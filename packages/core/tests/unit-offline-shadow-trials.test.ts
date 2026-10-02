@@ -10,7 +10,7 @@ import {
   applyScaffoldDecision, decidePromotion, getPendingScaffold, getShadowStatus,
   dropQueuedShadowTrial, initScaffoldTables, initShadowTables, listQueuedShadowTrials,
   queueShadowTrial, queueTurnShadowTrial,
-  runDueScaffoldEvaluations, shadowTrialPlan,
+  runQueuedShadowTrials, shadowTrialPlan,
   type CompletedTurn, type JudgeOutput, type ScaffoldControl,
   type ScaffoldReplayContext,
 } from '../src/index';
@@ -244,7 +244,7 @@ describe('the offline drain is what executes trials', () => {
     const { control, counts, contexts } = countedControl(rt);
     queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: CONTEXT }, PLAN);
 
-    const drain = await runDueScaffoldEvaluations(control);
+    const drain = await runQueuedShadowTrials(control);
 
     expect(drain).toEqual({ trials: 1, applied: null });
     expect(counts.surface).toBe(1);
@@ -275,7 +275,7 @@ describe('the offline drain is what executes trials', () => {
       queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
     }
 
-    const drain = await runDueScaffoldEvaluations(control);
+    const drain = await runQueuedShadowTrials(control);
 
     expect(drain).toEqual({ trials: 1, applied: 'promote' });
 
@@ -294,7 +294,7 @@ describe('the offline drain is what executes trials', () => {
     void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back'
       WHERE actor_id = ${rt.actor.actorId} AND version = 1`;
 
-    const drain = await runDueScaffoldEvaluations(control);
+    const drain = await runQueuedShadowTrials(control);
 
     expect(drain).toEqual({ trials: 0, applied: null });
     expect(counts.surface).toBe(0);
@@ -312,7 +312,7 @@ describe('the offline drain is what executes trials', () => {
 
     queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
 
-    const drain = await runDueScaffoldEvaluations(control);
+    const drain = await runQueuedShadowTrials(control);
 
     expect(drain.applied).toBeNull();
     expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(0);
@@ -325,7 +325,7 @@ describe('auto-evolution off runs no trial and leaves no trial to run', () => {
     return new EvolutionEngine(rt, storesFor(rt).history, {
       enabled,
       shadowTrialQueue: (turn, opts) => queueTurnShadowTrial(control, turn, opts),
-      shadowTrialRunner: () => runDueScaffoldEvaluations(control),
+      shadowTrialRunner: () => runQueuedShadowTrials(control),
     });
   }
 

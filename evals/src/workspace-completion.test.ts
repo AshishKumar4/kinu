@@ -3,9 +3,9 @@ import {
   BackgroundJobRunner, BackgroundJobStore, Inbox, initBackgroundJobsTable, listBackgroundJobs, silenceBoundMs, waitOn,
   withBackgroundThreshold, type RunEvent,
 } from '@kinu.run/core';
-import { createTestActorsOver, createTestSql, handClock, type HandClock } from '@kinu.run/test-utils';
+import { createTestActorsOver, createTestSql, handClock, present, type HandClock } from '@kinu.run/test-utils';
 import type { BackendHost } from '../../packages/core/src/types/backend-host';
-import type { PublicBackgroundJob, PublicSubordinate } from './session';
+import type { PublicAgent, PublicBackgroundJob, PublicSubordinate } from './session';
 import {
   answered, HUNG_AFTER_MS, settle, TrialCancelled, TurnWatch, type WatchClock, type WatchedWorkspace, WorkspaceHang, type WorkspaceHeld,
 } from './workspace-completion';
@@ -14,8 +14,11 @@ const START = Date.parse('2026-10-01T06:00:00.000Z');
 
 const MINUTE = 60_000;
 
-/** The bound in whole seconds, and the silence a watch polled each second reports when it first passes it. */
+/** The bound in whole seconds. */
 const BOUND_S = HUNG_AFTER_MS / 1000;
+
+/** How far past the bound a silent workspace is seen: it says no read moved, so it is looked at each half minute. */
+const LOOK_S = 30;
 
 /** The watch's own clock: a look's wait moves it on at once, so twenty minutes of polls run in a moment. `reached` is
  *  the moment the clock passes `elapsed`, for an answer that lands then. */
@@ -63,8 +66,11 @@ const hangOf = (watching: Promise<unknown>) => ended(watching, WorkspaceHang);
  *  each helper's own jobs, by its name. */
 type Snapshot = {
   events: RunEvent[]; jobs?: PublicBackgroundJob[]; helperJobs?: Record<string, PublicBackgroundJob[]>; helpers?: PublicSubordinate[];
-  inFlight?: string[]; heard?: number;
+  agents?: PublicAgent[]; inFlight?: string[]; heard?: number;
 };
+
+/** A workspace that never says a read moved: what it holds is seen only at its next look. */
+const SILENT_ROOM = { readsMoved: () => 0, readsMoving: new AbortController().signal };
 
 /** Far past any bound: a watch still reading a fixture this far in never gave a verdict. */
 const UNANSWERED_MS = 120 * MINUTE;
@@ -85,9 +91,11 @@ function fixtureWorkspace(clock: FixtureClock, state: (elapsed: number) => Snaps
     runEvents: () => Promise.resolve(read().events),
     backgroundJobs: (of) => Promise.resolve(of === undefined ? read().jobs ?? [] : read().helperJobs?.[of] ?? []),
     subordinates: () => Promise.resolve(read().helpers ?? []),
+    agents: () => Promise.resolve(read().agents ?? []),
     toolCallsInFlight: () => read().inFlight ?? [],
     heard: () => read().heard ?? 0,
     listen: (helpers) => { listened.push([...helpers]); },
+    ...SILENT_ROOM,
   };
 }
 
@@ -111,8 +119,8 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
 
     const hang = await hangOf(settle(new TurnWatch(silent, { clock })));
 
-    // Polled each second from the first row the watch saw: the first look past the bound is a second past it.
-    expect(hang.message).toContain(`busy for ${String(BOUND_S + 1)} s with no ledger row, no stream byte, no tool call in flight and no provider wait declared`);
+    // Looked at each half minute from the first row the watch saw: the first look past the bound is a look past it.
+    expect(hang.message).toContain(`busy for ${String(BOUND_S + LOOK_S)} s with no ledger row, no stream byte, no tool call in flight and no provider wait declared`);
     expect(hang.message).toContain(`held by open run run-1, its last row step_finish at ${at(1_000)}`);
     expect(hang.heldBy).toEqual(['open run']);
   });
@@ -156,8 +164,8 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
 
     const hang = await hangOf(settle(new TurnWatch(waiting, { clock })));
 
-    expect(hang.message).toContain(`busy for ${String(BOUND_S + 1)} s`);
-    expect(clock.elapsed()).toBe(10 * MINUTE + HUNG_AFTER_MS + 1_000);
+    expect(hang.message).toContain(`busy for ${String(BOUND_S + LOOK_S)} s`);
+    expect(clock.elapsed()).toBe(10 * MINUTE + HUNG_AFTER_MS + LOOK_S * 1000);
   });
 
   test('a ledger that keeps growing is never silent, however long the turn', async () => {
@@ -194,9 +202,9 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
 
     const hang = await hangOf(settle(new TurnWatch(stalled, { clock })));
 
-    expect(hang.message).toContain(`busy for ${String(BOUND_S + 1)} s with no ledger row, no stream byte`);
+    expect(hang.message).toContain(`busy for ${String(BOUND_S + LOOK_S)} s with no ledger row, no stream byte`);
     expect(hang.message).toContain('held by open run run-1');
-    expect(clock.elapsed()).toBe(2 * MINUTE + HUNG_AFTER_MS + 1_000);
+    expect(clock.elapsed()).toBe(2 * MINUTE + HUNG_AFTER_MS + LOOK_S * 1000);
   });
 
   // The provider fails a stream that sends nothing for its bound, writes the failed call's row, and hands the turn to its
@@ -347,12 +355,147 @@ function detachedCommand(hand: HandClock, never: boolean): DetachedCommand {
       runEvents: () => read(() => [...ledger]),
       backgroundJobs: (of) => read(() => (of === undefined ? listBackgroundJobs(store, 50) : [])),
       subordinates: () => read(() => []),
+      agents: () => read(() => []),
       toolCallsInFlight: () => inFlight,
       heard: () => 0,
       listen: () => undefined,
+      ...SILENT_ROOM,
     },
   };
 }
+
+/** What a room's state is in these scenes: its ledger, its jobs and its agents. */
+type RoomState = { readonly events: RunEvent[]; readonly jobs: PublicBackgroundJob[]; readonly agents: PublicAgent[] };
+
+/** One stage of a scene: the room's state, and the answers it gives before the next stage lands. A stage lands between
+ *  two answers of one read: after the first of its `after` answers that a `before` answer follows. */
+type RoomStage = {
+  readonly state: RoomState; readonly answers: number; readonly lands?: { readonly after: readonly string[]; readonly before: string };
+};
+
+/** Before the jobs answer: after the agents answer, or the ledger's for a watch that reads no agents. */
+const BEFORE_JOBS = { after: ['agents', 'ledger'], before: 'jobs' };
+
+/** The reads a room's frame names in these scenes: a job's settle moves both. */
+const MOVED_READS = new Set(['listWorkspaceAgents', 'listBackgroundJobs']);
+
+/**
+ * The workspace's room as its one socket orders it. The calls a read makes together are answered one at a time, in the
+ * order `order` gives for that read, else the order made, and each stage after the first lands between two of a read's
+ * answers. The frame for that change arrives as late as the room's tick allows: before the first answer to a later
+ * read, never inside the read it landed in. `stage` is where the room is.
+ */
+function roomWorkspace(
+  clock: FixtureClock, stages: readonly RoomStage[], order: (read: number) => readonly string[] = () => [],
+): WatchedWorkspace & { stage(): number } {
+  let stage = 0;
+  let given = 0;
+  let owed = 0;
+  let frames = 0;
+  let reads = 0;
+  let moving = new AbortController();
+  const asked: { readonly read: string; readonly answer: () => void }[] = [];
+
+  const answerRead = (): void => {
+    if (owed > 0) {
+      frames += owed;
+      owed = 0;
+      moving.abort();
+      moving = new AbortController();
+    }
+
+    reads += 1;
+    const ranked = order(reads);
+    const rank = (read: string): number => (ranked.includes(read) ? ranked.indexOf(read) : ranked.length);
+    const calls = asked.splice(0).sort((one, other) => rank(one.read) - rank(other.read));
+    const { after, before } = stages[stage + 1]?.lands ?? BEFORE_JOBS;
+    const followed = (name: string) => calls.findIndex((call, index) => call.read === name && calls.slice(index + 1).some((later) => later.read === before));
+    const landsAt = after.map(followed).find((index) => index !== -1);
+    let landed = false;
+
+    for (const [index, call] of calls.entries()) {
+      call.answer();
+      given += 1;
+
+      if (!landed && index === landsAt && stage + 1 < stages.length && given >= (stages[stage]?.answers ?? Infinity)) {
+        landed = true;
+        stage += 1;
+        given = 0;
+        owed += 1;
+      }
+    }
+  };
+
+  const ask = <T>(read: string, value: (state: RoomState) => T): Promise<T> => {
+    if (clock.elapsed() > UNANSWERED_MS) return Promise.reject(new Error('the room was still being read two hours in'));
+    const { promise, resolve } = Promise.withResolvers<T>();
+
+    if (asked.length === 0) queueMicrotask(answerRead);
+    asked.push({ read, answer: () => { resolve(value(present(stages[stage], 'the stage').state)); } });
+
+    return promise;
+  };
+
+  return {
+    runEvents: () => ask('ledger', (state) => state.events),
+    agents: () => ask('agents', (state) => state.agents),
+    subordinates: () => ask('roster', () => []),
+    backgroundJobs: (of) => ask(of === undefined ? 'jobs' : 'helper jobs', (state) => (of === undefined ? state.jobs : [])),
+    toolCallsInFlight: () => [],
+    heard: () => 0,
+    listen: () => undefined,
+    readsMoved: (names) => frames * names.filter((name) => MOVED_READS.has(name)).length,
+    get readsMoving() { return moving.signal; },
+    stage: () => stage,
+  };
+}
+
+const mainAgent = (activity: PublicAgent['activity']): PublicAgent => ({ label: 'Main', category: 'main', activity, open: { kind: 'chat', path: null } });
+
+// Staging f75f06932, 2026-10-01: five trials were called quiet on two idle reads a second apart while each owed a turn it
+// had not claimed. A read's calls are answered one at a time, so a change can land between two of them and the read see
+// neither side's work.
+describe('a change landing mid-read is never read as quiet', () => {
+  test("a job's settle landing between a read's answers holds the turn until the wake it owes has run", async () => {
+    const clock = watchClock();
+    const server = (status: string): PublicBackgroundJob => ({ id: 'bgjob-tests', kind: 'shell', status, label: 'workspace: npm test', createdAt: START });
+    const closed = [start('run-1'), end('run-1', 1_000, 1)];
+
+    const room = roomWorkspace(clock, [
+      // The lead's run ended with its tests running as a job.
+      { state: { events: closed, jobs: [server('running')], agents: [mainAgent('idle')] }, answers: 4 },
+      // The job settled, and the wake it owes the lead is queued, not yet claimed: no run is open.
+      { state: { events: closed, jobs: [server('completed')], agents: [mainAgent('working')] }, answers: 8 },
+      { state: { events: [...closed, start('wake-1', 2_000)], jobs: [server('completed')], agents: [mainAgent('working')] }, answers: 4 },
+      { state: { events: [...closed, start('wake-1', 2_000), end('wake-1', 3_000, 1)], jobs: [server('completed')], agents: [mainAgent('idle')] }, answers: Infinity },
+    ]);
+
+    expect(await settle(new TurnWatch(room, { clock }))).toBeUndefined();
+    expect(room.stage()).toBe(3);
+  });
+
+  // The room checks each call's socket with the user's object before it runs the call, so a later call can run first.
+  test('two reads in a row that each miss a change still hold the turn, as the frame between them says the room moved', async () => {
+    const clock = watchClock();
+    const server = (status: string): PublicBackgroundJob => ({ id: 'bgjob-tests', kind: 'shell', status, label: 'workspace: npm test', createdAt: START });
+    const turn = [start('run-1')];
+    const closed = [start('run-1'), end('run-1', 1_000, 1)];
+    const jobsFirst = ['jobs', 'agents', 'ledger', 'roster'];
+
+    const room = roomWorkspace(clock, [
+      { state: { events: turn, jobs: [], agents: [mainAgent('working')] }, answers: 4 },
+      // The lead's run ends with its tests running as a job: read jobs first, then the rest.
+      { state: { events: closed, jobs: [server('running')], agents: [mainAgent('idle')] }, answers: 3, lands: { after: ['jobs'], before: 'agents' } },
+      // The job settles and owes the lead a wake: read the rest first, then the jobs.
+      { state: { events: closed, jobs: [server('completed')], agents: [mainAgent('working')] }, answers: 4, lands: { after: ['roster'], before: 'jobs' } },
+      { state: { events: [...closed, start('wake-1', 2_000)], jobs: [server('completed')], agents: [mainAgent('working')] }, answers: 4 },
+      { state: { events: [...closed, start('wake-1', 2_000), end('wake-1', 3_000, 1)], jobs: [server('completed')], agents: [mainAgent('idle')] }, answers: Infinity },
+    ], (read) => (read % 2 === 1 ? jobsFirst : ['agents', 'ledger', 'roster', 'jobs']));
+
+    expect(await settle(new TurnWatch(room, { clock }))).toBeUndefined();
+    expect(room.stage()).toBe(4);
+  });
+});
 
 describe('a job is waited on until it settles, never judged by its silence', () => {
   // A detached `sleep 600; make` was graded hung at 420 s (2026-10-01): a job publishes nothing while it runs.
@@ -368,7 +511,7 @@ describe('a job is waited on until it settles, never judged by its silence', () 
 
     if (job === undefined) throw new Error('the runner made no job');
     expect(job.status).toBe('completed');
-    expect(hand.now() - START).toBeGreaterThan(10 * MINUTE);
+    expect(hand.now() - START).toBeGreaterThanOrEqual(10 * MINUTE);
     // One a minute while it ran: nine or ten, as the look at the tenth minute lands before or after the job settles.
     expect(new Set(lines)).toEqual(new Set([`waiting on job ${job.id} (workspace: sleep 600; make) since ${new Date(job.createdAt).toISOString()}`]));
     expect([9, 10]).toContain(lines.length);

@@ -22,9 +22,7 @@ import {
   corroborateLessonsForTurn,
 } from '../src/evolution/outcomes';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
-import {
-  dueScaffoldScores, initScaffoldScoreTables, listScaffoldScores, markPromoted, recordReplayScore,
-} from '../src/evolution/scaffold-scores';
+import { initReplayTables, runReplayEval, listReplayEvals } from '../src/evolution/replay';
 import { initRefinementTables, createRefinementStore } from '../src/evolution/refinement';
 import {
   initGepaTables, startGepaRun, persistGepaCandidate, listGepaRuns, loadGepaCandidates,
@@ -304,19 +302,29 @@ describe('two actors, one database: effect_tombstones', () => {
   });
 });
 
-describe('two actors, one database: scaffold_scores', () => {
-  test('each actor reads back only its own curve, one version number apart or not', () => {
+describe('two actors, one database: replay_evals', () => {
+  test('each actor samples its own ledger and reads back only its own curve', async () => {
     const w = world();
-    initScaffoldScoreTables(w.execRaw);
+    initTurnOutcomeTables(w.execRaw);
+    initReplayTables(w.execRaw);
 
-    markPromoted(w.sql, w.a, 4, 1);
-    recordReplayScore(w.sql, w.a, { version: 4, now: 2, results: [{ id: 'turn-1', score: 1, feedback: 'ok' }] });
-    markPromoted(w.sql, w.b, 4, 1);
+    for (const [actor, response] of [[w.a, 'a-answer'], [w.b, 'b-answer']] as const) {
+      recordTurnOutcome(w.sql, actor, {
+        turnId: 'turn-1', outcome: 'accepted', confidence: 1, source: 'explicit',
+        userMessage: 'ask', assistantResponse: response, now: 1,
+      });
+    }
 
-    expect(listScaffoldScores(w.sql, w.a).map((p) => p.interval?.mean)).toEqual([1]);
-    expect(listScaffoldScores(w.sql, w.b)).toEqual([]);
-    expect(dueScaffoldScores(w.sql, w.b)).toEqual([4]);
-    expect(dueScaffoldScores(w.sql, w.a)).toEqual([]);
+    const summary = await runReplayEval({
+      sql: w.sql, actor: w.a,
+      judge: createScriptedLLM(['{"score":1,"note":"ok"}']),
+      runTask: async () => 'fresh',
+      sampleSize: 1, now: 2,
+    });
+
+    expect(summary?.sampleSize).toBe(1);
+    expect(listReplayEvals(w.sql, w.a)).toHaveLength(1);
+    expect(listReplayEvals(w.sql, w.b)).toHaveLength(0);
     w.close();
   });
 });

@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-01",
-  "files": 2931,
-  "functions": 75218,
+  "measuredAt": "2026-10-02",
+  "files": 2943,
+  "functions": 75745,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -310,10 +310,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#6>handler",
-      "complexity": 28
-    },
-    {
       "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage>prop#2",
       "complexity": 28
     },
@@ -375,6 +371,10 @@
     },
     {
       "key": "scripts/infra-verify.ts#observe",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/ladder.ts#runPending",
       "complexity": 28
     },
     {

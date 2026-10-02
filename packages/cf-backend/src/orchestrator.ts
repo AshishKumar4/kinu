@@ -25,7 +25,7 @@ import {
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
-  type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
+  type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   isSubordinateOrigin,
   whenActorTakesInput,
 } from "@kinu.run/core";
@@ -103,7 +103,7 @@ import {
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
-  previewScaffoldLive, runScaffoldGepaOptimization,
+  previewScaffoldLive, runScaffoldCaptureText, runScaffoldGepaOptimization,
   advancePromptSectionLane,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
@@ -122,7 +122,7 @@ import {
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
   type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
-  listScaffoldScores, type ScaffoldScore,
+  listReplayEvals, type ReplayEvalSummary,
   alignmentConvergence, type AlignmentConvergence,
   calibrationReport, sampleForLabeling, ingestOutcomeLabels, DEFAULT_LABEL_BUDGET,
   type CalibrationReport, type LabelingItem, type LabelIngestResult, type OutcomeLabel,
@@ -178,7 +178,7 @@ import {
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
-  LiveReadsNotice, readsMovedByFiles, readsWrittenBy, sameDeviceStatus, type LiveRead,
+  LiveReadsNotice, readsMovedByFiles, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
@@ -251,8 +251,8 @@ import {
 import { EmailOutbox } from "@kinu.run/core";
 import { dispatchRecoveredNotice, type RecoveredNotice } from "./fiber-recovery";
 import {
-  acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
-  type SandboxLifecycleFailureResult,
+  acceptSandboxLifecycleIncident, initSandboxLifecycleTable,
+  type SandboxLifecycleIncidentResult,
 } from "./sandbox-lifecycle";
 
 import type { RestoreStatus } from "@kinu.run/devbox";
@@ -464,7 +464,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Lazy: the base constructor writes through `sql` before any field of this class exists. */
   private get liveReads(): LiveReadsNotice {
-    this._liveReads ??= new LiveReadsNotice((frame) => { this.broadcastToActor(null, frame); }, (flush) => { this.deferLiveReads(flush); });
+    this._liveReads ??= new LiveReadsNotice((frame) => { this.broadcastToActor(null, JSON.stringify(frame)); }, (flush) => { this.deferLiveReads(flush); });
 
     return this._liveReads;
   }
@@ -857,9 +857,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Immutable catalogs are shared by value; per-actor state (event log, governor, broadcast)
    * is built per actor in `actor-hosting.ts` and is never this object's own.
    */
-  /** The single adapter from the DO's `SqlStorage` to core's positional `SqlExec`. */
+  /** The single adapter from the DO's `SqlStorage` to core's positional `SqlExec`; its writes name the reads they move. */
   protected boundExec(): SqlExec {
-    return { exec: (query: string, ...bindings: SqlValue[]) => this.ctx.storage.sql.exec(query, ...bindings) };
+    return this.watchedExec;
   }
 
   private workspaceHostSeams(): WorkspaceHostSeams {
@@ -945,7 +945,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       suggestTitle: (mission) => this.suggestTitle(mission),
       taskProfile: (turn) => this.hostedTaskProfile(turn),
-      announce: () => { this.broadcastSubordinatesChanged(); },
+      announce: () => { this.liveReadsMoved(ROSTER_READS); },
       // The root's turns run on this object's own chat loop, not its hosted slot.
       scheduleDrain: (actor) => {
         if (actor.record.parentActorId === null) {
@@ -1149,7 +1149,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The workspace's purpose, shared by every actor in it.
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
-      broadcast: (event) => this.broadcastSubordinatesChanged(event),
+      rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',
         ...event,
@@ -1355,6 +1355,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A lease from before this activation lost its runner; effects dedupe on rerun. */
   private rependDeadActivationLeases(): void {
+    // Looked for first: every wake runs this, and a write tells each open page its agents moved.
+    const dead = this.boundExec().exec(
+      `SELECT 1 FROM agent_log
+       WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
+         AND consumed_at IS NOT NULL AND consumed_at < ?
+       LIMIT 1`,
+      this.activationStartedAt,
+    ).toArray();
+
+    if (dead.length === 0) return;
+
     const rows = this.boundExec().exec(
       `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
        WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
@@ -1864,6 +1875,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
+        // Replay-eval rollout runs the live scaffold with the real LLM and tool bridges.
+        replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
         // Promotion-gate evidence runs on the cadence lane so rollouts don't block the chat queue.
         ...this.shadowTrialPorts,
       });
@@ -2816,7 +2829,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async listWorkspaceAgents(): Promise<PanelAgent[]> {
     return readWorkspaceAgents({
-      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main',
+      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main', queued: this.chatTurnOwed,
       actors: this.workspaceActors().list({ retired: true }),
       figures: async (actorIds) => {
         const main = this.actorHandle().actorId;
@@ -3842,10 +3855,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listGepaRuns(this.boundSql, this.actorHandle(), limit);
   }
 
-  /** The quality curve: one point per promoted scaffold version, newest first. */
+  /** The persisted loss curve (replay_evals), newest first. */
   @callable()
-  async getReplayEvals(limit = 50): Promise<ScaffoldScore[]> {
-    return listScaffoldScores(this.boundSql, this.actorHandle(), limit);
+  async getReplayEvals(limit = 50): Promise<ReplayEvalSummary[]> {
+    return listReplayEvals(this.boundSql, this.actorHandle(), limit);
   }
 
   /** K_align: correction rate per 100 graded turns, per scaffold version, with 95% Wilson
@@ -4151,6 +4164,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.facts.recentTopK(limit).map((f) => ({
       key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
     }));
+  }
+
+  /** With candidateCode: the GEPA metric's rollout; without: runs the live scaffold. */
+  private runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
+    return runScaffoldCaptureText(this.scaffoldControl, task, candidateCode);
   }
 
   async getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {
@@ -5764,9 +5782,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Plain method (not `@callable`): only another DO calls it. `waitUntil` is a no-op in a DO, so work
    * happens in this invocation; the incident id makes caller retries safe.
    */
-  async acceptSandboxLifecycleFailure(body: JsonValue): Promise<SandboxLifecycleFailureResult> {
+  async acceptSandboxLifecycleIncident(body: JsonValue): Promise<SandboxLifecycleIncidentResult> {
 
-    return acceptSandboxLifecycleFailure({
+    return acceptSandboxLifecycleIncident({
       sql: this.boundSql,
       inbox: this.orch.inbox,
       // The workspace name is the only dimension the lifecycle module cannot know.

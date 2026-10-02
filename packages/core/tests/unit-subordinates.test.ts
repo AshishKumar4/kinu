@@ -41,7 +41,6 @@ import {
   type SubordinateReportPayload,
   type SubordinateReportStatus,
   type SubordinateRosterEntry,
-  type SubordinatesChangedEvent,
   type SubordinateRuntime,
   type KinuEvent,
   WorkspaceActorDirectory, actorReferenceOf, recoverSubordinateLifecycles, type ActorReference,
@@ -324,7 +323,6 @@ interface TeamHarness {
   assignments: Array<Parameters<SubordinateRuntime['assign']>[1]>;
   seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]>;
   broadcasts: number[];
-  events: SubordinatesChangedEvent[];
   tasks: Array<{ subordinate: string; content: string; timestamp: number }>;
   failures: Set<keyof SubordinateRuntime>;
 }
@@ -340,7 +338,6 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
   const assignments: Array<Parameters<SubordinateRuntime['assign']>[1]> = [];
   const seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]> = [];
   const broadcasts: number[] = [];
-  const events: SubordinatesChangedEvent[] = [];
   const tasks: Array<{ subordinate: string; content: string; timestamp: number }> = [];
   const failures = new Set<keyof SubordinateRuntime>();
 
@@ -408,11 +405,11 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
     now: () => 1_700_000_000_000,
     inheritedContext: async () => inheritedContext,
     ownMission: () => HARNESS_OWN_MISSION,
-    broadcast: (event) => { broadcasts.push(Date.now()); events.push(event); },
+    rosterMoved: () => { broadcasts.push(Date.now()); },
     broadcastTask: (event) => { tasks.push(event); },
   });
 
-  return { roster, runtime, team, calls, seeds, assignments, broadcasts, events, tasks, failures,
+  return { roster, runtime, team, calls, seeds, assignments, broadcasts, tasks, failures,
     actorReference: () => {
       const actor = directory.resolveChild(directory.main(), 'researcher-a1b2c3');
 
@@ -585,7 +582,6 @@ describe('team action routing', () => {
     await h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Compare vendors' });
     expect(h.broadcasts).toHaveLength(2);
     expect(h.tasks).toHaveLength(2);
-    expect(h.events.every((event) => !('assignedTask' in event))).toBe(true);
   });
 
   test('successful actions expose one canonical roster and nested live status', async () => {
@@ -768,7 +764,7 @@ describe('team action routing', () => {
       now: () => 123,
       inheritedContext: async () => [],
       ownMission: () => HARNESS_OWN_MISSION,
-      broadcast: () => {},
+      rosterMoved: () => {},
       broadcastTask: () => {},
     });
 

@@ -96,8 +96,8 @@ import { TierIdSchema,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldGepaOptimization,
-  queueTurnShadowTrial, runDueScaffoldEvaluations,
+  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldCaptureText, runScaffoldGepaOptimization,
+  queueTurnShadowTrial, runQueuedShadowTrials,
   type GepaOptimizationResult, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
   type ShadowStatus,
@@ -224,6 +224,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
+    replayTaskRunner: (task) => input.session().runReplayTask(task),
     shadowTrialQueue: (turn, opts) => input.session().queueShadowTrial(turn, opts),
     // A resolved gate swaps the live scaffold, so model-bound state is dropped.
     shadowTrialRunner: () => input.session().runShadowTrials(),
@@ -2319,6 +2320,11 @@ export class LocalAgentSession {
     return createScaffoldHistory(async () => this.actorSession.history);
   }
 
+  /** Replay-eval re-run: the live scaffold, as cf runs it (core's `runScaffoldCaptureText`). */
+  runReplayTask(task: string): Promise<string> {
+    return runScaffoldCaptureText(this.scaffoldControl, task);
+  }
+
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
    *  wall-clock field would re-fingerprint the block every request. */
   private dynamicContextSnapshot(
@@ -2389,7 +2395,7 @@ export class LocalAgentSession {
 
   /** A resolved gate swaps the live scaffold, so model-bound state is dropped. */
   async runShadowTrials(): Promise<ShadowTrialDrain> {
-    const drain = await runDueScaffoldEvaluations(this.scaffoldControl);
+    const drain = await runQueuedShadowTrials(this.scaffoldControl);
 
     if (drain.applied) {
       this.emit({

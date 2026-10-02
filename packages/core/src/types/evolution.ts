@@ -1,27 +1,24 @@
 import type { ScoreInterval } from '../utils/stats';
 
-export type ScaffoldScoreSource = 'gepa' | 'replay';
-
-export interface ScoredInstance {
-  readonly id: string;
-  readonly score: number;
-  readonly feedback: string;
+export interface ReplayInstanceResult {
+  outcomeId: string;
+  outcome: TurnOutcomeRow['outcome'];
+  score: number;
+  note: string;
 }
 
-/** Improved or declined only when the intervals do not overlap. */
-export type ScoreDirection = 'reached' | 'improved' | 'held' | 'declined';
-
-export interface ScaffoldScore {
-  readonly version: number;
-  readonly source: ScaffoldScoreSource;
-  readonly promotedAt: number;
-  readonly scoredAt: number;
-  /** Null when scoring failed, with `failure` saying why. */
-  readonly interval: ScoreInterval | null;
-  readonly failure: string | null;
-  /** Against the previous scored point; `declined` is a regression. */
-  readonly direction: ScoreDirection | null;
-  readonly results: readonly ScoredInstance[];
+export interface ReplayEvalSummary {
+  id: string;
+  ranAt: number;
+  sampleSize: number;
+  acceptedCount: number;
+  negativeCount: number;
+  meanScore: number;
+  loss: number;
+  /** 95% interval around `meanScore`; never read the mean without it. */
+  interval: ScoreInterval;
+  scaffoldVersion: number | null;
+  results: ReplayInstanceResult[];
 }
 
 /** Canonical order; the table's CHECK constraint, query filter and changelog derive from it. */

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { LiveReadsNotice, readsWrittenBy } from '../src/read-models/live-reads';
+import { LiveReadsNotice, readsWrittenBy, type ReadsChangedFrame } from '../src/read-models/live-reads';
 
 test('a write names the reads of its table and nothing else', () => {
   expect(readsWrittenBy('INSERT OR IGNORE INTO background_jobs (id) VALUES (?)'))
@@ -23,7 +23,7 @@ test('a turn claim taken or released moves the Agents panel', () => {
 });
 
 test('many writes in one tick send one frame naming each moved read once', () => {
-  const frames: string[] = [];
+  const frames: ReadsChangedFrame[] = [];
   const owed: (() => void)[] = [];
   const notice = new LiveReadsNotice((frame) => { frames.push(frame); }, (flush) => { owed.push(flush); });
 
@@ -32,7 +32,7 @@ test('many writes in one tick send one frame naming each moved read once', () =>
 
   for (const flush of owed.splice(0)) flush();
 
-  expect(frames.map((frame) => JSON.parse(frame))).toEqual([{
+  expect(frames).toEqual([{
     type: 'reads_changed',
     reads: ['getToolDescriptions', 'getEvolutionChangelog', 'listPendingActions', 'getWorkspaceTabPresence'],
   }]);

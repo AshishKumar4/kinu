@@ -183,7 +183,7 @@ function makeScene(options: {
     inheritedContext: async () => [],
     originContext: async () => options.originContext ?? [],
     ownMission: () => 'Keep the release train moving.',
-    broadcast: () => { /* no listeners in this scene */ },
+    rosterMoved: () => { /* no listeners in this scene */ },
     broadcastTask: () => { /* no listeners in this scene */ },
   };
 

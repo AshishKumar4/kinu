@@ -26,7 +26,7 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
-import { withHostedNodeExecution, WORKSPACE_ROOT } from '@kinu.run/core';
+import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type PortHolders } from '@kinu.run/core';
 import type { ActorReference, HostedNodeHome, TierRefusals } from '@kinu.run/core';
 import { mountActorFiles } from './workspace-host';
 
@@ -208,6 +208,9 @@ export type CFRuntime = AgentRuntime & {
   vectorStore: import("@kinu.run/core").VectorStore;
   startupWork: Promise<void>;
   sandboxHandle: SandboxHandle | null;
+  /** Who holds the box's exposed ports, read without the executor's touch; null until this activation used its box:
+   *  a call activates the box's object, and only real use keeps a box alive (D56). */
+  sandboxPortHolders(): PortHolders | null;
 };
 
 /** Every runtime this backend builds carries a vector store (noop when unbound). */
@@ -222,6 +225,8 @@ export interface CFRuntimeHooks {
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
+  /** A sandbox port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
+  servingMoved?: () => Promise<void>;
   /** Where non-turn model seams (judge, fast tier, reflection, embedder) report cost; turn spend arrives
      *  as `step_finish`. */
   reportModelCall: ModelCallSink;
@@ -391,6 +396,7 @@ export function createCFRuntime(
   const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
   let sandboxHandle: SandboxHandle | null = null;
+  let sandboxUsed = false;
 
   if (env.KinuDevbox) {
     try {
@@ -399,6 +405,7 @@ export function createCFRuntime(
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
       // the container has no network, so it fails closed. Only the owning workspace configures.
       const handle = adaptCloudflareSandbox(sdk, async () => {
+        sandboxUsed = true;
         const userId = actor.ownerUserId();
 
         if (!userId) return;
@@ -418,7 +425,10 @@ export function createCFRuntime(
       },
       // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
       env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
-      () => hooks.liveReadsMoved?.(['getExposedPorts']));
+      async () => {
+        hooks.liveReadsMoved?.(['getExposedPorts']);
+        await hooks.servingMoved?.();
+      });
 
       sandboxHandle = handle;
       executionRouter.register(createSandboxExecutor(handle, previewSuffix,
@@ -525,6 +535,16 @@ export function createCFRuntime(
     deviceTransport,
     vectorStore,
     sandboxHandle,
+    sandboxPortHolders: () => {
+      const handle = sandboxHandle;
+
+      if (handle === null || !sandboxUsed || previewSuffix === undefined) return null;
+
+      return {
+        exposedPorts: async () => (await handle.getExposedPorts(previewSuffix)).map((row) => row.port),
+        holders: (ports) => handle.portListeners(JOB_STAMP_ENV, ports),
+      };
+    },
   };
 
   if (unmount !== undefined) runtime.release = unmount;

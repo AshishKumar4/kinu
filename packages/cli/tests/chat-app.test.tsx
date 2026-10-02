@@ -6,7 +6,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
-import { missingSubordinateHistory, type AgentModelMenu, type SubordinateChild } from '@kinu.run/core';
+import { missingSubordinateHistory, READS_CHANGED_EVENT, type AgentModelMenu, type SubordinateChild } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
@@ -1069,6 +1069,33 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressEscape();
     await screen.waitFor('back in the Agent Hub', () => screen.frame().includes('Agent Hub'));
     expect(screen.frame()).not.toContain('Found 3 errors in app.log');
+  });
+
+  // 2026-10-01: the hub read the agent's helpers once, when it opened, and a hire made after that never showed.
+  test('the open Agent Hub reads its helpers again when a frame names them', async () => {
+    const scout: SubordinateChild = {
+      name: 'scout', displayName: 'Scout', nameOrigin: 'user', role: 'task', actorReference: null, birth: null, deleteRequested: false,
+      origin: 'agent', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
+    };
+
+    let hired = [scout];
+
+    const main = fakeClient({
+      name: 'checkout',
+      inspectSubordinate: async (request) => request.view === 'children'
+        ? { view: 'children', path: request.path, page: { status: 'end', items: hired } }
+        : missingSubordinateHistory(request.path),
+    });
+
+    const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the hire the hub read when it opened', () => screen.frame().includes('Scout · agent'));
+
+    hired = [scout, { ...scout, name: 'busy-mill-01', displayName: 'Busy Mill', createdAt: 2 }];
+    main.emit({ type: 'broadcast', event: { type: READS_CHANGED_EVENT, reads: ['listSubordinates'] } });
+
+    await screen.waitFor('the hire the frame named', () => screen.frame().includes('Busy Mill · agent'));
+    expect(screen.frame()).toContain('Scout · agent');
   });
 
   test('after a reload, a one-question helper the chat asked is listed as answered, and Enter opens its kept chat by id', async () => {

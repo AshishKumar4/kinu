@@ -10,7 +10,7 @@ import {
 } from '@kinu.run/core/obs';
 import type { AgentSignal, JsonValue, SendOutcome } from '@kinu.run/core';
 import {
-  SANDBOX_LIFECYCLE_ENVELOPE_VERSION, acceptSandboxLifecycleFailure,
+  SANDBOX_LIFECYCLE_ENVELOPE_VERSION, acceptSandboxLifecycleIncident,
   initSandboxLifecycleTable, type SandboxLifecycleDeps,
 } from '../src/sandbox-lifecycle';
 import {
@@ -89,7 +89,7 @@ describe('a durable recovery settlement', () => {
   test('a successful announcement is a row, not a silence', async () => {
     const { deps, settlements, delivered } = ledger();
 
-    const answer = await acceptSandboxLifecycleFailure(deps, envelope(), 1_000);
+    const answer = await acceptSandboxLifecycleIncident(deps, envelope(), 1_000);
 
     expect(answer).toMatchObject({ status: 'queued', duplicate: false });
     expect(delivered).toHaveLength(1);
@@ -101,7 +101,7 @@ describe('a durable recovery settlement', () => {
   test('an undelivered announcement is a failed recovery, with no invented cause', async () => {
     const { deps, settlements } = ledger({ deliver: async () => 'undelivered' });
 
-    await acceptSandboxLifecycleFailure(deps, envelope(), 1_000);
+    await acceptSandboxLifecycleIncident(deps, envelope(), 1_000);
 
     // `code` empty: the signal seam answers an outcome and holds no cause.
     expect(settlements).toEqual([{
@@ -112,8 +112,8 @@ describe('a durable recovery settlement', () => {
   test('an incident the agent already has is still a successful recovery', async () => {
     const { deps, settlements, delivered } = ledger();
 
-    await acceptSandboxLifecycleFailure(deps, envelope(), 1_000);
-    const repeat = await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 2 }), 1_400);
+    await acceptSandboxLifecycleIncident(deps, envelope(), 1_000);
+    const repeat = await acceptSandboxLifecycleIncident(deps, envelope({ attempts: 2 }), 1_400);
 
     expect(repeat).toMatchObject({ status: 'queued', duplicate: true });
     // The repeat is the container's conservative retry: the agent has been told, so it is `ok`.
@@ -126,7 +126,7 @@ describe('a durable recovery settlement', () => {
   test('the attempt count is the PRODUCER\'s, transported rather than recounted', async () => {
     const { deps, settlements } = ledger();
 
-    await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 4 }), 1_000);
+    await acceptSandboxLifecycleIncident(deps, envelope({ attempts: 4 }), 1_000);
 
     expect(settlements[0]?.attempts).toBe(4);
   });
@@ -138,10 +138,10 @@ describe('a durable recovery settlement', () => {
       deliver: async () => (landed ? 'queued' : 'undelivered'),
     });
 
-    await acceptSandboxLifecycleFailure(deps, envelope(), 1_000);
+    await acceptSandboxLifecycleIncident(deps, envelope(), 1_000);
     landed = true;
     // `first_seen_at` is written once, so this is the span the agent went untold, not the last hop.
-    await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 2 }), 9_500);
+    await acceptSandboxLifecycleIncident(deps, envelope({ attempts: 2 }), 9_500);
 
     expect(settlements.map((row) => [row.outcome, row.durationMs]))
       .toEqual([['failed', 0], ['ok', 8_500]]);
@@ -150,7 +150,7 @@ describe('a durable recovery settlement', () => {
   test('a refused envelope claims no dimensions it was not given', async () => {
     const { deps, settlements, delivered } = ledger();
 
-    const answer = await acceptSandboxLifecycleFailure(
+    const answer = await acceptSandboxLifecycleIncident(
       deps, envelope({ r2Key: 'backups/abc/data.sqsh' }), 1_000,
     );
 
@@ -169,7 +169,7 @@ describe('a durable recovery settlement', () => {
       deliver: async () => { throw new KinuError('timeout', 'the signal seam did not answer'); },
     });
 
-    await expect(acceptSandboxLifecycleFailure(deps, envelope(), 1_000)).rejects.toThrow();
+    await expect(acceptSandboxLifecycleIncident(deps, envelope(), 1_000)).rejects.toThrow();
 
     // The class is read from the failure, not defaulted: `timeout` and `io` imply opposite
     // responses.
@@ -183,7 +183,7 @@ describe('a durable recovery settlement', () => {
       deliver: async () => { throw new Error('socket hang up'); },
     });
 
-    await expect(acceptSandboxLifecycleFailure(deps, envelope(), 1_000)).rejects.toThrow();
+    await expect(acceptSandboxLifecycleIncident(deps, envelope(), 1_000)).rejects.toThrow();
 
     expect(settlements[0]?.code).toBe('io');
   });
@@ -199,9 +199,9 @@ describe('a durable recovery settlement', () => {
       },
     });
 
-    await expect(acceptSandboxLifecycleFailure(deps, envelope(), 1_000)).rejects.toThrow();
+    await expect(acceptSandboxLifecycleIncident(deps, envelope(), 1_000)).rejects.toThrow();
     fail = false;
-    const retried = await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 2 }), 6_000);
+    const retried = await acceptSandboxLifecycleIncident(deps, envelope({ attempts: 2 }), 6_000);
 
     // Not a duplicate: nothing had been announced, so the retry is the first announcement.
     expect(retried).toMatchObject({ status: 'queued', duplicate: false });
@@ -212,11 +212,30 @@ describe('a durable recovery settlement', () => {
   });
 });
 
+// Devbox D59: a container that would rest with processes still running asks its agent through this same envelope.
+describe('a rest ask', () => {
+  test('lands as one signal that lists what runs and names both answers, never as a failure', async () => {
+    const { deps, delivered } = ledger();
+
+    const reason = 'The sandbox has not been used for 40 minutes and would rest now, but these processes still run in it:\n'
+      + '- `npm run dev` (pid 98; running 2 h 5 min; listening on 3000; supervised: resting stops it, and it restarts cold on its next use, without its in-memory state)';
+
+    const answer = await acceptSandboxLifecycleIncident(deps, envelope({ stage: 'rest', reason, incidentId: 'ask-1' }), 1_000);
+    const text = JSON.stringify(delivered);
+
+    expect({ status: answer.status, signals: delivered.length }).toEqual({ status: 'queued', signals: 1 });
+    expect(text).toContain('npm run dev');
+    expect(text).toContain("sandbox.rest('now')");
+    expect(text).toContain("sandbox.rest('keep')");
+    expect(text).not.toContain('failed at');
+  });
+});
+
 describe('the versioned envelope', () => {
   test('an envelope with no version is refused, never defaulted to the current version', async () => {
     const { deps, delivered, settlements } = ledger();
 
-    const answer = await acceptSandboxLifecycleFailure(deps, envelopeWithout('version'), 1_000);
+    const answer = await acceptSandboxLifecycleIncident(deps, envelopeWithout('version'), 1_000);
 
     expect(answer.status).toBe('rejected');
     expect(delivered).toEqual([]);
@@ -226,7 +245,7 @@ describe('the versioned envelope', () => {
   test('an envelope stamped with a shape this build does not speak is refused BY NAME', async () => {
     const { deps, delivered } = ledger();
 
-    const answer = await acceptSandboxLifecycleFailure(deps, envelope({ version: 1 }), 1_000);
+    const answer = await acceptSandboxLifecycleIncident(deps, envelope({ version: 1 }), 1_000);
 
     expect(answer.status).toBe('rejected');
     expect(delivered).toEqual([]);
@@ -238,18 +257,18 @@ describe('the versioned envelope', () => {
     const { deps, delivered } = ledger();
 
     // A guessed attempt number would put an unmeasured value in the dataset.
-    expect((await acceptSandboxLifecycleFailure(deps, envelopeWithout('attempts'), 1_000)).status)
+    expect((await acceptSandboxLifecycleIncident(deps, envelopeWithout('attempts'), 1_000)).status)
       .toBe('rejected');
-    expect((await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 0 }), 1_000)).status)
+    expect((await acceptSandboxLifecycleIncident(deps, envelope({ attempts: 0 }), 1_000)).status)
       .toBe('rejected');
-    expect((await acceptSandboxLifecycleFailure(deps, envelope({ attempts: 1.5 }), 1_000)).status)
+    expect((await acceptSandboxLifecycleIncident(deps, envelope({ attempts: 1.5 }), 1_000)).status)
       .toBe('rejected');
     expect(delivered).toEqual([]);
   });
 });
 
 /**
- * Real `deliverIncidents` driving real `acceptSandboxLifecycleFailure`: the defect lived in the
+ * Real `deliverIncidents` driving real `acceptSandboxLifecycleIncident`: the defect lived in the
  * word crossing between the halves, so a test of either half alone reports nothing.
  */
 function incidentLedger(): IncidentStore & { rows(): readonly IncidentRow[] } {
@@ -270,7 +289,7 @@ describe('the answer the box acts on', () => {
   /** The host returns the status verbatim: both sides speak one disposition vocabulary. */
   async function pass(store: IncidentStore, deps: SandboxLifecycleDeps, now: number) {
     return await deliverIncidents(store, async (incident, attempt) => {
-      const answer = await acceptSandboxLifecycleFailure(deps, {
+      const answer = await acceptSandboxLifecycleIncident(deps, {
         version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
         incidentId: incident.incidentId,
         stage: incident.stage,
@@ -315,7 +334,7 @@ describe('the answer the box acts on', () => {
 
     // A caller defect: retrying cannot change the answer, so it is stamped and dropped.
     const delay = await deliverIncidents(store, async () =>
-      (await acceptSandboxLifecycleFailure(deps, { nonsense: true }, 1_000)).status);
+      (await acceptSandboxLifecycleIncident(deps, { nonsense: true }, 1_000)).status);
 
     const row = store.rows()[0];
     expect(row?.rejectedAt).toBeDefined();
@@ -369,8 +388,8 @@ describe('an auxiliary log failure', () => {
     db.prepare('DROP TABLE activity_log').run();
 
     const { value, logs } = await withDiagnostics(async () => ({
-      first: await agent.acceptSandboxLifecycleFailure(incident),
-      repeat: await agent.acceptSandboxLifecycleFailure({ ...incident, attempts: 2 }),
+      first: await agent.acceptSandboxLifecycleIncident(incident),
+      repeat: await agent.acceptSandboxLifecycleIncident({ ...incident, attempts: 2 }),
     }));
 
     // The duplicate arm logs before it answers too: an uncontained throw there made the retry loop
@@ -393,7 +412,7 @@ describe('an auxiliary log failure', () => {
     acceptSubmissions(agent);
 
     const { value, logs } = await withDiagnostics(
-      async () => await agent.acceptSandboxLifecycleFailure(incident),
+      async () => await agent.acceptSandboxLifecycleIncident(incident),
     );
 
     expect(value).toMatchObject({ status: 'queued', duplicate: false });

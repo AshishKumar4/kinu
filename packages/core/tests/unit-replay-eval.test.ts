@@ -1,0 +1,247 @@
+/** Replay eval: outcome-labeled turns re-run against the current config persist a loss entry. */
+import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { makeSql, makeExecRaw, createMockLLM, createTestRuntime } from './helpers';
+import { createTestActors, present } from '@kinu.run/test-utils';
+import type { ActorHandle } from '../src/identity/actor-handle';
+import type { SqlExecutor } from '../src/types/primitives';
+import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
+import { initReplayTables, runReplayEval, listReplayEvals } from '../src/evolution/replay';
+import { wilsonInterval } from '../src/utils/stats';
+import { EvolutionEngine } from '../src/evolution/engine';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+
+/** Seed and read share one actor handle; tables are keyed by actor. */
+interface Replays {
+  readonly sql: SqlExecutor;
+  readonly actor: ActorHandle;
+}
+
+function setup(): Replays {
+  const db = new Database(':memory:');
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+  initTurnOutcomeTables(execRaw);
+  initReplayTables(execRaw);
+
+  return { sql, actor: createTestActors(sql, execRaw).main };
+}
+
+function seedOutcomes(sql: SqlExecutor, actor: ActorHandle) {
+  recordTurnOutcome(sql, actor, {
+    turnId: 'good', outcome: 'accepted', confidence: 1, source: 'classifier',
+    userMessage: 'list the open ports', assistantResponse: 'Ports 80 and 443 are open.', now: 100,
+  });
+  recordTurnOutcome(sql, actor, {
+    turnId: 'bad', outcome: 'corrected', confidence: 1, source: 'classifier',
+    userMessage: 'summarize Q3', assistantResponse: 'Q2 summary...', followup: 'I said Q3, not Q2', now: 200,
+  });
+}
+
+describe('runReplayEval', () => {
+  test('re-runs labeled turns, scores against recorded outcomes, persists the loss entry', async () => {
+    const { sql, actor } = setup();
+    seedOutcomes(sql, actor);
+    const ranTasks: string[] = [];
+
+    const judge = createMockLLM({
+      // Distinct scores prove both the accepted and corrected paths ran.
+      'Accepted response': '{"score": 1.0, "note": "as good"}',
+      "User's correction": '{"score": 0.5, "note": "partially addressed"}',
+    });
+
+    const summary = await runReplayEval({
+      sql, actor, judge,
+      runTask: async (task) => {
+        ranTasks.push(task);
+
+        return `fresh answer to: ${task}`;
+      },
+      sampleSize: 6,
+    });
+
+    const scored = present(summary, 'the replay-eval summary');
+
+    expect(scored.sampleSize).toBe(2);
+    expect(scored.acceptedCount).toBe(1);
+    expect(scored.negativeCount).toBe(1);
+    expect(scored.meanScore).toBeCloseTo(0.75);
+    expect(scored.loss).toBeCloseTo(0.25);
+    expect(ranTasks.sort()).toEqual(['list the open ports', 'summarize Q3']);
+
+    // 0.75 over two instances says almost nothing, and the summary says so.
+    expect(scored.interval).toEqual(wilsonInterval(1.5, 2));
+    expect(scored.interval.lo).toBeCloseTo(0.1979, 4);
+    expect(scored.interval.hi).toBeCloseTo(0.9733, 4);
+
+    // Persisted with its interval.
+    const stored = listReplayEvals(sql, actor);
+    expect(stored).toHaveLength(1);
+    expect(stored[0].loss).toBeCloseTo(0.25);
+    expect(stored[0].results).toHaveLength(2);
+    expect(stored[0].interval).toEqual(scored.interval);
+
+    const [row] = sql<{ score_lo: number; score_hi: number }>`
+      SELECT score_lo, score_hi FROM replay_evals WHERE actor_id = ${actor.actorId}`;
+
+    expect(row.score_lo).toBeCloseTo(0.1979, 4);
+    expect(row.score_hi).toBeCloseTo(0.9733, 4);
+  });
+
+  test('a failed re-run or unusable judge scores 0 — failing to reproduce IS loss', async () => {
+    const { sql, actor } = setup();
+    seedOutcomes(sql, actor);
+
+    const summary = await runReplayEval({
+      sql, actor,
+      judge: createMockLLM({ '': 'not json' }),
+      runTask: async (task) => {
+        if (task.includes('Q3')) throw new Error('runner exploded');
+
+        return 'fresh';
+      },
+    });
+
+    const scored = present(summary, 'the replay-eval summary');
+
+    expect(scored.meanScore).toBe(0);
+    expect(scored.loss).toBe(1);
+    expect(scored.results.map((r) => r.note).join(' ')).toContain('runner exploded');
+  });
+
+  test('returns null (and persists nothing) when no labeled turns exist', async () => {
+    const { sql, actor } = setup();
+
+    const summary = await runReplayEval({
+      sql, actor, judge: createMockLLM(), runTask: async () => 'x',
+    });
+
+    expect(summary).toBeNull();
+    expect(listReplayEvals(sql, actor)).toHaveLength(0);
+  });
+});
+
+describe('listReplayEvals — the quality-panel data series', () => {
+  function insertReplay(
+    sql: SqlExecutor,
+    actor: ActorHandle,
+    row: { id: string; ranAt: number; meanScore: number; scaffoldVersion: number | null },
+  ) {
+    void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
+        VALUES (${actor.actorId}, ${row.id}, ${row.ranAt}, 4, 2, 2, ${row.meanScore}, ${row.scaffoldVersion}, ${'[]'})`;
+  }
+
+  test('returns the series newest-first with the fields the panel renders', () => {
+    const { sql, actor } = setup();
+    insertReplay(sql, actor, { id: 'r1', ranAt: 100, meanScore: 0.5, scaffoldVersion: 1 });
+    insertReplay(sql, actor, { id: 'r2', ranAt: 200, meanScore: 0.7, scaffoldVersion: 1 });
+    insertReplay(sql, actor, { id: 'r3', ranAt: 300, meanScore: 0.9, scaffoldVersion: 2 });
+
+    const series = listReplayEvals(sql, actor);
+    expect(series.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
+    expect(series[0].meanScore).toBeCloseTo(0.9);
+    expect(series[0].loss).toBeCloseTo(0.1);
+    // scaffold_version is the before/after-evolution axis.
+    expect(series.map((r) => r.scaffoldVersion)).toEqual([2, 1, 1]);
+  });
+
+  test('honors the limit', () => {
+    const { sql, actor } = setup();
+
+    for (let i = 0; i < 5; i++) insertReplay(sql, actor, { id: `r${i}`, ranAt: i * 10, meanScore: 0.5, scaffoldVersion: null });
+    expect(listReplayEvals(sql, actor, 3)).toHaveLength(3);
+  });
+
+  test('a row with no stored interval gets one reconstructed exactly', () => {
+    const { sql, actor } = setup();
+    // No score_lo/score_hi: the reconstruction path.
+    insertReplay(sql, actor, { id: 'no-interval', ranAt: 100, meanScore: 0.75, scaffoldVersion: null });
+    const [row] = listReplayEvals(sql, actor);
+    expect(row.interval).toEqual(wilsonInterval(3, 4)); // mean 0.75 over the row's 4 instances
+  });
+});
+
+describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
+  test('the lifetime cycle does NOT run it — the same ledger is not re-executed twice', async () => {
+    const { rt, stores } = createTestRuntime({
+      llmResponses: {
+        'Accepted response': '{"score": 0.8, "note": "ok"}',
+        "User's correction": '{"score": 0.8, "note": "ok"}',
+      },
+    });
+
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+
+    const engine = new EvolutionEngine(rt, stores.history, {
+      replayTaskRunner: async (task) => `current-config answer: ${task}`,
+    });
+
+    seedOutcomes(rt.storage.sql, rt.actor);
+    const events: Array<{ type: string; message: string }> = [];
+    engine.onEvent((e) => events.push(e));
+
+    await engine.onLifetimeEvolution();
+
+    expect(events.filter((e) => e.type === 'replay_eval')).toHaveLength(0);
+    expect(listReplayEvals(rt.storage.sql, rt.actor)).toHaveLength(0);
+  });
+
+  test('called explicitly, it runs through the backend runner and emits the loss', async () => {
+    const { rt, stores } = createTestRuntime({
+      llmResponses: {
+        'Accepted response': '{"score": 0.8, "note": "ok"}',
+        "User's correction": '{"score": 0.8, "note": "ok"}',
+      },
+    });
+
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+
+    const engine = new EvolutionEngine(rt, stores.history, {
+      replayTaskRunner: async (task) => `current-config answer: ${task}`,
+    });
+
+    seedOutcomes(rt.storage.sql, rt.actor);
+
+    const events: Array<{ type: string; message: string }> = [];
+    engine.onEvent((e) => events.push(e));
+    await engine.runReplayEval();
+
+    const replayEvents = events.filter((e) => e.type === 'replay_eval');
+    expect(replayEvents).toHaveLength(1);
+
+    expect(listReplayEvals(rt.storage.sql, rt.actor)).toHaveLength(1);
+  });
+
+  test('a failed pass reaches its caller instead of reading as nothing to measure', async () => {
+    const { rt, stores } = createTestRuntime({
+      llmResponses: {
+        'Accepted response': '{"score": 0.8, "note": "ok"}',
+        "User's correction": '{"score": 0.8, "note": "ok"}',
+      },
+    });
+
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+
+    const engine = new EvolutionEngine(rt, stores.history, {
+      replayTaskRunner: async (task) => `current-config answer: ${task}`,
+    });
+
+    seedOutcomes(rt.storage.sql, rt.actor);
+    // The loss row the pass ends on cannot be written.
+    rt.storage.execRaw('DROP TABLE replay_evals');
+
+    await expect(engine.runReplayEval()).rejects.toThrow('no such table: replay_evals');
+  });
+
+  test('no runner configured → replay skipped, returns null', async () => {
+    const { rt, stores } = createTestRuntime();
+    const engine = new EvolutionEngine(rt, stores.history);
+    seedOutcomes(rt.storage.sql, rt.actor);
+    expect(await engine.runReplayEval()).toBeNull();
+    expect(listReplayEvals(rt.storage.sql, rt.actor)).toHaveLength(0);
+  });
+});

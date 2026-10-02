@@ -145,6 +145,12 @@
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "background_job_serves@packages/core/src/jobs/store.ts": [
+    "actor_id TEXT NOT NULL",
+    "job_id TEXT NOT NULL",
+    "port INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, job_id)"
+  ],
   "background_jobs@packages/core/src/jobs/store.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -973,20 +979,6 @@
     "judge_rationale TEXT",
     "evaluated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
-  ],
-  "scaffold_scores@packages/core/src/evolution/scaffold-scores.ts": [
-    "actor_id TEXT NOT NULL",
-    "scaffold_version INTEGER NOT NULL",
-    "source TEXT NOT NULL CHECK (source IN ('gepa', 'replay'))",
-    "promoted_at INTEGER",
-    "scored_at INTEGER",
-    "mean_score REAL",
-    "score_lo REAL",
-    "score_hi REAL",
-    "sample_size INTEGER NOT NULL DEFAULT 0",
-    "failure TEXT",
-    "details TEXT NOT NULL DEFAULT '[]'",
-    "PRIMARY KEY (actor_id, scaffold_version)"
   ],
   "scaffold_trial_queue@packages/core/src/scaffold/shadow.ts": [
     "actor_id TEXT NOT NULL",

@@ -229,9 +229,9 @@ export {
 } from './evolution/behavior-labels';
 
 export {
-  DEFAULT_QUALITY_THRESHOLD, initScaffoldScoreTables, listScaffoldScores,
-  type ScaffoldScore, type ScaffoldScoreSource, type ScoreDirection, type ScoredInstance,
-} from './evolution/scaffold-scores';
+  initReplayTables, runReplayEval, listReplayEvals, DEFAULT_QUALITY_THRESHOLD,
+  type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
+} from './evolution/replay';
 
 // One row per turn, owned by EvolutionEngine.
 export {
@@ -638,7 +638,6 @@ export {
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
   type SubordinateRuntime,
-  type SubordinatesChangedEvent,
 } from './subordinates/support';
 
 export {
@@ -1565,7 +1564,7 @@ export { labelSigner, type LabelSigner, type LabelSignerEnv } from './utils/labe
 export { shellQuote } from './utils/shell';
 
 export {
-  wilsonInterval, scoreInterval, formatScoreInterval, seededRandom,
+  wilsonInterval, scoreInterval, lossInterval, formatScoreInterval, seededRandom,
   type ScoreInterval,
 } from './utils/stats';
 
@@ -1614,7 +1613,7 @@ export {
   backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership,
-  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
+  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
@@ -1767,8 +1766,8 @@ export type {
 // GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
 export {
   applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, shadowTrialPlan, runDueScaffoldEvaluations,
-  runScaffoldGepaOptimization, runScaffoldOnce,
+  previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, shadowTrialPlan, runQueuedShadowTrials,
+  runScaffoldCaptureText, runScaffoldGepaOptimization, runScaffoldOnce,
   advancePromptSectionLane, proposeMeasuredPromptSection,
   type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface,
@@ -1901,7 +1900,7 @@ export type {
 } from './read-models/workspace-diff';
 
 export {
-  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, readsMovedByFiles, readsWrittenBy,
+  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, ROSTER_READS, readsMovedByFiles, readsWrittenBy,
   type LiveRead, type ReadsChangedFrame,
 } from './read-models/live-reads';
 

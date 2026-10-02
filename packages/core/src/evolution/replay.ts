@@ -1,0 +1,206 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
+/**
+ * Replay-eval harness: re-runs outcome-labeled turns against the current config and
+ * scores the fresh response (accepted = regression guard; corrected/frustrated =
+ * does it address the correction). loss = 1 − mean(score) with a 95% interval,
+ * persisted to `replay_evals`.
+ */
+
+import { Effect } from 'effect';
+import * as v from 'valibot';
+import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives';
+import type { ActorHandle } from '../identity/actor-handle';
+import {
+  isNegativeOutcome,
+  listTurnOutcomes,
+  renderOutcomeCriterion,
+  FRESH_RESPONSE_RULE,
+} from './outcomes';
+import {
+  NEGATIVE_TURN_OUTCOMES, TURN_OUTCOMES,
+  type ReplayEvalSummary, type ReplayInstanceResult, type TurnOutcomeRow,
+} from '../types/evolution';
+
+import { renderThrownChain, settle, tolerate } from '../obs/index';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
+import { nanoid } from '../utils/nanoid';
+import { nowMs } from '../utils/date';
+import { parseJsonValue } from '../utils/json';
+import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stats';
+
+export {
+  NEGATIVE_TURN_OUTCOMES, TURN_OUTCOMES,
+  type ReplayEvalSummary, type ReplayInstanceResult, type TurnOutcomeRow,
+} from '../types/evolution';
+
+/** Instances per pass; each costs a full re-run plus a judge call. 95% half-width at mean 0.5 is ±0.20 at 20. */
+const DEFAULT_REPLAY_SAMPLE_SIZE = 20;
+
+/** The mean replay score the quality panel draws as its floor: below it, the current config answers
+ *  its labeled turns worse than a coin. */
+export const DEFAULT_QUALITY_THRESHOLD = 0.5;
+
+export function initReplayTables(execRaw: RawSqlExec): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS replay_evals (
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    ran_at INTEGER NOT NULL,
+    sample_size INTEGER NOT NULL,
+    accepted_n INTEGER NOT NULL,
+    negative_n INTEGER NOT NULL,
+    mean_score REAL NOT NULL,
+    scaffold_version INTEGER,
+    details TEXT NOT NULL,
+    score_lo REAL,
+    score_hi REAL,
+    PRIMARY KEY (actor_id, id)
+  )`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_replay_evals_actor
+             ON replay_evals(actor_id, ran_at DESC, id DESC)`);
+}
+
+export interface RunReplayEvalOpts {
+  sql: SqlExecutor;
+  actor: ActorHandle;
+  judge: LLM;
+  /** Re-run a task against the current config. */
+  runTask: (task: string) => Promise<string>;
+  sampleSize?: number;
+  scaffoldVersion?: number | null;
+  now?: number;
+}
+
+const ReplayJudgeSchema = v.object({
+  score: v.number(),
+  note: v.optional(v.string()),
+});
+
+const ReplayInstanceResultSchema: v.GenericSchema<ReplayInstanceResult> = v.object({
+  outcomeId: v.string(),
+  outcome: v.picklist(TURN_OUTCOMES),
+  score: v.number(),
+  note: v.string(),
+});
+
+function buildReplayJudgePrompt(row: TurnOutcomeRow, fresh: string): string {
+  return (
+    `You are scoring a NEW response to a task the agent has answered before.\n\n` +
+    `Task:\n${evidenceWindow(row.userMessage, EVIDENCE_BUDGETS.replayTask)}\n\n` +
+    `New response:\n${evidenceWindow(fresh, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n` +
+    renderOutcomeCriterion({
+      outcome: row.outcome,
+      recordedResponse: row.assistantResponse,
+      followup: row.followup,
+      critic: 'user',
+    }, FRESH_RESPONSE_RULE) +
+    `\n\nJSON shape: {"score": <number 0..1>, "note": "<one sentence>"}\n` +
+    jsonObjectOnlyInstruction()
+  );
+}
+
+async function judgeReplay(judge: LLM, row: TurnOutcomeRow, fresh: string): Promise<{ score: number; note: string } | null> {
+  const raw = await judge.complete(buildReplayJudgePrompt(row, fresh));
+  const parsed = v.safeParse(ReplayJudgeSchema, extractJsonObject(raw));
+
+  if (!parsed.success || !Number.isFinite(parsed.output.score)) return null;
+
+  return {
+    score: Math.min(1, Math.max(0, parsed.output.score)),
+    note: parsed.output.note ?? '',
+  };
+}
+
+function replayedInstance(opts: RunReplayEvalOpts, row: TurnOutcomeRow): Effect.Effect<ReplayInstanceResult> {
+  const scored = (score: number, note: string): ReplayInstanceResult => ({ outcomeId: row.id, outcome: row.outcome, score, note });
+
+  return Effect.tryPromise({ try: () => opts.runTask(row.userMessage), catch: (cause) => ({ cause }) }).pipe(Effect.matchEffect({
+    onFailure: (failed) => Effect.succeed(scored(0, `re-run failed: ${renderThrownChain(failed)}`)),
+    onSuccess: (fresh) => Effect.tryPromise({ try: () => judgeReplay(opts.judge, row, fresh), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+      onFailure: (failed) => scored(0, `judge failed: ${renderThrownChain(failed)}`),
+      onSuccess: (verdict) => (verdict === null
+        ? scored(0, 'judge failed: replay judge returned no numeric score')
+        : { outcomeId: row.id, outcome: row.outcome, ...verdict }),
+    })),
+  }));
+}
+
+/** Null when no outcome-labeled turns exist. A failed re-run or unusable verdict scores 0. */
+export function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEvalSummary | null> {
+  const size = Math.max(1, Math.floor(opts.sampleSize ?? DEFAULT_REPLAY_SAMPLE_SIZE));
+
+  const negatives = listTurnOutcomes(opts.sql, opts.actor, {
+    limit: Math.ceil(size / 2), outcomes: NEGATIVE_TURN_OUTCOMES,
+  });
+
+  const accepted = listTurnOutcomes(opts.sql, opts.actor, {
+    limit: size - negatives.length, outcomes: ['accepted'],
+  });
+
+  const sample = [...negatives, ...accepted];
+
+  if (sample.length === 0) return Promise.resolve(null);
+
+  return settle(Effect.map(Effect.forEach(sample, (row) => replayedInstance(opts, row)), (results) => recordedReplay(opts, results)));
+}
+
+function recordedReplay(opts: RunReplayEvalOpts, results: ReplayInstanceResult[]): ReplayEvalSummary {
+  const interval = scoreInterval(results.map((r) => r.score));
+
+  const summary: ReplayEvalSummary = {
+    id: `rpl-${nanoid()}`,
+    ranAt: opts.now ?? nowMs(),
+    sampleSize: results.length,
+    acceptedCount: results.filter((r) => r.outcome === 'accepted').length,
+    negativeCount: results.filter((r) => isNegativeOutcome(r.outcome)).length,
+    meanScore: interval.mean,
+    loss: 1 - interval.mean,
+    interval,
+    scaffoldVersion: opts.scaffoldVersion ?? null,
+    results,
+  };
+
+  opts.actor.assertCurrent();
+  void opts.sql`INSERT INTO replay_evals
+      (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version,
+       details, score_lo, score_hi)
+    VALUES
+      (${opts.actor.actorId}, ${summary.id}, ${summary.ranAt}, ${summary.sampleSize}, ${summary.acceptedCount},
+       ${summary.negativeCount}, ${summary.meanScore},
+       ${summary.scaffoldVersion}, ${JSON.stringify(summary.results)},
+       ${interval.lo}, ${interval.hi})`;
+  markStoreChanged(opts.sql);
+
+  return summary;
+}
+
+/** Newest first. */
+export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50): ReplayEvalSummary[] {
+  actor.assertCurrent();
+
+  const rows = sql<{
+    id: string; ran_at: number; sample_size: number; accepted_n: number;
+    negative_n: number; mean_score: number;
+    scaffold_version: number | null; details: string;
+    score_lo: number | null; score_hi: number | null;
+  }>`SELECT * FROM replay_evals WHERE actor_id = ${actor.actorId}
+      ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
+
+  return rows.map((r) => {
+    // Tolerable: the summary numbers live in the row's own columns.
+    const details = tolerate(() => parseJsonValue(r.details), 'malformed-input');
+    const parsed = v.safeParse(v.array(ReplayInstanceResultSchema), details);
+
+    // Pre-interval rows carry no bounds; mean and n determine them exactly.
+    const interval: ScoreInterval = r.score_lo != null && r.score_hi != null
+      ? { mean: r.mean_score, lo: r.score_lo, hi: r.score_hi, n: r.sample_size }
+      : wilsonInterval(r.mean_score * r.sample_size, r.sample_size);
+
+    return {
+      id: r.id, ranAt: r.ran_at, sampleSize: r.sample_size,
+      acceptedCount: r.accepted_n, negativeCount: r.negative_n,
+      meanScore: r.mean_score, loss: 1 - r.mean_score, interval,
+      scaffoldVersion: r.scaffold_version, results: parsed.success ? parsed.output : [],
+    };
+  });
+}

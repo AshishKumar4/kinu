@@ -26,9 +26,8 @@ export interface HeartbeatTick {
   /** Did this tick leave a successor armed? `false` is only correct when the box
    *  is stopping. */
   readonly armedNext: boolean;
-  readonly decision?: QuiesceAction;
+  readonly decision?: QuiesceAction | 'ask';
   readonly replaced?: boolean;
-  /** D35. */
   readonly note?: string;
 }
 

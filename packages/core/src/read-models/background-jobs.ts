@@ -36,7 +36,7 @@ export function jobResult(jobs: BackgroundJobStore, jobId: string): BackgroundJo
 }
 
 export function listBackgroundJobs(jobs: BackgroundJobStore, limit = 20): BackgroundJob[] {
-  return jobs.list(limit);
+  return jobs.list(limit).map((job) => (job.status === 'running' && job.serves !== null ? { ...job, status: 'serving' } : job));
 }
 
 /** Abort a running job, mark it cancelled, and wake the agent. Awaited: the wake is part of the

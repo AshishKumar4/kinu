@@ -87,8 +87,9 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
       calls.push(`replay:${limit ?? 'all'}`);
 
       return [{
-        version: 3, source: 'replay', promotedAt: 1, scoredAt: 2, interval: { mean: 0.75, lo: 0.5, hi: 1, n: 1 },
-        failure: null, direction: 'reached', results: [],
+        id: "rpl-1", ranAt: 1, sampleSize: 1, acceptedCount: 1, negativeCount: 0,
+        meanScore: 0.75, loss: 0.25, interval: { mean: 0.75, lo: 0.5, hi: 1, n: 1 },
+        scaffoldVersion: 0, results: [],
       }];
     },
     armCompactNow: () => { calls.push("compactNow"); },
@@ -177,11 +178,11 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(host.calls).toEqual(["archive:10"]);
   });
 
-  test("replayEvals exposes the quality curve read-only via the host", async () => {
+  test("replayEvals exposes the loss curve read-only via the host", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
     const r = await p.tools.replayEvals.execute(5);
-    expect(r).toMatchObject([{ version: 3, direction: 'reached' }]);
+    expect(r).toMatchObject([{ id: "rpl-1", loss: 0.25 }]);
     expect(host.calls).toEqual(["replay:5"]);
     expect(p.types).toContain("replayEvals");
   });
@@ -191,7 +192,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
       id: "bgjob-1", kind: "shell", label: null, workMode: "build", status: "completed",
       result: '"the output"', error: null, createdAt: 1, settledAt: 2, epoch: 0, resumeAttempts: 0,
       retriedBy: null,
-      attemptStartedAt: 1, resumeAfter: null,
+      attemptStartedAt: 1, resumeAfter: null, serves: null,
     };
 
     const host = fakeHost({ jobResult: async (id) => {
@@ -210,7 +211,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
       id: "bgjob-2", kind: "agents", label: null, workMode: "build", status: "running",
       result: null, error: null, createdAt: 1, settledAt: null, epoch: 0, resumeAttempts: 0,
       retriedBy: null,
-      attemptStartedAt: 1, resumeAfter: null,
+      attemptStartedAt: 1, resumeAfter: null, serves: null,
     };
 
     const host = fakeHost({ jobResult: async () => running });

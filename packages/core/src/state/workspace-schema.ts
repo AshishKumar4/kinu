@@ -21,7 +21,7 @@ import { initActorClaimTables } from '../orchestrator/actor-claims';
 import { resetGuardedExec } from './store-reset';
 import { initGepaTables } from '../evolution/gepa/persistence';
 import { initTurnOutcomeTables } from '../evolution/outcomes';
-import { initScaffoldScoreTables } from '../evolution/scaffold-scores';
+import { initReplayTables } from '../evolution/replay';
 import { initRefinementTables } from '../evolution/refinement';
 import { initImportedExperienceTable } from '../experience/imports';
 import { initHeadsTables } from '../heads/schema';
@@ -138,7 +138,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initSwarmNodeRecords(execRaw);
   // A woken actor can record outcomes before any turn constructs EvolutionEngine.
   initTurnOutcomeTables(execRaw);
-  initScaffoldScoreTables(execRaw);
+  initReplayTables(execRaw);
   initRefinementTables(execRaw);
   // Spec: docs/ARCHITECTURE.md, "Events and ingress".
   initEventsHubTables(exec);

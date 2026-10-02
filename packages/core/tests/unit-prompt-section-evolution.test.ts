@@ -20,7 +20,7 @@ import { buildChangelog, countUnseenChangelog, executeChangelogRevert } from '..
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initShadowTables } from '../src/scaffold/shadow';
 import { initTurnOutcomeTables } from '../src/evolution/outcomes';
-import { initScaffoldScoreTables } from '../src/evolution/scaffold-scores';
+import { initReplayTables } from '../src/evolution/replay';
 import { initRefinementTables } from '../src/evolution/refinement';
 import { initFactsTable, createFactsStore, type FactsStore } from '../src/memory/facts';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
@@ -52,7 +52,7 @@ function setup(): Harness {
   initScaffoldTables(execRaw);
   initShadowTables(execRaw);
   initTurnOutcomeTables(execRaw);
-  initScaffoldScoreTables(execRaw);
+  initReplayTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
   initRefinementTables(execRaw);

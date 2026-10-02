@@ -12,7 +12,7 @@ import type { BackgroundJob } from '../types/jobs';
 import { PROPOSED_TASK_STATUSES, type ProposedTask } from '../types/proposals';
 import type { ModifyResult } from '../types/scaffold';
 import type { ScaffoldVersionView } from '../types/scaffold';
-import type { ScaffoldScore } from '../types/evolution';
+import type { ReplayEvalSummary } from '../types/evolution';
 import type { TimerTrigger } from '../events/ingress/triggers';
 import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
@@ -45,7 +45,7 @@ export interface AgentSelfHost {
     | { ok: boolean; changed: boolean; error?: string };
   jobResult(jobId: string): Promise<BackgroundJob | null>;
   listBackgroundJobs(limit?: number): Promise<BackgroundJob[]>;
-  getReplayEvals(limit?: number): Promise<ScaffoldScore[]>;
+  getReplayEvals(limit?: number): Promise<ReplayEvalSummary[]>;
   /** Arm the compaction ladder's forced rebuild for this session's NEXT turn
    *  assembly — the same one-shot flag overflow recovery uses. */
   armCompactNow(): void;
@@ -79,7 +79,7 @@ export declare const agent: {
   backgroundJobs(limit?: number): Promise<unknown>;
   /** Compact the conversation when the next turn is assembled; the folded range stays archived. */
   compactNow(): Promise<{ armed: boolean; appliesAt: 'next-turn-assembly' } | Refusal>;
-  /** One point per promoted scaffold version, newest first: mean score on labeled turns with a 95% interval. */
+  /** Past turns replayed against your current config, newest first: loss = 1 - mean score, with a 95% interval. */
   replayEvals(limit?: number): Promise<unknown>;
 };
 `;
@@ -266,7 +266,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         },
       },
       replayEvals: {
-        description: 'Read your quality curve (newest first): one point per promoted scaffold version, its mean score on outcome-labeled turns with a 95% interval, and its direction against the previous point. A move inside the interval is noise, not progress; `declined` is a regression.',
+        description: 'Read your replay-eval loss curve (newest first): past outcome-labeled turns re-run against the current config, scored against how they originally landed. Each entry carries the 95% confidence interval on its mean score: a move inside the interval is noise, not progress.',
         execute: (...args: unknown[]) => settle(withArgument(
           argument(OptionalNumberSchema, { value: args[0] }, 'agent.replayEvals: limit must be a number when given'),
           (limit) => host.getReplayEvals(limit),

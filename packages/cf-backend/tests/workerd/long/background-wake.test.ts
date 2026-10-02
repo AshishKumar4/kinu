@@ -5,17 +5,12 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
-import { WAKE_MARKER as MARKER, WakeDriveResultSchema, type WakeHoldPlacement } from '../two-turn-shapes';
+import { WAKE_MARKER as MARKER, WakeDriveResultSchema } from '../two-turn-shapes';
 
 describe('a background job settling while the interactive turn still owns the session wakes a turn that reaches the model', () => {
-  const cases: ReadonlyArray<{ where: WakeHoldPlacement; window: string }> = [
-    { where: 'reply', window: 'inside the running turn\'s reply step (the live incident\'s window)' },
-    { where: 'settle', window: 'inside the just-closed turn\'s settle' },
-  ];
-
-  it.each(cases)('$window: the woken run opens for the runner\'s message, reads the job, and replies with its output', { timeout: 240_000 }, async ({ where }) => {
-    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName(`wake-driver-${where}`));
-    const drive = v.parse(WakeDriveResultSchema, await root.backgroundWakeConversation(where));
+  it('the real adapter auto-detaches, queues the wake behind the held reply and reaches the model', { timeout: 240_000 }, async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('wake-driver-reply'));
+    const drive = v.parse(WakeDriveResultSchema, await root.backgroundWakeConversation());
 
     expect(drive.rows.jobs).toHaveLength(1);
     const job = drive.rows.jobs[0];

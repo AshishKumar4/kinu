@@ -53,9 +53,12 @@ const workspace = {
   ],
   backgroundJobs: async (of) => (of === undefined ? [server] : []),
   subordinates: async () => [],
+  agents: async () => [],
   toolCallsInFlight: () => [],
   heard: () => 0,
   listen: () => undefined,
+  readsMoved: () => 0,
+  readsMoving: new AbortController().signal,
 };
 
 const harness = createHarness({
@@ -89,9 +92,12 @@ const ResultsSchema = v.object({
   })),
 });
 
-/** Run the held trial, send `signal` once it is open to the run's whole process group or to vitest's process alone, and
- *  hand back how the run ended, everything it printed, and the outcome its report recorded for the trial. */
-async function cancelHeldTrial(signal: 'SIGTERM' | 'SIGINT', to: 'group' | 'vitest'): Promise<{ code: number; output: string; outcome: unknown }> {
+/**
+ * Run the held trial and send `signal` once it is open: to the run's whole process group, to vitest's process alone, or
+ * to the deploy row's runner, the way a terminal's Ctrl-C reaches it (scripts/deadline.ts, a session of its own for the
+ * run). Hand back how the run, or its runner, ended, everything it printed, and the outcome its report recorded.
+ */
+async function cancelHeldTrial(signal: 'SIGTERM' | 'SIGINT', to: 'group' | 'vitest' | 'deploy row'): Promise<{ code: number; output: string; outcome: unknown }> {
   const dir = scratchDir(`cancelled-${signal}`, join(REPO, 'bench-artifacts'));
 
   // The eval suite's own plugin, interop and preload: the watch reaches core, which imports its prompts as text, and the
@@ -103,10 +109,15 @@ async function cancelHeldTrial(signal: 'SIGTERM' | 'SIGINT', to: 'group' | 'vite
   ].join('\n'));
   writeFileSync(join(dir, 'held.eval.ts'), HELD_TRIAL);
 
-  // Its own process group, as the deploy starts a gate: the group signal reaches vitest and its workers at once.
-  const run = Bun.spawn(['bun', '--bun', join(REPO, 'node_modules/.bin/vitest'), 'run', '--root', dir, '--config', join(dir, 'vitest.config.ts'),
-    `--reporter=${join(REPO, 'evals/src/reporter.ts')}`, '--reporter=json', `--outputFile.json=${join(dir, 'results.json')}`],
-  { cwd: REPO, detached: true, stdout: 'pipe', stderr: 'pipe' });
+  const vitest = ['bun', '--bun', join(REPO, 'node_modules/.bin/vitest'), 'run', '--root', dir, '--config', join(dir, 'vitest.config.ts'),
+    `--reporter=${join(REPO, 'evals/src/reporter.ts')}`, '--reporter=json', `--outputFile.json=${join(dir, 'results.json')}`];
+
+  // A deploy phase's lone row, its output passed on as it comes.
+  const row = `import { runUnderDeadline } from ${JSON.stringify(join(REPO, 'scripts/deadline.ts'))};\n`
+    + `await runUnderDeadline({ argv: ${JSON.stringify(vitest)}, cwd: ${JSON.stringify(REPO)}, seconds: 480, label: 'Eval pass', stdio: 'tee' });\n`;
+
+  // Its own process group, as the deploy starts a gate and a terminal its foreground job.
+  const run = Bun.spawn(to === 'deploy row' ? [process.execPath, '-e', row] : vitest, { cwd: REPO, detached: true, stdout: 'pipe', stderr: 'pipe' });
 
   let output = '';
   let sent = false;
@@ -119,7 +130,7 @@ async function cancelHeldTrial(signal: 'SIGTERM' | 'SIGINT', to: 'group' | 'vite
 
       if (!sent && output.includes('[fixture] the trial waits on its job')) {
         sent = true;
-        process.kill(to === 'group' ? -run.pid : run.pid, signal);
+        process.kill(to === 'vitest' ? run.pid : -run.pid, signal);
       }
     }
   };
@@ -131,25 +142,27 @@ async function cancelHeldTrial(signal: 'SIGTERM' | 'SIGINT', to: 'group' | 'vite
   return { code, output, outcome: results.testResults[0]?.assertionResults[0]?.meta.harness.run.output.turns[0]?.outcome };
 }
 
-describe('a run cancelled mid-trial records what held each open trial, then exits naming them', () => {
-  const held = { status: 'cancelled', heldBy: ['running shell job'] };
-
+/** How a held trial's run is cancelled, and what its record and its runner's exit say then. */
+const CANCELS = [
   // The deploy's watchdog signals the run's process group, and its kill follows 5 s later (scripts/deadline.ts).
-  test("SIGTERM to the run's process group, as the deploy sends it", async () => {
-    const { code, output, outcome } = await cancelHeldTrial('SIGTERM', 'group');
-
-    expect(code, output).toBe(143);
-    expect(outcome).toMatchObject({ ...held, message: expect.stringMatching(/^cancelled by SIGTERM, held by running shell job bgjob-server \(workspace: node server\.js\) for \d+ s$/u) });
-    expect(output).toContain('[evals] cancelled by SIGTERM, the trials open and what held each:');
-    expect(output).toMatch(/held > muse \| product \| trial 1: cancelled by SIGTERM, held by running shell job bgjob-server \(workspace: node server\.js\) for \d+ s/u);
-  });
-
+  { title: "SIGTERM to the run's process group, as the deploy sends it", signal: 'SIGTERM', to: 'group', code: 143, by: 'SIGTERM' },
   // A person who stops vitest's own process: its workers hear the cancel from it.
-  test("SIGINT to vitest's process alone, which passes it to its workers", async () => {
-    const { code, output, outcome } = await cancelHeldTrial('SIGINT', 'vitest');
+  { title: "SIGINT to vitest's process alone, which passes it to its workers", signal: 'SIGINT', to: 'vitest', code: 130, by: 'SIGINT' },
+  // A person's Ctrl-C on the deploy reaches the row's runner, never the run, which leads a session of its own: the runner
+  // passes it on as SIGTERM and waits for the run to end. Until 2026-10-01 it SIGKILLed the run at once, unrecorded.
+  { title: "a person's Ctrl-C on the deploy row running the eval pass records its cancelled trials", signal: 'SIGINT', to: 'deploy row', code: 130, by: 'SIGTERM' },
+] as const;
 
-    expect(code, output).toBe(130);
-    expect(outcome).toMatchObject({ ...held, message: expect.stringMatching(/^cancelled by SIGINT, held by running shell job bgjob-server/u) });
-    expect(output).toContain('[evals] cancelled by SIGINT, the trials open and what held each:');
-  });
+describe('a run cancelled mid-trial records what held each open trial, then exits naming them', () => {
+  for (const { title, signal, to, code, by } of CANCELS) {
+    test(title, async () => {
+      const run = await cancelHeldTrial(signal, to);
+      const held = `cancelled by ${by}, held by running shell job bgjob-server (workspace: node server.js) for `;
+
+      expect(run.code, run.output).toBe(code);
+      expect(run.outcome).toMatchObject({ status: 'cancelled', heldBy: ['running shell job'], message: expect.stringMatching(new RegExp(`^${RegExp.escape(held)}\\d+ s$`, 'u')) });
+      expect(run.output).toContain(`[evals] cancelled by ${by}, the trials open and what held each:`);
+      expect(run.output).toContain(`held > muse | product | trial 1: ${held}`);
+    });
+  }
 });

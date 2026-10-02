@@ -61,6 +61,7 @@ EVOLUTION_EVENTS = frozenset({
     "scaffold_proposed",
     "consolidation",
     "turn_complete",
+    "replay_eval",
     "changelog_digest",
     "experience_import",
     "scaffold_promotion",
