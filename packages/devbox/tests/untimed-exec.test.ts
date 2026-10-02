@@ -1,12 +1,13 @@
 // D37: an untimed command runs on `ctx.container.exec`, and ending it ends everything it started. Here the
 // runtime's exec is a real local process, so the output, the exit code and the process tree are real.
-import { afterAll, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import { devboxFailure } from '../src/errors';
+import { collectExecRecords } from '../src/exec-stream';
 import { Devbox, gate, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
@@ -129,6 +130,105 @@ describe('an untimed command on the runtime\'s exec', () => {
       admission.release();
       await ran;
       await box.destroy();
+    }
+  });
+});
+
+const decoder = new TextDecoder();
+
+/** The box's rest decision at `at`, as its heartbeat takes it. */
+async function restDecision(box: Awaited<ReturnType<typeof readyBox>>, at: number): Promise<string | undefined> {
+  setSystemTime(at);
+  await box.devboxHeartbeat();
+
+  return (await box.devboxState()).lastTick?.decision;
+}
+
+/** A FIFO the command reads before it goes on: it is still running until the test writes the FIFO. */
+function releaseFifo(cwd: string): string {
+  const release = join(cwd, 'release');
+  Bun.spawnSync(['mkfifo', release]);
+
+  return release;
+}
+
+// 2026-10-02: a sandbox job's output reached no one until its command ended.
+describe('a streamed untimed command', () => {
+  test('hands over what it printed while it still runs, and its exit code ends the stream', async () => {
+    const box = await readyBox();
+    const cwd = mkdtempSync(join(root, 'stream-'));
+    const release = releaseFifo(cwd);
+    const stream = await box.execUntimedStream(`echo compiled; read line < ${release}; echo "built $line" >&2; exit 3`, { cwd, execId: 'stream' });
+    const heard: string[] = [];
+
+    // The command waits on the FIFO until its first line is heard, so it ends only if that line came while it ran.
+    const result = await collectExecRecords(stream, (name, data) => {
+      heard.push(`${name}: ${decoder.decode(data)}`);
+
+      if (heard.length === 1) writeFileSync(release, 'ok\n');
+    });
+
+    expect(heard).toEqual(['stdout: compiled\n', 'stderr: built ok\n']);
+    expect(result).toEqual({ stdout: 'compiled\n', stderr: 'built ok\n', exitCode: 3 });
+  });
+
+  test('cancelling the stream ends the command and what it started', async () => {
+    const box = await readyBox();
+    const cwd = mkdtempSync(join(root, 'stream-cancel-'));
+    const started = join(cwd, 'started');
+    Bun.spawnSync(['mkfifo', started]);
+    const stream = await box.execUntimedStream(`sleep 60 & echo $! > ${started}; wait`, { cwd, execId: 'stream-cancel' });
+    const child = Number((await Bun.file(started).text()).trim());
+
+    await stream.cancel('the reader is gone');
+
+    expect(alive(child)).toBe(false);
+  });
+
+  // The box counts a shell command only as a caller; a streamed one is counted until it exits, then the box can rest.
+  test('holds the box while it runs, and lets it rest once it has ended', async () => {
+    const start = Date.now();
+    const box = await readyBox();
+    const cwd = mkdtempSync(join(root, 'stream-hold-'));
+    const release = releaseFifo(cwd);
+    const { idleMs, quietConfirmMs } = DEFAULT_DEVBOX_POLICY;
+
+    try {
+      const stream = await box.execUntimedStream(`read line < ${release}; echo done`, { cwd, execId: 'stream-hold' });
+      // Past the idle window and then through the quiet one: an uncounted command would let the box rest here.
+      const idle = start + idleMs + 1_000;
+      await restDecision(box, idle);
+      const running = await restDecision(box, idle + quietConfirmMs);
+
+      writeFileSync(release, 'ok\n');
+      expect(await collectExecRecords(stream, () => {})).toEqual({ stdout: 'done\n', stderr: '', exitCode: 0 });
+      const ended = idle + quietConfirmMs;
+      await restDecision(box, ended + idleMs + 1_000);
+      const after = await restDecision(box, ended + idleMs + 1_000 + quietConfirmMs);
+
+      expect({ running, after }).toEqual({ running: 'hold', after: 'quiesce' });
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  // No one reads the exit record here: the box stops counting the command because its process exited.
+  test('a cancelled stream lets the box rest, its command gone', async () => {
+    const start = Date.now();
+    const box = await readyBox();
+    const cwd = mkdtempSync(join(root, 'stream-cancel-rest-'));
+    const release = releaseFifo(cwd);
+    const { idleMs, quietConfirmMs } = DEFAULT_DEVBOX_POLICY;
+
+    try {
+      const stream = await box.execUntimedStream(`read line < ${release}`, { cwd, execId: 'stream-cancel-rest' });
+      await stream.cancel('the reader is gone');
+      const idle = start + idleMs + 1_000;
+      await restDecision(box, idle);
+
+      expect(await restDecision(box, idle + quietConfirmMs)).toBe('quiesce');
+    } finally {
+      setSystemTime();
     }
   });
 });

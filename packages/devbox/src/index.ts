@@ -4,6 +4,8 @@ export { Devbox, type DevboxState, type PortListener } from './devbox';
 
 export { DevboxError, devboxFailure, type DevboxErrorCode } from './errors';
 
+export { collectExecRecords, execRecords } from './exec-stream';
+
 export { DevboxSyncGateway, DevboxOutbound, type OutboundPolicy } from './gateway';
 
 export { DevboxStoreGateway } from './store-gateway';
