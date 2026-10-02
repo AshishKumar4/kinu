@@ -3,14 +3,9 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dockerBuild } from './docker-build';
 
-/** Build the same native probe and lower the deployed image contains, and the sync this tree
- *  bundles, which the Dockerfile copies (D30). */
+/** Build the same native probe and lower the deployed image contains. */
 export function buildBlockImage(image: string): void {
-  const context = join(import.meta.dir, '../../block-lower');
-  const bundled = spawnSync(process.execPath, [join(context, 'bundle-sync.ts')], { encoding: 'utf8' });
-
-  if (bundled.status !== 0) throw new Error(bundled.stdout + bundled.stderr);
-  const result = dockerBuild(image, context);
+  const result = dockerBuild(image, join(import.meta.dir, '../../block-lower'));
 
   if (result.status !== 0) throw new Error(result.stdout + result.stderr);
 }

@@ -1,11 +1,11 @@
 // The container's publisher (D57): mksquashfs streams each layer to the store as it builds it.
-import { shellPath } from './chunked-delta';
 import { DEVBOX_RUNTIME_DIR } from './storage';
 
 const MIB = 1024 * 1024;
 
-/** The platform's tmpfs, measured in a Medium container (D55). */
-const PLATFORM_TMPFS_BYTES = 64 * MIB;
+export function shellPath(path: string): string {
+  return `'${path.replaceAll("'", `'\\''`)}'`;
+}
 
 /** Parts, parts in flight, and the most of an archive the disk holds while it streams (a soft bound). */
 export interface StreamProfile {
@@ -16,9 +16,6 @@ export interface StreamProfile {
 
 /** Four 5 MiB parts held a 10 GiB base to about 13 MiB/s a box (D57); D53's E′ shape (D58). */
 export const DISK_STREAM: StreamProfile = { partBytes: 16 * MIB, partsInFlight: 16, windowBytes: 512 * MIB };
-
-/** R2 refuses a part under 5 MiB unless it is the last, and the window must hold two parts. */
-export const TMPFS_STREAM: StreamProfile = { partBytes: 5 * MIB, partsInFlight: 2, windowBytes: PLATFORM_TMPFS_BYTES / 4 };
 
 /** Publishes the archive as it grows (D57), past the mount (D15). Exits: 1 the store, 2 usage, 3 the
  *  store's account of the object, 4 mksquashfs failed, 5 mksquashfs claimed success with no archive. */
@@ -309,14 +306,6 @@ function archiverParts(input: ArchiveInput) {
     archiver: `/usr/bin/nice -n 10 /usr/bin/mksquashfs ${shellPath(input.sourceDir)} ${shellPath(input.archivePath)} `
       + `-noappend -comp zstd -Xcompression-level 1 -no-progress -wildcards -ef ${shellPath(input.excludeFile)}`,
   };
-}
-
-/** The archive written whole, for local extraction; prints `<rc> <bytes>`. */
-export function archiveCommand(input: ArchiveInput): string {
-  const { prepare, archiver } = archiverParts(input);
-
-  return `${prepare} && ${archiver} >/dev/null; rc=$?; printf '%s %s' "$rc" `
-    + `"$(stat -c %s ${shellPath(input.archivePath)} 2>/dev/null || echo 0)"`;
 }
 
 /** One command: a spot container can be replaced between execs. Prints `<rc> <bytes> <etag>`. */

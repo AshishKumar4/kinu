@@ -1,5 +1,5 @@
 // D55: the hybrid's chain backup in the image, with real FUSE, squashfs tools and the shipped publisher.
-// The store is served inside the container (support/flush-box.ts) and outlives every wipe of the disk,
+// The store is served inside the container (support/store-box.ts) and outlives every wipe of the disk,
 // as R2 outlives a lost container.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -7,8 +7,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { settle } from '../src/errors';
-import { DISK_CHAIN_STORE_MOUNT, diskChain, type DiskChainPorts, type DiskChainState } from '../src/disk-chain';
-import { storeObjectUrl } from '../src/snapshot-chain';
+import { diskChain, type DiskChainPorts, type DiskChainState } from '../src/disk-chain';
+import { STORE_MOUNT, storeObjectUrl } from '../src/store-gateway';
 import { DEVBOX_RUNTIME_DIR as RT, DEVBOX_WORKDIR as WD } from '../src/storage';
 import { buildBlockImage, removeBlockImage } from './support/block-image';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
@@ -56,12 +56,12 @@ const ports: DiskChainPorts = {
   storeRoot: () => ROOT,
   storeObjectUrl: (key) => storeObjectUrl(ROOT, 'bucket', key),
   objectBytes: (key) => {
-    const size = sh(`stat -c %s ${DISK_CHAIN_STORE_MOUNT}/${key.slice(ROOT.length + 1)}`);
+    const size = sh(`stat -c %s ${STORE_MOUNT}/${key.slice(ROOT.length + 1)}`);
 
     return Promise.resolve(size.status === 0 ? Number(size.stdout) : undefined);
   },
   deleteObjects: (keys) => {
-    must(`rm -f ${keys.map((key) => `${DISK_CHAIN_STORE_MOUNT}/${key.slice(ROOT.length + 1)}`).join(' ')}`);
+    must(`rm -f ${keys.map((key) => `${STORE_MOUNT}/${key.slice(ROOT.length + 1)}`).join(' ')}`);
 
     return Promise.resolve();
   },
@@ -103,17 +103,17 @@ let scratch = '';
 beforeAll(async () => {
   buildBlockImage(image);
   scratch = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}disk-chain-`));
-  const built = await Bun.build({ entrypoints: [join(import.meta.dir, 'support/flush-box.ts')], target: 'bun', outdir: scratch });
+  const built = await Bun.build({ entrypoints: [join(import.meta.dir, 'support/store-box.ts')], target: 'bun', outdir: scratch });
 
   if (!built.success) throw new AggregateError(built.logs, 'the store did not build');
 
   const started = spawnSync('docker', ['run', '--detach', '--name', name, '--network=none', '--device', '/dev/fuse', '--cap-add', 'SYS_ADMIN',
-    '--security-opt', 'apparmor=unconfined', '--add-host', 's3-devbox-publish.sandbox.internal:127.0.0.1', '--add-host', 'devbox.internal:127.0.0.1', image], { encoding: 'utf8' });
+    '--security-opt', 'apparmor=unconfined', '--add-host', 's3-devbox-publish.sandbox.internal:127.0.0.1', image], { encoding: 'utf8' });
 
   if (started.status !== 0) throw new Error(started.stderr);
-  spawnSync('docker', ['cp', join(scratch, 'flush-box.js'), `${name}:/var/tmp/flush-box.js`]);
-  spawnSync('docker', ['exec', '--detach', name, 'bun', '/var/tmp/flush-box.js', ROOT]);
-  must('until curl -sf http://devbox.internal/ready >/dev/null; do sleep 0.1; done');
+  spawnSync('docker', ['cp', join(scratch, 'store-box.js'), `${name}:/var/tmp/store-box.js`]);
+  spawnSync('docker', ['exec', '--detach', name, 'bun', '/var/tmp/store-box.js', STORE_MOUNT]);
+  must('until curl -sf http://s3-devbox-publish.sandbox.internal/ready >/dev/null; do sleep 0.1; done');
 });
 
 afterAll(() => {
@@ -184,7 +184,7 @@ test('a rest compacts the deltas into a new base once they outgrow a quarter of 
   const before = oldKeys();
   const rest = await commit('quiesce');
   const expected = tree();
-  const left = before.filter((key) => sh(`[ -e ${DISK_CHAIN_STORE_MOUNT}/${key.slice(ROOT.length + 1)} ]`).status === 0);
+  const left = before.filter((key) => sh(`[ -e ${STORE_MOUNT}/${key.slice(ROOT.length + 1)} ]`).status === 0);
   loseTheDisk();
   await settle(chain.attach(false));
 

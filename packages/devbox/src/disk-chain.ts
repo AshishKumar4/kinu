@@ -2,10 +2,13 @@
 // mounts the layers lazily in the gate (R1, R2) and copies them to disk behind it.
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { shellPath } from './chunked-delta';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { DEVBOX_RUNTIME_DIR, DEVBOX_WORKDIR, type AttachOutcome, type CheckpointKind, type CheckpointOutcome, type DevboxStorage } from './storage';
-import { DISK_STREAM, normalizeArchiveExclude, streamCommand } from './stream-archive';
+import { STORE_MOUNT } from './store-gateway';
+import { DISK_STREAM, normalizeArchiveExclude, shellPath, streamCommand } from './stream-archive';
+
+/** What a save leaves out unless a box names its own: each regenerates from the rest. */
+export const DEFAULT_EXCLUDES = ['node_modules', '*.log', '.cache', '.bun', '__pycache__', '.venv', 'target', '.next', '.turbo', 'dist'] as const;
 
 const DISK_CHAIN_FORMAT = 'disk-chain/1';
 
@@ -25,7 +28,6 @@ const COMPACT_SHARE = 0.25;
 
 const COMPACT_LAYERS = 8;
 
-export const DISK_CHAIN_STORE_MOUNT = '/backups';
 
 const RT = DEVBOX_RUNTIME_DIR;
 
@@ -54,9 +56,6 @@ const RECOVERED = `${RT}/disk-recovered.json`;
 const HYDRATED = `${RT}/disk-hydrate.done`;
 
 const HYDRATING = `${RT}/disk-hydrate.pid`;
-
-/** `safe` when a snapshot holds the whole workspace: not an older chain's overlay. */
-export const SNAPSHOT_SAFE_COMMAND = `if mountpoint -q ${DEVBOX_WORKDIR} && [ ! -e ${RECOVERED} ]; then echo unsafe; else echo safe; fi`;
 
 export interface DiskChainPorts {
   readonly exec: (command: string) => Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number }>;
@@ -140,7 +139,7 @@ function heldBytes(state: DiskChainState): number {
 }
 
 function mounted(root: string, key: string): string {
-  return `${DISK_CHAIN_STORE_MOUNT}/${key.slice(root.length + 1)}`;
+  return `${STORE_MOUNT}/${key.slice(root.length + 1)}`;
 }
 
 export interface DiskChainAttach {
@@ -341,13 +340,10 @@ export class DiskChainStorage implements DevboxStorage {
   }
 
   attach(): Promise<AttachOutcome> {
-    const { legacy, fromSnapshot, recovered } = this.#host;
+    const { fromSnapshot, recovered } = this.#host;
     const chain = this.#chain;
 
     return settle(Effect.gen(function* () {
-      const older = legacy();
-
-      if (older !== undefined) return yield* attempt('io', () => older.attach());
       const attached = yield* chain.attach(fromSnapshot());
       const restoredTo = attached.recoveredTo;
 
@@ -366,7 +362,6 @@ export class DiskChainStorage implements DevboxStorage {
 
 export interface DiskChainHost {
   readonly fromSnapshot: () => boolean;
-  readonly legacy: () => DevboxStorage | undefined;
   readonly recovered: (restoredTo: number) => Promise<void>;
   readonly discard: () => Promise<void>;
 }

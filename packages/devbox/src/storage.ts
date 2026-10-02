@@ -17,10 +17,8 @@ export interface AttachOutcome {
 
 /** `failed` is returned, not thrown: the alarm loop reduces a throwing scheduled callback
  *  to a console line, so the failure must reach the caller as a value to become an incident. */
-export const CHECKPOINT_OUTCOME_KINDS = ['skipped', 'committed', 'failed'] as const;
-
 export interface CheckpointOutcome {
-  readonly kind: (typeof CHECKPOINT_OUTCOME_KINDS)[number];
+  readonly kind: 'skipped' | 'committed' | 'failed';
   /** Present for `skipped` (why it declined) and `failed` (what went wrong). */
   readonly reason: string | undefined;
   /** Durable bytes the store holds after a `committed` commit, not bytes this commit wrote;
@@ -31,55 +29,12 @@ export interface CheckpointOutcome {
   readonly movedBytes: number | undefined;
 }
 
-/** The failure stamp the durable state row carries, so a repeatedly failing
- *  checkpoint stays visible across restarts. */
-interface RecordedFailure {
-  readonly at: number;
-  readonly reason: string;
-}
-
-type StampableRow = { readonly lastFailure: RecordedFailure | undefined };
-
-export interface FailureStampDeps<S> {
-  readonly writeState: (next: S) => Promise<void>;
-  readonly log: (line: string) => void;
-  readonly now: () => number;
-}
-
-/** Best effort: a rejected stamp would make a scheduled callback throw, or let a caller's
- *  catch rewrite the pre-commit record over the published one. */
-export async function stampFailure<S extends StampableRow>(
-  deps: FailureStampDeps<S>,
-  state: S,
-  reason: string,
-): Promise<void> {
-  try {
-    await deps.writeState({ ...state, lastFailure: { at: deps.now(), reason } });
-  } catch {
-    deps.log(`${DEVBOX_WORKDIR} that failure could not be stamped on the durable record`);
-  }
-}
-
-/** Log first: it cannot fail, and a storage failure could suppress a later line.
- *  `bytes`/`movedBytes` are `undefined`, not 0: a throw mid-flight may have landed objects. */
-export async function recordCheckpointFailure<S extends StampableRow>(
-  deps: FailureStampDeps<S>,
-  state: S | null,
-  reason: string,
-): Promise<CheckpointOutcome> {
-  deps.log(`${DEVBOX_WORKDIR} checkpoint failed: ${reason}`);
-
-  if (state !== null) await stampFailure(deps, state, reason);
-
-  return { kind: 'failed', reason, bytes: undefined, movedBytes: undefined };
-}
-
 export interface DevboxStorage {
   /** Must be idempotent on an attached container: the start hook can fire more than once per start.
    *  Throws only when stored state exists but cannot be served; an empty workspace is worse. */
   attach(): Promise<AttachOutcome>;
   /** Does not throw for an ordinary failure, including a refused failure stamp: recording is
-   *  best effort (`stampFailure`), the classification stays the operation's own. */
+   *  best effort, the classification stays the operation's own. */
   checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome>;
   /** Releases SDK-tracked live mounts before the container stops. A property, not a method:
    *  the metered wrapper and conformance suite call it through a receiver of their choosing. */
@@ -93,17 +48,6 @@ export interface DevboxStorage {
 export interface DevboxStore {
   readonly binding: string;
   readonly bucket: R2Bucket;
-}
-
-/** One format per class: bytes written by one format are unreadable by another, so
- *  the choice is carried as a name and a box records which format its bytes are in. */
-export type DevboxStrategyName = 'snapshot-chain';
-
-/** Measured basis: `bench/measure-first/DECISIVE-2026-09-05.md`; D27 stopped the search. */
-export const DEFAULT_DEVBOX_STRATEGY: DevboxStrategyName = 'snapshot-chain';
-
-export function parseDevboxStrategyName(value: string | null | undefined): DevboxStrategyName | null {
-  return value === 'snapshot-chain' ? value : null;
 }
 
 /** The directory a devbox makes durable, and every command's default working directory. */

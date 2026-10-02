@@ -62,7 +62,7 @@ export { CodemodeLauncher } from "./codemode-sandbox";
 
 export { SlateBinding } from "./slates/bindings";
 
-export { DevboxSyncGateway, DevboxOutbound, DevboxStoreGateway } from '@kinu.run/devbox';
+export { DevboxOutbound, DevboxStoreGateway } from '@kinu.run/devbox';
 
 export class KinuEgress extends WorkerEntrypoint<Env, KinuEgressParams> {
   override fetch(request: Request): Promise<Response> {

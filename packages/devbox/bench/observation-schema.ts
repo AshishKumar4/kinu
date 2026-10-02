@@ -1,6 +1,5 @@
 import * as v from 'valibot';
 import type { FileEvidence } from './witness-files';
-import { DeltaFallbackSchema, type DeltaFallback } from '../src/durability/contracts';
 
 export interface ExecReply {
   ok?: boolean;
@@ -53,7 +52,7 @@ export const FileObservationSchema = v.looseObject({
 
 export interface AttachOutcome { kind: string; detail: string }
 
-interface LayerObservation { bytes?: number; digest?: string; objectVersion?: string }
+interface LayerObservation { key?: string; bytes?: number; committedAt?: number }
 
 export interface StartupState {
   restoration?: 'unstarted' | 'restoring' | 'attached' | 'repair' | 'unattached';
@@ -62,15 +61,12 @@ export interface StartupState {
   lastAttach?: AttachOutcome;
   bootId?: string;
   chain?: {
-    base?: LayerObservation & { id?: string };
-    delta?: LayerObservation & { id?: string } | null;
-    mode?: string;
+    base?: LayerObservation;
+    deltas?: LayerObservation[];
     rev?: number;
-    /** The upper's fingerprint the last commit recorded: the loss-window driver's commit witness. */
-    upperMark?: string;
-    deltaFormat?: 'chunked';
-    deltaFallback?: DeltaFallback;
   } | null;
+  /** The rest snapshot the next wake starts from (D55). */
+  snapshot?: { id?: string; chainRev?: number; takenAt?: number } | null;
   incidents?: { total?: number; undelivered?: number };
   /** The box's own container traffic since it activated (D29, D30). */
   wire?: { sent: number; received: number };
@@ -78,7 +74,6 @@ export interface StartupState {
 
 export interface StateReply {
   error?: string;
-  extractionAllowed?: boolean;
   storePrefix?: string;
   /** The box's checkpoint period as the fixture configured it. */
   checkpointIntervalMs?: number;
@@ -86,22 +81,21 @@ export interface StateReply {
 }
 
 const LayerObservationSchema = v.looseObject({
-  bytes: v.optional(v.number()), digest: v.optional(v.string()), objectVersion: v.optional(v.string()),
+  key: v.optional(v.string()), bytes: v.optional(v.number()), committedAt: v.optional(v.number()),
 });
 
 const AttachOutcomeSchema = v.looseObject({ kind: v.string(), detail: v.string() });
 
 export const StateReplySchema = v.looseObject({
-  error: v.optional(v.string()), extractionAllowed: v.optional(v.boolean()), storePrefix: v.optional(v.string()),
+  error: v.optional(v.string()), storePrefix: v.optional(v.string()),
   checkpointIntervalMs: v.optional(v.number()),
   state: v.optional(v.looseObject({
     restoration: v.optional(v.picklist(['unstarted', 'restoring', 'attached', 'repair', 'unattached'])),
     running: v.optional(v.boolean()), unready: v.optional(v.string()), lastAttach: v.optional(AttachOutcomeSchema), bootId: v.optional(v.string()),
     chain: v.optional(v.nullable(v.looseObject({
-      base: v.optional(v.looseObject({ ...LayerObservationSchema.entries, id: v.optional(v.string()) })),
-      delta: v.optional(v.nullable(v.looseObject({ ...LayerObservationSchema.entries, id: v.optional(v.string()) }))), mode: v.optional(v.string()), rev: v.optional(v.number()),
-      upperMark: v.optional(v.string()), deltaFormat: v.optional(v.literal('chunked')), deltaFallback: v.optional(DeltaFallbackSchema),
+      base: v.optional(LayerObservationSchema), deltas: v.optional(v.array(LayerObservationSchema)), rev: v.optional(v.number()),
     }))),
+    snapshot: v.optional(v.nullable(v.looseObject({ id: v.optional(v.string()), chainRev: v.optional(v.number()), takenAt: v.optional(v.number()) }))),
     incidents: v.optional(v.looseObject({ total: v.optional(v.number()), undelivered: v.optional(v.number()) })),
     wire: v.optional(v.object({ sent: v.number(), received: v.number() })),
   })),

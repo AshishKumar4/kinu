@@ -156,23 +156,15 @@ describe('the start hook owns restoration', () => {
       await box.writeFile('/tmp/uncheckpointed-marker', 'local only');
       const identity = container.ctx.id.toString();
       const previousBoot = container.bootId;
-      const remote = new Map([['backups/remote', new Uint8Array([1, 2, 3])]]);
-      container.chainStore = { root: 'backups', objects: remote };
       rows.set('durable-lifecycle-marker', 'keep this');
-      container.stagedArchives.set('/var/tmp/devbox/local-stage', new Uint8Array([4]));
       container.s3fsMounts.add('/backups');
-      container.overlayMounts.add('/workspace');
-      container.layerMounts.add('/var/tmp/devbox/lower-base');
-
 
       await container[termination]();
 
       expect(container.files.size).toBe(0);
       expect(container.bootId).toBeUndefined();
-      expect(container.stagedArchives.size).toBe(0);
-      expect(container.s3fsMounts.size + container.overlayMounts.size + container.layerMounts.size).toBe(0);
+      expect(container.s3fsMounts.size).toBe(0);
       expect(rows.get('durable-lifecycle-marker')).toBe('keep this');
-      expect(remote.get('backups/remote')).toEqual(new Uint8Array([1, 2, 3]));
 
       await box.start();
       await box.ensureReady();
@@ -186,18 +178,14 @@ describe('the start hook owns restoration', () => {
       await box.ensureReady();
       await box.writeFile('/tmp/uncheckpointed-marker', 'local only');
       const previousBoot = container.bootId;
-      container.stagedArchives.set('/var/tmp/devbox/local-stage', new Uint8Array([4]));
       container.s3fsMounts.add('/backups');
-      container.overlayMounts.add('/workspace');
-      container.layerMounts.add('/var/tmp/devbox/lower-base');
       container[termination === 'stop' ? 'stopFault' : 'destroyFault'] = new Error('termination refused');
 
       await expect(container[termination]()).rejects.toThrow('termination refused');
 
       expect(container.running.running).toBe(true);
       expect(container.bootId).toBe(previousBoot);
-      expect(container.stagedArchives.size).toBe(1);
-      expect(container.s3fsMounts.size + container.overlayMounts.size + container.layerMounts.size).toBe(3);
+      expect(container.s3fsMounts.size).toBe(1);
       expect((await box.readFile('/tmp/uncheckpointed-marker')).content).toBe('local only');
     });
   }

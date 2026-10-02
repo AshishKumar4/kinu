@@ -3336,6 +3336,39 @@ of random data): the base saved in 37.8 s and committed 2,147,508,224 bytes.
 The box woke twice, in 4.2 s and 3.1 s at the driver, both exact. The first
 256 MiB read in 11.1 s and 3.2 s, and the whole workspace in 41 s and 25 s.
 
+D62. The hybrid is the only path; the older chain is deleted, and a reset,
+not a converter, takes boxes across (2026-10-02). Every box now keeps its
+workspace on the container's disk, takes a platform snapshot at each rest
+and backs it up with the disk chain (D55). The `hybrid` flag, the
+`snapshot-chain` strategy and its overlay-on-store chain, the container's own
+sync program (`sync.js`, `DevboxSyncGateway`, D30), the work-directory holder
+release (D61), extraction mode and the chunked delta stager are gone: 4,041
+source lines and 10,782 test lines deleted, 102 and 185 added. The image no
+longer carries `sync.js` (`01b8221c…`, built from this tree; the three
+binaries are unchanged).
+
+No converter. AGENTS.md ships a storage-format change as a reset
+deployment, and the promotion that ships this one resets production
+(`scripts/reset.ts`), as staging was reset. Measured before deciding
+(2026-10-02, read-only listing): `kinu-backups` held 7 boxes, two with
+bytes (76.5 MB and 9.6 MB, both base-only), and `kinu-backups-staging` none.
+The reset already empties the new layout: it deletes every object under
+`boxes/` in the store bucket, and the disk chain writes only under
+`boxes/<box>/backups/disk/`; both buckets hold nothing outside `boxes/`. The
+snapshot and chain records live in the Durable Objects the reset deletes.
+What a reset does not reach is the snapshots themselves: each sits in the
+image's registry repository as two `rootfs-*` tags (D55), shared by
+production and staging, and its annotations name no box, app or
+environment, so a reset cannot tell its own from the other environment's.
+Once their objects are gone nothing references them; they lapse in 30 days
+and do not count toward the image limit (D55).
+
+One fix the deletion surfaced. A snapshot's disk can keep the S3Mount
+marker of the mount it was taken under, and the first mount after a wake
+then failed ("invalid S3 mount route selection") because the box skipped
+the unmount for a container it had just started. A snapshot start now runs
+that unmount (`quiesce-order.test.ts`, red before the change).
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

@@ -50,19 +50,15 @@ import {
   BoxSizeSchema,
   Devbox,
   describeThrown,
-  parseDevboxStrategyName,
   type BoxSize,
   type CheckpointKind,
   type CheckpointOutcome,
   type DevboxPolicy,
   type DevboxStore,
-  type DevboxStrategyName,
   type RestoreClockPhase,
 } from '../src/index';
 import type { RestorePhaseStamps } from '../src/durability/contracts';
 import { DEFAULT_DEVBOX_POLICY, type LateStartFailure } from '../src/lifecycle';
-import { upperFingerprintCommand } from '../src/snapshot-chain';
-import { DEVBOX_RUNTIME_DIR } from '../src/storage';
 import {
   R2_CLASS_A_OPERATIONS as CLASS_A,
   R2_CLASS_B_OPERATIONS as CLASS_B,
@@ -78,7 +74,7 @@ import { settle } from '../src/errors';
 import { serveStore, type StoreGatewayProps } from '../src/store-gateway';
 import { meterPublicationBucket, observePublicationRequest, type PublicationFinish } from './publication-transport';
 
-export { DevboxSyncGateway, DevboxOutbound } from "../src/index";
+export { DevboxOutbound } from "../src/index";
 
 interface BenchEnv {
   BACKUP_BUCKET: R2Bucket;
@@ -94,15 +90,9 @@ interface BenchEnv {
   BENCH_INTERNET?: string;
   /** 'none' keeps every path, as a snapshot does (D55's head to head). */
   BENCH_EXCLUDES?: string;
-  /** '1' runs the container's own sync at the shipped period, as production does, for the
-   *  loss-window measurement (`scripts/bench-devbox-sync-window.ts`); absent, `checkpointNow`
-   *  is the only tick source. */
+  /** '1' runs the box's own checkpoints at the shipped period, as production does; absent,
+   *  `checkpointNow` is the only tick source. */
   BENCH_PRODUCTION_SYNC?: string;
-  /** Set to '1' ONLY for a local `wrangler dev` run, where there is no container
-   *  outbound interception and therefore no store mount. Absent on every deploy,
-   *  which is what stops a deployed arm from measuring extraction and reporting
-   *  it as a chain. */
-  ALLOW_EXTRACTION?: string;
 }
 
 // ── object-store op counting ────────────────────────────────────────────────
@@ -800,14 +790,6 @@ class BenchBox extends Devbox<BenchEnv> {
     return { binding: "BACKUP_BUCKET", bucket: countingBucket(this.env.BACKUP_BUCKET, this.env) };
   }
 
-  /** Local `wrangler dev` has no outbound interception, so the chain cannot
-   *  mount there and extraction is the only way the fixture runs at all. A
-   *  DEPLOY must never set this: an arm that silently measured extraction would
-   *  report a fixed-cost attach it never performed. */
-  protected override get allowExtraction(): boolean {
-    return this.env.ALLOW_EXTRACTION === '1';
-  }
-
   /** Shortened from the shipped defaults so an arm does not sit for half an hour
    *  waiting to be allowed to quiesce. The gate ORDER is what is under test; the
    *  waiting is not. */
@@ -842,10 +824,15 @@ class BenchBox extends Devbox<BenchEnv> {
   }
 }
 
-export class SnapshotChainBox extends BenchBox {
-  protected override get strategy(): DevboxStrategyName {
-    return 'snapshot-chain';
-  }
+export class SnapshotChainBox extends BenchBox {}
+
+/** The one arm the fixture deploys; the name drivers address it by. */
+const BENCH_ARM = 'snapshot-chain';
+
+type BenchArm = typeof BENCH_ARM;
+
+function benchArm(requested: string | null | undefined): BenchArm | null {
+  return requested === BENCH_ARM ? BENCH_ARM : null;
 }
 
 
@@ -893,7 +880,7 @@ type BenchStub = DurableObjectStub<SnapshotChainBox>;
 
 function boxOf(
   env: BenchEnv,
-  strategy: DevboxStrategyName,
+  strategy: BenchArm,
   name: string,
 ): BenchStub {
   const binding = env.SnapshotChainBox;
@@ -908,7 +895,7 @@ function boxOf(
  *  declared, and a payload that disagrees is refused with its reason instead of
  *  producing a silent default. */
 const DriverBodySchema = v.object({
-  strategy: v.optional(v.picklist(['snapshot-chain'])),
+  strategy: v.optional(v.picklist([BENCH_ARM])),
   command: v.optional(v.string()),
   cwd: v.optional(v.string()),
   path: v.optional(v.string()),
@@ -967,7 +954,7 @@ function benchCheckpointIntervalMs(env: BenchEnv): number {
 interface InstrumentRequest {
   readonly route: string;
   readonly env: BenchEnv;
-  readonly strategy: DevboxStrategyName;
+  readonly strategy: BenchArm;
   readonly box: BenchStub;
   readonly name: string;
   /** When the driver call opened, for the durations these routes report. */
@@ -994,20 +981,11 @@ async function serveInstrumentRoutes(
         ok: true,
         strategy,
         box: name,
-        extractionAllowed: env.ALLOW_EXTRACTION === '1',
         storePrefix: storePrefixOf(env, strategy, name),
         checkpointIntervalMs: benchCheckpointIntervalMs(env),
         state,
         ms: Date.now() - started,
       } });
-    }
-
-    case 'GET /upper-mark': {
-      // The upper's fingerprint as the checkpoint gate reads it, which a commit records as its
-      // `upperMark`: the loss-window driver's witness that a commit holds a write.
-      const read = await box.exec(upperFingerprintCommand(`${DEVBOX_RUNTIME_DIR}/upper`));
-
-      return json({ payload: { ok: read.exitCode === 0, mark: read.stdout.trim(), error: read.stderr.trim() } });
     }
 
     case 'GET /restore-probe': {
@@ -1060,7 +1038,7 @@ export default {
     }
 
     const requested = input.strategy ?? url.searchParams.get('strategy');
-    const strategy = parseDevboxStrategyName(requested);
+    const strategy = benchArm(requested);
 
     if (strategy === null) {
       return json({ payload: {

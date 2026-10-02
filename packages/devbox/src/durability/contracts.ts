@@ -3,14 +3,6 @@
 
 import * as v from 'valibot';
 
-/** Evidence for publishing a legacy whole-upper delta instead of chunked. */
-export const DeltaFallbackSchema = v.object({
-  reason: v.picklist(['upper-probe-failed', 'upper-empty', 'whiteout-probe-failed', 'base-probe-failed', 'block-hash-failed', 'stage-failed']),
-  detail: v.string(),
-});
-
-export type DeltaFallback = v.InferOutput<typeof DeltaFallbackSchema>;
-
 const CountSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 
 /** Work one restore did, in the dimensions a readiness claim is checked against.

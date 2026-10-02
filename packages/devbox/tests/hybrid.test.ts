@@ -1,47 +1,13 @@
 // D55's hybrid at the box boundary: a rest's snapshot is the next wake, and a wake that cannot use it
-// recovers from the chain and says so. The chain is a model here; disk-chain-image.test.ts runs the real one.
+// recovers from the chain and says so. The chain is chain-box's model; disk-chain-image.test.ts runs the real one.
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
-import { Effect } from 'effect';
 import * as v from 'valibot';
-import { DiskChainStateSchema, type DiskChain, type DiskChainPorts } from '../src/disk-chain';
-import { attempt } from '../src/errors';
-import { ChainTestBox, chainBox } from './support/chain-box';
-
-/** What the box asked of its chain, in order. */
-const asked: string[] = [];
-
-function modelChain(ports: DiskChainPorts): DiskChain {
-  return {
-    attach: (fromSnapshot) => Effect.gen(function* () {
-      asked.push(`attach from ${fromSnapshot ? 'snapshot' : 'image'}`);
-
-      if (fromSnapshot) return { kind: 'attached', detail: 'disk', recoveredTo: undefined };
-      const state = yield* attempt('io', () => ports.readState());
-
-      return state === null ? { kind: 'empty', detail: 'no record', recoveredTo: undefined } : { kind: 'attached', detail: 'lazy', recoveredTo: state.committedAt };
-    }),
-    commit: (kind) => Effect.gen(function* () {
-      const state = yield* attempt('io', () => ports.readState());
-      const at = ports.now();
-      yield* attempt('io', () => ports.writeState({ format: 'disk-chain/1', rev: (state?.rev ?? 0) + 1, base: { key: 'base', bytes: 1, committedAt: at }, deltas: [], committedAt: at }, state?.rev ?? null));
-      asked.push(`commit ${kind}`);
-
-      return { kind: 'committed', reason: undefined, bytes: 1, movedBytes: 1 };
-    }),
-  };
-}
+import { DiskChainStateSchema } from '../src/disk-chain';
+import { ChainTestBox, asked, chainBox } from './support/chain-box';
 
 class HybridBox extends ChainTestBox {
-  protected override get hybrid(): boolean {
-    return true;
-  }
-
   protected override get snapshotWakeCutoverMs(): number {
     return 50;
-  }
-
-  protected override hybridChain(ports: DiskChainPorts): DiskChain {
-    return modelChain(ports);
   }
 }
 

@@ -1,6 +1,5 @@
 import { expect, setSystemTime, test } from 'bun:test';
 import { INCIDENT_PREFIX } from '../src/incidents';
-import { normalizeChainState } from '../src/snapshot-chain';
 import { chainBox, chainHead } from './support/chain-box';
 import { gate } from './support/devbox-harness';
 import { DEFAULT_DEVBOX_POLICY, LAST_INTERACTION_KEY } from '../src/lifecycle';
@@ -30,7 +29,7 @@ test('quiesce drains admitted work and fences a later command before stopping', 
   expect(container.execs.some(command => command === 'printf too-late')).toBe(false);
 });
 
-test('a resident cwd holder survives as a launch record; stop commits, wake resumes, and the next commit is a delta', async () => {
+test('a resident cwd holder survives as a launch record; a stop commits and snapshots, and the wake resumes from the snapshot', async () => {
   setSystemTime(new Date('2026-09-28T12:00:00Z'));
   const { box, container, rows } = chainBox();
 
@@ -50,10 +49,7 @@ test('a resident cwd holder survives as a launch record; stop commits, wake resu
     await box.writeFile('/workspace/kept', 'after');
     setSystemTime(new Date('2026-09-28T12:01:00Z'));
     const next = await box.checkpointNow('tick');
-    expect(next.kind).toBe('committed');
-    const state = normalizeChainState(rows.get('devbox:storage-state'));
-    expect(state?.base.id).toBe(base);
-    expect(state?.delta).toMatchObject({ bytes: expect.any(Number), digest: expect.any(String) });
+    expect({ next: next.kind, reason: next.reason, rev: chainHead(rows) }).toEqual({ next: 'committed', reason: undefined, rev: base + 1 });
     await box.quiesce();
     await box.start();
     expect(await box.readFile('/workspace/kept')).toMatchObject({ content: 'after' });

@@ -3,9 +3,9 @@
 import type { IncidentTotals } from './incidents';
 import type { IncidentStage, PortExposureSpec, QuiesceAction, SupervisedProcessSpec } from './lifecycle';
 import type { Restoration } from './restoration';
-import type { ChainState } from './snapshot-chain';
+import type { DiskChainState } from './disk-chain';
 import type { BoxSize } from './sizes';
-import type { AttachOutcome, DevboxStrategyName } from './storage';
+import type { AttachOutcome } from './storage';
 
 /** `delivered` separates a failure the host already saw from one it never did. */
 export interface IncidentReasonRow {
@@ -42,7 +42,6 @@ export interface SupervisedProcessRow {
 
 /** Everything a caller can ask about a box without touching the container. */
 export interface DevboxReport {
-  readonly strategy: DevboxStrategyName;
   readonly durable: boolean;
   readonly running: boolean;
   /** `repair` still admits operations: only the agent can fix a failed service, so `exec` stays open.
@@ -56,7 +55,9 @@ export interface DevboxReport {
   readonly unready: string | undefined;
   readonly lastInteractionAt: number | undefined;
   readonly quietSince: number | undefined;
-  readonly chain: ChainState | null;
+  readonly chain: DiskChainState | null;
+  /** The rest snapshot the next wake starts from, when there is one. */
+  readonly snapshot: { readonly id: string; readonly image: string; readonly chainRev: number; readonly takenAt: number } | null;
   /** Durable: an eviction between the start and the question would erase the only evidence. */
   readonly lastAttach: AttachOutcome | undefined;
   /** A `lastTick.at` far in the past means the box stopped ticking; the row says what

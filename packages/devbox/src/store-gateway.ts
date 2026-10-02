@@ -4,7 +4,27 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { S3GatewayBinding, S3MountRequest } from '@cloudflare/sandbox';
 import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
-import { storeRouteHost } from './snapshot-chain';
+
+/** The box's prefix in the store: S3Mount admits a second mount of a binding only at the same prefix. */
+export function chainStoreRoot(boxPrefix: string): string {
+  return `${boxPrefix}/backups`;
+}
+
+/** Where the container sees the store, through S3Mount. */
+export const STORE_MOUNT = '/backups';
+
+/** The host S3Mount gives a route: `routeHost` in @cloudflare/sandbox 1.0.0 (index.mjs:1520). */
+export function storeRouteHost(routeId: string): string {
+  return `s3-${routeId}.sandbox.internal`;
+}
+
+/** The route the container's publisher PUTs through; S3Mount names its own routes at random. */
+export const STORE_PUBLISH_ROUTE = 'devbox-publish';
+
+/** The gateway roots each route at this box's prefix, so the URL names the key under it (D46). */
+export function storeObjectUrl(root: string, bucket: string, key: string): string {
+  return `http://${storeRouteHost(STORE_PUBLISH_ROUTE)}/${encodeURIComponent(bucket)}/${key.slice(root.length + 1).split('/').map(encodeURIComponent).join('/')}`;
+}
 
 export type StoreGatewayProps = Parameters<S3GatewayBinding>[0]['props'];
 

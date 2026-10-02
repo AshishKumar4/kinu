@@ -21,7 +21,6 @@ COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=build /build/target/release/devbox-block-lower /usr/local/bin/devbox-block-lower
 COPY --from=squash /build/squashfuse-0.1.103/squashfuse_ll /usr/local/bin/devbox-squashfuse
 COPY --from=shim /usr/local/bin/sandbox-shim /usr/local/bin/sandbox-shim
-COPY .build/sync.js /usr/local/lib/devbox/sync.js
 RUN mkdir -p /workspace /var/tmp/devbox && ln -s /usr/bin/fusermount3 /usr/local/bin/fusermount
 WORKDIR /
 ENTRYPOINT ["/usr/bin/tini", "--"]
