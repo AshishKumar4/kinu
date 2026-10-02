@@ -53,9 +53,12 @@ const workspace = {
   ],
   backgroundJobs: async (of) => (of === undefined ? [server] : []),
   subordinates: async () => [],
+  agents: async () => [],
   toolCallsInFlight: () => [],
   heard: () => 0,
   listen: () => undefined,
+  readsMoved: () => 0,
+  readsMoving: new AbortController().signal,
 };
 
 const harness = createHarness({

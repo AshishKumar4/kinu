@@ -97,8 +97,8 @@ import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
-  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, hostedActorSocketPath, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema,
-  STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, hostedActorSocketPath, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, READS_CHANGED_EVENT,
+  RunEventSchema, STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type SubordinateInspectionRequest, type WorkspaceSpend,
 } from '../../packages/core/src/index';
@@ -429,6 +429,10 @@ export type PublicFrame =
   /** The DO's account of where a steered message is: taken, read by the
    *  running turn at a step, run as a turn of its own, or handed back. */
   | { readonly kind: 'steer'; readonly steerId: string; readonly status: SteerStatus }
+  /** The live reads a write in the workspace moved (`reads_changed`), sent at the end of the tick that wrote: before
+   *  the answer to any call that arrived after the write. Names are kept as sent, so a read a newer build adds still
+   *  counts. */
+  | { readonly kind: 'reads'; readonly reads: readonly string[] }
   | { readonly kind: 'other'; readonly type: string };
 
 const STEER_STATUSES = ['queued', 'landed', 'turn', 'returned'] as const;
@@ -452,6 +456,7 @@ const FrameSchema = v.object({
   success: v.optional(v.boolean()),
   result: v.optional(JsonValueSchema),
   turnId: v.optional(v.string()),
+  reads: v.optional(v.array(v.string())),
 });
 
 /**
@@ -512,6 +517,8 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
   }
 
   if (type === CHAT_MESSAGE_TYPES.STREAM_RESUME_NONE) return { kind: 'resume-none' };
+
+  if (type === READS_CHANGED_EVENT && frame.output.reads !== undefined) return { kind: 'reads', reads: frame.output.reads };
 
   if (type === 'steer_status' && frame.output.steerId !== undefined) {
     const status = v.safeParse(v.picklist(STEER_STATUSES), frame.output.status);
@@ -905,6 +912,18 @@ const SubordinateRosterSchema = v.array(SubordinateRowSchema);
 /** One row of the roster, as the Agents surface lists it. */
 export type PublicSubordinate = v.InferOutput<typeof SubordinateRowSchema>;
 
+/** An agent as the Agents panel lists it: `working` from a turn owed to it (queued, handed over, or due from its event
+ *  log) through the claim that runs it, until that turn ends (core `read-models/workspace-agents.ts`). `open.path` is a
+ *  chat agent's roster path, null for the lead. */
+const PanelAgentSchema = v.object({
+  label: v.string(),
+  category: v.picklist(['main', 'user', 'hired', 'swarm', 'background']),
+  activity: v.picklist(['working', 'waiting', 'idle', 'done', 'stopped', 'failed', 'dismissed']),
+  open: v.object({ kind: v.string(), path: v.optional(v.nullable(v.string())) }),
+});
+
+export type PublicAgent = v.InferOutput<typeof PanelAgentSchema>;
+
 /** One entry of a folder as the Files tab lists it (`getExecutorFiles`). */
 const DirEntrySchema = v.object({ name: v.string(), type: v.picklist(['file', 'dir']) });
 
@@ -1231,6 +1250,13 @@ export class KinuPublicSession {
    *  streaming one step for minutes is heard working only here. */
   private framesHeard = 0;
 
+  /** How often the workspace has said each live read moved, and the sockets this session has opened on its room. */
+  private readonly moved = new Map<string, number>();
+
+  private socketsOpened = 0;
+
+  private moving = new AbortController();
+
   /** The streams each open socket hears: the workspace's room from `dial`, each helper's from `listen`. The ledger writes
    *  a call only when it ends (`tool_call_end`), so a call that runs for minutes, a helper's task, is seen running only here. */
   private readonly hearing = new Set<HeardStreams>();
@@ -1347,6 +1373,9 @@ export class KinuPublicSession {
 
     this.socket = socket;
     this.hearing.add(heard);
+    // A frame the workspace sent while no socket was open is lost: a socket opened is every read moving.
+    this.socketsOpened += 1;
+    this.moveOn();
     socket.addEventListener('message', (event: MessageEvent) => {
       this.handleFrame(event.data, heard);
     });
@@ -1612,8 +1641,28 @@ export class KinuPublicSession {
     return this.framesHeard;
   }
 
+  /** How often the workspace has said one of `reads` moved, each socket this session opened counting as all of them. */
+  readsMoved(reads: readonly string[]): number {
+    return reads.reduce((sum, read) => sum + (this.moved.get(read) ?? 0), this.socketsOpened);
+  }
+
+  /** Aborts at the workspace's next `reads_changed` frame, or the next socket this session opens on its room. */
+  get readsMoving(): AbortSignal {
+    return this.moving.signal;
+  }
+
+  private readsChanged(reads: readonly string[]): void {
+    for (const read of reads) this.moved.set(read, (this.moved.get(read) ?? 0) + 1);
+    this.moveOn();
+  }
+
+  private moveOn(): void {
+    this.moving.abort();
+    this.moving = new AbortController();
+  }
+
   /**
-   * Listen to exactly these helpers' rooms. A helper's turn streams to its own window alone (`broadcastToActor`), so it
+   * Listen to exactly these helpers' rooms, by name or path. A helper's turn streams to its own window alone (`broadcastToActor`), so it
    * is heard only on a socket opened on its path, as its window opens one. A room relays no replay: a call that started
    * before its socket opened is not known to run.
    */
@@ -1781,6 +1830,16 @@ export class KinuPublicSession {
     );
 
     return v.parse(SubordinateRosterSchema, rows);
+  }
+
+  /** Every agent of the workspace as the Agents panel lists it (`listWorkspaceAgents`, `hooks/use-kinu.ts`). */
+  async agents(): Promise<readonly PublicAgent[]> {
+    const rows = await this.boundary(
+      `listWorkspaceAgents on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listWorkspaceAgents', []),
+    );
+
+    return v.parse(v.array(PanelAgentSchema), rows);
   }
 
   /** One folder of the workspace as the Files tab lists it. A folder that does not exist lists nothing; any other
@@ -2192,6 +2251,12 @@ export class KinuPublicSession {
       if (resuming?.moved === true) resuming.turn.recorder.follow();
       resuming?.turn.recorder.beginReplay();
       this.socket?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }));
+
+      return;
+    }
+
+    if (frame.kind === 'reads') {
+      this.readsChanged(frame.reads);
 
       return;
     }
