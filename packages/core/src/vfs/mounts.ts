@@ -11,7 +11,7 @@ import { Effect } from 'effect';
 import type { FilesOwner } from '../safety/approval-gate';
 import { renderThrownChain, settle } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
-import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 export interface VfsMount {
 	readonly name: string;
@@ -160,7 +160,7 @@ export type TreeRemoval =
 export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<TreeRemoval> {
 	const st = await files.stat(path);
 
-	if (!st) throw new VfsError('ENOENT', 'no such file or directory', path);
+	if (!st) throw syscallError('ENOENT', 'rm', path);
 
 	const pending: string[] = [path];
 	const order: string[] = [];
@@ -231,7 +231,7 @@ export interface CarrySide {
 export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promise<void> {
 	const sourceStat = await from.files.stat(from.path);
 
-	if (!sourceStat) throw new VfsError('ENOENT', 'no such file or directory', from.path);
+	if (!sourceStat) throw syscallError('ENOENT', 'rename', from.path, { dest: to.path });
 
 	if ((sourceStat.type === 'directory')) {
 		throw new VfsError('EPERM',
@@ -525,7 +525,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 			if (native) return native.call(base, oldPath, newPath);
 			const st = await base.stat(oldPath);
 
-			if (!st) throw new VfsError('ENOENT', 'no such file or directory', oldPath);
+			if (!st) throw syscallError('ENOENT', 'rename', oldPath, { dest: newPath });
 
 			if ((st.type === 'directory')) {
 				throw new VfsError('EPERM', 'a directory cannot be renamed here: this route has no native rename, and only a file\'s bytes can be carried', oldPath);

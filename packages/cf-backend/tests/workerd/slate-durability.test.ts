@@ -153,3 +153,20 @@ it('the workspace terminal is the runtime shell: a typed line runs and its outpu
   expect(drive.frames).not.toContain('other');
   expect(drive.output).toContain('shell-23');
 });
+
+it('a node run leaves its log janitor as an alarm the object sleeps on, not a timer it stays awake for', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('janitor'));
+  const workspace = 'durability-janitor';
+  await subject().serveSlate({ workspace, owner: 'durability-owner', id: 'beside-janitor', body: 'served' });
+  const before = Date.now();
+
+  expect(await subject().runInWorkspace(workspace, 'node -e "console.log(1)"')).toEqual({ exitCode: 0, stdout: '1\n' });
+
+  // Nimbus drops an exited process's logs 10 minutes on.
+  const pending = await subject().pendingNimbusTasks(workspace);
+  const janitor = pending.tasks.find((task) => task.id === 'log-janitor');
+
+  expect(janitor?.time).toBeGreaterThanOrEqual(before + 9 * 60_000);
+  expect(pending.alarm).not.toBeNull();
+  expect(pending.alarm).toBeLessThanOrEqual(janitor?.time ?? 0);
+});

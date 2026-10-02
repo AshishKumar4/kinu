@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
-import { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
+import type { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
+import type { NamespaceFs } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
@@ -30,6 +31,8 @@ export interface ResidentSlateDeps {
   session: () => Promise<Pick<WorkspaceSession, 'vfs' | 'processes' | 'filesystem'>>;
   /** Every resident spawn goes through its `spawnWorker` and every teardown through its `kill`. */
   facetManager: () => Promise<ComposedFacetManager>;
+  /** esbuild for a credential's view, in the object's esbuild facet: esbuild-wasm's heap only grows. */
+  bundler: (vfs: NamespaceFs) => EsbuildService;
 }
 
 export interface ResidentSlateBoot {
@@ -400,7 +403,7 @@ export class ResidentSlateProcesses {
     let bundler = this.bundlers.get(bundlerKey);
 
     if (bundler === undefined) {
-      bundler = new EsbuildService(session.filesystem.namespaceFs(input.cred));
+      bundler = this.deps.bundler(session.filesystem.namespaceFs(input.cred));
       this.bundlers.set(bundlerKey, bundler);
     }
 

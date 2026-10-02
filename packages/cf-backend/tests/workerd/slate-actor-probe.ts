@@ -65,6 +65,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       ctx: this.ctx, workspace: 'binding-probe',
       session: async () => ({ vfs, processes: new SessionProcessSupervisor(), filesystem: new ProcessFiles(vfs) }),
       facetManager: async () => { throw new Error('binding probe does not boot a process'); },
+      bundler: () => { throw new Error('binding probe does not bundle a slate'); },
       apps: {
         ensure: async () => { throw new Error('binding probe does not boot a process'); },
         remove: async () => { throw new Error('binding probe does not keep durable applications'); },

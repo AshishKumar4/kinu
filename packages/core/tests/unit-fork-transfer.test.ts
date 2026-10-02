@@ -796,7 +796,7 @@ describe('a fork holds one frame, never a whole file', () => {
   const plane: ForkFileSource = {
     async pin() {
       const page: VfsExportPage = {
-        schema: 2, root: HUGE_ROOT, nextIno: 3, after: null, next: null,
+        schema: 3, source: 'huge:1', root: HUGE_ROOT, nextIno: 3, after: null, next: null,
         rows: [
           { path: '', ino: 1, kind: 'directory', size: 0, mode: 0o40755, uid: 1000, gid: 1000, defaultAcl: null, atime: 1, mtime: 1, contentKey: null, pieceOffset: 0, manifest: false, pieces: [] },
           { path: 'huge.bin', ino: 2, kind: 'file', size: HUGE_SIZE, mode: 0o100644, uid: 1000, gid: 1000, defaultAcl: null, atime: 1, mtime: 1, contentKey: '0'.repeat(64), pieceOffset: 0, manifest: true, pieces: hashes.map((hash): [string, number] => [hash, CHUNK]) },

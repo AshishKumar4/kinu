@@ -6,6 +6,7 @@ import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
+import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { SlateHost } from '../../src/slates/host';
 import { ROOT_SLATE_CALLER, slateCallerKey } from '../../src/slates/bindings';
@@ -46,6 +47,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     ctx: this.ctx, workspace: this.ctx.id.toString(),
     session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
     facetManager: async () => this.facets,
+    bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
     dispatch: async () => { throw new Error('The fixture declares no capability bindings'); },
     apps: {
       ...probeDurableApps(this.facets),

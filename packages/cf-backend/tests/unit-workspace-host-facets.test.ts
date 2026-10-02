@@ -13,7 +13,7 @@ import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import {
-  actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, OBJECT_NAMESPACE, SCRIPT_EXPORTS, serveObject,
+  actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, HELD_NIMBUS_TASKS, OBJECT_NAMESPACE, SCRIPT_EXPORTS, serveObject,
 } from './helpers/programmatic-host';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
@@ -123,6 +123,7 @@ function hostActor(duringFacet?: (supervisor: SupervisorRPC) => Promise<void>): 
   const actorEnv: ActorBindings = { LOADER, OrchestratorAgent: OBJECT_NAMESPACE, ASSETS };
 
   const hosted = createHostedWorkspace({
+    tasks: HELD_NIMBUS_TASKS,
     ctx: actorCtx(SCRIPT_EXPORTS),
     env: actorEnv,
     previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -188,6 +189,7 @@ function refusingBindings(): ActorBindings {
 describe('hosted workspace facets', () => {
   test('a script that exports no supervisor entrypoint composes no runtime: the first command names it', async () => {
     const hosted = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actorCtx({}),
       env: refusingBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),

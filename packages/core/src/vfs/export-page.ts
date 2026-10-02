@@ -21,6 +21,7 @@ const VfsExportRowSchema: v.GenericSchema<VfsExportRow> = v.object({
 
 export const VfsExportPageSchema: v.GenericSchema<VfsExportPage> = v.object({
   schema: v.number(),
+  source: v.string(),
   root: v.string(),
   nextIno: v.number(),
   after: v.nullable(v.string()),

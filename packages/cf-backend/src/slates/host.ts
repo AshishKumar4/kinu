@@ -117,7 +117,7 @@ export class SlateHost {
   private readonly blueprintHeadings = new Map<string, { title: string; description: string; bindings: number }>();
 
   constructor(private readonly deps: SlateHostDeps) {
-    this.resident = new ResidentSlateProcesses({ session: deps.session, facetManager: deps.facetManager });
+    this.resident = new ResidentSlateProcesses({ session: deps.session, facetManager: deps.facetManager, bundler: deps.bundler });
     this.store = new SqliteSlateStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
     this.state = new SqliteSlateStateStore(deps.ctx.storage.sql);
     initSlateLiveShareTables((ddl) => { deps.ctx.storage.sql.exec(ddl); });

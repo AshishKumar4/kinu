@@ -154,7 +154,7 @@
     "@earendil-works/pi-ai": "0.87.1",
     "@earendil-works/pi-coding-agent": "0.87.1",
     "@effect/tsgo": "0.45.0",
-    "@nimbus-sh/core": "0.13.1",
+    "@nimbus-sh/core": "0.14.0",
     "@nimbus-sh/runtime-bash": "5.2.37-3",
     "@nimbus-sh/runtime-cpython": "3.13.14",
     "@opentui/core": "^0.5.11",

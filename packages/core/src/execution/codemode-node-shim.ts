@@ -59,7 +59,7 @@ function fsError(fallback, refusal, path, syscall) {
   const named = /^(E[A-Z]+): /.exec(refusal);
   const code = named ? named[1] : fallback;
   const text = named ? refusal.slice(named[0].length) : refusal;
-  const error = new Error(code + ': ' + text + (path === undefined || text.includes("'" + path + "'") ? '' : ", '" + path + "'"));
+  const error = new Error(code + ': ' + text + (path === undefined || text.includes("'" + path + "'") ? '' : ', ' + syscall + " '" + path + "'"));
   error.code = code;
   error.errno = -1;
   error.syscall = syscall;
