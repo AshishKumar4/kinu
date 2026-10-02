@@ -63,6 +63,16 @@ describe('the pty screen model', () => {
 });
 
 describe('the pty driver', () => {
+  // A wait that never held skipped every later step; a run that read on would blame the wrong step (CI 36962966527).
+  test('a wait that never holds fails the run, naming the wait', async () => {
+    const program = scratchPath('pty-unmet', 'program.ts');
+
+    writeFileSync(program, "console.log('ready');\nawait Bun.sleep(60_000);\n");
+
+    await expect(runTuiInPty(program, { steps: [{ wait: 'ready', timeout: 15 }, { wait: 'never painted', timeout: 1 }] }))
+      .rejects.toThrow('the screen never showed "never painted"');
+  });
+
   test('a run ends every process the program started, not only the program', async () => {
     const pidFile = scratchPath('pty-driver-group', 'child.pid');
     const program = scratchPath('pty-driver-group', 'program.ts');
@@ -75,13 +85,12 @@ describe('the pty driver', () => {
       'await child.exited;',
     ].join('\n'));
 
-    const run = await runTuiInPty(program, { steps: [{ wait: 'ready', timeout: 15 }] });
+    await runTuiInPty(program, { steps: [{ wait: 'ready', timeout: 15 }] });
     const child = Number(readFileSync(pidFile, 'utf8'));
     const alive = tolerate(() => process.kill(child, 0), 'esrch') !== undefined;
 
     // A red run must not leave the loop behind for the scratch release to trip over.
     if (alive) process.kill(child, 'SIGKILL');
-    expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
     expect(alive).toBe(false);
   });
 });

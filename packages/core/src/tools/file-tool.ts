@@ -24,7 +24,7 @@ import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from '.
 import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { Effect, Result } from 'effect';
-import { KinuError, renderErrorMessage, renderThrownChain, settle } from '../obs/index';
+import { KinuError, renderThrownChain, settle } from '../obs/index';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
@@ -141,9 +141,9 @@ function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, path: s
   const reason = editOutcomeReason(err.code);
 
   // Only addressing mistakes get the roots hint; other errors carry their own reason.
-  if (err.code !== 'ENOENT' && err.code !== 'EISDIR') return Effect.succeed({ reason, error: renderErrorMessage(err) });
+  if (err.code !== 'ENOENT' && err.code !== 'EISDIR') return Effect.succeed({ reason, error: err.message });
 
-  return Effect.map(Effect.promise(() => vfsAddressingHint(vfs, 'the `file` tool\'s path')), (hint) => ({ reason, error: `${renderErrorMessage(err)}: ${hint}` }));
+  return Effect.map(Effect.promise(() => vfsAddressingHint(vfs, 'the `file` tool\'s path')), (hint) => ({ reason, error: `${err.message}: ${hint}` }));
 }
 
 function vfsRefused(vfs: VFS, failed: Failed, action: string, path: string): Effect.Effect<never, KinuError> {

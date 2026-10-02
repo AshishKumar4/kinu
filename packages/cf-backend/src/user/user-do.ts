@@ -282,7 +282,6 @@ function mcpNameCollision(input: { cause: unknown; name: string }): Effect.Effec
   return input.cause instanceof KinuError ? Effect.fail(input.cause) : Effect.die(input.cause);
 }
 
-/** `run`, with its rejection reported and then passed on as it was. */
 function reportedThenThrown<A>(run: () => Promise<A>, report: (failed: { readonly cause: unknown }) => void): Effect.Effect<A> {
   return Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) }).pipe(
     Effect.catch((failed) => Effect.andThen(Effect.sync(() => { report(failed); }), Effect.die(failed.cause))),
@@ -539,7 +538,6 @@ interface HeldLogin {
   readonly revision: number;
 }
 
-/** One login's refresh: what was held, how the issuer is asked, and what a revoked grant leaves. */
 interface RefreshingLogin {
   readonly key: string;
   readonly held: HeldLogin;
@@ -2031,7 +2029,7 @@ export class UserDO extends Agent<Env> {
 
   private _sockets: Hono | undefined;
 
-  /** A WebSocket cannot cross RPC; the Worker forwards these upgrades. Each route runs its effect here. */
+  /** A WebSocket cannot cross RPC; the Worker forwards these upgrades. */
   override async fetch(request: Request): Promise<Response> {
     this._sockets ??= new Hono({ getPath: rawPath })
       .all(DEVICE_CONNECT_PATH, (c) => settle(this.acceptDeviceSocket(c.req.raw, new URL(c.req.url))))
@@ -3656,8 +3654,7 @@ export class UserDO extends Agent<Env> {
         return [toKinuError({ doing: 'reading the credential to revoke it', cause: Cause.squash(failed), otherwise: 'io' })];
       }));
 
-      // Not an OAuth grant: nothing to revoke.
-      if (failures === null) return;
+        if (failures === null) return;
 
       if (failures.length === 0) {
         this.sqlx(`DELETE FROM user_unrevoked_grants WHERE key = ?`, key);
@@ -4640,7 +4637,6 @@ export class UserDO extends Agent<Env> {
     });
   }
 
-  /** Any failure past the tier check is the answer's refusal, never a rejection. */
   private driveOp<Value>(caller: UserCaller, op: (drive: MossaicVfs) => Effect.Effect<Value, KinuError>): Effect.Effect<DriveAnswer<Value>> {
     return Effect.gen({ self: this }, function* () {
       yield* Effect.promise(() => this.requireTier(caller, 'drive'));

@@ -14,7 +14,8 @@ import { KinuError, toKinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { Effect } from 'effect';
 import { FileRefusalError } from '../types/file-edits';
-import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { vfsErrorFromText } from './errno';
 import type { VfsMount } from './mounts';
 import { toolPairingGaps } from '../session/tool-pairing';
 
@@ -615,7 +616,7 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
 
 /** An error's class does not cross an isolate boundary. */
 export type ContextFailure =
-  | { readonly kind: 'vfs'; readonly code: VfsErrorCode; readonly detail: string; readonly path: string | null }
+  | { readonly kind: 'vfs'; readonly message: string; readonly path: string | null }
   | { readonly kind: 'refusal'; readonly verdict: FileRefusalError['verdict']; readonly message: string }
   | { readonly kind: 'kinu'; readonly code: KinuError['code']; readonly message: string };
 
@@ -634,13 +635,7 @@ export interface ContextTreeRemote {
 function contextFailure(error: Error): ContextFailure {
   if (error instanceof FileRefusalError) return { kind: 'refusal', verdict: error.verdict, message: error.message };
 
-  if (isVfsError(error)) {
-    const prefix = `${error.code}: `;
-    const suffix = error.path === undefined ? '' : `, '${error.path}'`;
-    const detail = error.message.startsWith(prefix) && error.message.endsWith(suffix) ? error.message.slice(prefix.length, error.message.length - suffix.length) : error.message;
-
-    return { kind: 'vfs', code: error.code, detail, path: error.path ?? null };
-  }
+  if (isVfsError(error)) return { kind: 'vfs', message: error.message, path: error.path ?? null };
 
   const failure = toKinuError({ doing: 'serving a context file', cause: error, otherwise: 'io' });
 
@@ -677,7 +672,7 @@ export function servedContextTree(tree: ContextTree): ContextTreeRemote {
 function rebuilt(failure: ContextFailure): Error {
   if (failure.kind === 'refusal') return new FileRefusalError(failure.verdict, failure.message);
 
-  if (failure.kind === 'vfs') return new VfsError(failure.code, failure.detail, failure.path ?? undefined);
+  if (failure.kind === 'vfs') return vfsErrorFromText({ message: failure.message, path: failure.path ?? undefined }) ?? new KinuError('io', failure.message);
 
   return new KinuError(failure.code, failure.message);
 }

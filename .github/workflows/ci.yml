@@ -1,9 +1,8 @@
 name: CI
 
-# No suites or gates are enumerated here. The ladder partitions its own CI tier
-# by measured cost; its coverage check requires every row exactly once (L23).
-# In 2026-09-30 runs the single runner took 1975–2215 s of work, with setup
-# taking the job to 44m42s. Each part has its own runner, including the hammer.
+# No suites or gates are listed here. Hosted row/file timings balance eight
+# source runners; each of the six contended runs owns its hammer runner.
+# Collection requires every execution unit and split-suite file (L23).
 permissions:
   contents: read
 
@@ -93,10 +92,10 @@ jobs:
           path: bench-artifacts/ci/verdicts.json
           if-no-files-found: error
       - name: Publish hammer evidence
-        if: always() && matrix.part == 'hammer'
+        if: always() && startsWith(matrix.part, 'hammer-')
         uses: actions/upload-artifact@v4
         with:
-          name: hammer-${{ github.sha }}-${{ github.run_attempt }}
+          name: hammer-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.part }}
           path: bench-artifacts/hammer/
           if-no-files-found: error
       # The bundle is still proved once, not once per shard.

@@ -17,8 +17,7 @@ import { Effect, Result } from 'effect';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
-import { canonicalWorkspacePath, workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
-import { SOUL_PATH } from '../identity/soul';
+import { isWorkspaceSoul } from '../identity/soul';
 
 export interface ExecutorFileLookup {
   getProvider(name: string): { files?: VFS; homeDir(segment?: string): Promise<string> } | undefined;
@@ -117,30 +116,28 @@ export class ExecutorFileUpload {
   }
 
   async chunk(offset: number, chunk: Uint8Array, final: boolean): Promise<ExecutorWriteResult> {
-    const step = this.chunks.chunk(offset, chunk, final);
+    const assembly = this.chunks.chunk(offset, chunk, final);
 
-    if (Result.isFailure(step)) return { error: step.failure };
+    if (Result.isFailure(assembly)) return { error: assembly.failure };
 
-    if (step.success === null) return { ok: true };
-    const assembled = step.success;
+    if (assembly.success === null) return { ok: true };
+    const assembled = assembly.success;
     const { writeSoul, expectedRevision } = this.write;
 
-    if (writeSoul !== undefined && isWorkspaceSoul(this.executorId, this.path)) {
-      await writeSoul(assembled);
+    return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
+      if (writeSoul !== undefined && this.executorId === 'workspace' && isWorkspaceSoul(this.path)) {
+        await writeSoul(assembled);
 
-      return { ok: true };
-    }
+        return { ok: true };
+      }
 
-    return writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembled, expectedRevision });
+      return writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembled, expectedRevision });
+    })));
   }
 
   abort(): void {
     this.chunks.abort();
   }
-}
-
-function isWorkspaceSoul(executorId: string, path: string): boolean {
-  return executorId === 'workspace' && canonicalWorkspacePath(workspacePath(path)) === `${WORKSPACE_ROOT}/${SOUL_PATH}`;
 }
 
 /** In-order chunk assembly; `assembled` is answered exactly once, on the final chunk. */
@@ -563,15 +560,15 @@ export function renameExecutorPathOp(
 
   if (from === to) return Promise.resolve({ ok: true });
 
-  if (isWorkspaceSoul(executorId, from) || isWorkspaceSoul(executorId, to)) {
-    return Promise.resolve({ error: 'SOUL.md is set from Settings, not by moving files' });
-  }
-
-  const vfs = executorFiles(router, executorId);
-
-  if (!vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
-
   return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
+    if (executorId === 'workspace' && (isWorkspaceSoul(from) || isWorkspaceSoul(to))) {
+      return { error: 'SOUL.md is set from Settings, not by moving files' };
+    }
+
+    const vfs = executorFiles(router, executorId);
+
+    if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+
     if (await exists(vfs, to)) return { error: `${to} already exists` };
     const native = vfs.rename?.bind(vfs);
 
@@ -601,13 +598,13 @@ export function deleteExecutorPathOp(
 ): Promise<ExecutorWriteResult> {
   if (!path || normalizeDir(path) === '/') return Promise.resolve({ error: 'a real path is required' });
 
-  if (isWorkspaceSoul(executorId, path)) return Promise.resolve({ error: 'SOUL.md is set from Settings, not by deleting it' });
-
-  const vfs = executorFiles(router, executorId);
-
-  if (!vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
-
   return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
+    if (executorId === 'workspace' && isWorkspaceSoul(path)) return { error: 'SOUL.md is set from Settings, not by deleting it' };
+
+    const vfs = executorFiles(router, executorId);
+
+    if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+
     const stat = await vfs.stat(path);
 
     if (!stat) return { error: `no such file or directory: ${path}` };

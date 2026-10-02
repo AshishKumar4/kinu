@@ -1,34 +1,35 @@
 /** File-plane error presentation over Nimbus's POSIX error type. */
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
-import { isVfsError, toVfsError, VfsError, VFS_ERRNO, VFS_STRERROR, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, isVfsErrorCode, syscallError, toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
-function knownCode(code: string): code is VfsErrorCode {
-  return Object.hasOwn(VFS_ERRNO, code);
+/**
+ * Node's error text from another plane or isolate (`EPERM: <words>, rename '<path>'`), on the requested path with
+ * its own words and syscall. Unknown codes stay unclassified.
+ */
+export function vfsErrorFromText(input: { message: string; path: string | undefined; cause?: unknown }): VfsError | null {
+  const { message, path, cause } = input;
+
+  const [, code, words, syscall, dest] = /^(E[A-Z]+): (.*?)(?:, ([a-z]+))? '[^']*'(?: -> '([^']*)')?$/su.exec(message)
+    ?? /^(E[A-Z]+): (.*)$/su.exec(message) ?? [];
+
+  if (code === undefined || words === undefined || !isVfsErrorCode(code)) return null;
+
+  return syscall === undefined
+    ? new VfsError(code, words, path, { dest, cause })
+    : syscallError(code, syscall, path, { detail: words, dest, cause });
 }
 
-/** Node's error text from a remote plane, retaining the requested path. Unknown codes stay unclassified. */
-export function vfsErrorFromText(message: string, path: string): VfsError | null {
-  const [, code, text] = /^(E[A-Z]+): (.*)$/su.exec(message) ?? [];
-
-  return code !== undefined && text !== undefined && knownCode(code) ? new VfsError(code, text, path) : null;
-}
-
-/** Adds model-facing guidance without repeating Nimbus's code or path. */
+/** Adds model-facing guidance after Nimbus's message; code, errno, syscall, path and dest are kept. */
 export function withVfsErrorHint(error: VfsError, hint: string): VfsError {
-  const suffix = error.path === undefined ? 0 : `, '${error.path}'`.length;
-  const message = error.message.slice(error.code.length + 2, suffix === 0 ? undefined : -suffix);
+  const guided = new VfsError(error.code, `${error.message.slice(error.code.length + 2)}: ${hint}`, undefined, { syscall: error.syscall, cause: error });
 
-  return new VfsError(error.code, `${message}: ${hint}`, error.path, { cause: error });
+  return Object.assign(guided, { path: error.path, ...(error.dest !== undefined && { dest: error.dest }) });
 }
 
-/** Names the file-plane path instead of Nimbus's internal storage key. */
+/** Names the file-plane path, not the engine's storage key, with the call that met the failure. */
 export function atVfsPath<T>(absolute: string, syscall: string, call: () => T | Promise<T>): Promise<T> {
-  return settle(Effect.tryPromise({ try: async () => call(), catch: (cause) => cause }).pipe(Effect.catch((error) => {
-    const failure = toVfsError(error, absolute);
-
-    return isVfsError(failure)
-      ? Effect.fail(new VfsError(failure.code, `${VFS_STRERROR[failure.code]}, ${syscall}`, absolute, { cause: error }))
-      : Effect.die(error);
-  })));
+  return settle(Effect.tryPromise({ try: async () => call(), catch: (error) => toVfsError(error, syscall, absolute) }).pipe(
+    Effect.catch((failure) => (isVfsError(failure) ? Effect.fail(failure) : Effect.die(failure))),
+  ));
 }

@@ -118,7 +118,6 @@ export function hostedActorPlacement(record: WorkspaceActor): HostedActorPlaceme
  */
 
 export class HostedActorHomes {
-  /** One provisioning per actor; a home once provisioned is held until `forget`, a failure frees the key. */
   private readonly homes = flight(({ record, reference }: { readonly record: WorkspaceActor; readonly reference: ActorReference }) => Effect.flatMap(
     Effect.promise(() => this.provision(record, reference)),
     (home) => (home.isolation === 'private-home' ? Effect.succeed(home) : Effect.fail(new KinuError('denied', 'A hosted actor requires its own credential.'))),

@@ -215,7 +215,7 @@ export function acceptSandboxLifecycleIncident(
       idempotencyKey: sandboxLifecycleIncidentKey(incident.incidentId),
     };
 
-    // Its failure is passed on so the container retries; the row stays unannounced, so the retry is safe.
+    // Passed on so the container retries; the unannounced row makes that safe.
     const outcome: SendOutcome = yield* attempt({ doing: 'announcing a sandbox lifecycle failure to the agent', otherwise: 'io' }, () => deps.inbox.send(signal)).pipe(
       Effect.tapError((error) => Effect.sync(() => { recordSettlement('failed', error.code); })),
     );

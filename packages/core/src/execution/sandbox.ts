@@ -8,7 +8,7 @@ import { readExecJob, readExecSignal } from './signal';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerated, toKinuError, type Refusal } from '../obs/index';
-import { isVfsError, VfsError, VFS_ERRNO, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, isVfsErrorCode, syscallError, type VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -732,8 +732,6 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
     return p.slice(p.lastIndexOf('/') + 1);
   };
 
-  const isErrnoCode = (code: string): code is VfsErrorCode => Object.hasOwn(VFS_ERRNO, code);
-
   const errnoOf = (cause: Error): VfsErrorCode | null => {
     if (isVfsError(cause)) return null;
     const visited = new Set<Error>();
@@ -745,31 +743,28 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
       if (!detail.success) continue;
       const { code } = detail.output;
 
-      return isErrnoCode(code) ? code : 'EIO';
+      return isVfsErrorCode(code) ? code : 'EIO';
     }
 
     return null;
   };
 
-  const serving = <T>(path: string, op: () => Promise<T>): Effect.Effect<T, VfsError> => Effect.catch(tried(op), (failed) => {
+  const serving = <T>(path: string, syscall: string, op: () => Promise<T>): Effect.Effect<T, VfsError> => Effect.catch(tried(op), (failed) => {
     const { cause } = failed;
     const code = cause instanceof Error ? errnoOf(cause) : null;
 
     if (code === null || !(cause instanceof Error)) return Effect.die(cause);
 
-    const error = new VfsError(code, `${cause.message} (on '${path}')`, path);
-    error.cause = cause;
-
-    return Effect.fail(error);
+    return Effect.fail(syscallError(code, syscall, path, { cause }));
   });
 
   return {
     readFile(path) {
       return settle(Effect.gen(function* () {
-        const result = yield* serving(path, () => handle.readFile(path, { encoding: 'base64' }));
+        const result = yield* serving(path, 'open', () => handle.readFile(path, { encoding: 'base64' }));
 
         if (result.exitCode != null && result.exitCode !== 0) {
-          return yield* Effect.fail(new VfsError('ENOENT', `no such file or directory, open '${path}' (exit ${result.exitCode})`, path));
+          return yield* Effect.fail(syscallError('ENOENT', 'open', path, { detail: `no such file or directory (exit ${result.exitCode})` }));
         }
 
         return result.encoding === 'base64' ? base64ToBytes(result.content ?? '') : new TextEncoder().encode(result.content ?? '');
@@ -780,7 +775,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
     readRange(path, offset, length) {
       return settle(Effect.gen(function* () {
         if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-          return yield* Effect.fail(new VfsError('EIO', 'range offset and length must be positive safe integers', path));
+          return yield* Effect.fail(syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' }));
         }
 
         const r = yield* Effect.promise(() => handle.exec(
@@ -788,7 +783,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
         ));
 
         if ((r.exitCode ?? 0) !== 0) {
-          return yield* Effect.fail(new VfsError('EIO', `${(r.stderr ?? r.output ?? '').trim() || 'range read failed'}, open '${path}'`, path));
+          return yield* Effect.fail(syscallError('EIO', 'read', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined }));
         }
 
         return base64ToBytes(r.stdout ?? r.output ?? '');
@@ -796,11 +791,11 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
     },
 
     writeFile(path, data) {
-      return settle(Effect.asVoid(serving(path, () => handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }))));
+      return settle(Effect.asVoid(serving(path, 'open', () => handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }))));
     },
 
     readdir(path) {
-      return settle(Effect.map(serving(path, () => handle.listFiles(path, { recursive: false })), (result) => (result.files ?? [])
+      return settle(Effect.map(serving(path, 'scandir', () => handle.listFiles(path, { recursive: false })), (result) => (result.files ?? [])
         .map((entry) => ({ name: nameOf(entry), entry }))
         .filter(({ name }) => name.length > 0)
         .map(({ name, entry }) => {
@@ -817,7 +812,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
 
       const name = clean.slice(clean.lastIndexOf('/') + 1);
 
-      return settle(Effect.map(tolerated(serving(clean, () => handle.listFiles(vfsDirname(clean), { recursive: false })), 'enoent'), (listing) => {
+      return settle(Effect.map(tolerated(serving(clean, 'stat', () => handle.listFiles(vfsDirname(clean), { recursive: false })), 'enoent'), (listing) => {
         const entry = listing === undefined ? undefined : (listing.files ?? []).find((file) => nameOf(file) === name);
 
         return entry === undefined ? null : { size: entry.size ?? 0, mtimeMs: 0, type: isDir(entry) ? 'directory' as const : 'file' as const };
@@ -825,7 +820,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
     },
 
     unlink(path) {
-      return settle(Effect.asVoid(serving(path, () => handle.deleteFile(path))));
+      return settle(Effect.asVoid(serving(path, 'unlink', () => handle.deleteFile(path))));
     },
 
     mkdir(path, opts) {
@@ -833,7 +828,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
         const r = yield* Effect.promise(() => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`));
 
         if ((r.exitCode ?? 0) !== 0) {
-          return yield* Effect.fail(new VfsError('EIO', `${(r.stderr ?? r.output ?? '').trim() || 'operation failed'}, mkdir '${path}'`, path));
+          return yield* Effect.fail(syscallError('EIO', 'mkdir', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined }));
         }
       }));
     },

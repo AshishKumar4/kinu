@@ -14,6 +14,7 @@ import { makeExecRaw, makeSqlExec } from '../../../core/tests/helpers';
 import { makeCtx, makeEnv } from './actor-harness';
 import { createWorkspaceActorHost, HostedActorHomes, type WorkspaceHostSeams } from '../../src/actor-hosting';
 import { createHostedWorkspace } from '../../src/workspace-host';
+import { HELD_NIMBUS_TASKS } from './programmatic-host';
 
 const opened: Database[] = [];
 
@@ -82,6 +83,7 @@ export async function hostedWorkspace(
 
   // Both optional deps are answered, not cast: a workspace with no signing key has no preview URL.
   const workspace = createHostedWorkspace({
+    tasks: HELD_NIMBUS_TASKS,
     ctx, env,
     previewUrl: (port) => Promise.resolve({ unavailable: `port ${String(port)} has no preview host in this fixture` }),
     onFilesChanged: () => undefined,

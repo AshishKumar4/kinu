@@ -205,7 +205,7 @@ function pacedSteps(request: ScriptedRequest): ScriptedAnswer {
     return {
       pace: PACED,
       text: 'Listing the home folder.',
-      toolCall: { name: 'file', arguments: { action: 'list', path: '/home/user' } },
+      toolCall: { name: 'file', arguments: { action: 'list', path: '/home/main' } },
     };
   }
 

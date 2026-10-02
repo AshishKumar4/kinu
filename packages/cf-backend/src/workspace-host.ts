@@ -21,6 +21,7 @@ import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedR
 import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
 import * as v from 'valibot';
+import type { NimbusTasks } from './nimbus-tasks';
 
 /** `NIMBUS_SESSION` is deliberately not named: the class is gone (wrangler.jsonc migration `v3`). */
 const HOST_FABRIC_COMPOSITION: FabricComposition = {
@@ -79,6 +80,8 @@ function hostedRuntimeModule(): Promise<HostedRuntimeModule> {
 export interface HostedWorkspaceDeps<Id> {
   readonly ctx: DurableObjectState;
   readonly env: HostedWorkspaceEnv<Id>;
+  /** The actor's Lifecycle jobs for Nimbus's tasks; each runs through `onScheduled`. */
+  readonly tasks: Pick<NimbusTasks, 'schedule' | 'cancel'>;
   /** Supplied by the actor: the URL names the workspace and is signed with a user-plane-derived key. */
   previewUrl: (port: number, capability: string) => Promise<WorkspacePreviewUrl>;
   onFilesChanged?: (paths: readonly string[]) => void;
@@ -130,6 +133,8 @@ export interface HostedWorkspace {
   readonly apps: DurableApps;
   /** The edge has verified the signed hostname; the full capability never leaves this object. */
   routePreview(port: number, handle: string, request: Request, pathname: string): Promise<Response>;
+  /** Runs one of Nimbus's scheduled tasks, composing the runtime on a cold wake. */
+  onScheduled(task: HostedRuntimeTask): Promise<void>;
   /** Leaves the actor's rows alone. */
   destroy(): Promise<void>;
 }
@@ -224,29 +229,10 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   const portRegistry = deps.onPortsChanged ? new ObservedPortRegistry(deps.onPortsChanged) : new PortRegistry();
   let composing: Promise<HostComposition> | undefined;
 
-  // This object's alarm slot is the SDK scheduler's, so tasks run on a timer plus waitUntil. Timers die with
-  // a hibernated isolate, hence the launch pump also runs once per incarnation.
-  const pending = new Map<HostedRuntimeTask, { timer: ReturnType<typeof setTimeout>; settle: (run: boolean) => void }>();
-
   const lifecycle: HostedRuntimeOptions['lifecycle'] = {
     waitUntil: (task) => { deps.ctx.waitUntil(task); },
-    schedule: async (reason, at) => {
-      pending.get(reason)?.settle(false);
-      const sleep = Promise.withResolvers<boolean>();
-      const timer = setTimeout(() => { pending.delete(reason); sleep.resolve(true); }, Math.max(0, at - Date.now()));
-      pending.set(reason, { timer, settle: sleep.resolve });
-      deps.ctx.waitUntil(sleep.promise.then(async (run) => {
-        if (run) await (await compose()).runtime.onScheduled(reason);
-      }));
-    },
-    cancel: async (reason) => {
-      const held = pending.get(reason);
-
-      if (held === undefined) return;
-      clearTimeout(held.timer);
-      pending.delete(reason);
-      held.settle(false);
-    },
+    schedule: (task, at) => deps.tasks.schedule(task, at),
+    cancel: (task) => deps.tasks.cancel(task),
   };
 
   const compose = async (): Promise<HostComposition> => {
@@ -271,7 +257,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
           resolveWorkerLaunch: (recipe) => resolveSlateLaunch(deps, recipe),
         });
 
-        // Cold-start recovery of launches a reset or hibernation interrupted.
+        // Cold-start recovery of the launch journal, as Nimbus's own session pumps once at init.
         deps.ctx.waitUntil(runtime.onScheduled('resident-launch'));
 
         return { runtime, facets: runtime.facets(), ports: portRegistry };
@@ -418,6 +404,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         }));
       }));
     },
+    onScheduled: async (task) => { await (await runtime()).onScheduled(task); },
     destroy: () => bundle.destroy(),
   };
 }

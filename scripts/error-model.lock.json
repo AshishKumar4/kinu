@@ -205,7 +205,7 @@
     "packages/cli-backend/src/executor.ts#throw": 2,
     "packages/cli-backend/src/head-runtime.ts#catch": 1,
     "packages/cli-backend/src/host-mount.ts#catch": 6,
-    "packages/cli-backend/src/host-mount.ts#throw": 2,
+    "packages/cli-backend/src/host-mount.ts#throw": 1,
     "packages/cli-backend/src/local-session.ts#catch": 7,
     "packages/cli-backend/src/local-session.ts#promise-rejection": 1,
     "packages/cli-backend/src/local-session.ts#throw": 9,

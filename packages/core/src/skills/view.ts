@@ -3,7 +3,7 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 
 
 import type { VfsMount } from '../vfs/mounts';
-import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
@@ -20,12 +20,12 @@ type Located =
 /** `plane` is the agent's whole file plane, read per call. */
 export function skillsMount(plane: () => VFS): VfsMount {
   const encoder = new TextEncoder();
-  const absent = (path: string) => new VfsError('ENOENT', 'no such file or directory', `${SKILLS_VIEW}${path}`);
+  const absent = (path: string, syscall: string) => syscallError('ENOENT', syscall, `${SKILLS_VIEW}${path}`);
 
-  const readOnly = (path: string) => new VfsError('EROFS',
-  `${SKILLS_VIEW} is a read-only view of every skill; write one at ${WORKSPACE_SKILLS_DIR}/<name>/${SKILL_FOLDER_FILE}, `
-    + `or under ${SHARED_SKILLS_DIR} for the owner's Drive`,
-  `${SKILLS_VIEW}${path}`,);
+  const readOnly = (path: string, syscall: string) => syscallError('EROFS', syscall, `${SKILLS_VIEW}${path}`, {
+    detail: `${SKILLS_VIEW} is a read-only view of every skill; write one at ${WORKSPACE_SKILLS_DIR}/<name>/${SKILL_FOLDER_FILE}, `
+      + `or under ${SHARED_SKILLS_DIR} for the owner's Drive`,
+  });
 
   /** The skill a path names and the rest of the path; null for the root or an unknown name. */
   const locate = async (path: string): Promise<Located | null> => {
@@ -74,7 +74,7 @@ export function skillsMount(plane: () => VFS): VfsMount {
 
         const real = located?.kind === 'file' ? source(located) : null;
 
-        if (real === null) return yield* Effect.fail(absent(path));
+        if (real === null) return yield* Effect.fail(absent(path, 'open'));
 
         return yield* Effect.promise(async () => plane().readFile(real));
       }));
@@ -84,7 +84,7 @@ export function skillsMount(plane: () => VFS): VfsMount {
         const located = yield* Effect.promise(() => locate(path));
 
         if (located === null) {
-          if (path.split('/').some((segment) => segment !== '')) return yield* Effect.fail(absent(path));
+          if (path.split('/').some((segment) => segment !== '')) return yield* Effect.fail(absent(path, 'scandir'));
           const names = [...Object.keys(BUILTIN_SKILL_FILES), ...(yield* Effect.promise(() => listSkillFiles(plane()))).map((file) => file.name)];
 
           return names.sort(compareSkillNames).map((name) => ({ name, type: 'directory' }));
@@ -92,16 +92,16 @@ export function skillsMount(plane: () => VFS): VfsMount {
 
         if (located.rest === '' && (located.kind === 'builtin' || located.file.folder === null)) return [{ name: SKILL_FOLDER_FILE, type: 'file' }];
 
-        if (located.kind === 'builtin' || located.file.folder === null) return yield* Effect.fail(absent(path));
+        if (located.kind === 'builtin' || located.file.folder === null) return yield* Effect.fail(absent(path, 'scandir'));
         const folder = located.file.folder;
 
         return yield* Effect.promise(async () => plane().readdir(located.rest === '' ? folder : `${folder}/${located.rest}`));
       }));
     },
     stat,
-    writeFile(path) { return settle(Effect.fail(readOnly(path))); },
-    unlink(path) { return settle(Effect.fail(readOnly(path))); },
-    mkdir(path) { return settle(Effect.fail(readOnly(path))); },
+    writeFile(path) { return settle(Effect.fail(readOnly(path, 'open'))); },
+    unlink(path) { return settle(Effect.fail(readOnly(path, 'unlink'))); },
+    mkdir(path) { return settle(Effect.fail(readOnly(path, 'mkdir'))); },
   };
 
   // Skills live in the owner's Drive too.

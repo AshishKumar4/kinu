@@ -1391,8 +1391,10 @@ describe("CLI distribution artifacts", () => {
     run(["model", "w1", "openai-compat/mock-model"]);
   }
 
-  function chatSurface(root: string, env: Record<string, string>): Promise<PtyRun> {
+  /** Without the worker the markers never leave, so that case reads its misses rather than failing on them. */
+  function chatSurface(root: string, env: Record<string, string>, unmetWait: "fail" | "report" = "fail"): Promise<PtyRun> {
     return runTuiInPty(join(root, "cli.js"), {
+      unmetWait,
       args: ["chat", "w1"],
       cwd: root,
       steps: [
@@ -1430,7 +1432,6 @@ describe("CLI distribution artifacts", () => {
 
       const run = await chatSurface(root, env);
 
-      expect(run.waits.every((w) => w.met), `PTY waits failed: ${JSON.stringify(run.waits)}`).toBe(true);
 
       // Conceal: every marker the text carries is gone from the frame. A
       // worker that never starts leaves all of them literal.
@@ -1486,8 +1487,9 @@ describe("CLI distribution artifacts", () => {
       try {
         provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
 
-        const run = await chatSurface(root, env);
+        const run = await chatSurface(root, env, "report");
 
+        expect(run.waits.find((wait) => !wait.met)).toMatchObject({ until: "gone", text: "**" });
         expect(run.screen).toContain("**two green lanes**");
         expect(run.screen).toContain("### Heading marker");
         expect(run.screen).toContain("`parser.worker.js`");

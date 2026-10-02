@@ -9,7 +9,7 @@ import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 
 import type { CheckpointFiles } from '../types/primitives';
 import { vfsErrorFromText } from '../vfs/errno';
-import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { commandResult, uncheckpointedSentence, type CommandResult } from './exec-result';
@@ -668,7 +668,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   const call = (method: string, params: JsonValue[], path: string): Effect.Effect<JsonValue | undefined, KinuError | VfsError> =>
     Effect.tryPromise({
       try: () => transport.rpc(method, params, target),
-      catch: (cause) => (cause instanceof Error ? vfsErrorFromText(cause.message, path) : null)
+      catch: (cause) => (cause instanceof Error ? vfsErrorFromText({ message: cause.message, path, cause }) : null)
         ?? deviceFailure({ doing: `${method} on the device`, cause }),
     });
 
@@ -783,7 +783,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
     readRange(path, offset, length) {
       return settle(Effect.suspend(() => (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0
-        ? Effect.fail(new VfsError('EIO', 'range offset and length must be positive safe integers', path))
+        ? Effect.fail(syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' }))
         : Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, offset, length)))));
     },
 

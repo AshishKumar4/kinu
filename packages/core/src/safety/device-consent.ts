@@ -26,6 +26,7 @@ export const DEVICE_CONSENT_UNANSWERED =
 export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
   'Kinu installs a small daemon here and links this machine to your account.',
   'A workspace you approve runs in a sandbox: its own home plus folders you pick. Everything else stays invisible to it.',
+  'If you pick your home folder, the agent can also change your shell startup files and git settings, which run outside the sandbox. Pick a project folder to keep them out of reach.',
   'The daemon only dials out. Revoke it any time under Account settings > Devices.',
 ];
 

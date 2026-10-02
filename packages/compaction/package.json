@@ -10,7 +10,7 @@
   "dependencies": {
     "@better-compact/core": "0.2.2",
     "@kinu.run/core": "workspace:*",
-    "@nimbus-sh/core": "0.13.1",
+    "@nimbus-sh/core": "0.14.0",
     "ai": "6.0.214",
     "valibot": "^1.4.1"
   },

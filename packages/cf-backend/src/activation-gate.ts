@@ -60,8 +60,7 @@ export function startBeforeRpc(instance: StartGated, names: readonly string[], r
     if (gated.has(name) || descriptor === undefined) continue;
     const method: SurfaceMethod = descriptor.value;
 
-    // The method runs on the tick the gate opens, as an awaited gate runs it: a read it makes must not trail work the
-    // same tick started.
+    // A promise chain, not settle: the method runs on the tick the gate opens (OBSERVABILITY.md).
     const gatedMethod: SurfaceMethod = function (...args) {
       const gate = startGates.get(this);
 

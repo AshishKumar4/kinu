@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-02",
-  "files": 2943,
-  "functions": 76387,
+  "files": 2946,
+  "functions": 76473,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -374,7 +374,7 @@
       "complexity": 28
     },
     {
-      "key": "scripts/ladder.ts#runPending",
+      "key": "scripts/ladder.ts#ciCommand",
       "complexity": 28
     },
     {

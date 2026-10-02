@@ -8,6 +8,7 @@ import * as v from 'valibot';
 import { newWebSocketRpcSession } from 'capnweb';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
+import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
@@ -97,6 +98,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       ctx, workspace: ctx.id.name ?? ctx.id.toString(),
       session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
       facetManager: async () => facets,
+      bundler: (vfs) => supervisorEsbuildService(ctx, env, vfs),
       dispatch: async (_caller, route) => {
         if (route.kind !== 'namespace') throw new Error(`probe dispatch answers namespace only, got ${route.kind}`);
 

@@ -44,11 +44,12 @@ describe('device consent prompt data', () => {
     expect(DEVICE_CONSENT_DENIED).not.toContain('later');
   });
 
-  test('the connect disclosure is three lines: daemon, sandbox, revoke', () => {
+  test('the connect disclosure is four lines: daemon, sandbox, what a home folder exposes, revoke', () => {
     // What a person reads before the daemon is installed: an extra line must not arrive unnoticed.
     expect(DEVICE_CONNECT_DISCLOSURE).toEqual([
       'Kinu installs a small daemon here and links this machine to your account.',
       'A workspace you approve runs in a sandbox: its own home plus folders you pick. Everything else stays invisible to it.',
+      'If you pick your home folder, the agent can also change your shell startup files and git settings, which run outside the sandbox. Pick a project folder to keep them out of reach.',
       'The daemon only dials out. Revoke it any time under Account settings > Devices.',
     ]);
   });

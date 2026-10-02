@@ -8,7 +8,7 @@ import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
-import { canonicalWorkspacePath } from '../vfs/workspace-path';
+import { workspacePath } from '../vfs/workspace-path';
 import {
   ForkContextMemberRowSchema,
   ForkConversationEntryPartRowSchema,
@@ -66,22 +66,25 @@ function artifactSegments(relative: string, path: string, root: string): Effect.
 /** One payload path relative to its owning artifact directory. A path outside it is refused:
  *  carrying another workspace's absolute path would re-root or escape into a directory the fork does not own. */
 function forkArtifactRelativePath(stored: string, artifactDirectory: string): Effect.Effect<string> {
-  // One trailing-separator rule so `/a/b` and `/a/b/` relativize and re-root identically.
-  const root = canonicalWorkspacePath(artifactDirectory.endsWith('/') ? artifactDirectory.slice(0, -1) : artifactDirectory);
+  const root = workspacePath(artifactDirectory);
   const prefix = `${root}/`;
-  const path = canonicalWorkspacePath(stored);
 
-  return path.startsWith(prefix)
-    ? artifactSegments(path.slice(prefix.length), path, root)
-    : Effect.die(new Error(
-      `fork cannot carry payload ${JSON.stringify(path)}: it is outside the artifact directory `
-      + `${JSON.stringify(root)}`,
-    ));
+  // Refuse raw segments before normalization can erase traversal.
+  return Effect.flatMap(artifactSegments(stored.startsWith('/') ? stored.slice(1) : stored, stored, root), () => {
+    const path = workspacePath(stored);
+
+    return stored.startsWith('/') && path.startsWith(prefix)
+      ? Effect.succeed(path.slice(prefix.length))
+      : Effect.die(new Error(
+        `fork cannot carry payload ${JSON.stringify(path)}: it is outside the artifact directory `
+        + `${JSON.stringify(root)}`,
+      ));
+  });
 }
 
 /** Absolute payload path for a carried relative path under one artifact directory. */
 export function forkArtifactPath(relative: string, artifactDirectory: string): string {
-  const root = artifactDirectory.endsWith('/') ? artifactDirectory.slice(0, -1) : artifactDirectory;
+  const root = workspacePath(artifactDirectory);
 
   return settleSync(Effect.map(artifactSegments(relative, relative, root), () => `${root}/${relative}`));
 }

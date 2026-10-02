@@ -11,7 +11,7 @@ import { Cause, Effect, Result } from 'effect';
 import type { FilesOwner } from '../safety/approval-gate';
 import { renderThrownChain, settle, settleSync } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
-import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 export interface VfsMount {
 	readonly name: string;
@@ -165,7 +165,7 @@ function treeRemoval(files: VFS, path: string): Effect.Effect<TreeRemoval, VfsEr
 	return Effect.gen(function* () {
 		const st = yield* awaited(() => files.stat(path));
 
-		if (!st) return yield* Effect.fail(new VfsError('ENOENT', 'no such file or directory', path));
+		if (!st) return yield* Effect.fail(syscallError('ENOENT', 'rm', path));
 
 		const pending: string[] = [path];
 		const order: string[] = [];
@@ -236,7 +236,7 @@ function carried(from: CarrySide, to: CarrySide): Effect.Effect<void, VfsError> 
 	return Effect.gen(function* () {
 		const sourceStat = yield* awaited(() => from.files.stat(from.path));
 
-		if (!sourceStat) return yield* Effect.fail(new VfsError('ENOENT', 'no such file or directory', from.path));
+		if (!sourceStat) return yield* Effect.fail(syscallError('ENOENT', 'rename', from.path, { dest: to.path }));
 
 		if ((sourceStat.type === 'directory')) {
 			return yield* Effect.fail(new VfsError('EPERM',
@@ -489,7 +489,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 					if (native) return yield* awaited(() => native.call(base, oldPath, newPath));
 					const st = yield* awaited(() => base.stat(oldPath));
 
-					if (!st) return yield* Effect.fail(new VfsError('ENOENT', 'no such file or directory', oldPath));
+					if (!st) return yield* Effect.fail(syscallError('ENOENT', 'rename', oldPath, { dest: newPath }));
 
 					if ((st.type === 'directory')) {
 						return yield* Effect.fail(new VfsError('EPERM', 'a directory cannot be renamed here: this route has no native rename, and only a file\'s bytes can be carried', oldPath));

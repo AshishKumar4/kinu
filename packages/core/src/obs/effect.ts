@@ -42,7 +42,7 @@ function fail(cause: Cause.Cause<KinuError | VfsError>, options?: SettleOptions)
   );
 }
 
-/** The only runner. Its awaits add hops a plain `await` does not, so a call forwarded when a gate opens stays a promise chain. */
+/** The only runner. Its awaits add hops a bare `await` lacks, so a call forwarded when a gate opens stays a promise chain. */
 export async function settle<A>(effect: Effect.Effect<A, KinuError | VfsError>, options?: SettleOptions): Promise<A> {
   const exit = await Effect.runPromiseExit(effect, { scheduler: WITHIN_ONE_EVENT, signal: options?.signal });
 
