@@ -59,6 +59,7 @@ export {
   logged,
   settleLogged,
   settleLoggedSync,
+  detach,
   RESERVED_LOG_FIELDS,
   type LogEventName,
   type LogFields,

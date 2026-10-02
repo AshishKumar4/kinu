@@ -6,7 +6,7 @@ import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
 import {
   deviceHistoryNote, type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestorePlan, type Rpc,
 } from "@kinu.run/core";
-import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 
@@ -34,7 +34,7 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
   useEffect(() => {
     let current = true;
 
-    startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       // Keyed on the turn in the store: retention is per directory but the limit is global, so a filtered window loses checkpoints.
       const listing = yield* Effect.promise(async () => rpc<FileCheckpointListing>("listFileCheckpoints", [200, messageId]));
 
@@ -71,7 +71,7 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
     if (reverted === null) onClose();
   }, [revert, onClose]);
 
-  const revertWithFiles = useCallback(() => settle(Effect.gen(function* () {
+  const revertWithFiles = useCallback(() => detach(Effect.gen(function* () {
     const reverted = yield* Effect.promise(async () => revert());
     setFailure(reverted);
 

@@ -16,7 +16,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { TranscriptBody, useNodeTranscript } from "@/components/NodeTranscript";
 import { NO_HEAD_DELTAS, type HeadDeltas } from "@kinu.run/core";
 import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "@kinu.run/core";
-import { settle, showing } from "@kinu.run/core/obs";
+import { showing, detach } from "@kinu.run/core/obs";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;
@@ -70,7 +70,7 @@ function TakesComparison({ set, onPick, onClose }: {
     return () => document.removeEventListener("keydown", onKey);
   }, [step]);
 
-  const useTake = useCallback(() => settle(Effect.gen(function* () {
+  const useTake = useCallback(() => detach(Effect.gen(function* () {
     if (busy || isCurrent) return;
     setBusy(true);
     setErr(null);

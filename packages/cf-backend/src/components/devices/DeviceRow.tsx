@@ -10,7 +10,7 @@ import {
 } from "@/lib/user-api";
 import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode, type DeviceMode } from "@kinu.run/core";
-import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 import { composing } from "@/components/ui/form";
 
 /** The hub enforces the same `effectiveDeviceMode`, so this line matches what it does. */
@@ -77,7 +77,7 @@ export function DeviceRow({
           <button type="button" disabled={acknowledging}
             onClick={() => {
               setAcknowledging(true);
-              startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+              startTransition(() => detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
                 yield* Effect.promise(async () => onAcknowledge());
               }), showing((chain) => {
                 // A rejection escaping `onError` still leaves the row visibly unacknowledged.
@@ -182,7 +182,7 @@ export function DeviceRow({
             aria-checked={sandboxOn}
             aria-label={`Sandbox on ${device.label}`}
             disabled={switching || device.wholeMachine}
-            onClick={() => settle(setSandbox(!sandboxOn))}
+            onClick={() => detach(setSandbox(!sandboxOn))}
             className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors disabled:opacity-50 ${
               sandboxOn ? "border-[var(--c-accent)] bg-[var(--c-accent)]" : "border-[var(--c-border-strong)] bg-[var(--c-fill)]"
             }`}
@@ -209,7 +209,7 @@ export function DeviceRow({
               <span key={g.agentName} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm p-fill">
                 {g.agentName}
                 <span className={g.policy === "allow" ? "p-text-3" : "p-danger"}>{g.policy === "allow" ? "Allowed" : "Denied"}</span>
-                <button onClick={() => settle(dropGrant(g.agentName))}
+                <button onClick={() => detach(dropGrant(g.agentName))}
                   title={g.policy === "allow" ? `Revoke ${g.agentName}'s access` : `Remove the saved denial for ${g.agentName}`}
                   className="p-text-3 hover:p-danger">
                   <XIcon size={10} />

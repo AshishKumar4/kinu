@@ -7,7 +7,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import * as v from 'valibot';
 import "@xterm/xterm/css/xterm.css";
 import { describeError } from "@/hooks/use-async-resource";
-import { renderThrownChain, settle, showing, tolerate } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, tolerate, detach } from "@kinu.run/core/obs";
 import { useTheme, type Theme, type ThemeMode } from "@/hooks/use-theme";
 import {
   BUSY, LINE_MODE_LABEL, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
@@ -281,7 +281,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
           <span className="ml-auto shrink-0" title="⌃C interrupts the foreground program.">⇧⌃C copies</span>
         ) : (
           <>
-            <button type="button" onClick={() => settle(Effect.catchCause(Effect.gen(function* () {
+            <button type="button" onClick={() => detach(Effect.catchCause(Effect.gen(function* () {
               yield* Effect.promise(async () => restart());
             }), showing(setFailure)))}
               className="ml-auto shrink-0 underline decoration-dotted hover:p-text-2 cursor-pointer"

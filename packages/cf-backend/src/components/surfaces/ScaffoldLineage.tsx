@@ -7,7 +7,7 @@ import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines } from "./shared";
-import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
 
@@ -105,7 +105,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const { resource: lineage, reload } = useAsyncResource(loadVersions);
   const versions = lastValue(lineage) ?? [];
 
-  const loadDetail = useCallback((version: number) => settle(Effect.gen(function* () {
+  const loadDetail = useCallback((version: number) => detach(Effect.gen(function* () {
     setDetail({ status: "loading" });
 
     // An absent verdict is an empty result, not a failure.
@@ -128,7 +128,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
     return loadDetail(version);
   }, [loadDetail]);
 
-  const decide = useCallback((mode: "promote" | "rollback") => settle(Effect.gen(function* () {
+  const decide = useCallback((mode: "promote" | "rollback") => detach(Effect.gen(function* () {
     setBusy(mode);
     setDecideErr(null);
 
@@ -141,7 +141,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
       const e = Cause.squash(failed); setDecideErr(`${mode} failed: ${renderThrownChain({ cause: e })}`); })), Effect.sync(() => { setBusy(null); }));
   })), [rpc, reload, loadDetail, selected]);
 
-  const runPreview = useCallback(() => settle(Effect.gen(function* () {
+  const runPreview = useCallback(() => detach(Effect.gen(function* () {
     if (selected == null || !previewTask.trim()) return;
     setBusy("preview"); setPreviewOut(null);
 

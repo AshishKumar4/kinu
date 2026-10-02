@@ -21,7 +21,7 @@ import type { AdvisorSeverity, DiffAnchor, InlineSteer, JsonObject, JsonValue, P
 import { changeNotesCard, MAIN_AGENT, slatesChanged } from "@kinu.run/core";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
-import { diagnostics, renderThrownChain, settle } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { MarkdownContent, CodeBlock, SlateLink } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
@@ -865,7 +865,7 @@ function MessageFeedback({
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  const toggle = useCallback((next: 'positive' | 'negative') => settle(Effect.gen(function* () {
+  const toggle = useCallback((next: 'positive' | 'negative') => detach(Effect.gen(function* () {
     if (busy) return;
     setBusy(true);
     setFailed(false);

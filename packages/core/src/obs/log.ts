@@ -173,6 +173,12 @@ export function settleLogged<Fields>(
   return settle(logged<Fields>(event, failure, work, fields));
 }
 
+export function detach(effect: Effect.Effect<void>): void {
+  settle(effect).then(undefined, (...rejected: [unknown]) => {
+    diagnostics.failure('effect.detached_defect', toKinuError({ doing: 'running an effect nothing awaits', cause: rejected[0], otherwise: 'unavailable' }));
+  });
+}
+
 export function settleLoggedSync<Fields>(
   event: LogEventName,
   failure: { readonly doing: string; readonly otherwise: ErrorCode },

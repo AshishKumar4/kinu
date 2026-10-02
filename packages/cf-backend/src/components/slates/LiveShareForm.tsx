@@ -9,13 +9,12 @@ import {
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE,
   type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type Rpc, type SlateAnswer, type SlateCapability, type SlateCapabilityGraph, type SlateGraphBinding,
 } from "@kinu.run/core";
-import { settle, showing } from "@kinu.run/core/obs";
+import { showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { revokeShare, shareLive } from "@/lib/shared-api";
 import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, StopButton, type AccessOption } from "./ShareParts";
-import { showRejection } from "@/hooks/use-async-resource";
 
 export interface LiveShareFixture {
   graph: SlateCapabilityGraph;
@@ -215,14 +214,14 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   useEffect(() => {
     if (fixture !== undefined) return;
     let live = true;
-    Promise.all([
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => Promise.all([
       rpc<SlateAnswer<unknown>>("slate", [{ op: "graph", id: slate }]),
       rpc<SlateAnswer<unknown>>("slate", [{ op: "liveShares" }]),
-    ]).then(([drawn, rows]) => {
+    ])), ([drawn, rows]) => {
       if (!live) return;
       setGraph(answered(drawn, SlateCapabilityGraphSchema));
       setShares(answered(rows, v.array(LiveShareRecordSchema)).filter((share) => share.slate === slate && share.revokedAt === null));
-    }).catch(showRejection(setErr, () => live));
+    }), showing((chain) => { if (live) setErr(chain); })));
 
     return () => { live = false; };
   }, [fixture, rpc, slate]);
@@ -241,7 +240,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   const emailList = useMemo(() => emailsOf(emails), [emails]);
   const canShare = graph !== null && !busy && (visibility === "public" || emailList.length > 0);
 
-  const share = useCallback(() => settle(Effect.gen(function* () {
+  const share = useCallback(() => detach(Effect.gen(function* () {
     if (!canShare) return;
     setBusy(true);
     setErr(null);
@@ -260,7 +259,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     }));
   })), [canShare, approved, workspace, slate, visibility, emailList, fork, setBusy, onListingPending]);
 
-  const revoke = useCallback((shareId: string) => settle(Effect.gen(function* () {
+  const revoke = useCallback((shareId: string) => detach(Effect.gen(function* () {
     setErr(null);
 
     return yield* Effect.catchCause(Effect.gen(function* () {
@@ -317,12 +316,12 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
         {graph === null && err === null && <div className="flex justify-center py-2"><Loader size="sm" /></div>}
         {graph !== null && reaches && <Reach graph={graph} visibility={visibility} approved={approved} onToggle={toggle} disabled={busy} />}
         {graph !== null && <p className="p-meta p-text-3" data-share-limits>{limits}</p>}
-        {shares.length > 0 && <SharedNow shares={shares} onStop={(id) => void revoke(id)} disabled={busy} />}
+        {shares.length > 0 && <SharedNow shares={shares} onStop={(id) => revoke(id)} disabled={busy} />}
         <Failure message={err} />
       </div>
       <div className="flex justify-end gap-2 border-t p-border pt-4">
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton className="h-8 px-4 text-sm" onClick={() => void share()} disabled={!canShare} data-share-submit>
+        <FilledButton className="h-8 px-4 text-sm" onClick={() => share()} disabled={!canShare} data-share-submit>
           {busy ? <><Loader size="sm" /><span className="ml-1">Sharing…</span></> : "Share"}
         </FilledButton>
       </div>

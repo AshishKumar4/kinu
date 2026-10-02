@@ -12,7 +12,7 @@ import type { ChangelogEntryKind, DiffLine } from "@kinu.run/core";
 import * as v from "valibot";
 import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { diagnostics, settle, showing, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, showing, toKinuError, detach, settle } from "@kinu.run/core/obs";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import {
   DiffLines, CodeBlock,
@@ -184,7 +184,7 @@ function useEntryRevert(entryId: string, rpc: Rpc, onReverted: () => void) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
 
-  const revert = useCallback(() => settle(Effect.gen(function* () {
+  const revert = useCallback(() => detach(Effect.gen(function* () {
     setBusy(true);
     setNotice(null);
 
@@ -246,7 +246,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   const [diff, setDiff] = useState<AsyncResource<ScaffoldDiff> | null>(null);
   const [expanded, setExpanded] = useState(false);
 
-  const toggleDiff = useCallback(() => settle(Effect.gen(function* () {
+  const toggleDiff = useCallback(() => detach(Effect.gen(function* () {
     if (diff !== null) {
       setDiff(null);
 
@@ -373,7 +373,7 @@ function StagedSkillDecision(
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
 
-  const open = useCallback(() => settle(Effect.gen(function* () {
+  const open = useCallback(() => detach(Effect.gen(function* () {
     if (staged !== null) {
       setStaged(null);
 
@@ -393,7 +393,7 @@ function StagedSkillDecision(
     }));
   })), [rpc, decision.requestId, decision.routeIndex, staged]);
 
-  const decide = useCallback((verdict: "approve" | "reject", digest: string) => settle(Effect.gen(function* () {
+  const decide = useCallback((verdict: "approve" | "reject", digest: string) => detach(Effect.gen(function* () {
     setBusy(true);
     setNotice(null);
 

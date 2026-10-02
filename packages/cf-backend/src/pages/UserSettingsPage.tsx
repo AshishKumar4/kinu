@@ -24,7 +24,7 @@ import { InviteCard } from "@/components/account/InviteCard";
 import { DevicesCard } from "@/components/devices/DevicesCard";
 import { AccountUsageCard } from "@/components/account/AccountUsageCard";
 import { SandboxSizeSettings } from "@/components/SandboxSize";
-import { settle, showing } from '@kinu.run/core/obs';
+import { showing, detach } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
   profile: { email: string; displayName: string | null } | null;
@@ -49,7 +49,7 @@ function ProfileNameEditor({ profile, onSaved }: {
         <div className="flex-1">
           <DisplayNameField value={name} onChange={setName} saving={saving} />
         </div>
-        <Button variant="secondary" size="sm" disabled={!changed || saving} onClick={() => settle(save())}>
+        <Button variant="secondary" size="sm" disabled={!changed || saving} onClick={() => detach(save())}>
           {saving ? <Loader size="sm" /> : null} Save
         </Button>
       </div>

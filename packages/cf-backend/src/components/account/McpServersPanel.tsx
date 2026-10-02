@@ -15,7 +15,7 @@ import { McpPresetCards } from "@/components/plugins/McpPresetCards";
 import { Choice, inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import * as v from "valibot";
-import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
+import { renderThrownChain, showing, detach } from '@kinu.run/core/obs';
 
 const POLL_MS = 5000;
 
@@ -48,7 +48,7 @@ export function McpServersPanel() {
   // Presets ride the same poll so a rotated app credential re-cards without a reload.
   const refresh = useCallback((): void => {
     setErr(null);
-    startTransition(() => settle(Effect.gen(function* () {
+    startTransition(() => detach(Effect.gen(function* () {
       yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
         const rows = yield* Effect.promise(async () => listMcpServers());
         setServers(rows);
@@ -85,7 +85,7 @@ export function McpServersPanel() {
     return () => clearTimeout(t);
   }, [authResult, refresh, searchParams, setSearchParams]);
 
-  const remove = useCallback((id: string, name: string) => settle(Effect.gen(function* () {
+  const remove = useCallback((id: string, name: string) => detach(Effect.gen(function* () {
     if (!confirm(`Remove "${name}"? All workspaces will lose access to its tools.`)) return;
 
     return yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => removeMcpServer(id)); refresh(); }), (failed) => Effect.sync(() => {
@@ -196,7 +196,7 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const save = useCallback(() => settle(Effect.gen(function* () {
+  const save = useCallback(() => detach(Effect.gen(function* () {
     if (!name.trim() || !serverUrl.trim()) return;
     setErr(null); setSaving(true);
 

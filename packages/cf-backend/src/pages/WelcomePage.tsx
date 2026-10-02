@@ -10,7 +10,7 @@ import {
 import {
   APP_ROUTES, ONBOARDING_STEPS,
 } from "@kinu.run/core";
-import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
@@ -103,7 +103,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const named = displayName.trim() || (profile?.email ?? '');
   const letter = (named === '' ? '?' : named)[0].toUpperCase();
 
-  const finish = useCallback(() => settle(Effect.gen(function* () {
+  const finish = useCallback(() => detach(Effect.gen(function* () {
     setBusy(true);
     setError(null);
 

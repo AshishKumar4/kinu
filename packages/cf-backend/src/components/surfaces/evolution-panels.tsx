@@ -1,5 +1,5 @@
 import { Effect, Cause } from 'effect';
-import { settle } from '@kinu.run/core/obs';
+import { detach } from '@kinu.run/core/obs';
 import { useState, useCallback } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { DatabaseIcon, GaugeIcon } from "@phosphor-icons/react";
@@ -32,7 +32,7 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
   const load = useCallback(() => rpc<GepaRunRow[]>("getGepaRuns", [20]), [rpc]);
   const { resource, reload } = useAsyncResource(load);
 
-  const open = useCallback((runId: string) => settle(Effect.gen(function* () {
+  const open = useCallback((runId: string) => detach(Effect.gen(function* () {
     setSel(runId);
     setDetail({ status: "loading" });
 

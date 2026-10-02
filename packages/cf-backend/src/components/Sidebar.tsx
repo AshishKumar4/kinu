@@ -16,7 +16,7 @@ import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
 import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
-import { renderCauseChain, settle, showing } from "@kinu.run/core/obs";
+import { renderCauseChain, showing, detach } from "@kinu.run/core/obs";
 import { SidebarAgents } from "./SidebarAgents";
 import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
 import { composing } from "@/components/ui/form";
@@ -81,7 +81,7 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
   });
 
   return (
-    <form onSubmit={(event) => settle(save(event))} className="p-card px-1.5 py-1">
+    <form onSubmit={(event) => detach(save(event))} className="p-card px-1.5 py-1">
       <div className="flex items-center gap-1">
         <input
           autoFocus
@@ -152,7 +152,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
   const closeUserMenu = useCallback(() => setShowUserMenu(false), []);
   useCloseOnOutsideClick(showUserMenu, userMenuRef, closeUserMenu);
 
-  const confirmDelete = useCallback(() => settle(Effect.gen(function* () {
+  const confirmDelete = useCallback(() => detach(Effect.gen(function* () {
     if (!deleteTarget) return;
     const name = deleteTarget.name;
     setDeleteBusy(true);

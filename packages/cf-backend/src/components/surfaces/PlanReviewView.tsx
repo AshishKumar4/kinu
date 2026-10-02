@@ -20,7 +20,7 @@ import {
 } from "@plannotator/ui/utils/parser";
 import type { Rpc } from "@kinu.run/core";
 import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
-import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { annotationType } from "./annotation-type";
 import { copyLabel, useCopy, type CopyStatus } from "@/hooks/use-copy";
@@ -184,7 +184,7 @@ function DismissPlan({ plan, rpc, readOnly, deciding, saving, onError }: {
   });
 
   return (
-    <Button type="button" size="sm" variant="ghost" onClick={() => settle(dismiss())} disabled={deciding !== null || saving || busy}>
+    <Button type="button" size="sm" variant="ghost" onClick={() => detach(dismiss())} disabled={deciding !== null || saving || busy}>
       {busy ? <Loader size="sm" /> : "Dismiss"}
     </Button>
   );
@@ -295,7 +295,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     onError: setError,
   });
 
-  const changeAnnotations = useCallback((next: Annotation[]) => settle(Effect.gen(function* () {
+  const changeAnnotations = useCallback((next: Annotation[]) => detach(Effect.gen(function* () {
     if (decisionInFlight()) return;
     // Decided after the handler so a superseded revision does not read as a failed save.
     let thrown: { readonly cause: unknown } | undefined;

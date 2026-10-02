@@ -9,7 +9,7 @@ import {
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { jobName, lastOutputLines, shortJobId, timeAgo } from "@kinu.run/core";
-import { settle, showing } from "@kinu.run/core/obs";
+import { showing, detach } from "@kinu.run/core/obs";
 
 function statusMeta(status: BackgroundJob["status"]) {
   switch (status) {
@@ -67,7 +67,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const act = useCallback((method: string) => settle(Effect.gen(function* () {
+  const act = useCallback((method: string) => detach(Effect.gen(function* () {
     setBusy(true);
     setErr(null);
 

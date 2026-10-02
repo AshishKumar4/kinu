@@ -2,7 +2,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { Effect } from "effect";
-import { attempt, renderThrownChain, settle } from "@kinu.run/core/obs";
+import { attempt, renderThrownChain, settle, detach } from "@kinu.run/core/obs";
 import { CHATGPT_USAGE_URL, chatgptPlan, startChatGptSignIn, type ChatGptPlan } from "@/lib/user-api";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -83,7 +83,7 @@ export function ChatGptConnect({ plan, legacy, onChanged }: { plan: ChatGptPlan;
         <p className="text-xs p-text-2">{status.email ?? "Your ChatGPT account"} signed in without ChatGPT plan usage. Continue with ChatGPT to allow it.</p>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        <FilledButton onClick={() => settle(signIn())} disabled={waiting}>Continue with ChatGPT</FilledButton>
+        <FilledButton onClick={() => detach(signIn())} disabled={waiting}>Continue with ChatGPT</FilledButton>
         {waiting && <span className="p-meta p-text-3 flex items-center gap-2"><Loader size="sm" /> Waiting for the browser to come back to {device.label}…</span>}
       </div>
       <p className="p-meta p-text-3">

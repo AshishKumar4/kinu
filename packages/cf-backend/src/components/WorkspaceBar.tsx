@@ -6,7 +6,7 @@ import { Link } from "react-router-dom";
 import { CheckIcon, GitBranchIcon, PencilSimpleIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
 import type { ConnectionStatus } from "@/hooks/use-kinu";
 import { useTheme, toggleMode } from "@/hooks/use-theme";
-import { settle, showing } from '@kinu.run/core/obs';
+import { showing, detach } from '@kinu.run/core/obs';
 import { fmtSpan } from "@kinu.run/core";
 import { composing } from "@/components/ui/form";
 
@@ -186,7 +186,7 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
 
   if (editing) {
     return (
-      <form onSubmit={(event) => settle(save(event))} className="flex min-w-0 items-center gap-1">
+      <form onSubmit={(event) => detach(save(event))} className="flex min-w-0 items-center gap-1">
         <input
           autoFocus
           value={value}

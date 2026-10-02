@@ -2,6 +2,8 @@
  * `/updates` (docs/SELF-DEPLOY.md § Updates). The deployment pulls; there is no push.
  * A poll failing mid-run is expected: the Worker being replaced is the update working.
  */
+import { showing, detach } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { ArrowUpIcon } from "@phosphor-icons/react";
@@ -58,16 +60,15 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     if (!live) return;
     let mounted = true;
 
-    const failed = showRejection(setErr, () => mounted);
+    const failed = showing((chain) => { if (mounted) setErr(chain); });
 
-    read(UpdateOfferSchema, "/api/updates")
-      .then((held) => { if (mounted) setOffer(held); })
-      .catch(failed);
-
-    // `apply` answers before the first step runs, so a page opened mid-update reads the ledger.
-    read(DeploySnapshotSchema, "/api/updates/run")
-      .then((held) => { if (mounted && held.steps.length > 0) setRun(held); })
-      .catch(failed);
+    detach(Effect.all([
+      Effect.catchCause(Effect.map(Effect.promise(() => read(UpdateOfferSchema, "/api/updates")), (held) => { if (mounted) setOffer(held); }), failed),
+      // `apply` answers before the first step runs, so a page opened mid-update reads the ledger.
+      Effect.catchCause(Effect.map(Effect.promise(() => read(DeploySnapshotSchema, "/api/updates/run")), (held) => {
+        if (mounted && held.steps.length > 0) setRun(held);
+      }), failed),
+    ], { concurrency: 'unbounded' }));
 
     return () => { mounted = false; };
   }, [live]);
@@ -95,14 +96,11 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     };
   }, [live, going]);
 
-  const apply = useCallback((): void => {
+  const apply = useCallback(() => {
     setBusy(true);
     setErr(null);
 
-    read(DeploySnapshotSchema, "/api/updates/apply", { method: "POST" })
-      .then(setRun)
-      .catch(showRejection(setErr))
-      .finally(() => setBusy(false));
+    detach(Effect.ensuring(Effect.catchCause(Effect.map(Effect.promise(() => read(DeploySnapshotSchema, "/api/updates/apply", { method: "POST" })), setRun), showing(setErr)), Effect.sync(() => setBusy(false))));
   }, []);
 
   return (

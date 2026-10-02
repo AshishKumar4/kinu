@@ -3,7 +3,7 @@ import type { TextareaRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 
-import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
+import { renderThrownChain, settle, showing, detach } from '@kinu.run/core/obs';
 
 import type {
   ProviderConnectId,
@@ -152,7 +152,7 @@ export function GuidedOnboarding(props: {
   }, [props.onReady, props.operations]);
 
   const attempt = useCallback((work: () => Promise<void>) => {
-    startTransition(() => settle(Effect.catchCause(Effect.promise(work), showing(setError))));
+    startTransition(() => detach(Effect.catchCause(Effect.promise(work), showing(setError))));
   }, [startTransition]);
 
   useEffect(() => attempt(refresh), [attempt, refresh]);
@@ -204,7 +204,7 @@ export function GuidedOnboarding(props: {
 
   const run = useCallback((operation: () => void | Promise<void>) => {
     if (busy) return;
-    startTransition(() => settle(Effect.gen(function* () {
+    startTransition(() => detach(Effect.gen(function* () {
       setBusy(true);
       setError(null);
 

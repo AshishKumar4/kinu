@@ -300,54 +300,56 @@ export class Host {
   });
 });
 
-test('React owns a JSX handler, useCallback, startTransition and a `void settle` in useEffect; other forms stay findings', () => {
+test('React calls an intrinsic element\'s handler, startTransition\'s and an effect\'s: only detach runs there', () => {
   const TSX = 'packages/fixture/src/panel.tsx';
 
   const source = `
-import { settle } from '../obs/index';
+import { detach, settle } from '../obs/index';
 function Panel() {
-  const save = useCallback(() => settle(write()), []);
-  const open = useCallback(async () => { return settle(write()); }, []);
+  const save = useCallback(() => detach(write()), []);
+  const open = useCallback(() => { return detach(write()); }, []);
   useEffect(() => {
     const controller = new AbortController();
-    void settle(Effect.catchCause(load(controller.signal), showing(setError)));
+    detach(load(controller.signal));
     return () => { controller.abort(); };
   }, []);
-  useEffect(() => { void settle(Effect.ensuring(Effect.catchCause(load(), (failed) => Effect.sync(() => { report(failed); })), done)); }, []);
+  useEffect(() => detach(load()), []);
   useEffect(() => { void settle(load()); }, []);
-  useEffect(() => { void settle(Effect.catchCause(load(), (failed) => Effect.failCause(failed))); }, []);
-  useEffect(() => settle(load()), []);
-  useEffect(() => { return settle(load()); }, []);
+  const read = useCallback(() => settle(load()), []);
+  const later = () => detach(load());
   const pending = settle(load());
-  return <button onClick={() => settle(save())} onBlur={() => { void settle(save()); log(); }} onFocus={() => startTransition(() => settle(load()))} />;
+  const dialog = <Dialog onConfirm={() => settle(save())} onClose={() => detach(close())} />;
+  const quit = <button onClick={() => settle(save())} />;
+  return <button onClick={() => detach(save())} onBlur={(event) => { event.preventDefault(); detach(save()); }} onFocus={() => startTransition(() => settle(load()))} />;
 }
 `;
 
   const plain = `
-import { settle } from '../obs/index';
+import { detach, settle } from '../obs/index';
 function helper() {
   useCallback(() => settle(write()), []);
+  useCallback(() => detach(write()), []);
 }
 `;
 
   const midBody = 'a runner called mid-body; the effect is run once, at the edge, as its return';
-  const cleanup = "a runner as a React effect's whole body is returned as its cleanup; run it as `void settle(…)` in a block";
-  const unanswered = 'a voided runner whose effect does not visibly answer every failure; end it in Effect.catchCause(…, showing(set)) or an inline handler that does not fail again';
+  const floats = 'a settle where React calls: React never awaits it, so a rejection would float; run the answered effect with detach';
+  const only = "detach runs only where a component hands out a function: a JSX attribute's, or useCallback's, startTransition's or an effect's";
 
   expect(bridgeSites(new Map([[TSX, source], [FILE, plain]]))).toEqual({
     bridges: [],
     flights: [],
     routes: [],
     held: [],
-    react: [`${TSX}:11`, `${TSX}:17`, `${TSX}:17`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`],
+    react: [`${TSX}:11`, `${TSX}:13`, `${TSX}:16`, `${TSX}:16`, `${TSX}:18`, `${TSX}:18`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`],
     findings: [
       `${FILE}:4: a runner returned outside an exported function or public member`,
-      `${TSX}:12: ${unanswered}`,
-      `${TSX}:13: ${unanswered}`,
-      `${TSX}:14: ${cleanup}`,
-      `${TSX}:15: ${cleanup}`,
-      `${TSX}:16: ${midBody}`,
-      `${TSX}:17: ${midBody}`,
+      `${FILE}:5: ${only}`,
+      `${TSX}:12: ${midBody}`,
+      `${TSX}:14: ${only}`,
+      `${TSX}:15: ${midBody}`,
+      `${TSX}:17: ${floats}`,
+      `${TSX}:18: ${floats}`,
     ],
   });
 });

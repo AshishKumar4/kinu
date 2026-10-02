@@ -24,7 +24,7 @@ import type { Rpc } from "@kinu.run/core";
 import { fmtTokens } from "@kinu.run/core";
 import { pageSchema, UsageSchema, usageTotal, type SeekCursor } from "@kinu.run/core";
 import * as v from "valibot";
-import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
+import { renderThrownChain, showing, detach } from '@kinu.run/core/obs';
 
 const RunSummarySchema = v.object({
   runId: v.string(), startedAt: v.number(), causedBy: v.nullable(v.string()),
@@ -217,7 +217,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const { resource: jobsResource, reload: reloadJobs } = useAsyncResource(loadJobs, changelogRevalidate);
   const jobs = lastValue(jobsResource);
 
-  const revoke = useCallback((triggerId: string) => settle(Effect.gen(function* () {
+  const revoke = useCallback((triggerId: string) => detach(Effect.gen(function* () {
     if (!agentId) return;
 
     if (!confirm("Revoke this automation? It stops firing, and a webhook's URL stops working.")) return;
@@ -429,7 +429,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const submit = useCallback(() => settle(Effect.gen(function* () {
+  const submit = useCallback(() => detach(Effect.gen(function* () {
     if (!label.trim()) {
       setErr("Give the webhook a label.");
 

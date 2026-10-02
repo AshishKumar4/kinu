@@ -16,7 +16,7 @@ import { inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
 import { PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
-import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
@@ -154,7 +154,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
   let trailing: ReactNode;
 
   if (added) {
-    trailing = <PresetMenu preset={preset} word={word} dot={dot} onRemove={() => settle(remove())} />;
+    trailing = <PresetMenu preset={preset} word={word} dot={dot} onRemove={() => detach(remove())} />;
   } else if (asking) {
     trailing = (
       <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}

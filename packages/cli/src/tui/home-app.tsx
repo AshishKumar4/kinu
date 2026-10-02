@@ -48,7 +48,7 @@ import {
   type TuiAgentSource,
   type TuiAgentSummary,
 } from './tui-shell';
-import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
+import { renderThrownChain, showing, detach } from '@kinu.run/core/obs';
 
 type HomeTuiAction =
   | { type: 'open-agent'; name: string }
@@ -211,7 +211,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   }, [cloudReady, localReady, mode]);
 
 
-  const openModelPicker = useCallback(() => settle(Effect.gen(function* () {
+  const openModelPicker = useCallback(() => detach(Effect.gen(function* () {
     const request = ++modelPickerRequestRef.current;
     setFocusArea('model');
     setCatalogHint(null);
@@ -237,7 +237,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     }));
   })), [defaultModel, keybindings, mode, opts]);
 
-  const selectModel = useCallback((spec: string) => settle(Effect.catchCause(Effect.gen(function* () {
+  const selectModel = useCallback((spec: string) => detach(Effect.catchCause(Effect.gen(function* () {
     yield* Effect.promise(async () => updateDefaultTier({ model: spec }));
     modelPickerRequestRef.current += 1;
     setDefaultModelState(spec);
@@ -246,7 +246,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     setError(null);
   }), showing(setError))), []);
 
-  const selectReasoningEffort = useCallback((effort: ReasoningEffort) => settle(Effect.catchCause(Effect.gen(function* () {
+  const selectReasoningEffort = useCallback((effort: ReasoningEffort) => detach(Effect.catchCause(Effect.gen(function* () {
     yield* Effect.promise(async () => updateDefaultTier({ reasoningEffort: effort }));
     setReasoningEffortState(effort);
     setError(null);
@@ -268,7 +268,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     return selectReasoningEffort(next);
   }, [efforts, reasoningEffort, selectReasoningEffort]);
 
-  const submit = useCallback(() => settle(Effect.gen(function* () {
+  const submit = useCallback(() => detach(Effect.gen(function* () {
     const mission = (textareaRef.current?.plainText ?? draft).trim();
 
     if (!mission || busy) return;

@@ -51,7 +51,7 @@ import { nestedAgent, type AgentLinkIds } from "@/pages/nested-agent";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
-import { settle, settleLogged, showing } from "@kinu.run/core/obs";
+import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 
 /** Composed key: Kumo's `Button` requires a `shape` prop, `anti-slop/no-shape-in-symbol-names`
@@ -256,7 +256,7 @@ function ForkModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const submit = useCallback(() => settle(Effect.gen(function* () {
+  const submit = useCallback(() => detach(Effect.gen(function* () {
     if (busy) return;
     setBusy(true);
     setErr(null);
@@ -789,7 +789,7 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     if (!agentId) return;
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
       // A visit the roster did not take is a gone workspace, which the page's own missing state already shows.
       yield* Effect.promise(async () => touchWorkspace(agentId));
       reportSide("visit", null);
@@ -805,7 +805,7 @@ export default function WorkspacePage() {
     if (!t || !live || ui.mode === "plan") return;
     setBranchNotice(null);
     // Clear the draft only once the branch is accepted, and only if it was not edited meanwhile.
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
       const result = yield* Effect.promise(async () => state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t]));
 
       if (result.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
@@ -829,7 +829,7 @@ export default function WorkspacePage() {
   const [feedbackByMessage, setFeedbackByMessage] = useState<Record<string, 'positive' | 'negative'>>({});
   useEffect(() => {
     if (state.connectionStatus !== "connected") return;
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
       const loaded = yield* Effect.promise(async () => state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback'));
       setFeedbackByMessage(loaded);
       reportSide("feedback", null);
@@ -863,7 +863,7 @@ export default function WorkspacePage() {
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
     if (state.connectionStatus !== "connected" || live) return;
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
       const loaded = yield* Effect.promise(async () => state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes'));
       setTakesByTurn(loaded);
       reportSide("takes", null);
@@ -887,7 +887,7 @@ export default function WorkspacePage() {
   const [restorePlan, setRestorePlan] = useState<DeviceRestorePlan | null>(null);
   const [restoring, setRestoring] = useState(false);
 
-  const applyRestore = useCallback(() => settle(Effect.gen(function* () {
+  const applyRestore = useCallback(() => detach(Effect.gen(function* () {
     if (!restorePlan) return;
     setRestoring(true);
 

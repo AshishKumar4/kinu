@@ -27,7 +27,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { ChatGptConnect, ChatGptPlanUsage } from "@/components/account/ChatGptConnect";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
+import { renderThrownChain, showing, detach } from '@kinu.run/core/obs';
 import {
   CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
 } from '@kinu.run/core';
@@ -61,7 +61,7 @@ function UnrevokedGrants({ grants, onChanged }: { grants: readonly UnrevokedGran
           </div>
           <button
             className="p-btn-quiet inline-flex h-6.5 shrink-0 items-center px-2 text-xs"
-            onClick={() => settle(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => dismissUnrevokedGrant(grant.key)); onChanged(); }), showing(setError)))}
+            onClick={() => detach(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => dismissUnrevokedGrant(grant.key)); onChanged(); }), showing(setError)))}
           >
             I revoked it
           </button>
@@ -241,7 +241,7 @@ function ProviderEntry({ provider, name, method, connected, detail, disconnect, 
         <span className="ml-auto flex items-center gap-2">
           {connected ? <ConnectedBadge detail={detail} /> : <span className="p-meta p-text-3">Not connected</span>}
           {connected && disconnect !== undefined && (
-            <button type="button" onClick={() => settle(leave())} className={dangerQuietCls} aria-label={`Disconnect ${name}`}>Disconnect</button>
+            <button type="button" onClick={() => detach(leave())} className={dangerQuietCls} aria-label={`Disconnect ${name}`}>Disconnect</button>
           )}
         </span>
       </div>
@@ -279,7 +279,7 @@ function CloudflareAccountSection({ status, onChanged }: {
           ...(status.selectedId === null ? [{ value: '', label: '(no account selected)' }] : []),
           ...status.accounts.map((account) => ({ value: account.id, label: account.name })),
         ]}
-        onChange={(id) => settle(choose(id))} />
+        onChange={(id) => detach(choose(id))} />
       {error && <p className="text-xs p-danger">{error}</p>}
     </Field>
   );
@@ -330,7 +330,7 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
           value={status.selectedId ?? ''}
           disabled={saving}
           options={[{ value: '', label: '(no gateway selected)' }, ...status.gateways.map((gw) => ({ value: gw.id, label: gw.id }))]}
-          onChange={(id) => settle(choose(id))} />
+          onChange={(id) => detach(choose(id))} />
       )}
       {error && <p className="text-xs p-danger">{error}</p>}
     </Field>
@@ -345,7 +345,7 @@ function CodexConnect({ onChanged }: { onChanged: () => void }) {
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  const start = useCallback(() => settle(Effect.gen(function* () {
+  const start = useCallback(() => detach(Effect.gen(function* () {
     setError(null);
 
     return yield* Effect.catchCause(Effect.gen(function* () {
@@ -537,7 +537,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
         <form className="flex flex-wrap gap-2" onSubmit={(event) => {
           event.preventDefault();
 
-          return settle(save());
+          detach(save());
         }}>
           {compat ? (
             <>
@@ -620,7 +620,7 @@ function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: 
                   label={`${name} default account`}
                   value={envelope.catalog.accounts?.[provider] ?? (accounts.includes(MAIN_ACCOUNT) ? MAIN_ACCOUNT : '')}
                   options={accounts.map((account) => ({ value: account, label: account }))}
-                  onChange={(account) => settle(choose(envelope, provider, account))}
+                  onChange={(account) => detach(choose(envelope, provider, account))}
                   disabled={saving}
                   size="sm"
                 />

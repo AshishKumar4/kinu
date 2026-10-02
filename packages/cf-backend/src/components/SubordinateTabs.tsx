@@ -9,7 +9,7 @@ import { CaretDownIcon, CaretRightIcon, HouseIcon, PlusIcon, TrashIcon } from "@
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { codenameFor, ownerFacingSubordinate } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
-import { settle, settleLogged, showing } from "@kinu.run/core/obs";
+import { settleLogged, showing, detach } from "@kinu.run/core/obs";
 import { useWheelScrollsSideways } from "@/hooks/use-wheel-scrolls-sideways";
 
 
@@ -115,7 +115,7 @@ export function SubordinateTabs({
                 <button
                   type="button"
                   disabled={deleting === subordinate.name}
-                  onClick={() => settle(Effect.gen(function* () {
+                  onClick={() => detach(Effect.gen(function* () {
                     if (subordinate.origin === "user") {
                       setDeleteError(null);
                       setDeleting(subordinate.name);
@@ -205,7 +205,7 @@ export function SubordinateTabs({
           footer={<>
             <Button size="sm" variant="ghost" disabled={dismissing} onClick={() => setDismissTarget(null)}>Cancel</Button>
             <FilledButton danger disabled={dismissing}
-              onClick={() => settle(Effect.gen(function* () {
+              onClick={() => detach(Effect.gen(function* () {
                 setDismissing(true);
                 setDismissError(null);
 

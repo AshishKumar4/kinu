@@ -12,7 +12,7 @@ import { lastValue, useAsyncResource, type Revalidate } from "@/hooks/use-async-
 import { DEVICE_ROSTER_POLL_MS, useDeviceRoster } from "@/hooks/use-device-roster";
 import { ConnectDevicePanel, DeviceConnectFlow } from "@/components/ConnectDevicePanel";
 import { DeviceRow } from "@/components/devices/DeviceRow";
-import { settle, showing } from "@kinu.run/core/obs";
+import { showing, detach, settle } from "@kinu.run/core/obs";
 
 /** Grants share the roster's cadence: a revoke changes both, so one clock keeps them consistent. */
 const keepPollingGrants: Revalidate<DeviceConsent[]> = () => DEVICE_ROSTER_POLL_MS;
@@ -35,7 +35,7 @@ export function DevicesCard() {
     onConnected: reloadDevices,
   }));
 
-  const revoke = useCallback((id: string, label: string) => settle(Effect.gen(function* () {
+  const revoke = useCallback((id: string, label: string) => detach(Effect.gen(function* () {
     if (!confirm(`Revoke "${label}"? Agents will lose access.`)) return;
     setErr(null);
 

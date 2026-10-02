@@ -109,7 +109,7 @@ import {
   type TuiAgentSource,
   type TuiAgentSummary,
 } from './tui-shell';
-import { diagnostics, renderThrownChain, toKinuError, settle, showing } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError, settle, showing, detach } from '@kinu.run/core/obs';
 import { Effect, Cause, Result } from 'effect';
 import { readParkedNotice } from '../parked-actions';
 
@@ -591,7 +591,7 @@ function ChatScene({
     yield* Effect.promise(async () => sendPrompt(text));
   }), errorShown)), [addError, addMessage, client, sendPrompt]);
 
-  const performWalkback = useCallback((point: ForkPoint) => settle(Effect.gen(function* () {
+  const performWalkback = useCallback((point: ForkPoint) => detach(Effect.gen(function* () {
     if (selectionPendingRef.current) return;
     selectionPendingRef.current = true;
     setReady(false);
@@ -643,7 +643,7 @@ function ChatScene({
   const switchWorkspace = useCallback((
     workspace: TuiAgentSummary,
     preparedClient?: AgentClient,
-  ) => settle(Effect.gen(function* () {
+  ) => detach(Effect.gen(function* () {
     if (!preparedClient && workspace.name === client.agentName && workspace.mode === client.mode) {
       setNavigationOpen(false);
 
@@ -912,7 +912,7 @@ function ChatScene({
     return () => { live = false; };
   }, [client, subagentSurface]);
 
-  const openModelPicker = useCallback(() => settle(Effect.gen(function* () {
+  const openModelPicker = useCallback(() => detach(Effect.gen(function* () {
     const request = ++modelRequestRef.current;
     setActiveSurface({ kind: 'model', menu: EMPTY_MODEL_MENU, loading: true, error: null });
 
@@ -946,7 +946,7 @@ function ChatScene({
     }));
   })), [client]);
 
-  const selectModel = useCallback((spec: string) => settle(Effect.gen(function* () {
+  const selectModel = useCallback((spec: string) => detach(Effect.gen(function* () {
     if (selectionPendingRef.current) return;
     setReady(false);
     selectionPendingRef.current = true;
@@ -962,7 +962,7 @@ function ChatScene({
     }));
   })), [addError, addMessage, client]);
 
-  const revertChangelogEntry = useCallback((entry: ChangelogEntry) => settle(Effect.gen(function* () {
+  const revertChangelogEntry = useCallback((entry: ChangelogEntry) => detach(Effect.gen(function* () {
     if (selectionPendingRef.current) return;
     selectionPendingRef.current = true;
     setActiveSurface(null);
@@ -989,7 +989,7 @@ function ChatScene({
   })), [addError, addMessage, client]);
 
   /** A changed answer streams its continuation as the next turn. */
-  const pickTake = useCallback((set: AlternateTakeSet, candidate: AlternateTakeCandidate) => settle(Effect.gen(function* () {
+  const pickTake = useCallback((set: AlternateTakeSet, candidate: AlternateTakeCandidate) => detach(Effect.gen(function* () {
     if (selectionPendingRef.current) return;
     selectionPendingRef.current = true;
     setActiveSurface(null);
@@ -1005,7 +1005,7 @@ function ChatScene({
     }));
   })), [addError, addMessage, client]);
 
-  const selectReasoningEffort = useCallback((chosen: ReasoningEffort) => settle(Effect.catchCause(Effect.gen(function* () {
+  const selectReasoningEffort = useCallback((chosen: ReasoningEffort) => detach(Effect.catchCause(Effect.gen(function* () {
     yield* Effect.promise(async () => client.setReasoningEffort(chosen));
     setStatus((value) => value === null ? value : { ...value, reasoningEffort: chosen });
   }), errorShown)), [addError, client]);
@@ -1298,7 +1298,7 @@ function ChatScene({
   }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt, runLocalCommand]);
 
   /** Once per set, never for one already picked from. */
-  const hintAlternateTakes = useCallback(() => settle(Effect.gen(function* () {
+  const hintAlternateTakes = useCallback(() => detach(Effect.gen(function* () {
     const generation = clientGenerationRef.current;
 
     return yield* Effect.catchCause(Effect.gen(function* () {

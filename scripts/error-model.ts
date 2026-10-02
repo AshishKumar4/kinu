@@ -98,6 +98,11 @@ export const DECLARED = byFile([
     reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
       + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
   }],
+  ['packages/core/src/obs/log.ts', {
+    mechanisms: ['promise-rejection'],
+    within: ['detach'],
+    reason: 'the React edge\'s runner: nothing awaits it, so its one rejection observer turns a defect into a diagnostic',
+  }],
   ['packages/test-utils/src/mossaic.ts', {
     mechanisms: ['throw'],
     within: ['fakeMossaic'],
@@ -331,7 +336,9 @@ export const HOST_BOUNDARIES = new Map<string, string>([
   ['packages/core/src/execution/parent.ts', '`answerParentRpc` answers a fork over DO RPC and in the CLI: a platform-owned call'],
 ]);
 
-const RUNNERS: readonly string[] = ['settle', 'settleSync', 'observe'];
+const RUNNERS: readonly string[] = ['settle', 'settleSync', 'observe', 'detach'];
+
+const DETACH_ONLY_AT_REACT = 'detach runs only where a component hands out a function: a JSX attribute\'s, or useCallback\'s, startTransition\'s or an effect\'s';
 
 /** A Hono app's registrations: each takes its handlers after the path. */
 const ROUTE_METHODS: readonly string[] = ['get', 'post', 'put', 'delete', 'patch', 'options', 'all', 'use', 'on'];
@@ -370,7 +377,7 @@ export interface BridgeCensus {
   readonly routes: string[];
   /** Each detached root handed straight to a platform holder, which owns its lifetime. */
   readonly held: string[];
-  /** Each runner React calls: a JSX handler's or useCallback's body, or a `void settle(…)` statement in useEffect. */
+  /** Each runner where a component hands out a function: a detach React calls, or a settle its own caller awaits. */
   readonly react: string[];
   /** A runner returned from a private helper or a local function: not a bridge, a mistake. */
   readonly findings: string[];
@@ -390,6 +397,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     const runners = new Set<string>();
     const syncRunners = new Set<string>();
     const flightNames = new Set<string>();
+    const detachNames = new Set<string>();
 
     walk(parsed.root, (node) => {
       const { raw } = node;
@@ -405,6 +413,8 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
           runners.add(specifier.local.name);
 
           if (specifier.imported.name === 'settleSync') syncRunners.add(specifier.local.name);
+
+          if (specifier.imported.name === 'detach') detachNames.add(specifier.local.name);
         }
       }
     });
@@ -435,22 +445,24 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         return;
       }
 
-      const reacted = file.endsWith('.tsx') ? reactEdge(node, text) : 'none';
+      const caller = file.endsWith('.tsx') ? reactEdge(node) : null;
 
-      if (reacted === 'edge') {
+      if (detachNames.has(raw.callee.name)) {
+        if (caller !== null) react.push(site);
+        else findings.push(`${site}: ${DETACH_ONLY_AT_REACT}`);
+
+        return;
+      }
+
+      if (caller === 'react') {
+        findings.push(`${site}: a settle where React calls: React never awaits it, so a rejection would float; run the answered effect with detach`);
+
+        return;
+      }
+
+      // A component's own surface: its caller awaits what it returns.
+      if (caller === 'component') {
         react.push(site);
-
-        return;
-      }
-
-      if (reacted === 'cleanup') {
-        findings.push(`${site}: a runner as a React effect's whole body is returned as its cleanup; run it as \`void settle(…)\` in a block`);
-
-        return;
-      }
-
-      if (reacted === 'unanswered') {
-        findings.push(`${site}: a voided runner whose effect does not visibly answer every failure; end it in Effect.catchCause(…, showing(set)) or an inline handler that does not fail again`);
 
         return;
       }
@@ -494,89 +506,50 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
  */
 const HOLDERS: readonly string[] = ['waitUntil', 'keepAliveWhile', 'fiber', 'runFiber'];
 
-const REACT_CALLBACKS: readonly string[] = ['useCallback', 'startTransition'];
-
-const REACT_EFFECTS: readonly string[] = ['useEffect', 'useLayoutEffect'];
-
-/** The React hook or transition a function is the first argument of, if any. */
-function reactHook(fn: SyntaxNode | undefined): string | null {
-  const call = fn?.parent;
-
-  if (fn === undefined || call?.raw.type !== 'CallExpression' || call.raw.arguments[0] !== fn.raw) return null;
-
-  return identifierCalleeName(call) ?? memberCalleeName(call) ?? null;
-}
+/** React calls these and never awaits them. */
+const REACT_CALLED: readonly string[] = ['startTransition', 'useEffect', 'useLayoutEffect'];
 
 /**
- * React owns these calls, as Hono owns a route handler's: a runner that a JSX attribute's, useCallback's or
- * startTransition's function returns, or a `void settle(…)` statement directly in a useEffect body. An effect's
- * returned runner would be its cleanup, so that form is reported apart.
+ * Who calls a function a component hands out: `react` for an intrinsic element's attribute or startTransition's or an
+ * effect's argument, which React calls and never awaits; `component` for another component's attribute or
+ * useCallback's argument, which the receiving code calls and may await; null for anything else.
  */
-function reactEdge(runner: SyntaxNode, text: string): 'edge' | 'cleanup' | 'unanswered' | 'none' {
-  const fn = returningFunction(runner);
+function reactCaller(fn: SyntaxNode | undefined): 'react' | 'component' | null {
+  if (fn === undefined || !isFunctionLike(fn)) return null;
+  const attribute = fn.parent?.raw.type === 'JSXExpressionContainer' ? fn.parent.parent : undefined;
 
-  if (fn !== undefined) {
-    if (fn.parent?.raw.type === 'JSXExpressionContainer' && fn.parent.parent?.raw.type === 'JSXAttribute') return 'edge';
-    const hook = reactHook(fn) ?? '';
+  if (attribute?.raw.type === 'JSXAttribute') {
+    const element = attribute.parent?.raw;
+    const name = element?.type === 'JSXOpeningElement' && element.name.type === 'JSXIdentifier' ? element.name.name : '';
 
-    if (REACT_CALLBACKS.includes(hook)) return 'edge';
-
-    return REACT_EFFECTS.includes(hook) ? 'cleanup' : 'none';
+    return /^[a-z]/.test(name) ? 'react' : 'component';
   }
 
-  const voided = runner.parent;
-  const statement = voided?.parent;
-  const block = statement?.parent;
+  const call = fn.parent;
 
-  if (voided?.raw.type !== 'UnaryExpression' || voided.raw.operator !== 'void' || statement?.raw.type !== 'ExpressionStatement'
-    || block?.raw.type !== 'BlockStatement') return 'none';
+  if (call?.raw.type !== 'CallExpression' || call.raw.arguments[0] !== fn.raw) return null;
+  const hook = identifierCalleeName(call) ?? memberCalleeName(call) ?? '';
 
-  if (!REACT_EFFECTS.includes(reactHook(block.parent) ?? '')) return 'none';
-  const effect = runner.raw.type === 'CallExpression' ? runner.raw.arguments[0] : undefined;
+  if (REACT_CALLED.includes(hook)) return 'react';
 
-  return effect !== undefined && answersEveryFailure(effect, text) ? 'edge' : 'unanswered';
-}
-
-type Expression = Extract<SyntaxNode['raw'], { type: 'CallExpression' }>['arguments'][number];
-
-/** `Effect.<name>(…)`, the call itself, or null. */
-function effectCall(node: Expression, name: string): Extract<Expression, { type: 'CallExpression' }> | null {
-  if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression' || node.callee.computed) return null;
-  const { object, property } = node.callee;
-
-  return object.type === 'Identifier' && object.name === 'Effect' && property.type === 'Identifier' && property.name === name ? node : null;
+  return hook === 'useCallback' ? 'component' : null;
 }
 
 /**
- * A voided run must never reject, so its effect ends, under any `ensuring`, in `catchCause` whose handler is
- * `showing(…)` or an inline function that neither fails nor dies again. Anything else cannot be seen to hold.
+ * Who calls a runner that sits where a component hands out a function (`.tsx` only): as that function's expression
+ * body, or a return or statement directly in its block.
  */
-function answersEveryFailure(effect: Expression, text: string): boolean {
-  const ensured = effectCall(effect, 'ensuring');
+function reactEdge(runner: SyntaxNode): 'react' | 'component' | null {
+  const holder = runner.parent;
 
-  if (ensured) return ensured.arguments[0] !== undefined && answersEveryFailure(ensured.arguments[0], text);
-  const caught = effectCall(effect, 'catchCause');
-  const handler = caught?.arguments[1];
+  if (holder !== undefined && arrowBody(holder.raw) === runner.raw) return reactCaller(holder);
+  const statement = holder?.raw.type === 'ReturnStatement' || holder?.raw.type === 'ExpressionStatement' ? holder : undefined;
+  const block = statement?.parent;
 
-  if (handler === undefined) return false;
+  if (block?.raw.type !== 'BlockStatement') return null;
+  const fn = block.parent;
 
-  if (handler.type === 'CallExpression' && handler.callee.type === 'Identifier' && handler.callee.name === 'showing') return true;
-
-  if (handler.type !== 'ArrowFunctionExpression' && handler.type !== 'FunctionExpression') return false;
-
-  return !/\bEffect\.(fail|failCause|die|dieMessage)\b|\bthrow\b|\bnew KinuError\b/.test(text.slice(handler.start, handler.end));
-}
-
-/** The function that returns this call: as its expression body, or as a return statement directly in its body. */
-function returningFunction(call: SyntaxNode): SyntaxNode | undefined {
-  const holder = call.parent;
-
-  if (holder !== undefined && arrowBody(holder.raw) === call.raw) return holder;
-
-  if (holder?.raw.type !== 'ReturnStatement' || holder.parent?.raw.type !== 'BlockStatement') return undefined;
-  const fn = holder.parent.parent;
-
-  return fn !== undefined && isFunctionLike(fn) && 'body' in fn.raw && fn.raw.body === holder.parent.raw ? fn : undefined;
+  return fn !== undefined && 'body' in fn.raw && fn.raw.body === block.raw ? reactCaller(fn) : null;
 }
 
 /** Whether a runner is a holder's whole argument, or the whole body of a callback that is one. */
@@ -1026,7 +999,7 @@ if (import.meta.main) {
   console.log(`  held: ${String(held.length)} (a detached root a platform holder keeps alive: ${HOLDERS.join(', ')})`);
 
   for (const site of held) console.log(`    ${site}`);
-  console.log(`  react: ${String(react.length)} (a runner React calls: a JSX handler, ${REACT_CALLBACKS.join(', ')}, or \`void settle(…)\` in ${REACT_EFFECTS.join(', ')})`);
+  console.log(`  react: ${String(react.length)} (a detach React calls, or a settle a component attribute or useCallback hands its awaiting caller)`);
 
   for (const site of react) console.log(`    ${site}`);
 

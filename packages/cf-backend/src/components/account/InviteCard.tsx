@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { UserPlusIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
-import { attempt, renderThrownChain, settle } from "@kinu.run/core/obs";
+import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { builtinAuthStatus, createBuiltinLink, listBuiltinAccounts } from "@/lib/user-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { Card, Field, inputCls } from "@/components/ui/form";
@@ -41,7 +41,7 @@ export function InviteCard() {
         <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); }}>
           <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com"
             aria-label="Email to invite" autoComplete="off" className={`${inputCls} min-w-0 flex-1`} />
-          <Button type="submit" variant="secondary" size="sm" disabled={busy || email.trim() === ""} onClick={() => settle(create(false, email.trim()))}>
+          <Button type="submit" variant="secondary" size="sm" disabled={busy || email.trim() === ""} onClick={() => detach(create(false, email.trim()))}>
             {busy ? <Loader size="sm" /> : null} Create invite link
           </Button>
         </form>
@@ -57,7 +57,7 @@ export function InviteCard() {
           {invite.reset ? "Reset link" : "Invite"} for {invite.email}, until {new Date(invite.expiresAt).toLocaleString()}.
         </p>
       )}
-      <Accounts busy={busy} onReset={(address) => settle(create(true, address))} />
+      <Accounts busy={busy} onReset={(address) => detach(create(true, address))} />
       {error && <p role="alert" className="mt-2 text-xs p-danger">{error}</p>}
     </Card>
   );

@@ -1,5 +1,5 @@
 import { Effect, Cause } from 'effect';
-import { settle } from '@kinu.run/core/obs';
+import { detach } from '@kinu.run/core/obs';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor,
@@ -265,7 +265,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
         <div className="min-h-0 flex-1">
           <ChangesPanel key={focus?.nonce ?? 0} file={focus?.path ?? null} sets={sets} source={shown.source}
             onSource={(next) => { picked.current = true; setSource(next); }} now={now}
-            reviewedAt={reviewedAt} onReviewed={() => settle(markReviewed())} onUndo={undoable ? () => void undoReviewed() : null}
+            reviewedAt={reviewedAt} onReviewed={() => detach(markReviewed())} onUndo={undoable ? () => void undoReviewed() : null}
             onOpenInFiles={openInFiles} />
         </div>
       </div>

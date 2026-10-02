@@ -5,7 +5,7 @@ import { Loader } from "@cloudflare/kumo";
 import {
   CheckIcon, DownloadSimpleIcon, FileIcon, PencilSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
-import { renderThrownChain, settle } from "@kinu.run/core/obs";
+import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { MarkdownContent, CodeBlock } from "./shared";
 import {
@@ -56,7 +56,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
     setAsSource(false);
   }, [path]);
 
-  const save = useCallback((text: string) => settle(Effect.gen(function* () {
+  const save = useCallback((text: string) => detach(Effect.gen(function* () {
     if (file?.revision === undefined) return;
     setSaving(true);
     setSaveError(null);
@@ -109,7 +109,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
             )
           ) : (
             <>
-              <button data-files-save disabled={saving} onClick={() => void save(draft)}
+              <button data-files-save disabled={saving} onClick={() => save(draft)}
                 className="flex items-center gap-1 p-t-control p-accent hover:underline p-1 disabled:opacity-50"
                 title={`Save ${name}`}>
                 <CheckIcon size={12} />{saving ? "Saving…" : "Save"}

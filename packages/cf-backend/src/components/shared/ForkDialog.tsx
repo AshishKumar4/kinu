@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon } from "@phosphor-icons/react";
-import { settle, showing } from "@kinu.run/core/obs";
+import { showing, detach } from "@kinu.run/core/obs";
 import { workspaceDisplayTitle } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -12,7 +12,6 @@ import { inputCls } from "@/components/ui/form";
 import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
 import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
-import { showRejection } from "@/hooks/use-async-resource";
 
 const NEW_WORKSPACE = "\u0000new";
 
@@ -39,16 +38,16 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
   useEffect(() => {
     if (workspaces !== undefined) return;
     let mounted = true;
-    listWorkspaces().then((list) => {
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => listWorkspaces()), (list) => {
       if (!mounted) return;
       setRoster(list.entries);
       setTarget(list.entries[0]?.name ?? NEW_WORKSPACE);
-    }).catch(showRejection(setErr, () => mounted));
+    }), showing((chain) => { if (mounted) setErr(chain); })));
 
     return () => { mounted = false; };
   }, [workspaces]);
 
-  const submit = useCallback(() => settle(Effect.gen(function* () {
+  const submit = useCallback(() => detach(Effect.gen(function* () {
     if (busy) return;
     setBusy(true);
     setErr(null);

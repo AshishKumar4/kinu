@@ -24,7 +24,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import type { Rpc } from '@kinu.run/core';
 import * as v from 'valibot';
-import { settle, showing } from '@kinu.run/core/obs';
+import { showing, detach } from '@kinu.run/core/obs';
 
 const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(ArchiveCursorSchema) });
 
@@ -146,7 +146,7 @@ export default function SettingsPage() {
 
   // A failed field is recorded in place rather than given a value Save could write over the stored setting.
   const loadRpcFields = useCallback((): void => {
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
       const [mode, evolution] = yield* Effect.promise(async () => Promise.allSettled([
         rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
         rpc<EvolutionConfigView>("getEvolutionConfig", []),
@@ -178,7 +178,7 @@ export default function SettingsPage() {
 
   const dirty = displayName.dirty || soul.dirty || approval.dirty || advisor.dirty;
 
-  const save = useCallback(() => settle(Effect.gen(function* () {
+  const save = useCallback(() => detach(Effect.gen(function* () {
     // Only edited fields are written; the form has no authority over fields still loading or failed.
     const writes: Array<Promise<JsonValue | undefined | void>> = [];
     const commits: Array<() => void> = [];
@@ -400,7 +400,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
               <span className="p-text-2">{executorLabel(grant.executor)}</span>
               <button
                 type="button"
-                onClick={() => settle(revoke(grant))}
+                onClick={() => detach(revoke(grant))}
                 disabled={busy !== null}
                 className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50"
                 title={`Ask again next time a command trips ${grant.rule} on ${grant.executor}`}
@@ -517,7 +517,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {row.reason === undefined && (
                     <button
                       type="button"
-                      onClick={() => settle(read(row))}
+                      onClick={() => detach(read(row))}
                       disabled={busy !== null}
                       className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0"
                     >{busy === row.path ? "…" : readWord}</button>
@@ -525,7 +525,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {followed && (
                     <button
                       type="button"
-                      onClick={() => settle(decide(row, "revoke"))}
+                      onClick={() => detach(decide(row, "revoke"))}
                       disabled={busy !== null}
                       className={`${row.reason === undefined ? "" : "ml-auto "}px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0`}
                       title="Stop following this file as instructions"
@@ -534,7 +534,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {!followed && row.reason === undefined && (
                     <button
                       type="button"
-                      onClick={() => settle(decide(row, "approve"))}
+                      onClick={() => detach(decide(row, "approve"))}
                       disabled={busy !== null}
                       className="px-2 py-0.5 rounded-sm p-card-hover p-text-2 hover:p-text disabled:opacity-50 shrink-0"
                       title="Follow these exact contents as instructions"
@@ -581,7 +581,7 @@ function WorkspaceBackupCard({
   const [status, setStatus] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const download = useCallback(() => settle(Effect.gen(function* () {
+  const download = useCallback(() => detach(Effect.gen(function* () {
     setBusy(true);
     setErr(null);
     setStatus("Exporting…");
@@ -659,7 +659,7 @@ function GepaOptimizationCard({
   const { resource, reload } = useAsyncResource(load);
   const runs = lastValue(resource) ?? [];
 
-  const run = useCallback(() => settle(Effect.gen(function* () {
+  const run = useCallback(() => detach(Effect.gen(function* () {
     setRunning(true);
     setMsg('Testing candidate scaffolds against recent tasks. This can take a few minutes.');
 
@@ -737,7 +737,7 @@ function AlwaysActiveSkillsCard({
 
   // React owns the async transition so a malformed response reaches this card's visible error.
   const refresh = useCallback((): void => {
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
       const raw = yield* Effect.promise(async () => rpc('getAlwaysActiveSkills', []));
       setNames(v.parse(SkillNamesSchema, raw).names);
     }), showing(setErr))));
@@ -745,7 +745,7 @@ function AlwaysActiveSkillsCard({
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const save = useCallback((next: string[]) => settle(Effect.gen(function* () {
+  const save = useCallback((next: string[]) => detach(Effect.gen(function* () {
     setBusy(true);
     setErr(null);
 

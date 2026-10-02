@@ -15,7 +15,7 @@ import {
 import {
   formatBytes, joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry, type MountInfo,
 } from "@kinu.run/core";
-import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, settle } from "@kinu.run/core/obs";
 import type { Rpc } from "@kinu.run/core";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
