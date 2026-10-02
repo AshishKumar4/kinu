@@ -67,33 +67,42 @@ describe('withRateLimitRetry', () => {
     expect(statedRetryAfterMs({ cause: { responseHeaders: Object.fromEntries(limited.headers) } })).toBe(1_500);
   });
 
-  test('a sibling\'s cooldowns spend this call\'s retries, so it hands over instead of waiting without end', async () => {
+  /** A lane a sibling already cooled, then `limited` 429s of this call's own. */
+  async function behindSibling(limited: number, retries: number) {
     let nowMs = 1_000_000;
-    let joined = 0;
     let sent = 0;
+    const sleep = async (ms: number) => { nowMs += ms; };
 
-    // Every wait this call joins, another request extends: the lane never clears.
-    const pacer: ProviderPacer = new ProviderPacer({
-      now: () => nowMs,
-      sleep: async (ms) => {
-        nowMs += ms;
-        joined += 1;
-
-        if (joined > 10) throw new Error('still parked behind its siblings');
-        pacer.declareWait('api.example.com', 1_000);
-      },
-    });
+    const pacer = new ProviderPacer({ now: () => nowMs, sleep });
 
     pacer.declareWait('api.example.com', 1_000);
 
     const wrapped = withRateLimitRetry(asFetchFunction(async () => {
       sent += 1;
 
-      return new Response('ok');
-    }), { now: () => nowMs, pacer });
+      return sent <= limited ? new Response('limited', { status: 429 }) : new Response('ok');
+    }), { now: () => nowMs, sleep, pacer, random: () => 0, warn: () => {} });
 
-    await expect(wrapped('https://api.example.com/v1/chat', { body: '{}' })).rejects.toThrow('rate-limiting this account');
-    expect({ joined, sent }).toEqual({ joined: DEFAULT_PROVIDER_RETRIES, sent: 0 });
+    const answered = await Promise.allSettled([
+      wrapped('https://api.example.com/v1/chat', { body: '{}', headers: { [PROVIDER_RETRIES_HEADER]: String(retries) } }),
+    ]);
+
+    return { sent, answered: answered[0] };
+  }
+
+  test('a sibling\'s cooldown is waited out without spending this call\'s retries', async () => {
+    // Staging 85a438698: jury calls joined each other's waits and stopped at attempt 2 of 3.
+    const { sent, answered } = await behindSibling(DEFAULT_PROVIDER_RETRIES, DEFAULT_PROVIDER_RETRIES);
+
+    expect({ sent, status: answered.status === 'fulfilled' ? answered.value.status : null })
+      .toEqual({ sent: DEFAULT_PROVIDER_RETRIES + 1, status: 200 });
+  });
+
+  test('a call with no retries, a chain entry behind it, hands over at a sibling\'s cooldown without asking', async () => {
+    const { sent, answered } = await behindSibling(0, 0);
+
+    expect(sent).toBe(0);
+    expect(answered.status === 'rejected' ? String(answered.reason) : '').toContain('rate-limiting this account');
   });
 
   test('its own declared wait is never counted as a sibling\'s, whichever clock read it', async () => {

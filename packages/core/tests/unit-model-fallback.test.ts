@@ -41,6 +41,11 @@ const overloaded = (): Response => Response.json(
   { status: 503, headers: { 'retry-after-ms': '0' } },
 );
 
+/** OpenRouter's upstream failure: HTTP 200, a keep-alive, then the error as the first event. */
+const erringInStream = (): Response => new Response(`: OPENROUTER PROCESSING\n\n${sse([
+  JSON.stringify({ error: { code: 500, message: 'Upstream error from Inception: The server had an error while processing your request.' } }),
+])}`, { headers: SSE_HEADERS });
+
 /** Part of an answer, then the provider's stream fails. */
 const partThenFail = (text: string): Response => new Response(sse([
   JSON.stringify({ choices: [{ delta: { content: text } }] }),
@@ -251,6 +256,29 @@ describe('a failed call hands the turn down its fallback chain', () => {
 
     expect(served.map((entry) => entry.model)).toEqual(['primary', 'backup', 'backup', 'backup']);
     expect(threw?.message ?? '').toStartWith('Tried openrouter/primary, openrouter/backup: ');
+  });
+
+  test('a lone model asks again when its stream opens with the provider\'s error', async () => {
+    // Staging 85a438698, request-logs: one call, no wait, and the turn failed.
+    const { events, threw, served } = await turn((_model, seen) => (seen === 1 ? erringInStream() : answer('after the retry')), []);
+
+    expect(threw).toBeNull();
+    expect(served.map((entry) => entry.model)).toEqual(['primary', 'primary']);
+    expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'after the retry' });
+  });
+
+  test('a model with a chain behind it hands over at once when its stream opens with an error', async () => {
+    const { served } = await turn((model) => (model === 'primary' ? erringInStream() : answer('from backup')), ['backup']);
+
+    expect(served.map((entry) => entry.model)).toEqual(['primary', 'backup']);
+  });
+
+  test('a lone model\'s HTTP 500 is asked again', async () => {
+    const serverError = () => Response.json({ error: { message: 'refused with 500' } }, { status: 500, headers: { 'retry-after-ms': '0' } });
+    const { threw, served } = await turn((_model, seen) => (seen === 1 ? serverError() : answer('after the retry')), []);
+
+    expect(threw).toBeNull();
+    expect(served.map((entry) => entry.model)).toEqual(['primary', 'primary']);
   });
 
   test('a model that failed over sits out its cooldown, then the next turn starts on it again', async () => {
