@@ -6,7 +6,7 @@ import { attempt, settle, settleSync } from '../obs/effect';
 import { tolerateAsync } from '../obs/expected-failure';
 import { vfsBasename, vfsDirname } from '../utils/vfs-helpers';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
-import { workspaceScopePath } from '../vfs/workspace-path';
+import { workspacePath } from '../vfs/workspace-path';
 import { isSlateMethodName } from './rpc';
 import type { SlateReadModel } from './read-models';
 import type { SlateBinding, SlateProject } from './project';
@@ -69,7 +69,7 @@ function issued(input: Parameters<typeof issuedSlateInvocation>[0]): Effect.Effe
 export type SlateBindingRoute =
   | {
     readonly kind: 'namespace'; readonly namespace: string; readonly member: string; readonly args: readonly JsonValue[];
-    /** Prefixes the path must land in, links followed. */
+    /** Prefixes the path must land in. */
     readonly within?: readonly string[];
   }
   | { readonly kind: 'codemode'; readonly namespace: 'memory' | 'tasks' | 'web'; readonly member: string; readonly args: readonly JsonValue[] }
@@ -140,12 +140,14 @@ async function landing(namespace: GrantNamespace, path: string): Promise<string 
 export function assertLandsWithin(namespace: GrantNamespace, route: Extract<SlateBindingRoute, { kind: 'namespace' }>): Promise<void> {
   return settle(Effect.gen(function* () {
     if (route.within === undefined) return;
-    const prefixes = route.within;
+    const declared = route.within;
     const path = v.parse(v.string(), route.args[0]);
-    const landed = yield* attempt({ doing: `resolving ${path}`, otherwise: 'io' }, () => landing(namespace, path));
 
-    if (landed === null || !insidePrefixes(prefixes, landed)) {
-      return yield* Effect.fail(new KinuError('denied', `${path} leads outside its prefixes, to ${landed ?? 'a link that names nothing'}: ${prefixes.join(', ')}`));
+    const [landed, ...prefixes] = yield* attempt({ doing: `resolving ${path}`, otherwise: 'io' },
+      () => Promise.all([path, ...declared].map((named) => landing(namespace, named))));
+
+    if (landed === null || !insidePrefixes(prefixes.filter((prefix) => prefix !== null), landed)) {
+      return yield* Effect.fail(new KinuError('denied', `${path} leads outside its prefixes, to ${landed ?? 'a link that names nothing'}: ${declared.join(', ')}`));
     }
   }));
 }
@@ -163,7 +165,6 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
   }
 
   if (binding.paths !== undefined) {
-    const prefixes = binding.paths;
     const FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists'];
 
     if (!FILE_MEMBERS.includes(member)) {
@@ -171,18 +172,15 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
     }
 
     const named = v.safeParse(v.string(), args[0]);
-    const raw = named.success ? named.output : '';
-    const absolute = raw.startsWith('/') && !raw.split('/').includes('..');
-    const target = absolute ? workspaceScopePath(raw) : '';
 
-    if (!absolute || !insidePrefixes(prefixes, target)) {
-      return Effect.fail(new KinuError('denied', `${name}.${member} names a path outside its prefixes: ${prefixes.join(', ')}`));
+    if (!named.success || !named.output.startsWith('/')) {
+      return Effect.fail(new KinuError('denied', `${name}.${member} takes an absolute path inside ${binding.paths.join(', ')}`));
     }
 
     const forwarded = args.slice();
-    forwarded[0] = target;
+    forwarded[0] = workspacePath(named.output);
 
-    return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args: forwarded, within: prefixes });
+    return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args: forwarded, within: binding.paths });
   }
 
   return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args });

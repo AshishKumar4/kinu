@@ -1,6 +1,9 @@
-import { expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import * as v from 'valibot';
-import { issuedSlateInvocation, routeSlateBindingCall, routeViewerBindingCall, SlateBindingRequestSchema, type SlateInvocation, type SlateViewer } from '../src/slates/bindings';
+import { assertLandsWithin, issuedSlateInvocation, routeSlateBindingCall, routeViewerBindingCall, SlateBindingRequestSchema, type SlateInvocation, type SlateViewer } from '../src/slates/bindings';
+import { createWorkspaceBundle } from './helpers';
 import type { ShareGrant } from '../src/slates/sharing';
 import { parseSlateProject } from '../src/slates/project';
 import type { JsonValue } from '../src/utils/json';
@@ -108,31 +111,53 @@ test('an ai binding routes one model call, and a declared tier pins it', () => {
   expect(() => route('MODEL', 'shell', [{ prompt: 4 }])).toThrow('takes one { prompt, system?, tier? } object');
 });
 
-test('a path-scoped workspace binding offers only file members inside its prefixes', () => {
-  expect(route('FILES', 'readFile', ['/home/main/notes/a.md'])).toEqual({
-    kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/home/main/notes/a.md'], within: ['/home/main/notes', '/home/main/shared'],
+test('a path-scoped workspace binding offers only file members, on an absolute path it forwards resolved', () => {
+  expect(route('FILES', 'readFile', ['/home/main/notes/./a.md', 'utf8'])).toEqual({
+    kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/home/main/notes/a.md', 'utf8'],
+    within: ['/home/main/notes', '/home/main/shared'],
   });
-  expect(route('FILES', 'readdir', ['/home/main/notes'])).toMatchObject({ kind: 'namespace', member: 'readdir' });
-  expect(route('FILES', 'exists', ['/home/main/shared/x'])).toMatchObject({ kind: 'namespace', member: 'exists' });
-  expect(route('FILES', 'readFile', ['/home/user/notes/./a.md', 'utf8']))
-    .toMatchObject({ args: ['/home/main/notes/a.md', 'utf8'] });
-
   expect(() => route('FILES', 'exec', ['/home/main/notes/a.md'])).toThrow('a path-scoped workspace binding offers only file members');
 
-  let denial: unknown;
+  for (const args of [['relative/path'], [42], []]) {
+    expect(() => route('FILES', 'readFile', args)).toThrow(expect.objectContaining({ code: 'denied' }));
+  }
+});
 
-  try { route('FILES', 'readFile', ['/etc/passwd']); }
-  catch (cause) { denial = cause; }
+describe('a granted path is judged where it lands in the workspace namespace', () => {
+  async function landsWithin(prefixes: readonly string[]) {
+    const granted = parseSlateProject({ main: 'server.js', slate: { bindings: {
+      FILES: { kind: 'namespace', namespace: 'workspace', paths: [...prefixes] },
+    } } });
 
-  expect(denial).toHaveProperty('code', 'denied');
-  expect(denial).toHaveProperty('message', expect.stringMatching(/\/home\/main\/notes.*\/home\/main\/shared/u));
+    const { filesystem } = await createWorkspaceBundle(new Database(':memory:')).session();
+    const namespace = filesystem.vfs.as(CRED_SESSION_USER);
 
-  // A sibling sharing the prefix string is not inside it.
-  expect(() => route('FILES', 'readFile', ['/home/main/notes2/x'])).toThrow('outside its prefixes');
-  expect(() => route('FILES', 'readFile', ['/home/main/notes/../other'])).toThrow('outside its prefixes');
-  expect(() => route('FILES', 'readFile', ['relative/path'])).toThrow('outside its prefixes');
-  expect(() => route('FILES', 'readFile', [42])).toThrow('outside its prefixes');
-  expect(() => route('FILES', 'readFile', [])).toThrow('outside its prefixes');
+    return async (path: string) => {
+      const call = routeSlateBindingCall({ id: 'app', project: granted, name: 'FILES', request: { member: 'readFile', args: [path], invocation: null }, chain: [] });
+
+      if (call.kind !== 'namespace') throw new Error(`expected a namespace route, got ${call.kind}`);
+      await assertLandsWithin(namespace, call);
+    };
+  }
+
+  test('inside a prefix lands; a sibling, a parent segment or another tree does not', async () => {
+    const lands = await landsWithin(['/home/main/notes', '/home/main/shared/']);
+
+    for (const inside of ['/home/main/notes/a.md', '/home/main/shared', '/home/main/shared/x', '/home/user/notes/a.md']) {
+      expect(await lands(inside)).toBeUndefined();
+    }
+
+    for (const outside of ['/etc/passwd', '/home/main/notes2/x', '/home/main/notes/../other', '/home/main/shared2/x']) {
+      await expect(lands(outside)).rejects.toMatchObject({ code: 'denied' });
+    }
+  });
+
+  test('a grant on the Nimbus home spelling grants the home it links to', async () => {
+    const lands = await landsWithin(['/home/user/']);
+
+    expect(await lands('/home/main/item.txt')).toBeUndefined();
+    await expect(lands('/home/other/item.txt')).rejects.toMatchObject({ code: 'denied' });
+  });
 });
 
 const viewerProject = parseSlateProject({
