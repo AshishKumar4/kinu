@@ -81,25 +81,3 @@ export async function raceAbort<T>(
 	}
 }
 
-/** Resolves `.`/`..` segments and prevents directory traversal above root. */
-export function normalizePath(path: string): string {
-	const stripped = path.replace(/^\/+/, "");
-
-	if (stripped === "." || stripped === "./" || stripped === "") return "";
-
-	const segments = stripped.split("/");
-	const resolved: string[] = [];
-
-	for (const seg of segments) {
-		if (seg === "." || seg === "") continue;
-
-		if (seg === "..") {
-			resolved.pop();
-		} else {
-			resolved.push(seg);
-		}
-	}
-
-	return resolved.join("/");
-}
-

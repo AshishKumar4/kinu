@@ -33,7 +33,7 @@ interface ArtifactFacts {
 interface MisevolutionCriterion {
   readonly id: string;
   readonly trips: (facts: ArtifactFacts) => boolean;
-  readonly reason: string;
+  readonly reason: (facts: ArtifactFacts) => string;
 }
 
 const EGRESS_NAMES: ReadonlySet<string> = new Set(['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'sendBeacon']);
@@ -59,33 +59,34 @@ const CRITERIA: readonly MisevolutionCriterion[] = [
   {
     id: 'network-egress',
     trips: (facts) => [...EGRESS_NAMES].some((name) => facts.names.has(name)),
-    reason: 'direct network egress: evolved code must reach the outside world only through the audited tool surface (host.callTool / sandbox tools)',
+    reason: () => 'direct network egress: evolved code must reach the outside world only through the audited tool surface (host.callTool / sandbox tools)',
   },
   {
     id: 'version-machinery-tamper',
     trips: (facts) => mentions(['scaffold_versions', 'scaffold_evaluations', 'scaffold_trial_queue'])(facts)
       || facts.paths.some(namesScaffoldFile),
-    reason: 'touches the scaffold version files or shadow-eval tables: promotion happens only through the gated pipeline',
+    reason: () => 'touches the scaffold version files or shadow-eval tables: promotion happens only through the gated pipeline',
   },
   {
     id: 'rollout-config-tamper',
     trips: mentions(['auto_promote_scaffold', 'shadow_sample_rate', 'scaffold_explore_share', 'auto_gepa_every_n_turns', 'changelog_seen_at']),
-    reason: 'references the shadow-rollout knobs or the changelog seen-marker: evolved code must not change its own promotion gates or hide its changes from the operator',
+    reason: () => 'references the shadow-rollout knobs or the changelog seen-marker: evolved code must not change its own promotion gates or hide its changes from the operator',
   },
   {
     id: 'self-modification-reentry',
     trips: mentions(['proposeScaffold', 'modifyScaffold', 'applyPromotionDecision', 'applyScaffoldDecision', 'rollbackScaffold', 'checkMisevolution']),
-    reason: 'an evolved artifact must not itself propose, promote, roll back, or re-gate scaffold versions',
+    reason: () => 'an evolved artifact must not itself propose, promote, roll back, or re-gate scaffold versions',
   },
   {
     id: 'consent-weakening',
     trips: mentions(['shell_approval_mode', 'setShellApprovalMode', 'allow_all', 'device_consent']),
-    reason: 'weakens a consent/approval path (shell approval mode, device consent)',
+    reason: () => 'weakens a consent/approval path (shell approval mode, device consent)',
   },
   {
     id: 'unanalysable-code',
     trips: (facts) => facts.hidden.length > 0,
-    reason: 'the code hides what it names from this checklist (it does not parse, runs a string as code, imports at runtime, takes a constructor out of an object, or hands on the global object): write it with names the checklist can read',
+    reason: (facts) => `the code ${[...new Set(facts.hidden)].join(', ')}, which hides what it names from this checklist: `
+      + 'write it with names the checklist can read',
   },
 ];
 
@@ -324,7 +325,7 @@ export function checkMisevolutionForSurface(artifact: EvolvedArtifact, surface: 
 
   for (const candidate of MISEVOLUTION_CRITERIA) {
     if (enforced.includes(candidate.id) && candidate.trips(facts)) {
-      return Result.fail({ criterionId: candidate.id, reason: candidate.reason });
+      return Result.fail({ criterionId: candidate.id, reason: candidate.reason(facts) });
     }
   }
 

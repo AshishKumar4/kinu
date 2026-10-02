@@ -6,7 +6,7 @@ import { TierIdSchema } from '../types/profile';
 import { renderIssues, type JsonPrimitive } from '../utils/json';
 import { SLATE_INLINE_HEIGHT } from './host-context';
 import { SLATE_READ_MODELS } from './read-models';
-import { workspaceScopePath } from '../vfs/workspace-path';
+import { workspacePath } from '../vfs/workspace-path';
 
 const Name = v.pipe(v.string(), v.minLength(1));
 
@@ -14,8 +14,8 @@ const SourcePath = v.pipe(Name, v.check((path) => !path.startsWith('/') && !path
 
 const PathPrefix = v.pipe(
   Name,
-  v.check((path) => path.startsWith('/') && !path.includes('\0') && !path.split('/').includes('..'), 'must name an absolute path without traversal'),
-  v.transform(workspaceScopePath),
+  v.check((path) => path.startsWith('/') && !path.includes('\0'), 'must name an absolute path'),
+  v.transform(workspacePath),
 );
 
 const Binding = v.variant('kind', [

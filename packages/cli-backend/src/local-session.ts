@@ -155,7 +155,6 @@ import { diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type 
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
-import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
 import { detectOrphanedFibers } from '@kinu.run/core';
@@ -2907,7 +2906,6 @@ export class LocalAgentSession {
       contextBudget: this.actorSession.orchestrator.acc.context,
       fileLedger: this.actorSession.orchestrator.acc.files,
       escalations: this.actorSession.orchestrator.acc.escalations,
-      craftedToolExecute: createNodeCraftedExecute(),
       vectorStore: null,
       codemode: (surface) => {
         // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.

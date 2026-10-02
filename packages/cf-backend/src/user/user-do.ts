@@ -34,6 +34,7 @@ import {
   DEVICE_PTY_OUTPUT,
   DEVICE_PTY_EXIT,
   DEVICE_PTY_MAX_AXIS,
+  type DeviceExecOutput,
   NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED,
   codexEgressAllowed, chatgptEgressAllowed, DEVICE_CHATGPT, DeviceChatGptStatusSchema,
   type DeviceChatGptStatus, type RelayedProvider,
@@ -672,6 +673,18 @@ function credentialBaseURL(storedKey: string, cred: Credential): string | null {
   }
 
   return null;
+}
+
+function watchedOutput(opts: { readonly onOutput?: (output: DeviceExecOutput) => void | Promise<void> } | undefined) {
+  const onOutput = opts?.onOutput;
+
+  if (onOutput === undefined) return {};
+
+  return {
+    onOutput: (output: DeviceExecOutput) => settleLogged('device.output_unsent', {
+      doing: "handing a running command's output to its workspace", otherwise: 'unavailable',
+    }, async () => { await onOutput(output); }),
+  };
 }
 
 export class UserDO extends Agent<Env> {
@@ -2665,6 +2678,7 @@ export class UserDO extends Agent<Env> {
     opts?: {
       deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint;
       timeoutMs?: number; requestId?: string; backgroundJobId?: string;
+      onOutput?: (output: DeviceExecOutput) => void | Promise<void>;
     },
   ): Promise<string | undefined> {
     return settle(Effect.gen({ self: this }, function* () {
@@ -2694,7 +2708,7 @@ export class UserDO extends Agent<Env> {
       const tunnel = this._devices.tunnel(deviceId);
 
       if (!tunnel) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
-      const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = { extra: { deviceId } };
+      const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = { extra: { deviceId }, ...watchedOutput(opts) };
 
       if (opts?.checkpoint) {
         rpcOptions.extra = {

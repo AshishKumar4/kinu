@@ -7,7 +7,7 @@ import { exists as nimbusExists, readText, type Awaitable, type VFS, type VfsSta
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 
-import type { CheckpointFiles } from '../types/primitives';
+import type { CheckpointFiles, OutputSink } from '../types/primitives';
 import { vfsErrorFromText } from '../vfs/errno';
 import { syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
@@ -28,7 +28,7 @@ import {
   isDeviceNotConnectedError, isDeviceUnknownMethodError, isSandboxUnavailableError,
   nextDeviceRequestId,
 } from './device-tunnel';
-import { readDeviceOwnershipContext, readExecSignal } from './signal';
+import { readDeviceOwnershipContext, readExecOutput, readExecSignal } from './signal';
 import { approveFileAccess, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { asBytes } from '../safety/bound-write';
 import { RESERVED_REFERENCE_ROOTS } from '../vfs/mounts';
@@ -126,6 +126,7 @@ export interface DeviceExecOptions {
   requestId?: string;
   backgroundJobId?: string;
   deviceId?: string;
+  output?: OutputSink;
 }
 
 /** Transport to the UserDO hub. `status()` is a cached snapshot; `refreshStatus()` is authoritative (turn start).
@@ -383,8 +384,11 @@ export function createDeviceTunnelExecutor(
         // Read per call: a detached scope owns this command from the insert.
         const backgroundJobId = ownership.owner?.() ?? null;
         const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
+        const output = readExecOutput({ context: args[1] });
 
         if (deviceId !== undefined) execOpts.deviceId = deviceId;
+
+        if (output !== undefined) execOpts.output = output;
 
         if (backgroundJobId !== null) execOpts.backgroundJobId = backgroundJobId;
 
@@ -870,10 +874,11 @@ export function deviceMountSegment(device: DeviceFleetEntry, fleet: readonly Dev
 /** Stated absence for a path under no live machine, listing the connected segments. */
 function noSuchDevice(fleet: readonly DeviceFleetEntry[] | undefined, first: string): VfsError {
   const segments = connectedDevices(fleet).map((d) => deviceMountSegment(d, fleet)).join(', ');
+  const offline = fleet?.some((d) => !d.connected && deviceMountSegment(d, fleet) === first) === true;
 
   const reason = first === ''
     ? `several machines are connected: each is mounted at /pc/<name>: ${segments}`
-    : `no connected machine is named "${first}": connected: ${segments}`;
+    : `${offline ? `"${first}" is offline` : `no connected machine is named "${first}"`}: connected: ${segments}`;
 
   return new VfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
 }

@@ -19,6 +19,7 @@ import { Effect, Result } from 'effect';
 import { diagnostics, KinuError, refusalOf, settle, settleSync, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
+import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { SlateOperationSchema, requireSlateWorkMode, type SlateOperation, type SlateCallResult } from '../slates/rpc';
 import { currentWorkMode } from '../execution/work-mode';
@@ -100,6 +101,11 @@ function vfsGuided<A>(vfs: VFS, run: () => Promise<A>): Effect.Effect<A, VfsErro
       : Effect.die(cause);
   }));
 }
+
+/** The one statement of what `createTool` takes, rendered into the declaration the model reads. */
+const CREATE_TOOL_CONTRACT = 'Save a crafted tool, callable as `tools.<name>(args)` from the next program. `code` is '
+  + `${CRAFTED_TOOL_BODY}; helpers may precede it. In its body, ${WORKSPACE_FILE_BINDINGS}, and call `
+  + '`tools.<name>(args)`; `require`, `import` and `eval` are refused.';
 
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
   const { vfs, memory, craftStore, shell, sql, actor, resourceLimits } = deps;
@@ -264,12 +270,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     },
 
     createTool: {
-      description:
-        'Create or update a reusable tool in CraftStore. ' +
-        'Code is JavaScript that denotes an async function: `async (args) => { ... }`, `async function name(args) { ... }`, or `const name = async (args) => { ... }` (helpers may precede it). ' +
-        'Inside the body you may call `workspace.*`, `state.*`, other tools as `tools.<name>(...)`, `require(...)` and `fetch`. ' +
-        'Callable as `tools.<name>(...)` from the NEXT eval call on. ' +
-        'Returns { ok, name, action: "created"|"updated" }.',
+      description: CREATE_TOOL_CONTRACT,
       execute: async (...args: unknown[]): Promise<JsonValue> => {
         const name = parseInput(StringSchema, { value: args[0] });
         const description = parseInput(StringSchema, { value: args[1] });
@@ -329,8 +330,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           return {
             ok: false,
             ...refusalOf(new KinuError('denied',
-              `Misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason} `
-              + `Rewrite the tool body without it and call createTool again.`)),
+              `Misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason}. Rewrite the tool body without it: `
+              + `${WORKSPACE_FILE_BINDINGS}, and call other tools as \`tools.<name>(args)\`.`)),
           };
         }
 
@@ -409,7 +410,7 @@ declare namespace workspace {
   function saveNote(content: string): Promise<string | Refusal>;
   /** Your crafted tools. */
   function listTools(): Promise<Array<{ name: string; description: string; qualityScore: number }> | Refusal>;
-  /** Save a crafted tool, callable as \`tools.<name>(args)\` from the next program. */
+  /** ${CREATE_TOOL_CONTRACT} */
   function createTool(
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;

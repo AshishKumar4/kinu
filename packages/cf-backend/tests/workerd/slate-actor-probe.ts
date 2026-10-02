@@ -5,8 +5,8 @@
 import { Effect } from 'effect';
 import { Agent } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import type { CraftedTool } from '@kinu.run/core';
-import { craftedToolDeclarations, DynamicContextLedger, settleWorkspaceRoot, settleWorkspaceSlates } from '@kinu.run/core';
+import type { CodemodeSurface, CraftedTool } from '@kinu.run/core';
+import { craftedToolDeclarations, DynamicContextLedger, selectInjectableCraftedTools, settleWorkspaceRoot, settleWorkspaceSlates } from '@kinu.run/core';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
@@ -52,15 +52,17 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     };
 
     const factory = createCodemodeToolFactory({
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'binding-probe', actor: 'binding-probe' } : null }), sql, workspace: 'binding-probe',
+      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'binding-probe', actor: 'binding-probe' } : null }), workspace: 'binding-probe',
       webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), reach: slateToolReach(narrowToolSurface(undefined)),
       browserSessions: NO_BROWSERS,
       rt: {
         actor: bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => Effect.void),
-        craftStore: { list: () => [crafted] },
         storage: { vfs: createMemoryVfs().vfs },
       },
     });
+
+    // The store holds `crafted`, read fresh per program as a runtime's surface reads it.
+    const surface: CodemodeSurface = { native: {}, craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), providers: [] };
 
     const host = new SlateHost({
       ctx: this.ctx, workspace: 'binding-probe',
@@ -75,14 +77,14 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       dispatch: async (caller, route) => {
         if (route.kind !== 'tool') throw new Error('Expected a tool binding');
 
-        return await inWorkMode(caller.workMode, () => factory.callTool({}, route.name, route.input)) ?? null;
+        return await inWorkMode(caller.workMode, () => factory.callTool(surface, route.name, route.input)) ?? null;
       },
       catalog: async () => ({ executors: [], mcp: [], tools: [], tiers: [], slates: {} }),
       shareUrl: async () => null,
     });
 
     const call = (mode: WorkMode) => host.bindingCall({ ...ROOT_SLATE_CALLER, workMode: mode }, 'crafted', 'CALCULATE', { member: 'call', args: [{ n: 21 }], invocation: null });
-    const tool = factory.toolFor({});
+    const tool = factory.toolFor(surface);
     const declarations = () => craftedToolDeclarations({ eval: tool }, { workMode: 'build', allowedTools: ['eval'] });
     const before = declarations();
     const first = await call('build');
@@ -109,11 +111,10 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
     if (!files.exists('/home/main/plan-data.txt')) files.writeFile('/home/main/plan-data.txt', 'original');
     const sql = bindAgentSql(this);
-    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
 
     const factory = createCodemodeToolFactory({
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'mode-probe', actor: 'mode-probe' } : null }), sql, workspace: 'mode-probe',
+      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'mode-probe', actor: 'mode-probe' } : null }), workspace: 'mode-probe',
       webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }),
       browserSessions: NO_BROWSERS,
       rt: {
@@ -122,7 +123,6 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
           actorId: 'mode-probe', workspaceId: 'mode-probe', parentActorId: null,
           name: 'mode-probe', storageKey: 'mode-probe',
         }, () => Effect.void),
-        craftStore: { list: () => [] },
         executionRouter: { getProviders: () => [{
           name: 'workspace', positionalArgs: true,
           tools: {
@@ -137,7 +137,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       },
     });
 
-    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({}) }).eval;
+    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ native: {}, craftedTools: () => [], providers: [] }) }).eval;
     const execute = tool?.execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');
