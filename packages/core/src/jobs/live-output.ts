@@ -3,10 +3,11 @@ import type { OutputChunk, OutputSink, OutputStreamName } from '../types/primiti
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { diagnostics, settleSync, toKinuError } from '../obs/index';
+import { formatBytes } from '../utils/format';
 
 export const JOB_OUTPUT_EVENT = 'job_output';
 
-const OutputChunkSchema = v.object({ stream: v.picklist(['stdout', 'stderr']), text: v.string() });
+const OutputChunkSchema = v.object({ stream: v.picklist(['stdout', 'stderr']), text: v.string(), omitted: v.optional(v.number()) });
 
 export interface JobOutputFrame {
   readonly type: typeof JOB_OUTPUT_EVENT;
@@ -36,13 +37,24 @@ const WINDOW_CHARS = 16_384;
 
 const TAIL_CHARS = 16_384;
 
-function appendDroppingOldest(chunks: OutputChunk[], chunk: OutputChunk, cap: number): number {
+const encoder = new TextEncoder();
+
+function withOmitted(chunk: OutputChunk, omitted: number): OutputChunk {
+  return omitted > 0 ? { stream: chunk.stream, text: chunk.text, omitted } : { stream: chunk.stream, text: chunk.text };
+}
+
+function omittedIn(chunks: readonly OutputChunk[]): number {
+  return chunks.reduce((sum, { omitted = 0 }) => sum + omitted, 0);
+}
+
+function keepNewest(chunks: OutputChunk[], chunk: OutputChunk, cap: number): void {
   const last = chunks.at(-1);
 
-  if (last?.stream === chunk.stream) chunks[chunks.length - 1] = { stream: chunk.stream, text: last.text + chunk.text };
+  if (last !== undefined && last.text === '') chunks[chunks.length - 1] = withOmitted(chunk, omittedIn([last, chunk]));
+  else if (last?.stream === chunk.stream && chunk.omitted === undefined) chunks[chunks.length - 1] = withOmitted({ stream: last.stream, text: last.text + chunk.text }, last.omitted ?? 0);
   else chunks.push(chunk);
   let over = chunks.reduce((sum, { text }) => sum + text.length, 0) - cap;
-  const dropped = Math.max(over, 0);
+  let shed = 0;
 
   while (over > 0) {
     const first = chunks[0];
@@ -51,31 +63,76 @@ function appendDroppingOldest(chunks: OutputChunk[], chunk: OutputChunk, cap: nu
 
     if (first.text.length <= over) {
       chunks.shift();
+      shed += (first.omitted ?? 0) + encoder.encode(first.text).byteLength;
       over -= first.text.length;
     } else {
-      chunks[0] = { stream: first.stream, text: first.text.slice(over) };
+      chunks[0] = withOmitted({ stream: first.stream, text: first.text.slice(over) }, (first.omitted ?? 0) + encoder.encode(first.text.slice(0, over)).byteLength);
       over = 0;
     }
   }
 
-  return dropped;
+  const head = chunks[0];
+
+  if (head !== undefined && shed > 0) chunks[0] = withOmitted(head, (head.omitted ?? 0) + shed);
 }
 
 export function followJobOutput(tail: JobOutputTail | undefined, frame: JobOutputFrame): JobOutputTail {
   if (tail !== undefined && frame.seq <= tail.seq) return tail;
   const chunks = [...tail?.chunks ?? []];
-  let omitted = (tail?.omitted ?? 0) + frame.dropped;
+  // A sender that places no loss counts it only, before its first chunk.
+  const unplaced = frame.dropped - omittedIn(frame.chunks);
 
-  for (const chunk of frame.chunks) omitted += appendDroppingOldest(chunks, chunk, TAIL_CHARS);
+  for (const [at, chunk] of frame.chunks.entries()) {
+    keepNewest(chunks, at === 0 ? withOmitted(chunk, (chunk.omitted ?? 0) + unplaced) : chunk, TAIL_CHARS);
+  }
 
-  return { seq: frame.seq, chunks, omitted };
+  return { seq: frame.seq, chunks, omitted: omittedIn(chunks) };
+}
+
+function omittedMarker(bytes: number): string {
+  return `... ${formatBytes(bytes)} omitted ...`;
+}
+
+type OutputLine = { readonly kind: 'text'; readonly text: string } | { readonly kind: 'lost'; readonly bytes: number };
+
+/** The last `count` lines; a loss among them marked in place, every one before them above them. */
+export function lastOutputLines(tail: JobOutputTail | undefined, count: number): string[] {
+  const items: OutputLine[] = [];
+  let line = '';
+
+  for (const { text, omitted = 0 } of tail?.chunks ?? []) {
+    if (omitted > 0) {
+      if (line !== '') items.push({ kind: 'text', text: line });
+      const previous = items.at(-1);
+
+      if (previous?.kind === 'lost') items[items.length - 1] = { kind: 'lost', bytes: previous.bytes + omitted };
+      else items.push({ kind: 'lost', bytes: omitted });
+      line = '';
+    }
+
+    const [first = '', ...rest] = text.split('\n');
+    line += first;
+
+    for (const next of rest) {
+      items.push({ kind: 'text', text: line });
+      line = next;
+    }
+  }
+
+  if (line !== '') items.push({ kind: 'text', text: line });
+  const lines = items.flatMap((item, at) => (item.kind === 'text' ? [at] : []));
+  const start = lines.at(-count) ?? lines[0] ?? items.length;
+  const before = items.slice(0, start).reduce((sum, item) => sum + (item.kind === 'lost' ? item.bytes : 0), 0);
+  const shown = items.slice(start).map((item) => (item.kind === 'lost' ? omittedMarker(item.bytes) : item.text));
+
+  return before > 0 ? [omittedMarker(before), ...shown] : shown;
 }
 
 /** Gathers from the call's start; sends once a job takes it. */
 class JobOutputFeed implements OutputSink {
   private readonly decoders: Readonly<Record<OutputStreamName, TextDecoder>> = { stdout: new TextDecoder(), stderr: new TextDecoder() };
   private window: OutputChunk[] = [];
-  private dropped = 0;
+  private lostAfterWindow = 0;
   private told: JobOutputTail = { seq: 0, chunks: [], omitted: 0 };
   private sending = false;
   private ended = false;
@@ -91,9 +148,10 @@ class JobOutputFeed implements OutputSink {
     this.gather(stream, data instanceof Uint8Array ? this.decoders[stream].decode(data, { stream: true }) : data);
   }
 
-  lost(count: number): void {
+  lost(bytes: number): void {
     if (this.ended) return;
-    this.dropped += count;
+    this.lostAfterWindow += bytes;
+    this.arm();
   }
 
   live(): void {
@@ -120,8 +178,12 @@ class JobOutputFeed implements OutputSink {
 
   private gather(stream: OutputStreamName, text: string): void {
     if (text === '') return;
-    this.dropped += appendDroppingOldest(this.window, { stream, text }, WINDOW_CHARS);
+    keepNewest(this.window, withOmitted({ stream, text }, this.lostAfterWindow), WINDOW_CHARS);
+    this.lostAfterWindow = 0;
+    this.arm();
+  }
 
+  private arm(): void {
     if (this.sending && this.disarm === null) this.disarm = this.deps.clock.after(FLUSH_MS, () => { this.flush(); });
   }
 
@@ -129,10 +191,14 @@ class JobOutputFeed implements OutputSink {
     this.disarm?.();
     this.disarm = null;
 
+    if (this.lostAfterWindow > 0) {
+      keepNewest(this.window, { stream: this.window.at(-1)?.stream ?? 'stdout', text: '', omitted: this.lostAfterWindow }, WINDOW_CHARS);
+      this.lostAfterWindow = 0;
+    }
+
     if (this.window.length === 0) return;
-    const frame: JobOutputFrame = { type: JOB_OUTPUT_EVENT, jobId: this.jobId, seq: this.told.seq + 1, chunks: this.window, dropped: this.dropped };
+    const frame: JobOutputFrame = { type: JOB_OUTPUT_EVENT, jobId: this.jobId, seq: this.told.seq + 1, chunks: this.window, dropped: omittedIn(this.window) };
     this.window = [];
-    this.dropped = 0;
     this.told = followJobOutput(this.told, frame);
 
     return settleSync(this.sent(frame));

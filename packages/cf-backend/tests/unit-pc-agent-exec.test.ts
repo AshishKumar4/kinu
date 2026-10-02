@@ -69,6 +69,7 @@ const PcAgentModuleSchema = v.object({
   requestDirectory: v.function(),
   supervisionSupported: v.function(),
   processStartIdentity: v.pipe(v.function(), v.returnsAsync(v.string())),
+  watchOutput: v.function(),
   waitForFile: v.function(),
   waitForSupervisorState: v.function(),
 });
@@ -113,11 +114,45 @@ type DaemonReply = v.InferOutput<typeof DaemonReplySchema>;
 const OutputFrameSchema = v.object({
   type: v.literal(pcAgent.EXEC_OUTPUT_FRAME),
   request: v.string(),
-  chunks: v.array(v.object({ stream: v.picklist(['stdout', 'stderr']), data: v.string() })),
+  chunks: v.array(v.object({ stream: v.picklist(['stdout', 'stderr']), data: v.string(), omitted: v.optional(v.number()) })),
   dropped: v.number(),
 });
 
 type OutputFrame = v.InferOutput<typeof OutputFrameSchema>;
+
+const WatchSchema = v.object({ ended: v.promise(), bind: v.function() });
+
+/** A record on a supervisor's output pipe: its kind (1 stdout, 2 stderr), a 48-bit length, the bytes. */
+function outputRecord(kind: 1 | 2, text: string): Buffer {
+  const body = Buffer.from(text);
+  const header = Buffer.alloc(7);
+  header[0] = kind;
+  header.writeUIntBE(body.length, 1, 6);
+
+  return Buffer.concat([header, body]);
+}
+
+/** A supervisor's record of bytes it dropped: kind 0, the count as the length, nothing after it. */
+function dropRecord(bytes: number): Buffer {
+  const header = Buffer.alloc(7);
+  header.writeUIntBE(bytes, 1, 6);
+
+  return header;
+}
+
+/** The frames a watch over `records` sends once its supervisor's pipe closes. */
+async function framesOf(id: string, ...records: Buffer[]): Promise<OutputFrame[]> {
+  const pipe = new EventEmitter();
+  const ws = recorder();
+  const watch = v.parse(WatchSchema, pcAgent.watchOutput(id, pipe, ws.socket));
+  pipe.emit('data', Buffer.concat(records));
+  pipe.emit('close');
+  await watch.ended;
+
+  return ws.outputsOf(id);
+}
+
+const base64 = (text: string): string => Buffer.from(text).toString('base64');
 
 function outputText(frames: readonly OutputFrame[], stream: 'stdout' | 'stderr'): string {
   return frames.flatMap((frame) => frame.chunks).filter((chunk) => chunk.stream === stream)
@@ -214,6 +249,26 @@ describe('a running command\'s output, for a hub that asked', () => {
     expect(ws.arrivals.indexOf(reply)).toBeGreaterThan(Math.max(...ws.outputsOf(id).map((frame) => ws.arrivals.indexOf(frame))));
     acknowledge(rpcId(401), id, ws.socket);
     await ws.answerTo(rpcId(401));
+  });
+
+  // 2026-10-02: a loss was counted into the frame's total and placed nowhere, so a hub could not say where it was.
+  test('a drop the supervisor reports between two chunks is placed between them, in bytes', async () => {
+    const id = rpcId(480);
+
+    expect(await framesOf(id, outputRecord(1, 'one\n'), dropRecord(5000), outputRecord(1, 'two\n'))).toEqual([{
+      type: pcAgent.EXEC_OUTPUT_FRAME, request: id,
+      chunks: [{ stream: 'stdout', data: base64('one\n') }, { stream: 'stdout', data: base64('two\n'), omitted: 5000 }], dropped: 5000,
+    }]);
+  });
+
+  test('a window a chunk overflows keeps its newest bytes, the shed ones placed before them', async () => {
+    const id = rpcId(490);
+
+    expect(await framesOf(id, outputRecord(2, 'early\n'), outputRecord(1, 'x'.repeat(20_000)), dropRecord(7))).toEqual([{
+      type: pcAgent.EXEC_OUTPUT_FRAME, request: id,
+      // `early` and the oldest 3,616 x's go: 3,622 bytes before what is kept. A loss after the last chunk ends the frame.
+      chunks: [{ stream: 'stdout', data: base64('x'.repeat(16_384)), omitted: 3622 }, { stream: 'stdout', data: '', omitted: 7 }], dropped: 3629,
+    }]);
   });
 
   test('a flood goes out as a bounded number of windows, every byte sent or counted', async () => {

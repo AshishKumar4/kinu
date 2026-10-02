@@ -50,9 +50,15 @@ export interface DeviceRpcOptions {
 
 function writeOutput(sink: OutputSink): (output: DeviceExecOutput) => void {
   return ({ chunks, dropped }) => {
-    for (const chunk of chunks) sink.write(chunk.stream, base64ToBytes(chunk.data));
+    // A daemon that places no loss counts it only: before its first chunk.
+    const unplaced = dropped - chunks.reduce((sum, { omitted = 0 }) => sum + omitted, 0);
 
-    if (dropped > 0) sink.lost(dropped);
+    if (unplaced > 0) sink.lost(unplaced);
+
+    for (const { stream, data, omitted = 0 } of chunks) {
+      if (omitted > 0) sink.lost(omitted);
+      sink.write(stream, base64ToBytes(data));
+    }
   };
 }
 
