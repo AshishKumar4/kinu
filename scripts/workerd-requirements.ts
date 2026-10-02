@@ -1,3 +1,4 @@
+import type { ObjectPattern } from 'oxc-parser';
 import { moduleEdges } from './import-graph';
 import { collapsePath, IMPORT_CANDIDATES, importUses, literalString, NAMESPACE, parse, type SyntaxNode } from './syntax';
 
@@ -9,8 +10,20 @@ function memberName(node: SyntaxNode): string | undefined {
   return !raw.computed && raw.property.type === 'Identifier' ? raw.property.name : literalString(raw.property);
 }
 
-/** Wrappers that leave the expression they hold the same value. */
-const TRANSPARENT = new Set(['TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression', 'TSTypeAssertion', 'ParenthesizedExpression']);
+/** Wrappers that change only a value's static type, so `env` read through them is still `env`. */
+const TYPE_ONLY_WRAPPERS = new Set(['TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression', 'TSTypeAssertion', 'ParenthesizedExpression']);
+
+function destructuredBindings(file: string, pattern: ObjectPattern): string[] {
+  return pattern.properties.map((property) => {
+    if (property.type === 'RestElement') throw new Error(`${file}: rest-destructuring workerd env does not name its Worker bindings`);
+
+    const name = !property.computed && property.key.type === 'Identifier' ? property.key.name : literalString(property.key);
+
+    if (name === undefined) throw new Error(`${file}: workerd env binding must be named`);
+
+    return name;
+  });
+}
 
 function envBindings(file: string, text: string) {
   const parsed = parse(file, text);
@@ -30,7 +43,7 @@ function envBindings(file: string, text: string) {
       nativeEnv = access;
     } else if (origin.imported !== 'env') return;
 
-    while (nativeEnv.parent !== undefined && TRANSPARENT.has(nativeEnv.parent.raw.type)) nativeEnv = nativeEnv.parent;
+    while (nativeEnv.parent !== undefined && TYPE_ONLY_WRAPPERS.has(nativeEnv.parent.raw.type)) nativeEnv = nativeEnv.parent;
 
     const access = nativeEnv.parent;
 
@@ -44,14 +57,7 @@ function envBindings(file: string, text: string) {
     }
 
     if (access?.raw.type === 'VariableDeclarator' && access.raw.init === nativeEnv.raw && access.raw.id.type === 'ObjectPattern') {
-      for (const property of access.raw.id.properties) {
-        if (property.type === 'RestElement') throw new Error(`${file}: rest-destructuring workerd env does not name its Worker bindings`);
-
-        const name = !property.computed && property.key.type === 'Identifier' ? property.key.name : literalString(property.key);
-
-        if (name === undefined) throw new Error(`${file}: workerd env binding must be named`);
-        bindings.add(name);
-      }
+      for (const name of destructuredBindings(file, access.raw.id)) bindings.add(name);
 
       return;
     }
