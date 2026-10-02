@@ -24,7 +24,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import type { Rpc } from '@kinu.run/core';
 import * as v from 'valibot';
-import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
+import { settle, showing } from '@kinu.run/core/obs';
 
 const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(ArchiveCursorSchema) });
 
@@ -367,19 +367,17 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
   const { resource, reload } = useAsyncResource(load);
   const grants = lastValue(resource);
 
-  const revoke = async (grant: ApprovalGrant) => {
+  const revoke = (grant: ApprovalGrant) => Effect.gen(function* () {
     setBusy(`${grant.rule}@${grant.executor}`);
     setErr(null);
 
-    try {
-      await rpc("revokeShellApprovalGrants", [[grant]]);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => rpc("revokeShellApprovalGrants", [[grant]]));
       reload();
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
+    }), showing(setErr)), Effect.sync(() => {
       setBusy(null);
-    }
-  };
+    }));
+  });
 
   if (resource.status !== "error" && grants !== null && grants.length === 0) return null;
 
@@ -402,7 +400,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
               <span className="p-text-2">{executorLabel(grant.executor)}</span>
               <button
                 type="button"
-                onClick={async () => { await revoke(grant); }}
+                onClick={() => settle(revoke(grant))}
                 disabled={busy !== null}
                 className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50"
                 title={`Ask again next time a command trips ${grant.rule} on ${grant.executor}`}
@@ -440,7 +438,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   const page = lastValue(resource);
 
   // Opening a row reads that file only; the listing carries no bytes.
-  const read = async (row: InstructionSourceRow) => {
+  const read = (row: InstructionSourceRow) => Effect.gen(function* () {
     if (open?.path === row.path) {
       setOpen(null);
 
@@ -450,25 +448,23 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
     setBusy(row.path);
     setErr(null);
 
-    try {
-      setOpen(await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]));
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      setOpen(yield* Effect.promise(async () => rpc<InstructionSourceView | null>("readInstructionApproval", [row.path])));
+    }), showing(setErr)), Effect.sync(() => {
       setBusy(null);
-    }
-  };
+    }));
+  });
 
-  const decide = async (row: InstructionSourceRow, action: "approve" | "revoke") => {
+  const decide = (row: InstructionSourceRow, action: "approve" | "revoke") => Effect.gen(function* () {
     setBusy(row.path);
     setErr(null);
 
-    try {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       if (action === "approve") {
         // Approval binds the digest the owner was just shown; if the file moved on, nothing is granted.
         const opened = open?.path === row.path
           ? open
-          : await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]);
+          : (yield* Effect.promise(async () => rpc<InstructionSourceView | null>("readInstructionApproval", [row.path])));
 
         if (!opened) {
           setErr("Kinu could not read that file, so nothing was approved. Try again.");
@@ -476,19 +472,17 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
           return;
         }
 
-        await rpc("approveInstruction", [row.path, opened.digest]);
+        yield* Effect.promise(async () => rpc("approveInstruction", [row.path, opened.digest]));
       } else {
-        await rpc("revokeInstruction", [row.path]);
+        yield* Effect.promise(async () => rpc("revokeInstruction", [row.path]));
       }
 
       setOpen(null);
       reload();
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
+    }), showing(setErr)), Effect.sync(() => {
       setBusy(null);
-    }
-  };
+    }));
+  });
 
   const rows = page?.items ?? null;
 
@@ -523,7 +517,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {row.reason === undefined && (
                     <button
                       type="button"
-                      onClick={async () => { await read(row); }}
+                      onClick={() => settle(read(row))}
                       disabled={busy !== null}
                       className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0"
                     >{busy === row.path ? "…" : readWord}</button>
@@ -531,7 +525,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {followed && (
                     <button
                       type="button"
-                      onClick={async () => { await decide(row, "revoke"); }}
+                      onClick={() => settle(decide(row, "revoke"))}
                       disabled={busy !== null}
                       className={`${row.reason === undefined ? "" : "ml-auto "}px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0`}
                       title="Stop following this file as instructions"
@@ -540,7 +534,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {!followed && row.reason === undefined && (
                     <button
                       type="button"
-                      onClick={async () => { await decide(row, "approve"); }}
+                      onClick={() => settle(decide(row, "approve"))}
                       disabled={busy !== null}
                       className="px-2 py-0.5 rounded-sm p-card-hover p-text-2 hover:p-text disabled:opacity-50 shrink-0"
                       title="Follow these exact contents as instructions"
@@ -758,8 +752,7 @@ function AlwaysActiveSkillsCard({
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       const r = v.parse(SkillNamesSchema, yield* Effect.promise(async () => rpc('setAlwaysActiveSkills', [next])));
       setNames(r.names);
-    }), (failed) => Effect.sync(() => {
-      const e = Cause.squash(failed); setErr(renderThrownChain({ cause: e })); })), Effect.sync(() => { setBusy(false); }));
+    }), showing(setErr)), Effect.sync(() => { setBusy(false); }));
   })), [rpc]);
 
   const add = useCallback(async () => {

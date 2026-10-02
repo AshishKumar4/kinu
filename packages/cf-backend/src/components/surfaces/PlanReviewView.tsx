@@ -20,7 +20,7 @@ import {
 } from "@plannotator/ui/utils/parser";
 import type { Rpc } from "@kinu.run/core";
 import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
-import { renderThrownChain, settle } from "@kinu.run/core/obs";
+import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { annotationType } from "./annotation-type";
 import { copyLabel, useCopy, type CopyStatus } from "@/hooks/use-copy";
@@ -170,23 +170,21 @@ function DismissPlan({ plan, rpc, readOnly, deciding, saving, onError }: {
 
   if (readOnly || !planReviewAwaitingDecision(plan)) return null;
 
-  const dismiss = async () => {
+  const dismiss = () => Effect.gen(function* () {
     setBusy(true);
     onError(null);
 
-    try {
-      const result = await rpc<PlanReviewResult>("dismissPlanReview", [plan.id, plan.revision]);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const result = yield* Effect.promise(async () => rpc<PlanReviewResult>("dismissPlanReview", [plan.id, plan.revision]));
 
       if (!result.ok) onError(result.error);
-    } catch (cause) {
-      onError(renderThrownChain({ cause }));
-    } finally {
+    }), showing(onError)), Effect.sync(() => {
       setBusy(false);
-    }
-  };
+    }));
+  });
 
   return (
-    <Button type="button" size="sm" variant="ghost" onClick={dismiss} disabled={deciding !== null || saving || busy}>
+    <Button type="button" size="sm" variant="ghost" onClick={() => settle(dismiss())} disabled={deciding !== null || saving || busy}>
       {busy ? <Loader size="sm" /> : "Dismiss"}
     </Button>
   );
@@ -223,7 +221,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
       return true;
     } catch (cause) {
       if (activePlanKey.current === planKey) {
-        setError(renderThrownChain({ cause: cause }));
+        setError(renderThrownChain({ cause }));
       }
 
       return false;

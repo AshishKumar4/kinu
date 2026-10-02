@@ -1,4 +1,5 @@
 /** The owner's roster: pages read from the owner's object, kept current by one socket per tab. */
+import { Effect } from 'effect';
 import * as v from "valibot";
 import {
   createContext,
@@ -16,7 +17,7 @@ import {
   listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE, UserApiError,
   type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
 } from "@/lib/user-api";
-import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
+import { renderThrownChain, tolerate, settleSync } from "@kinu.run/core/obs";
 
 const ROSTER_PAGE = 50;
 
@@ -340,11 +341,13 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
 }
 
 export function useWorkspaceRoster(): WorkspaceRosterValue {
-  const roster = useContext(WorkspaceRosterContext);
+  return settleSync(Effect.gen(function* () {
+    const roster = useContext(WorkspaceRosterContext);
 
-  if (roster === null) throw new Error("useWorkspaceRoster requires WorkspaceRosterProvider");
+    if (roster === null) return yield* Effect.die(new Error("useWorkspaceRoster requires WorkspaceRosterProvider"));
 
-  return roster;
+    return roster;
+  }));
 }
 
 export function useFilteredRoster(filter: RosterFilter | null): RosterPages | null {

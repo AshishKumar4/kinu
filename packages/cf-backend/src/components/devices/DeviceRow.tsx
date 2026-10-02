@@ -106,12 +106,13 @@ export function DeviceRow({
     onDeviceChanged();
   };
 
-  const dropGrant = async (agentName: string) => {
-    try { await revokeDeviceConsent(device.id, agentName); }
-    catch (e) { onError(`Could not revoke the grant: ${renderThrownChain({ cause: e })}`); }
+  const dropGrant = (agentName: string) => Effect.gen(function* () {
+    yield* Effect.catchCause(Effect.promise(async () => revokeDeviceConsent(device.id, agentName)), showing((chain) => {
+      onError(`Could not revoke the grant: ${chain}`);
+    }));
 
     onGrantsChanged();
-  };
+  });
 
   const { sandbox } = device;
   const sandboxOn = sandbox.tier === "sandboxed";
@@ -119,16 +120,16 @@ export function DeviceRow({
   const cannotSandbox = sandbox.capability !== "sandboxed";
 
   // Only turning off asks; on only narrows what a command reaches.
-  const setSandbox = async (on: boolean) => {
+  const setSandbox = (on: boolean) => Effect.gen(function* () {
     if (!on && !confirm(`Turn Sandbox off for "${device.label}"? The agent will run as you with full access.`)) return;
     setSwitching(true);
 
-    try { await setDeviceSandboxTier(device.id, on ? "sandboxed" : "raw"); }
-    catch (e) { onError(`Could not change the Sandbox setting: ${renderThrownChain({ cause: e })}`); }
-    finally { setSwitching(false); }
+    yield* Effect.ensuring(Effect.catchCause(Effect.promise(async () => setDeviceSandboxTier(device.id, on ? "sandboxed" : "raw")), showing((chain) => {
+      onError(`Could not change the Sandbox setting: ${chain}`);
+    })), Effect.sync(() => { setSwitching(false); }));
 
     onDeviceChanged();
-  };
+  });
 
   return (
     <div className="px-4 py-3">
@@ -181,7 +182,7 @@ export function DeviceRow({
             aria-checked={sandboxOn}
             aria-label={`Sandbox on ${device.label}`}
             disabled={switching || device.wholeMachine}
-            onClick={async () => { await setSandbox(!sandboxOn); }}
+            onClick={() => settle(setSandbox(!sandboxOn))}
             className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors disabled:opacity-50 ${
               sandboxOn ? "border-[var(--c-accent)] bg-[var(--c-accent)]" : "border-[var(--c-border-strong)] bg-[var(--c-fill)]"
             }`}
@@ -208,7 +209,7 @@ export function DeviceRow({
               <span key={g.agentName} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm p-fill">
                 {g.agentName}
                 <span className={g.policy === "allow" ? "p-text-3" : "p-danger"}>{g.policy === "allow" ? "Allowed" : "Denied"}</span>
-                <button onClick={async () => { await dropGrant(g.agentName); }}
+                <button onClick={() => settle(dropGrant(g.agentName))}
                   title={g.policy === "allow" ? `Revoke ${g.agentName}'s access` : `Remove the saved denial for ${g.agentName}`}
                   className="p-text-3 hover:p-danger">
                   <XIcon size={10} />

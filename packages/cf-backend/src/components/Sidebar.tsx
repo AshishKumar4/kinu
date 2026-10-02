@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { useState, useCallback, useRef, type FormEvent, type ReactNode } from "react";
 import { Link, NavLink, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
@@ -61,7 +61,7 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
 
   const reported = error !== null && error !== "";
 
-  const save = async (event: FormEvent) => {
+  const save = (event: FormEvent) => Effect.gen(function* () {
     event.preventDefault();
     const displayName = value.trim();
 
@@ -69,18 +69,19 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
     setSaving(true);
     setError(null);
 
-    try {
-      const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const result = yield* Effect.promise(async () => rpc<{ displayName: string }>("setDisplayName", [displayName]));
       onSaved(result.displayName);
-    } catch (err) {
+    }), (failed) => Effect.sync(() => {
+      const err = Cause.squash(failed);
       setError(err instanceof Error ? renderCauseChain(err) : "Rename failed");
-    } finally {
+    })), Effect.sync(() => {
       setSaving(false);
-    }
-  };
+    }));
+  });
 
   return (
-    <form onSubmit={save} className="p-card px-1.5 py-1">
+    <form onSubmit={(event) => settle(save(event))} className="p-card px-1.5 py-1">
       <div className="flex items-center gap-1">
         <input
           autoFocus

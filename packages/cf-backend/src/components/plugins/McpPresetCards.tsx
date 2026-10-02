@@ -1,4 +1,5 @@
 /** One-click MCP preset rows; a row's state is the account's server row tagged with its `preset_id`. */
+import { Effect } from 'effect';
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import {
@@ -15,7 +16,7 @@ import { inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
 import { PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
 
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
@@ -138,23 +139,22 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
     }
   };
 
-  const remove = async () => {
+  const remove = () => Effect.gen(function* () {
     if (!server) return;
 
     if (!confirm(`Remove "${server.name}"? All workspaces will lose access to its tools.`)) return;
 
     setErr(null);
 
-    try { await removeMcpServer(server.id); onChanged(); }
-    catch (e) { setErr(renderThrownChain({ cause: e })); }
-  };
+    return yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => removeMcpServer(server.id)); onChanged(); }), showing(setErr));
+  });
 
   const asking = openToken && !added;
 
   let trailing: ReactNode;
 
   if (added) {
-    trailing = <PresetMenu preset={preset} word={word} dot={dot} onRemove={() => void remove()} />;
+    trailing = <PresetMenu preset={preset} word={word} dot={dot} onRemove={() => settle(remove())} />;
   } else if (asking) {
     trailing = (
       <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}

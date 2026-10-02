@@ -1,4 +1,5 @@
 /** `/deploy` (docs/SELF-DEPLOY.md § The Cloudflare door). Public: the run key minted in this tab authorizes everything. */
+import { Effect } from 'effect';
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { CloudArrowUpIcon } from "@phosphor-icons/react";
@@ -7,7 +8,7 @@ import {
   deployDoor, deployOptions, mintRun,
   type DeployChoice, type DeployDoor, type DeployInputs, type DeployOptions, type DeploySnapshot,
 } from "@kinu.run/core/deploy";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { settle, showing } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -112,23 +113,20 @@ function Answered({ options, runId, onStarted }: {
     return () => { live = false; };
   }, [runId]);
 
-  const deploy = async (): Promise<void> => {
+  const deploy = () => Effect.gen(function* () {
     setBusy(true);
     setErr(null);
 
     const door = doorFor(runId);
 
-    try {
+    return yield* Effect.catchCause(Effect.gen(function* () {
       for (const [name, value] of Object.entries(answers.keys)) {
-        if (value !== "") await door.holdProviderKey(name, value);
+        if (value !== "") yield* Effect.promise(async () => door.holdProviderKey(name, value));
       }
 
-      onStarted(await door.start(inputsFrom(answers)));
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
-      setBusy(false);
-    }
-  };
+      onStarted(yield* Effect.promise(async () => door.start(inputsFrom(answers))));
+    }), showing((chain) => { setErr(chain); setBusy(false); }));
+  });
 
   return (
     <section className="space-y-4" aria-label="Your deployment">
@@ -205,7 +203,7 @@ function Answered({ options, runId, onStarted }: {
       <div className="flex items-center justify-between gap-3">
         <p className="p-meta p-text-3">Kinu {options.version} will be uploaded into your account.</p>
         <FilledButton
-          onClick={() => void deploy()}
+          onClick={() => settle(deploy())}
           disabled={busy || answers.accountId === "" || answers.ownerEmail === ""}
           className="!h-9 !px-4 !text-sm"
         >
@@ -288,16 +286,12 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     };
   }, [live, runId]);
 
-  const signIn = async (): Promise<void> => {
-    try {
-      // An expired run is re-signed, not replaced: a fresh run would create a second set of everything.
-      const run = runId !== "" && heldRunKey(runId) !== "" ? runId : await openDeployRun();
+  const signIn = () => Effect.catchCause(Effect.gen(function* () {
+    // An expired run is re-signed, not replaced: a fresh run would create a second set of everything.
+    const run = runId !== "" && heldRunKey(runId) !== "" ? runId : (yield* Effect.promise(async () => openDeployRun()));
 
-      location.assign(await doorFor(run).authorize());
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
-    }
-  };
+    location.assign(yield* Effect.promise(async () => doorFor(run).authorize()));
+  }), showing(setErr));
 
   const retry = useCallback((stepId: string): void => {
     doorFor(runId).retry(stepId).then(setSnapshot).catch(showRejection(setErr));
@@ -340,7 +334,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
                     + " its sign-in. The token stays with this run and is deleted when the run ends."
                     + " After that, your deployment uses its own."}
               </p>
-              <FilledButton onClick={() => void signIn()} className="mt-4 !h-9 !px-4 !text-sm">
+              <FilledButton onClick={() => settle(signIn())} className="mt-4 !h-9 !px-4 !text-sm">
                 Sign in with Cloudflare
               </FilledButton>
             </div>
