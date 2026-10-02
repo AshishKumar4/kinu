@@ -1,3 +1,4 @@
+import { Data } from 'effect';
 import * as oauth from 'oauth4webapi';
 import { Hono } from 'hono';
 import {
@@ -431,14 +432,13 @@ async function fetchOAuthProfile(
   };
 }
 
-class OAuthProviderTokenError extends Error {
+class OAuthProviderTokenError extends Data.TaggedError('OAuthProviderTokenError')<{ readonly message: string }> {
   constructor(
     public readonly providerError: string,
     public readonly status?: number,
     public readonly providerDescription?: string,
   ) {
-    super(providerDescription ?? providerError);
-    this.name = 'OAuthProviderTokenError';
+    super({ message: providerDescription ?? providerError });
   }
 }
 

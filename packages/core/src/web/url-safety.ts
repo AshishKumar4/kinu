@@ -4,7 +4,7 @@
  * refuses a name resolving inward (docs/CRAFT-ARCHITECTURE.md, "Names that resolve inward").
  */
 
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import { refusedHostname } from '../safety/egress-destination';
 
@@ -12,10 +12,9 @@ import { refusedHostname } from '../safety/egress-destination';
 const SECRET_PREFIX_RE =
   /(sk-[A-Za-z0-9_-]{10,}|sk_[A-Za-z0-9_]{10,}|ghp_[A-Za-z0-9]{10,}|gho_[A-Za-z0-9]{10,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,})/;
 
-export class UnsafeUrlError extends Error {
+export class UnsafeUrlError extends Data.TaggedError('UnsafeUrlError')<{ readonly message: string; readonly cause?: unknown }> {
   constructor(public readonly reason: string, options?: ErrorOptions) {
-    super(reason, options);
-    this.name = 'UnsafeUrlError';
+    super({ message: reason, ...(options?.cause !== undefined && { cause: options.cause }) });
   }
 }
 

@@ -3,7 +3,7 @@
  * `/api/user/ai/v1`, origin checked against the eval-identity allowlist; (2) AI Gateway, `AI_GATEWAY_BASE_URL` +
  * `AI_GATEWAY_AUTH` (or `KINU_BASE_URL`/`KINU_AUTH`). No baked-in default; a half-set environment is `misconfigured`, not a skip.
  */
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import { settleSync } from '@kinu.run/core/obs';
 import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
@@ -211,10 +211,9 @@ export const TRANSIENT_PLATFORM_ERRORS: readonly string[] = [
  * result, which {@link infraBoundary} passes on unmarked. `status` is the HTTP status; a socket
  * RPC reply has none.
  */
-export class DeploymentAnswer extends Error {
+export class DeploymentAnswer extends Data.TaggedError('DeploymentAnswer')<{ readonly message: string }> {
   constructor(message: string, readonly status?: number) {
-    super(message);
-    this.name = 'DeploymentAnswer';
+    super({ message });
   }
 }
 

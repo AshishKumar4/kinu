@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import { settle } from '../obs/effect';
 import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /**
@@ -35,10 +35,9 @@ export function viewerKindOf(path: string): ViewerKind {
   return inlineType === "application/pdf" ? "pdf" : "text";
 }
 
-export class FileWriteConflict extends Error {
+export class FileWriteConflict extends Data.TaggedError('FileWriteConflict')<{ readonly message: string }> {
   constructor(readonly currentRevision: VfsRevision) {
-    super('This file changed after you opened it.');
-    this.name = 'FileWriteConflict';
+    super({ message: 'This file changed after you opened it.' });
   }
 }
 

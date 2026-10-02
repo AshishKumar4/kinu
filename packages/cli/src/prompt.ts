@@ -2,17 +2,16 @@
  * Prompt input via blocking canonical-mode reads on the terminal fd; never readline or raw mode: macOS kqueue cannot
  * poll /dev/tty, so under `kinu setup </dev/tty` keys never arrive. No terminal raises NonInteractiveError.
  */
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import { settleSync } from '@kinu.run/core/obs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { closeSync, openSync, readSync } from 'node:fs';
 import { ACCENT, DIM } from './display';
 
-class NonInteractiveError extends Error {
+class NonInteractiveError extends Data.TaggedError('NonInteractiveError')<{ readonly message: string }> {
   constructor(message = 'This step needs an interactive terminal. Re-run from a terminal, or pass flags to skip prompts.') {
-    super(message);
-    this.name = 'NonInteractiveError';
+    super({ message });
   }
 }
 

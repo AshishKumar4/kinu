@@ -94,6 +94,18 @@ export const DECLARED = new Map<string, Declaration>([
     within: ['createTool', 'slateRefusal'],
     reason: 'codemode\'s `workspace.createTool` and `workspace.slates` answers, read by the program the model wrote',
   }],
+  ...([
+    ['packages/cf-backend/src/cli/auth-store.ts', ['RateLimitError', 'CliAuthCodeError']],
+    ['packages/core/src/mission-budget.ts', ['MissionBudgetExhausted']],
+    ['packages/core/src/providers/util.ts', ['StaleModelList']],
+    ['packages/core/src/state/store-reset.ts', ['StoragePredatesResetError']],
+    ['packages/core/src/tools/db-codemode.ts', ['AppBatchError']],
+    ['packages/core/src/types/file-edits.ts', ['FileRefusalError']],
+  ] as const).map(([file, classes]) => [file, {
+    mechanisms: ['error-class'],
+    within: classes,
+    reason: 'a KinuError refinement: it fails on Effect\'s channel and crosses as a KinuError (code, wire), and callers also read it by class for its extra field',
+  }] as const),
   ['packages/core/src/tools/outcome.ts', {
     mechanisms: ['result-literal', 'result-type'],
     reason: '`ToolOutcome`, the recorded outcome of a native tool invocation; `success` is its stored field',
@@ -298,7 +310,7 @@ function isDeclared(file: string, mechanism: Mechanism, node: SyntaxNode): boole
 
   if (declaration.within === undefined) return true;
 
-  for (let up = node.parent; up !== undefined; up = up.parent) {
+  for (let up: SyntaxNode | undefined = node; up !== undefined; up = up.parent) {
     const name = declaredName(up);
 
     if (name !== undefined && declaration.within.includes(name)) return true;

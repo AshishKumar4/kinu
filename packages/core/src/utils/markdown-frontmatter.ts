@@ -3,7 +3,7 @@
  * inline/block lists, one-level maps, `#` comments). Tabs and multi-line strings are rejected.
  */
 
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import type { JsonObject, JsonValue } from './json';
 
@@ -17,10 +17,9 @@ export interface FrontmatterParseError {
   line: number;       // 1-based, within the front-matter block
 }
 
-export class MarkdownFrontmatterError extends Error {
+export class MarkdownFrontmatterError extends Data.TaggedError('MarkdownFrontmatterError')<{ readonly message: string }> {
   constructor(public readonly detail: FrontmatterParseError) {
-    super(`front-matter parse error at line ${detail.line}: ${detail.message}`);
-    this.name = 'MarkdownFrontmatterError';
+    super({ message: `front-matter parse error at line ${detail.line}: ${detail.message}` });
   }
 }
 

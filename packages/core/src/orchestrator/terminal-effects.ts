@@ -4,6 +4,7 @@
  * (mismatch: blocked), the recorded input, and a disposition plus schedule; definitive failures end one unrun.
  * `TerminalTransitions.end` settles only when no row is owed.
  */
+import { Data } from 'effect';
 import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 
@@ -337,10 +338,9 @@ export interface OwedEffect {
 }
 
 /** A deterministic interruption. Never caught by the per-effect handler: it must leave the sequence as an eviction would. */
-export class TerminalEffectInterrupt extends Error {
+export class TerminalEffectInterrupt extends Data.TaggedError('TerminalEffectInterrupt')<{ readonly message: string }> {
   constructor(phase: TerminalEffectPhase, name: TerminalEffectName, scope: string) {
-    super(`terminal effect ${name}${scope === '' ? '' : `:${scope}`} interrupted ${phase} its side effect`);
-    this.name = 'TerminalEffectInterrupt';
+    super({ message: `terminal effect ${name}${scope === '' ? '' : `:${scope}`} interrupted ${phase} its side effect` });
   }
 }
 

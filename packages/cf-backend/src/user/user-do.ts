@@ -3,7 +3,7 @@
  * Every privileged method takes a `UserCaller` first and gates on `requireTier` before anything else.
  */
 import { Agent, type AgentContext } from "agents";
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from "../rpc-surface";
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "../activation-gate";
 import { parseCliTokenUserId } from "../cli/auth-store";
@@ -483,19 +483,17 @@ export type WorkspaceRegistration =
 
 /** Publish of something that is not an open reservation. A fork transfer treats it as a rollback
  * trigger, not a transport fault; crosses the DO RPC boundary as its message. */
-class WorkspaceReservationNotPendingError extends Error {
+class WorkspaceReservationNotPendingError extends Data.TaggedError('WorkspaceReservationNotPendingError')<{ readonly message: string }> {
   constructor(name: string, why: string) {
-    super(`Workspace "${name}" cannot be published: ${why}.`);
-    this.name = 'WorkspaceReservationNotPendingError';
+    super({ message: `Workspace "${name}" cannot be published: ${why}.` });
   }
 }
 
 /** A CLI device-code approval redeemed twice; the poll route answers it as already-delivered.
  * Crosses the DO RPC boundary as its message. */
-class CliAuthorizationSpentError extends Error {
+class CliAuthorizationSpentError extends Data.TaggedError('CliAuthorizationSpentError')<{ readonly message: string; readonly cause?: unknown }> {
   constructor(options: ErrorOptions) {
-    super('That CLI authorization has already been redeemed.', options);
-    this.name = 'CliAuthorizationSpentError';
+    super({ message: 'That CLI authorization has already been redeemed.', ...(options?.cause !== undefined && { cause: options.cause }) });
   }
 }
 

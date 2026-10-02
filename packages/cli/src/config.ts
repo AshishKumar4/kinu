@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import {
   chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync, statSync,
   writeFileSync, unlinkSync,
@@ -387,12 +387,11 @@ export function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOp
   }));
 }
 
-export class MissingLocalWorkspaceError extends Error {
+export class MissingLocalWorkspaceError extends Data.TaggedError('MissingLocalWorkspaceError')<{ readonly message: string }> {
   readonly hint: string;
 
   constructor(workspaceName: string) {
-    super(`Workspace "${workspaceName}" not found.`);
-    this.name = 'MissingLocalWorkspaceError';
+    super({ message: `Workspace "${workspaceName}" not found.` });
     this.hint = `Create it with: kinu create ${workspaceName}`;
   }
 }

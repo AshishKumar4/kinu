@@ -2,7 +2,7 @@
  * A small AgentRuntime fixture over a fresh in-memory database. Work it cannot perform faithfully
  * refuses by name until a test supplies it, so no test passes on work nothing performed.
  */
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import { settleSync } from '@kinu.run/core/obs';
 import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
@@ -34,11 +34,10 @@ export interface TestRuntime {
 }
 
 /** Work the test runtime does not perform, named with the option that supplies it. */
-export class UnsupportedTestCapability extends Error {
+export class UnsupportedTestCapability extends Data.TaggedError('UnsupportedTestCapability')<{ readonly message: string }> {
   constructor(readonly capability: string, readonly option: string) {
-    super(`createTestRuntime does not perform ${capability}; pass ${option} with a real adapter or `
-      + 'an explicit fake');
-    this.name = 'UnsupportedTestCapability';
+    super({ message: `createTestRuntime does not perform ${capability}; pass ${option} with a real adapter or `
+      + 'an explicit fake' });
   }
 }
 

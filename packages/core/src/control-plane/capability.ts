@@ -4,7 +4,7 @@
  * graph (the workerd test project cannot compile the production `Env`).
  * Derived from the user plane's root secret under a distinct label.
  */
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import { settle } from '../obs/effect';
 import { hmacSha256Hex } from '../utils/crypto';
 import * as v from 'valibot';
@@ -63,13 +63,10 @@ export interface ControlSecretEnv {
 }
 
 /** Maps to a deliberate 503: the plane is unconfigured, not broken. */
-export class ControlPlaneUnconfiguredError extends Error {
+export class ControlPlaneUnconfiguredError extends Data.TaggedError('ControlPlaneUnconfiguredError')<{ readonly message: string }> {
   constructor() {
-    super(
-      'The control plane is not configured: CREDENTIAL_ENCRYPTION_KEY is not set. '
-      + 'See docs/DEPLOYMENT.md.',
-    );
-    this.name = 'ControlPlaneUnconfiguredError';
+    super({ message: 'The control plane is not configured: CREDENTIAL_ENCRYPTION_KEY is not set. '
+      + 'See docs/DEPLOYMENT.md.' });
   }
 }
 
@@ -84,10 +81,9 @@ export async function adminControlToken(env: ControlSecretEnv): Promise<ControlC
 }
 
 /** workerd erases the subclass across RPC and keeps `name`, so a caller reads the name, never `instanceof`. */
-class ControlDeniedError extends Error {
+class ControlDeniedError extends Data.TaggedError('ControlDeniedError')<{ readonly message: string }> {
   constructor(message: string) {
-    super(message);
-    this.name = 'ControlDeniedError';
+    super({ message });
   }
 }
 

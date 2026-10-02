@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError, renderThrownChain, classifyErrorCode, settle } from '../obs/index';
 import { FileRefusalError } from '../types/file-edits';
@@ -59,11 +59,9 @@ export function successfulToolOutcome(name: string, result: { output: unknown })
   return parsed?.success ? { success: true, failures: parsed.output.failures } : { success: true };
 }
 
-class CodemodeProgramError extends Error {
-  override readonly name = 'CodemodeProgramError';
-
+class CodemodeProgramError extends Data.TaggedError('CodemodeProgramError')<{ readonly message: string; readonly cause?: unknown }> {
   constructor(readonly outcome: Extract<ToolOutcome, { success: false }>, message: string, options?: ErrorOptions) {
-    super(message, options);
+    super({ message, ...(options?.cause !== undefined && { cause: options.cause }) });
   }
 }
 

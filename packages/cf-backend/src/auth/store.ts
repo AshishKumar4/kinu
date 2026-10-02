@@ -8,7 +8,7 @@
 // The userId is derived from the verified email (`deriveUserId`), so the email is the account and an
 // unverified address is not an identity.
 
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import type { AuthIdentity } from './session';
 import type { OAuthProviderId } from '@kinu.run/core/identity';
 import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
@@ -205,13 +205,9 @@ export async function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthPro
 
 /** A session that cannot be checked is not an invalid one: answering 401 during an outage would sign
  *  everyone out into a sign-in that also fails. Raised only at the store boundaries. */
-export class SessionAuthorityUnavailableError extends Error {
+export class SessionAuthorityUnavailableError extends Data.TaggedError('SessionAuthorityUnavailableError')<{ readonly message: string; readonly cause?: unknown }> {
   constructor(options: { cause: unknown }) {
-    super(
-      'Kinu cannot reach the store that holds your sign-in right now. Try again shortly.',
-      { cause: options.cause },
-    );
-    this.name = 'SessionAuthorityUnavailableError';
+    super({ message: 'Kinu cannot reach the store that holds your sign-in right now. Try again shortly.', cause: options.cause });
   }
 }
 

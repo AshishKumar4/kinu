@@ -1,6 +1,7 @@
 // BackgroundJobRunner: backend-agnostic lifecycle for auto-detached tool calls. Keeps the
 // work alive in a platform-supplied durable fiber and wakes the agent via Inbox.send.
 
+import { Data } from 'effect';
 import type { Schedule } from '../types/primitives';
 import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
@@ -31,11 +32,10 @@ export function backgroundJobWakeTrigger(jobId: string): string {
 }
 
 /** Thrown by a resumer for a kind unsafe to re-drive (e.g. `shell`/`eval`). */
-export class JobNotResumable extends Error {
+export class JobNotResumable extends Data.TaggedError('JobNotResumable')<{ readonly message: string }> {
   readonly kind: string;
   constructor(kind: string) {
-    super(`background job kind "${kind}" is not resumable`);
-    this.name = 'JobNotResumable';
+    super({ message: `background job kind "${kind}" is not resumable` });
     this.kind = kind;
   }
 }

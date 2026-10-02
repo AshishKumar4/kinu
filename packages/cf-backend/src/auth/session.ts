@@ -1,5 +1,6 @@
 // Cookies are opaque HttpOnly session handles; KV stores only their hashes.
 
+import { Data } from 'effect';
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, EVAL_TRIAL_ACCOUNTS, parseEvalAccount, timingSafeEqual,
 } from '@kinu.run/core';
@@ -68,10 +69,9 @@ export function isFreshAuthTime(authTimeMs: number | null | undefined, now = Dat
     && now - authTimeMs <= STEP_UP_WINDOW_MS;
 }
 
-export class AuthError extends Error {
+export class AuthError extends Data.TaggedError('AuthError')<{ readonly message: string; readonly cause?: unknown }> {
   constructor(public readonly status: number, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'AuthError';
+    super({ message, ...(options?.cause !== undefined && { cause: options.cause }) });
   }
 }
 

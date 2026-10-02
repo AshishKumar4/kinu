@@ -2,7 +2,7 @@
  * Typed client for `/api/drive/*`; the session rides the HttpOnly cookie.
  * Folders upload as one zip (core's `packZip`) so the object lands the whole set or none.
  */
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import {
   DriveListingSchema, MarkedSkillSchema, packZip, type DriveListing, type FileText, type JsonValue, type MarkedSkill,
 } from '@kinu.run/core';
@@ -12,10 +12,9 @@ import * as v from 'valibot';
 
 const ErrorBody = v.object({ error: v.string() });
 
-class DriveApiError extends Error {
+class DriveApiError extends Data.TaggedError('DriveApiError')<{ readonly message: string }> {
   constructor(readonly status: number, message: string) {
-    super(message);
-    this.name = 'DriveApiError';
+    super({ message });
   }
 }
 

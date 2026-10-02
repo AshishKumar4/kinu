@@ -1,5 +1,5 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import {
   DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   AccountUsageSchema, ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
@@ -133,9 +133,10 @@ type RequestBody =
   | McpServerInput
   | { catalog: ProfileCatalog; expectedVersion: number };
 
-export class UserApiError extends Error {
+export class UserApiError extends Data.TaggedError('UserApiError')<{ readonly message: string }> {
   constructor(message: string, readonly status: number) {
-    super(message);
+    super({ message });
+    this.name = 'Error';
   }
 }
 
