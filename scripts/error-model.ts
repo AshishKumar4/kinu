@@ -430,7 +430,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         return;
       }
 
-      const reacted = file.endsWith('.tsx') ? reactEdge(node) : 'none';
+      const reacted = file.endsWith('.tsx') ? reactEdge(node, text) : 'none';
 
       if (reacted === 'edge') {
         react.push(site);
@@ -440,6 +440,12 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
 
       if (reacted === 'cleanup') {
         findings.push(`${site}: a runner as a React effect's whole body is returned as its cleanup; run it as \`void settle(…)\` in a block`);
+
+        return;
+      }
+
+      if (reacted === 'unanswered') {
+        findings.push(`${site}: a voided runner whose effect does not visibly answer every failure; end it in Effect.catchCause(…, showing(set)) or an inline handler that does not fail again`);
 
         return;
       }
@@ -501,7 +507,7 @@ function reactHook(fn: SyntaxNode | undefined): string | null {
  * startTransition's function returns, or a `void settle(…)` statement directly in a useEffect body. An effect's
  * returned runner would be its cleanup, so that form is reported apart.
  */
-function reactEdge(runner: SyntaxNode): 'edge' | 'cleanup' | 'none' {
+function reactEdge(runner: SyntaxNode, text: string): 'edge' | 'cleanup' | 'unanswered' | 'none' {
   const fn = returningFunction(runner);
 
   if (fn !== undefined) {
@@ -520,7 +526,40 @@ function reactEdge(runner: SyntaxNode): 'edge' | 'cleanup' | 'none' {
   if (voided?.raw.type !== 'UnaryExpression' || voided.raw.operator !== 'void' || statement?.raw.type !== 'ExpressionStatement'
     || block?.raw.type !== 'BlockStatement') return 'none';
 
-  return REACT_EFFECTS.includes(reactHook(block.parent) ?? '') ? 'edge' : 'none';
+  if (!REACT_EFFECTS.includes(reactHook(block.parent) ?? '')) return 'none';
+  const effect = runner.raw.type === 'CallExpression' ? runner.raw.arguments[0] : undefined;
+
+  return effect !== undefined && answersEveryFailure(effect, text) ? 'edge' : 'unanswered';
+}
+
+type Expression = Extract<SyntaxNode['raw'], { type: 'CallExpression' }>['arguments'][number];
+
+/** `Effect.<name>(…)`, the call itself, or null. */
+function effectCall(node: Expression, name: string): Extract<Expression, { type: 'CallExpression' }> | null {
+  if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression' || node.callee.computed) return null;
+  const { object, property } = node.callee;
+
+  return object.type === 'Identifier' && object.name === 'Effect' && property.type === 'Identifier' && property.name === name ? node : null;
+}
+
+/**
+ * A voided run must never reject, so its effect ends, under any `ensuring`, in `catchCause` whose handler is
+ * `showing(…)` or an inline function that neither fails nor dies again. Anything else cannot be seen to hold.
+ */
+function answersEveryFailure(effect: Expression, text: string): boolean {
+  const ensured = effectCall(effect, 'ensuring');
+
+  if (ensured) return ensured.arguments[0] !== undefined && answersEveryFailure(ensured.arguments[0], text);
+  const caught = effectCall(effect, 'catchCause');
+  const handler = caught?.arguments[1];
+
+  if (handler === undefined) return false;
+
+  if (handler.type === 'CallExpression' && handler.callee.type === 'Identifier' && handler.callee.name === 'showing') return true;
+
+  if (handler.type !== 'ArrowFunctionExpression' && handler.type !== 'FunctionExpression') return false;
+
+  return !/\bEffect\.(fail|failCause|die|dieMessage)\b|\bthrow\b|\bnew KinuError\b/.test(text.slice(handler.start, handler.end));
 }
 
 /** The function that returns this call: as its expression body, or as a return statement directly in its body. */

@@ -310,9 +310,12 @@ function Panel() {
   const open = useCallback(async () => { return settle(write()); }, []);
   useEffect(() => {
     const controller = new AbortController();
-    void settle(load(controller.signal));
+    void settle(Effect.catchCause(load(controller.signal), showing(setError)));
     return () => { controller.abort(); };
   }, []);
+  useEffect(() => { void settle(Effect.ensuring(Effect.catchCause(load(), (failed) => Effect.sync(() => { report(failed); })), done)); }, []);
+  useEffect(() => { void settle(load()); }, []);
+  useEffect(() => { void settle(Effect.catchCause(load(), (failed) => Effect.failCause(failed))); }, []);
   useEffect(() => settle(load()), []);
   useEffect(() => { return settle(load()); }, []);
   const pending = settle(load());
@@ -329,19 +332,22 @@ function helper() {
 
   const midBody = 'a runner called mid-body; the effect is run once, at the edge, as its return';
   const cleanup = "a runner as a React effect's whole body is returned as its cleanup; run it as `void settle(…)` in a block";
+  const unanswered = 'a voided runner whose effect does not visibly answer every failure; end it in Effect.catchCause(…, showing(set)) or an inline handler that does not fail again';
 
   expect(bridgeSites(new Map([[TSX, source], [FILE, plain]]))).toEqual({
     bridges: [],
     flights: [],
     routes: [],
     held: [],
-    react: [`${TSX}:14`, `${TSX}:14`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`],
+    react: [`${TSX}:11`, `${TSX}:17`, `${TSX}:17`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`],
     findings: [
       `${FILE}:4: a runner returned outside an exported function or public member`,
-      `${TSX}:11: ${cleanup}`,
-      `${TSX}:12: ${cleanup}`,
-      `${TSX}:13: ${midBody}`,
-      `${TSX}:14: ${midBody}`,
+      `${TSX}:12: ${unanswered}`,
+      `${TSX}:13: ${unanswered}`,
+      `${TSX}:14: ${cleanup}`,
+      `${TSX}:15: ${cleanup}`,
+      `${TSX}:16: ${midBody}`,
+      `${TSX}:17: ${midBody}`,
     ],
   });
 });
