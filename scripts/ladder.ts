@@ -252,7 +252,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'reads the machine — inode tables, temp roots, stray project markers — none of which a hash over the tree stands for.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts',
+    run: 'bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts',
     label: 'Pattern census and parser self-tests',
     tier: 'push',
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.

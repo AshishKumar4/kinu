@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "ES2024.Promise", "DOM", "DOM.Iterable"],
+    "allowImportingTsExtensions": true,
+    "types": ["bun", "node", "@cloudflare/workers-types/experimental"]
+  },
+  "include": ["vitest.config.ts", "src/slate-vendor.d.ts"]
+}

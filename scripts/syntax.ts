@@ -864,7 +864,10 @@ interface ImportScope {
 }
 
 /** Resolve import consumers by lexical binding, including awaited module bindings. */
-export function importUses(tree: SyntaxNode): readonly ImportUse[] {
+export function importUses(
+  tree: SyntaxNode,
+  onUse?: (origin: ImportUse, reference: SyntaxNode) => void,
+): readonly ImportUse[] {
   const scopes = new Map<SyntaxNode, ImportScope>();
   const declarations = new Set<Node>();
   const moduleScope: ImportScope = { parent: undefined, functionScope: true, bindings: new Map() };
@@ -988,7 +991,15 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
 
     if (binding?.dynamic) binding.origin = undefined;
   });
+
   const uses: ImportUse[] = [];
+  
+
+  const record = (origin: ImportUse, reference: SyntaxNode): void => {
+    uses.push(origin);
+    onUse?.(origin, reference);
+  };
+  
   walk(tree, node => {
     const name = identifierName(node.raw);
 
@@ -1014,8 +1025,8 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
       const member = !parent.computed && parent.property.type === 'Identifier'
         ? parent.property.name : literalString(parent.property);
 
-      if (member !== undefined) uses.push({ specifier: origin.specifier, imported: member });
-    } else uses.push(origin);
+      if (member !== undefined) record({ specifier: origin.specifier, imported: member }, node.parent ?? node);
+    } else record(origin, node);
   });
   // `lazy(() => import('./m'))`: React resolves the promise and reads exactly
   // `.default`, so the module's default export is consumed without a binding
@@ -1038,7 +1049,7 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
     if (callee.type !== 'Identifier' || callee.name !== 'lazy') return;
     const specifier = literalString(raw.source);
 
-    if (specifier !== undefined) uses.push({ specifier, imported: 'default' });
+    if (specifier !== undefined) record({ specifier, imported: 'default' }, node);
   });
 
   return uses;
