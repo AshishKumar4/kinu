@@ -6,7 +6,7 @@
 import { DynamicWorkerExecutor } from '@cloudflare/codemode';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
-  explainNativeToolReferenceError, parsesAsExpression,
+  explainSandboxError, renderCraftedDefinitions,
   NO_TIMER_DEADLINE_MS, bindTaskPlan, codemodeFunction, decodeJsonValue, relayedAnswer,
   type CraftedToolSource, type ExecuteResult, type Executor, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
@@ -29,18 +29,6 @@ export interface SandboxIdentity {
   * is the one read of it that does not throw. An unparseable crafted body throws only on call.
   */
 export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identity: SandboxIdentity): string {
-  const definitions = crafted.map((entry) => {
-    const parseError = parsesAsExpression(entry.code);
-
-    const factory = parseError === null
-      // Async: the gate admits top-level `await`, which in a sync arrow is a SyntaxError that
-      // breaks the whole prelude module.
-      ? `async () => (\n${entry.code}\n)`
-      : `() => { throw new Error(${JSON.stringify(`stored source does not parse: ${parseError}`)}); }`;
-
-    return `      ${JSON.stringify(entry.name)}: __kinu.defineCrafted(${JSON.stringify(entry.name)}, ${factory}, tools[${JSON.stringify(entry.name)}]),`;
-  });
-
   return [
     `    const __kinu = await import(${JSON.stringify(`./${KINU_NODE_MODULE_NAME}`)});`,
     '    const __kinuWorkspace = typeof workspace === "undefined" ? null : workspace;',
@@ -51,9 +39,7 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
     '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
     `    const env = Object.freeze({ workspace: ${JSON.stringify(identity.workspace)}, state: __kinuState, missingBuiltins: __kinuBuiltins.missing });`,
-    '    Object.assign(tools, {',
-    ...definitions,
-    '    });',
+    renderCraftedDefinitions(crafted),
   ].join('\n');
 }
 
@@ -134,7 +120,7 @@ export class KinuSandboxExecutor {
       // DWE returns sandbox-internal failures as strings; only the native-tool ReferenceError is
       // rewritten into the correction.
       return result.error
-        ? { ...result, error: explainNativeToolReferenceError(result.error) }
+        ? { ...result, error: explainSandboxError(result.error) }
         : result;
     } catch (err) {
       // createCodeTool turns a non-empty `error` into a tool-output-error the model sees.

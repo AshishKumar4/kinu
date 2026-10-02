@@ -1064,7 +1064,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         durable: (callId, signal) => turn.actor.session.durableCall(callId, signal),
       },
       codemode: ({ native }) => factory.toolFor(native),
-      craftedToolExecute: null,
       agents,
       // Rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite what the workspace
       // observed under the same words.

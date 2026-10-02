@@ -3741,7 +3741,6 @@ export abstract class ActorAgent extends Agent<Env> {
         },
         // The sandbox declares the finished native surface, so core builds it last over all other tools.
         codemode: ({ native }) => this.getCodemodeToolFactory(mode, profileKey).toolFor(native),
-        craftedToolExecute: null,
         // Lives on the accumulator so the cached toolset keeps a stable reference and resets per turn.
         contextBudget: this.acc.context,
         // Same ownership: rides the accumulator so the cached toolset sees the turn's ledger.

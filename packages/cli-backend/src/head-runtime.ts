@@ -112,7 +112,7 @@ export function hostedCodemodeTool(actor: HostedActor, extras: readonly Codemode
 
   return (finished) => sandbox({
     native: finished,
-    craftedTools: () => ({}),
+    craftedTools: () => [],
     providers: actor.runtime.executionRouter?.getProviders() ?? [],
   });
 }

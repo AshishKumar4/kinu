@@ -28,9 +28,7 @@ import { createFileTool } from './file-tool';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { TurnContextBudget } from '../context-budget';
 import { isMcpToolKey } from './mcp-naming';
-import { selectInjectableCraftedTools, type CraftedToolExecute, type CraftedToolExecuteFn } from './crafted-executor';
-import { attributeCraftedFailure } from '../craft/attribution';
-import { DEFAULT_CONFIG } from '../config';
+import { selectInjectableCraftedTools, type CraftedToolSource } from './crafted-executor';
 import { commandResult, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
 import type { ShellExecOptions } from '../types/primitives';
@@ -50,14 +48,11 @@ type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[
 
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
 
-export type CraftedToolSet =
-  Record<string, { description: string; execute: (arg: JsonValue) => Promise<JsonValue | undefined> }>;
-
 /** Builds `eval` over a finished surface: the sandbox declares every other tool, so it runs last. */
 export interface CodemodeSurface {
   readonly native: ToolSet;
-  /** Resolved per execute so a tool crafted mid-turn is callable on the next `eval`. */
-  readonly craftedTools: () => CraftedToolSet;
+  /** Read per execute so a tool crafted mid-turn is callable on the next `eval`; compiled in the program. */
+  readonly craftedTools: () => readonly CraftedToolSource[];
   readonly providers: ExecutorProviderSurface[];
 }
 
@@ -67,10 +62,6 @@ export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 export interface BuiltinToolDeps {
   workMode?: WorkMode;
   rt: AgentRuntime;
-  /**
-   * null: sandbox-side compilation (CF Worker Loader prelude). Omitted: no crafted executor.
-   */
-  craftedToolExecute?: CraftedToolExecute | null;
   /** Ready `eval` for a confined surface (head, swarm node); actors set `codemode` on `buildActorTools` instead. */
   prebuiltCodemodeTool?: unknown;
   /** Hybrid memory search when present; null declares no semantic index (results report lexical-only). */
@@ -106,50 +97,6 @@ export interface ReportToolDeps {
   readonly bodyOnly?: boolean;
 }
 
-/** Crafted-tool map, read fresh each call; codegen only via `craftedToolExecute`. */
-function buildCraftedToolSetFromExecute(rt: AgentRuntime, factory: CraftedToolExecute) {
-  const out: CraftedToolSet = {};
-
-  const list = selectInjectableCraftedTools(rt.craftStore, rt.storage.sql, DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection);
-
-  for (const t of list) {
-    const description = t.description;
-
-    try {
-      const execute = factory({ name: t.name, description, code: t.code });
-      out[t.name] = {
-        description,
-        // The single runtime attribution point for crafted tools; substrates must not also stamp,
-        // or one failure reads as several.
-        execute: attributeCraftedFailure(t.name, execute),
-      };
-    } catch (err) {
-      diagnostics.failure(
-        CRAFT_TOOL_SKIPPED,
-        toKinuError({ doing: 'compile a crafted tool', cause: err, otherwise: 'bad_input' }),
-        { tool: t.name },
-      );
-    }
-  }
-
-  return out;
-}
-
-/** One compiled body per (name, code). */
-function memoizeCraftedExecute(factory: CraftedToolExecute): CraftedToolExecute {
-  const compiled = new Map<string, { code: string; execute: CraftedToolExecuteFn }>();
-
-  return (crafted) => {
-    const hit = compiled.get(crafted.name);
-
-    if (hit && hit.code === crafted.code) return hit.execute;
-    const execute = factory(crafted);
-    compiled.set(crafted.name, { code: crafted.code, execute });
-
-    return execute;
-  };
-}
-
 const PlanEditsInputSchema = z.object({ edits: z.array(PlanEditSchema).min(1) });
 
 /** Device nicknames are not in the enum, so it stays advisory: any string passes, and an unknown one is a device. */
@@ -172,8 +119,6 @@ const RUN_ESCALATION_REFUSED = 'shell.escalation_refused';
 const RUN_RUNTIME_NO_EXEC = 'shell.runtime_no_exec';
 
 const RUN_ESCALATION_FAILED = 'shell.escalation_failed';
-
-const CRAFT_TOOL_SKIPPED = 'craft.tool_skipped';
 
 function unprovisionedAdvice(runtimeKey: string): string {
   if (runtimeKey === 'device') {
@@ -434,14 +379,7 @@ export function installCodemode(
   deps: BuiltinToolDeps,
 ): void {
   const { rt } = deps;
-
-  const craftedToolExecute = deps.craftedToolExecute
-    ? memoizeCraftedExecute(deps.craftedToolExecute)
-    : undefined;
-
-  const craftedTools = (): CraftedToolSet => craftedToolExecute
-    ? buildCraftedToolSetFromExecute(rt, craftedToolExecute)
-    : {};
+  const craftedTools = () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql);
 
   const built = build({ native: toolsInWorkMode(deps.workMode ?? 'build', surface), craftedTools, providers: rt.executionRouter?.getProviders() ?? [] });
   const clamp = { vfs: rt.storage.vfs, producer: 'eval' as const, images: true as const };

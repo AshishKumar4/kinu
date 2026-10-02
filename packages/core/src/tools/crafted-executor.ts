@@ -1,10 +1,6 @@
-/**
- * Crafted source selection and host-side execution contracts. CF compiles source in a Worker Loader sandbox
- * (catalog `isolate.codegen_blocked` rules out a host callback); local Node/Bun compiles in-process.
- */
+/** Crafted source selection; each backend compiles a body in the program that calls it (`renderCraftedDefinitions`). */
 
 import type { CraftedTool } from '../types/craft';
-import type { JsonValue } from '../utils/json';
 import type { CraftStore } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
 import { filterByEffectiveScore } from '../craft/ema';
@@ -17,12 +13,6 @@ export interface CraftedToolSource {
   description: string;
   code: string;
 }
-
-/** On error returns a string-form error so the codemode proxy can surface it to the LLM. */
-export type CraftedToolExecuteFn = (arg: JsonValue) => Promise<JsonValue | undefined>;
-
-/** Must be idempotent: the crafted set is resolved once per `eval` call, calling the factory once per tool. */
-export type CraftedToolExecute = (tool: CraftedToolSource) => CraftedToolExecuteFn;
 
 /**
  * Filters null/comment-only code. Uses `??`, not the `||` of {@link craftedToolDescription}: this is a codec,

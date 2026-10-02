@@ -1,15 +1,18 @@
 /**
- * Rewrites the one V8 ReferenceError shape for a bare Kinu tool name (e.g. `run(...)`) inside `eval` into the
- * `tools.<name>(input)` correction; every other error passes through untouched.
+ * Rewrites a bare Kinu tool name's ReferenceError (e.g. `run(...)`) and workerd's refusal of a module `import` inside
+ * `eval` into their corrections; every other error passes.
  */
 
 import { isBuiltinToolName, TOOL_REACH } from './registry';
-import { CRAFTED_TOOL_NAMESPACE } from '../types/codemode';
+import { CRAFTED_TOOL_NAMESPACE, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 
 /** Exact V8 message shape, so model-constructed text containing "is not defined" never misfires. */
 const UNDEFINED_IDENTIFIER = /^([A-Za-z_$][\w$]*) is not defined$/;
 
-export function explainNativeToolReferenceError(error: string): string {
+const NO_SUCH_MODULE = /No such module "[^"]+"\.?$/;
+
+export function explainSandboxError(error: string): string {
+  if (NO_SUCH_MODULE.test(error)) return `${error} A program imports no modules: ${WORKSPACE_FILE_BINDINGS}.`;
   const name = UNDEFINED_IDENTIFIER.exec(error)?.[1];
 
   if (!name || !isBuiltinToolName(name)) return error;

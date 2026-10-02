@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/safety/misevolution.ts b/packages/core/src/safety/misevolution.ts
 --- a/packages/core/src/safety/misevolution.ts
 +++ b/packages/core/src/safety/misevolution.ts
-@@ -36,7 +36,7 @@
-   readonly reason: string;
+@@ -35,7 +35,7 @@
+   readonly reason: (facts: ArtifactFacts) => string;
  }
  
 -const EGRESS_NAMES: ReadonlySet<string> = new Set(['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'sendBeacon']);

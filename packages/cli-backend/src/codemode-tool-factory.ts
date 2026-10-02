@@ -6,7 +6,6 @@
 import { KINU_NODE_MODULE_SOURCE, requireBuild, WORKSPACE_ROOT } from '@kinu.run/core';
 import type {
   CodemodeProvider,
-  CraftedToolSet,
   CodemodeBuilder,
   ExecutorProvider,
   JsonValue,
@@ -14,9 +13,9 @@ import type {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
-  decodeJsonValue, explainNativeToolReferenceError, nativeToolFunctions,
+  decodeJsonValue, explainSandboxError, nativeToolFunctions,
   renderCodemodeDescription, codemodeInputSchema,
-  withCraftedToolDeclarations,
+  withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
   codemodeFunction, withCodemodeProgram,
 } from '@kinu.run/core';
 import { tool } from 'ai';
@@ -27,12 +26,14 @@ interface NodeExecuteToolFactoryDeps {
   extraProviders?: CodemodeProvider[];
 }
 
-/** Always-bound sandbox parameters; a provider may not take them. */
+/** Always-bound sandbox parameters; a provider may not take them. `__kinu` defines the crafted tools. */
 const FIXED_NAMESPACES: readonly string[] = [
-  'workspace', CRAFTED_TOOL_NAMESPACE, 'console', 'require', 'process',
+  'workspace', CRAFTED_TOOL_NAMESPACE, 'console', 'require', 'process', '__kinu',
 ];
 
-const KinuNodeSchema = v.object({ createRequire: v.function(), createProcess: v.function(), bindSlates: v.function(), loadBuiltins: v.function() });
+const KinuNodeSchema = v.object({
+  createRequire: v.function(), createProcess: v.function(), bindSlates: v.function(), loadBuiltins: v.function(), defineCrafted: v.function(),
+});
 
 const BuiltinsSchema = v.object({ loaded: v.looseObject({}) });
 
@@ -52,8 +53,6 @@ function loadKinuNode(): Promise<KinuNode> {
 }
 
 type CodemodeExecute = CodemodeProvider['tools'][string]['execute'];
-
-type CraftedExecute = CraftedToolSet[string]['execute'];
 
 interface ExecuteSuccess {
   result: JsonValue;
@@ -91,15 +90,12 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
         try {
           const signal = options.abortSignal;
           const context = signal ? { signal } : undefined;
-          const toolBindings: Record<string, CodemodeExecute | CraftedExecute> = {};
+          const toolBindings: Record<string, CodemodeExecute> = {};
+          // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
+          const crafted = surface.craftedTools();
 
-          for (const [name, entry] of Object.entries(nativeBindings)) {
+          for (const [name, entry] of Object.entries({ ...nativeBindings, ...craftedFailureFunctions(crafted) })) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
-          }
-
-          // Read per call so a tool crafted a step ago is callable now.
-          for (const [name, entry] of Object.entries(surface.craftedTools())) {
-            toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async (...toolArgs) => entry.execute(decodeJsonValue({ value: toolArgs[0] ?? {} })));
           }
 
           const providerBindings: Record<string, Record<string, CodemodeExecute>> = {};
@@ -125,13 +121,13 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
           const argValues: unknown[] = [
             workspace, toolBindings, sandboxConsole,
             node.createRequire({ workspace, builtins: node.builtins, cwd: WORKSPACE_ROOT }),
-            node.createProcess(WORKSPACE_ROOT),
+            node.createProcess(WORKSPACE_ROOT), node,
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 
           const fn = new Function(
             ...argNames,
-            `return (\n${normalizeCode(args.code)}\n)()`,
+            `${renderCraftedDefinitions(crafted)}\nreturn (\n${normalizeCode(args.code)}\n)()`,
           );
 
           const rawResult = await fn(...argValues);
@@ -147,11 +143,11 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
           return payload;
         } catch (error) {
           // A bare native-tool call throws a plain ReferenceError; rewrite it into a correction.
-          const message = explainNativeToolReferenceError(renderThrownChain({ cause: error }));
+          const message = explainSandboxError(renderThrownChain({ cause: error }));
           throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
         }
       }),
-    }), () => Object.entries(surface.craftedTools()).map(([name, entry]) => ({ name, description: entry.description })));
+    }), () => surface.craftedTools().map(({ name, description }) => ({ name, description })));
   };
 }
 
