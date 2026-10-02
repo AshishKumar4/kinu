@@ -18,14 +18,14 @@ export function vfsErrorFromText(input: { message: string; path: string | undefi
     : syscallError(code, syscall, path, { detail: words, dest, cause });
 }
 
-/** Adds model-facing guidance after Nimbus's message; code, errno, syscall, path and dest are kept. */
+/** Model-facing guidance after Nimbus's message; every other field is kept. */
 export function withVfsErrorHint(error: VfsError, hint: string): VfsError {
   const guided = new VfsError(error.code, `${error.message.slice(error.code.length + 2)}: ${hint}`, undefined, { syscall: error.syscall, cause: error });
 
   return Object.assign(guided, { path: error.path, ...(error.dest !== undefined && { dest: error.dest }) });
 }
 
-/** Names the file-plane path, not the engine's storage key, with the call that met the failure. */
+/** The file-plane path, not the engine's storage key. */
 export async function atVfsPath<T>(absolute: string, syscall: string, call: () => T | Promise<T>): Promise<T> {
   try {
     return await call();
