@@ -3529,7 +3529,21 @@ Each question runs on our image and on trixie. (a) P -> C with P's tags
 deleted on day 0: C restored at 1 h and then daily to 14 days, and P's tags,
 manifest and layer read by digest each time. (b) P -> C untouched: C
 restored every 3 days and P never; from day 28 to 36, daily, whether C
-restores and whether P's tags, manifest and layer still exist.
+restores and whether P's tags, manifest and layer still exist. Run
+`life10021741`, Worker and bucket `kinu-life10021741`; the readings are
+`readings/<lineage>/<hours>h.json`. Until the owner mints the
+Containers-scoped token, the Worker holds the deploy token as its secret;
+that is temporary, and the secret is swapped when the scoped token exists.
+
+Day 0 of (a), both bases: C's manifest names P's manifest as its `subject`
+and P as `parent_snapshot_id`, and does not name P's layer; C's one layer
+is an incremental btrfs stream (5,644 B on our image, 6,216 B on trixie)
+over P's 67 MB layer. P's two tags deleted (204, 204): both then answer
+404, while P's manifest by digest and P's layer blob still answer 200, and
+C restored exact at once (324 ms, 449 ms to its first exec). Under OCI's
+rules a `subject` points from the referrer to its subject and does not keep
+the subject, so only the time series can say whether the registry's
+collection spares an untagged parent.
 
 ## Measurement contract for a strategy comparison
 
