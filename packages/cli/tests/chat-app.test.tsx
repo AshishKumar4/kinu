@@ -1103,7 +1103,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     const main = fakeClient({
       name: 'checkout',
       listJobs: async () => [{
-        id: 'bgjob-build', kind: 'shell', status: 'running', label: 'workspace: bun run build',
+        id: 'bgjob-4e1a77c0aa11', kind: 'shell', status: 'running', label: 'workspace: bun run build',
         output: { seq: 2, omitted: 0, chunks: [{ stream: 'stdout', text: 'resolving\ncompiled 120 modules\n' }] },
       }],
     });
@@ -1112,9 +1112,11 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the running job the hub read', () => screen.frame().includes('workspace: bun run build'));
     expect(screen.frame()).toContain('compiled 120 modules');
+    // Named as every surface names a job: its label, then its short id.
+    expect(screen.frame()).toContain('workspace: bun run build · 4e1a77c0 · running');
 
     main.emit({ type: 'broadcast', event: {
-      type: JOB_OUTPUT_EVENT, jobId: 'bgjob-build', seq: 3, dropped: 0, chunks: [{ stream: 'stderr', text: 'warn: 2 large chunks\n' }],
+      type: JOB_OUTPUT_EVENT, jobId: 'bgjob-4e1a77c0aa11', seq: 3, dropped: 0, chunks: [{ stream: 'stderr', text: 'warn: 2 large chunks\n' }],
     } });
 
     await screen.waitFor('the line its frame carried', () => screen.frame().includes('warn: 2 large chunks'));

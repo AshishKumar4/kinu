@@ -1619,7 +1619,7 @@ export {
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel,
-  JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput,
+  JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, jobName, shortJobId, type JobName,
   type JobOutputFrame, type JobOutputTail,
 } from './jobs/index';
 

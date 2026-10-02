@@ -39,6 +39,8 @@ export {
 
 export { AgentWakeQueue } from './wake-queue';
 
+export { jobName, shortJobId, type JobName } from './job-name';
+
 export {
   JobOutputFeeds,
   JOB_OUTPUT_EVENT,

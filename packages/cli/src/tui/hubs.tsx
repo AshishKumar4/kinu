@@ -8,7 +8,7 @@ import { tierIdsOf,
   type WorkspaceWork,
   type AgentTaskTree,
   type JobOutputTail,
-  evolutionHelper, ownerFacingSubordinate,
+  evolutionHelper, jobName, ownerFacingSubordinate,
 } from '@kinu.run/core';
 import type { AgentJobSummary } from '../agent-client';
 import type { ScrollBoxRenderable } from '@opentui/core';
@@ -79,7 +79,8 @@ export function lastPrinted(output: JobOutputTail | undefined): string | undefin
 
 export function jobWork(jobs: readonly AgentJobSummary[]): TuiWorkEntry[] {
   return jobs.filter((job) => job.status === 'running' || job.status === 'serving').map((job) => {
-    const entry: WorkEntryDraft = { id: `job:${job.id}`, title: job.label ?? job.kind, label: job.status, status: 'running' };
+    const { title, shortId } = jobName(job);
+    const entry: WorkEntryDraft = { id: `job:${job.id}`, title, label: `${shortId} · ${job.status}`, status: 'running' };
     const printed = lastPrinted(job.output);
 
     if (printed !== undefined) entry.printed = printed;
