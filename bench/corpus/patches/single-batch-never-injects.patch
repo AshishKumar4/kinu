@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/orchestrator/inbox.ts b/packages/core/src/orchestrator/inbox.ts
-index 3113268f2..b0d2e9a76 100644
 --- a/packages/core/src/orchestrator/inbox.ts
 +++ b/packages/core/src/orchestrator/inbox.ts
-@@ -597,7 +597,7 @@ export class Inbox implements AgentInbox {
+@@ -377,7 +377,7 @@ export class Inbox implements AgentInbox {
  
-     if (activated !== null && activated !== undefined) bodies.unshift(activated);
+       if (activated !== null && activated !== undefined) bodies.unshift(activated);
  
--    if (bodies.length > 0) {
-+    if (bodies.length > 1) {
-       entries.push({ message: { role: 'user', content: bodies.join('\n\n') }, durable: false });
-     }
+-      if (bodies.length > 0) {
++      if (bodies.length > 1) {
+         entries.push({ message: { role: 'user', content: bodies.join('\n\n') }, durable: false });
+       }
  

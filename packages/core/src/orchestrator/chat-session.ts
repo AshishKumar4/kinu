@@ -490,12 +490,14 @@ export class ChatSession {
   }
 
   /** An id already landed or reserved would send the same words twice. */
-  private refuseUnusableId(id: string): void {
-    if (!v.is(MessageIdSchema, id)) throw new KinuError('bad_input', 'A message id is 1 to 128 characters.');
+  private refuseUnusableId(id: string): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      if (!v.is(MessageIdSchema, id)) return yield* new KinuError('bad_input', 'A message id is 1 to 128 characters.');
 
-    if (this.transcript.has(id) || this.pendingSends.has(id)) {
-      throw new KinuError('bad_input', `message ${id} was already sent`);
-    }
+      if (this.transcript.has(id) || this.pendingSends.has(id)) {
+        return yield* new KinuError('bad_input', `message ${id} was already sent`);
+      }
+    });
   }
 
   /** Resolves once the words are reserved and owed a landing; a `landing` is registered before the message can move. */
@@ -505,7 +507,7 @@ export class ChatSession {
     landing: SendLandingWaiter | null = null,
   ): Promise<void> {
     return settleEffect(Effect.gen({ self: this }, function* () {
-      this.refuseUnusableId(opts.id);
+      yield* this.refuseUnusableId(opts.id);
       const card = 'metadata' in opts ? opts : undefined;
       const { text, files } = normalizePromptInput(input);
 

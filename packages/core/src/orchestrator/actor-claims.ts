@@ -147,16 +147,18 @@ export class ActorClaimStore {
         metadata: { program: { ...claim.program }, workMode: claim.workMode, ...(input.cache !== undefined && { cache: { ...input.cache } }) } }));
 
       const consumed = this.transactionSync(() => {
-        this.assertLive(claim);
-        const currentRevision = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
+        return settleSync(Effect.gen({ self: this }, function* () {
+          this.assertLive(claim);
+          const currentRevision = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
 
-        if (currentRevision !== latest) throw new KinuError('denied', 'another request consumed this claim during preparation');
-        const selected = this.history.context.selected();
+          if (currentRevision !== latest) return yield* new KinuError('denied', 'another request consumed this claim during preparation');
+          const selected = this.history.context.selected();
 
-        if (selected?.contextId !== source.contextId || selected.revision !== source.revision) throw new KinuError('denied', 'working selection changed during request preparation');
-        this.history.requests.recordPrepared(prepared);
+          if (selected?.contextId !== source.contextId || selected.revision !== source.revision) return yield* new KinuError('denied', 'working selection changed during request preparation');
+          this.history.requests.recordPrepared(prepared);
 
-        return { requestId: prepared.request.id, revision: prepared.request.revision };
+          return { requestId: prepared.request.id, revision: prepared.request.revision };
+        }));
       });
 
       this.history.requests.remember(prepared);
