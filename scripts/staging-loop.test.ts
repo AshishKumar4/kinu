@@ -197,7 +197,7 @@ function tarball(dir: string, name: string, version: string): string {
 function depend(dependencies: Record<string, string>, message: string): string {
   writeFileSync(join(work, 'package.json'), JSON.stringify({ name: 'fixture', private: true, dependencies }));
 
-  if (Bun.spawnSync(['bun', 'install'], { cwd: work, stdout: 'ignore', stderr: 'pipe' }).exitCode !== 0) throw new Error(`bun install for ${message} failed`);
+  if (Bun.spawnSync(['bun', 'install'], { env: process.env, cwd: work, stdout: 'ignore', stderr: 'pipe' }).exitCode !== 0) throw new Error(`bun install for ${message} failed`);
   git(work, 'add', 'package.json', 'bun.lock', 'vendor');
 
   return land(work, message);

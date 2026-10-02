@@ -4,7 +4,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
-import { AwaitedList, handClock, scratchPath, scriptedAdvisorPort, type ScriptedAdvisorPort } from '@kinu.run/test-utils';
+import { spawnTest, AwaitedList, handClock, scratchPath, scriptedAdvisorPort, type ScriptedAdvisorPort } from '@kinu.run/test-utils'
 import type { SqlExecutor, SqlValue } from '@kinu.run/core';
 import {
   TerminalEffectInterrupt,
@@ -302,10 +302,8 @@ describe('a killed CLI process is recovered by the next start', () => {
   async function killAt(
     dbPath: string, mode: 'before-settle' | 'inside-claim' | 'inside-title' | 'after-record',
   ): Promise<string> {
-    const child = Bun.spawn(
-      ['bun', new URL('./terminal-death-probe.ts', import.meta.url).pathname, dbPath, mode],
-      { cwd: new URL('../../..', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe' },
-    );
+    const child = spawnTest(['bun', new URL('./terminal-death-probe.ts', import.meta.url).pathname, dbPath, mode],
+    { cwd: new URL('../../..', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe' },);
 
     const out = await new Response(child.stdout).text();
     await child.exited;

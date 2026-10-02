@@ -1042,10 +1042,12 @@ eatmydata. A root under a worktree breaks Chrome, whose `SingletonSocket` lies
 71 bytes below a scratch root, while a Unix socket path holds 107. With
 `TMPDIR=/var/tmp` and eatmydata, `bun test --parallel=4 packages/cf-backend/`
 added at most 90 to 127 MB of entries to `/var/tmp`, other lanes' included,
-and left no scratch root behind (three runs, 2026-09-24). One gap: under bun
-1.4.0, `Bun.spawn` with no `env` passes the environment bun started with, not
-`process.env` as the preload changed it, so those children keep the runner's
-`TMPDIR` instead of the scratch root. One exception, 2026-09-25: a test
+and left no scratch root behind (three runs, 2026-09-24). Under Bun 1.4.0,
+`Bun.spawn` with no `env` passes the environment Bun started with, not the
+preload's current `process.env`. Re-proved on Bun 1.4.2, 2026-10-02: a child
+minted scratch under the launch root after its parent changed `TMPDIR`.
+Tests now use `spawnTest` or name `env` explicitly; `no-ambient-bun-in-tests`
+refuses the native no-env path, with no allowlist. One exception, 2026-09-25: a test
 browser's profile lives in `/tmp` until the browser closes, because one probe
 run wrote 174 MB of profile data in six minutes (`scripts/test-chrome.ts`).
 

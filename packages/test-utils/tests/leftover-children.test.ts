@@ -8,11 +8,13 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tolerate } from '@kinu.run/core/obs';
 import { scratchDir } from '../src/scratch';
+import { spawnTest } from '../src/spawn';
 
 interface FixtureRun {
   readonly exitCode: number;
   readonly stderr: string;
   readonly pid: number;
+  readonly parent: number;
 }
 
 /** One throwaway file through the real preload: from the repository root, so bunfig.toml's preload runs. */
@@ -23,10 +25,10 @@ async function runFile(body: string): Promise<FixtureRun> {
 
   writeFileSync(file, `import { test } from 'bun:test';\nimport { writeFileSync } from 'node:fs';\n`
     + `const PID_FILE = ${JSON.stringify(pidFile)};\n${body}`);
-  const run = Bun.spawn(['bun', 'test', '--timeout=0', file], { cwd: join(import.meta.dir, '..', '..', '..'), stdout: 'pipe', stderr: 'pipe' });
+  const run = spawnTest(['bun', 'test', '--timeout=0', file], { cwd: join(import.meta.dir, '..', '..', '..'), stdout: 'pipe', stderr: 'pipe' });
   const [exitCode, stderr] = await Promise.all([run.exited, new Response(run.stderr).text()]);
 
-  return { exitCode, stderr, pid: Number(readFileSync(pidFile, 'utf8').trim()) };
+  return { exitCode, stderr, pid: Number(readFileSync(pidFile, 'utf8').trim()), parent: run.pid };
 }
 
 /** Whether `pid` still holds memory: gone, a zombie, or a process past releasing it on its way out holds none. */
@@ -46,6 +48,7 @@ describe('a child a test file leaves running', () => {
 
     expect(run.exitCode).not.toBe(0);
     expect(run.stderr).toContain(`${String(run.pid)} sleep 30`);
+    expect(run.stderr).toContain(`parent ${String(run.parent)}`);
     expect(holdsMemory(run.pid)).toBe(false);
   });
 

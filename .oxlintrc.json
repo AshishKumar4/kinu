@@ -71,6 +71,7 @@
     "anti-slop/no-known-value-widening": "error",
     "anti-slop/no-manufactured-sql-column": "error",
     "anti-slop/no-ambient-git-in-tests": "error",
+    "anti-slop/no-ambient-bun-in-tests": "error",
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-near-duplicate-functions": "error",
     "anti-slop/no-object-parameters": "error",
