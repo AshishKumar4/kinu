@@ -169,30 +169,30 @@ export function admitActiveSkills(opts: {
       // Policy, body, budget, and trust derive from this one read, so policy cannot be swapped between reads.
       const parsed = parseSkillFile(source, 'vfs', skill.name);
 
-      if (!parsed.ok || parsed.skill.name !== skill.name) {
+      if (Result.isFailure(parsed) || parsed.success.name !== skill.name) {
         active.push({ ...skill, body: null, trust: 'unverified' });
         reasons.push({ name: skill.name, reason });
         continue;
       }
 
-      if (!reasonAllowedBySkill(parsed.skill, reason)) continue;
-      const cost = estimateTokens(parsed.skill.body.length);
+      if (!reasonAllowedBySkill(parsed.success, reason)) continue;
+      const cost = estimateTokens(parsed.success.body.length);
 
       if (cost > remaining) {
-        active.push({ ...parsed.skill, bodyRef: skill.bodyRef, body: null, trust: 'unverified' });
-        reasons.push({ name: parsed.skill.name, reason });
+        active.push({ ...parsed.success, bodyRef: skill.bodyRef, body: null, trust: 'unverified' });
+        reasons.push({ name: parsed.success.name, reason });
         continue;
       }
 
       remaining -= cost;
-      const { body, ...header } = parsed.skill;
+      const { body, ...header } = parsed.success;
       active.push({
         ...header,
         bodyRef: skill.bodyRef,
         body,
         trust: skillTrust(skill.bodyRef, source, opts.trust),
       });
-      reasons.push({ name: parsed.skill.name, reason });
+      reasons.push({ name: parsed.success.name, reason });
     }
 
     return { active, reasons };

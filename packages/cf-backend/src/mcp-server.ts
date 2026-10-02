@@ -6,6 +6,7 @@
  * ownership claim as the per-agent API.
  */
 
+import { Result } from 'effect';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
@@ -446,8 +447,8 @@ async function serveMcp<Id>(request: Request, env: McpEnv<Id>, resolveAgent: Mcp
   if (caller instanceof Response) return caller;
   const owned = await claimOwnedWorkspace(env, caller.userId, agentName);
 
-  if (!owned.ok) {
-    return withCors(Response.json({ error: owned.error }, { status: owned.status }));
+  if (Result.isFailure(owned)) {
+    return withCors(Response.json({ error: owned.failure.error }, { status: owned.failure.status }));
   }
 
   try {

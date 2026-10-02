@@ -62,7 +62,7 @@ import {
 import { scoreInterval, type ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, renderThrownChain, settle, settleLogged, toKinuError } from '../obs/index';
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Result } from 'effect';
 
 export type { ScaffoldVersionView } from '../types/scaffold';
 
@@ -825,12 +825,12 @@ export async function proposeMeasuredPromptSection(
     candidateScore,
   });
 
-  if (!proposal.ok) {
-    return { ok: false, sectionId: section.id, code: proposal.code, error: proposal.error };
+  if (Result.isFailure(proposal)) {
+    return { ok: false, sectionId: section.id, code: proposal.failure.code, error: proposal.failure.error };
   }
 
   return {
-    ok: true, sectionId: section.id, version: proposal.version, incumbentScore, candidateScore,
+    ok: true, sectionId: section.id, version: proposal.success, incumbentScore, candidateScore,
   };
 }
 

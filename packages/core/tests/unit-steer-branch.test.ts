@@ -1,4 +1,5 @@
 /** Steer-as-Branch: the single-head branch run, its settle into Alternate Takes, and the pick flow. */
+import { Result } from 'effect';
 import { describe, test, expect } from 'bun:test';
 import { createTestActor, createTestWorkspace } from './helpers';
 import { SessionHistory } from '../src/session/history';
@@ -226,7 +227,7 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
       liveText: 'A-style answer',
     });
 
-    expect(outcome.ok).toBe(true);
+    expect(Result.isSuccess(outcome)).toBe(true);
 
     const set = present(latestAlternateTakeSet(sql, actor), 'the latest alternate-take set');
     expect(set).toMatchObject({ turnId: 'turn-9', sessionId: 'default', task: 'use approach B instead' });
@@ -245,7 +246,7 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
       task: 'x', report, turnId: 'turn-9', sessionId: 'default', liveText: 'live',
     });
 
-    expect(outcome).toEqual({ ok: false, reason: 'model exploded' });
+    expect(outcome).toEqual(Result.fail('model exploded'));
     expect(latestAlternateTakeSet(sql, actor)).toBeNull();
   });
 
@@ -257,9 +258,9 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
       turnId: null, sessionId: 'default', liveText: '',
     });
 
-    expect(outcome.ok).toBe(false);
+    expect(Result.isSuccess(outcome)).toBe(false);
 
-    if (!outcome.ok) expect(outcome.reason).toContain('live turn did not complete');
+    if (Result.isFailure(outcome)) expect(outcome.failure).toContain('live turn did not complete');
     expect(latestAlternateTakeSet(sql, actor)).toBeNull();
   });
 
@@ -271,9 +272,9 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
       turnId: 'turn-9', sessionId: 'default', liveText: 'same answer',
     });
 
-    expect(outcome.ok).toBe(false);
+    expect(Result.isSuccess(outcome)).toBe(false);
 
-    if (!outcome.ok) expect(outcome.reason).toContain('same answer as the live turn');
+    if (Result.isFailure(outcome)) expect(outcome.failure).toContain('same answer as the live turn');
     expect(latestAlternateTakeSet(sql, actor)).toBeNull();
   });
 });

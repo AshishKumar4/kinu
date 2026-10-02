@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { Result } from 'effect';
 import { runSectionGepa, PROMPT_SECTION_TARGETS, findPromptSectionTarget } from '../src/evolution/gepa/section-bridge';
 import {
   activePromptSectionOverrides, applyPromptSectionDecision,
@@ -120,7 +121,7 @@ describe('the system sections are the GEPA targets', () => {
       incumbentScore: scoreInterval([0.5, 0.5]), candidateScore: scoreInterval([0.9, 0.9]),
     });
 
-    expect(proposal.ok).toBe(true);
+    expect(Result.isSuccess(proposal)).toBe(true);
     const pending = getPendingPromptSection(rt.storage.sql, rt.actor, TARGET_ID);
 
     if (!pending) throw new Error('expected a pending section');
@@ -197,10 +198,10 @@ describe('a candidate that cannot ship is never scored', () => {
       incumbentScore: scoreInterval([0.2]), candidateScore: scoreInterval([0.9]),
     });
 
-    expect(result.ok).toBe(false);
+    expect(Result.isFailure(result)).toBe(true);
 
-    if (result.ok) throw new Error('unreachable');
-    expect(result.code).toBe('malformed_template');
+    if (Result.isSuccess(result)) throw new Error('unreachable');
+    expect(result.failure.code).toBe('malformed_template');
   });
 
   test('a candidate past the byte ceiling is refused before anything scores it', () => {
@@ -212,10 +213,10 @@ describe('a candidate that cannot ship is never scored', () => {
       incumbentScore: scoreInterval([0]), candidateScore: scoreInterval([1, 1, 1, 1, 1, 1, 1, 1]),
     });
 
-    expect(result.ok).toBe(false);
+    expect(Result.isFailure(result)).toBe(true);
 
-    if (result.ok) throw new Error('unreachable');
-    expect(result.code).toBe('byte_ceiling');
+    if (Result.isSuccess(result)) throw new Error('unreachable');
+    expect(result.failure.code).toBe('byte_ceiling');
   });
 });
 
@@ -235,12 +236,12 @@ describe('the size rule — a longer section has to earn its bytes', () => {
 
   test('longer + EQUAL score → refused', () => {
     const result = propose(LONGER, incumbent, incumbent);
-    expect(result.ok).toBe(false);
+    expect(Result.isFailure(result)).toBe(true);
 
-    if (result.ok) throw new Error('unreachable');
-    expect(result.code).toBe('size_rule');
-    expect(result.error).toContain(`+${String(LONGER.length - INCUMBENT.length)} bytes`);
-    expect(result.error).toContain('a longer section needs a strictly better score');
+    if (Result.isSuccess(result)) throw new Error('unreachable');
+    expect(result.failure.code).toBe('size_rule');
+    expect(result.failure.error).toContain(`+${String(LONGER.length - INCUMBENT.length)} bytes`);
+    expect(result.failure.error).toContain('a longer section needs a strictly better score');
   });
 
   test('longer + better-but-inside-the-noise → refused', () => {
@@ -249,21 +250,21 @@ describe('the size rule — a longer section has to earn its bytes', () => {
     const alsoNoisy = scoreInterval([1, 0, 1, 0, 0]);
     expect(noisy.mean).toBeGreaterThan(alsoNoisy.mean);
     const result = propose(LONGER, noisy, alsoNoisy);
-    expect(result.ok).toBe(false);
+    expect(Result.isFailure(result)).toBe(true);
 
-    if (result.ok) throw new Error('unreachable');
-    expect(result.code).toBe('size_rule');
+    if (Result.isSuccess(result)) throw new Error('unreachable');
+    expect(result.failure.code).toBe('size_rule');
   });
 
   test('longer + a score that clears the incumbent outright → accepted', () => {
     expect(decisive.lo).toBeGreaterThan(incumbent.mean);
-    expect(propose(LONGER).ok).toBe(true);
+    expect(Result.isSuccess(propose(LONGER))).toBe(true);
   });
 
   test('same length or shorter → accepted on GEPA\'s own margin, however thin', () => {
     const thin = scoreInterval([0.51]);
-    expect(propose(SAME_SIZE, thin, incumbent).ok).toBe(true);
-    expect(propose(SAME_SIZE.slice(0, -20), thin, incumbent).ok).toBe(true);
+    expect(Result.isSuccess(propose(SAME_SIZE, thin, incumbent))).toBe(true);
+    expect(Result.isSuccess(propose(SAME_SIZE.slice(0, -20), thin, incumbent))).toBe(true);
   });
 
   test('the bridge consults it: a longer winner inside the noise is refused', async () => {
@@ -363,12 +364,12 @@ describe('a proposal is pending, and pending is not live', () => {
       incumbentScore: scoreInterval([0.2]), candidateScore: scoreInterval([0.9]),
     };
 
-    expect(proposePromptSection(rt.storage.sql, rt.actor, { ...args, source: SAME_SIZE }).ok).toBe(true);
+    expect(Result.isSuccess(proposePromptSection(rt.storage.sql, rt.actor, { ...args, source: SAME_SIZE }))).toBe(true);
     const second = proposePromptSection(rt.storage.sql, rt.actor, { ...args, source: SAME_SIZE.slice(0, -1) });
-    expect(second.ok).toBe(false);
+    expect(Result.isFailure(second)).toBe(true);
 
-    if (second.ok) throw new Error('unreachable');
-    expect(second.code).toBe('already_pending');
+    if (Result.isSuccess(second)) throw new Error('unreachable');
+    expect(second.failure.code).toBe('already_pending');
   });
 });
 

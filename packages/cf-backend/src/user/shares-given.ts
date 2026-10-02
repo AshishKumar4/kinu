@@ -3,7 +3,7 @@
  * Delete needs revoked shares too: their recipients still hold the `sharesReceived_add` row.
  * Worker code only: it claims ownership via the session plane and derives ids from emails.
  */
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { retryTransientDO, type UserCaller } from '@kinu.run/core';
 import {
@@ -47,7 +47,7 @@ function sharesGiven<Id>(
     for (const workspace of (yield* Effect.promise(async () => userDO.listActiveWorkspaces(owner)))) {
       const claim = yield* Effect.promise(async () => claimOwnedWorkspace(env, userId, workspace.name));
 
-      if (!claim.ok) continue;
+      if (Result.isFailure(claim)) continue;
 
       const owned = workspaceOwner(env, workspace.name);
       const listing = yield* Effect.promise(async () => owned.slateAs(ROOT_SLATE_CALLER, { op: 'shares' }));

@@ -3,7 +3,7 @@
  * Heads settle independently (Promise.allSettled).
  */
 
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid';
@@ -382,135 +382,131 @@ export class HeadController {
   }
 
   /** The merge prompt carries each head's full evidence and artifacts so no finding is lost. */
-  async merge(request: MergeRequest): Promise<MergeResult> {
-    const { reports, rationale, strategy, inheritedContext, parentBudget, mode } = request;
-    const headIds = request.headIds ?? reports.map((r) => r.id);
-    const headScores = request.headScores ?? [];
-    const grounded = mode !== 'plan' && this.runtime.grounding != null;
-    const costSummary = summarizeCost(reports, parentBudget);
-    const fileChanges = collectFileChanges(reports);
+  merge(request: MergeRequest): Promise<MergeResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const { reports, rationale, strategy, inheritedContext, parentBudget, mode } = request;
+      const headIds = request.headIds ?? reports.map((r) => r.id);
+      const headScores = request.headScores ?? [];
+      const grounded = mode !== 'plan' && this.runtime.grounding != null;
+      const costSummary = summarizeCost(reports, parentBudget);
+      const fileChanges = collectFileChanges(reports);
 
-    // Every head stopped without banking a finding: report deterministically. A model asked to narrate
-    // this invents a cause.
-    if (costSummary.headsWithFindings === 0) {
-      return {
-        mergedNarrative: emptySplitNarrative(reports, rationale),
-        selectedDecisions: [],
+      // Every head stopped without banking a finding: report deterministically. A model asked to narrate
+      // this invents a cause.
+      if (costSummary.headsWithFindings === 0) {
+        return {
+          mergedNarrative: emptySplitNarrative(reports, rationale),
+          selectedDecisions: [],
+          unresolvedQuestions: [],
+          recommendations: [],
+          // No head observed anything, so there is no negative space to report.
+          blindSpots: [],
+          evidenceAggregate: [],
+          headIds,
+          headScores,
+          fileChanges,
+          grounded,
+          costSummary,
+        };
+      }
+
+      const prompt = buildMergePrompt({ reports, rationale, strategy, inheritedContext, headScores: grounded ? headScores : [] });
+
+      const fallback = (errMsg: string): MergeResult => ({
+        mergedNarrative: fallbackNarrative(reports, rationale, errMsg),
+        selectedDecisions: reports.flatMap((r) => r.decisions),
         unresolvedQuestions: [],
         recommendations: [],
-        // No head observed anything, so there is no negative space to report.
         blindSpots: [],
-        evidenceAggregate: [],
+        evidenceAggregate: reports.flatMap((r) => r.evidence),
+        headIds,
+        headScores,
+        fileChanges,
+        grounded,
+        costSummary,
+      });
+
+      const merged = yield* Effect.result(this.synthesize(prompt, rationale, grounded));
+
+      if (Result.isFailure(merged)) return fallback(merged.failure);
+      const output = merged.success;
+
+      return {
+        mergedNarrative: output.narrative,
+        selectedDecisions: output.selected_decisions,
+        unresolvedQuestions: output.unresolved_questions,
+        recommendations: output.recommendations,
+        blindSpots: output.blind_spots,
+        evidenceAggregate: reports.flatMap((r) => r.evidence),
         headIds,
         headScores,
         fileChanges,
         grounded,
         costSummary,
       };
-    }
-
-    const prompt = buildMergePrompt({ reports, rationale, strategy, inheritedContext, headScores: grounded ? headScores : [] });
-
-    const fallback = (errMsg: string): MergeResult => ({
-      mergedNarrative: fallbackNarrative(reports, rationale, errMsg),
-      selectedDecisions: reports.flatMap((r) => r.decisions),
-      unresolvedQuestions: [],
-      recommendations: [],
-      blindSpots: [],
-      evidenceAggregate: reports.flatMap((r) => r.evidence),
-      headIds,
-      headScores,
-      fileChanges,
-      grounded,
-      costSummary,
-    });
-
-    const merged = await this.synthesize(prompt, rationale, grounded);
-
-    if (!merged.ok) return fallback(merged.error);
-
-    return {
-      mergedNarrative: merged.output.narrative,
-      selectedDecisions: merged.output.selected_decisions,
-      unresolvedQuestions: merged.output.unresolved_questions,
-      recommendations: merged.output.recommendations,
-      blindSpots: merged.output.blind_spots,
-      evidenceAggregate: reports.flatMap((r) => r.evidence),
-      headIds,
-      headScores,
-      fileChanges,
-      grounded,
-      costSummary,
-    };
+    }));
   }
 
-  /** Returns the surfaced error reason when every sample fails; the caller renders the per-head fallback. */
-  private async synthesize(
+  /** Fails with the surfaced error reason when every sample fails; the caller renders the per-head fallback. */
+  private synthesize(
     prompt: string,
     rationale: string,
     grounded: boolean,
-  ): Promise<{ ok: true; output: MergeOutput } | { ok: false; error: string }> {
+  ): Effect.Effect<MergeOutput, string> {
     const g = grounded ? this.runtime.grounding : undefined;
     const k = Math.max(1, g?.mergeSamples ?? 1);
 
-    const sampleOne = async (): Promise<{ ok: true; output: MergeOutput } | { ok: false; error: string }> => {
-      let out: MergeOutput;
-
-      try {
-        out = await this.runtime.mergeLLM(prompt, MergeOutputSchema);
-      } catch (err) {
-        return { ok: false, error: renderThrownChain({ cause: err }) };
-      }
-
+    const sampleOne = Effect.tryPromise({
+      try: () => this.runtime.mergeLLM(prompt, MergeOutputSchema),
+      catch: (err) => renderThrownChain({ cause: err }),
+    }).pipe(Effect.flatMap((out) => {
       const parse = v.safeParse(MergeOutputSchema, out);
 
       return parse.success
-        ? { ok: true, output: parse.output }
-        : { ok: false, error: `merge schema invalid: ${parse.issues.map((i) => i.message).join('; ')}` };
-    };
+        ? Effect.succeed(parse.output)
+        : Effect.fail(`merge schema invalid: ${parse.issues.map((i) => i.message).join('; ')}`);
+    }));
 
-    if (k === 1 || !g) return sampleOne();
+    if (k === 1 || !g) return sampleOne;
 
-    const results = await Promise.all(Array.from({ length: k }, sampleOne));
-    const samples = results.filter((r): r is { ok: true; output: MergeOutput } => r.ok).map((r) => r.output);
+    return Effect.gen(function* () {
+      const results = yield* Effect.forEach(Array.from({ length: k }), () => Effect.result(sampleOne), { concurrency: 'unbounded' });
+      const samples = results.filter(Result.isSuccess).map((r) => r.success);
 
-    if (samples.length === 0) {
-      const firstError = results.find((r): r is { ok: false; error: string } => !r.ok);
+      if (samples.length === 0) return yield* Effect.fail(results.find(Result.isFailure)?.failure ?? 'all merge samples failed');
 
-      return { ok: false, error: firstError?.error ?? 'all merge samples failed' };
-    }
+      if (samples.length === 1) return samples[0];
 
-    if (samples.length === 1) return { ok: true, output: samples[0] };
+      // Settled, as in scoreHeads: a rejecting judge must not discard valid samples and the head_merge row.
+      const judge = g.judge ?? g.explorer;
 
-    // Settled, as in scoreHeads: a rejecting judge must not discard valid samples and the head_merge row.
-    const judge = g.judge ?? g.explorer;
+      const settled = yield* Effect.promise(() => Promise.allSettled(
+        samples.map(async (s) => ({ sample: s, score: await scoreMergeNarrative(judge, rationale, s.narrative) })),
+      ));
 
-    const settled = await Promise.allSettled(
-      samples.map(async (s) => ({ sample: s, score: await scoreMergeNarrative(judge, rationale, s.narrative) })),
-    );
+      const scored = settled.map((outcome, i) => {
+        if (outcome.status === 'fulfilled') return outcome.value;
+        // The reason itself, not its `message` — see scoreHeads.
+        diagnostics.failure(
+          'merge.sample_score_failed',
+          toKinuError({ doing: 'score a merge sample', cause: outcome.reason, otherwise: 'unavailable' }),
+          { sampleIndex: i },
+        );
 
-    const scored = settled.map((outcome, i) => {
-      if (outcome.status === 'fulfilled') return outcome.value;
-      // The reason itself, not its `message` — see scoreHeads.
-      diagnostics.failure(
-        'merge.sample_score_failed',
-        toKinuError({ doing: 'score a merge sample', cause: outcome.reason, otherwise: 'unavailable' }),
-        { sampleIndex: i },
+        return { sample: samples[i], score: null };
+      });
+
+      const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);
+
+      if (usable.length === 0) return samples[0];
+      const medianScore = median(usable.map((x) => x.score));
+
+      const winner = usable.reduce((best, cur) =>
+        Math.abs(cur.score - medianScore) < Math.abs(best.score - medianScore) ? cur : best,
       );
 
-      return { sample: samples[i], score: null };
+      return winner.sample;
     });
-
-    const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);
-
-    if (usable.length === 0) return { ok: true, output: samples[0] };
-    const medianScore = median(usable.map((x) => x.score));
-
-    const winner = usable.reduce((best, cur) =>
-      Math.abs(cur.score - medianScore) < Math.abs(best.score - medianScore) ? cur : best,
-    );
-
-    return { ok: true, output: winner.sample };
   }
 }
 

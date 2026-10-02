@@ -4,7 +4,7 @@
  * (mismatch: blocked), the recorded input, and a disposition plus schedule; definitive failures end one unrun.
  * `TerminalTransitions.end` settles only when no row is owed.
  */
-import { Data } from 'effect';
+import { Data, Result } from 'effect';
 import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 
@@ -221,7 +221,7 @@ export function branchesTerminalEffect(deps: {
             { entry, turnId, liveText, settlementKey: id },
           );
 
-          return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
+          return { status: 'completed', detail: Result.isSuccess(outcome) ? undefined : outcome.failure };
         }
       }
 
@@ -241,14 +241,14 @@ export function branchesTerminalEffect(deps: {
         task, report, turnId, sessionId: deps.sessionId, liveText, settlementKey: id,
       });
 
-      deps.broadcast(outcome.ok
+      deps.broadcast(Result.isSuccess(outcome)
         ? {
           type: 'branch_status', status: 'settled', branchId: id, task,
-          takeSetId: outcome.set.id, turnId: turnId ?? '',
+          takeSetId: outcome.success.id, turnId: turnId ?? '',
         }
-        : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.reason });
+        : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.failure });
 
-      return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
+      return { status: 'completed', detail: Result.isSuccess(outcome) ? undefined : outcome.failure };
     },
   });
 }

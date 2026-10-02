@@ -3,7 +3,7 @@
  * first; `authorizeAdmin` then requires an allowlisted session email EQUAL to the
  * Access email, so one person must pass both gates. Worker-code trust is `capability.ts`.
  */
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import type { MiddlewareHandler } from 'hono';
 import { err, hmacSha256Hex } from '@kinu.run/core';
 import { diagnostics, settleSync } from '@kinu.run/core/obs';
@@ -46,9 +46,7 @@ export type AdminDenial =
   | 'token_identity'
   | 'stale_auth';
 
-export type AdminAuthorization =
-  | { readonly ok: true; readonly admin: AuthorizedAdmin }
-  | { readonly ok: false; readonly denial: AdminDenial };
+export type AdminAuthorization = Result.Result<AuthorizedAdmin, AdminDenial>;
 
 export interface AdminGateEnv extends ControlSecretEnv {
   CONTROL_PLANE_ADMINS?: string;
@@ -62,40 +60,36 @@ function controlPlaneAdmins(env: AdminGateEnv): readonly string[] {
     .filter((entry) => entry.length > 0);
 }
 
-type OperatorLookup =
-  | { readonly ok: true; readonly email: string }
-  | {
-      readonly ok: false;
-      readonly denial: 'unconfigured' | 'no_admins_configured' | 'not_admin'
-        | 'dev_identity' | 'token_identity';
-    };
+type OperatorDenial = 'unconfigured' | 'no_admins_configured' | 'not_admin' | 'dev_identity' | 'token_identity';
+
+type OperatorLookup = Result.Result<string, OperatorDenial>;
 
 /** App-side half only (no step-up, no Access). Dev identities are always fresh
  *  and CLI tokens non-interactive, so both are refused; empty allowlist = nobody. */
 function operatorEmail(env: AdminGateEnv, identity: AuthIdentity): OperatorLookup {
-  if (!(env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim()) {
-    return { ok: false, denial: 'unconfigured' };
-  }
+  const denied = (denial: OperatorDenial): OperatorLookup => Result.fail(denial);
 
-  if (identity.provider === 'dev') return { ok: false, denial: 'dev_identity' };
+  if (!(env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim()) return denied('unconfigured');
 
-  if (identity.cliScopes !== undefined) return { ok: false, denial: 'token_identity' };
+  if (identity.provider === 'dev') return denied('dev_identity');
+
+  if (identity.cliScopes !== undefined) return denied('token_identity');
 
   const admins = controlPlaneAdmins(env);
 
-  if (admins.length === 0) return { ok: false, denial: 'no_admins_configured' };
+  if (admins.length === 0) return denied('no_admins_configured');
 
   const email = identity.email.trim().toLowerCase();
 
-  if (email.length === 0 || !admins.includes(email)) return { ok: false, denial: 'not_admin' };
+  if (email.length === 0 || !admins.includes(email)) return denied('not_admin');
 
-  return { ok: true, email };
+  return Result.succeed(email);
 }
 
 /** Nav-link visibility only, not authorization: profile requests carry no
  *  Access assertion. Shares `operatorEmail` with `authorizeAdmin`. */
 export function isControlPlaneOperator(env: AdminGateEnv, identity: AuthIdentity): boolean {
-  return operatorEmail(env, identity).ok;
+  return Result.isSuccess(operatorEmail(env, identity));
 }
 
 /** `access` is required proof the Access gate ran. Email mismatch is checked
@@ -107,16 +101,17 @@ export function authorizeAdmin(
   options: { readonly mutating: boolean; readonly now?: number },
 ): AdminAuthorization {
   const operator = operatorEmail(env, identity);
+  const denied = (denial: AdminDenial): AdminAuthorization => Result.fail(denial);
 
-  if (!operator.ok) return { ok: false, denial: operator.denial };
+  if (Result.isFailure(operator)) return denied(operator.failure);
 
-  if (operator.email !== access.email) return { ok: false, denial: 'access_mismatch' };
+  if (operator.success !== access.email) return denied('access_mismatch');
 
   const fresh = isFreshAuthTime(identity.authTime, options.now ?? Date.now());
 
-  if (options.mutating && !fresh) return { ok: false, denial: 'stale_auth' };
+  if (options.mutating && !fresh) return denied('stale_auth');
 
-  return { ok: true, admin: { email: operator.email, userId: identity.userId, fresh, access } };
+  return Result.succeed({ email: operator.success, userId: identity.userId, fresh, access });
 }
 
 export interface AdminDenialAnswer {
@@ -167,14 +162,14 @@ export function reportAdminDenial(denial: AdminDenial, path: string, method: str
 export const controlPlaneAccess: MiddlewareHandler<FamilyEnv<ControlPlaneAccessEnv, { access: AccessIdentity }>> = async (c, next) => {
   const access = await verifyControlPlaneAccess(c.req.raw, c.env);
 
-  if (!access.ok) {
-    reportAdminDenial(access.denial, new URL(c.req.url).pathname, c.req.method);
+  if (Result.isFailure(access)) {
+    reportAdminDenial(access.failure, new URL(c.req.url).pathname, c.req.method);
 
-    const answer = adminDenialAnswer(access.denial);
+    const answer = adminDenialAnswer(access.failure);
 
     return err(answer.status, answer.message);
   }
 
-  c.set('access', access.access);
+  c.set('access', access.success);
   await next();
 };

@@ -1,5 +1,6 @@
 /** `/api/control/*`: the operator gate is the first middleware; Access, the app's first gate, sets the required `access`. One audited mutation endpoint. */
 import { Hono, type Context } from 'hono';
+import { Result } from 'effect';
 import { authoredRefusal, diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import type { Page, PageRequest } from '@kinu.run/core';
@@ -92,15 +93,15 @@ controlRoutes.onError((cause, c) => {
 controlRoutes.use('/api/control/*', async (c, next) => {
   const authorization = authorizeAdmin(c.env, c.get('identity'), c.get('access'), { mutating: false });
 
-  if (!authorization.ok) {
-    reportAdminDenial(authorization.denial, new URL(c.req.url).pathname, c.req.method);
+  if (Result.isFailure(authorization)) {
+    reportAdminDenial(authorization.failure, new URL(c.req.url).pathname, c.req.method);
 
-    const answer = adminDenialAnswer(authorization.denial);
+    const answer = adminDenialAnswer(authorization.failure);
 
     return err(answer.status, answer.message);
   }
 
-  const admin = authorization.admin;
+  const admin = authorization.success;
   c.set('control', { env: c.env, admin, caller: await adminCaller(c.env, admin) });
   await next();
 });
@@ -428,8 +429,8 @@ async function handleWorkspaceDetail<Id>(
 ): Promise<Response> {
   const owned = await claimOwnedWorkspace(env, userId, workspace);
 
-  if (!owned.ok) return err(owned.status, owned.error);
-  const agent = owned.agent;
+  if (Result.isFailure(owned)) return err(owned.failure.status, owned.failure.error);
+  const agent = owned.success;
 
   const [runs, activity, jobs, approvals, consents, executors, grants] = await Promise.allSettled([
     agent.getRunSummaries({ limit: DETAIL_WINDOW }),

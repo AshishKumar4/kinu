@@ -194,11 +194,11 @@ export function discoverSkills(
           // The stem is the fallback `name`; an explicit `name:` must still match it.
           const parsed = parseSkillFile(text, source, name);
 
-          if (!parsed.ok) return { error: parsed.error };
+          if (Result.isFailure(parsed)) return { error: parsed.failure.error };
 
-          if (parsed.skill.name !== name) return { error: `"${path}" does not match front-matter name "${parsed.skill.name}"` };
+          if (parsed.success.name !== name) return { error: `"${path}" does not match front-matter name "${parsed.success.name}"` };
 
-          return { skill: discovered(parsed.skill, { kind: 'file', path, chars: parsed.skill.body.length }) };
+          return { skill: discovered(parsed.success, { kind: 'file', path, chars: parsed.success.body.length }) };
         },
         catch: (cause) => ({ cause }),
       }));

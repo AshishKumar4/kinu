@@ -10,6 +10,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
  * every promotion lands in the Evolution Changelog.
  */
 
+import { Result } from 'effect';
 import * as v from 'valibot';
 import { renderThrownChain } from '../obs/error';
 import { DEFAULT_CONFIG } from '../config';
@@ -131,7 +132,6 @@ interface PromptSizeRuleInput {
   readonly candidateScore: ScoreInterval;
 }
 
-type PromptSizeVerdict = { ok: true } | { ok: false; reason: string };
 
 /**
  * A candidate longer than the incumbent needs a strictly better score: its
@@ -139,19 +139,16 @@ type PromptSizeVerdict = { ok: true } | { ok: false; reason: string };
  * GEPA's strictly-better aggregate suffices. Bytes are paid every turn, so the
  * ambiguous case falls closed. Gate 4 only; tested through the gate.
  */
-function checkPromptSizeRule(input: PromptSizeRuleInput): PromptSizeVerdict {
-  if (input.candidateBytes <= input.incumbentBytes) return { ok: true };
+function checkPromptSizeRule(input: PromptSizeRuleInput): Result.Result<void, string> {
+  if (input.candidateBytes <= input.incumbentBytes) return Result.void;
 
-  if (input.candidateScore.lo > input.incumbentScore.mean) return { ok: true };
+  if (input.candidateScore.lo > input.incumbentScore.mean) return Result.void;
   const grown = input.candidateBytes - input.incumbentBytes;
 
-  return {
-    ok: false,
-    reason: `+${String(grown)} bytes (${String(input.incumbentBytes)} to ${String(input.candidateBytes)}) `
-      + `for a score of ${input.candidateScore.mean.toFixed(3)} whose interval `
-      + `(lo ${input.candidateScore.lo.toFixed(3)}) does not clear the incumbent's `
-      + `${input.incumbentScore.mean.toFixed(3)}: a longer section needs a strictly better score`,
-  };
+  return Result.fail(`+${String(grown)} bytes (${String(input.incumbentBytes)} to ${String(input.candidateBytes)}) `
+    + `for a score of ${input.candidateScore.mean.toFixed(3)} whose interval `
+    + `(lo ${input.candidateScore.lo.toFixed(3)}) does not clear the incumbent's `
+    + `${input.incumbentScore.mean.toFixed(3)}: a longer section needs a strictly better score`);
 }
 
 /** Named so callers can branch: the GEPA bridge reports a size-rule refusal differently from a veto. */
@@ -166,9 +163,11 @@ export type ProposeSectionRefusal =
   | 'size_rule'
   | 'already_pending';
 
-export type ProposeSectionResult =
-  | { readonly ok: true; readonly version: number }
-  | { readonly ok: false; readonly code: ProposeSectionRefusal; readonly error: string };
+export interface ProposeSectionRefused { readonly code: ProposeSectionRefusal; readonly error: string }
+
+export type ProposeSectionResult = Result.Result<number, ProposeSectionRefused>;
+
+const refused = (code: ProposeSectionRefusal, error: string): ProposeSectionResult => Result.fail({ code, error });
 
 export interface ProposePromptSectionArgs {
   readonly section: PromptSection<string>;
@@ -187,40 +186,31 @@ export function proposePromptSection(
   const { section, source, rationale } = args;
 
   if (!PROMPT_SECTIONS.some((known) => known.id === section.id)) {
-    return { ok: false, code: 'not_registered', error: `"${section.id}" is not a registered prompt section` };
+    return refused('not_registered', `"${section.id}" is not a registered prompt section`);
   }
 
   if (rationale.length < MIN_RATIONALE_LENGTH) {
-    return { ok: false, code: 'rationale_too_short', error: `Rationale must be at least ${String(MIN_RATIONALE_LENGTH)} chars` };
+    return refused('rationale_too_short', `Rationale must be at least ${String(MIN_RATIONALE_LENGTH)} chars`);
   }
 
   const incumbent = incumbentSectionSource(sql, actor, section);
 
   if (source === incumbent) {
-    return { ok: false, code: 'unchanged', error: 'candidate is the incumbent, byte for byte' };
+    return refused('unchanged', 'candidate is the incumbent, byte for byte');
   }
 
   // Gate 2: the slot contract. Also the only place a malformed template is caught before rendering.
   const wanted = templateContract(section.id, incumbent);
-  let offered;
+  const contract = Result.try({ try: () => templateContract(section.id, source), catch: (cause) => renderThrownChain({ cause }) });
 
-  try {
-    offered = templateContract(section.id, source);
-  } catch (err) {
-    return {
-      ok: false, code: 'malformed_template',
-      error: renderThrownChain({ cause: err }),
-    };
-  }
+  if (Result.isFailure(contract)) return refused('malformed_template', contract.failure);
+  const offered = contract.success;
 
   if (wanted.slots.join('|') !== offered.slots.join('|')
     || wanted.flags.join('|') !== offered.flags.join('|')) {
-    return {
-      ok: false, code: 'slot_contract',
-      error: `slot contract changed: the builder supplies {slots: ${wanted.slots.join(', ') || '(none)'}; `
-        + `flags: ${wanted.flags.join(', ') || '(none)'}}, the candidate declares `
-        + `{slots: ${offered.slots.join(', ') || '(none)'}; flags: ${offered.flags.join(', ') || '(none)'}}`,
-    };
+    return refused('slot_contract', `slot contract changed: the builder supplies {slots: ${wanted.slots.join(', ') || '(none)'}; `
+      + `flags: ${wanted.flags.join(', ') || '(none)'}}, the candidate declares `
+      + `{slots: ${offered.slots.join(', ') || '(none)'}; flags: ${offered.flags.join(', ') || '(none)'}}`);
   }
 
   // Gate 3: misevolution.
@@ -231,10 +221,7 @@ export function proposePromptSection(
       surface: 'scaffold', violation: misevolution, detail: `prompt section ${section.id}: ${rationale}`,
     });
 
-    return {
-      ok: false, code: 'misevolution',
-      error: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`,
-    };
+    return refused('misevolution', `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`);
   }
 
   // Gate 4: size.
@@ -242,10 +229,7 @@ export function proposePromptSection(
   const incumbentBytes = Buffer.byteLength(incumbent, 'utf8');
 
   if (candidateBytes > PROMPT_SECTION_MAX_BYTES) {
-    return {
-      ok: false, code: 'byte_ceiling',
-      error: `${String(candidateBytes)} bytes exceeds the ${String(PROMPT_SECTION_MAX_BYTES)}-byte section ceiling`,
-    };
+    return refused('byte_ceiling', `${String(candidateBytes)} bytes exceeds the ${String(PROMPT_SECTION_MAX_BYTES)}-byte section ceiling`);
   }
 
   const size = checkPromptSizeRule({
@@ -253,7 +237,7 @@ export function proposePromptSection(
     incumbentScore: args.incumbentScore, candidateScore: args.candidateScore,
   });
 
-  if (!size.ok) return { ok: false, code: 'size_rule', error: size.reason };
+  if (Result.isFailure(size)) return refused('size_rule', size.failure);
 
   // Gate 5: one pending per section.
   const pending = sql<{ version: number }>`
@@ -262,10 +246,7 @@ export function proposePromptSection(
     ORDER BY version DESC LIMIT 1`;
 
   if (pending.length > 0) {
-    return {
-      ok: false, code: 'already_pending',
-      error: `a rollout for ${section.id} (v${String(pending[0].version)}) is already pending; resolve it before proposing another`,
-    };
+    return refused('already_pending', `a rollout for ${section.id} (v${String(pending[0].version)}) is already pending; resolve it before proposing another`);
   }
 
   const maxRows = sql<{ v: number }>`
@@ -280,7 +261,7 @@ export function proposePromptSection(
             ${incumbentBytes}, ${nowMs()})`;
   markStoreChanged(sql);
 
-  return { ok: true, version };
+  return Result.succeed(version);
 }
 
 export function getPendingPromptSection(

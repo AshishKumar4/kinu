@@ -1,4 +1,5 @@
 import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { Result } from 'effect';
 import { serveFamily } from './helpers/api';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -684,7 +685,7 @@ describe('cloud agent ownership safety', () => {
       // The Worker forwards the hash; deciding here would let two concurrent first-touches split the identity.
       const { env, calls } = setupClaim({ capabilityHash: null });
 
-      expect((await claimOwnedWorkspace(env, USER_ID, 'jarvis')).ok).toBe(true);
+      expect(Result.isSuccess(await claimOwnedWorkspace(env, USER_ID, 'jarvis'))).toBe(true);
 
       expect(calls).toEqual([`claim:${USER_ID}`, 'ensure:jarvis:none']);
     });
@@ -692,7 +693,7 @@ describe('cloud agent ownership safety', () => {
     test('an already-provisioned workspace still reconciles, carrying its hash', async () => {
       const { env, calls } = setupClaim({ capabilityHash: 'sha-existing' });
 
-      expect((await claimOwnedWorkspace(env, USER_ID, 'jarvis')).ok).toBe(true);
+      expect(Result.isSuccess(await claimOwnedWorkspace(env, USER_ID, 'jarvis'))).toBe(true);
 
       expect(calls).toEqual([`claim:${USER_ID}`, 'ensure:jarvis:sha-existing']);
     });
@@ -702,9 +703,9 @@ describe('cloud agent ownership safety', () => {
 
       const result = await claimOwnedWorkspace(env, USER_ID, 'jarvis');
 
-      expect(result).toMatchObject({ ok: false, status: 500 });
+      expect(result).toMatchObject({ failure: { status: 500 } });
 
-      if (!result.ok) expect(result.error).not.toContain('storage unavailable');
+      if (Result.isFailure(result)) expect(result.failure.error).not.toContain('storage unavailable');
     });
   });
 

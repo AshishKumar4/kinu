@@ -9,7 +9,7 @@
 
 import type { SqlExecutor } from '../../types/primitives';
 import type { ActorHandle } from '../../identity/actor-handle';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { renderThrownChain } from '../../obs/error';
 import { settleSync } from '../../obs/effect';
 import { checkMisevolutionForSurface } from '../../safety/misevolution';
@@ -141,13 +141,13 @@ export async function runSectionGepa<I = unknown, E = unknown>(
     candidateScore: winnerScore,
   });
 
-  if (!proposal.ok) {
+  if (Result.isFailure(proposal)) {
     return {
       ...base, proposed: false, pendingVersion: null,
-      skipReason: proposal.code === 'size_rule' ? 'size_rule' : 'propose_gate_rejected',
-      proposeError: { code: proposal.code, error: proposal.error },
+      skipReason: proposal.failure.code === 'size_rule' ? 'size_rule' : 'propose_gate_rejected',
+      proposeError: { code: proposal.failure.code, error: proposal.failure.error },
     };
   }
 
-  return { ...base, proposed: true, pendingVersion: proposal.version };
+  return { ...base, proposed: true, pendingVersion: proposal.success };
 }

@@ -131,9 +131,7 @@ export async function startBranchHead(
   };
 }
 
-export type BranchSettleOutcome =
-  | { ok: true; set: AlternateTakeSet }
-  | { ok: false; reason: string };
+export type BranchSettleOutcome = Result.Result<AlternateTakeSet, string>;
 
 export interface PendingBranch {
   readonly id: string;
@@ -169,7 +167,7 @@ export function settlePendingBranch(
         type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message: reason,
       });
 
-      return { ok: false, reason };
+      return Result.fail(reason);
     };
 
     const held = yield* Effect.result(Effect.tryPromise({ try: () => entry.handle, catch: (cause) => ({ cause }) }));
@@ -197,11 +195,11 @@ export function settlePendingBranch(
       settlementKey === undefined ? settlement : { ...settlement, settlementKey },
     );
 
-    if (!outcome.ok) return fail(outcome.reason);
+    if (Result.isFailure(outcome)) return fail(outcome.failure);
 
     deps.broadcast({
       type: 'branch_status', status: 'settled', branchId: entry.id, task: entry.task,
-      takeSetId: outcome.set.id, turnId,
+      takeSetId: outcome.success.id, turnId,
     });
 
     return outcome;
@@ -253,19 +251,15 @@ export function settleBranchIntoTakes(
   },
 ): BranchSettleOutcome {
   if (input.report.status !== 'completed') {
-    return {
-      ok: false,
-      reason: input.report.errorMessage
-        ?? `the branch ended with status "${input.report.status}"`,
-    };
+    return Result.fail(input.report.errorMessage ?? `the branch ended with status "${input.report.status}"`);
   }
 
   if (!input.report.summary.trim()) {
-    return { ok: false, reason: 'the branch produced no answer' };
+    return Result.fail('the branch produced no answer');
   }
 
   if (!input.turnId || !input.liveText.trim()) {
-    return { ok: false, reason: 'the live turn did not complete, so there is nothing to compare against' };
+    return Result.fail('the live turn did not complete, so there is nothing to compare against');
   }
 
   const settlement = {
@@ -286,8 +280,8 @@ export function settleBranchIntoTakes(
   );
 
   if (!set) {
-    return { ok: false, reason: 'the branch reached the same answer as the live turn' };
+    return Result.fail('the branch reached the same answer as the live turn');
   }
 
-  return { ok: true, set };
+  return Result.succeed(set);
 }

@@ -4,6 +4,7 @@
  */
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
+import { Result } from "effect";
 import { routeAgentRequest } from "agents";
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { containerEventResolver, handleContainerEgress, handleContainerEvent, parseEgressParams, type KinuEgressParams } from './egress/outbound';
@@ -401,7 +402,7 @@ worker.all('/agents/*', async (c, next) => {
   const identity = c.get('identity');
   const claim = await claimOwnedWorkspace(c.env, identity.userId, agentName);
 
-  if (!claim.ok) return err(claim.status, claim.error);
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
 
   observeWorkspaceUse(c.env, identity, agentName, { retain: c.executionCtx });
 

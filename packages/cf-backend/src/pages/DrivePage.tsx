@@ -1,4 +1,5 @@
 /** The Drive: My stuff (`/drive`, `/drive/<path>`) and Shared (`/shared`). Nothing empty is drawn. */
+import { Result } from 'effect';
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
@@ -119,8 +120,8 @@ function coverLines(text: string, name: string): [string | null, CoverLine[]] {
   if (!MARKDOWN.test(name)) return [null, text.split("\n").slice(0, 14).map((line) => ({ text: line, heading: false }))];
   const parsed = parseSkillFile(text);
 
-  if (parsed.ok) {
-    const { name: skill, description, body } = parsed.skill;
+  if (Result.isSuccess(parsed)) {
+    const { name: skill, description, body } = parsed.success;
     const steps = pageLines(body).filter((line) => !blank(line) && !(line.heading && line.text.toLowerCase() === skill.toLowerCase()));
 
     return [skill, [{ text: description, heading: false }, { text: "", heading: false }, ...steps].slice(0, 12)];

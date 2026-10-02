@@ -2,6 +2,7 @@
 // while leaving the others flat, measured against the clean run rather than the locked baseline.
 
 import type { ModelMessage } from 'ai';
+import { Result } from 'effect';
 import type { PrepareStepContext } from '../extension';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import { StepInjections, type RecordedInjection } from '../prompting/step-injections';
@@ -271,11 +272,10 @@ export const FAULTS: readonly Fault[] = Object.freeze([
         if (first && original.indexOf(first.oldText) !== original.lastIndexOf(first.oldText)) {
           const at = original.indexOf(first.oldText);
 
-          return {
-            ok: true,
+          return Result.succeed({
             content: original.slice(0, at) + first.newText + original.slice(at + first.oldText.length),
             applied: [{ line: 1, removedLines: 1, addedLines: 1 }],
-          };
+          });
         }
 
         return s.applyFileEdits(original, edits, path);

@@ -4,6 +4,7 @@
  * Every action names an account, since `OrchestratorAgent` is addressed by workspace name globally.
  * Arms return `ActionOutcome` and never throw for a refusal, so every attempt is audited.
  */
+import { Result } from 'effect';
 import { renderThrownChain, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
 import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -193,8 +194,8 @@ export async function runControlAction<Id>(
 
     const owned = await claimOwnedWorkspace(env, action.userId, action.workspace);
 
-    if (!owned.ok) return notOwned(owned.error);
-    const agent = owned.agent;
+    if (Result.isFailure(owned)) return notOwned(owned.failure.error);
+    const agent = owned.success;
 
     switch (action.action) {
       case 'job.cancel': {

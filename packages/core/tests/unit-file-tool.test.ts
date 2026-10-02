@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /** The `file` tool: exact-match editor, honest read, read-before-write gate. Asserts the model-facing contract. */
 
@@ -27,11 +28,11 @@ import { failedToolOutcome } from '../src/tools/outcome';
 describe('applyFileEdits', () => {
   test('replaces the one occurrence and leaves the rest byte-identical', () => {
     const out = applyFileEdits('a\nTARGET\nb\n', [{ oldText: 'TARGET', newText: 'REPLACED' }], '/f');
-    expect(out.ok).toBe(true);
+    expect(Result.isSuccess(out)).toBe(true);
 
-    if (!out.ok) return;
-    expect(out.content).toBe('a\nREPLACED\nb\n');
-    expect(out.applied).toEqual([{ line: 2, removedLines: 1, addedLines: 1 }]);
+    if (Result.isFailure(out)) return;
+    expect(out.success.content).toBe('a\nREPLACED\nb\n');
+    expect(out.success.applied).toEqual([{ line: 2, removedLines: 1, addedLines: 1 }]);
   });
 
   /** Each refusal: the anchor as typed, the file, and what the message must say to recover without another read. */
@@ -86,12 +87,12 @@ describe('applyFileEdits', () => {
     test(refusal.name, () => {
       const out = applyFileEdits(refusal.file, refusal.edits, '/f');
 
-      expect(out.ok).toBe(false);
+      expect(Result.isSuccess(out)).toBe(false);
 
-      if (out.ok) return;
-      expect(out.reason).toBe(refusal.reason);
+      if (Result.isSuccess(out)) return;
+      expect(out.failure.reason).toBe(refusal.reason);
 
-      for (const phrase of refusal.says) expect(out.message).toContain(phrase);
+      for (const phrase of refusal.says) expect(out.failure.message).toContain(phrase);
     });
   }
 
@@ -103,10 +104,10 @@ describe('applyFileEdits', () => {
       '/f',
     );
 
-    expect(out.ok).toBe(true);
+    expect(Result.isSuccess(out)).toBe(true);
 
-    if (!out.ok) return;
-    expect(out.content).toBe('two\nthree\n');
+    if (Result.isFailure(out)) return;
+    expect(out.success.content).toBe('two\nthree\n');
   });
 
   /** A successful edit keeps line endings, an untyped BOM, and every line outside the anchor. */
@@ -137,30 +138,30 @@ describe('applyFileEdits', () => {
     test(rewrite.name, () => {
       const out = applyFileEdits(rewrite.file, rewrite.edits, '/f');
 
-      expect(out.ok).toBe(true);
+      expect(Result.isSuccess(out)).toBe(true);
 
-      if (!out.ok) return;
-      expect(out.content).toBe(rewrite.content);
+      if (Result.isFailure(out)) return;
+      expect(out.success.content).toBe(rewrite.content);
     });
   }
 
   test('an empty file and a file with no trailing newline both edit cleanly', () => {
-    expect(applyFileEdits('', [{ oldText: 'x', newText: 'y' }], '/f')).toMatchObject({ reason: 'not_found' });
+    expect(applyFileEdits('', [{ oldText: 'x', newText: 'y' }], '/f')).toMatchObject({ failure: { reason: 'not_found' } });
     const out = applyFileEdits('last line', [{ oldText: 'last', newText: 'final' }], '/f');
-    expect(out.ok).toBe(true);
+    expect(Result.isSuccess(out)).toBe(true);
 
-    if (!out.ok) return;
-    expect(out.content).toBe('final line');
+    if (Result.isFailure(out)) return;
+    expect(out.success.content).toBe('final line');
   });
 
   test('does not normalize away characters it merely failed to match', () => {
     // A fuzzy fallback would rewrite the whole file out of normalized space; refuse instead.
     const original = 'const a = “quoted”;\nconst b = "plain";\n';
     const out = applyFileEdits(original, [{ oldText: 'const a = "quoted";', newText: 'x' }], '/f');
-    expect(out.ok).toBe(false);
+    expect(Result.isSuccess(out)).toBe(false);
 
-    if (out.ok) return;
-    expect(out.reason).toBe('not_found');
+    if (Result.isSuccess(out)) return;
+    expect(out.failure.reason).toBe('not_found');
   });
 });
 

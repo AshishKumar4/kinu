@@ -2,6 +2,7 @@
  * Exact-match file editor behind the `file` tool's `edit`/`read`: an edit that cannot be placed exactly once
  * fails without touching the file. No fuzzy fallback; line endings and BOM round-trip.
  */
+import { Result } from 'effect';
 import { headEnd, lineCount } from '../utils/text';
 import type { FileEditFailure } from '../types/file-edits';
 
@@ -22,9 +23,9 @@ export interface AppliedEdit {
   addedLines: number;
 }
 
-export type FileEditOutcome =
-  | { ok: true; content: string; applied: AppliedEdit[] }
-  | { ok: false; reason: FileEditFailure; message: string };
+export interface FileEditRefusal { readonly reason: FileEditFailure; readonly message: string }
+
+export type FileEditOutcome = Result.Result<{ readonly content: string; readonly applied: AppliedEdit[] }, FileEditRefusal>;
 
 export const BOM = '\uFEFF';
 
@@ -104,33 +105,30 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
     const { oldText, newText } = anchors[i];
 
     if (oldText.length === 0) {
-      return {
-        ok: false,
+      return Result.fail({
         reason: 'empty_anchor',
         message: `${at(i, anchors.length)} is empty in ${path}. Give the exact text to replace; use action=write to create or replace the whole file.`,
-      };
+      });
     }
 
     const occurrences = countOccurrences(base, oldText);
 
     if (occurrences === 0) {
-      return {
-        ok: false,
+      return Result.fail({
         reason: 'not_found',
         message:
           `${at(i, anchors.length)} does not appear in ${path}. It must match the file byte for byte, ` +
           'including indentation and blank lines. Read the file again and copy the text from what it returned.',
-      };
+      });
     }
 
     if (occurrences > 1) {
-      return {
-        ok: false,
+      return Result.fail({
         reason: 'ambiguous',
         message:
           `${at(i, anchors.length)} appears ${occurrences} times in ${path}, so the target is ambiguous and nothing was changed. ` +
           'Extend it with the surrounding lines until it is unique, or make one edit per occurrence with distinct context.',
-      };
+      });
     }
 
     const start = base.indexOf(oldText);
@@ -144,13 +142,12 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
     const cur = ordered[i];
 
     if (prev.start + prev.length > cur.start) {
-      return {
-        ok: false,
+      return Result.fail({
         reason: 'overlap',
         message:
           `edits[${prev.index}] and edits[${cur.index}] cover overlapping text in ${path}. ` +
           'Merge them into one edit, or target disjoint regions.',
-      };
+      });
     }
   }
 
@@ -165,11 +162,10 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   }
 
   if (content === body) {
-    return {
-      ok: false,
+    return Result.fail({
       reason: 'no_change',
       message: `Every edit to ${path} replaced text with itself, so the file is unchanged. Check that new_text differs from old_text.`,
-    };
+    });
   }
 
   const applied = matches.map((m) => ({
@@ -178,7 +174,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
     addedLines: lineCount(m.newText),
   }));
 
-  return { ok: true, content: (hasBom ? BOM : '') + content, applied };
+  return Result.succeed({ content: (hasBom ? BOM : '') + content, applied });
 }
 
 export interface FileSlice {

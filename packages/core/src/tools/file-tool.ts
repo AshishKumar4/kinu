@@ -23,7 +23,7 @@ import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from '../vfs/file-ledger';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
 import type { JsonObject, JsonValue } from '../utils/json';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { KinuError, renderErrorMessage, renderThrownChain, settle } from '../obs/index';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
@@ -344,15 +344,15 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
         const outcome = applyFileEdits(current, edits, path);
 
-        if (!outcome.ok) {
-          ledger.recordEdit(path, outcome.reason);
+        if (Result.isFailure(outcome)) {
+          ledger.recordEdit(path, outcome.failure.reason);
 
-          return yield* failure(outcome.reason, outcome.message);
+          return yield* failure(outcome.failure.reason, outcome.failure.message);
         }
 
         // Coverage carries across the edit: only the named span changed.
         const report = yield* Effect.catch(
-          persist(path, outcome.content, writtenRevision => ledger.observeEdited(path, current, outcome.content, writtenRevision), revision),
+          persist(path, outcome.success.content, writtenRevision => ledger.observeEdited(path, current, outcome.success.content, writtenRevision), revision),
           refusedEdit,
         );
 
@@ -362,7 +362,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           ok: true,
           path,
           reference: referenceOf(path),
-          applied: outcome.applied.map((a) => ({ line: a.line, removed_lines: a.removedLines, added_lines: a.addedLines })),
+          applied: outcome.success.applied.map((a) => ({ line: a.line, removed_lines: a.removedLines, added_lines: a.addedLines })),
         }, report);
       }
     }

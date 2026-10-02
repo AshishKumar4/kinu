@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import { exists, readText, type VFS, type VfsDirent, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Skills behaviour through the public surface. There is no `skills` tool: CRUD is
@@ -121,14 +122,14 @@ description: A trivial workflow.
 Do the thing.
 `);
 
-    expect(r.ok).toBe(true);
+    expect(Result.isSuccess(r)).toBe(true);
 
-    if (!r.ok) return;
-    expect(r.skill.name).toBe('hello-world');
-    expect(r.skill.description).toBe('A trivial workflow.');
-    expect(r.skill.allowed_tools).toEqual([]);
-    expect(r.skill.body).toContain('# Hello');
-    expect(r.skill.source).toBe('vfs');
+    if (Result.isFailure(r)) return;
+    expect(r.success.name).toBe('hello-world');
+    expect(r.success.description).toBe('A trivial workflow.');
+    expect(r.success.allowed_tools).toEqual([]);
+    expect(r.success.body).toContain('# Hello');
+    expect(r.success.source).toBe('vfs');
   });
 
   test('accepts both `allowed-tools` and `allowed_tools`', () => {
@@ -148,11 +149,11 @@ allowed_tools: [run, memory]
 body
 `);
 
-    expect(hyphen.ok && snake.ok).toBe(true);
+    expect(Result.isSuccess(hyphen) && Result.isSuccess(snake)).toBe(true);
 
-    if (hyphen.ok && snake.ok) {
-      expect(hyphen.skill.allowed_tools).toEqual(snake.skill.allowed_tools);
-      expect(hyphen.skill.allowed_tools).toEqual(['run', 'memory']);
+    if (Result.isSuccess(hyphen) && Result.isSuccess(snake)) {
+      expect(hyphen.success.allowed_tools).toEqual(snake.success.allowed_tools);
+      expect(hyphen.success.allowed_tools).toEqual(['run', 'memory']);
     }
   });
 
@@ -167,9 +168,9 @@ allowed-tools: Bash(git:*) Read
 body
 `);
 
-    expect(r.ok).toBe(true);
+    expect(Result.isSuccess(r)).toBe(true);
 
-    if (r.ok) expect(r.skill.allowed_tools).toEqual(['Bash(git:*)', 'Read']);
+    if (Result.isSuccess(r)) expect(r.success.allowed_tools).toEqual(['Bash(git:*)', 'Read']);
   });
 
   test('rejects non-kebab-case name', () => {
@@ -180,7 +181,7 @@ description: x
 body
 `);
 
-    expect(r.ok).toBe(false);
+    expect(Result.isSuccess(r)).toBe(false);
   });
 
   test('rejects missing description', () => {
@@ -190,7 +191,7 @@ name: x
 body
 `);
 
-    expect(r.ok).toBe(false);
+    expect(Result.isSuccess(r)).toBe(false);
   });
 
   test('uses fallbackName when frontmatter omits name (Anthropic spec)', () => {
@@ -200,9 +201,9 @@ description: A skill authored without an explicit name.
 body
 `, 'vfs', 'my-skill-from-dir');
 
-    expect(r.ok).toBe(true);
+    expect(Result.isSuccess(r)).toBe(true);
 
-    if (r.ok) expect(r.skill.name).toBe('my-skill-from-dir');
+    if (Result.isSuccess(r)) expect(r.success.name).toBe('my-skill-from-dir');
   });
 
   test('rejects names containing reserved words (anthropic/claude)', () => {
@@ -220,8 +221,8 @@ description: x
 body
 `);
 
-    expect(a.ok).toBe(false);
-    expect(c.ok).toBe(false);
+    expect(Result.isSuccess(a)).toBe(false);
+    expect(Result.isSuccess(c)).toBe(false);
   });
 
   test('rejects names exceeding 64 characters', () => {
@@ -234,7 +235,7 @@ description: x
 body
 `);
 
-    expect(r.ok).toBe(false);
+    expect(Result.isSuccess(r)).toBe(false);
   });
 
   test('rejects descriptions exceeding 1024 characters', () => {
@@ -247,7 +248,7 @@ description: ${longDesc}
 body
 `);
 
-    expect(r.ok).toBe(false);
+    expect(Result.isSuccess(r)).toBe(false);
   });
 
   test('rejects descriptions containing XML tags', () => {
@@ -258,7 +259,7 @@ description: "Has <tool>tags</tool> inside"
 body
 `);
 
-    expect(r.ok).toBe(false);
+    expect(Result.isSuccess(r)).toBe(false);
   });
 
   // Only a real `false` closes the skill to `/skill-name`.
@@ -269,9 +270,9 @@ body
     test(c.name, () => {
       const r = parseSkillFile(`---\n${c.frontmatter}\n---\nbody\n`);
 
-      expect(r.ok).toBe(true);
+      expect(Result.isSuccess(r)).toBe(true);
 
-      if (r.ok) expect(r.skill.user_invocable).toBe(c.invocable);
+      if (Result.isSuccess(r)) expect(r.success.user_invocable).toBe(c.invocable);
     });
   }
 
@@ -284,9 +285,9 @@ user-invocable: "false"
 body
 `);
 
-    expect(quoted.ok).toBe(true);
+    expect(Result.isSuccess(quoted)).toBe(true);
 
-    if (quoted.ok) expect(quoted.skill.user_invocable).toBe(true);
+    if (Result.isSuccess(quoted)) expect(quoted.success.user_invocable).toBe(true);
   });
 
   test('preserves unknown front-matter keys in ext (forward-compat)', () => {
@@ -299,11 +300,11 @@ also_custom: 42
 body
 `);
 
-    expect(r.ok).toBe(true);
+    expect(Result.isSuccess(r)).toBe(true);
 
-    if (!r.ok) return;
-    expect(r.skill.ext.custom_field).toBe('hello');
-    expect(r.skill.ext.also_custom).toBe(42);
+    if (Result.isFailure(r)) return;
+    expect(r.success.ext.custom_field).toBe('hello');
+    expect(r.success.ext.also_custom).toBe(42);
   });
 });
 

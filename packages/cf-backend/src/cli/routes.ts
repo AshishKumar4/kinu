@@ -1,4 +1,5 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
+import { Result } from 'effect';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
@@ -425,9 +426,9 @@ async function cliAgent<Id>(
 ): Promise<CliAgentTarget | Response> {
   const result = await claimOwnedWorkspace(env, cli.userId, name);
 
-  if (!result.ok) return err(result.status, result.error);
+  if (Result.isFailure(result)) return err(result.failure.status, result.failure.error);
 
-  return result.agent;
+  return result.success;
 }
 
 /** The one method-shaped transport; AGENT_RPC_ACCESS table membership is the dispatch allowlist. */

@@ -2,6 +2,7 @@ import type { ChatEvent } from '../src/chat';
 // GEPA must train on a set disjoint from the one its winner is scored on, and
 // refuse to run when the ledger has no failure to optimise toward. Real
 // `runScaffoldGepaOptimization` over a real ledger; model and judge are scripted.
+import { Result } from 'effect';
 import { describe, expect, test } from 'bun:test';
 import type { LanguageModelV3Prompt } from '@ai-sdk/provider';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -399,10 +400,10 @@ test('an unavailable paired trial cannot supply the last win needed to promote a
     incumbentScore: scoreInterval([0.1, 0.1, 0.1, 0.1]), candidateScore: scoreInterval([0.9, 0.9, 0.9, 0.9]),
     rationale: 'Clarify the response format while retaining the existing output requirements.' });
 
-  if (!proposal.ok) throw new Error(proposal.error);
+  if (Result.isFailure(proposal)) throw new Error(proposal.failure.error);
 
   for (let index = 0; index < 4; index++) recordPromptSectionTrial(rt.storage.sql, rt.actor, {
-    sectionId: section.id, pendingVersion: proposal.version, winner: 'pending',
+    sectionId: section.id, pendingVersion: proposal.success, winner: 'pending',
   });
   const failure = new Error('pending trial judge unavailable');
 
