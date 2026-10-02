@@ -3,9 +3,11 @@
  * and the foreground abort. Cancelling detached work always takes a job id.
  */
 
-import type { ToolSet } from 'ai';
+import type { ToolExecutionOptions, ToolSet } from 'ai';
 
 import type { BackgroundJob, BackgroundJobStore } from '../jobs/store';
+import type { JobOutputFeeds, JobOutputTail } from '../jobs/live-output';
+import { CALL_JOB_OPTION, type CallJob } from '../tools/call-job';
 import type { BackgroundRetryRequest } from '../jobs/runner';
 import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
@@ -19,6 +21,7 @@ export interface BackgroundJobControl {
   cancel(jobId: string): Promise<boolean>;
   createRetry(request: BackgroundRetryRequest): string | null;
   detach(jobId: string, kind: string, promise: Promise<JsonValue | undefined>): void;
+  readonly output: JobOutputFeeds;
 }
 
 export interface BackgroundJobPlaneDeps {
@@ -35,8 +38,17 @@ export function jobResult(jobs: BackgroundJobStore, jobId: string): BackgroundJo
   return jobs.get(jobId);
 }
 
-export function listBackgroundJobs(jobs: BackgroundJobStore, limit = 20): BackgroundJob[] {
-  return jobs.list(limit).map((job) => (job.status === 'running' && job.serves !== null ? { ...job, status: 'serving' } : job));
+export type ListedBackgroundJob = BackgroundJob & { readonly output?: JobOutputTail };
+
+export function listBackgroundJobs(
+  jobs: BackgroundJobStore, limit = 20, output?: (jobId: string) => JobOutputTail | undefined,
+): ListedBackgroundJob[] {
+  return jobs.list(limit).map((job) => {
+    const status = job.status === 'running' && job.serves !== null ? 'serving' : job.status;
+    const tail = job.status === 'running' ? output?.(job.id) : undefined;
+
+    return { ...job, status, ...(tail !== undefined && { output: tail }) };
+  });
 }
 
 /** Abort a running job, mark it cancelled, and wake the agent. Awaited: the wake is part of the
@@ -105,10 +117,17 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
     }
 
     deps.logActivity('bg_job_retry', `${jobId} -> ${newId}`);
+    const output = deps.jobRunner.output.open(newId);
+    output.live();
+    const retried: CallJob = { id: newId, detached: AbortSignal.abort(), output };
 
-    const promise = Promise.resolve(tool.execute(input, {
-        abortSignal: controller.signal, toolCallId: newId, messages: [],
-      })).then((result) => result === undefined ? undefined : decodeJsonValue({ value: result }));
+    const options: ToolExecutionOptions & { [CALL_JOB_OPTION]: CallJob } = {
+      abortSignal: controller.signal, toolCallId: newId, messages: [], [CALL_JOB_OPTION]: retried,
+    };
+
+    const promise = Promise.resolve(tool.execute(input, options))
+      .finally(() => { output.end(); })
+      .then((result) => result === undefined ? undefined : decodeJsonValue({ value: result }));
 
     deps.jobRunner.detach(newId, job.kind, promise);
 

@@ -73,7 +73,11 @@ import {
 } from './overlays';
 import { useDeviceConnectPrompt, type DeviceConnectPromptState } from './use-device-connect';
 import { useShellApproval } from './use-shell-approval';
-import { READS_CHANGED_EVENT, ROSTER_READS, type BroadcastEvent, type LiveRead, type ShellApprovalRequest, type WorkMode } from '@kinu.run/core';
+import {
+  followJobOutput, JobOutputFrameSchema, READS_CHANGED_EVENT, ROSTER_READS,
+  type BroadcastEvent, type JobOutputTail, type LiveRead, type ShellApprovalRequest, type WorkMode,
+} from '@kinu.run/core';
+import * as v from 'valibot';
 import { useComposerPaste } from './use-composer-paste';
 import { useDraftEditing } from './use-draft-editing';
 import { composerHelp } from './help-view';
@@ -88,6 +92,7 @@ import { agentDisplayLabel, clipText } from '@kinu.run/core/tui';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
   buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers, evolutionWork,
+  jobWork, lastPrinted,
   type TuiHubData, type TuiHubRow, type TuiWorkEntry, type TuiHubView, type TuiSubagentChat,
 } from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
@@ -144,7 +149,7 @@ export type ActiveSurface =
   | { kind: 'subagent'; path: readonly string[]; label: string; actorId: string | null }
   | null;
 
-const HUB_READS: ReadonlySet<string> = new Set<LiveRead>([...ROSTER_READS, 'listWorkspaceWork']);
+const HUB_READS: ReadonlySet<string> = new Set<LiveRead>([...ROSTER_READS, 'listWorkspaceWork', 'listBackgroundJobs']);
 
 function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string | null {
   if (surface === null) return walkbackOpen ? 'Walk back ›' : null;
@@ -832,8 +837,15 @@ function ChatScene({
     return { ...roster, page: { ...roster.page, items } };
   }, [client, hub, roster]);
 
+  const [jobTails, setJobTails] = useState<Readonly<Record<string, JobOutputTail>>>({});
+
   const hubLive = useMemo<TuiHubData | undefined>(() => !hub ? undefined : {
     ...hub.data,
+    work: hub.data.work.map((item) => {
+      const printed = lastPrinted(jobTails[item.id.replace(/^job:/, '')]);
+
+      return item.id.startsWith('job:') && printed !== undefined ? { ...item, printed } : item;
+    }),
     agents: buildAgentHubEntries({
       items: roster.page.items,
       subordinates: hub.identity === `${client.mode}:${client.agentName}` ? hub.data.subordinates : [],
@@ -848,7 +860,7 @@ function ChatScene({
       },
       projectRoot,
     }),
-  }, [hub, roster.page.items, client, status?.name, isProcessing, projectRoot]);
+  }, [hub, roster.page.items, client, status?.name, isProcessing, projectRoot, jobTails]);
 
   const answered = useMemo(() => answeredHelpers(messages, hub?.data.helpers ?? []), [messages, hub]);
   // Bumped by each frame naming a read the hub shows, so the hub reads again.
@@ -1349,6 +1361,15 @@ function ChatScene({
   }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, sealThinking, setTurnPhase, stream]);
 
   const handleBroadcast = useCallback((event: Extract<AgentClientEvent, { type: 'broadcast' }>) => {
+    const printed = v.safeParse(JobOutputFrameSchema, event.event);
+
+    if (printed.success) {
+      const frame = printed.output;
+      setJobTails((tails) => ({ ...tails, [frame.jobId]: followJobOutput(tails[frame.jobId], frame) }));
+
+      return;
+    }
+
     if (event.event.type === READS_CHANGED_EVENT) {
       if (event.event.reads?.some((read) => HUB_READS.has(read)) === true) setHubReadsMoved((moves) => moves + 1);
 
@@ -2253,8 +2274,8 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
 }
 
 async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError' | 'work' | 'workError' | 'helpers'>> {
-  const [subordinates, work] = await Promise.allSettled([readSubordinates(client), client.workspaceWork()]);
-  const evolution = subordinates.status === 'fulfilled' ? subordinates.value.evolution : [];
+  const [subordinates, work, jobs] = await Promise.allSettled([readSubordinates(client), client.workspaceWork(), client.listJobs(20)]);
+  const evolution = [...jobs.status === 'fulfilled' ? jobWork(jobs.value) : [], ...subordinates.status === 'fulfilled' ? subordinates.value.evolution : []];
 
   return {
     ...(subordinates.status === 'fulfilled'

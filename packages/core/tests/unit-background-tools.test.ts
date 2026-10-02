@@ -6,7 +6,8 @@ import { handClock, toolExecute } from '@kinu.run/test-utils';
 import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { wrapToolsForBackground } from '../src/jobs/background-wrap';
 import { readSpawnStarted, BACKGROUND_POLICY, invocationBackgroundPolicy, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
-import type { Clock } from '../src/types/clock';
+import { REAL_CLOCK, type Clock } from '../src/types/clock';
+import { JobOutputFeeds } from '../src/jobs/live-output';
 
 
 function gate() {
@@ -41,6 +42,7 @@ function fakeJobRunner(
   return {
     policy,
     thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold, clock }),
+    output: new JobOutputFeeds({ clock: clock ?? REAL_CLOCK, send: () => {} }),
   };
 }
 

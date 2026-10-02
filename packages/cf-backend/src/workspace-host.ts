@@ -465,6 +465,7 @@ function workspaceBox(deps: {
     // Each actor's work runs in its own named durable shell.
     exec: async (command, options): Promise<NimbusExecResult> =>
       await (await runtime()).exec(command, { ...options, shellId }),
+    execStream: async (command, options) => await (await runtime()).execStream(command, { ...options, shellId }),
     startProcess: async (command, options): Promise<NimbusStartResult> =>
       await (await runtime()).startProcess(command, { ...options, shellId }),
     runCode: async (code, options): Promise<NimbusExecResult> =>

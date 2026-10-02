@@ -77,6 +77,7 @@ interface FakeClientOptions {
   rename?: AgentClient['rename'];
   inspectSubordinate?: AgentClient['inspectSubordinate'];
   workspaceWork?: AgentClient['workspaceWork'];
+  listJobs?: AgentClient['listJobs'];
   workspaceSpend?: AgentClient['workspaceSpend'];
 }
 
@@ -142,7 +143,7 @@ export function fakeClient(options: FakeClientOptions) {
     revertChangelogEntry: async () => ({ ok: false }),
     readMemory: async () => '',
     searchNodes: async () => [],
-    listJobs: async () => [],
+    listJobs: options.listJobs ?? (async () => []),
     latestTakes: async () => null,
     pickTake: async () => { throw new Error('no takes'); },
     getModelSpec: async () => 'openai/gpt-5.5',

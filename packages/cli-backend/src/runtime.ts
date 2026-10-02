@@ -8,7 +8,7 @@ import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { Database } from 'bun:sqlite';
 import type {
   AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
-  ResolvedTurnProfile, Shell, ShellExecResult, OutputSpill, SpillOutcome,
+  ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome,
 } from '@kinu.run/core';
 import type { Schedule, Memory, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
 import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
@@ -786,10 +786,10 @@ export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process
   const env = unsandboxedCommandEnvironment(source, new Set([...HARNESS_CREDENTIAL_ENV, ...dotenvLoadedNames(process.cwd(), source)]));
 
   return {
-    exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
+    exec(command: string, stdinOrOptions?: string | ShellExecOptions) {
       const { promise, resolve } = Promise.withResolvers<ShellExecResult>();
 
-      const { stdin, signal }: { stdin?: string; signal?: AbortSignal } = v.is(v.string(), stdinOrOptions)
+      const { stdin, signal, output }: ShellExecOptions = v.is(v.string(), stdinOrOptions)
         ? { stdin: stdinOrOptions }
         : stdinOrOptions ?? {};
 
@@ -837,8 +837,15 @@ export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process
 
       if (signal?.aborted) onAbort();
       else signal?.addEventListener('abort', onAbort, { once: true });
-      child.stdout.on('data', (chunk: Buffer) => { stdout.write(chunk); });
-      child.stderr.on('data', (chunk: Buffer) => { stderr.write(chunk); });
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout.write(chunk);
+        output?.write('stdout', chunk);
+      });
+
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr.write(chunk);
+        output?.write('stderr', chunk);
+      });
       child.on('error', (error) => conclude({ error }));
 
       // A backgrounded grandchild keeps stdout open, so `close` may never

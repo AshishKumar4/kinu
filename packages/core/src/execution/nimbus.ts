@@ -3,7 +3,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
-import type { Shell } from '../types/primitives';
+import type { OutputSink, Shell } from '../types/primitives';
+import { collectExecStream, type ExecChunk, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
 import type { MountedVfs } from '../vfs/mounts';
 import { atVfsPath } from '../vfs/errno';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -141,6 +142,7 @@ export interface NimbusSandboxFiles {
 export interface NimbusSandboxHandle {
   ready(): Promise<void>;
   exec(command: string, options?: NimbusExecOptions): Promise<NimbusExecResult>;
+  execStream?: (command: string, options?: NimbusExecOptions) => Promise<ExecStream>;
   startProcess?: (command: string, options?: NimbusExecOptions) => Promise<NimbusStartResult>;
   runCode?: (code: string, options?: NimbusRunCodeOptions) => Promise<NimbusExecResult>;
   files: NimbusSandboxFiles;
@@ -629,8 +631,11 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
         if (cred !== undefined) execOptions.cred = cred;
       }
 
+      const output = options?.output;
+      const streamed = box.execStream;
+
       const result = await raceAbort(
-        () => box.exec(command, execOptions),
+        () => (output === undefined || streamed === undefined ? box.exec(command, execOptions) : heard(streamed(command, execOptions), output)),
         options?.signal,
         'workspace exec aborted: the command may still finish in the session',
       );
@@ -652,6 +657,19 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
       });
     },
   };
+}
+
+async function heard(started: Promise<ExecStream>, output: OutputSink): Promise<NimbusExecResult> {
+  const stream = await started;
+
+  const told = stream.output.pipeThrough(new TransformStream<ExecChunk, ExecChunk>({
+    transform(chunk, forward) {
+      output.write(chunk.stream, chunk.data);
+      forward.enqueue(chunk);
+    },
+  }));
+
+  return collectExecStream({ output: told, exit: stream.exit });
 }
 
 /**

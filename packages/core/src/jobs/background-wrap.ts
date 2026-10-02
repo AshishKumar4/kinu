@@ -27,7 +27,7 @@ export const CONFINED_BACKGROUNDABLE_TOOLS = {
  * scaffold, GEPA) use unwrapped. Once a job retains a call, BackgroundJobRunner owns its controller.
  */
 export function wrapToolsForBackground(raw: ToolSet, deps: {
-  jobRunner: Pick<BackgroundJobRunner, 'thresholdDeps' | 'policy'>;
+  jobRunner: Pick<BackgroundJobRunner, 'thresholdDeps' | 'policy' | 'output'>;
   /** Named by the caller so a confined surface's set is visible where it is built. */
   backgroundable: Readonly<Record<string, BackgroundableTool>>;
   mode: () => WorkMode;
@@ -48,7 +48,11 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
         if (!detachable(parsedInput)) return exec(input, options);
         const controller = new AbortController();
         const ownership = new DeviceRequestOwnership(newJobId());
-        const job: CallJob = { id: ownership.jobId, detached: ownership.detached };
+        const output = deps.jobRunner.output.open(ownership.jobId);
+        const job: CallJob = { id: ownership.jobId, detached: ownership.detached, output };
+        const ending = <T>(call: T | PromiseLike<T>): Promise<T> => Promise.resolve(call).finally(() => { output.end(); });
+
+        ownership.detached.addEventListener('abort', () => { output.live(); }, { once: true });
         const mode = deps.mode();
         const turnSignal = options.abortSignal;
         const abortSignal = turnSignal ? AbortSignal.any([turnSignal, controller.signal]) : controller.signal;
@@ -58,7 +62,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
 
         if (completion === 'spawn') {
           if (!deps.jobRunner.policy.wakesAfterTurn) {
-            run = Promise.resolve(exec(input, { ...options, abortSignal }));
+            run = ending(exec(input, { ...options, abortSignal }));
           } else {
             run = withSpawnDetach(
               key,
@@ -74,7 +78,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
                   [CALL_JOB_OPTION]: job,
                 };
 
-                return exec(input, execOptions);
+                return ending(exec(input, execOptions));
               },
               deps.jobRunner.thresholdDeps(input, mode, controller, ownership),
             );
@@ -89,7 +93,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
 
           run = withBackgroundThreshold(
             key,
-            () => exec(input, execOptions),
+            () => ending(exec(input, execOptions)),
             deps.jobRunner.thresholdDeps(input, mode, controller, ownership),
           );
         }

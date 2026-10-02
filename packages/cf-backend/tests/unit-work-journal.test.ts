@@ -116,6 +116,22 @@ describe('Now owes the work in hand whatever the plan read is doing', () => {
     expect(sectionTitles(markup)).toEqual(['Now']);
   });
 
+  // Main's queue, 2026-10-02: a long build showed nothing until it finished. A running job's card shows the last
+  // lines its frames told; a settled one shows its result as before.
+  test("a running job's card shows the last lines it printed, and a settled job's its result", () => {
+    const output = {
+      seq: 3, omitted: 0,
+      chunks: [{ stream: 'stdout' as const, text: 'one\ntwo\nthree\n' }, { stream: 'stderr' as const, text: 'warn: four\nfive\n' }],
+    };
+
+    const running = workTabMarkup([job({ id: 'bgjob-5d0c2b11', status: 'running', settledAt: null, output })]);
+    expect(running).toContain('two\nthree\nwarn: four\nfive');
+    expect(running).not.toContain('one\n');
+
+    const settled = workTabMarkup([job({ id: 'bgjob-5d0c2b11', status: 'completed', result: 'built', output })]);
+    expect(settled).not.toContain('warn: four');
+  });
+
   test('one decision and no work in flight renders Needs you and no journal frame', () => {
     const decision: PendingAction = {
       id: 'defer-1', kind: 'deferred_action', title: 'Approve: a command the agent wants to run on device',

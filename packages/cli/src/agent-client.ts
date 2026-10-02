@@ -18,7 +18,7 @@ import type {
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
-import { isSteeredMessage, type AgentModelMenu } from '@kinu.run/core';
+import { isSteeredMessage, type AgentModelMenu, type JobOutputTail } from '@kinu.run/core';
 import type { KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -105,6 +105,8 @@ export interface AgentJobSummary {
   id: string;
   kind: string;
   status: string;
+  label?: string | null;
+  output?: JobOutputTail;
 }
 
 export interface AgentSearchNode {

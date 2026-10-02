@@ -34,6 +34,15 @@ function interruptionNote(job: BackgroundJob, now: number): string | null {
   return `Interrupted and re-driven ${times}. The work was not lost.${waiting}`;
 }
 
+/** The last lines a running job printed, as its frames told them. */
+function lastOutput(output: BackgroundJob["output"]): string | null {
+  const lines = (output?.chunks ?? []).map(({ text }) => text).join("").replace(/\n$/, "").split("\n");
+
+  return lines.slice(-OUTPUT_LINES).join("\n") || null;
+}
+
+const OUTPUT_LINES = 4;
+
 /** Rounded up, so a wait that exists never reads as "in 0s". */
 function timeUntil(ms: number): string {
   const seconds = Math.ceil(ms / 1000);
@@ -86,6 +95,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
   const Icon = m.icon;
   const live = job.status === "running" || job.status === "serving";
   const detail = job.status === "completed" ? job.result : job.error;
+  const printed = live ? lastOutput(job.output) : null;
   const interrupted = interruptionNote(job, Date.now());
 
   return (
@@ -109,6 +119,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
               Retried as {job.retriedBy.replace(/^bgjob-/, "").slice(0, 8)}
             </div>
           )}
+          {printed && <pre className="p-annotation p-text-2 mt-1 whitespace-pre-wrap break-words font-mono" aria-label="Latest output">{printed}</pre>}
           {detail && <div className="p-annotation p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words">{detail}</div>}
           {err && <div className="p-t-status p-danger mt-1">{err}</div>}
         </div>

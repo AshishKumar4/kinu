@@ -2,7 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
 import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
-import { initWorkspaceSchema } from '@kinu.run/core';
+import { initWorkspaceSchema, JobOutputFrameSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -1090,6 +1090,39 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(message).toContain('writes files');
     expect(message).toMatch(/kinu jobs \S+ cancel <id>/);
     expect(stderrLines.some((line) => line.includes('bgjob-quiet'))).toBe(true);
+  });
+
+  // Main's queue, 2026-10-02: a long build showed nothing in the TUI until it finished.
+  test("a detached command's output reaches the session's clients as job frames before the job settles", async () => {
+    // Still running when its zero window passes, so a job takes it.
+    const command = "echo compiled; echo 'warn: chunk size' 1>&2; sleep 0.2; echo built";
+
+    const { session, events } = setup('unused', toolSequenceModel([{ name: 'shell', input: { command, why: 'build' } }]), {
+      // A zero window: the call becomes a job because it has not finished, not because time passed.
+      backgroundPolicy: { detachAfterMs: 0, settleGraceMs: 60_000, wakesAfterTurn: true },
+    });
+
+    await session.send('build it', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+
+    const frames = events.items.flatMap((event) => {
+      const frame = event.type === 'broadcast' ? v.safeParse(JobOutputFrameSchema, event.event) : null;
+
+      return frame?.success === true ? [frame.output] : [];
+    });
+
+    const printed = { stdout: '', stderr: '' };
+
+    for (const { chunks } of frames) for (const { stream, text } of chunks) printed[stream] += text;
+
+    expect(frames.map(({ seq }) => seq)).toEqual(frames.map((_, index) => index + 1));
+    expect(printed).toEqual({ stdout: 'compiled\nbuilt\n', stderr: 'warn: chunk size\n' });
+
+    const settledAt = events.items.findIndex((event) => event.type === 'background' && event.event === 'background_job_notice');
+    const lastFrameAt = events.items.map((event) => event.type === 'broadcast' && v.is(JobOutputFrameSchema, event.event)).lastIndexOf(true);
+    expect(lastFrameAt).toBeGreaterThanOrEqual(0);
+    expect(lastFrameAt).toBeLessThan(settledAt);
+    await session.end();
   });
 
   test('end() releases the session when a fiber will never settle', async () => {

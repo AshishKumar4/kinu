@@ -39,6 +39,16 @@ export {
 
 export { AgentWakeQueue } from './wake-queue';
 
+export {
+  JobOutputFeeds,
+  JOB_OUTPUT_EVENT,
+  JobOutputFrameSchema,
+  JobOutputTailSchema,
+  followJobOutput,
+  type JobOutputFrame,
+  type JobOutputTail,
+} from './live-output';
+
 export { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
 
 export {
