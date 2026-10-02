@@ -217,7 +217,7 @@ const SNAPSHOT_KEY = 'devbox:snapshot';
 
 const SUPERSEDED_SNAPSHOTS_KEY = 'devbox:superseded-snapshots';
 
-const SnapshotRecord = v.object({ id: v.string(), chainRev: v.number(), takenAt: v.number() });
+const SnapshotRecord = v.object({ id: v.string(), image: v.string(), chainRev: v.number(), takenAt: v.number() });
 
 const SNAPSHOT_LIFE_MS = 29 * 24 * 60 * 60 * 1000;
 
@@ -603,7 +603,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const held = v.safeParse(SnapshotRecord, this.ctx.storage.kv.get(SNAPSHOT_KEY));
     const chain = v.safeParse(DiskChainStateSchema, this.ctx.storage.kv.get(DISK_STATE_KEY));
 
-    if (!held.success || Date.now() - held.output.takenAt > SNAPSHOT_LIFE_MS) return undefined;
+    if (!held.success || held.output.image !== this.containerImage || Date.now() - held.output.takenAt > SNAPSHOT_LIFE_MS) return undefined;
 
     return chain.success && chain.output.rev > held.output.chainRev ? undefined : held.output.id;
   }
@@ -2028,7 +2028,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const snapshot = await this.#container().snapshotContainer({ name: `${this.ctx.id.toString()}-${String(Date.now())}` });
 
     this.#supersede(SNAPSHOT_KEY);
-    this.ctx.storage.kv.put(SNAPSHOT_KEY, { id: snapshot.id, chainRev: chain.success ? chain.output.rev : 0, takenAt: Date.now() });
+    this.ctx.storage.kv.put(SNAPSHOT_KEY, { id: snapshot.id, image: this.containerImage ?? '', chainRev: chain.success ? chain.output.rev : 0, takenAt: Date.now() });
 
     return undefined;
   }

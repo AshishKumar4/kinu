@@ -45,6 +45,15 @@ class HybridBox extends ChainTestBox {
   }
 }
 
+/** The same box after a deploy that changed its image. */
+class ImageChangedBox extends HybridBox {
+  static image = '';
+
+  protected override get containerImage(): string | undefined {
+    return ImageChangedBox.image;
+  }
+}
+
 /** A box that was started, used and rested once. */
 async function rested() {
   asked.length = 0;
@@ -110,6 +119,17 @@ test('a snapshot the chain has moved past, or one past its 29 days, is not woken
 
   expect({ moved: moved.container.startOptions.map(startedFrom), old: old.container.startOptions.map(startedFrom) }).toEqual({
     moved: ['image', 'image'], old: ['image', 'image'],
+  });
+});
+
+test('a snapshot of another image is not woken: the new image starts and recovers the chain', async () => {
+  const { box, container } = await rested();
+  ImageChangedBox.image = 'registry.example/devbox@sha256:next';
+  Object.setPrototypeOf(box, ImageChangedBox.prototype);
+  await box.devboxStartup();
+
+  expect({ starts: container.startOptions.map(startedFrom), asked }).toEqual({
+    starts: ['image', 'image'], asked: ['attach from image', 'commit quiesce', 'attach from image'],
   });
 });
 
