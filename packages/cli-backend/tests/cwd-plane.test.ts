@@ -237,21 +237,6 @@ describe('addressing the bound directory', () => {
 
     expect(readFileSync(join(project, 'slates/widgets/package.json'), 'utf8')).toBe('{"main":"server.ts"}');
     expect((await rt.storage.vfs.readdir(SLATES_ROOT)).map(({ name }) => name)).toEqual(['widgets']);
-    expect(await refusalOf(() => writeText(rt.storage.vfs, `${SLATES_ROOT}/../../outside.txt`, 'escaped'))).toBe('EACCES');
-    expect(existsSync(join(project, '..', 'outside.txt'))).toBe(false);
-  });
-
-  test('a path that climbs out by `..`, relative or through the plane\'s own root, is refused, and writes nothing', async () => {
-    const { state, project } = roots('cwd-plane-escape');
-    const outside = join(project, '..', 'outside.txt');
-    const rt = agentRuntime(state, 'solo', project);
-
-    expect(await refusalOf(() => writeText(rt.storage.vfs, '../outside.txt', 'escaped'))).toBe('EACCES');
-    expect(await refusalOf(() => writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/../outside.txt`, 'escaped'))).toBe('EACCES');
-    expect(await refusalOf(() => rt.storage.vfs.mkdir(`${WORKSPACE_ROOT}/../sneaky`, { recursive: true }))).toBe('EACCES');
-
-    expect(existsSync(outside)).toBe(false);
-    expect(existsSync(join(project, '..', 'sneaky'))).toBe(false);
   });
 
   /** The agent's `file` tool and codemode's `workspace.writeFile`, with a user who answers `answer`. */
@@ -269,6 +254,17 @@ describe('addressing the bound directory', () => {
 
     return { file, writeFile: (path: string, content: string) => present(writeFile, 'workspace.writeFile').execute(path, content), asked };
   }
+
+  test('a relative path that climbs out of the directory is a host path outside it, and its write waits for the user', async () => {
+    const { state, project } = roots('cwd-plane-climb');
+    const outside = join(dirname(project), 'outside.txt');
+    const rt = agentRuntime(state, 'solo', project);
+    const { file, asked } = agentTools(rt, () => 'deny');
+
+    await expect(file({ action: 'write', path: '../outside.txt', content: 'climbed' })).rejects.toMatchObject({ code: 'denied' });
+    expect(asked).toEqual([`file write ${outside}`]);
+    expect(existsSync(outside)).toBe(false);
+  });
 
   test('the agent reads outside the directory unasked; its change there waits for the user, and runs once allowed', async () => {
     const { state, project } = roots('cwd-plane-outside');

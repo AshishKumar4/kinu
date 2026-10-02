@@ -806,10 +806,11 @@ export function deviceMountSegment(device: DeviceFleetEntry, fleet: readonly Dev
 /** Stated absence for a path under no live machine, listing the connected segments. */
 function noSuchDevice(fleet: readonly DeviceFleetEntry[] | undefined, first: string): Error {
   const segments = connectedDevices(fleet).map((d) => deviceMountSegment(d, fleet)).join(', ');
+  const offline = fleet?.some((d) => !d.connected && deviceMountSegment(d, fleet) === first) === true;
 
   const reason = first === ''
     ? `several machines are connected: each is mounted at /pc/<name>: ${segments}`
-    : `no connected machine is named "${first}": connected: ${segments}`;
+    : `${offline ? `"${first}" is offline` : `no connected machine is named "${first}"`}: connected: ${segments}`;
 
   return new VfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
 }

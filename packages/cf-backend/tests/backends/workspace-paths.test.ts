@@ -79,27 +79,20 @@ for (const name of testBackends()) {
       }
     });
 
-    test('relative, home-alias and slate traversal cannot leave their named root', async () => {
+    test('a path resolves as POSIX resolves it, from the home, on both backends', async () => {
       const plane = await publicPlane(name);
 
       try {
-        await plane.write('item.txt', 'unchanged');
+        await plane.write('item.txt', 'one');
         await plane.write('/slates/project/item.txt', 'slate');
-        expect(await plane.read('/slates/project/./item.txt')).toMatchObject({ content: 'slate' });
 
-        if (plane.hostFile !== null) expect(plane.hostFile('slates/project/item.txt')).toBe('slate');
-
-        for (const path of [
-          '../item.txt', './dir/../../item.txt', '../../tmp/item.txt',
-          '/home/main/../item.txt', '/home/user/../item.txt',
-          '/slates/../item.txt', '/slates/../../item.txt',
-        ]) {
-          expect((await plane.read(path)).error).toContain('EACCES');
-          await expect(plane.write(path, 'escaped')).rejects.toMatchObject({ code: 'EACCES' });
+        for (const path of ['../main/item.txt', './dir/../item.txt', '/slates/../home/main/item.txt', '/home/x/../main/item.txt']) {
+          expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
 
-        expect(await plane.read('item.txt')).toMatchObject({ content: 'unchanged' });
-        expect(await plane.read('/slates/project/item.txt')).toMatchObject({ content: 'slate' });
+        expect(await plane.read('/home/main/../../slates/project/./item.txt')).toMatchObject({ content: 'slate' });
+
+        if (plane.hostFile !== null) expect(plane.hostFile('slates/project/item.txt')).toBe('slate');
       } finally {
         plane.end?.();
       }
