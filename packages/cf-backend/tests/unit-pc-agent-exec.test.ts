@@ -72,6 +72,7 @@ const PcAgentModuleSchema = v.object({
   watchOutput: v.function(),
   waitForFile: v.function(),
   waitForSupervisorState: v.function(),
+  stopSupervisor: v.pipe(v.function(), v.returnsAsync(v.void())),
 });
 
 const SupervisorRegistrySchema2 = v.object({
@@ -742,6 +743,21 @@ describe('pc-agent durable supervisor', () => {
     expect(alive(v.parse(PidSchema, command.pid))).toBe(true);
     process.kill(-v.parse(PidSchema, command.pid), 'SIGKILL');
     await commandEnded;
+  });
+
+  // The same window with no timing left to it: the supervisor told to stop has already exited, so kill finds no process.
+  test('a stop told to a supervisor that has just exited answers with that exit, naming the process group', async () => {
+    const id = rpcId(465);
+    const dir = join(scratchDir('pc-agent-stop-exited'), id);
+    mkdirSync(dir, { mode: 0o700 });
+    const supervisor = Bun.spawn(['true']);
+    const command = Bun.spawn(['true']);
+    await Promise.all([supervisor.exited, command.exited]);
+
+    await expect(pcAgent.stopSupervisor({ dir, pid: supervisor.pid, group: command.pid }, id)).rejects.toThrow(
+      `the supervisor of ${id} (pid ${String(supervisor.pid)}) exited without recording the command's result, so its outcome `
+        + `is unknown; the command may still be running in process group ${String(command.pid)}`,
+    );
   });
 
   test('a supervisor that dies on reading its ACK leaves its directory to the daemon, and the ACK answers', async () => {

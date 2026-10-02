@@ -1704,11 +1704,32 @@ async function resultWritten(entry, requestId) {
     await Promise.allSettled([written, exited]);
   }
 
-  // The supervisor writes its result before it can exit, so one gone without a result never wrote one.
-  if (!fs.existsSync(resultFile)) {
+  resultRecorded(entry, requestId);
+}
+
+/** The supervisor writes its result before it can exit, so one gone without a result never wrote one. */
+function resultRecorded(entry, requestId) {
+  if (!fs.existsSync(path.join(entry.dir, 'result'))) {
     throw new Error(`the supervisor of ${requestId} (pid ${entry.pid}) exited without recording the command's result, `
       + `so its outcome is unknown; the command may still be running in process group ${entry.group}`);
   }
+}
+
+/**
+ * Tells the supervisor of `entry` to stop, and waits for its result. One gone since its identity was checked
+ * cannot be told (ESRCH): it is answered for from what it left, as one that exits mid-wait is.
+ */
+async function stopSupervisor(entry, requestId) {
+  try {
+    process.kill(entry.pid, 'SIGUSR1');
+  } catch (err) {
+    if (!err || err.code !== 'ESRCH') throw err;
+    resultRecorded(entry, requestId);
+
+    return;
+  }
+
+  await resultWritten(entry, requestId);
 }
 
 /** The ACK to a live supervisor, settled once it has removed its directory or once it is gone, whichever is first. */
@@ -1827,8 +1848,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
       throw new Error(`cannot terminate ${requestId}: supervisor identity no longer matches`);
     }
 
-    process.kill(entry.pid, 'SIGUSR1');
-    await resultWritten(entry, requestId);
+    await stopSupervisor(entry, requestId);
     const terminal = readTerminalResult(entry.dir);
 
     if (terminal.kind !== 'cancelled') {
@@ -3740,6 +3760,7 @@ module.exports = {
   watchOutput,
   waitForFile,
   waitForSupervisorState,
+  stopSupervisor,
   createCheckpoints,
   CONFIG_PATH,
   readDeviceConfig,
