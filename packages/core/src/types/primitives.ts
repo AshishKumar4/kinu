@@ -132,11 +132,13 @@ export type OutputStreamName = 'stdout' | 'stderr';
 export interface OutputChunk {
   readonly stream: OutputStreamName;
   readonly text: string;
+  /** Bytes lost just before `text`. */
+  readonly omitted?: number;
 }
 
 export interface OutputSink {
   write(stream: OutputStreamName, data: Uint8Array | string): void;
-  lost(count: number): void;
+  lost(bytes: number): void;
 }
 
 const WritableSchema = v.object({ write: v.function(), lost: v.function() });

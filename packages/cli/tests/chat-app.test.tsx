@@ -6,7 +6,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
-import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, type AgentModelMenu, type SubordinateChild } from '@kinu.run/core';
+import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, type AgentModelMenu, type JobOutputTail, type SubordinateChild } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
@@ -169,6 +169,11 @@ test('Up and Down inside a multiline draft move the cursor and boundary history 
   await screen.renderOnce();
   expect(input.logicalCursor.row).toBe(2);
 });
+
+/** The listing of one running build whose output the hub has read as `output`. */
+function runningBuild(output: JobOutputTail): AgentClient['listJobs'] {
+  return async () => [{ id: 'bgjob-4e1a77c0aa11', kind: 'shell', status: 'running', label: 'workspace: bun run build', output }];
+}
 
 describe('ChatApp terminal interaction', () => {
   test('command palette exposes only truthful local and cloud capabilities', async () => {
@@ -1102,10 +1107,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
   test("the open Agent Hub lists a running job with the line it printed last, and its frames keep that line current", async () => {
     const main = fakeClient({
       name: 'checkout',
-      listJobs: async () => [{
-        id: 'bgjob-4e1a77c0aa11', kind: 'shell', status: 'running', label: 'workspace: bun run build',
-        output: { seq: 2, omitted: 0, chunks: [{ stream: 'stdout', text: 'resolving\ncompiled 120 modules\n' }] },
-      }],
+      listJobs: runningBuild({ seq: 2, omitted: 0, chunks: [{ stream: 'stdout', text: 'resolving\ncompiled 120 modules\n' }] }),
     });
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
@@ -1121,6 +1123,42 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     await screen.waitFor('the line its frame carried', () => screen.frame().includes('warn: 2 large chunks'));
     expect(screen.frame()).not.toContain('compiled 120 modules');
+  });
+
+  // 2026-10-02: a row showing a cut tail read as the whole output.
+  test('a running job whose output was dropped shows the bytes dropped before its last line, and where a frame drops more', async () => {
+    const main = fakeClient({
+      name: 'checkout',
+      listJobs: runningBuild({ seq: 2, omitted: 1_258_291, chunks: [{ stream: 'stdout', text: 'resolving\ncompiled 120 modules\n', omitted: 1_258_291 }] }),
+    });
+
+    const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the running job the hub read', () => screen.frame().includes('workspace: bun run build'));
+    expect(screen.frame()).toContain('... 1.2 MB omitted ... compiled 120 modules');
+
+    main.emit({ type: 'broadcast', event: {
+      type: JOB_OUTPUT_EVENT, jobId: 'bgjob-4e1a77c0aa11', seq: 3, dropped: 4_096,
+      chunks: [{ stream: 'stdout', text: 'compiled 377 modules\n', omitted: 4_096 }],
+    } });
+
+    await screen.waitFor('the line its frame carried', () => screen.frame().includes('compiled 377 modules'));
+    expect(screen.frame()).toContain('... 1.2 MB omitted ... compiled 377 modules');
+  });
+
+  test('a frame from a worker that counts a loss without placing it is marked before its first line', async () => {
+    const main = fakeClient({
+      name: 'checkout',
+      listJobs: runningBuild({ seq: 2, omitted: 0, chunks: [{ stream: 'stdout', text: 'resolving\n' }] }),
+    });
+
+    const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the running job the hub read', () => screen.frame().includes('workspace: bun run build'));
+    main.emit({ type: 'broadcast', event: { type: JOB_OUTPUT_EVENT, jobId: 'bgjob-4e1a77c0aa11', seq: 3, dropped: 2_048, chunks: [{ stream: 'stdout', text: 'linked\n' }] } });
+
+    await screen.waitFor('the line its frame carried', () => screen.frame().includes('linked'));
+    expect(screen.frame()).toContain('... 2.0 KB omitted ... linked');
   });
 
   test('after a reload, a one-question helper the chat asked is listed as answered, and Enter opens its kept chat by id', async () => {

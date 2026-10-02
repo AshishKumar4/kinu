@@ -47,6 +47,7 @@ export {
   JobOutputFrameSchema,
   JobOutputTailSchema,
   followJobOutput,
+  lastOutputLines,
   type JobOutputFrame,
   type JobOutputTail,
 } from './live-output';

@@ -452,49 +452,103 @@ function recordingRunner(clock: ReturnType<typeof handClock>) {
   return { ...chain, frames, framesAtSettle };
 }
 
+/** A sandbox build detached into a job on `clock`: the sink its command prints to, the job's frames, and its end. */
+async function detachedBuild(clock: ReturnType<typeof handClock>) {
+  const finished = Promise.withResolvers<{ stdout: string; exitCode: number }>();
+  let given: OutputSink | undefined;
+  const chain = recordingRunner(clock);
+
+  const handle: SandboxHandle = {
+    // The build prints, then outruns its call's window.
+    exec: (_command, opts) => {
+      given = opts?.output;
+      given?.write('stdout', 'resolving dependencies\n');
+      clock.advance(BACKGROUND_POLICY.interactive.detachAfterMs);
+
+      return finished.promise;
+    },
+    readFile: async () => ({}),
+    writeFile: async () => {},
+    listFiles: async () => ({ files: [] }),
+    deleteFile: async () => {},
+    exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
+    unexposePort: async () => {},
+    getExposedPorts: async () => [],
+    ...sandboxHandleLifecycle,
+  };
+
+  const router = new DefaultExecutionRouter();
+  router.register(createSandboxExecutor(handle, 'preview.example.com'));
+  const { rt } = createTestRuntime();
+
+  const wrapped = wrapToolsForBackground(
+    buildBuiltinTools({ rt: { ...rt, executionRouter: router }, conversations: conversationsFor(rt) }),
+    { jobRunner: chain.runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
+  );
+
+  const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
+  const detached = await run({ command: 'bun run build', runtime: 'sandbox', why: 'build the site' });
+
+  if (!isBackgroundHandle(detached)) throw new Error(`the build did not detach: ${JSON.stringify(detached)}`);
+
+  return {
+    ...chain,
+    jobId: detached.jobId,
+    output: present(given, 'the sink the sandbox command was given'),
+    finish: async () => {
+      finished.resolve({ stdout: 'built\n', exitCode: 0 });
+      await Promise.all(chain.bodies);
+    },
+  };
+}
+
 describe("a running job's output", () => {
+  test('a window its output overflows drops the oldest and counts the drop in bytes, where it was', async () => {
+    const clock = handClock(Date.now());
+    const build = await detachedBuild(clock);
+
+    // Five two-byte characters past what one window holds: the oldest five go, ten bytes.
+    build.output.write('stdout', 'é'.repeat(WINDOW_CHARS));
+    build.output.write('stdout', 'done\n');
+    clock.advance(250);
+
+    expect(build.frames.at(-1)).toEqual({
+      type: JOB_OUTPUT_EVENT, jobId: build.jobId, seq: 2,
+      chunks: [{ stream: 'stdout', text: `${'é'.repeat(WINDOW_CHARS - 5)}done\n`, omitted: 10 }], dropped: 10,
+    });
+    // The tail sheds the first frame's line to stay within its bound: 23 more bytes before what it keeps.
+    const [listed] = listBackgroundJobs(build.store, 20, (id) => build.runner.output.tail(id));
+    expect(listed?.output).toMatchObject({ seq: 2, omitted: 33, chunks: [{ omitted: 33 }] });
+    expect(joined(present(listed?.output, "the running job's listed output").chunks).length).toBe(TAIL_CHARS);
+    await build.finish();
+  });
+
+  test("a loss the command's sink reports is marked between the lines around it", async () => {
+    const clock = handClock(Date.now());
+    const build = await detachedBuild(clock);
+
+    build.output.write('stdout', 'one\n');
+    build.output.lost(4096);
+    build.output.write('stdout', 'two\n');
+    clock.advance(250);
+
+    expect(build.frames.at(-1)).toEqual({
+      type: JOB_OUTPUT_EVENT, jobId: build.jobId, seq: 2,
+      chunks: [{ stream: 'stdout', text: 'one\n' }, { stream: 'stdout', text: 'two\n', omitted: 4096 }], dropped: 4096,
+    });
+
+    // A loss with nothing printed after it yet is marked at the end, not held back.
+    build.output.lost(512);
+    clock.advance(250);
+    expect(build.frames.at(-1)).toMatchObject({ seq: 3, chunks: [{ text: '', omitted: 512 }], dropped: 512 });
+    await build.finish();
+  });
+
   // Main's queue, 2026-10-02: a job's output reached no one until it settled, so a long build showed nothing in the UI
   // or TUI until it finished. It goes to the job's rooms a window at a time, and is never a row.
   test('reaches its rooms while it runs, a window at a time, and its settle comes after its last frame', async () => {
     const clock = handClock(Date.now());
-    const finished = Promise.withResolvers<{ stdout: string; exitCode: number }>();
-    let given: OutputSink | undefined;
-    const { runner, store, bodies, db, frames, framesAtSettle } = recordingRunner(clock);
-
-    const handle: SandboxHandle = {
-      // The build prints, then outruns its call's window.
-      exec: (_command, opts) => {
-        given = opts?.output;
-        given?.write('stdout', 'resolving dependencies\n');
-        clock.advance(BACKGROUND_POLICY.interactive.detachAfterMs);
-
-        return finished.promise;
-      },
-      readFile: async () => ({}),
-      writeFile: async () => {},
-      listFiles: async () => ({ files: [] }),
-      deleteFile: async () => {},
-      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
-      unexposePort: async () => {},
-      getExposedPorts: async () => [],
-      ...sandboxHandleLifecycle,
-    };
-
-    const router = new DefaultExecutionRouter();
-    router.register(createSandboxExecutor(handle, 'preview.example.com'));
-    const { rt } = createTestRuntime();
-
-    const wrapped = wrapToolsForBackground(
-      buildBuiltinTools({ rt: { ...rt, executionRouter: router }, conversations: conversationsFor(rt) }),
-      { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
-    );
-
-    const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
-    const detached = await run({ command: 'bun run build', runtime: 'sandbox', why: 'build the site' });
-
-    if (!isBackgroundHandle(detached)) throw new Error(`the build did not detach: ${JSON.stringify(detached)}`);
-    const { jobId } = detached;
-    const output = present(given, 'the sink the sandbox command was given');
+    const { runner, store, db, frames, framesAtSettle, jobId, output, finish } = await detachedBuild(clock);
 
     // The job's first frame, at its detach, holds what the build printed before the job took it.
     expect(frames).toEqual([{ type: JOB_OUTPUT_EVENT, jobId, seq: 1, chunks: [{ stream: 'stdout', text: 'resolving dependencies\n' }], dropped: 0 }]);
@@ -516,7 +570,7 @@ describe("a running job's output", () => {
     const flood = frames.slice(2);
     expect(flood.map(({ seq }) => seq)).toEqual([3, 4, 5, 6]);
 
-    // Each holds its window's newest characters and says how many it left out.
+    // Each holds its window's newest characters and says how many bytes it left out.
     for (const frame of flood) expect(joined(frame.chunks).length).toBeLessThanOrEqual(WINDOW_CHARS);
     expect(flood.every(({ dropped }) => dropped > 0)).toBe(true);
     expect(joined(present(flood.at(-1), 'the last flood frame').chunks).endsWith('compiled module 9999\n')).toBe(true);
@@ -535,8 +589,7 @@ describe("a running job's output", () => {
 
     // The build ends: what it printed last goes out before its settle, and the job holds no output after it.
     output.write('stdout', 'built in 41s\n');
-    finished.resolve({ stdout: 'built\n', exitCode: 0 });
-    await Promise.all(bodies);
+    await finish();
 
     expect(frames.at(-1)).toEqual({ type: JOB_OUTPUT_EVENT, jobId, seq: 7, chunks: [{ stream: 'stdout', text: 'built in 41s\n' }], dropped: 0 });
     expect(framesAtSettle).toEqual([7]);
@@ -587,7 +640,7 @@ describe("a running job's output", () => {
     // A window the machine could not send whole: its bytes, and what it left out.
     machine({ chunks: [{ stream: 'stderr', data: base64('warn: café\n') }], dropped: 2048 });
     clock.advance(250);
-    expect(frames.at(-1)).toEqual({ type: JOB_OUTPUT_EVENT, jobId, seq: 2, chunks: [{ stream: 'stderr', text: 'warn: café\n' }], dropped: 2048 });
+    expect(frames.at(-1)).toEqual({ type: JOB_OUTPUT_EVENT, jobId, seq: 2, chunks: [{ stream: 'stderr', text: 'warn: café\n', omitted: 2048 }], dropped: 2048 });
 
     machine({ chunks: [{ stream: 'stdout', data: base64('built in 41s\n') }], dropped: 0 });
     answered.resolve(JSON.stringify({ stdout: 'resolving dependencies\nbuilt in 41s\n', stderr: 'warn: café\n', exitCode: 0 }));
