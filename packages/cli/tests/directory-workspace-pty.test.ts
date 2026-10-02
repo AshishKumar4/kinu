@@ -63,7 +63,6 @@ describe('kinu in a directory', () => {
 
     const run = await launchIn(home, project, 'project-newer');
 
-    expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
     expect(run.screen).toContain('Send a message');
     expect(run.screen).not.toContain('What is this workspace for?');
     expect(run.screen).not.toContain('elsewhere-latest');
@@ -77,7 +76,6 @@ describe('kinu in a directory', () => {
 
     const run = await launchIn(home, empty, 'What is this workspace for?');
 
-    expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
     expect(run.screen).not.toContain('Send a message');
   });
 });
@@ -92,7 +90,6 @@ describe('kinu ends with its terminal', () => {
 
       const run = await launchIn(home, project, 'Send a message', [{ signal }, { sleep: 10 }]);
 
-      expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
       expect(run.exited, run.screen).toBe(true);
     });
   }
@@ -103,7 +100,6 @@ describe('kinu ends with its terminal', () => {
 
     const run = await launchIn(home, empty, 'What is this workspace for?', [{ signal: 'SIGHUP' }, { sleep: 10 }]);
 
-    expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
     expect(run.exited, run.screen).toBe(true);
   });
 });

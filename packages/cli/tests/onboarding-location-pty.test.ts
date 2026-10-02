@@ -31,7 +31,6 @@ test('choosing where workspaces live keeps the answer and moves setup to the pro
     ],
   });
 
-  expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
   expect(run.screen).not.toContain('Where will your workspaces live?');
   expect(parseJsonObject(readFileSync(join(home, 'tui.json'), 'utf8')).onboardingLocation).toBe('local');
 });
@@ -64,7 +63,6 @@ test('Esc on a setup question answers it, and kinu keeps running', async () => {
     ],
   });
 
-  expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
   expect(run.exited, run.screen).toBe(false);
   expect(run.screen).toContain('Connect a provider');
 });

@@ -328,6 +328,8 @@ export async function runTuiInPty(entry: string, options: {
   readonly rows?: number;
   readonly env?: Readonly<Record<string, string>>;
   readonly term?: string;
+  /** A run whose verdict reads its misses (a first-run case) reports them; any other fails at the first. */
+  readonly unmetWait?: 'fail' | 'report';
 }): Promise<PtyRun> {
   const { python, driver } = installDriver();
   const home = join(driver, '..');
@@ -370,6 +372,14 @@ export async function runTuiInPty(entry: string, options: {
   if (result.survivors.length > 0) {
     throw new Error(`the program's process group still had live members 5 s after SIGKILL, so nothing vouches `
       + `that the run's home is quiet: ${result.survivors.join('; ')}`);
+  }
+
+  const unmet = result.waits.find((wait) => !wait.met);
+
+  // The driver stops at the first unmet wait, so every later step never ran; the run is that wait's failure.
+  if (unmet !== undefined && options.unmetWait !== 'report') {
+    throw new Error(`the screen never ${unmet.until === 'shown' ? 'showed' : 'dropped'} ${JSON.stringify(unmet.text)} `
+      + `(${String(unmet.afterMs)} ms in), so the steps after it never ran:\n${result.screen}`);
   }
 
   const raw = Buffer.from(result.output, 'base64').toString('utf8');

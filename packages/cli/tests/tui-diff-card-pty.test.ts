@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
 import { BUILTIN_TUI_THEMES, createThemeRegistry, DEFAULT_TUI_THEME_SELECTION } from '../src/tui/theme';
+import { TUI_COMPOSER_PLACEHOLDER } from '@kinu.run/core/tui';
 import { inkBefore, runTuiInPty } from './helpers/pty-screen';
 
 const entry = resolve(import.meta.dir, 'fixtures/pty-chat.tsx');
@@ -14,7 +15,7 @@ describe('the file diff card on a real terminal', () => {
     const run = await runTuiInPty(entry, {
       env: { KINU_PTY_FILE_EDIT: '1' },
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: 'edit state.ts' },
         { send: '\r' },
         { wait: 'src/state.ts', timeout: 3 },

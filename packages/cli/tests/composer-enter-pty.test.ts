@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { scratchPath } from '@kinu.run/test-utils';
 
+import { TUI_COMPOSER_PLACEHOLDER } from '@kinu.run/core/tui';
 import { runTuiInPty } from './helpers/pty-screen';
 
 const entry = resolve(import.meta.dir, 'fixtures/pty-chat.tsx');
@@ -15,7 +16,7 @@ function enterSubmits(label: string, enterBytes: string) {
   test(`${label} sends the draft and the agent reply lands on screen`, async () => {
     const run = await runTuiInPty(entry, {
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: 'draft one' },
         { wait: 'draft one', timeout: 1 },
         { send: enterBytes },
@@ -37,7 +38,7 @@ describe('the composer on a real terminal', () => {
     const run = await runTuiInPty(entry, {
       env: { VISUAL: '', EDITOR: `/bin/sh ${script}`, KINU_PTY_EDITOR_RECEIVED: received, KINU_PTY_SENT_FILE: sent },
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: 'draft survives editor failure' },
         { wait: 'draft survives editor failure', timeout: 3 },
         { send: '\x07' },
@@ -61,7 +62,7 @@ describe('the composer on a real terminal', () => {
     const run = await runTuiInPty(entry, {
       env: { VISUAL: `/bin/sh ${script}`, EDITOR: 'exit 99', KINU_PTY_EDITOR_RECEIVED: received, KINU_PTY_SENT_FILE: sent },
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: 'draft before editor' },
         { wait: 'draft before editor', timeout: 3 },
         { send: '\x07' },
@@ -79,7 +80,7 @@ describe('the composer on a real terminal', () => {
   test('legacy Ctrl+- bytes undo a deletion', async () => {
     const run = await runTuiInPty(entry, {
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: 'keep this draft' },
         { wait: 'keep this draft', timeout: 3 },
         { send: '\x7f\x7f' },
@@ -101,7 +102,7 @@ describe('the composer on a real terminal', () => {
     const run = await runTuiInPty(entry, {
       env: { KINU_PTY_SENT_FILE: sent },
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: `\x1b[200~${path}\x1b[201~` },
         { wait: '[Image #1]', timeout: 3 },
         { send: '\r' },
@@ -123,7 +124,7 @@ describe('the composer on a real terminal', () => {
     const run = await runTuiInPty(entry, {
       env: { KINU_PTY_SENT_FILE: sent },
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: packet('status=OK') + packet(`status=DATA:mime=${mime}`) + packet('status=DONE') },
         { send: packet('status=OK') + packet(`status=DATA:mime=${mime}`, 'iVBORw0KGgo=') + packet('status=DONE') },
         { wait: '[Image #1]', timeout: 3 },
@@ -146,7 +147,7 @@ describe('the composer on a real terminal', () => {
     const run = await runTuiInPty(entry, {
       env: { KINU_PTY_SENT_FILE: sent },
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: `\x1b[200~${text}\x1b[201~` },
         { wait: '[paste #1]', timeout: 3 },
         { send: '\r' },
@@ -161,7 +162,7 @@ describe('the composer on a real terminal', () => {
   test('embedded newlines in a short bracketed paste never submit', async () => {
     const run = await runTuiInPty(entry, {
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: '\x1b[200~first pasted line\nsecond pasted line\n\x1b[201~' },
         { wait: 'second pasted line', timeout: 3 },
       ],
@@ -177,7 +178,7 @@ describe('the composer on a real terminal', () => {
   test('Shift+Enter opens a line instead of sending', async () => {
     const run = await runTuiInPty(entry, {
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: 'draft one' },
         { wait: 'draft one', timeout: 1 },
         { send: '\u001B[13;2u' },
@@ -191,9 +192,9 @@ describe('the composer on a real terminal', () => {
   });
 
   test('typing after a click on the transcript lands in the composer', async () => {
-    const run = await runTuiInPty(entry, {
+    await runTuiInPty(entry, {
       steps: [
-        { wait: 'Connected to pty', timeout: 15 },
+        { wait: TUI_COMPOSER_PLACEHOLDER, timeout: 15 },
         { send: 'abc' },
         { wait: 'abc', timeout: 3 },
         { send: '\u001B[<0;50;12M' },
@@ -204,6 +205,5 @@ describe('the composer on a real terminal', () => {
       ],
     });
 
-    expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
   });
 });

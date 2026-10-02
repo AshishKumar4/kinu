@@ -32,14 +32,6 @@ describe('the connect card on a real terminal', () => {
       ],
     });
 
-    expect(run.waits.map((wait) => [wait.until, wait.text, wait.met])).toEqual([
-      ['shown', 'not now', true],
-      ['gone', 'not now', true],
-      ['shown', TUI_COMPOSER_PLACEHOLDER, true],
-      ['shown', draft, true],
-      ['shown', TUI_COMPOSER_STEERING_PLACEHOLDER, true],
-      ['shown', 'agent prose reply', true],
-    ]);
     expect(run.screen).not.toContain('quirk');
   });
 

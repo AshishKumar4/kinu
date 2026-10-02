@@ -144,7 +144,6 @@ async function inTerminal(machine: Machine, args: readonly string[], steps: read
     steps: [...steps, ...(close ? [{ signal: 'SIGHUP' } as const] : []), { sleep: 10 }],
   });
 
-  expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
   expect(run.exited, run.screen).toBe(true);
 }
 
