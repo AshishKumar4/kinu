@@ -15,6 +15,7 @@ import { toolExecute } from '@kinu.run/test-utils';
 import type { JsonValue } from '../src/utils/json';
 import type { CraftedTool } from '../src/types/craft';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 const ToolSummarySchema = v.object({
   name: v.string(),
@@ -369,7 +370,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     });
 
     await exec.tools.readFile.execute('shared.md');
-    const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory });
+    const fileTool = createFileTool({ home: WORKSPACE_ROOT, vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
 
     const result = v.parse(FileSuccessSchema, await execute({
@@ -387,7 +388,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     await writeText(rt.storage.vfs, 'unshared.md', 'content');
     const exec = buildExec(rt);
     await exec.tools.readFile.execute('unshared.md');
-    const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
+    const fileTool = createFileTool({ home: WORKSPACE_ROOT, vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
     await expect(execute({ action: 'edit', path: 'unshared.md', edits: [{ old_text: 'content', new_text: 'changed' }] }))
       .rejects.toThrow('has not been read here yet');

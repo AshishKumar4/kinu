@@ -197,6 +197,7 @@ export class AgentDatabase {
       toolFiles: files.agent(),
       storage: {
         vfs: files.agent(),
+        home: this.workspace.home,
         sql: files.sql,
         execRaw: (ddl) => { files.storage.sql.exec(ddl); },
         transactionSync: (write) => files.storage.transactionSync(write),

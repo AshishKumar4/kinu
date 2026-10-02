@@ -63,7 +63,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       release = deps.workspace.mountTable(mounted, node.cred);
       vfs = mounted;
       toolFiles = withApprovalGatedFiles(mounted, 'workspace', { userRoots: () => mounted.userRoots(), locate: null, parksWrites: false }, deps.approvalPolicy);
-      ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs: toolFiles, files: mounted, shell, filesOwner: 'agent' }));
+      ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs: toolFiles, files: mounted, home: node.home, shell, filesOwner: 'agent' }));
 
       for (const info of origin.executionRouter?.listExecutors() ?? []) {
         if (info.name === 'workspace') continue;
@@ -81,7 +81,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
     return {
       actor,
-      storage: { ...origin.storage, vfs },
+      storage: { ...origin.storage, vfs, home: node.isolation === 'private-home' ? node.home : origin.storage.home },
       agentStateVfs: origin.agentStateVfs,
       toolFiles,
       workspaceIsMachine: origin.workspaceIsMachine,

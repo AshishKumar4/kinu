@@ -354,6 +354,7 @@ test('a context edit written through the native file tool reaches the NEXT model
   })]);
 
   const file = createFileDispatcher({
+    home: WORKSPACE_ROOT,
     vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
   });
 
@@ -451,7 +452,7 @@ test('a versioned context edit refuses a replaced target and preserves its histo
     actorId: left.handle.actorId, own: ownTree(left),
   })]);
 
-  const file = createFileDispatcher({ vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const file = createFileDispatcher({ home: WORKSPACE_ROOT, vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
   const path = '/context/working.jsonl';
   await file({ action: 'read', path });
   const revision = (await files.stat(path))?.revision;
@@ -476,8 +477,8 @@ test('pending context edits can be read and revised but cannot overwrite another
     actorId: left.handle.actorId, own: ownTree(left),
   })]);
 
-  const first = createFileDispatcher({ vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
-  const second = createFileDispatcher({ vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const first = createFileDispatcher({ home: WORKSPACE_ROOT, vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const second = createFileDispatcher({ home: WORKSPACE_ROOT, vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
   const path = '/context/working.jsonl';
   await first({ action: 'read', path });
   await second({ action: 'read', path });

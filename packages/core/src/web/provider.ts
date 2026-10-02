@@ -1,4 +1,4 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { Storage } from '../types/primitives';
 /**
  * Web search/fetch provider shared by both backends; key-less by default (DuckDuckGo), Tavily when a `tavily`
  * credential is stored. Rendered fetches and screenshots go through Browser Run (`browser-run.ts`).
@@ -467,7 +467,7 @@ export type BrowserSessionsAccess = { readonly sessions: BrowserSessions } | { r
 export interface WebCodemodeDeps {
   readonly provider: WebSearchProvider;
   /** Where a screenshot is saved; null on a slate's route, where a share visitor writes nothing into the workspace. */
-  readonly vfs: VFS | null;
+  readonly files: Pick<Storage, 'vfs' | 'home'> | null;
   readonly sessions: BrowserSessionsAccess;
   /** Sandbox-side `connectBrowser`, `pageTools` and `callPageTool`; without it they refuse, naming `missing`. */
   readonly prelude?: { readonly source: string } | { readonly missing: string };
@@ -505,13 +505,13 @@ export const KITESURF_SESSION_ID = 'kitesurf';
 /** A slate's \`web\`: the one-shot members only, writing nothing into the workspace, since a share visitor may call it. */
 export function createSlateWebCodemodeProvider(provider: WebSearchProvider): CodemodeProvider {
   return createWebCodemodeProvider({
-    provider, vfs: null,
+    provider, files: null,
     sessions: { missing: 'a slate holds no browser session; it has web.search, web.fetch and web.screenshot' },
   });
 }
 
 export function createWebCodemodeProvider(deps: WebCodemodeDeps): CodemodeProvider {
-  const { provider, vfs } = deps;
+  const { provider, files } = deps;
 
   const sessions: Effect.Effect<BrowserSessions, KinuError> = 'missing' in deps.sessions
     ? Effect.fail(new KinuError('unavailable', deps.sessions.missing))
@@ -571,9 +571,9 @@ export function createWebCodemodeProvider(deps: WebCodemodeDeps): CodemodeProvid
         const shot = await provider.screenshot(url, { fullPage: opts.output.fullPage === true, engine: opts.output.engine, signal: readExecSignal({ context: args[2] }) });
         const dataUrl = `data:image/png;base64,${bytesToBase64(shot.bytes)}`;
 
-        if (vfs === null) return { url: shot.url, retrievedAt: shot.retrievedAt, dataUrl };
+        if (files === null) return { url: shot.url, retrievedAt: shot.retrievedAt, dataUrl };
 
-        return { url: shot.url, path: await saveScreenshot(vfs, shot), retrievedAt: shot.retrievedAt, dataUrl };
+        return { url: shot.url, path: await saveScreenshot(files, shot), retrievedAt: shot.retrievedAt, dataUrl };
       },
     },
     openBrowser: {
