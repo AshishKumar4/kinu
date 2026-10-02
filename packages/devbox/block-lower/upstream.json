@@ -1,7 +1,7 @@
 {
   "date": "2026-10-02",
-  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:01b8221c0a2ebf972800466cce8987df9f53ae731ece0d4fad747d29ca074fba",
-  "digest": "sha256:01b8221c0a2ebf972800466cce8987df9f53ae731ece0d4fad747d29ca074fba",
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:e74446535d5c43b0a4ec5cc06856549d2e73eb655ac3b9834503f749c33b7b8f",
+  "digest": "sha256:e74446535d5c43b0a4ec5cc06856549d2e73eb655ac3b9834503f749c33b7b8f",
   "sandboxVersion": "1.0.0",
   "sandbox": "docker.io/cloudflare/sandbox@sha256:5bc187515bad0d9d486a4f1476f7d8ad39fe97c57965f044e4b0a0dcc93eac06",
   "rust": "docker.io/library/rust@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d",
@@ -11,7 +11,7 @@
     "driver": "low-level, unmodified upstream"
   },
   "binaries": {
-    "devbox-block-lower": "ad76e1563916b158ba9f43a73bb784937fdb669893c84bac6bd86ffe79e41b9c",
+    "devbox-block-lower": "82abb3ee8087c8e0822a78b4e508e579b6a4e670a95a1729e839b6f4446a17c7",
     "devbox-squashfuse": "2c9f758b480621826d0d40d832512998b74c672fb5e7daaa6205d1e0b030df18",
     "sandbox-shim": "a2973893e48d9b80c4ea9d763affdb5ea0135c94ed467716c8e3a57add032d97"
   },
@@ -20,10 +20,9 @@
     "Dockerfile": "64d9c7521e8aee062cb480613b75a2cadd87b834b70c920651178cc21da0827c",
     "Cargo.lock": "42b0f84a3a09ad9cca1e51c35fb750d6fff123ce5c27f99996ced24c98d22109",
     "src/index.rs": "c4f632c9f0cfcbc54d84194814bdf1d5cfcba5fa170f2599c06e2f02f349c130",
-    "src/main.rs": "e0a36a9ea41001530591292e13d679f5e28467f104300d348f9a48dbef880da7",
-    "src/model.rs": "ce3235af5ba144ebdb8874b19a4dbc35f63d159c581e4f7ddb2983d05e54a19c",
-    "src/probe.rs": "1dad9c88c07a1ac484f2685f61a5274fb0a839fdc90017e65a09d2f390aaaac3",
+    "src/main.rs": "3b436f50857187a45ff68f9c5e72366c18c5504a8902b2e2f0dfd81383a0ead6",
+    "src/model.rs": "3b69b7750bc4302af7943e16286b2cea4349d59151df77bbc0206808958ba904",
     "src/namespace.rs": "b2f750bea8a1dcae7c8910aba19734615f949e1b9d395e2b4b5274487d68011f",
-    "src/storage.rs": "4a37c4d0187fcf0aa094958c24de13873c798de27ec9f8648a6d584931701666"
+    "src/storage.rs": "9e450d71ca71a3453da5666ad3ef248e6d06d97288a41ffe40828eac28784ed2"
   }
 }

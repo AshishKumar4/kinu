@@ -18,8 +18,7 @@ export interface DevboxPolicy {
   /** Quiescing also requires this much OBSERVED quiet — consecutive
    *  heartbeats that agreed — so one unlucky sample cannot stop a box. */
   readonly quietConfirmMs: number;
-  /** Minimum checkpoint gap and the sync's tick period are one number, so an early tick (a
-   *  container restart re-arms it) cannot double-commit. It bounds the loss window (D30). */
+  /** The ambient checkpoint's period and minimum gap: the loss window. */
   readonly checkpointIntervalMs: number;
   /** The whole onStart restore budget; a raced timer bounds each step. */
   readonly attachBudgetMs: number;

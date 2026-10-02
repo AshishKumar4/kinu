@@ -1,5 +1,5 @@
-// D55's R2 backup: a save publishes an overlay layer of what changed since the last; a recovery
-// mounts the layers lazily in the gate (R1, R2) and copies them to disk behind it.
+// D55's R2 backup: a save publishes a layer of what changed, a large file as its changed blocks
+// (D63); a recovery mounts the layers lazily in the gate (R1, R2) and copies them to disk.
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
@@ -10,7 +10,7 @@ import { DISK_STREAM, normalizeArchiveExclude, shellPath, streamCommand } from '
 /** What a save leaves out unless a box names its own: each regenerates from the rest. */
 export const DEFAULT_EXCLUDES = ['node_modules', '*.log', '.cache', '.bun', '__pycache__', '.venv', 'target', '.next', '.turbo', 'dist'] as const;
 
-const DISK_CHAIN_FORMAT = 'disk-chain/1';
+const DISK_CHAIN_FORMAT = 'disk-chain/2';
 
 const Layer = v.object({ key: v.string(), bytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)), committedAt: v.number() });
 
@@ -27,7 +27,6 @@ export type DiskChainState = v.InferOutput<typeof DiskChainStateSchema>;
 const COMPACT_SHARE = 0.25;
 
 const COMPACT_LAYERS = 8;
-
 
 const RT = DEVBOX_RUNTIME_DIR;
 
@@ -56,6 +55,12 @@ const RECOVERED = `${RT}/disk-recovered.json`;
 const HYDRATED = `${RT}/disk-hydrate.done`;
 
 const HYDRATING = `${RT}/disk-hydrate.pid`;
+
+const BLOCKS = `${RT}/disk-blocks`;
+
+const BLOCKS_REV = `${RT}/disk-blocks.rev`;
+
+const BLOCK_LOWER = `${RT}/disk-blk`;
 
 export interface DiskChainPorts {
   readonly exec: (command: string) => Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number }>;
@@ -91,28 +96,76 @@ function inventoryCommand(dir: string, excludes: readonly string[], to: string):
     + `| LC_ALL=C sort -z > ${shellPath(`${to}.tmp`)} && mv ${shellPath(`${to}.tmp`)} ${shellPath(to)}`;
 }
 
-function stageDeltaCommand(dir: string, before: string, after: string): string {
+/** Stages a delta's `tree/`, `.devbox-delta/` and `${BLOCKS}.next`. */
+function stageDeltaCommand(dir: string, before: string, after: string, cached: boolean): string {
   const changed = `${STAGE}.changed`;
   const deleted = `${STAGE}.deleted`;
-  const list = `${STAGE}.list`;
 
   return [
     'set -e', `rm -rf ${shellPath(STAGE)} && mkdir -p ${shellPath(STAGE)}`,
     `LC_ALL=C comm -z -13 ${shellPath(before)} ${shellPath(after)} | cut -z -f1 > ${shellPath(changed)}`,
     `cut -z -f1 ${shellPath(before)} > ${shellPath(`${deleted}.before`)} && cut -z -f1 ${shellPath(after)} > ${shellPath(`${deleted}.after`)}`,
     `LC_ALL=C comm -z -23 ${shellPath(`${deleted}.before`)} ${shellPath(`${deleted}.after`)} > ${shellPath(deleted)}`,
-    `counts=$(python3 -c ${shellPath(STAGE_SCRIPT)} ${shellPath(STAGE)} ${shellPath(changed)} ${shellPath(deleted)} ${shellPath(list)})`,
-    `tar -C ${shellPath(dir)} --null --no-recursion --ignore-failed-read --warning=no-file-changed -T ${shellPath(list)} -cf - | tar -C ${shellPath(STAGE)} -xpf -`,
-    'printf %s "$counts"',
+    `python3 -c ${shellPath(STAGE_SCRIPT)} ${shellPath(STAGE)} ${shellPath(changed)} ${shellPath(deleted)} ${shellPath(dir)} ${shellPath(BLOCKS)} ${cached ? '1' : '0'}`,
   ].join('\n');
 }
 
 const STAGE_SCRIPT = `
-import os, sys
-stage, changed_path, deleted_path, list_path = sys.argv[1:5]
+import hashlib, json, os, shlex, shutil, subprocess, sys
+stage, changed_path, deleted_path, workdir, blocks, blocks_ok = sys.argv[1:7]
+BLOCK, BIG = 16384, 1048576
+tree, meta, nxt = os.path.join(stage, 'tree'), os.path.join(stage, '.devbox-delta'), blocks + '.next'
 def entries(path):
     return [item.decode('utf-8', 'surrogateescape') for item in open(path, 'rb').read().split(b'\\0') if item]
+def name(path):
+    return hashlib.sha256(path.encode('utf-8', 'surrogateescape')).hexdigest()
+def index(pages):
+    built = [bytearray(128) for _ in pages]
+    def build(lo, hi):
+        if lo == hi:
+            return bytes(32)
+        mid = (lo + hi) // 2
+        left, right = build(lo, mid), build(mid + 1, hi)
+        at, digest = pages[mid]
+        page = built[mid]
+        page[0:8] = at.to_bytes(8, 'little')
+        page[8] = 1 if digest else 2
+        if digest:
+            page[16:48] = digest
+        page[48:80], page[80:112] = left, right
+        return hashlib.sha256(page).digest()
+    root = build(0, len(pages)) if pages else hashlib.sha256(b'').digest()
+    data = b''.join(built)
+    return {'index': hashlib.sha256(data).hexdigest(), 'root': root.hex(), 'count': len(pages)}, data
+def blocks_of(path, before):
+    """One read: every block's digest, and a page for each block that differs from \`before\`."""
+    info, pages, digests, size = os.lstat(path), [], bytearray(), 0
+    with open(path, 'rb') as source:
+        while True:
+            data = source.read(BLOCK)
+            if not data:
+                break
+            digest = hashlib.sha256(data).digest()
+            digests += digest
+            if before is not None and before[size // BLOCK * 32:size // BLOCK * 32 + 32] != digest:
+                if data.count(0) == len(data):
+                    pages.append((size, None))
+                else:
+                    os.makedirs(os.path.join(meta, 'chunks'), exist_ok=True)
+                    chunk = os.path.join(meta, 'chunks', digest.hex())
+                    if not os.path.exists(chunk):
+                        open(chunk, 'wb').write(data)
+                    pages.append((size, digest))
+            size += len(data)
+    return info, pages, bytes(digests), size
 changed, deleted = entries(changed_path), entries(deleted_path)
+shutil.rmtree(nxt, ignore_errors=True)
+os.makedirs(nxt)
+known = set()
+if blocks_ok == '1' and os.path.isfile(os.path.join(blocks, 'paths')):
+    known = set(entries(os.path.join(blocks, 'paths')))
+    for path in known:
+        os.link(os.path.join(blocks, name(path)), os.path.join(nxt, name(path)))
 gone, tops = set(), []
 for path in deleted:
     parts = path.split('/')
@@ -120,18 +173,105 @@ for path in deleted:
         continue
     gone.add(path)
     tops.append(path)
-wanted = set(changed)
-for path in changed + tops:
+cached_before, changing = set(known), set(changed)
+for path in list(known):
+    if path in gone or path in changing or any(path.startswith(top + '/') for top in tops):
+        known.discard(path)
+        os.unlink(os.path.join(nxt, name(path)))
+records, whole = [], []
+for path in changed:
+    full = os.path.join(workdir, path)
+    info = os.lstat(full) if os.path.lexists(full) else None
+    cached = os.path.join(blocks, name(path))
+    if path in cached_before and info is not None and os.path.isfile(full) and not os.path.islink(full) and info.st_size >= BIG:
+        info, pages, digests, size = blocks_of(full, open(cached, 'rb').read())
+        over, data = index(pages)
+        os.makedirs(meta, exist_ok=True)
+        open(os.path.join(meta, over['index']), 'wb').write(data)
+        records.append({'p': path, 's': size, 'mode': info.st_mode & 0o7777, 'uid': info.st_uid, 'gid': info.st_gid, 't': info.st_mtime_ns, 'over': over})
+        open(os.path.join(nxt, name(path)), 'wb').write(digests)
+        known.add(path)
+    else:
+        whole.append(path)
+wanted = set(whole)
+for path in whole + tops:
     parts = path.split('/')
     wanted.update('/'.join(parts[:at]) for at in range(1, len(parts)))
 for path in tops:
-    parent, name = os.path.split(path)
-    os.makedirs(os.path.join(stage, parent), exist_ok=True)
-    open(os.path.join(stage, parent, '.wh.' + name), 'w').close()
-with open(list_path, 'wb') as out:
+    parent, base = os.path.split(path)
+    os.makedirs(os.path.join(tree, parent), exist_ok=True)
+    open(os.path.join(tree, parent, '.wh.' + base), 'w').close()
+os.makedirs(tree, exist_ok=True)
+listing = os.path.join(stage + '.list')
+with open(listing, 'wb') as out:
     for path in sorted(wanted):
         out.write(path.encode('utf-8', 'surrogateescape') + b'\\0')
-print(len(changed), len(tops), end='')
+subprocess.run(f"tar -C {shlex.quote(workdir)} --null --no-recursion --ignore-failed-read --warning=no-file-changed -T {shlex.quote(listing)} -cf - | tar -C {shlex.quote(tree)} -xpf -", shell=True, check=True)
+for path in whole:
+    staged = os.path.join(tree, path)
+    if os.path.isfile(staged) and not os.path.islink(staged) and os.lstat(staged).st_size >= BIG:
+        open(os.path.join(nxt, name(path)), 'wb').write(blocks_of(staged, None)[2])
+        known.add(path)
+if records:
+    open(os.path.join(meta, 'manifest.json'), 'w').write(json.dumps({'v': 3, 'files': records}))
+with open(os.path.join(nxt, 'paths'), 'wb') as out:
+    for path in sorted(known):
+        out.write(path.encode('utf-8', 'surrogateescape') + b'\\0')
+print(len(changed), len(tops), len(records), end='')
+`;
+
+/** Under one lock, so no cache carries a rev the inventory has moved past. */
+function blockSwapCommand(next: string, rev: number): string {
+  const swap = `[ "$(cat ${shellPath(INVENTORY_REV)} 2>/dev/null)" = ${String(rev)} ] || { rm -rf ${shellPath(next)}; exit 0; }; `
+    + `rm -rf ${shellPath(BLOCKS)} && mv ${shellPath(next)} ${shellPath(BLOCKS)} && printf %s ${String(rev)} > ${shellPath(BLOCKS_REV)}`;
+
+  return `flock ${shellPath(`${BLOCKS}.lock`)} sh -c ${shellPath(swap)}`;
+}
+
+/** `stable` keeps only a file whose size and time held across the read. */
+function blockCacheCommand(root: string, inventory: string, rev: number, stable: boolean): string {
+  const next = `${BLOCKS}.${stable ? 'base' : 'recovered'}`;
+
+  return `rm -rf ${shellPath(next)} && python3 -c ${shellPath(CACHE_SCRIPT)} ${shellPath(root)} ${shellPath(inventory)} ${shellPath(next)} ${stable ? '1' : '0'} `
+    + `&& ${blockSwapCommand(next, rev)}`;
+}
+
+const CACHE_SCRIPT = `
+import hashlib, os, sys
+root, inventory, out, stable = sys.argv[1:5]
+BLOCK, BIG = 16384, 1048576
+os.makedirs(out)
+kept = []
+for item in open(inventory, 'rb').read().split(b'\\0'):
+    fields = item.decode('utf-8', 'surrogateescape').split('\\t')
+    if len(fields) < 4 or fields[1] != 'f' or int(fields[2]) < BIG:
+        continue
+    path, size = fields[0], int(fields[2])
+    seconds, _, fraction = fields[3].partition('.')
+    when = int(seconds) * 1000000000 + int((fraction + '000000000')[:9])
+    full = os.path.join(root, path)
+    try:
+        before = os.lstat(full)
+        if stable == '1' and (before.st_size, before.st_mtime_ns) != (size, when):
+            continue
+        digests = bytearray()
+        with open(full, 'rb') as source:
+            while True:
+                data = source.read(BLOCK)
+                if not data:
+                    break
+                digests += hashlib.sha256(data).digest()
+        after = os.lstat(full)
+    except OSError:
+        continue
+    if stable == '1' and (after.st_size, after.st_mtime_ns) != (size, when):
+        continue
+    open(os.path.join(out, hashlib.sha256(path.encode('utf-8', 'surrogateescape')).hexdigest()), 'wb').write(digests)
+    kept.append(path)
+with open(os.path.join(out, 'paths'), 'wb') as listing:
+    for path in sorted(kept):
+        listing.write(path.encode('utf-8', 'surrogateescape') + b'\\0')
+print(len(kept), end='')
 `;
 
 function heldBytes(state: DiskChainState): number {
@@ -181,10 +321,11 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     return bytes;
   });
 
-  /** The pre-pack inventory is the baseline once the record names the layer. */
-  const advance = (state: DiskChainState, expectedRev: number | null) => Effect.gen(function* () {
+  /** The pre-pack inventory and a delta's digests are the baseline once the record names the layer. */
+  const advance = (state: DiskChainState, expectedRev: number | null, staged: boolean) => Effect.gen(function* () {
     yield* attempt('io', () => ports.writeState(state, expectedRev));
-    yield* run('keeping the inventory', `mv ${shellPath(NEXT_INVENTORY)} ${shellPath(INVENTORY)} && printf %s ${String(state.rev)} > ${shellPath(INVENTORY_REV)}`);
+    yield* run('keeping the inventory', `mv ${shellPath(NEXT_INVENTORY)} ${shellPath(INVENTORY)} && printf %s ${String(state.rev)} > ${shellPath(INVENTORY_REV)}`
+      + (staged ? ` && ${blockSwapCommand(`${BLOCKS}.next`, state.rev)}` : ''));
   });
 
   const commitBase = (prior: DiskChainState | null, at: number) => Effect.gen(function* () {
@@ -192,7 +333,10 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     const key = `${ports.storeRoot()}/disk/${id}/base.sqsh`;
     const bytes = yield* publish(key, DEVBOX_WORKDIR, ports.excludes());
     const state: DiskChainState = { format: DISK_CHAIN_FORMAT, rev: (prior?.rev ?? 0) + 1, base: { key, bytes, committedAt: at }, deltas: [], committedAt: at };
-    yield* advance(state, prior?.rev ?? null);
+    yield* advance(state, prior?.rev ?? null, false);
+    yield* run('caching the base\'s block digests', blockCacheCommand(DEVBOX_WORKDIR, INVENTORY, state.rev, true)).pipe(
+      Effect.catchTag('DevboxError', failure => Effect.sync(() => ports.log(`the next save sends changed large files whole: ${failure.message}`))),
+    );
 
     if (prior !== null) {
       yield* attempt('io', () => ports.deleteObjects([prior.base.key, ...prior.deltas.map(layer => layer.key)])).pipe(
@@ -203,25 +347,43 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     return { kind: 'committed', reason: undefined, bytes: state.base.bytes, movedBytes: bytes } satisfies CheckpointOutcome;
   });
 
+  /** `layers` newest first; the block lower sits above the deltas' trees. */
   const mountLayers = (layers: readonly string[]) => Effect.gen(function* () {
     yield* attempt('io', () => ports.mountStore());
 
-    const lowers = layers.map((_, at) => `${LAYERS}/${String(at)}`);
+    const at = (index: number) => `${LAYERS}/${String(index)}`;
+    const deltas = layers.slice(0, -1).map((_, index) => at(index));
+    const base = at(layers.length - 1);
+    const lowers = [...deltas.map(delta => `${delta}/tree`), base].map(shellPath).join(':');
 
-    const mounts = layers.map((key, at) => `mountpoint -q ${shellPath(`${LAYERS}/${String(at)}`)} || { mkdir -p ${shellPath(`${LAYERS}/${String(at)}`)} && `
-      + `/usr/local/bin/devbox-squashfuse ${shellPath(mounted(ports.storeRoot(), key))} ${shellPath(`${LAYERS}/${String(at)}`)} -o allow_other,ro,nonempty; }`);
+    const mounts = layers.map((key, index) => `mountpoint -q ${shellPath(at(index))} || { mkdir -p ${shellPath(at(index))} && `
+      + `/usr/local/bin/devbox-squashfuse ${shellPath(mounted(ports.storeRoot(), key))} ${shellPath(at(index))} -o allow_other,ro,nonempty; }`);
+
+    const blocks = `/usr/local/bin/devbox-block-lower --base ${shellPath(base)} ${[...deltas].reverse().map(delta => `--layer ${shellPath(delta)}`).join(' ')} `
+      + `--mount ${shellPath(BLOCK_LOWER)} --stats ${shellPath(`${BLOCK_LOWER}.json`)}`;
 
     yield* run('mounting the recovered layers', [
-      'set -e', ...mounts, `mkdir -p ${shellPath(UPPER)} ${shellPath(WORK)} ${shellPath(LOWERS)} ${shellPath(DEVBOX_WORKDIR)}`,
-      `mountpoint -q ${shellPath(DEVBOX_WORKDIR)} || /usr/bin/fuse-overlayfs -o lowerdir=${lowers.map(shellPath).join(':')},upperdir=${shellPath(UPPER)},workdir=${shellPath(WORK)} ${shellPath(DEVBOX_WORKDIR)}`,
-      `mountpoint -q ${shellPath(LOWERS)} || /usr/bin/fuse-overlayfs -o lowerdir=${lowers.map(shellPath).join(':')} ${shellPath(LOWERS)}`,
+      'set -e', ...mounts, `mkdir -p ${shellPath(UPPER)} ${shellPath(WORK)} ${shellPath(LOWERS)} ${shellPath(DEVBOX_WORKDIR)} ${shellPath(BLOCK_LOWER)}`,
+      `top=''; held=''`,
+      ...deltas.map(delta => `[ -e ${shellPath(`${delta}/.devbox-delta/manifest.json`)} ] && held=1`),
+      `if [ -n "$held" ]; then`,
+      `  mountpoint -q ${shellPath(BLOCK_LOWER)} || { cd / && setsid nohup ${blocks} >${shellPath(`${BLOCK_LOWER}.log`)} 2>&1 </dev/null &`,
+      `    for i in $(seq 1 100); do mountpoint -q ${shellPath(BLOCK_LOWER)} && break; sleep 0.1; done; }`,
+      `  mountpoint -q ${shellPath(BLOCK_LOWER)} || { cat ${shellPath(`${BLOCK_LOWER}.log`)} >&2; exit 1; }`,
+      `  top=${shellPath(BLOCK_LOWER)}:`,
+      'fi',
+      `mountpoint -q ${shellPath(DEVBOX_WORKDIR)} || /usr/bin/fuse-overlayfs -o "lowerdir=$top"${lowers},upperdir=${shellPath(UPPER)},workdir=${shellPath(WORK)} ${shellPath(DEVBOX_WORKDIR)}`,
+      `mountpoint -q ${shellPath(LOWERS)} || /usr/bin/fuse-overlayfs -o "lowerdir=$top"${lowers} ${shellPath(LOWERS)}`,
     ].join('\n'));
   });
 
   const startHydration = (rev: number) => {
-    const script = `${inventoryCommand(LOWERS, ports.excludes(), `${INVENTORY}.recovered`)} && mv ${shellPath(`${INVENTORY}.recovered`)} ${shellPath(INVENTORY)} `
+    const recovered = `${INVENTORY}.recovered`;
+
+    const script = `${inventoryCommand(LOWERS, ports.excludes(), recovered)} && cp ${shellPath(recovered)} ${shellPath(INVENTORY)} `
       + `&& printf %s ${String(rev)} > ${shellPath(INVENTORY_REV)} && rm -rf ${shellPath(`${HYDRATE}.tmp`)} && mkdir -p ${shellPath(`${HYDRATE}.tmp`)} `
-      + `&& cp -a ${shellPath(LOWERS)}/. ${shellPath(`${HYDRATE}.tmp`)}/ && mv ${shellPath(`${HYDRATE}.tmp`)} ${shellPath(HYDRATE)} && touch ${shellPath(HYDRATED)}`;
+      + `&& cp -a ${shellPath(LOWERS)}/. ${shellPath(`${HYDRATE}.tmp`)}/ && { ${blockCacheCommand(`${HYDRATE}.tmp`, recovered, rev, false)} || true; } `
+      + `&& mv ${shellPath(`${HYDRATE}.tmp`)} ${shellPath(HYDRATE)} && touch ${shellPath(HYDRATED)}`;
 
     return run('starting the copy to disk', `cd / && { setsid nohup sh -c ${shellPath(script)} >${shellPath(`${RT}/disk-hydrate.log`)} 2>&1 </dev/null & `
       + `echo $! > ${shellPath(HYDRATING)}; }`).pipe(Effect.asVoid);
@@ -267,7 +429,8 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
       return yield* commitBase(state, at);
     }
 
-    const [changed = '0', deleted = '0'] = (yield* run('staging the changes', stageDeltaCommand(dir, INVENTORY, NEXT_INVENTORY))).split(' ');
+    const cached = (yield* read(BLOCKS_REV)) === baseline;
+    const [changed = '0', deleted = '0'] = (yield* run('staging the changes', stageDeltaCommand(dir, INVENTORY, NEXT_INVENTORY, cached))).split(' ');
 
     if (changed === '0' && deleted === '0') {
       return { kind: 'skipped', reason: 'nothing changed since the last save', bytes: heldBytes(state), movedBytes: 0 } satisfies CheckpointOutcome;
@@ -276,7 +439,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     const key = `${state.base.key.slice(0, state.base.key.lastIndexOf('/'))}/delta-${String(state.deltas.length + 1)}-${crypto.randomUUID()}.sqsh`;
     const bytes = yield* publish(key, STAGE, []);
     const next: DiskChainState = { ...state, rev: state.rev + 1, deltas: [...state.deltas, { key, bytes, committedAt: at }], committedAt: at };
-    yield* advance(next, state.rev);
+    yield* advance(next, state.rev, true);
 
     return { kind: 'committed', reason: undefined, bytes: heldBytes(next), movedBytes: bytes } satisfies CheckpointOutcome;
   });

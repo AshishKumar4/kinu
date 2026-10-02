@@ -3361,13 +3361,76 @@ image's registry repository as two `rootfs-*` tags (D55), shared by
 production and staging, and its annotations name no box, app or
 environment, so a reset cannot tell its own from the other environment's.
 Once their objects are gone nothing references them; they lapse in 30 days
-and do not count toward the image limit (D55).
+and do not count toward the image limit (D55). This is a known effect of a
+reset, accepted on 2026-10-02 rather than splitting the repository per
+environment: the registry sweep, held for the owner's token decision, is where
+they get cleaned.
 
 One fix the deletion surfaced. A snapshot's disk can keep the S3Mount
 marker of the mount it was taken under, and the first mount after a wake
 then failed ("invalid S3 mount route selection") because the box skipped
 the unmount for a container it had just started. A snapshot start now runs
 that unmount (`quiesce-order.test.ts`, red before the change).
+
+D63. A large file changed in place travels as the blocks that changed, and
+the block lower composes it through every layer (2026-10-02, option (a) of
+the D55 follow-up). D55's disk chain sent each changed file whole. A dev
+session's databases and logs are written in place, so one 4 KiB page write
+re-sent the whole file at every save. Measured before building (local, the
+image, `bench-artifacts/inplace/measure.log`): a session with a 616 MB SQLite
+database, a 165 MB JSONL log, a git repo and a 1 GiB file written in place
+re-sent 1.85 GB per save.
+
+What a save does now. A regular file of 1 MiB or more, changed since the last
+save and with its block digests cached, is read once in 16 KiB blocks. Each
+block whose SHA-256 differs from the cached one becomes a chunk (an all-zero
+block becomes a hole), indexed in the block lower's authenticated page format.
+Its record (path, size, mode, owner, mtime, index) goes in
+`.devbox-delta/manifest.json` (`v: 3`), and the layer's `tree/` holds the
+other changed files whole and the whiteouts. The cache is the digests of each
+large file as the record holds it. A save stages the next cache beside the
+current one, and it becomes current only once the record names the layer,
+under one lock that also drops a cache built for a rev the inventory has
+moved past. A base caches every large file whose size and mtime held across
+the pack and the read, and a recovery caches its copy to disk. A file with no
+cache travels whole once and is cached from then on.
+
+What a recovery does. Every layer is a lazy squashfs mount; the deltas'
+`tree/` directories are overlay lowers, and `devbox-block-lower` sits above
+them all. It serves a file whose newest version is a block record. It reads
+each block from the newest layer that holds it, down to the file's last whole
+copy, each record's index looked up by that version's own size. A file a newer
+layer replaced or removed is not served, so the overlay reads that layer. A
+record with no earlier version beneath it is EIO, never zeros. The crate lost
+the older chain's single-delta CLI, its opacity probe and the v2 manifest.
+
+Measured (local, image built from this tree, 2 CPUs, real FUSE and the shipped
+publisher, the store served in the container; `bench-artifacts/block-deltas/`,
+`session.jsonl`, the same session as above):
+
+| Step | Result |
+|---|---|
+| base of the 1.85 GB workspace | 25.2 s, 1.42 GB stored, 3 large files cached |
+| each of 10 saves | 9.34 to 9.41 MB moved (was 1.85 GB), 1.8 to 3.6 s |
+| what a save records | about 1,000 blocks of the database, 100 of the 1 GiB file, 7 or 8 of the log |
+| recovery of 11 layers | attached in 2.4 s, lazily |
+| every file read through the layers | 49 s, exact (sha256 of every file) |
+| first save after the recovery | 9.48 MB: the copy's cache held |
+
+The image tests are red on the committed chain and green now
+(`image-red.log`, `image-green.log`): the earlier test's 4 KiB write into an
+8 MiB file moves under 256 KiB, and a new test stacks block records over
+four saves (growth, a punch, a truncation below an earlier growth, a
+re-edited block), then recovers exactly lazily, as a plain disk, and from
+the store again. A bug that test found is fixed: a record's index was looked
+up by the served file's size, so a version shorter than the one below read
+as EIO. The crate's unit tests cover the resolution through layers, a
+shadowing newer layer, a missing earlier version and a corrupt chunk.
+
+The image is `e7444653…`, built from this tree; its other binaries are
+unchanged. Lines: the crate +684 / -526, `disk-chain.ts` +195 / -32. The record's
+format is `disk-chain/2`; no box holds `/1` (the hybrid was opt-in until
+D62), and a format change ships as a reset.
 
 ## Measurement contract for a strategy comparison
 

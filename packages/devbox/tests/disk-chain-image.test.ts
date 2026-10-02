@@ -87,13 +87,13 @@ const tree = () => must(TREE);
 
 /** The disk lost: everything but the store, as a replaced container leaves it. */
 function loseTheDisk(): void {
-  must(`for m in ${WD} ${RT}/disk-lowers $(ls -d ${RT}/disk-layers/* 2>/dev/null); do mountpoint -q $m && fusermount3 -u $m; done; `
+  must(`for m in ${WD} ${RT}/disk-lowers ${RT}/disk-blk $(ls -d ${RT}/disk-layers/* 2>/dev/null); do mountpoint -q $m && fusermount3 -u $m; done; `
     + `pkill -f '[c]p -a ${RT}/disk-lowers' || true; rm -rf ${RT}/disk-* && rm -rf ${WD} && mkdir -p ${WD}`);
 }
 
 /** A container stop: every mount goes and the disk stays, as a snapshot keeps it. */
 function stopTheContainer(): void {
-  must(`for m in ${WD} ${RT}/disk-lowers $(ls -d ${RT}/disk-layers/* 2>/dev/null); do mountpoint -q $m && fusermount3 -u $m; done; true`);
+  must(`for m in ${WD} ${RT}/disk-lowers ${RT}/disk-blk $(ls -d ${RT}/disk-layers/* 2>/dev/null); do mountpoint -q $m && fusermount3 -u $m; done; true`);
 }
 
 const commit = (kind: 'tick' | 'quiesce') => settle(chain.commit(kind));
@@ -154,8 +154,8 @@ test('a base and two deltas recover exactly, lazily in the gate and then as a pl
   expect({
     kinds: [base.kind, first.kind, second.kind, unchanged.kind, recovered.kind, afterRecovery.kind, settled],
     layers: (record()?.deltas.length ?? -1) + 1,
-    // A layer holds whole files: the 4 KiB written into the 8 MiB file re-sends that file.
-    deltaSizes: [(first.movedBytes ?? 0) < 1024 * 1024, (second.movedBytes ?? 0) < 9 * 1024 * 1024],
+    // The 4 KiB written into the 8 MiB file travels as the one 16 KiB block it touched.
+    deltaSizes: [(first.movedBytes ?? 0) < 1024 * 1024, (second.movedBytes ?? 0) < 256 * 1024],
     lazilyExact: lazily === expected,
     plainExact: onDisk === expectedLater,
     mountedNow,
@@ -164,6 +164,54 @@ test('a base and two deltas recover exactly, lazily in the gate and then as a pl
   }).toEqual({
     kinds: ['committed', 'committed', 'committed', 'skipped', 'attached', 'committed', 'recovery made plain'],
     layers: 4, deltaSizes: [true, true], lazilyExact: true, plainExact: true, mountedNow: false, againExact: true, excluded: true,
+  });
+});
+
+/** Writes `count` bytes of `byte` at `offset` into `file` in place, as a database page write does. */
+const poke = (file: string, offset: number, count: number, byte: string) =>
+  `python3 -c "import os; f=os.open('${WD}/${file}', os.O_WRONLY); os.pwrite(f, b'${byte}' * ${String(count)}, ${String(offset)}); os.close(f)"`;
+
+const waitForTheCopy = () => must(`for _ in $(seq 1 600); do [ -e ${RT}/disk-hydrate.done ] && break; sleep 0.1; done; [ -e ${RT}/disk-hydrate.done ]`);
+
+test('files written in place travel as their changed blocks, and recover exactly through every layer', async () => {
+  loseTheDisk();
+  stored = null;
+  must(`set -e; cd ${WD}; head -c 4194304 /dev/urandom > db.bin; head -c 2097152 /dev/urandom > log.jsonl; echo small > s.txt`);
+  const base = await commit('tick');
+  must(`set -e; ${poke('db.bin', 100_000, 4096, 'A')}; ${poke('db.bin', 3_000_000, 10, 'B')}; head -c 51200 /dev/urandom >> ${WD}/log.jsonl`);
+  const first = await commit('tick');
+  must(`set -e; ${poke('db.bin', 100_100, 20, 'C')}; ${poke('db.bin', 0, 1, 'D')}; truncate -s 1572864 ${WD}/log.jsonl; echo edited >> ${WD}/s.txt`);
+  const second = await commit('tick');
+  must(`set -e; ${poke('db.bin', 4_194_300, 100, 'E')}`);
+  const third = await commit('tick');
+  const expected = tree();
+  const blocks = sh(`tr '\\0' ' ' < ${RT}/disk-blocks/paths`).stdout;
+
+  loseTheDisk();
+  await settle(chain.attach(false));
+  const lazily = tree();
+  waitForTheCopy();
+  must(poke('db.bin', 2_000_000, 1, 'F'));
+  const afterRecovery = await commit('tick');
+  const expectedLater = tree();
+  stopTheContainer();
+  await settle(chain.attach(true));
+  const onDisk = tree();
+  loseTheDisk();
+  await settle(chain.attach(false));
+  const again = tree();
+
+  expect({
+    kinds: [base.kind, first.kind, second.kind, third.kind, afterRecovery.kind],
+    // Each save moves its touched 16 KiB blocks, not the 4 MiB and 2 MiB files.
+    small: [first, second, third, afterRecovery].map(saved => (saved.movedBytes ?? Infinity) < 256 * 1024),
+    cached: blocks.trim().split(' ').sort(),
+    lazilyExact: lazily === expected,
+    plainExact: onDisk === expectedLater,
+    againExact: again === expectedLater,
+  }).toEqual({
+    kinds: ['committed', 'committed', 'committed', 'committed', 'committed'],
+    small: [true, true, true, true], cached: ['db.bin', 'log.jsonl'], lazilyExact: true, plainExact: true, againExact: true,
   });
 });
 

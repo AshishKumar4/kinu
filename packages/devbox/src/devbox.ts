@@ -2372,8 +2372,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         const now = Date.now();
 
-        // Each busy lane covers its own tail: claims include draining streams, checkpoints queued runs,
-        // startup restore/repair; shell commands and supervised starts count only via `#activeCallers`.
+        // Each lane covers its own tail; shell commands and supervised starts count via `#activeCallers`.
         const backgroundWork = this.#quiescing !== undefined || this.#activeCallers !== 0 || this.#openSockets !== 0
           || this.#resources.busy()
           || this.#lane.busy()

@@ -32,12 +32,10 @@ export interface ProcessRecord {
   readonly exitCode: number | undefined;
 }
 
-// Cloudflare sandbox-sdk rc.1's process-workspace example: file-backed identities survive a DO
-// eviction, native exec starts the wrapper, and a process group carries signals to its children.
-// An exec whose answer is lost may or may not have spawned the wrapper, so one symlink decides the
-// launch: the wrapper makes `launch -> launched` before anything runs, and a caller that finds no pid
-// and no exit makes `launch -> unlaunched`, after which nothing runs (D48). The wrapper enters the cwd
-// itself, so a missing one is the launch's own recorded failure.
+// After sandbox-sdk rc.1's process-workspace example: file-backed identities survive a DO eviction,
+// and a process group carries signals. One symlink decides a launch whose exec answer was lost:
+// the wrapper makes `launch -> launched` before anything runs, a caller finding no pid and no exit
+// makes `launch -> unlaunched` (D48). A missing cwd is the launch's own recorded failure.
 const RUN = `dir=$1; cwd=$2; shift 2
 ln -s launched "$dir/launch" 2>/dev/null || exit 0
 if ! cd -- "$cwd" 2>/dev/null; then

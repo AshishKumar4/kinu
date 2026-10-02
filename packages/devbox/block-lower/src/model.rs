@@ -3,51 +3,27 @@ use crate::namespace::{DirectoryEntries, NameSet, PathMap};
 use serde::Deserialize;
 use std::io;
 
+/// A file this layer stores as the blocks that changed since the layer below.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Directory {
+pub struct Record {
     pub p: String,
+    pub s: u64,
     pub mode: u16,
     pub uid: u32,
     pub gid: u32,
-    #[serde(default)]
-    pub opaque: bool,
+    /// Modification time in nanoseconds since the epoch.
+    pub t: u64,
+    pub over: IndexRef,
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
-pub enum Record {
-    Whole {
-        p: String,
-        s: u64,
-    },
-    Chunked {
-        p: String,
-        s: u64,
-        mode: u16,
-        uid: u32,
-        gid: u32,
-        over: IndexRef,
-    },
-}
-
-impl Record {
-    pub fn path(&self) -> &str {
-        match self {
-            Self::Whole { p, .. } | Self::Chunked { p, .. } => p,
-        }
-    }
-}
-
+/// `.devbox-delta/manifest.json` of one layer. Whole files and deletions are in
+/// the layer's `tree/`, which the overlay reads directly.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub v: u32,
     pub files: Vec<Record>,
-    pub dirs: Vec<Directory>,
-    pub deleted: Vec<String>,
-    pub treplace: Vec<String>,
-    pub links: Vec<Vec<String>>,
 }
 
 pub fn path_valid(path: &str) -> bool {
@@ -65,81 +41,35 @@ pub fn ancestors(path: &str) -> impl Iterator<Item = &str> {
 
 impl Manifest {
     pub fn validate(&self) -> io::Result<()> {
-        if self.v != 2 {
+        if self.v != 3 {
             return Err(invalid("unsupported manifest version"));
         }
         let mut names = NameSet::new();
-        let mut nondirs = NameSet::new();
         for record in &self.files {
-            let path = record.path();
-            if !path_valid(path) || !names.insert(path) {
+            if !path_valid(&record.p) || !names.insert(&record.p) {
                 return Err(invalid("invalid or duplicate file path"));
             }
-            nondirs.insert(path);
-            match record {
-                Record::Chunked { s, mode, over, .. } => {
-                    if *mode > 0o7777 {
-                        return Err(invalid("unsupported file mode"));
-                    }
-                    over.validate(*s)?;
-                }
-                Record::Whole { s, .. } => {
-                    if *s > 9007199254740991 {
-                        return Err(invalid("invalid whole size"));
-                    }
-                }
+            if record.mode > 0o7777 {
+                return Err(invalid("unsupported file mode"));
             }
-        }
-        for dir in &self.dirs {
-            if !(path_valid(&dir.p) || (dir.p.is_empty() && dir.opaque))
-                || dir.mode > 0o7777
-                || !names.insert(&dir.p)
-            {
-                return Err(invalid("invalid or duplicate directory"));
-            }
-        }
-        for path in &self.deleted {
-            if !path_valid(path) || !names.insert(path) {
-                return Err(invalid("invalid or duplicate deletion"));
-            }
-            nondirs.insert(path);
+            record.over.validate(record.s)?;
         }
         for path in names.iter() {
-            if ancestors(path).any(|parent| nondirs.contains(parent)) {
-                return Err(invalid("file or deletion has children"));
-            }
-        }
-        let whole: NameSet<'_> = self
-            .files
-            .iter()
-            .filter_map(|r| match r {
-                Record::Whole { p, .. } => Some(p.as_str()),
-                _ => None,
-            })
-            .collect();
-        let mut linked = NameSet::new();
-        for group in &self.links {
-            if group.len() < 2 {
-                return Err(invalid("short hardlink group"));
-            }
-            for path in group {
-                if !whole.contains(path) || !linked.insert(path) {
-                    return Err(invalid("invalid hardlink group"));
-                }
-            }
-        }
-        let deleted: NameSet<'_> = self.deleted.iter().map(String::as_str).collect();
-        let mut replaced = NameSet::new();
-        for path in &self.treplace {
-            if !nondirs.contains(path.as_str())
-                || deleted.contains(path.as_str())
-                || !replaced.insert(path)
-            {
-                return Err(invalid("invalid replacement"));
+            if ancestors(path).any(|parent| names.contains(parent)) {
+                return Err(invalid("file has children"));
             }
         }
         Ok(())
     }
+}
+
+/// Attributes of a directory the table synthesises above a served file.
+#[derive(Clone, Copy)]
+pub struct DirAttrs {
+    pub mode: u16,
+    pub uid: u32,
+    pub gid: u32,
+    pub t: u64,
 }
 
 #[derive(Clone)]
@@ -150,46 +80,43 @@ pub struct Inode {
     pub mode: u16,
     pub uid: u32,
     pub gid: u32,
-    pub index: Option<IndexRef>,
+    pub t: u64,
+    /// The layer whose record serves this file; `None` for a directory.
+    pub layer: Option<usize>,
     pub children: DirectoryEntries,
 }
 
-/// Only chunked inodes and their ancestor directories enter this table.
-/// Whole files and other namespace entries belong to the lazy tree lower.
-pub fn inodes(manifest: &Manifest) -> io::Result<Vec<Inode>> {
-    manifest.validate()?;
-    let root_attrs = manifest.dirs.iter().find(|dir| dir.p.is_empty());
-    let root = Inode {
+/// Only served files and their ancestor directories enter this table: every
+/// other path belongs to the layers' trees beneath it in the overlay.
+pub fn inodes(
+    served: &[(usize, &Record)],
+    dir: impl Fn(&str) -> io::Result<Option<DirAttrs>>,
+) -> io::Result<Vec<Inode>> {
+    let attrs = |path: &str| -> io::Result<DirAttrs> {
+        Ok(dir(path)?.unwrap_or(DirAttrs {
+            mode: 0o755,
+            uid: 0,
+            gid: 0,
+            t: 0,
+        }))
+    };
+    let root = attrs("")?;
+    let mut rows = vec![Inode {
         path: String::new(),
         parent: 1,
         size: 0,
-        mode: root_attrs.map_or(0o755, |dir| dir.mode),
-        uid: root_attrs.map_or(0, |dir| dir.uid),
-        gid: root_attrs.map_or(0, |dir| dir.gid),
-        index: None,
+        mode: root.mode,
+        uid: root.uid,
+        gid: root.gid,
+        t: root.t,
+        layer: None,
         children: DirectoryEntries::new(),
-    };
-    let mut rows = vec![root];
+    }];
     let mut ids = PathMap::new();
     ids.insert("", 1);
-    let attrs: PathMap<_> = manifest
-        .dirs
-        .iter()
-        .map(|dir| (dir.p.as_str(), dir))
-        .collect();
-    for file in &manifest.files {
-        let Record::Chunked {
-            p,
-            s,
-            mode,
-            uid,
-            gid,
-            over,
-        } = file
-        else {
-            continue;
-        };
-        for path in ancestors(p).chain(std::iter::once(p.as_str())) {
+    for (layer, record) in served {
+        let p = record.p.as_str();
+        for path in ancestors(p).chain(std::iter::once(p)) {
             if ids.contains_key(path) {
                 continue;
             }
@@ -198,27 +125,29 @@ pub fn inodes(manifest: &Manifest) -> io::Result<Vec<Inode>> {
                 .get(parent)
                 .ok_or_else(|| invalid("missing parent inode"))?;
             let id = u64::try_from(rows.len()).map_err(|_| invalid("inode count"))? + 1;
-            let dir = attrs.get(path);
             let row = if path == p {
                 Inode {
                     path: path.to_owned(),
                     parent: parent_id,
-                    size: *s,
-                    mode: *mode,
-                    uid: *uid,
-                    gid: *gid,
-                    index: Some(over.clone()),
+                    size: record.s,
+                    mode: record.mode,
+                    uid: record.uid,
+                    gid: record.gid,
+                    t: record.t,
+                    layer: Some(*layer),
                     children: DirectoryEntries::new(),
                 }
             } else {
+                let found = attrs(path)?;
                 Inode {
                     path: path.to_owned(),
                     parent: parent_id,
                     size: 0,
-                    mode: dir.map_or(0o755, |d| d.mode),
-                    uid: dir.map_or(0, |d| d.uid),
-                    gid: dir.map_or(0, |d| d.gid),
-                    index: None,
+                    mode: found.mode,
+                    uid: found.uid,
+                    gid: found.gid,
+                    t: found.t,
+                    layer: None,
                     children: DirectoryEntries::new(),
                 }
             };
@@ -240,13 +169,33 @@ mod tests {
         for path in ["", "/etc/passwd", "a/../b", "a//b", "./a", "a\0b"] {
             assert!(!path_valid(path));
         }
-        let mut m: Manifest = serde_json::from_str(
-            r#"{"v":1,"files":[],"dirs":[],"deleted":[],"treplace":[],"links":[]}"#,
-        )
+        let empty = r#"{"index":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","root":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","count":0}"#;
+        let record = |p: &str| {
+            format!(r#"{{"p":"{p}","s":1,"mode":420,"uid":0,"gid":0,"t":0,"over":{empty}}}"#)
+        };
+        let old: Manifest =
+            serde_json::from_str(&format!(r#"{{"v":2,"files":[{}]}}"#, record("a"))).unwrap();
+        assert!(old.validate().is_err());
+        let twice: Manifest = serde_json::from_str(&format!(
+            r#"{{"v":3,"files":[{},{}]}}"#,
+            record("a"),
+            record("a")
+        ))
         .unwrap();
-        assert!(inodes(&m).is_err());
-        m.v = 2;
-        m.deleted = vec!["a".to_owned(), "a".to_owned()];
-        assert!(inodes(&m).is_err());
+        assert!(twice.validate().is_err());
+        let nested: Manifest = serde_json::from_str(&format!(
+            r#"{{"v":3,"files":[{},{}]}}"#,
+            record("a"),
+            record("a/b")
+        ))
+        .unwrap();
+        assert!(nested.validate().is_err());
+        let sound: Manifest = serde_json::from_str(&format!(
+            r#"{{"v":3,"files":[{},{}]}}"#,
+            record("a/b"),
+            record("a/c")
+        ))
+        .unwrap();
+        assert!(sound.validate().is_ok());
     }
 }
