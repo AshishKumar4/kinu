@@ -2444,7 +2444,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           if (!sleepTimeDue(window)) {
             this.armSleepTimeWake(window);
             diagnostics.event('memory.facts_deferred', {
-              completedTurns: window.completedTurns, unprocessed: window.turns.length,
+              workspace: this.name, completedTurns: window.completedTurns, unprocessed: window.turns.length,
             });
 
             return { status: 'completed', detail: 'the cadence is not due' };
@@ -2661,6 +2661,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       diagnostics.event('memory.facts_compressed', {
+        workspace: this.name,
         upserted: summary.upserted,
         decayed: summary.decayed,
         skipped: summary.skipped,
