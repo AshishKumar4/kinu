@@ -25,6 +25,7 @@ import type { ContextSelection } from '../src/session/context';
 import { agentArtifactDirectory } from '../src/vfs/agent-home';
 import { sha256Hex } from '../src/safety/argument-digest';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test-build' };
 
@@ -125,7 +126,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
       return {
         ...template,
         actor: bound.handle,
-        storage: { vfs: plane, sql, execRaw, transactionSync: (write) => db.transaction(write)() },
+        storage: { vfs: plane, home: WORKSPACE_ROOT, sql, execRaw, transactionSync: (write) => db.transaction(write)() },
         agentStateVfs: plane,
         identity: scaffoldIdentity(bound.record.name, plane, sql, bound.record.actorId),
         release: () => { released.push(bound.record.name); },

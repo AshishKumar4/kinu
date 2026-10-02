@@ -176,17 +176,17 @@ const PTY_EXIT_FRAME = 'PTY_EXIT';
 const PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, PTY_CLOSE_FRAME]);
 
 /**
- * How far behind the socket may fall before a terminal's output is dropped
- * rather than queued.
+ * How far behind the socket may fall before live output — a terminal's, or a
+ * running command's — is dropped rather than queued.
  *
- * A terminal is unlike a command: its output has no end to wait for, so a
- * program writing faster than the socket drains would grow this daemon's heap
- * without bound. Queueing does not help a display — the newest bytes ARE the
- * picture, and the pane repaints — so past this backlog the newest frame is
- * dropped and counted. A full repaint of a large window is tens of kilobytes,
- * so this holds several of them and a brief stall stays invisible.
+ * Live output has no end to wait for, so a program writing faster than the
+ * socket drains would grow this daemon's heap without bound. Queueing does not
+ * help a display — the newest bytes ARE the picture, and a command's result
+ * still carries every byte — so past this backlog the newest frame is dropped
+ * and counted. A full repaint of a large window is tens of kilobytes, so this
+ * holds several of them and a brief stall stays invisible.
  */
-const PTY_BACKLOG_MAX_BYTES = 256 * 1024;
+const LIVE_BACKLOG_MAX_BYTES = 256 * 1024;
 
 /**
  * The provider relay: the hub asks this machine to make a model call for the
@@ -923,6 +923,26 @@ const REQUEST_ID = /^rpc-[A-Za-z0-9_-]{10}-[1-9]\d*$/;
 
 const EXEC_ACK_METHOD = 'execAck';
 
+/**
+ * A running command's output, sent only to a hub whose exec frame asked with
+ * `output: true`: `{ type, request, chunks: [{ stream, data }], dropped }`,
+ * each chunk's bytes in base64, `dropped` the bytes left out since the last
+ * frame. A hub that never asks gets no frame and the command gets no output
+ * pipe.
+ */
+const EXEC_OUTPUT_FRAME = 'EXEC_OUT';
+
+/** At most one output frame per request per interval, holding at most the
+ *  newest window of bytes: the rate and size core's job feed sends at. */
+const EXEC_OUTPUT_FLUSH_MS = 250;
+
+const EXEC_OUTPUT_WINDOW_BYTES = 16 * 1024;
+
+/** A supervisor's record on the output pipe: the descriptor the bytes came
+ *  from (1 or 2), or 0 for a count of bytes it dropped; then a 48-bit length;
+ *  then that many bytes, none after a count. */
+const OUTPUT_RECORD_HEADER_BYTES = 7;
+
 /** Room for what the supervisor writes around the kept bytes: the seam, and the closing line that names
  *  the spill path or why it was not saved. */
 const EXEC_CAPTURE_MAX_BYTES = EXEC_STREAM_MAX_BYTES + 16 * 1024;
@@ -1163,7 +1183,7 @@ const SUPERVISOR_SCRIPT = `
 const fs = require('node:fs');
 const { execFile, spawn } = require('node:child_process');
 
-const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile] = process.argv.slice(1);
+const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile, lifeFile] = process.argv.slice(1);
 const maxOutput = Number(maxText);
 // Half kept from the start, half from the end, as core's BoundedOutput keeps them (COMMAND_OUTPUT_LIMITS).
 const HEAD = Math.floor(maxOutput / 2);
@@ -1228,7 +1248,12 @@ function abandonStartup() {
 }
 
 async function publishState() {
+  // First, before anything yields: on Linux the command's identity is read before the event loop can reap it.
   const [start, groupStart] = await startIdentities();
+  // Held until this process exits, however it exits: the kernel closes it, and the daemon reads that close as
+  // this supervisor gone. Opened before the state exists, so whoever reads the state finds it held.
+  await run('mkfifo', [lifeFile]);
+  fs.openSync(lifeFile, 'r+');
   const stateTemporary = stateFile + '.tmp.' + process.pid;
   fs.writeFileSync(
     stateTemporary,
@@ -1385,6 +1410,40 @@ class Capture {
   }
 }
 
+// The daemon's output pipe on fd 3, when its hub asked to watch: each chunk goes on as a record. A
+// backlog past the plan's bound drops the chunk and counts it, and a daemon that went away (EPIPE)
+// ends the forwarding, so the command never waits on the daemon and the capture never sees any of it.
+let live = null;
+let liveBacklog = 0;
+let liveDropped = 0;
+
+function liveRecord(kind, size) {
+  const header = Buffer.alloc(7);
+  header[0] = kind;
+  header.writeUIntBE(size, 1, 6);
+  return header;
+}
+
+function forward(kind, chunk) {
+  if (live === null) return;
+  if (live.writableLength > liveBacklog) {
+    liveDropped += chunk.length;
+    return;
+  }
+  if (liveDropped > 0) live.write(liveRecord(0, liveDropped));
+  liveDropped = 0;
+  live.write(Buffer.concat([liveRecord(kind, chunk.length), chunk]));
+}
+
+// Before the result exists: the daemon answers once this pipe has closed, so the output it forwards
+// reaches the hub before the result does.
+function endLive() {
+  if (live === null) return;
+  if (liveDropped > 0) live.write(liveRecord(0, liveDropped));
+  live.end();
+  live = null;
+}
+
 let child;
 let stdout;
 let stderr;
@@ -1398,6 +1457,7 @@ function finish(kind, exitCode, signal) {
   completed = true;
   stdout.close();
   stderr.close();
+  endLive();
   if (kind === 'cancelled') {
     writeTerminalResult(kind, exitCode);
     process.exit(0);
@@ -1447,6 +1507,11 @@ try {
   const spill = plan.spill || {};
   stdout = new Capture(stdoutFile, spill.stdout, 'stdout');
   stderr = new Capture(stderrFile, spill.stderr, 'stderr');
+  if (plan.liveBacklog > 0) {
+    liveBacklog = plan.liveBacklog;
+    live = fs.createWriteStream(null, { fd: 3 });
+    live.on('error', () => { live = null; });
+  }
   child = spawn(argv[0], argv.slice(1), {
     detached: true,
     env: plan.env,
@@ -1483,8 +1548,16 @@ try {
       if (!err || err.code !== 'ESRCH') finish('exited', 125);
     }
   });
-  child.stdout.on('data', (chunk) => { if (!completed) stdout.write(chunk); });
-  child.stderr.on('data', (chunk) => { if (!completed) stderr.write(chunk); });
+  child.stdout.on('data', (chunk) => {
+    if (completed) return;
+    stdout.write(chunk);
+    forward(1, chunk);
+  });
+  child.stderr.on('data', (chunk) => {
+    if (completed) return;
+    stderr.write(chunk);
+    forward(2, chunk);
+  });
 } catch (err) {
   abandonStartup();
 }
@@ -1568,19 +1641,105 @@ function waitForFile(file, signal) {
   return waitForPath(file, true, signal);
 }
 
-function waitForDirectoryRemoval(dir) {
-  return waitForPath(dir, false);
+/**
+ * Resolves once the supervisor of `dir` is gone, or `signal` aborts. It holds `life` open for writing from before
+ * its state was published, so a reader opened while that end is held is hung up when the supervisor exits, and one
+ * opened after finds no writer at all. A record from a supervisor older than `life` has nothing to watch.
+ */
+async function supervisorExit(dir, signal) {
+  let fd;
+
+  try {
+    fd = fs.openSync(path.join(dir, 'life'), fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+    throw err;
+  }
+
+  try {
+    if (!lifeHeld(fd)) return;
+    // Bun alone sees a FIFO's hang-up here (its net.Socket over the fd never ends); it leaves the fd to us.
+    const reader = Bun.file(fd).stream().getReader();
+    let cancelled = Promise.resolve();
+    const cancel = () => { cancelled = reader.cancel(); };
+
+    signal.addEventListener('abort', cancel, { once: true });
+
+    try {
+      // Nothing is ever written: the read ends at the writer's close, or at the cancel.
+      while (!(await reader.read()).done);
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      await cancelled;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
-function writeAcknowledgement(dir) {
+/** Whether a writer holds the FIFO `fd` reads: with none left a non-blocking read ends (0); with one, it would wait. */
+function lifeHeld(fd) {
+  try {
+    return fs.readSync(fd, Buffer.alloc(1)) !== 0;
+  } catch (err) {
+    if (err && err.code === 'EAGAIN') return true;
+    throw err;
+  }
+}
+
+/**
+ * Resolves once the supervisor of `entry` has written its result. One that exits first never will, and that is
+ * the answer: what became of its command is unknown.
+ */
+async function resultWritten(entry, requestId) {
+  const resultFile = path.join(entry.dir, 'result');
+  const settled = new AbortController();
+  const written = waitForFile(resultFile, settled.signal);
+  const exited = supervisorExit(entry.dir, settled.signal);
+
+  try {
+    await Promise.race([written, exited]);
+  } finally {
+    settled.abort();
+    await Promise.allSettled([written, exited]);
+  }
+
+  // The supervisor writes its result before it can exit, so one gone without a result never wrote one.
+  if (!fs.existsSync(resultFile)) {
+    throw new Error(`the supervisor of ${requestId} (pid ${entry.pid}) exited without recording the command's result, `
+      + `so its outcome is unknown; the command may still be running in process group ${entry.group}`);
+  }
+}
+
+/** The ACK to a live supervisor, settled once it has removed its directory or once it is gone, whichever is first. */
+async function handOver(dir) {
+  const settled = new AbortController();
+  // Watched before the ACK goes: the supervisor that reads it removes `life` with the directory.
+  const exited = supervisorExit(dir, settled.signal);
+  const removed = writeAcknowledgement(dir, settled.signal).then(() => waitForDirectoryRemoval(dir, settled.signal));
+
+  try {
+    await Promise.race([removed, exited]);
+  } finally {
+    settled.abort();
+    await Promise.allSettled([removed, exited]);
+  }
+}
+
+function waitForDirectoryRemoval(dir, signal) {
+  return waitForPath(dir, false, signal);
+}
+
+/** `signal` ends a writer still waiting for its reader, which a supervisor gone before it opened the FIFO never is. */
+function writeAcknowledgement(dir, signal) {
   const ack = path.join(dir, 'ack');
 
   return new Promise((resolve, reject) => {
-    const writer = spawn('/bin/sh', ['-c', 'printf 1 > "$1"', 'kinu-ack', ack], { stdio: 'ignore' });
+    const writer = spawn('/bin/sh', ['-c', 'printf 1 > "$1"', 'kinu-ack', ack], { stdio: 'ignore', signal });
     writer.once('error', reject);
-    writer.once('exit', (code, signal) => {
+    writer.once('exit', (code, killedBy) => {
       if (code === 0) resolve();
-      else reject(new Error(`supervisor acknowledgement writer exited with ${signal ?? code}`));
+      else reject(new Error(`supervisor acknowledgement writer exited with ${killedBy ?? code}`));
     });
   });
 }
@@ -1669,7 +1828,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
     }
 
     process.kill(entry.pid, 'SIGUSR1');
-    await waitForFile(path.join(entry.dir, 'result'));
+    await resultWritten(entry, requestId);
     const terminal = readTerminalResult(entry.dir);
 
     if (terminal.kind !== 'cancelled') {
@@ -1690,7 +1849,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
     const entry = await loadEntry(requestId);
 
     if (!entry) return undefined;
-    await waitForFile(path.join(entry.dir, 'result'));
+    await resultWritten(entry, requestId);
 
     return { entry, ...readExecResult(entry.dir) };
   }
@@ -1710,13 +1869,12 @@ function createInFlight(root = INFLIGHT_ROOT) {
     // longer matches is gone (its daemon died and it left the result behind),
     // and this daemon owns the directory instead. The supervisor alone is
     // asked: a finished command's group leader has exited, so the group half
-    // of the identity never matches here.
-    if (terminal.kind === 'exited' && (await startedAs(entry.pid, entry.start))) {
-      await writeAcknowledgement(entry.dir);
-      await waitForDirectoryRemoval(entry.dir);
-    } else {
-      removeRequestDirectory(entry.dir);
-    }
+    // of the identity never matches here. One that dies after this check is
+    // heard of through its `life` FIFO.
+    if (terminal.kind === 'exited' && (await startedAs(entry.pid, entry.start))) await handOver(entry.dir);
+
+    // Gone already when a supervisor removed it on reading the ACK.
+    removeRequestDirectory(entry.dir);
 
     entries.delete(requestId);
 
@@ -1794,7 +1952,9 @@ function createInFlight(root = INFLIGHT_ROOT) {
  * durable request owner without creating another supervisor. */
 const inFlight = createInFlight();
 
-function startSupervisor(requestId, command, plan, uncheckpointed) {
+/** `uncheckpointed`: why no checkpoint covers the command, or null. `watched`: the hub asked for its output
+ *  while it runs, so the supervisor gets a pipe for it on fd 3 and `child.stdio[3]` is this daemon's end. */
+function startSupervisor(requestId, command, plan, { uncheckpointed, watched }) {
   assertSupervisionSupported();
   const dir = requestDirectory(INFLIGHT_ROOT, requestId);
   fs.mkdirSync(INFLIGHT_ROOT, { recursive: true, mode: 0o700 });
@@ -1811,6 +1971,8 @@ function startSupervisor(requestId, command, plan, uncheckpointed) {
     JSON.stringify({
       argv: plan.argv.slice(0, -1), env: plan.env, statusFd: plan.statusFd, cwd: plan.spawnCwd,
       spill: outputSpill(plan, requestId),
+      // A window's worth: past it, this daemon would drop the bytes from its window anyway.
+      liveBacklog: watched ? EXEC_OUTPUT_WINDOW_BYTES : 0,
     }),
     { encoding: 'utf8', mode: 0o600, flag: 'wx' },
   );
@@ -1823,8 +1985,8 @@ function startSupervisor(requestId, command, plan, uncheckpointed) {
     '-e', SUPERVISOR_SCRIPT,
     commandFile, path.join(dir, 'state'), path.join(dir, 'result'),
     path.join(dir, 'stdout'), path.join(dir, 'stderr'), path.join(dir, 'ack'),
-    String(EXEC_STREAM_MAX_BYTES), planFile,
-  ], { detached: true, env: COMMAND_ENV, stdio: 'ignore' });
+    String(EXEC_STREAM_MAX_BYTES), planFile, path.join(dir, 'life'),
+  ], { detached: true, env: COMMAND_ENV, stdio: watched ? ['ignore', 'ignore', 'ignore', 'pipe'] : 'ignore' });
 
   child.unref();
 
@@ -2195,10 +2357,11 @@ function leaderEnvironment(plan) {
 }
 
 /**
- * One frame from a live terminal to the hub, and whether the socket took it.
+ * One frame of live output — a terminal's, or a running command's — to the
+ * hub, and whether the socket took it.
  *
  * `false` is not a failure: it means this socket is too far behind to be
- * caught up by queueing, and the session counts what it dropped.
+ * caught up by queueing, and the sender counts what it dropped.
  *
  * The backlog rule covers OUTPUT alone. A terminal's newest bytes are its
  * picture, and a dropped repaint is repaired by the next one — but the frame
@@ -2206,17 +2369,17 @@ function leaderEnvironment(plan) {
  * leaves the hub holding a terminal that no longer exists, so it goes out even
  * when the socket is behind: it is one small frame, once per session.
  */
-function sendPtyFrame(ws, frame) {
-  const droppable = frame.type === PTY_OUTPUT_FRAME;
+function sendLiveFrame(ws, frame) {
+  const droppable = frame.type === PTY_OUTPUT_FRAME || frame.type === EXEC_OUTPUT_FRAME;
 
-  if (droppable && Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > PTY_BACKLOG_MAX_BYTES) return false;
+  if (droppable && Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > LIVE_BACKLOG_MAX_BYTES) return false;
 
   try {
     ws.send(JSON.stringify(frame));
   } catch (err) {
-    // The socket closed between this terminal's read and this write. Its own
-    // close handler ends every session; this frame has nowhere left to go.
-    log('device.terminal_frame_unsent', frame.type, frame.session, errorDetail(err));
+    // The socket closed between the read and this write. Its own close handler
+    // ends every session and command; this frame has nowhere left to go.
+    log('device.live_frame_unsent', frame.type, frame.session ?? frame.request, errorDetail(err));
 
     return false;
   }
@@ -2266,7 +2429,7 @@ async function openTerminalSession(msg, ws, ctx) {
     rows: params[2],
     argv: plan.argv,
     env: leaderEnvironment(plan),
-    send: (frame) => sendPtyFrame(ws, frame),
+    send: (frame) => sendLiveFrame(ws, frame),
   });
 
   return { session: params[0], pid: opened.pid, cols: opened.cols, rows: opened.rows };
@@ -2301,6 +2464,119 @@ function socketClosed(ws) {
  *  a re-delivered frame joins it, and a cancel lets it start before stopping it. */
 const starting = new Map();
 
+/** Commands whose output a hub is watching, by request id, while their supervisor's pipe is open. */
+const outputWatches = new Map();
+
+/**
+ * One watched command: its supervisor's records, coalesced into frames for
+ * the socket that asked, at most one per EXEC_OUTPUT_FLUSH_MS holding the
+ * newest EXEC_OUTPUT_WINDOW_BYTES. Every byte left out is counted where it
+ * was: a chunk's `omitted` is what was lost just before it, and a loss with
+ * no chunk after it ends the frame as an empty one. `dropped` is their sum. A
+ * re-delivered exec binds it to the socket that sent it. `ended` resolves once
+ * the pipe has closed and its last frame went out, so the command's result
+ * follows its output.
+ */
+function watchOutput(requestId, pipe, ws) {
+  let socket = ws;
+  let chunks = [];
+  let held = 0;
+  let lost = 0;
+  let timer = null;
+
+  function flush() {
+    clearTimeout(timer);
+    timer = null;
+
+    if (chunks.length === 0 && lost === 0) return;
+    const sent = chunks.map(({ stream, bytes, omitted }) => ({ stream, data: bytes.toString('base64'), ...(omitted > 0 && { omitted }) }));
+
+    if (lost > 0) sent.push({ stream: chunks.at(-1)?.stream ?? 'stdout', data: '', omitted: lost });
+    const dropped = sent.reduce((sum, chunk) => sum + (chunk.omitted ?? 0), 0);
+    const frame = { type: EXEC_OUTPUT_FRAME, request: requestId, chunks: sent, dropped };
+
+    // A frame the socket refused is lost whole, before whatever comes next.
+    lost = !socketClosed(socket) && sendLiveFrame(socket, frame) ? 0 : dropped + held;
+    chunks = [];
+    held = 0;
+  }
+
+  function arm() {
+    timer ??= setTimeout(flush, EXEC_OUTPUT_FLUSH_MS);
+  }
+
+  function keep(stream, bytes) {
+    const kept = bytes.subarray(Math.max(0, bytes.length - EXEC_OUTPUT_WINDOW_BYTES));
+    const omitted = lost + bytes.length - kept.length;
+    const last = chunks.at(-1);
+
+    if (omitted === 0 && last !== undefined && last.stream === stream) last.bytes = Buffer.concat([last.bytes, kept]);
+    else chunks.push({ stream, bytes: Buffer.from(kept), omitted });
+    lost = 0;
+    held += kept.length;
+
+    // Past the window the oldest bytes go, lost before the first chunk kept; the newest chunk always stays.
+    while (held > EXEC_OUTPUT_WINDOW_BYTES) {
+      const first = chunks[0];
+      const cut = Math.min(first.bytes.length, held - EXEC_OUTPUT_WINDOW_BYTES);
+      first.bytes = first.bytes.subarray(cut);
+      first.omitted += cut;
+      held -= cut;
+
+      if (first.bytes.length === 0) {
+        chunks.shift();
+        chunks[0].omitted += first.omitted;
+      }
+    }
+
+    arm();
+  }
+
+  let header = Buffer.alloc(0);
+  let source = 0;
+  let remaining = 0;
+
+  pipe.on('data', (data) => {
+    for (let at = 0; at < data.length;) {
+      if (remaining > 0) {
+        const end = Math.min(data.length, at + remaining);
+        keep(source === 1 ? 'stdout' : 'stderr', data.subarray(at, end));
+        remaining -= end - at;
+        at = end;
+        continue;
+      }
+
+      const end = Math.min(data.length, at + OUTPUT_RECORD_HEADER_BYTES - header.length);
+      header = Buffer.concat([header, data.subarray(at, end)]);
+      at = end;
+
+      if (header.length < OUTPUT_RECORD_HEADER_BYTES) continue;
+      source = header[0];
+      const size = header.readUIntBE(1, 6);
+      header = Buffer.alloc(0);
+
+      if (source === 0) {
+        lost += size;
+        arm();
+      } else {
+        remaining = size;
+      }
+    }
+  });
+
+  pipe.on('error', (err) => { log('device.exec_output_unread', requestId, errorDetail(err)); });
+
+  const ended = new Promise((resolve) => {
+    pipe.once('close', () => {
+      flush();
+      outputWatches.delete(requestId);
+      resolve();
+    });
+  });
+
+  return { ended, bind: (next) => { socket = next; } };
+}
+
 /** Starts `id`'s supervisor after the pre-mutation snapshot its frame asks for
  *  and publishes the start in `starting` until the supervisor's state is on
  *  disk. A command whose socket closed while it waited is never started: its
@@ -2317,9 +2593,10 @@ function startCommand(msg, cmd, ws, ctx) {
     const supervisor = await mutation(checkpoints, msg.checkpoint, coveredBy(tree), (snapshot) => {
       if (socketClosed(ws)) throw new Error(`the socket that sent ${id} closed before it could start`);
 
-      return startSupervisor(id, cmd, plan, whyUncheckpointed(tree, snapshot));
+      return startSupervisor(id, cmd, plan, { uncheckpointed: whyUncheckpointed(tree, snapshot), watched: msg.output === true });
     });
 
+    if (msg.output === true) outputWatches.set(id, watchOutput(id, supervisor.child.stdio[3], ws));
     await waitForSupervisorState(supervisor.dir, supervisor.child);
     inFlight.register(id, supervisor.dir);
   })();
@@ -2345,6 +2622,8 @@ function execCommand(msg, ws, ctx) {
   const started = starting.get(id)
     ?? (fs.existsSync(dir) ? waitForFile(path.join(dir, 'state')) : startCommand(msg, cmd, ws, ctx));
 
+  if (msg.output === true) outputWatches.get(id)?.bind(ws);
+
   /** @param {unknown} error */
   function reportExecReplyFailure(error) {
     log('Could not report exec command result', id, error);
@@ -2356,6 +2635,7 @@ function execCommand(msg, ws, ctx) {
       const completed = await inFlight.result(id);
 
       if (!completed) throw new Error(`missing in-flight command ${id}`);
+      await outputWatches.get(id)?.ended;
       rpc(ws, id, completed.result);
     } catch (err) {
       rpc(ws, id, null, err instanceof Error ? err.message : String(err));
@@ -3375,6 +3655,7 @@ module.exports = {
   CANCEL_METHOD,
   CANCEL_PROTOCOL,
   EXEC_ACK_METHOD,
+  EXEC_OUTPUT_FRAME,
   PTY_OPEN_METHOD,
   PTY_INPUT_FRAME,
   PTY_RESIZE_FRAME,
@@ -3394,6 +3675,8 @@ module.exports = {
   INFLIGHT_ROOT,
   requestDirectory,
   supervisionSupported,
+  processStartIdentity,
+  watchOutput,
   waitForFile,
   waitForSupervisorState,
   createCheckpoints,

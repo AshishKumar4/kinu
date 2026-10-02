@@ -2,9 +2,10 @@
 
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
-import { asSchema, tool, jsonSchema } from 'ai';
+import { asSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime, conversationsFor, storesFor } from './helpers';
+import { programCodemode } from './helpers-program';
 import {
   narrowToolSurface, codemodeCapabilitiesFor, TOOL_REACH,
   buildActorTools,
@@ -14,9 +15,7 @@ import {
   createMemoryCodemodeProvider,
   createReportCodemodeProvider,
   withApprovalGatedShell,
-  projectJsonValue,
   type CodemodeProvider,
-  type CraftedToolExecute,
   type CodemodeBuilder,
   type JsonValue,
   type MemoryToolInput,
@@ -33,55 +32,8 @@ interface CircularValue {
   self?: CircularValue;
 }
 
-// Core has no in-process fallback; tests wire cli-backend's Node executor factory.
-const nodeCraftedExecute: CraftedToolExecute = (t) => {
-  let compiled: ((arg: JsonValue) => Promise<JsonValue | undefined>) | null = null;
-
-  return async (arg) => {
-    if (!compiled) {
-      const evaluated = v.parse(v.function(), new Function('return (' + t.code + ')')());
-      compiled = async (input) => {
-        const result = await evaluated(input);
-
-        return v.safeParse(v.undefined(), result).success
-          ? undefined
-          : projectJsonValue({ value: result });
-      };
-    }
-
-    return compiled(arg);
-  };
-};
-
-const nodeCodemodeBuilder: CodemodeBuilder = (surface) => {
-  return tool({
-    description: 'test exec_tools',
-    inputSchema: jsonSchema<{ code: string }>({
-      type: 'object', properties: { code: { type: 'string' } }, required: ['code'],
-    }),
-    execute: async (a: { code: string }) => {
-      try {
-        // A double that also bound `codemode` would keep passing after the alias was removed.
-        const crafted: Record<string, (arg: JsonValue) => Promise<JsonValue | undefined>> = {};
-
-        for (const [name, entry] of Object.entries(surface.craftedTools())) {
-          crafted[name] = entry.execute;
-        }
-
-        const fn = new Function('workspace', 'tools', 'return (async () => { ' + a.code + ' })()');
-        const rawResult = await fn({}, crafted);
-
-        const result = v.safeParse(v.undefined(), rawResult).success
-          ? undefined
-          : projectJsonValue({ value: rawResult });
-
-        return { result };
-      } catch (error) {
-        return { result: undefined, error: error instanceof Error ? error.message : String(error) };
-      }
-    },
-  });
-};
+/** Programs run as both backends run them: crafted tools compiled in the program's scope. */
+const nodeCodemodeBuilder: CodemodeBuilder = programCodemode();
 
 /** The builtin surface with a working sandbox: an actor's, minus delegation. */
 function tools(
@@ -92,7 +44,6 @@ function tools(
     rt,
     conversations: conversationsFor(rt),
     escalations,
-    craftedToolExecute: nodeCraftedExecute,
     codemode: nodeCodemodeBuilder,
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
   });
@@ -205,8 +156,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const t = buildActorTools({
       rt,
       conversations: conversationsFor(rt),
-      craftedToolExecute: nodeCraftedExecute,
-      codemode: nodeCodemodeBuilder,
+        codemode: nodeCodemodeBuilder,
       facts: stubFacts,
       webSearch: stubWebSearch,
       agents: { mode: 'build', team: stubTeam, peers: stubPeers },
@@ -268,7 +218,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { facts } = factsOverMap();
 
     const t = buildBuiltinTools({
-      rt, craftedToolExecute: nodeCraftedExecute,
+      rt,
       conversations: conversationsFor(rt),
       facts,
     });
@@ -296,7 +246,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { rt } = createTestRuntime();
 
     const t = buildBuiltinTools({
-      rt, craftedToolExecute: nodeCraftedExecute,
+      rt,
       conversations: conversationsFor(rt),
       facts: { upsert: () => 'created' as const, recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [] },
     });
@@ -543,9 +493,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       buildActorTools({
         rt,
         conversations: conversationsFor(rt),
-        craftedToolExecute: nodeCraftedExecute,
-        codemode: (surface) => {
-          injected = Object.keys(surface.craftedTools());
+            codemode: (surface) => {
+          injected = surface.craftedTools().map((crafted) => crafted.name);
 
           return nodeCodemodeBuilder(surface);
         },

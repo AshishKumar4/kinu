@@ -127,13 +127,13 @@ describe('a completion held past its own cancellation', () => {
   test('publishes no row, frame or acknowledgement after the request settled', async () => {
     const { responder, release } = holdingDaemon();
 
-    const harness = await deviceHarness('ashish@studio', (frame) => {
+    const harness = await deviceHarness('ashish@studio', (frame, say) => {
     // Already finished on the machine, so the daemon holds no control entry: the completion boundary.
       if (frame.method === DEVICE_CANCEL_METHOD) {
         return { requestId: v.parse(v.string(), frame.params[0]), cancelled: 'unknown' };
       }
 
-      return responder(frame);
+      return responder(frame, say);
     });
 
     harness.consentDecision = 'always';

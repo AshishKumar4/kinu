@@ -4537,10 +4537,10 @@ const BUILD_LINES = [
 
 const BUILD_JOB_ID = "bgjob-4e1a77c0";
 
-function buildTail(lines: number): JobOutputTail {
+function buildTail(lines: number, lost: number): JobOutputTail {
   return BUILD_LINES.slice(0, lines).reduce<JobOutputTail | undefined>((tail, line, at) => followJobOutput(tail, {
-    type: JOB_OUTPUT_EVENT, jobId: BUILD_JOB_ID, seq: at + 1, dropped: 0,
-    chunks: [{ stream: line.startsWith("warn:") ? "stderr" : "stdout", text: `${line}\n` }],
+    type: JOB_OUTPUT_EVENT, jobId: BUILD_JOB_ID, seq: at + 1, dropped: at === 0 ? lost : 0,
+    chunks: [{ stream: line.startsWith("warn:") ? "stderr" : "stdout", text: `${line}\n`, ...(at === 0 && lost > 0 && { omitted: lost }) }],
   }), undefined) ?? { seq: 0, chunks: [], omitted: 0 };
 }
 
@@ -4554,6 +4554,7 @@ function buildingJob(output: JobOutputTail): BackgroundJob {
 function useBuildingJob(): BackgroundJob {
   const params = new URLSearchParams(location.search);
   const live = params.get("live") === "1";
+  const lost = Math.max(Number(params.get("lost") ?? 0) || 0, 0);
   const [lines, setLines] = useState(Math.min(Math.max(Number(params.get("lines") ?? 4) || 4, 1), BUILD_LINES.length));
 
   useEffect(() => {
@@ -4563,7 +4564,7 @@ function useBuildingJob(): BackgroundJob {
     return () => { clearInterval(timer); };
   }, [live]);
 
-  return buildingJob(buildTail(lines));
+  return buildingJob(buildTail(lines, lost));
 }
 
 function JobStreamingFrame() {

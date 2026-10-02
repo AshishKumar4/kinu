@@ -11,6 +11,7 @@ import {
 } from '../src/index';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { lostToolCall } from '../src/tools/effect-claim';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 /** `ToolSet`'s index type erases the registry's input type, so the call shape is restated once here. */
 function mcpCall(tools: ToolSet, name: string): (args: JsonObject, options: ToolExecutionOptions) => Promise<string> {
@@ -287,7 +288,7 @@ describe('tool effect claims', () => {
             return `charged-${Number(args.amount)}`;
           },
           effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
-          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(), producer: 'external_tool' },
+          clamp: { files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, budget: new TurnContextBudget(), producer: 'external_tool' },
         },
       );
 
@@ -311,7 +312,7 @@ describe('tool effect claims', () => {
         {
           call: async () => 'ok',
           effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
-          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(), producer: 'external_tool' },
+          clamp: { files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, budget: new TurnContextBudget(), producer: 'external_tool' },
         },
       );
 
@@ -337,7 +338,7 @@ describe('tool effect claims', () => {
             return `lookup-${String(dispatched)}`;
           },
           effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
-          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(), producer: 'external_tool' },
+          clamp: { files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, budget: new TurnContextBudget(), producer: 'external_tool' },
         },
       );
 

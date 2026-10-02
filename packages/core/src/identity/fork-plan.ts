@@ -6,7 +6,7 @@
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
-import { workspacePath } from '../vfs/workspace-path';
+import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import {
   ForkContextMemberRowSchema,
   ForkConversationEntryPartRowSchema,
@@ -64,11 +64,11 @@ function assertArtifactSegments(relative: string, path: string, root: string): v
 /** One payload path relative to its owning artifact directory. A path outside it is refused:
  *  carrying another workspace's absolute path would re-root or escape into a directory the fork does not own. */
 function forkArtifactRelativePath(stored: string, artifactDirectory: string): string {
-  const root = workspacePath(artifactDirectory);
+  const root = workspacePath(artifactDirectory, WORKSPACE_ROOT);
   const prefix = `${root}/`;
   // Refuse raw segments before normalization can erase traversal.
   assertArtifactSegments(stored.startsWith('/') ? stored.slice(1) : stored, stored, root);
-  const path = workspacePath(stored);
+  const path = workspacePath(stored, WORKSPACE_ROOT);
 
   if (!stored.startsWith('/') || !path.startsWith(prefix)) {
     throw new Error(
@@ -82,7 +82,7 @@ function forkArtifactRelativePath(stored: string, artifactDirectory: string): st
 
 /** Absolute payload path for a carried relative path under one artifact directory. */
 export function forkArtifactPath(relative: string, artifactDirectory: string): string {
-  const root = workspacePath(artifactDirectory);
+  const root = workspacePath(artifactDirectory, WORKSPACE_ROOT);
   assertArtifactSegments(relative, relative, root);
 
   return `${root}/${relative}`;

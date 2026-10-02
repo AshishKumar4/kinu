@@ -22,6 +22,7 @@ import { classifyToolFailure } from '../src/read-models/tool-failures';
 import type { RunEvent, RunEventBase } from '../src/events/types';
 import { KinuError } from '../src/obs/index';
 import { failedToolOutcome } from '../src/tools/outcome';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 
 describe('applyFileEdits', () => {
@@ -468,7 +469,7 @@ type FileToolTestInput = FileToolInput | { action: string; path: string | number
 
 /** The entry as the tool surface serves it: behind the input check a program meets. */
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
-  const entry = withCheckedInput('file', createFileTool({ vfs, ledger, budget: new TurnContextBudget() }));
+  const entry = withCheckedInput('file', createFileTool({ home: WORKSPACE_ROOT, vfs, ledger, budget: new TurnContextBudget() }));
 
   return { call: toolExecute<FileToolTestInput, JsonValue>(entry), ledger };
 }
@@ -614,7 +615,7 @@ describe('file tool', () => {
     };
 
     for (const path of ['memory/a.md', '/memory/a.md', 'memory/a.md']) {
-      const entry = createFileTool({ vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
+      const entry = createFileTool({ home: WORKSPACE_ROOT, vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
       await toolExecute(entry)({ action: 'write', path, content: 'x' });
     }
 
@@ -669,7 +670,7 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'big.txt': 'x'.repeat(500) });
     const ledger = new TurnFileLedger();
     const budget = new TurnContextBudget();
-    const entry = createFileTool({ vfs, ledger, budget });
+    const entry = createFileTool({ home: WORKSPACE_ROOT, vfs, ledger, budget });
     await toolExecute(entry)({ action: 'read', path: 'big.txt' });
     expect(budget.snapshot().admittedChars).toBe(500);
   });
@@ -1004,7 +1005,7 @@ describe('a bulk read is bounded where it is produced', () => {
     const clamped = v.safeParse(v.string(), result);
 
     if (!clamped.success) return v.parse(JsonObjectSchema, result);
-    const spilled = [...vfs.files].find(([path]) => path.startsWith(`${SPILL_DIRS.toolOutput}/`));
+    const spilled = [...vfs.files].find(([path]) => path.startsWith(`${WORKSPACE_ROOT}/${SPILL_DIRS.toolOutput}/`));
 
     if (spilled === undefined) throw new Error(`no spill for a clamped listing: ${clamped.output}`);
 

@@ -34,6 +34,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+source "$REPO/scripts/repo-runtime.sh"
 SCRATCH="$(mktemp -d /tmp/kinu-mac-acceptance.XXXXXX)"
 AGENT_HOME="$SCRATCH/agents/ws-1/home"
 AGENT_TMP="$SCRATCH/agents/ws-1/tmp"

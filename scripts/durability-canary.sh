@@ -13,6 +13,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source scripts/repo-runtime.sh
 
 export KINU_EVAL_BACKEND=cloud
 export KINU_EVAL_LIVE=1

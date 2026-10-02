@@ -369,6 +369,27 @@ describe('where the file browser lands on a mount', () => {
   }
 });
 
+describe('a file on a machine that is offline', () => {
+  function reading(fleet: readonly DeviceFleetEntry[], path: string): Promise<string> {
+    const router = new DefaultExecutionRouter();
+
+    router.register(createDeviceTunnelExecutor(fleetTransport(fleet)));
+    const plane = withMountTable(createTestRuntime().rt.storage.vfs, standardMounts((name) => router.getProvider(name)));
+
+    return readText(plane, path);
+  }
+
+  test('is refused naming that machine as offline, beside the ones that are connected', async () => {
+    await expect(reading([STUDIO, SPARE], '/pc/spare box/notes.md'))
+      .rejects.toMatchObject({ code: 'ENXIO', message: expect.stringContaining('"spare box" is offline') });
+  });
+
+  test('is refused naming it as offline when no machine is connected', async () => {
+    await expect(reading([SPARE], '/pc/spare box/notes.md'))
+      .rejects.toMatchObject({ code: 'ENXIO', message: expect.stringContaining('"spare box" is offline') });
+  });
+});
+
 describe('the shell tool names the machine', () => {
   /** `shell` over the real router and provider, as `shell { runtime: "<nickname>" }` runs. */
   function runTool(fleet: readonly DeviceFleetEntry[]) {

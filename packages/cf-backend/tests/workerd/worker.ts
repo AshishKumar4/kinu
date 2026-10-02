@@ -16,6 +16,8 @@ export { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 
 export { DeviceLedgerProbeDO } from './device-inflight-probe';
 
+export { DeviceOutputHubProbeDO, DeviceOutputWorkspaceProbeDO } from './device-output-probe';
+
 export { TerminalEffectProbeDO } from './terminal-effect-probe';
 
 // Needs `ctx.storage.transactionSync` and `… RETURNING`, which only the platform provides.

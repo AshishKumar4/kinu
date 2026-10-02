@@ -87,9 +87,9 @@ A workspace holds the state. Agents are the actors that work inside it.
   of that state (`core/src/vfs/agent-view.ts`), and the `file` tool reaches an
   absolute path outside the directory as the shell does: each operation is
   reviewed as the command it amounts to (`cat`, `tee`, `rm -rf`, ...) under the
-  shell's approval mode and grants. Relative and home-rooted file paths normalize
-  at `/home/main` (`WORKSPACE_ROOT`, `core/src/vfs/workspace-path.ts`). They
-  cannot climb above that home; `/slates` has the same boundary at its own root.
+  shell's approval mode and grants. Relative file paths resolve at the acting
+  agent's home (`/home/main` for main, `core/src/vfs/workspace-path.ts`) and `..` climbs as on
+  Linux; permissions and the approval gate decide what the path may reach.
   `/home/user` (`NIMBUS_WORKSPACE_ROOT`) links to the home only because Nimbus
   0.13.1 still names it in PATH, XDG and `/etc/passwd`, even with HOME set to
   `/home/main` (measured 2026-10-01; values in [Storage](STORAGE.md)). Delete the

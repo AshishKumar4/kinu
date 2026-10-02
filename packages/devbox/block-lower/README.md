@@ -29,6 +29,8 @@ The image is built from this directory alone and pinned in `upstream.json`:
 docker build -t kinu-devbox-native:<date> packages/devbox/block-lower
 ```
 
+The runtime image pins the Bun version in the root `package.json`.
+
 ## Format and reads
 
 `over.index` names `.devbox-delta/<sha256>`, a file in the same delta image.

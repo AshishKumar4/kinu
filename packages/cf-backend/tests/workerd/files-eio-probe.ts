@@ -4,7 +4,7 @@
  * shim.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { nimbusSessionFiles } from '@kinu.run/core';
+import { nimbusSessionFiles, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
@@ -46,7 +46,7 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
   /** The box plane's `readRange` is `readNimbusOriginRange`, the `node -e` reader. */
   async readRange(path: string, offset: number, length: number): Promise<RangeReadReport> {
     this.execs = [];
-    const plane = nimbusSessionFiles(this.box());
+    const plane = nimbusSessionFiles(this.box(), { home: WORKSPACE_ROOT });
 
     try {
       const bytes = await plane.readRange(path, offset, length);

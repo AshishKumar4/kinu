@@ -129,11 +129,12 @@ describe('installed Nimbus dependency integrity', () => {
     const shell = await workspace.exec(`ls ${NIMBUS_WORKSPACE_ROOT}`);
 
     const file = createFileDispatcher({
+      home: WORKSPACE_ROOT,
       vfs: nimbusSessionFiles({
         files: workspaceBoxFiles(async () => workspace.vfs),
         ready: async () => undefined,
         exec: async () => { throw new Error('the file tool runs no commands'); },
-      }),
+      }, { home: WORKSPACE_ROOT }),
       ledger: new TurnFileLedger(),
       budget: new TurnContextBudget(),
     });
@@ -159,7 +160,7 @@ describe('installed Nimbus dependency integrity', () => {
         files: workspaceBoxFiles(async () => workspace.vfs),
         ready: async () => undefined,
         exec: async () => { throw new Error('the plane runs no commands'); },
-      });
+      }, { home: WORKSPACE_ROOT });
 
       await writeText(plane, `${NIMBUS_WORKSPACE_ROOT}/slates/a/package.json`, '{}');
 

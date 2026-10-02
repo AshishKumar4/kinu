@@ -33,8 +33,8 @@ export interface DeviceHarness extends TestUserDO {
   closeDeviceHarness(): Promise<void>;
 }
 
-/** Answer now, or later to hold a command's result open across its cancellation. */
-export type DeviceResponder = (frame: DeviceFrame) => JsonValue | Promise<JsonValue>;
+/** Answer now, or later to hold a command's result open across its cancellation; `say` sends a frame first. */
+export type DeviceResponder = (frame: DeviceFrame, say: (frame: JsonValue) => Promise<void>) => JsonValue | Promise<JsonValue>;
 
 /** What a current daemon reports on connect (sandbox proof, agent-home root);
  *  without it the hub refuses to run commands. */

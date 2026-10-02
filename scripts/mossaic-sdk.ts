@@ -162,7 +162,7 @@ export function bindPinnedCompiler(root: string): void {
 export function buildSdk(root: string = REPO_ROOT): void {
   bindPinnedCompiler(root);
 
-  const built = Bun.spawnSync(['bun', 'run', 'build'], {
+  const built = Bun.spawnSync([process.execPath, 'run', '--bun', 'build'], {
     cwd: join(root, MOSSAIC_SDK),
     stdout: 'inherit',
     stderr: 'inherit',

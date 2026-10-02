@@ -2,7 +2,11 @@
  * DeviceTransport over the user-level device hub (UserDO). `status()` is the last answer; `refreshStatus()`
  * awaits the hub.
  */
-import { WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId } from './device-tunnel';
+import {
+  WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId, type DeviceExecOutput,
+} from './device-tunnel';
+import { base64ToBytes } from '../utils/base64';
+import type { OutputSink } from '../types/primitives';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { shellQuote } from '../utils/shell';
 import { type DeviceCheckpointHint } from '../checkpoints/types';
@@ -41,6 +45,20 @@ export interface DeviceRpcOptions {
   backgroundJobId?: string;
   /** Target machine. Absent: hub answers a one-machine account and refuses several. */
   deviceId?: string;
+  onOutput?: (output: DeviceExecOutput) => void;
+}
+
+function writeOutput(sink: OutputSink): (output: DeviceExecOutput) => void {
+  return ({ chunks, dropped }) => {
+    const unplaced = dropped - chunks.reduce((sum, { omitted = 0 }) => sum + omitted, 0);
+
+    if (unplaced > 0) sink.lost(unplaced);
+
+    for (const { stream, data, omitted = 0 } of chunks) {
+      if (omitted > 0) sink.lost(omitted);
+      sink.write(stream, base64ToBytes(data));
+    }
+  };
 }
 
 export interface HubDeviceTransportOpts {
@@ -152,6 +170,8 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         if (rpcOpts?.backgroundJobId !== undefined) {
           deviceOptions.backgroundJobId = rpcOpts.backgroundJobId;
         }
+
+        if (rpcOpts?.output !== undefined) deviceOptions.onOutput = writeOutput(rpcOpts.output);
 
         const caller = await opts.caller();
         const rawResult = await hub.deviceRpc(caller, method, effectiveParams, deviceOptions);

@@ -20,7 +20,6 @@ import {
   DEFAULT_TOOL_RESULT_MAX_CHARS,
   decodeJsonValue,
   projectJsonValue,
-  type CraftedToolExecute,
   type CodemodeProvider,
   type CodemodeBuilder,
   type JsonValue,
@@ -32,10 +31,6 @@ import { cutShareGrant, grantAdmits, slateCapabilityGraph } from '../src/slates/
 import { parseSlateProject } from '../src/slates/project';
 
 const NO_BROWSER_RUN = { missing: 'this suite reaches no Browser Run' };
-
-const unusedCraftedExecute: CraftedToolExecute = () => async () => {
-  throw new Error('This web-tool suite does not install crafted tools');
-};
 
 function createNodeCodemodeBuilder(codemodeProviders: CodemodeProvider[] = []): CodemodeBuilder {
   return (surface) => {
@@ -504,8 +499,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
   return buildActorTools({
     rt,
     conversations: conversationsFor(rt),
-    craftedToolExecute: unusedCraftedExecute,
-    codemode: createNodeCodemodeBuilder([createWebCodemodeProvider({ provider, vfs: rt.storage.vfs, sessions: NO_BROWSER_RUN })]),
+    codemode: createNodeCodemodeBuilder([createWebCodemodeProvider({ provider, files: rt.storage, sessions: NO_BROWSER_RUN })]),
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
     webSearch: provider,
   });
@@ -514,7 +508,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
 describe('web builtin', () => {
   test('gated on the webSearch dep', () => {
     const { rt } = createTestRuntime();
-    const without = buildBuiltinTools({ rt, craftedToolExecute: unusedCraftedExecute, conversations: conversationsFor(rt) });
+    const without = buildBuiltinTools({ rt, conversations: conversationsFor(rt) });
     expect(Object.keys(without)).not.toContain('web');
 
     const withWeb = buildWithWeb(rt);
@@ -713,7 +707,7 @@ describe('web through Browser Run', () => {
     const { web, execute } = webWithBrowser(() => new Response(PNG, { headers: { 'content-type': 'image/png' } }));
     const output = await execute({ action: 'screenshot', url: 'https://example.com/', full_page: true });
 
-    expect(await web.toModelOutput?.({ toolCallId: 'c1', input: {}, output })).toEqual({ type: 'text', value: expect.stringMatching(/^Saved the whole page of https:\/\/example\.com\/ to screenshots\//u) });
+    expect(await web.toModelOutput?.({ toolCallId: 'c1', input: {}, output })).toEqual({ type: 'text', value: expect.stringMatching(/^Saved the whole page of https:\/\/example\.com\/ to \/home\/main\/screenshots\//u) });
   });
 
   test('private and internal addresses are refused before Browser Run is asked', async () => {
@@ -818,10 +812,10 @@ describe('web on a shared slate', () => {
     expect(await tree(rt.storage.vfs)).toEqual(before);
 
     // The same call from an agent's eval saves the picture, so the tree above is the slate route's doing.
-    const evalWeb = createWebCodemodeProvider({ provider, vfs: rt.storage.vfs, sessions: NO_BROWSER_RUN });
+    const evalWeb = createWebCodemodeProvider({ provider, files: rt.storage, sessions: NO_BROWSER_RUN });
     const saved = await callCodemodeMember([evalWeb], 'web', 'screenshot', ['https://example.com/']);
 
-    expect(saved).toMatchObject({ path: expect.stringMatching(/^screenshots\/example\.com-/u) });
+    expect(saved).toMatchObject({ path: expect.stringMatching(/^\/home\/main\/screenshots\/example\.com-/u) });
     expect(await tree(rt.storage.vfs)).not.toEqual(before);
   });
 });

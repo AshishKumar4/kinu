@@ -8,10 +8,11 @@
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { cloudflareTest } from '@cloudflare/vitest-plugin';
-import { buildSync, transform, type OutputFile } from 'esbuild';
+import { cloudflareTest, getDurableObjectDesignators } from '@cloudflare/vitest-plugin';
+import { buildSync, transform, type BuildOptions } from 'esbuild';
 import { buildSlateVendor, slateVendor } from './slate-vendor';
-import { defineConfig, type Plugin } from 'vitest/config';
+import { configDefaults, defineConfig, type Plugin } from 'vitest/config';
+import type { UserConfig } from 'vite';
 import { probeOutbound } from './tests/workerd/http-model-fake';
 import { hireOutbound } from './tests/workerd/hire-model-fake';
 import { registryOutbound } from './tests/workerd/npm-registry-fake';
@@ -23,30 +24,46 @@ import {
 import { kCurrentWorker, type V4ModuleDefinition } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { promptText } from './vite-prompt-text';
-import { buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
+import { AGENT_BUNDLE_ENTRY, buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
 import { workersAiBinding } from './tests/helpers/workers-ai-binding';
+import type { Reporter } from 'vitest/reporters';
 import * as v from 'valibot';
 import { HELD_PROXY_MODEL } from './tests/workerd/ai-proxy-shapes';
+import { readMatching } from '../../scripts/sources';
+import { workerdRequirements } from '../../scripts/workerd-requirements';
+import { workerSourceTriggers } from '../../scripts/worker-test-inputs';
 
 const NativeAiInputSchema = v.looseObject({ inputs: v.looseObject({ messages: v.optional(v.array(v.looseObject({ role: v.optional(v.string()) }))) }) });
 
-const hireAi = await workersAiBinding(async (request) => {
-  const { inputs } = v.parse(NativeAiInputSchema, await request.json());
+let hireAi: ReturnType<typeof workersAiBinding> | undefined;
 
-  return Response.json({ response: JSON.stringify(inputs.messages?.[0]?.role === 'system' ? { title: 'Hire Probe' } : { upserts: [], decay: [] }) });
-});
+function getHireAi(): ReturnType<typeof workersAiBinding> {
+  hireAi ??= workersAiBinding(async (request) => {
+    const { inputs } = v.parse(NativeAiInputSchema, await request.json());
 
-const surfaceAi = await workersAiBinding(async (request) => {
-  if (request.headers.get('mf-header-cf-consn-model-id') === HELD_PROXY_MODEL) {
-    await probeOutbound(new Request('http://probe-control.invalid/proxy/park', { method: 'POST', signal: request.signal }));
+    return Response.json({ response: JSON.stringify(inputs.messages?.[0]?.role === 'system' ? { title: 'Hire Probe' } : { upserts: [], decay: [] }) });
+  });
 
-    return Response.json({ response: 'held' });
-  }
+  return hireAi;
+}
 
-  const { inputs } = v.parse(NativeAiInputSchema, await request.json());
+let surfaceAi: ReturnType<typeof workersAiBinding> | undefined;
 
-  return Response.json({ response: JSON.stringify(inputs.messages?.[0]?.role === 'system' ? { title: 'Two Turn Probe' } : { upserts: [], decay: [] }) });
-});
+function getSurfaceAi(): ReturnType<typeof workersAiBinding> {
+  surfaceAi ??= workersAiBinding(async (request) => {
+    if (request.headers.get('mf-header-cf-consn-model-id') === HELD_PROXY_MODEL) {
+      await probeOutbound(new Request('http://probe-control.invalid/proxy/park', { method: 'POST', signal: request.signal }));
+
+      return Response.json({ response: 'held' });
+    }
+
+    const { inputs } = v.parse(NativeAiInputSchema, await request.json());
+
+    return Response.json({ response: JSON.stringify(inputs.messages?.[0]?.role === 'system' ? { title: 'Two Turn Probe' } : { upserts: [], decay: [] }) });
+  });
+
+  return surfaceAi;
+}
 
 /**
  * KINU-065: Vite's oxc supports only legacy decorators, which break `@callable()` (they register the
@@ -83,179 +100,56 @@ function standardDecorators(): Plugin {
 // Raw `buildSync` runs no plugins, so `virtual:kinu-slate-vendor` aliases to this materialized module.
 const slateVendorModulePath = fileURLToPath(new URL('../../node_modules/.cache/kinu/slate-vendor.js', import.meta.url));
 
-mkdirSync(dirname(slateVendorModulePath), { recursive: true });
+let vendorMaterialized = false;
 
-writeWhole(slateVendorModulePath, `export const workerCompatibility = ${JSON.stringify(workerCompatibility)};\nexport default ${JSON.stringify(buildSlateVendor())};\n`);
+const probeRuntime = {
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter(name => !name.startsWith('node:')).map(name => [name, 'node:' + name])) },
+} satisfies BuildOptions;
 
+/** A selected probe keeps its own entry and flags; unused probes perform no build. */
+function probeModules(file: string, options: BuildOptions = {}): V4ModuleDefinition[] {
+  if (!vendorMaterialized && options.alias?.['virtual:kinu-slate-vendor'] !== undefined) {
+    mkdirSync(dirname(slateVendorModulePath), { recursive: true });
+    writeWhole(slateVendorModulePath, `export const workerCompatibility = ${JSON.stringify(workerCompatibility)};\nexport default ${JSON.stringify(buildSlateVendor())};\n`);
+    vendorMaterialized = true;
+  }
 
-/** Probe bundles reach miniflare as an ES module entry plus compiled `.wasm`. */
-function probeModules(bundle: OutputFile[]): V4ModuleDefinition[] {
-  return bundle.map((file) => ({
-    type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-    path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+  const built = buildSync({
+    ...options,
+    entryPoints: [fileURLToPath(new URL('./tests/workerd/' + file, import.meta.url))],
+    outfile: fileURLToPath(new URL('./tests/workerd/.compiled/' + file.replace(/\.ts$/, '.js'), import.meta.url)),
+    bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+    external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+  }).outputFiles;
+
+  return built.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm'))).map(output => ({
+    type: output.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+    path: output.path, contents: output.path.endsWith('.wasm') ? output.contents : output.text,
   }));
 }
 
-const hostedPreviewProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/preview-port-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/preview-port-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const slateActorProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-actor-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-actor-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'],
-  target: 'es2022',
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const slateShareProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-share-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-share-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'],
-  target: 'es2022',
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const planAnnounceProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/plan-announce-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/plan-announce-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const slateEgressProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-egress-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-egress-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const twoTurnProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/two-turn-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/two-turn-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-// Imports src, so it builds apart.
-const codexEgressProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/codex-egress-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/codex-egress-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles;
-
-const hireProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/hire-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/hire-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const accountResetProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/account-reset-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/account-reset-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const storeResetProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/store-reset-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/store-reset-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const addressedNameProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/addressed-name-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/addressed-name-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const agentFacetProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/agent-facet-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/agent-facet-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
 // The agent bundles a probe's workspace loads into its agents' own isolates, served as the asset binding serves them.
-const agentFacetProbeBundle = buildAgentBundle(fileURLToPath(new URL('./tests/workerd/agent-facet-probe-agent.ts', import.meta.url)));
+const agentBundles = new Map<string, string>();
 
-const shippedAgentBundle = buildAgentBundle();
-
-function agentAssets(bundle: string) {
+function agentAssets(entry = AGENT_BUNDLE_ENTRY) {
   return async (request: Request): Promise<Response> => {
     const path = new URL(request.url).pathname;
 
     if (path === '/_agent/compatibility.json') return Response.json(workerCompatibility);
 
-    return path === '/_agent/agent.js'
-      ? new Response(bundle, { headers: { 'content-type': 'text/javascript' } })
-      : new Response('Not found', { status: 404 });
+    if (path !== '/_agent/agent.js') return new Response('Not found', { status: 404 });
+
+    let bundle = agentBundles.get(entry);
+
+    if (bundle === undefined) {
+      bundle = buildAgentBundle(entry);
+      agentBundles.set(entry, bundle);
+    }
+
+    return new Response(bundle, { headers: { 'content-type': 'text/javascript' } });
   };
 }
-
-const attributionProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/attribution-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/attribution-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const slateDurabilityProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-durability-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-durability-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const publicSurfaceProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/public-surface-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/public-surface-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
-  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const deployRunProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/deploy-run-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/deploy-run-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
 let forbiddenEgressHits = 0;
 
@@ -337,77 +231,56 @@ async function attributionOutbound(request: Request): Promise<Response> {
   }
 }
 
-export default defineConfig({
-  plugins: [
-    promptText(),
-    slateVendor(),
-    standardDecorators(),
-    cloudflareTest({
-      main: './tests/workerd/worker.ts',
-      miniflare: {
-        ...workerCompatibility,
-        // `useSQLite` mirrors `exports`' `storage: "sqlite"` (wrangler.jsonc); without it `ctx.storage.sql`
-        // throws. `LOADER` mirrors `worker_loaders` for the real codemode executor.
-        workerLoaders: { LOADER: {} },
-        modulesRules: [{ type: 'CompiledWasm', include: ['**/*.wasm'] }],
-        // The privileged Vitest runner permits eval and would mask the hosted Node refusal.
-        workers: [{
-          name: 'hosted-preview-probe', ...workerCompatibility,
-          modules: probeModules(hostedPreviewProbe),
-          durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } },
-        }, {
-          workerLoaders: { LOADER: {} },
-          name: 'slate-actor-probe', ...workerCompatibility,
-          modules: probeModules(slateActorProbe),
-          durableObjects: {
-            SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', useSQLite: true },
-          },
-        }, {
+type AuxiliaryWorker = NonNullable<NonNullable<Parameters<typeof getDurableObjectDesignators>[0]['miniflare']>['workers']>[number];
+
+const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
+['hosted-preview-probe', async () => ({ ...workerCompatibility, modules: probeModules('preview-port-probe.ts'), durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } }, })],
+['slate-actor-probe', async () => ({ workerLoaders: { LOADER: {} }, ...workerCompatibility, modules: probeModules('slate-actor-probe.ts', probeRuntime), durableObjects: {
+          SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', useSQLite: true },
+        }, })],
+["plan-announce-probe", async () => ({
           // Bound as `OrchestratorAgent` because production `workspaceOwner()` reads that name off `env`.
-          name: 'plan-announce-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: probeModules(planAnnounceProbe),
+           ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: probeModules('plan-announce-probe.ts', { ...probeRuntime, keepNames: true }),
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
             USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', useSQLite: true },
           },
-        }, {
-          name: 'slate-egress-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: probeModules(slateEgressProbe),
-          serviceBindings: { ASSETS: nimbusAssets },
-          durableObjects: { SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', useSQLite: true } },
-          // Final transport only: the actual CodemodeEgress policy and resident
-          // global fetch run above this mock. No unmatched request reaches a network.
-          outboundService: async (request) => {
-            const url = new URL(request.url);
-
-            if (url.origin === 'http://169.254.169.254') {
-              forbiddenEgressHits += 1;
-
-              return new Response('forbidden transport reached');
-            }
-
-            if (url.origin === 'https://example.com') {
-              if (url.pathname === '/control') return new Response('public control');
-
-              if (url.pathname === '/redirect') return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/forbidden' } });
-
-              if (url.pathname === '/seen') return Response.json({ forbiddenEgressHits });
-            }
-
-            throw new Error('Unmatched test egress is disabled: ' + request.url);
-          },
-        }, {
+        })],
+['slate-egress-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('slate-egress-probe.ts', probeRuntime), serviceBindings: { ASSETS: nimbusAssets }, durableObjects: { SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', useSQLite: true } },
+        // Final transport only: the actual CodemodeEgress policy and resident
+        // global fetch run above this mock. No unmatched request reaches a network.
+        outboundService: async (request) => {
+          const url = new URL(request.url);
+        
+          if (url.origin === 'http://169.254.169.254') {
+            forbiddenEgressHits += 1;
+        
+            return new Response('forbidden transport reached');
+          }
+        
+          if (url.origin === 'https://example.com') {
+            if (url.pathname === '/control') return new Response('public control');
+        
+            if (url.pathname === '/redirect') return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/forbidden' } });
+        
+            if (url.pathname === '/seen') return Response.json({ forbiddenEgressHits });
+          }
+        
+          throw new Error('Unmatched test egress is disabled: ' + request.url);
+        }, })],
+["two-turn-probe", async () => ({
           // `env.AI` is a service binding to this worker's FakeAI, so the model plane stays in-pool.
-          name: 'two-turn-probe',
+          
           compatibilityDate: workerCompatibility.compatibilityDate,
           // workerd marshals `request.signal` over RPC only under this flag
           // ("AbortSignal serialization is not enabled" otherwise).
           compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
           workerLoaders: { LOADER: {} },
-          modules: probeModules(twoTurnProbe),
+          modules: probeModules('two-turn-probe.ts', probeRuntime),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
-          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' }, ASSETS: agentAssets(shippedAgentBundle) },
+          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' }, ASSETS: agentAssets() },
           // Compat HTTP falls back to the
           // global fetch (owned-model-services passes no deps.fetch), which
           // routes to the Node-side fake; unknown hosts throw.
@@ -417,33 +290,31 @@ export default defineConfig({
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
-        }, {
-          name: 'codex-egress-probe', ...workerCompatibility,
-          modules: probeModules(codexEgressProbe),
-
-          durableObjects: { CODEX_EGRESS_PROBE: { className: 'CodexEgressProbe', useSQLite: true }, CodexEgress: { className: 'CodexEgressProbe', useSQLite: true } },
-        }, {
+        })],
+['codex-egress-probe', async () => ({ ...workerCompatibility, modules: probeModules('codex-egress-probe.ts', probeRuntime), durableObjects: { CODEX_EGRESS_PROBE: { className: 'CodexEgressProbe', useSQLite: true }, CodexEgress: { className: 'CodexEgressProbe', useSQLite: true } }, })],
+["hire-probe", async () => ({
           // A real hire: the child's `workers-ai/` tier arrives on the AI binding, the root's
           // `openai-compat` lane on outbound.
-          name: 'hire-probe',
+          
           compatibilityDate: workerCompatibility.compatibilityDate,
           compatibilityFlags: workerCompatibility.compatibilityFlags,
           workerLoaders: { LOADER: {} },
-          modules: probeModules(hireProbe),
+          modules: probeModules('hire-probe.ts', probeRuntime),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
-          ai: hireAi,
-          serviceBindings: { ASSETS: agentAssets(shippedAgentBundle) },
+          ai: await getHireAi(),
+          serviceBindings: { ASSETS: agentAssets() },
           outboundService: hireOutbound,
           durableObjects: {
             HIRE_PROBE: { className: 'HireProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
-        }, {
+        })],
+["slate-durability-probe", async () => ({
           // Nimbus port reservations live in workspace storage, so preview URLs survive
           // `abortAllDurableObjects()`.
-          name: 'slate-durability-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: probeModules(slateDurabilityProbe),
+           ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: probeModules('slate-durability-probe.ts', probeRuntime),
           // A removed slate takes its picture; with no `BROWSER`, nothing is photographed here.
           r2Buckets: ['SLATE_PICTURES'],
           bindings: {
@@ -459,31 +330,30 @@ export default defineConfig({
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
-        }, {
+        })],
+["slate-share-probe", async () => ({
           // `SlateBinding` resolves `env.OrchestratorAgent`, so the probe class is bound under that name too.
-          name: 'slate-share-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: probeModules(slateShareProbe),
+           ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: probeModules('slate-share-probe.ts', probeRuntime),
           serviceBindings: { ASSETS: nimbusAssets },
           durableObjects: {
             SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', useSQLite: true },
             OrchestratorAgent: { className: 'SlateShareProbeDO', useSQLite: true },
           },
-        }, {
-          name: 'account-reset-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: probeModules(accountResetProbe),
-          bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
-          outboundService: async (request) => {
-            throw new Error('Unmatched test egress is disabled: ' + request.url);
-          },
-          durableObjects: {
-            ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', useSQLite: true },
-            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            UserDO: { className: 'UserDO', useSQLite: true },
-          },
-        }, {
+        })],
+['account-reset-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-reset-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+        outboundService: async (request) => {
+          throw new Error('Unmatched test egress is disabled: ' + request.url);
+        },
+        durableObjects: {
+          ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', useSQLite: true },
+          OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          UserDO: { className: 'UserDO', useSQLite: true },
+        }, })],
+["store-reset-probe", async () => ({
           // The probe's `OrchestratorAgent` is the production class plus the one method that plants the old table.
-          name: 'store-reset-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: probeModules(storeResetProbe),
+           ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: probeModules('store-reset-probe.ts', { ...probeRuntime, keepNames: true }),
           bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           outboundService: async (request) => {
             throw new Error('Unmatched test egress is disabled: ' + request.url);
@@ -493,63 +363,56 @@ export default defineConfig({
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
-        }, {
-          name: 'addressed-name-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: probeModules(addressedNameProbe),
-          bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YWRkcmVzc2VkLW5hbWUtcHJvYmUtY3JlZC1rZXktMzI=' },
-          outboundService: async (request) => {
-            throw new Error('Unmatched test egress is disabled: ' + request.url);
-          },
-          durableObjects: {
-            ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', useSQLite: true },
-            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            UserDO: { className: 'UserDO', useSQLite: true },
-          },
-        }, {
-          name: 'agent-facet-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: probeModules(agentFacetProbe),
-          bindings: { WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'YWdlbnQtZmFjZXQtcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
-          ai: hireAi,
-          serviceBindings: { ASSETS: agentAssets(agentFacetProbeBundle) },
-          outboundService: hireOutbound,
-          durableObjects: {
-            AGENT_FACET_PROBE: { className: 'AgentFacetProbeRoot', useSQLite: true },
-            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            UserDO: { className: 'UserDO', useSQLite: true },
-          },
-        }, {
-          name: 'attribution-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: probeModules(attributionProbe),
-          bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YXR0cmlidXRpb24tcHJvYmUtY3JlZC1rZXktMzJieXQ=' },
-          outboundService: attributionOutbound,
-          durableObjects: {
-            ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', useSQLite: true },
-            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            UserDO: { className: 'UserDO', useSQLite: true },
-          },
-        }, {
+        })],
+['addressed-name-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('addressed-name-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YWRkcmVzc2VkLW5hbWUtcHJvYmUtY3JlZC1rZXktMzI=' },
+        outboundService: async (request) => {
+          throw new Error('Unmatched test egress is disabled: ' + request.url);
+        },
+        durableObjects: {
+          ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', useSQLite: true },
+          OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          UserDO: { className: 'UserDO', useSQLite: true },
+        }, })],
+['agent-facet-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('agent-facet-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'YWdlbnQtZmFjZXQtcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
+        ai: await getHireAi(),
+        serviceBindings: { ASSETS: agentAssets(fileURLToPath(new URL('./tests/workerd/agent-facet-probe-agent.ts', import.meta.url))) },
+        outboundService: hireOutbound,
+        durableObjects: {
+          AGENT_FACET_PROBE: { className: 'AgentFacetProbeRoot', useSQLite: true },
+          OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          UserDO: { className: 'UserDO', useSQLite: true },
+        }, })],
+['attribution-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('attribution-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YXR0cmlidXRpb24tcHJvYmUtY3JlZC1rZXktMzJieXQ=' },
+        outboundService: attributionOutbound,
+        durableObjects: {
+          ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', useSQLite: true },
+          OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          UserDO: { className: 'UserDO', useSQLite: true },
+        }, })],
+["public-surface-probe", async () => ({
           // The production Worker entry (`route()`), reached over `PUBLIC_SURFACE`; same
           // `enable_abortsignal_rpc` reason as two-turn-probe.
-          name: 'public-surface-probe',
+          
           compatibilityDate: workerCompatibility.compatibilityDate,
           compatibilityFlags: workerCompatibility.compatibilityFlags,
           workerLoaders: { LOADER: {} },
-          modules: probeModules(publicSurfaceProbe),
+          modules: probeModules('public-surface-probe.ts', { ...probeRuntime, keepNames: true }),
           // `DEV_USER_EMAIL` is the loopback identity; `WORKERS_AI_VIA_BINDING` puts its inference on `AI`.
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           // The CLI device sign-in and its rate limits live in AUTH_KV (cli-scoped-socket).
           kvNamespaces: ['AUTH_KV'],
-          ai: surfaceAi,
-          serviceBindings: { ASSETS: agentAssets(shippedAgentBundle) },
+          ai: await getSurfaceAi(),
+          serviceBindings: { ASSETS: agentAssets() },
           outboundService: probeOutbound,
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
-        }, {
+        })],
+["deploy-probe", async () => ({
           // Self-deployment against real DO SQLite; every external host is the Node-side fake, unmatched throws.
-          name: 'deploy-probe', ...workerCompatibility,
-          modules: probeModules(deployRunProbe),
+           ...workerCompatibility,
+          modules: probeModules('deploy-run-probe.ts', { conditions: ['workerd', 'worker', 'browser'], target: 'es2022' }),
           // Root secrets are bound because a self-update's vault reads through to them.
           bindings: {
             CLI_PUBLIC_ORIGIN: DEPLOY_FAKE_CHANNEL,
@@ -567,7 +430,17 @@ export default defineConfig({
             // `/api/updates/apply` addresses the run through `env.DeployRunDO`.
             DeployRunDO: { className: 'DeployRunProbeDO', useSQLite: true },
           },
-        }],
+        })]
+]);
+
+const runnerOptions = {
+        ...workerCompatibility,
+        // `useSQLite` mirrors `exports`' `storage: "sqlite"` (wrangler.jsonc); without it `ctx.storage.sql`
+        // throws. `LOADER` mirrors `worker_loaders` for the real codemode executor.
+        workerLoaders: { LOADER: {} },
+        modulesRules: [{ type: 'CompiledWasm', include: ['**/*.wasm'] }],
+        // The privileged Vitest runner permits eval and would mask the hosted Node refusal.
+        
         // A miniflare service binding carries a WebSocket upgrade (measured 2026-09-16), so the chat
         // protocol runs in-pool.
         serviceBindings: {
@@ -612,6 +485,8 @@ export default defineConfig({
           USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', scriptName: 'plan-announce-probe', useSQLite: true },
           SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', scriptName: 'slate-egress-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
+          DEVICE_OUTPUT_HUB_PROBE: { className: 'DeviceOutputHubProbeDO', useSQLite: true },
+          DEVICE_OUTPUT_WORKSPACE_PROBE: { className: 'DeviceOutputWorkspaceProbeDO', useSQLite: true },
           TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', scriptName: 'two-turn-probe', useSQLite: true },
           HIRE_PROBE: { className: 'HireProbeRoot', scriptName: 'hire-probe', useSQLite: true },
           DEVBOX_NOT_READY_PROBE: { className: 'DevboxNotReadyProbeDO', useSQLite: true },
@@ -626,17 +501,69 @@ export default defineConfig({
           SEALED_ORCHESTRATOR: { className: 'OrchestratorAgent', scriptName: 'public-surface-probe', useSQLite: true },
           DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
         },
-      },
-    }),
-  ],
-  test: {
-    include: ['tests/workerd/**/*.test.ts'],
+      } satisfies NonNullable<Parameters<typeof getDurableObjectDesignators>[0]['miniflare']>;
+
+const WorkerTargetSchema = v.union([
+  v.pipe(v.string(), v.transform(name => ({ name }))),
+  v.looseObject({ name: v.string() }),
+]);
+
+/** Bindings are exactly the runtime's targets, including local service functions. */
+function workerdBindingTargets(options: typeof runnerOptions): Map<string, string | undefined> {
+  const targets = new Map<string, string | undefined>();
+
+  for (const [name, binding] of getDurableObjectDesignators({ miniflare: options })) targets.set(name, binding.scriptName);
+
+  for (const [name, binding] of Object.entries(options.serviceBindings)) {
+    const target = v.safeParse(WorkerTargetSchema, binding);
+
+    targets.set(name, target.success ? target.output.name : undefined);
+  }
+
+  for (const name of Object.keys(options.workerLoaders)) targets.set(name, undefined);
+
+  return targets;
+}
+
+const projectSources = readMatching(file => file.startsWith('packages/cf-backend/tests/') && /\.[cm]?[jt]sx?$/.test(file) && !file.endsWith('.d.ts'));
+
+const bindingTargets = workerdBindingTargets(runnerOptions);
+
+const requirements = workerdRequirements(projectSources, bindingTargets, new Set(auxiliaryWorkers.keys()), 'packages/cf-backend');
+
+const suiteWorkers = new Map([...requirements].map(([file, workers]) => [fileURLToPath(new URL(file, import.meta.url)), workers]));
+
+let selectedWorkers: AuxiliaryWorker[] = [];
+
+const workerSelection: Reporter = {
+  async onTestRunStart(specifications) {
+    const selected = new Set<string>();
+
+    for (const specification of specifications) {
+      const workers = suiteWorkers.get(specification.moduleId);
+
+      if (workers === undefined) throw new Error(`${specification.moduleId}: workerd suite has no declared Worker requirements`);
+
+      for (const worker of workers) selected.add(worker);
+    }
+
+    selectedWorkers = await Promise.all([...selected].map(async name => {
+      const build = auxiliaryWorkers.get(name);
+
+      if (build === undefined) throw new Error(`Worker ${name} is not declared`);
+
+      return { name, ...await build() };
+    }));
+  },
+};
+
+const sharedTestOptions = {
+    forceRerunTriggers: workerSourceTriggers() ?? configDefaults.forceRerunTriggers,
     // Asserts the pool actually started (adopted from cloudflare-os `test-setup/assert-workerd.ts`).
     setupFiles: ['./tests/workerd/assert-workerd.ts'],
     // Wall-time gate assertions would contend under per-file parallelism.
     fileParallelism: false,
-    // One runner and Miniflare per row (pool-workers 0.22 dropped `singleWorker`); measured 2026-09-18 a
-    // large drop in row time. Suites share an isolate, so each mints its own DO names.
+    // Suites with the same auxiliary Worker set share a pool; each still mints its own DO names.
     isolate: false,
     // No per-test clock (`gate:test-clocks` pins `0`): waits end on their condition and the ladder kills
     // hangs. Measured 2026-09-16, a file's first test pays pool boot, past Vitest's default timeout.
@@ -654,5 +581,29 @@ export default defineConfig({
       // `deploy-ledger.test.ts` aborts a DeployRunDO mid-plan on purpose.
       if (error.message.includes('probe: the object died mid-plan')) return false;
     },
+} satisfies NonNullable<UserConfig['test']>;
+
+export default defineConfig({
+  plugins: [promptText(), slateVendor(), standardDecorators(), {
+    name: 'kinu:workerd-bindings',
+    configureVitest({ vitest }) {
+      vitest.config.reporters.push(workerSelection);
+    },
+  }, cloudflareTest(() => {
+    const selected = new Set(selectedWorkers.map(worker => worker.name));
+
+    return {
+      main: './tests/workerd/worker.ts',
+      miniflare: {
+        ...runnerOptions,
+        serviceBindings: Object.fromEntries(Object.entries(runnerOptions.serviceBindings).filter(([name]) => bindingTargets.get(name) === undefined || selected.has(bindingTargets.get(name)))),
+        durableObjects: Object.fromEntries(Object.entries(runnerOptions.durableObjects).filter(([name]) => bindingTargets.get(name) === undefined || selected.has(bindingTargets.get(name)))),
+        workers: selectedWorkers,
+      },
+    };
+  })],
+  test: {
+    ...sharedTestOptions,
+    include: ['tests/workerd/**/*.test.ts'],
   },
 });

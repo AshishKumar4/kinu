@@ -262,12 +262,12 @@ export function createCFRuntime(
     : workspaceBox;
 
   // Workspace state belongs to the session user: a facet's uid could not create entries under `.kinu`.
-  const originVfs = nimbusSessionFiles(workspaceBox);
+  const originVfs = nimbusSessionFiles(workspaceBox, { home: WORKSPACE_ROOT });
 
   // Both of the actor's planes or neither (see `workspaceExecution`). This unmounted tree keeps foreign
   // bytes out of memory and agent-state snapshots.
   const baseWorkspaceVfs = hooks.workspaceExecution
-    ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution.cred)
+    ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution)
     : originVfs;
 
   const observedWorkspaceVfs = hooks.workspaceObserver
@@ -536,7 +536,7 @@ export function createCFRuntime(
 
   const runtime: CFRuntime = {
     actor: actor.actor,
-    storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
+    storage: { vfs: agentFileVfs, home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
     toolFiles,
     workspaceIsMachine: false,

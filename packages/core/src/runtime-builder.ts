@@ -7,6 +7,7 @@ import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';
 import type { TurnFileLedger } from './vfs/file-ledger';
 import { createScaffoldSurface } from './scaffold/surface';
+import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import type { ActorHandle } from './identity/actor-handle';
 import { createRoutedModelLane, type ModelLaneComponents } from './profiles/model-lane';
 
@@ -21,6 +22,8 @@ export interface RuntimeComponents {
   transactionSync: <T>(write: () => T) => T;
   execRaw: RawSqlExec;
   vfs: VFS;
+  /** Absent: {@link WORKSPACE_ROOT}, the root's. */
+  home?: string;
   /** This agent's own state when `vfs` is a shared plane. */
   agentStateVfs?: VFS;
   toolFiles: VFS;
@@ -72,7 +75,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
 
   return {
     actor: components.actor,
-    storage: { vfs, sql, execRaw, transactionSync: components.transactionSync },
+    storage: { vfs, home: components.home ?? WORKSPACE_ROOT, sql, execRaw, transactionSync: components.transactionSync },
     agentStateVfs,
     toolFiles: components.toolFiles,
     workspaceIsMachine: components.workspaceIsMachine,

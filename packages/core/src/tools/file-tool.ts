@@ -55,6 +55,7 @@ function boundListing(path: string, entries: readonly string[]): JsonValue {
 
 export interface FileToolDeps {
   vfs: VFS & CheckpointFiles;
+  home: string;
   ledger: TurnFileLedger;
   /** The turn-cumulative bulk budget; a file read counts as bulk. */
   budget: TurnContextBudget;
@@ -160,7 +161,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     }
 
     if (output === null) return failure('missing', 'No path at ' + path);
-    const bounded = await clampSerializedToolResult({ output }, { vfs, budget, producer: 'file_read' });
+    const bounded = await clampSerializedToolResult({ output }, { files: { vfs, home: deps.home }, budget, producer: 'file_read' });
 
     return bounded ?? failure('io', 'File inspection produced no serializable result');
   };

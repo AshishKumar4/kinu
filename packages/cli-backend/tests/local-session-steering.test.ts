@@ -1775,7 +1775,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
   function sandboxWith(deps: AgentsToolDeps) {
     const tool = createNodeCodemodeToolFactory({
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
-    })({ native: {}, craftedTools: () => ({}), providers: [] });
+    })({ native: {}, craftedTools: () => [], providers: [] });
 
     return (code: string, options?: ToolExecutionOptions) =>
       toolExecute<{ code: string }, JsonValue>(tool)({ code }, options);

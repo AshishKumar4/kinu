@@ -35,6 +35,7 @@ export interface DeviceRpcOptions {
   requestId?: string;
   /** Called only on a device-sent terminal frame; not on timeout/socket loss/liveness failure. */
   onTerminal?: () => void;
+  onOutput?: (output: DeviceExecOutput) => void;
 }
 
 interface Pending {
@@ -42,6 +43,7 @@ interface Pending {
   reject: (err: Error) => void;
   stop: () => void;
   onTerminal?: () => void;
+  onOutput?: (output: DeviceExecOutput) => void;
 }
 
 const RpcResponseSchema = v.object({
@@ -49,6 +51,17 @@ const RpcResponseSchema = v.object({
   result: v.optional(JsonValueSchema),
   error: v.optional(v.string()),
 });
+
+const DEVICE_EXEC_OUTPUT = 'EXEC_OUT';
+
+const ExecOutputFrameSchema = v.object({
+  type: v.literal(DEVICE_EXEC_OUTPUT),
+  request: v.string(),
+  chunks: v.array(v.object({ stream: v.picklist(['stdout', 'stderr']), data: v.string(), omitted: v.optional(v.number()) })),
+  dropped: v.number(),
+});
+
+export type DeviceExecOutput = Omit<v.InferOutput<typeof ExecOutputFrameSchema>, 'type' | 'request'>;
 
 export const TUNNEL_DISCONNECTED = 'device tunnel not connected';
 
@@ -227,10 +240,10 @@ export class DeviceTunnel {
         stop = () => { this.openEnded.delete(id); this.disarmIdleHeartbeat(); };
       }
 
-      this.pending.set(id, { resolve, reject, stop, onTerminal: opts?.onTerminal });
+      this.pending.set(id, { resolve, reject, stop, onTerminal: opts?.onTerminal, onOutput: opts?.onOutput });
 
       try {
-        this.socket.send(JSON.stringify({ ...opts?.extra, id, method, params }));
+        this.socket.send(JSON.stringify({ ...opts?.extra, ...(opts?.onOutput !== undefined && { output: true }), id, method, params }));
       } catch (err) {
         this.pending.delete(id);
         stop();
@@ -253,6 +266,14 @@ export class DeviceTunnel {
     if (!parsed.success) return;
     const msg = parsed.output;
     this.lastFrameAt = this.clock.now();
+    const output = v.safeParse(ExecOutputFrameSchema, decoded);
+
+    if (output.success) {
+      const { request, chunks, dropped } = output.output;
+      this.pending.get(request)?.onOutput?.({ chunks, dropped });
+
+      return;
+    }
 
     if (msg.id === undefined) return;
     const p = this.pending.get(msg.id);

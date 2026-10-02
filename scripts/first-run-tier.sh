@@ -43,6 +43,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source scripts/repo-runtime.sh
 
 # The knob the suites gate on, before anything reads a credential.
 export KINU_EVAL_BACKEND=cloud

@@ -41,11 +41,10 @@ async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8
     throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
   }
 
-  const absolute = workspacePath(path);
   const native = files.readRange;
 
   if (native) {
-    const bytes = await native.call(files, absolute, offset, length);
+    const bytes = await native.call(files, path, offset, length);
 
     if (bytes === null) throw syscallError('ENOENT', 'open', path);
 
@@ -53,7 +52,7 @@ async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8
   }
 
   const result = await box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
-    env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path: absolute, offset, length }) },
+    env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path, offset, length }) },
     ...asCred(cred),
   });
 
@@ -681,7 +680,12 @@ function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, n
   return cred === undefined ? {} : { cred };
 }
 
-export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VFS & Required<Pick<VFS, 'readlink' | 'removeRecursive' | 'rename' | 'readRange'>> {
+export function nimbusSessionFiles(
+  box: NimbusSandboxHandle,
+  plane: { readonly home: string; readonly cred?: VfsCred },
+): VFS & Required<Pick<VFS, 'readlink' | 'removeRecursive' | 'rename' | 'readRange'>> {
+  const { home, cred } = plane;
+  const at = (path: string): string => workspacePath(path, home);
   let files = box.files;
 
   if (cred !== undefined) {
@@ -694,7 +698,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
 
   return {
     async readFile(path) {
-      const absolute = workspacePath(path);
+      const absolute = at(path);
 
       if (files.readBytes) {
         const bytes = await atVfsPath(absolute, 'open', () => files.readBytes?.(absolute) ?? null);
@@ -712,17 +716,17 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
     },
     /** Prefix the origin's fixed Node reader reads; the SDK file methods cannot express a range. */
     async readRange(path, offset, length) {
-      return readNimbusOriginRange({ box, files, path, offset, length, cred });
+      return readNimbusOriginRange({ box, files, path: at(path), offset, length, cred });
     },
     async writeFile(path, data) {
-      const absolute = workspacePath(path);
+      const absolute = at(path);
 
       await atVfsPath(absolute, 'open', () => files.write(absolute, data));
     },
     // No `writeFileIfRevision`: the SDK write takes no precondition and stat has no revision, so
     // `writeExecutorFileOp` answers `unsupported`.
     async readdir(path) {
-      const absolute = workspacePath(path);
+      const absolute = at(path);
 
       return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => {
         if (entry.type === 'symlink') return { name: entry.name, type: 'symlink' as const };
@@ -731,7 +735,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       });
     },
     async readlink(path) {
-      const absolute = workspacePath(path);
+      const absolute = at(path);
 
       if (files.readlink) {
         const target = await atVfsPath(absolute, 'readlink', () => files.readlink?.(absolute) ?? null);
@@ -749,7 +753,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       return r.stdout.replace(/\n$/, '');
     },
     async stat(path, options) {
-      const absolute = workspacePath(path);
+      const absolute = at(path);
       const native = options?.follow === false ? files.lstat?.bind(files) : files.stat?.bind(files);
 
       if (native) {
@@ -771,20 +775,20 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
 
       return { size: Number(size), mtimeMs: Number(seconds) * 1_000, type: type === 'directory' ? 'directory' : entryType };
     },
-    async unlink(path) { await files.delete(workspacePath(path)); },
-    async removeRecursive(path) { await files.delete(workspacePath(path), { recursive: true }); },
+    async unlink(path) { await files.delete(at(path)); },
+    async removeRecursive(path) { await files.delete(at(path), { recursive: true }); },
     async rename(from, to) {
       if (!files.rename) throw syscallError('EIO', 'rename', from, { detail: 'Nimbus SDK handle does not expose rename', dest: to });
-      await files.rename(workspacePath(from), workspacePath(to));
+      await files.rename(at(from), at(to));
     },
     async mkdir(path, opts) {
       if (files.mkdir) {
-        await files.mkdir(workspacePath(path));
+        await files.mkdir(at(path));
 
         return;
       }
 
-      const r = await box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(workspacePath(path))}`, asCred(cred));
+      const r = await box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(at(path))}`, asCred(cred));
 
       if (!r.success || r.exitCode !== 0) {
         throw syscallError('EIO', 'mkdir', path, { detail: r.stderr.trim() || undefined });

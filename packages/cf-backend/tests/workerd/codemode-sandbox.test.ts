@@ -301,7 +301,7 @@ describe('the eval sandbox under workerd', () => {
 
     const provider: WebSearchProvider = { search: unused, fetch: unused, render: unused, screenshot: unused };
 
-    const web = createWebCodemodeProvider({ provider, vfs: null, sessions: { missing: 'no sessions here' }, prelude: { source: BROWSER_PRELUDE } });
+    const web = createWebCodemodeProvider({ provider, files: null, sessions: { missing: 'no sessions here' }, prelude: { source: BROWSER_PRELUDE } });
     const fns = Object.fromEntries(Object.entries(web.tools).map(([name, entry]) => [name, (...args: unknown[]) => entry.execute(...args)]));
     const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }));
 
@@ -319,6 +319,27 @@ describe('the eval sandbox under workerd', () => {
       { tool: 'web', action: 'connectBrowser', reason: 'denied' },
       { tool: 'web', action: 'pageTools', reason: 'unavailable' },
     ] });
+  });
+
+  test('a module import names the workspace binding, and a crafted body reads and writes files through it', async () => {
+    // The live eval's first and corrected attempts at `report_totals` (packages/cli-backend/tests/crafted-file-capability.test.ts).
+    const imported = await executor.execute("// read with node:fs\nconst fs = await import('fs');\nreturn fs.readFileSync('notes.md');", [toolsProvider([]), workspace]);
+    expect(imported.error).toContain('No such module "node:fs"');
+    expect(imported.error).toContain('`await workspace.readFile(path)`');
+
+    const crafted = [{
+      name: 'copy_notes',
+      code: 'async (args) => { await workspace.writeFile(args.to, (await workspace.readFile(args.from)).toUpperCase()); return await workspace.readFile(args.to); }',
+      description: '',
+    }];
+
+    const copied = await executor.execute(
+      `return await tools.copy_notes({ from: '${WORKSPACE_ROOT}/notes.md', to: '${WORKSPACE_ROOT}/copy.md' });`,
+      [toolsProvider(crafted), workspace],
+    );
+
+    expect(copied.error).toBeUndefined();
+    expect(copied.result).toBe('HELLO FROM THE WORKSPACE');
   });
 
   test('a bare native tool name is corrected toward tools.<name>', async () => {

@@ -1,7 +1,7 @@
 {
   "name": "kinu",
   "private": true,
-  "packageManager": "bun@1.4.0",
+  "packageManager": "bun@1.4.2",
   "description": "Kinu gives AI agents a durable computer of their own. It adapts and improves with use, runs locally or fully in the cloud, and solves hard tasks by exploring multiple approaches and letting executable checks choose the winner.",
   "license": "MIT",
   "keywords": [
@@ -30,7 +30,7 @@
     "test:workerd:cf-complexity": "bun scripts/ladder.ts --run vitest run --root packages/cf-backend tests/workerd/complexity/",
     "coverage": "bun scripts/coverage.ts",
     "coverage:check": "bun scripts/coverage-check.ts",
-    "typecheck": "tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cf-backend/tests/workerd && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/devbox && tsc --noEmit -p packages/devbox/tests/workerd && tsc --noEmit -p packages/test-utils && tsc --noEmit -p tests && tsc --noEmit -p evals && tsc --noEmit -p scripts/tsconfig.scripts.json && tsc --noEmit -p scripts/worker-heap && node --check packages/pc-agent/src/index.js && node --check packages/pc-agent/src/sandbox.js && node --check packages/pc-agent/src/pty.js && node --check packages/pc-agent/src/chatgpt.js",
+    "typecheck": "tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cf-backend/tests/workerd && tsc --noEmit -p packages/cf-backend/tsconfig.vitest.json && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/devbox && tsc --noEmit -p packages/devbox/tests/workerd && tsc --noEmit -p packages/test-utils && tsc --noEmit -p tests && tsc --noEmit -p evals && tsc --noEmit -p scripts/tsconfig.scripts.json && tsc --noEmit -p scripts/worker-heap && node --check packages/pc-agent/src/index.js && node --check packages/pc-agent/src/sandbox.js && node --check packages/pc-agent/src/pty.js && node --check packages/pc-agent/src/chatgpt.js",
     "check": "bun run lint && bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts && bun run typecheck && bun run gate:typecheck-coverage",
     "test:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/rules.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-swallow.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-design-smells.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-wait-until.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-ambient-git.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-copy-rpc-stub.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-untyped-console.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/import-extension.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/typescript-escapes.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-deep-import.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-elapsed-deadline.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/type-aware.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-vacuous-type-predicate.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-sync-spawn.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/effect.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/live-tree.gate.test.ts",
     "lint": "bun run test:anti-slop",
@@ -165,6 +165,7 @@
     "@vitest/coverage-istanbul": "^4.1.11",
     "agents": "^0.24.0",
     "aws4fetch": "^1.0.20",
+    "bun": "1.4.2",
     "chess.js": "1.4.0",
     "effect": "4.0.0-rc.117",
     "esbuild": "^0.28.1",

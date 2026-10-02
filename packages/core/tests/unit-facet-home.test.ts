@@ -111,5 +111,24 @@ describe('a subordinate and a head provision like a node', () => {
       database.close();
     }
   });
+
+  test('a relative path names the file in its own home, where its shell starts', async () => {
+    const database = new Database(':memory:');
+
+    try {
+      const bundle = createWorkspaceBundle(database);
+      const privileged = await bundle.privileged();
+      const sub = await facetHomeProvisioner({ ...privileged, sql: bundleSql(database) })(subordinateAgentName('notes-abc123'));
+
+      if (sub.isolation !== 'private-home') throw new Error('a facet provisioner must hand back a credential');
+      const asSub = await bundle.asAgent(sub);
+
+      await writeText(asSub.vfs, '.kinu/tool-output/full.log', 'full\n');
+      expect(await asSub.shell.exec('cat .kinu/tool-output/full.log')).toMatchObject({ exitCode: 0, stdout: 'full\n' });
+      expect(await readText(asSub.vfs, `${sub.home}/.kinu/tool-output/full.log`)).toBe('full\n');
+    } finally {
+      database.close();
+    }
+  });
 });
 

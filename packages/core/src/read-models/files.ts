@@ -1,10 +1,10 @@
 import { exists, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
+import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 /**
  * The file manager's read/write surface, one executor at a time, each in its own native paths
  * (the agent-facing merge is `vfs/mounts.ts`). Errors are values so the pane can render them.
  */
 
-import { normalizePath } from '@kinu.run/agent-utils';
 import {
   MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, carryFileWithVfsOps, listWithVfsOps,
   readBoundedWithVfsOps, partialTreeRemovalMessage, removeTreeWithVfsOps,
@@ -315,17 +315,12 @@ function executorFiles(router: ExecutorFileLookup, executorId: string): VFS | nu
   return router.getProvider(executorId)?.files ?? null;
 }
 
-/** Absolute-path arithmetic shared with the browser; restores the slash `normalizePath` strips. */
-function normalizeDir(path: string): string {
-  return `/${normalizePath(path)}`;
-}
-
 export function joinDir(dir: string, name: string): string {
   return dir === '/' ? `/${name}` : `${dir}/${name}`;
 }
 
 export function parentDir(dir: string): string {
-  return normalizeDir(`${dir}/..`);
+  return normalizePath(`${dir}/..`);
 }
 
 export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
@@ -387,7 +382,7 @@ export function getExecutorFiles(
   return settle(orError(Effect.gen(function* () {
     const dir = path === ''
       ? yield* step(() => provider.homeDir())
-      : yield* mountLanding(router, normalizeDir(path));
+      : yield* mountLanding(router, normalizePath(path));
 
     return yield* step(async () => {
     const listed = await listWithVfsOps(vfs, dir);
@@ -594,7 +589,7 @@ export function deleteExecutorPathOp(
   executorId: string,
   path: string,
 ): Promise<ExecutorWriteResult> {
-  if (!path || normalizeDir(path) === '/') return Promise.resolve({ error: 'a real path is required' });
+  if (!path || normalizePath(path) === '/') return Promise.resolve({ error: 'a real path is required' });
 
   return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
     if (executorId === 'workspace' && isWorkspaceSoul(path)) return { error: 'SOUL.md is set from Settings, not by deleting it' };

@@ -156,7 +156,6 @@ import {
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
-import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
 import { detectOrphanedFibers } from '@kinu.run/core';
@@ -1214,7 +1213,7 @@ export class LocalAgentSession {
         durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
       },
       clamp: {
-        vfs: this.rt.storage.vfs,
+        files: this.rt.storage,
         budget: this.actorSession.orchestrator.acc.context,
         producer: 'external_tool',
       },
@@ -1926,7 +1925,7 @@ export class LocalAgentSession {
 
           const observed = await observeCompletionState({
             exec: (command) => shell.exec(command),
-            vfs: this.rt.storage.vfs,
+            files: this.rt.storage,
           });
 
           // No evidence means no gate: a bare "are you sure?" is not worth a turn.
@@ -2207,7 +2206,7 @@ export class LocalAgentSession {
     const missing = 'Browser sessions run on the hosted backend; the CLI has rendered fetches and screenshots only';
 
     return createWebCodemodeProvider({
-      provider: this.getWebSearchProvider(), vfs: this.rt.storage.vfs, sessions: { missing }, prelude: { missing },
+      provider: this.getWebSearchProvider(), files: this.rt.storage, sessions: { missing }, prelude: { missing },
     });
   }
 
@@ -2928,7 +2927,6 @@ export class LocalAgentSession {
       contextBudget: this.actorSession.orchestrator.acc.context,
       fileLedger: this.actorSession.orchestrator.acc.files,
       escalations: this.actorSession.orchestrator.acc.escalations,
-      craftedToolExecute: createNodeCraftedExecute(),
       vectorStore: null,
       codemode: (surface) => {
         // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.

@@ -89,6 +89,7 @@ NC='\033[0m'
 # ── Locate Kinu root ──────────────────────────────────────────
 KINU_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$KINU_ROOT" || { echo -e "${RED}Cannot cd to Kinu root${NC}"; exit 1; }
+source "$KINU_ROOT/scripts/repo-runtime.sh"
 
 export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729eba250f1}"
 

@@ -14,9 +14,9 @@
 #
 #   bash scripts/setup-worktree.sh
 #
-# Dependencies themselves still come from the main checkout, so a branch that
-# CHANGED package.json, bun.lock or patches/ must run `bun install` in the
-# worktree instead; this script says so rather than lying about it.
+# Matching dependencies come from the main checkout; a different lock or patch
+# gets a real install here. The bootstrap may use the machine's Bun; after
+# installing, all setup checks and hooks use this repo's pinned npm binary.
 
 set -euo pipefail
 
@@ -25,20 +25,6 @@ MAIN="$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd)")"
 
 if [ "$TREE" = "$MAIN" ]; then
   echo "This is the main checkout — run 'bun install' here, not this script." >&2
-  exit 1
-fi
-if [ ! -d "$MAIN/node_modules" ]; then
-  echo "The main checkout ($MAIN) has no node_modules — run 'bun install' there first." >&2
-  exit 1
-fi
-if ! cmp -s "$TREE/bun.lock" "$MAIN/bun.lock"; then
-  echo "bun.lock differs from the main checkout: this branch changed dependencies." >&2
-  echo "Borrowed modules would be the wrong ones — run 'bun install' in $TREE instead." >&2
-  exit 1
-fi
-if ! diff -rq "$TREE/patches" "$MAIN/patches" >/dev/null 2>&1; then
-  echo "patches/ differs from the main checkout: this branch patches a dependency differently." >&2
-  echo "Borrowed modules would carry the main checkout's patch — run 'bun install' in $TREE instead." >&2
   exit 1
 fi
 
@@ -106,15 +92,25 @@ prune() {
   done
 }
 
-mirror "$MAIN/node_modules" "$TREE/node_modules" top
-prune "$TREE/node_modules"
-# Nested per-workspace trees carry the versions bun.lock places there (the SDK's own typescript).
-for dir in $WORKSPACES; do
-  if [ -d "$MAIN/$dir/node_modules" ]; then mirror "$MAIN/$dir/node_modules" "$TREE/$dir/node_modules"; fi
-  if [ -d "$TREE/$dir/node_modules" ]; then prune "$TREE/$dir/node_modules"; fi
-done
+if cmp -s "$TREE/bun.lock" "$MAIN/bun.lock" && diff -rq "$TREE/patches" "$MAIN/patches" >/dev/null 2>&1; then
+  if [ ! -d "$MAIN/node_modules" ]; then
+    echo "The main checkout ($MAIN) has no node_modules — run 'bun install' there first." >&2
+    exit 1
+  fi
+  mirror "$MAIN/node_modules" "$TREE/node_modules" top
+  prune "$TREE/node_modules"
+  # Nested trees carry the versions bun.lock places there (the SDK's own typescript).
+  for dir in $WORKSPACES; do
+    if [ -d "$MAIN/$dir/node_modules" ]; then mirror "$MAIN/$dir/node_modules" "$TREE/$dir/node_modules"; fi
+    if [ -d "$TREE/$dir/node_modules" ]; then prune "$TREE/$dir/node_modules"; fi
+  done
+else
+  echo "Dependencies differ from the main checkout; installing this worktree's locked set."
+  (cd "$TREE" && bun install --frozen-lockfile)
+fi
 
 cd "$TREE"
+source "$TREE/scripts/repo-runtime.sh"
 # The vendored SDK now resolves to this tree's copy, and its export map points at
 # `dist/`, which the root `prepare` hook builds and a linked worktree never runs.
 sdk_out="$(bun scripts/mossaic-sdk.ts 2>&1)" || { printf '%s\n' "$sdk_out"; exit 1; }

@@ -3,7 +3,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent } from '@kinu.run/core';
+import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
 import { hostNodeSeat, nodeCodemodeTool } from '../../src/hosted-actors';
 import { HIRE_CHILD_MODEL, hireModelsBaseUrl } from './hire-shapes';
@@ -15,13 +15,13 @@ import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
 import { createRuntimeExecutor } from '../../src/codemode-sandbox';
 import { SLATE_STORAGE_BINDING, type SlateCallResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
-import type { AgentFacetAnswer, OnePlaneObservation, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
+import type { AgentFacetAnswer, CraftedFromNodeObservation, OnePlaneObservation, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
 export * from '../../src/server';
 
 const PROBE_OWNER_ID = 'a9e1c0de5eed0000a9e1c0de5eed0000';
 
-const PROBE_RPC = ['onePlane', 'swarmNode', 'agentFor'];
+const PROBE_RPC = ['onePlane', 'swarmNode', 'agentFor', 'craftedFromNode'];
 
 let bootId: string | null = null;
 
@@ -80,6 +80,29 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     });
   }
 
+  /** Main crafts `double`; a node seated as a swarm seats it calls it through the `eval` production gives a node. */
+  async craftedFromNode(): Promise<CraftedFromNodeObservation> {
+    this.rt.craftStore.create({ name: 'double', description: 'doubles a number', code: 'async (n) => n * 2' });
+    const seams = this.hostedSeams();
+    const seat = await hostNodeSeat(seams, { nodeId: 'crafted-node', rootId: 'crafted-swarm', depth: 1 });
+    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)({}) }).eval?.execute;
+
+    if (execute === undefined) throw new Error('the node has no eval');
+
+    const call = async (): Promise<string> => {
+      try {
+        return JSON.stringify(await execute({ code: 'return await tools.double(21);' }, { toolCallId: 'crafted-node', messages: [] }));
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    };
+
+    const called = await call();
+    void this.boundSql`UPDATE crafted_tools SET score = 0.01, uses = 9, last_used_at = ${Date.now()} WHERE name = 'double'`;
+
+    return { mainActorId: this.actorHandle().actorId, nodeActorId: seat.actor.record.actorId, called, retired: await call() };
+  }
+
   private async runSwarmNode(): Promise<SwarmFacetObservation> {
     const source = `async function* run() {
       const here = await workspace.exec('pwd');
@@ -135,7 +158,7 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 }
 
 export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
-  private async target(workspace: string): Promise<Pick<OrchestratorAgent, 'onePlane' | 'swarmNode' | 'agentFor' | 'setModel' | 'setSoul'>> {
+  private async target(workspace: string): Promise<Pick<OrchestratorAgent, 'onePlane' | 'swarmNode' | 'agentFor' | 'craftedFromNode' | 'setModel' | 'setSoul'>> {
     const owner = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
     await userDO.ensureProfile(owner, 'owner@probe.local', 'Owner');
@@ -218,6 +241,10 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
     const auth = v.parse(v.nullish(v.object({ headers: v.record(v.string(), v.string()) })), handed);
 
     return { answer: auth?.headers ?? null, carriesDisposer: v.is(v.looseObject({}), handed) && Symbol.dispose in handed };
+  }
+
+  async craftedFromNode(workspace: string): Promise<CraftedFromNodeObservation> {
+    return await (await this.target(workspace)).craftedFromNode();
   }
 
   async swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>> {

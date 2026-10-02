@@ -32,12 +32,13 @@ const onDisk = trackedFiles().filter(isFirstRunSuite).sort();
 test('a red in either project reds the tier, which still reports spend and keeps its reports', () => {
   const root = scratchDir('first-run-shell-retention');
   const scripts = join(root, 'scripts');
-  const bin = join(root, 'bin');
+  const bin = join(root, 'node_modules', '.bin');
   const reports = join(root, 'reports');
-  mkdirSync(scripts); mkdirSync(bin);
+  mkdirSync(scripts); mkdirSync(bin, { recursive: true });
   mkdirSync(join(root, 'tests/first-run'), { recursive: true });
   writeFileSync(join(root, 'tests/first-run/probe.first-run.ts'), '');
   copyFileSync(join(import.meta.dirname, '../../scripts/first-run-tier.sh'), join(scripts, 'first-run-tier.sh'));
+  copyFileSync(join(import.meta.dirname, '../../scripts/repo-runtime.sh'), join(scripts, 'repo-runtime.sh'));
   // The fleet project fails and the cases project passes: the other
   // project's green must not become the tier's verdict.
   writeFileSync(join(bin, 'bun'), `#!/bin/bash
