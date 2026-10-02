@@ -93,6 +93,11 @@ export const DECLARED = byFile([
     within: ['useTuiProduct'],
     reason: OUTSIDE_PROVIDER,
   }],
+  ['packages/cf-backend/src/gallery.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
   ['packages/test-utils/src/mossaic.ts', {
     mechanisms: ['throw'],
     within: ['fakeMossaic'],
