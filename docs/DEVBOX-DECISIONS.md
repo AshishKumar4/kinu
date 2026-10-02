@@ -2886,9 +2886,8 @@ the save reached, 47 and 27 MiB/s a box.
 The 224 MiB rows come from the phases probe. As in D57's small runs, its base
 save reports "committed, but reseating it failed: ... /workspace: Device or
 resource busy" on both images. The commit lands before the reseat, and the
-time is the commit's. The probe's sampler starts by exec from /workspace and
-stays running, which by inference is what holds the mount; this was not
-traced.
+time is the commit's. D61 traces the cause: the probe's own sampler, whose
+cwd is `/workspace`.
 
 Tests: `stream-script.test.ts` runs the shipped script with its own small
 profile (5 MiB parts, four in flight, 40 MiB window), so a test archive spans
@@ -3067,6 +3066,76 @@ code without breaking a rule:
   The beat still has to run for the quiet window and the ask, so the watch
   would add a path and remove none.
 So the timeout stays a backstop that only fires when the beat itself stops.
+
+D61. A quiesce releases a process that maps the work directory; the
+reseat refusal D57 and D58 saw is the bench's own (2026-10-02). After a
+quiesce commits a first base, it reseats `/workspace`: it unmounts the
+overlay, mounts the base as the lower and starts an empty upper. While
+anything holds `/workspace`, the unmount is refused, the outcome is "committed,
+but reseating it failed", and the quiesce fails. In production the holders
+that matter are a dev server and a terminal shell, so this entry measures what
+the reseat does with each.
+
+The bench's refusal. The phases probe records, just before each commit, every
+process holding `/workspace` by its cwd, an open fd or a mapping
+(`side-by-side/phases.ts`). Live (run `sbs10020448nrspws`, image `daefe832…`,
+n=2), the holders were the probe's sampler (`bash /tmp/phase-sampler.sh`), the
+sampler's `sleep`, and the probe's own scan, all with their cwd in
+`/workspace`. Both commits failed the reseat. The bench drives that commit
+through `POST /checkpoint`, which calls `checkpointNow('quiesce')`. That is a
+commit without the quiesce's holder release. In the product only the bench
+calls `checkpointNow`; the heartbeat calls `quiesce()`, which releases holders
+first. With the sampler started from `/` instead (`sbs10020521nrsproot3`,
+n=2), both commits reseated and committed 234,885,120 bytes. The only process
+listed was the probe's own scan, which exits before the commit.
+
+What the product does, measured in the image with a real fuse-overlayfs at
+`/workspace`. The image's own sync.js ran against a box and store served
+inside the container (`bench-artifacts/reseat-holders/run.ts`, as
+`concurrent-flush-image.test.ts` does). The workspace held 64 MiB of random
+data and 40 small files; then came a first base and two 4 KiB edits.
+
+| Holders, and the path | Reseat | Record exact | Upper after | The two edits moved |
+|---|---|---|---|---|
+| dev server and terminal shell, cwd in `/workspace`; quiesce (release, then commit) | ok, both holders stopped | yes | 0 B | 8,192 and 12,288 B (deltas) |
+| the same; commit only, as the bench does | refused (EBUSY) | yes | 67,109,215 B | 67,117,056 and 67,121,152 B (full rebases) |
+| the same plus a program run from `/workspace`, its cwd elsewhere; quiesce, before the fix | refused (EBUSY) | yes | 67,144,551 B | 67,129,344 and 67,133,440 B (full rebases) |
+| the same, after the fix | ok, all three stopped | yes | 0 B | 8,192 and 12,288 B (deltas) |
+
+The dev server is `python3 -m http.server` started in `/workspace`. The
+terminal shell is a tmux pane, as `terminal.ts` opens it: a tmux server
+started from `/`, with its pane's shell in `/workspace`. "Exact" means every
+file `/workspace` shows is in the recorded layers, and no layer holds a file
+it does not.
+
+So a refused reseat loses nothing: the base is durable before it, and every
+record stayed exact. Its cost is that the box keeps the old overlay, with the
+whole tree in the upper, which grows with every write and never shrinks. Each
+later commit then republishes the whole tree as a rebase, about 64 MiB for a
+4 KiB edit here. And the quiesce fails, so the box does not stop. What the
+next quiesce does with the holder still alive was not measured.
+
+The defect. The release found holders by cwd and by open fd only. A process
+whose binary or library comes from `/workspace` holds the mount through its
+mapping, with no fd open there and its cwd elsewhere: for example a dev server
+built into the workspace and started from `/`, or a native addon a server
+loads. The release said "none", the holder outlived it, and the reseat was
+refused. The scan now also reads `/proc/<pid>/maps` (`f5d992608`,
+`releaseWorkdirHoldersCommand`). `workdir-holders-image.test.ts` starts four
+holders in the image: a dev server and a terminal shell (cwd), a program run
+from `/workspace`, and a process with a library preloaded from it. It was red
+on `20804a4f0`: the last two survived the release and the unmount was refused
+(`bench-artifacts/reseat-holders/holders-red.log`). It is green now
+(`holders-green.log`). devbox suite: 539 pass.
+
+One image for both lanes. lane/devbox-rest-ask changed no file the image
+carries: its code runs in the Durable Object, and the sync bundle is unchanged
+at `2171d5f4…`. Built from the merged tree, the image is byte-identical to
+`daefe832…` (local image id `d8372d0b…` for both builds), so `daefe832…` stays
+the pin. Live on `f5d992608` (run `sbs10020453nmlive`, one Medium box, 2 GiB
+of random data): the base saved in 37.8 s and committed 2,147,508,224 bytes.
+The box woke twice, in 4.2 s and 3.1 s at the driver, both exact. The first
+256 MiB read in 11.1 s and 3.2 s, and the whole workspace in 41 s and 25 s.
 
 ## Measurement contract for a strategy comparison
 
