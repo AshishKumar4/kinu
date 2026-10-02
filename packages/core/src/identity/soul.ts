@@ -13,7 +13,7 @@ import { NIMBUS_WORKSPACE_ROOT, workspacePath, WORKSPACE_ROOT } from '../vfs/wor
 export const SOUL_PATH = 'SOUL.md';
 
 export function isWorkspaceSoul(path: string): boolean {
-  const named = workspacePath(path);
+  const named = workspacePath(path, WORKSPACE_ROOT);
 
   // Nimbus's home links to Kinu's.
   return named === `${WORKSPACE_ROOT}/${SOUL_PATH}` || named === `${NIMBUS_WORKSPACE_ROOT}/${SOUL_PATH}`;

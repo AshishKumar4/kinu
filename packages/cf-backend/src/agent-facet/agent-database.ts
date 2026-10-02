@@ -12,7 +12,7 @@ import {
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue,
+  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -85,6 +85,7 @@ export class AgentDatabase {
     private readonly storage: DurableObjectStorage,
     private readonly workspace: {
       readonly agent: () => NimbusSandboxHandle;
+      readonly home: string;
       readonly state: () => NimbusSandboxHandle;
       readonly enqueueTurn: BackendHost['enqueueTurn'];
       readonly program: AgentWorkspace['program'];
@@ -149,8 +150,8 @@ export class AgentDatabase {
     });
 
     const files: AgentRuntimeFiles = {
-      agent: () => nimbusSessionFiles(this.workspace.agent()),
-      state: () => nimbusSessionFiles(this.workspace.state()),
+      agent: () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home }),
+      state: () => nimbusSessionFiles(this.workspace.state(), { home: WORKSPACE_ROOT }),
       sql: this.sql,
       storage,
     };

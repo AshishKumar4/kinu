@@ -11,7 +11,7 @@ import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { DurableObject } from 'cloudflare:workers';
 import type { ModelMessage } from 'ai';
 import { SlateId } from '@agent-core/core/slates';
-import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts, withMountTable, type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines } from '@kinu.run/core';
+import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts, withMountTable, type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines, WORKSPACE_ROOT } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { SlateFiles, WorkspaceSlateContentStore, slateDirectory } from '@kinu.run/core/slates';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
@@ -150,7 +150,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
   /** The agent's file plane, as `createCFRuntime` mounts it (no /pc, no /sandbox here). */
   private agentFiles(): VFS {
-    return withMountTable(nimbusSessionFiles(this.box()), standardMounts(() => undefined));
+    return withMountTable(nimbusSessionFiles(this.box(), { home: WORKSPACE_ROOT }), standardMounts(() => undefined));
   }
 
   private main(): ActorHandle {
@@ -169,7 +169,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
   /** The actor's stores exactly as the orchestrator builds them (actor-agent.ts `stores`). */
   private stores(actor: ActorHandle): AgentStores {
     return createAgentStores(() => this.executor, () => actor, (write) => this.ctx.storage.transactionSync(write), async () => ({
-      vfs: nimbusSessionFiles(this.box(), CRED_SESSION_USER),
+      vfs: nimbusSessionFiles(this.box(), { home: WORKSPACE_ROOT, cred: CRED_SESSION_USER }),
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
     }));
   }

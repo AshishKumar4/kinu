@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor,
-  workspacePath, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type ReviewAnnotation, type Rpc,
+  workspacePath, WORKSPACE_ROOT, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type ReviewAnnotation, type Rpc,
 } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -250,7 +250,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
     return resource.status === "error" ? <div className="p-4"><LoadFailure what="the change-set" message={resource.message} onRetry={reload} /></div> : null;
   }
 
-  const openInFiles = shown.mode === "vfs-baseline" ? (path: string): void => onOpenFile(workspacePath(path)) : null;
+  const openInFiles = shown.mode === "vfs-baseline" ? (path: string): void => onOpenFile(workspacePath(path, WORKSPACE_ROOT)) : null;
 
   const now = Date.now();
 
