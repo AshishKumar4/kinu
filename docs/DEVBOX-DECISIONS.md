@@ -2705,6 +2705,114 @@ the quiet is confirmed. Deployed re-proof owed: no call from a workspace to
 its box in Workers Logs while turns run, and boxes resting 40 minutes after
 their own last use.
 
+D57. The chain streams every layer to the store as mksquashfs builds it, so
+a base larger than the free disk saves (2026-10-01). The defect: a layer was
+built whole on the disk, and when the disk could not hold it, in tmpfs. The
+platform's tmpfs is 64 MiB (D55), so on a Medium box (a 20 GB disk) any
+workspace whose squashfs did not fit in the free disk could not be saved at
+all. On image `ea5d88ee…`, a box with 10 GiB of random data failed 5 of 5
+saves with `No space left on device`, 13 to 15 s in, and kept nothing
+(`bench-artifacts/stream-base/live-red.log`). It had failed the same way on
+`c072f8f5…` in D55's runs.
+
+The change (`stream-archive.ts`, called by `snapshot-chain.ts`):
+- `sync.js` runs mksquashfs into a sparse file and uploads each 5 MiB part
+  once the archive has grown past it. After the store answers, it re-reads
+  the part, checks it did not change, and punches it out of the disk.
+- mksquashfs writes its output in order and returns once, for the 96-byte
+  superblock at offset 0. strace on 4.7.5 showed no other backward write,
+  with or without duplicate files. So the first part is held and uploads
+  last.
+- When more than the window (64 MiB) waits on the disk, mksquashfs is
+  stopped until uploads free it. It runs under `nice`, so the uploader keeps
+  its turn to stop it. Freeing a part waits for its pages to be written, so
+  the bound is soft: on an ext4 test host the archive briefly held 203 MB
+  against a 40 MiB window.
+- A disk that cannot hold twice the window streams through tmpfs, with a
+  16 MiB window.
+- Parts in flight and part size are unchanged (four, 5 MiB, D50).
+
+Before the record names the layer:
+- The store's own digest of every part must equal the digest of the bytes
+  sent. R2 answers each part with its MD5, and a completed object with the
+  MD5 of those followed by `-<parts>`; this was checked live in run
+  `m5510011512et`.
+- After mksquashfs exits, no punched range may hold data again, which would
+  mean a write after the upload.
+- The store's HEAD must report the size sent and the composite digest.
+- D54's `unsquashfs -l` read-back through the store mount must succeed.
+Any failure aborts the multipart upload and records nothing.
+
+The small path is faster, not slower, because packing and uploading now
+overlap. A 224 MiB base saved in 29.2 to 30.6 s on `ea5d88ee…` (median
+30.0 s). On the new image it took 22.5 to 26.4 s and 23.6 to 25.7 s in two
+runs (medians 25.4 and 24.6 s). Each run was n=5 on fresh Medium boxes in
+the same hour (`bench-artifacts/stream-base/small-*.log`).
+
+A large base is now bound by mksquashfs. At its default zstd level on random
+data it ran on about two cores: one box streamed 2 GiB from plain disk in
+about 110 s. Five 10 GiB boxes at once, packing through fuse-overlayfs,
+streamed about 4 MiB/s each. D53's E′ variant (zstd level 1, sixteen 16 MiB
+parts) saved 2 GiB in 24.6 s; that tuning is the next change, with its own
+measurement.
+
+Tests:
+- `stream-script.test.ts` runs the shipped script with the real mksquashfs
+  against an R2-like store:
+  - a 288 MiB archive lands exactly as a direct mksquashfs makes it, with
+    several parts in flight and never more than half of it on the disk;
+  - a small archive is one PUT;
+  - a part the store holds as other bytes is refused, and the upload aborted;
+  - an archiver that writes into a part already uploaded is refused;
+  - mksquashfs failing exits 4.
+- Strategy cell 6.25 (`strategy-conformance.test.ts`, a base larger than the
+  free disk commits and wakes exact) is red against the old code, which
+  failed the save and woke empty
+  (`bench-artifacts/stream-base/model-red.log`), and passes now
+  (`model-green.log`). The model's tmpfs now holds 64 MiB, as the platform's
+  does; it was unbounded.
+- The concurrent-flush image test's store answers with R2's digests.
+- devbox suite: 523 pass.
+
+Image `a41e4a11…`, sync.js `fc469296…`. The small-path runs used `6bea205d…`,
+whose script is the same, before the publisher moved into its own module.
+
+Live on `a41e4a11…`, the same 10 GiB fixture saved and woke exactly, 3 of 3:
+- One box alone (`sbs10011701nsg3`): the quiesce committed 10,737,442,816
+  bytes in 893 s. The wake took 4.4 s at the driver, with 1.9 s attaching the
+  base. The first 256 MiB read in 4.7 s, and the whole workspace in 209 s.
+- Five boxes at once (`sbs10011738nsg5b`): box 1 committed in 893 s and woke
+  twice, in 5.2 and 10.0 s, reading everything in 238 and 195 s.
+For most of each save, mksquashfs sat stopped by the window: the upload was
+the bound, about 13 MiB/s per box with four 5 MiB parts in flight.
+
+The other four boxes reported "skipped: nothing has been written since the
+attach", and their records still named their 10 GiB bases. The trace (ps,
+the stage and the box's state every 30 s) shows why:
+- The bench drives the quiesce from an alarm. The platform cut the alarm
+  handler at 900 s and delivered it again.
+- The second delivery started a second flush at exactly 900 s on each of
+  those boxes. It waited on D54's lock until the first had committed and
+  reseated the upper, then truthfully found the upper empty.
+So a quiesce flush longer than 15 minutes is delivered twice. D54's lock
+makes that safe, but the answer was wrong: it said "skipped" for a workspace
+the first flush had just made durable.
+
+The fix: the lock file holds one small record, the last holder's token and
+outcome, overwritten by every flush. A flush that had to wait for the lock,
+and then finds nothing to save, reports the commit it waited behind: kind
+`committed`, the record's durable bytes, `movedBytes` 0, and a reason naming
+the flush ahead of it. `afterWaiting` in `sync.ts`; the test in `sync.test.ts`
+was red before it (`bench-artifacts/stream-base/waited-red.log`). The
+real-image test checks that the lock stays one file under 2 KiB. Image
+`648726e8…`, sync.js `22c7f1af…`.
+
+Platform time on a new image: the first deploy of `a41e4a11…` polled
+`containers/image-preparations` 296 times in 12 minutes (16:48:55 to
+17:00:43Z) before it was stopped. The retry polled 179 times in 7 minutes
+(17:01:49 to 17:08:49Z), then deployed. That is about 20 minutes, which any
+deploy of a new image may pay.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

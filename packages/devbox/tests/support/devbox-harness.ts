@@ -558,6 +558,8 @@ export class FakeSandbox {
       return { stdout: '', stderr: '', exitCode: 0 };
     }
 
+    if (command.includes('devbox-stream.mjs')) return this.#execStream(command);
+
     if (command.includes('/usr/bin/mksquashfs')) {
       const tail = command.slice(command.indexOf('/usr/bin/mksquashfs'));
       const quoted = quotedSegments(tail);
@@ -573,8 +575,6 @@ export class FakeSandbox {
 
       return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
     }
-
-    if (command.includes('devbox-publish.mjs')) return this.#execPublishEgress(command);
 
     if (command.includes('conv=fsync')) return this.#execPublish(command);
 
@@ -636,15 +636,15 @@ export class FakeSandbox {
     return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
   }
 
-  /** Models D15: the egress publish writes the staged archive in ONE object attempt (s3fs `dd`
-   *  cannot); the store lands it under the mount's prefix plus the URL's key. */
-  #execPublishEgress(command: string) {
-    const archivePath = /devbox-publish\.mjs' '([^']+)'/.exec(command)?.[1];
-    const objectUrl = /devbox-publish\.mjs' '[^']+' '([^']+)'/.exec(command)?.[1];
+  /** Models D15 and D57: the archive streams to the store as it is built, in ONE object attempt
+   *  (s3fs `dd` cannot); the store lands it under the mount's prefix plus the URL's key. */
+  #execStream(command: string) {
+    const objectUrl = /devbox-stream\.mjs' '([^']+)'/.exec(command)?.[1];
+    const sourceDir = quotedSegments(command.slice(command.indexOf('/usr/bin/mksquashfs')))[0];
     const store = this.chainStore;
 
-    if (archivePath === undefined || objectUrl === undefined || store === undefined) {
-      throw new Error(`the egress publish command names no archive, URL or store: ${command}`);
+    if (sourceDir === undefined || objectUrl === undefined || store === undefined) {
+      throw new Error(`the stream command names no source, URL or store: ${command}`);
     }
 
     if (this.s3fsMounts.size === 0) {
@@ -657,10 +657,7 @@ export class FakeSandbox {
       return { stdout: '1 ', stderr: `PUT answered 403 for ${objectUrl}`, exitCode: 0 };
     }
 
-    const bytes = this.stagedArchives.get(archivePath);
-
-    if (bytes === undefined) return { stdout: '2 ', stderr: `no archive at ${archivePath}`, exitCode: 0 };
-
+    const bytes = this.synthesizeArchive(sourceDir);
     const key = `${store.root}/${decodeURIComponent(relative)}`;
     store.attempts?.push({ operation: 'put', key, bytes: bytes.byteLength });
     store.objects.set(key, bytes.slice());

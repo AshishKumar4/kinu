@@ -7,7 +7,7 @@ import { evalCommit, evalMatrix } from './config';
 import { createKinuHarness } from './harness';
 import { trialAccounts, trialSlot } from './slot';
 import { ARMS, resolveEvalTarget } from './target';
-import { taskVersion, type EvalRunInput, type EvalRunOutput, type EvalTask } from './task';
+import { failureRationale, taskVersion, type EvalRunInput, type EvalRunOutput, type EvalTask } from './task';
 
 const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional result', ({ output }) => {
   const checks = output.turns.flatMap((turn) => turn.checks);
@@ -16,7 +16,7 @@ const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional res
   return {
     score: output.success ? 1 : 0,
     metadata: {
-      rationale: output.success ? 'every turn and check passed' : `failed: ${failed.join(', ') || 'a turn did not complete'}`,
+      rationale: output.success ? 'every turn and check passed' : failureRationale(output),
       passedChecks: checks.length - failed.length,
       totalChecks: checks.length,
       failedChecks: failed,

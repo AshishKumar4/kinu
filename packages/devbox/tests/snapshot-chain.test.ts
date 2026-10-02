@@ -18,8 +18,8 @@ function devboxScratchDir(label: string): string {
 }
 
 import { chainAdvanced, layerUnreadable } from '../src/errors';
+import { archiveCommand, STREAM_WINDOW_BYTES, streamCommand } from '../src/stream-archive';
 import {
-  archiveCommand,
   archiveSizeCommand,
   baseObjectKey,
   chainStoreRoot,
@@ -27,7 +27,6 @@ import {
   deltaObjectKey,
   metadataObjectKey,
   normalizeChainState,
-  publishCommand,
   shouldRebase,
   snapshotChainStorage,
   supersedeGeneration,
@@ -600,12 +599,24 @@ function harness(overrides: {
         return Promise.reject(refused);
       }
 
-      // The archive moves because the container writes it to the store, not via bytes to the isolate.
-      // The publisher runs `bun <runtime>/devbox-publish.mjs` and lands one object attempt (D15).
-      const egress = /bun '(?<script>[^']*devbox-publish\.mjs)' '(?<archive>[^']+)' '(?<url>[^']+)' \d+/
+      // The archive moves because the container streams it to the store as mksquashfs builds it,
+      // not via bytes to the isolate, and lands one object attempt (D15, D57). `stagedReport` is the
+      // archiver's own `<rc> <bytes>`; the script's exit names which half failed.
+      const streamed = /devbox-stream\.mjs' '(?<url>[^']+)' .* -- \/usr\/bin\/nice -n 10 \/usr\/bin\/mksquashfs '(?<source>[^']+)'/
         .exec(command)?.groups;
 
-      if (egress !== undefined) return Promise.resolve(publishEgress(egress.url));
+      if (streamed !== undefined) {
+        calls.push(`makeSquashfs:${streamed.source}:${excludePatternsOf(command).length}`);
+        const [archived = '', size = ''] = (overrides.stagedReport ?? `0 ${DELTA_BYTES}`).split(' ');
+
+        if (archived !== '0') return Promise.resolve({ stdout: '4 ', stderr: `mksquashfs exited ${archived}: FATAL ERROR`, exitCode: 0 });
+
+        if (Number(size) <= 0) {
+          return Promise.resolve({ stdout: '5 ', stderr: `mksquashfs reported success but ${streamed.source} streamed nothing`, exitCode: 0 });
+        }
+
+        return Promise.resolve(publishEgress(streamed.url));
+      }
 
       // The publication creates the generation's directory first (s3fs shows no parent for an
       // empty prefix), so the matcher reads the `dd` rather than the start of the line.
@@ -2041,10 +2052,10 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(record.calls).toContain(`makeSquashfs:${UPPER}:${CHAIN_EXCLUDES.length}`);
   });
 
-  test('disk full stages in memory and commits, never a crash',
+  test('a disk with less room than the archive still commits, never a crash',
     async () => {
-      // A disk archiver that fills the container disk takes the box down; a refusing disk gate
-      // stages in memory instead, where tmpfs costs no disk quota.
+      // The archive streams to the store as it is built, so it needs a window of the disk, not
+      // its own size (D57); the platform's 64 MiB tmpfs could never hold a large one.
       const record = harness({ state: chainState(), mounts: MOUNTED, freeBytes: 1 });
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('committed');
@@ -2122,12 +2133,16 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(read).toBeLessThan(wrote);
       const store = storeMountOf(record.calls);
 
-      const command = publishCommand({
+      const command = streamCommand({
+        sourceDir: '/workspace',
         archivePath: '/stage/layer.sqsh',
+        excludeFile: '/stage/excludes.txt',
+        excludes: [],
         objectUrl: `http://r2.internal/BACKUP_BUCKET/${CHAIN_ID}/data.sqsh`,
+        windowBytes: STREAM_WINDOW_BYTES,
       });
 
-      expect(command).toContain('devbox-publish.mjs');
+      expect(command).toContain('devbox-stream.mjs');
       expect(command).toContain(`'http://r2.internal/BACKUP_BUCKET/${CHAIN_ID}/data.sqsh'`);
       expect(command).toContain('/stage/layer.sqsh');
       expect(command).not.toContain('conv=fsync');

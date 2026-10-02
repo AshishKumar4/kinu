@@ -229,9 +229,9 @@ export {
 } from './evolution/behavior-labels';
 
 export {
-  initReplayTables, runReplayEval, listReplayEvals, DEFAULT_QUALITY_THRESHOLD,
-  type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
-} from './evolution/replay';
+  DEFAULT_QUALITY_THRESHOLD, initScaffoldScoreTables, listScaffoldScores,
+  type ScaffoldScore, type ScaffoldScoreSource, type ScoreDirection, type ScoredInstance,
+} from './evolution/scaffold-scores';
 
 // One row per turn, owned by EvolutionEngine.
 export {
@@ -1564,7 +1564,7 @@ export { labelSigner, type LabelSigner, type LabelSignerEnv } from './utils/labe
 export { shellQuote } from './utils/shell';
 
 export {
-  wilsonInterval, scoreInterval, lossInterval, formatScoreInterval, seededRandom,
+  wilsonInterval, scoreInterval, formatScoreInterval, seededRandom,
   type ScoreInterval,
 } from './utils/stats';
 
@@ -1766,8 +1766,8 @@ export type {
 // GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
 export {
   applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, shadowTrialPlan, runQueuedShadowTrials,
-  runScaffoldCaptureText, runScaffoldGepaOptimization, runScaffoldOnce,
+  previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, shadowTrialPlan, runDueScaffoldEvaluations,
+  runScaffoldGepaOptimization, runScaffoldOnce,
   advancePromptSectionLane, proposeMeasuredPromptSection,
   type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface,

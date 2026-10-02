@@ -26,9 +26,9 @@ const DEFAULT_OPENCODE_BIN = 'opencode';
 
 const CONFIG_TTL_MS = 60_000;
 
-const INSTALL_HINT = 'Install opencode: https://opencode.ai';
+const NOT_INSTALLED = "opencode isn't installed on this machine.";
 
-const LOGIN_HINT = 'Run `opencode auth login` to authenticate, then run `kinu setup` again.';
+const NOT_SIGNED_IN = "opencode isn't signed in on this machine.";
 
 const openCodeAuthSchema = v.record(v.string(), v.object({
   type: v.string(),
@@ -266,9 +266,9 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
     async unavailableReason() {
       const a = await availability();
 
-      if (!a.binary) return INSTALL_HINT;
+      if (!a.binary) return NOT_INSTALLED;
 
-      if (!a.authenticated) return LOGIN_HINT;
+      if (!a.authenticated) return NOT_SIGNED_IN;
 
       return undefined;
     },

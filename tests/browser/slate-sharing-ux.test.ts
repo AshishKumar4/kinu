@@ -1,33 +1,9 @@
-/**
- * The sharing surfaces, in a real browser: the Drive's Shared tab, the
- * blueprint page (signed in and signed out), the share dialog in both modes
- * and the unmapped-bindings panel, each at desktop and phone width in dark and
- * light.
- *
- * What only a browser can say here: that the warning about secret-shaped text
- * names a location and never a value, that a signed-out visitor's one action
- * is a sign-in, that the fork picker offers every workspace plus a new one,
- * that the live dialog grants every read member with no click and a mutating
- * one only after a click that changes the grant summary, that the risk text
- * under a mutating member names the act, the workspace and who can trigger it
- * rather than a generic warning, and that the dialog states the limits a share
- * runs under. Screenshots land in ~/kinu-logs/blueprints/ and
- * ~/kinu-logs/live-shares/ (outside the worktree).
- */
+/** Real-browser share access, grant consent, credential redaction and blueprint bindings at both widths and themes. */
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
-const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'blueprints');
-
-const LIVE_SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'live-shares');
-
-mkdirSync(SHOTS, { recursive: true });
-
-mkdirSync(LIVE_SHOTS, { recursive: true });
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
@@ -35,22 +11,16 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
   const page = await gallery.newPage();
   await page.setViewport(VIEWPORTS[viewport]);
   await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
-  await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'networkidle0' });
+  await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'load' });
 
   return page;
 }
 
-async function shoot(page: Page, name: string, dir = SHOTS): Promise<string> {
-  const path = join(dir, `${name}.png`);
-  await page.screenshot({ path, fullPage: true });
-
-  return path;
-}
 
 describe('slate sharing surfaces', () => {
   test('every surface renders at both widths in both themes, and says what it must', async () => {
     await withGallery(async (gallery) => {
-      const shots: string[] = [];
+      
 
       for (const theme of ['dark', 'light'] as const) {
         for (const viewport of ['desktop', 'mobile'] as const) {
@@ -73,7 +43,7 @@ describe('slate sharing surfaces', () => {
             await shared.waitForFunction(() => (document.querySelector('[role="dialog"]')?.textContent ?? '').includes('checkout-fixes'));
             const dialog = await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '');
             expect(dialog).toContain('New workspace');
-            shots.push(await shoot(shared, `shared-fork-picker-${viewport}-${theme}`));
+            
           } finally {
             await shared.close();
           }
@@ -88,7 +58,7 @@ describe('slate sharing surfaces', () => {
             expect(text).not.toContain('AKIA');
             expect(text).toContain('Fork into Kinu');
             expect(text).toContain('MCP server');
-            shots.push(await shoot(blueprint, `blueprint-${viewport}-${theme}`));
+            
           } finally {
             await blueprint.close();
           }
@@ -105,7 +75,7 @@ describe('slate sharing surfaces', () => {
 
             expect(action).toContain('Fork into Kinu');
             expect(await visitor.$('aside')).toBeNull();
-            shots.push(await shoot(visitor, `blueprint-signed-out-${viewport}-${theme}`));
+            
           } finally {
             await visitor.close();
           }
@@ -128,7 +98,7 @@ describe('slate sharing surfaces', () => {
             }
 
             expect({ requests, dollars }).toEqual({ requests: [120], dollars: [2] });
-            shots.push(await shoot(live, `share-dialog-live-${viewport}-${theme}`, LIVE_SHOTS));
+            
             // Folded, the reach names what the slate reaches (a server by its title), not the slate's own keys.
             const reach = await live.$eval('[data-share-reach]', (element) => element.textContent ?? '');
             expect(reach).toContain('GitHub');
@@ -154,7 +124,7 @@ describe('slate sharing surfaces', () => {
             await live.click('[data-share-access]');
             await live.click('[data-share-access-option="public"]');
             expect(await live.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Anyone who opens this share can trigger it.');
-            shots.push(await shoot(live, `share-dialog-live-approved-public-${viewport}-${theme}`, LIVE_SHOTS));
+            
           } finally {
             await live.close();
           }
@@ -169,7 +139,7 @@ describe('slate sharing surfaces', () => {
             expect(text).not.toContain('PEER (app');
             expect(await dialog.$('[role="dialog"] [role="alert"]')).not.toBeNull();
             expect(text).not.toMatch(/per minute|spend|\$/);
-            shots.push(await shoot(dialog, `share-dialog-blueprint-${viewport}-${theme}`, LIVE_SHOTS));
+            
           } finally {
             await dialog.close();
           }
@@ -181,15 +151,14 @@ describe('slate sharing surfaces', () => {
             expect(text).toContain('needs its bindings connected');
             expect(text).toContain('Connect an MCP server named "github"');
             expect(text).toContain('Open the preview');
-            shots.push(await shoot(panel, `unmapped-bindings-${viewport}-${theme}`));
+            
           } finally {
             await panel.close();
           }
         }
       }
 
-      expect(shots.length).toBe(28);
-      process.stdout.write(`slate-sharing-ux: ${String(shots.length)} screenshots under ${SHOTS} and ${LIVE_SHOTS}\n`);
+      
     });
   });
 });

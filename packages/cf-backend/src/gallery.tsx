@@ -2585,10 +2585,11 @@ const TRANSCRIPTS = {
 const TRANSCRIPT_BY_NODE = new Map<string, NodeTranscriptView>(Object.entries(TRANSCRIPTS));
 
 /** Evolution reads three non-array shapes the blanket `[]` would break; populated so the frame shows panels, not empty states. */
+/** The quality curve, newest promotion first: a GEPA score, a regression a replay found, and a failed scoring. */
 const REPLAY_EVALS = [
-  { id: "rev_3", ranAt: NOW - 2 * 864e5, sampleSize: 24, acceptedCount: 19, negativeCount: 5, meanScore: 0.79, loss: 0.21, scaffoldVersion: 7, interval: { lo: 0.64, hi: 0.89, n: 24 } },
-  { id: "rev_2", ranAt: NOW - 9 * 864e5, sampleSize: 21, acceptedCount: 14, negativeCount: 7, meanScore: 0.67, loss: 0.33, scaffoldVersion: 6, interval: { lo: 0.51, hi: 0.80, n: 21 } },
-  { id: "rev_1", ranAt: NOW - 17 * 864e5, sampleSize: 18, acceptedCount: 10, negativeCount: 8, meanScore: 0.55, loss: 0.45, scaffoldVersion: 6, interval: { lo: 0.39, hi: 0.71, n: 18 } },
+  { version: 8, source: "replay", promotedAt: NOW - 864e5, scoredAt: NOW - 864e5 + 6e5, interval: null, failure: "no outcome-labeled turns to replay", direction: null, results: [] },
+  { version: 7, source: "replay", promotedAt: NOW - 2 * 864e5, scoredAt: NOW - 2 * 864e5 + 9e5, interval: { mean: 0.44, lo: 0.28, hi: 0.61, n: 20 }, failure: null, direction: "declined", results: [] },
+  { version: 6, source: "gepa", promotedAt: NOW - 9 * 864e5, scoredAt: NOW - 10 * 864e5, interval: { mean: 0.79, lo: 0.64, hi: 0.89, n: 24 }, failure: null, direction: "reached", results: [] },
 ];
 
 const ALIGNMENT = {

@@ -9,7 +9,7 @@ import { renderChangelogText } from '../src/tui/index';
 import {
   buildChangelog, countUnseenChangelog, listUnseenChangelog,
   executeChangelogRevert, revertChangelogEntryById,
-  initScaffoldTables, initShadowTables, initTurnOutcomeTables, initReplayTables,
+  initScaffoldTables, initShadowTables, initTurnOutcomeTables, initScaffoldScoreTables,
   initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
   startGepaRun, finishGepaRun,
   recordTurnOutcome, recordShadowEvaluation,
@@ -20,6 +20,8 @@ import {
 import { describePathology } from '../src/evolution/pathology';
 import { createRefinementStore, initRefinementTables } from '../src/evolution/refinement';
 import { createTestRuntime } from './helpers';
+import { markPromoted, recordReplayScore } from '../src/evolution/scaffold-scores';
+import { formatScoreInterval, scoreInterval } from '../src/utils/stats';
 import { RunEventRecorder } from '../src/events/recorder';
 import { present } from '@kinu.run/test-utils';
 
@@ -35,7 +37,7 @@ function setup() {
   initScaffoldTables(execRaw);
   initShadowTables(execRaw);
   initTurnOutcomeTables(execRaw);
-  initReplayTables(execRaw);
+  initScaffoldScoreTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
   initRefinementTables(execRaw);
@@ -53,12 +55,19 @@ async function seedScaffoldPending(rt: AgentRuntime): Promise<number> {
   return present(result.version, 'the version modifyScaffold assigned');
 }
 
-interface ReplayRowSeed {
-  id: string;
+interface PointSeed {
+  version: number;
   at: number;
   n: number;
   mean: number;
-  scaffoldVersion: number;
+}
+
+/** One curve point: `version` promoted and scored at `at`, over `n` turns that each scored `mean`. */
+function seedPoint(rt: AgentRuntime, { version, at, n, mean }: PointSeed): void {
+  markPromoted(rt.storage.sql, rt.actor, version, at);
+  recordReplayScore(rt.storage.sql, rt.actor, {
+    version, now: at, results: Array.from({ length: n }, (_, i) => ({ id: `turn-${String(i)}`, score: mean, feedback: '' })),
+  });
 }
 
 describe('buildChangelog — every kind from the seeded ledgers', () => {
@@ -209,8 +218,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       runId: abortedId, status: 'aborted', stopReason: 'aborted', winnerId: null,
       metricCalls: 0, iterations: 0,
     });
-    void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-        VALUES (${actor.actorId}, 'rpl-1', ${Date.now()}, 6, 4, 2, 0.75, 0, '[]')`;
+    seedPoint(rt, { version: 0, at: Date.now(), n: 6, mean: 0.75 });
     recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'build it', assistantResponse: 'done',
@@ -230,9 +238,8 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(gepa[0].revert).toBeUndefined();
 
     const replay = present(entries.find((e) => e.kind === 'replay'), 'the replay entry');
-    expect(replay.summary).toContain('Self-test score');
-    expect(replay.evidence).toContain('loss 0.25');
-    expect(replay.evidence).toContain('6 labeled turns');
+    expect(replay.summary).toContain('Self-test score reached');
+    expect(replay.evidence).toContain('over 6 turns');
     expect(replay.revert).toBeUndefined();
 
     const outcomes = present(entries.find((e) => e.kind === 'outcomes'), 'the outcomes entry');
@@ -366,10 +373,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const version = await seedScaffoldPending(rt);
     const now = Date.now();
 
-    for (let index = 0; index < 7; index += 1) {
-      void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-          VALUES (${actor.actorId}, ${`rpl-${index}`}, ${now + 2 + index}, 6, 4, 2, 0.75, ${version}, '[]')`;
-    }
+    for (let index = 0; index < 7; index += 1) seedPoint(rt, { version: 100 + index, at: now + 2 + index, n: 6, mean: 0.75 });
 
     recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
@@ -389,7 +393,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(countUnseenChangelog(sql, actor, 0)).toBe(9);
   });
 
-  test('humanizes scaffold promotion and replay score direction without losing raw detail', async () => {
+  test('humanizes scaffold promotion and the score direction without losing raw detail', async () => {
     const { rt } = setup();
     const version = await seedScaffoldPending(rt);
 
@@ -405,26 +409,16 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     const now = Date.now();
 
-    const replayRow = ({ id, at, n, mean, scaffoldVersion }: ReplayRowSeed) => {
-      void rt.storage.sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-          VALUES (${rt.actor.actorId}, ${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${scaffoldVersion}, '[]')`;
-    };
-
-    // 0.50 → 0.75 over 4 instances: overlapping intervals, not a direction.
-    replayRow({ id: 'rpl-old', at: now - 1000, n: 4, mean: 0.50, scaffoldVersion: 0 });
-    replayRow({ id: 'rpl-new', at: now, n: 4, mean: 0.75, scaffoldVersion: version });
-    // 0.30 → 0.95 over 40 instances: the intervals clear each other.
-    replayRow({ id: 'rpl-lo', at: now + 1, n: 40, mean: 0.30, scaffoldVersion: version });
-    replayRow({ id: 'rpl-hi', at: now + 2, n: 40, mean: 0.95, scaffoldVersion: version });
-    replayRow({ id: 'rpl-drop', at: now + 3, n: 40, mean: 0.30, scaffoldVersion: version });
+    // 0.50 → 0.75 over 4 turns: the intervals overlap, so no direction.
+    seedPoint(rt, { version: 0, at: now - 1000, n: 4, mean: 0.50 });
+    seedPoint(rt, { version, at: now, n: 4, mean: 0.75 });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor);
     const scaffold = present(entries.find((entry) => entry.kind === 'scaffold'), 'the scaffold entry');
     expect(scaffold.evidence).toContain(`Promoted scaffold v${version}`);
     expect(scaffold.evidence).toContain(RATIONALE);
-    const replay = present(entries.find((entry) => entry.id === 'replay:rpl-new'), 'the rpl-new entry');
- 
-    expect(replay.evidence).toContain(`scaffold v${version}`);
+    const replay = present(entries.find((entry) => entry.id === `replay:v${version}`), 'the promoted version\'s point');
+    expect(replay.summary).toBe(`Self-test score held within noise at ${formatScoreInterval(scoreInterval([0.75, 0.75, 0.75, 0.75]))} on scaffold v${version}`);
   });
 });
 
@@ -500,8 +494,7 @@ describe('renderChangelogText — the one text form', () => {
   test('numbers entries, shows evidence, marks revertables', () => {
     const { rt, facts } = setup();
     facts.upsert('k', 'v', { confidence: 0.7 });
-    void rt.storage.sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-        VALUES (${rt.actor.actorId}, 'rpl-2', ${Date.now() - 1000}, 3, 2, 1, 0.9, NULL, '[]')`;
+    seedPoint(rt, { version: 0, at: Date.now() - 1000, n: 3, mean: 0.9 });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor);
     const text = renderChangelogText(entries, { unseenCount: 2 });
@@ -773,16 +766,12 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     const now = Date.now();
     seedTools(rt, ['t1', 't2', 't3', 't4', 't5', 't6'], (i) => now - (5 - i) * 1000);
 
-    for (let i = 0; i < 6; i++) {
-      void rt.storage.sql`INSERT INTO replay_evals
-        (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-        VALUES (${rt.actor.actorId}, ${`r${i}`}, ${now - (5 - i) * 1000 - 500}, 8, 4, 4, 0.5, 0, '[]')`;
-    }
+    for (let i = 0; i < 6; i++) seedPoint(rt, { version: i, at: now - (5 - i) * 1000 - 500, n: 8, mean: 0.5 });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor, { limit: 3 });
     expect(entries).toHaveLength(3);
     expect(entries.map((e) => e.id)).toEqual([
-      `tool:t6:${now}`, `replay:r5`, `tool:t5:${now - 1000}`,
+      `tool:t6:${now}`, `replay:v5`, `tool:t5:${now - 1000}`,
     ]);
   });
 
@@ -918,24 +907,18 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     expect(entry.at).toBe(endedAt);
   });
 
-  test('replay direction is computed against the predecessor even at the limit edge', () => {
-    // A one-row lookahead gives the oldest entry something to compare against.
+  test('a point\'s direction is computed against its predecessor even at the limit edge', () => {
+    // The point before the page gives the oldest entry on it something to compare against.
     const { rt } = setup();
     const now = Date.now();
 
-    const row = (id: string, at: number, mean: number) => {
-      void rt.storage.sql`INSERT INTO replay_evals
-        (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-        VALUES (${rt.actor.actorId}, ${id}, ${at}, 40, 20, 20, ${mean}, 0, '[]')`;
-    };
-
-    row('rp-1', now - 2000, 0.30);
-    row('rp-2', now - 1000, 0.95);
-    row('rp-3', now, 0.30);
+    seedPoint(rt, { version: 1, at: now - 2000, n: 40, mean: 0.30 });
+    seedPoint(rt, { version: 2, at: now - 1000, n: 40, mean: 0.95 });
+    seedPoint(rt, { version: 3, at: now, n: 40, mean: 0.30 });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor, { limit: 2 });
-    expect(entries.map((e) => e.id)).toEqual(['replay:rp-3', 'replay:rp-2']);
-    expect(entries[0].summary).toContain('declined');
+    expect(entries.map((e) => e.id)).toEqual(['replay:v3', 'replay:v2']);
+    expect(entries[0].summary).toContain('regressed');
     expect(entries[1].summary).toContain('improved');
   });
 });

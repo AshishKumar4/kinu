@@ -5,6 +5,7 @@ import { describeThrown as describe } from './lifecycle';
 import { snapshotChainStorage } from './snapshot-chain';
 import { DEVBOX_RUNTIME_DIR, type CheckpointKind, type CheckpointOutcome, type DevboxStorage } from './storage';
 import {
+  afterWaiting,
   BOOT_ID_PATH, DEVBOX_SYNC_HOST, DEVBOX_SYNC_PROGRAM, SYNC_PID_PATH, SYNC_SOCKET_PATH,
   containerChainPorts, decodeSyncConfig, parseCheckpointKind, parseSyncOutcome, runSyncLoop, syncCaller, syncWorker,
   type SyncConfig, type SyncLoop, type SyncWorker,
@@ -38,26 +39,43 @@ const COMMIT_LOCK_PATH = `${DEVBOX_RUNTIME_DIR}/stage.lock`;
 
 let releasedAs: string | undefined;
 
+/** The lock file: its last holder's token, then that holder's outcome once it finished. */
+function lockRecord() {
+  const [token = '', line = ''] = readFileSync(COMMIT_LOCK_PATH, 'utf8').split('\n');
+
+  return { token, outcome: line === '' ? undefined : parseSyncOutcome(line, '', 0) };
+}
+
 /** One commit at a time in a container (D54). `flock` holds the lock while its stdin is open, so a
- *  killed program releases it. */
+ *  killed program releases it. A program that had to wait learns what the holder did (D57). */
 async function holdingCommitLock(work: (othersHeldIt: boolean) => Promise<CheckpointOutcome>): Promise<CheckpointOutcome> {
-  const holder = Bun.spawn(['flock', COMMIT_LOCK_PATH, 'sh', '-c', 'echo held; exec cat >/dev/null'], { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
+  const holder = Bun.spawn([
+    'sh', '-c', 'exec 9>>"$1"; if flock -n 9; then echo held; else echo waited; flock 9 && echo held; fi; exec cat >/dev/null', 'lock', COMMIT_LOCK_PATH,
+  ], { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
+
   const reader = holder.stdout.getReader();
-  const { value } = await reader.read();
+  let said = '';
+
+  for (let chunk = await reader.read(); !chunk.done && !said.includes('held'); chunk = await reader.read()) said += new TextDecoder().decode(chunk.value);
   reader.releaseLock();
 
   try {
-    if (new TextDecoder().decode(value).trim() !== 'held') {
+    if (!said.includes('held')) {
       const reason = `the commit lock was not taken (exit ${String(await holder.exited)}): ${await new Response(holder.stderr).text()}`;
 
       return { kind: 'failed', reason, bytes: undefined, movedBytes: undefined };
     }
 
-    const othersHeldIt = readFileSync(COMMIT_LOCK_PATH, 'utf8') !== releasedAs;
-    releasedAs = crypto.randomUUID();
-    writeFileSync(COMMIT_LOCK_PATH, releasedAs);
+    const before = lockRecord();
+    const othersHeldIt = before.token !== releasedAs;
+    const token = crypto.randomUUID();
+    releasedAs = token;
+    writeFileSync(COMMIT_LOCK_PATH, token);
 
-    return await work(othersHeldIt);
+    const outcome = await work(othersHeldIt);
+    writeFileSync(COMMIT_LOCK_PATH, `${token}\n${JSON.stringify(outcome)}`);
+
+    return said.includes('waited') ? afterWaiting(outcome, before.outcome) : outcome;
   } finally {
     await holder.stdin.end();
     await holder.exited;

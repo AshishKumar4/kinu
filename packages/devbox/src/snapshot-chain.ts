@@ -45,104 +45,13 @@ import {
   recordCheckpointFailure,
   stampFailure,
 } from './storage';
+import { normalizeArchiveExclude, PLATFORM_TMPFS_BYTES, STREAM_WINDOW_BYTES, streamCommand } from './stream-archive';
 
 /** One writable mount for the container's life: the SDK refuses a binding remounted with a
  *  different readOnly setting, and squashfuse holds layer files under it; the prefix bounds. */
 export const CHAIN_STORE_MOUNT = '/backups';
 
-/** R2 refuses a multipart part under 5 MiB unless it is the last, so a smaller part size
- *  fails mid-upload rather than running slower. */
-const PUBLISH_PART_BYTES = 5 * 1024 * 1024;
 
-/** 224 MiB took 38 s one part at a time and 20 s with four in flight, on both policies; eight was no faster (D50). */
-const PUBLISH_PARTS_IN_FLIGHT = 4;
-
-/** s3fs PUTs a directory marker and an empty object before flush, so publishing bypasses the
- *  mount (D15); a `Bun.file` slice sends no body, so parts send `slice.stream()` (Bun 1.3.12). */
-const PUBLISH_SCRIPT = `// devbox-publish-v2
-const [archive, url, partArg, inFlightArg] = process.argv.slice(2);
-const partBytes = Number(partArg);
-const inFlight = Number(inFlightArg);
-
-function refuse(code, message) {
-  process.stderr.write(message + '\\n');
-  process.exit(code);
-}
-
-if (archive === undefined || url === undefined || !Number.isSafeInteger(partBytes) || partBytes <= 0
-  || !Number.isSafeInteger(inFlight) || inFlight <= 0) {
-  refuse(2, 'usage: publish.mjs <archive> <url> <partBytes> <partsInFlight>');
-}
-
-const file = Bun.file(archive);
-
-if (!(await file.exists())) refuse(2, 'no archive at ' + archive);
-const size = file.size;
-
-if (size <= 0) refuse(2, archive + ' is empty');
-
-async function answered(label, response) {
-  if (response.ok) return response;
-  const body = (await response.text()).slice(0, 300);
-  throw new Error(label + ' answered ' + response.status + ': ' + body);
-}
-
-function tag(text, name) {
-  const found = new RegExp('<' + name + '>([^<]*)</' + name + '>').exec(text);
-
-  return found === null ? '' : found[1];
-}
-
-let etag = '';
-
-if (size <= partBytes) {
-  const put = await answered('PUT', await fetch(url, { method: 'PUT', body: file }));
-  etag = put.headers.get('etag') ?? '';
-} else {
-  const opened = await answered('POST ?uploads', await fetch(url + '?uploads=', { method: 'POST' }));
-  const uploadId = tag(await opened.text(), 'UploadId');
-
-  if (uploadId.length === 0) refuse(1, 'the multipart upload was opened without an id');
-  const id = encodeURIComponent(uploadId);
-  const count = Math.ceil(size / partBytes);
-  const etags = [];
-  let next = 1;
-
-  const send = async () => {
-    for (let number = next++; number <= count; number = next++) {
-      const slice = file.slice((number - 1) * partBytes, Math.min(size, number * partBytes));
-      const part = await answered('PUT part ' + number, await fetch(url + '?partNumber=' + number + '&uploadId=' + id, {
-        method: 'PUT',
-        headers: { 'content-length': String(slice.size) },
-        body: slice.stream(),
-      }));
-      etags[number - 1] = part.headers.get('etag') ?? '';
-    }
-  };
-
-  try {
-    await Promise.all(Array.from({ length: Math.min(inFlight, count) }, send));
-    const parts = etags.map((etag, index) => '<Part><PartNumber>' + (index + 1) + '</PartNumber><ETag>' + etag + '</ETag></Part>');
-    const completed = await answered('POST ?uploadId', await fetch(url + '?uploadId=' + id, {
-      method: 'POST', body: '<CompleteMultipartUpload>' + parts.join('') + '</CompleteMultipartUpload>',
-    }));
-    etag = tag(await completed.text(), 'ETag');
-  } catch (error) {
-    const aborted = await fetch(url + '?uploadId=' + id, { method: 'DELETE' });
-    refuse(1, String(error && error.message ? error.message : error) + '; multipart ' + uploadId + (aborted.ok ? ' aborted' : ' NOT aborted (' + aborted.status + ')'));
-  }
-}
-
-const head = await answered('HEAD', await fetch(url, { method: 'HEAD' }));
-const landed = Number(head.headers.get('content-length'));
-
-if (landed !== size) refuse(3, 'the store reports ' + landed + ' bytes for ' + url + ' where ' + size + ' were sent');
-process.stdout.write(size + ' ' + etag);
-`;
-
-/** `PUBLISH_SCRIPT` as it travels inside {@link publishCommand}: base64, so
- *  no byte of it can become shell syntax. */
-const PUBLISH_SCRIPT_B64 = btoa(PUBLISH_SCRIPT);
 
 
 
@@ -156,37 +65,6 @@ export const CHAIN_EXCLUDES = [
   'node_modules', '*.log', '.cache',
   '.bun', '__pycache__', '.venv', 'target', '.next', '.turbo', 'dist',
 ] as const;
-
-/** Mirrors `@cloudflare/sandbox` `BackupService` normalisation exactly: a different one would
- *  exclude a different file set from the same policy; null means the pattern matches nothing. */
-function normalizeArchiveExclude(pattern: string): string | null {
-  let normalized = pattern;
-
-  while (normalized.startsWith('**/')) normalized = normalized.slice(3);
-
-  while (normalized.includes('/**/')) normalized = normalized.replaceAll('/**/', '/');
-
-  if (normalized.endsWith('/**')) normalized = normalized.slice(0, -3);
-
-  if (normalized === '' || normalized === '**') return null;
-
-  return normalized;
-}
-
-/** Two lines per pattern: mksquashfs anchors an exclude to the source dir unless prefixed `... `;
- *  with `-wildcards`, both lines exclude the pattern at every depth. */
-function archiveExcludeFile(patterns: readonly string[]): string {
-  const lines: string[] = [];
-
-  for (const pattern of patterns) {
-    const normalized = normalizeArchiveExclude(pattern);
-
-    if (normalized === null) continue;
-    lines.push(normalized, `... ${normalized}`);
-  }
-
-  return lines.map(line => `${line}\n`).join('');
-}
 
 /** Rebase once the delta outgrows the base by this factor: beyond it, every checkpoint
  *  moves more bytes than a fresh base would cost. */
@@ -738,28 +616,28 @@ function chainShell(exec: ContainerExec, root: string) {
         + `-o lowerdir=${lowers.map(shellPath).join(':')}`
         + `,upperdir=${shellPath(upperDir)},workdir=${shellPath(workDir)} ${shellPath(dir)}`);
     },
-    /** Build and measure stay one command for the reason {@link archiveCommand} states. */
-    makeSquashfs: async (
-      sourceDir: string, archivePath: string, excludes: readonly string[],
-    ): Promise<number> => {
-      const excludeFile = `${archivePath.slice(0, archivePath.lastIndexOf('/'))}/excludes.txt`;
+    streamArchive: async (input: {
+      readonly sourceDir: string; readonly archivePath: string; readonly excludes: readonly string[];
+      readonly objectUrl: string; readonly windowBytes: number;
+    }): Promise<number> => {
+      const { sourceDir, archivePath, objectUrl } = input;
+      const result = await exec(streamCommand({ ...input, excludeFile: `${archivePath.slice(0, archivePath.lastIndexOf('/'))}/excludes.txt` }));
+      const [code, size, etag] = result.stdout.trim().split(/\s+/);
+      const words = result.stderr.trim();
 
-      const result = await exec(archiveCommand({
-        sourceDir, archivePath, excludeFile, excludes,
-      }));
+      if (code === '4') throw new DevboxError("io", `building the squashfs failed: ${words || 'no output'}`);
 
-      const [code, size] = result.stdout.trim().split(/\s+/);
+      if (code === '5') throw new DevboxError("io", words || `mksquashfs reported success but ${archivePath} is empty`);
 
       if (code !== '0') {
-        throw new DevboxError("io", `staging the exclude list or building the squashfs failed (${code ?? '?'}): `
-        + `${result.stderr.trim() || 'no output'}`, );
+        throw new DevboxError("io", `publishing ${sourceDir} to ${objectUrl} failed (${code ?? '?'}): ${words || 'no output'}`);
       }
 
       const bytes = Number(size);
 
       if (!Number.isFinite(bytes) || bytes <= 0) {
-        throw new DevboxError("io", `mksquashfs reported success but ${archivePath} is ${size ?? 'absent'}: `
-        + `${result.stderr.trim() || 'the archiver left no diagnostics'}`, );
+        throw new DevboxError("io", `the store reports ${objectUrl} as ${size ?? 'absent'} after a publication `
+        + `that reported success${etag === undefined ? '' : ` (etag ${etag})`}: ${words || 'no diagnostics'}`, );
       }
 
       return bytes;
@@ -769,32 +647,12 @@ function chainShell(exec: ContainerExec, root: string) {
       await must(`reading ${key} back as a squashfs before the record names it`,
         `/usr/bin/unsquashfs -l ${shellPath(mountedLayerPath(CHAIN_STORE_MOUNT, root, key))} >/dev/null`);
     },
-    /** The final name directly: a rename is a server-side copy, and a PUT is visible only whole. */
-    publishArchive: async (archivePath: string, objectUrl: string): Promise<number> => {
-      const result = await exec(publishCommand({ archivePath, objectUrl }));
-      const [code, size, etag] = result.stdout.trim().split(/\s+/);
-
-      if (code !== '0') {
-        throw new DevboxError("io", `publishing ${archivePath} to ${objectUrl} failed (${code ?? '?'}): `
-        + `${result.stderr.trim() || 'no output'}`, );
-      }
-
-      const bytes = Number(size);
-
-      if (!Number.isFinite(bytes) || bytes <= 0) {
-        throw new DevboxError("io", `the store reports ${objectUrl} as ${size ?? 'absent'} after a publication `
-        + `that reported success${etag === undefined ? '' : ` (etag ${etag})`}: `
-        + `${result.stderr.trim() || 'no diagnostics'}`, );
-      }
-
-      return bytes;
-    },
     /** Upper bound: squashfs never exceeds its input; size and exclude come off one policy list.
      *  Both readings run in one command so a container replacement cannot split them. */
-    stagingShortfall: async (
+    stageRoom: async (
       sourceDir: string,
       excludes: readonly string[],
-    ): Promise<string | null> => {
+    ): Promise<{ readonly need: number; readonly free: number } | null> => {
       const measured = await exec(
         `mkdir -p ${shellPath(stageDir)}; `
         + `need=$(${archiveSizeCommand(sourceDir, excludes)}); `
@@ -806,11 +664,9 @@ function chainShell(exec: ContainerExec, root: string) {
 
       // An unreadable answer is NOT a refusal: refusing every checkpoint
       // because a probe could not parse would lose more than a full disk.
-      if (!Number.isFinite(need) || !Number.isFinite(free)) return null;
+      if (need === undefined || free === undefined || !Number.isFinite(need) || !Number.isFinite(free)) return null;
 
-      if (free >= need) return null;
-
-      return `staging ${sourceDir} needs up to ${need} bytes and ${stageDir} has ${free} free.`;
+      return { need, free };
     },
     statBytes: async (path: string): Promise<number | undefined> => {
       const raw = (await exec(`stat -c %s ${shellPath(path)} 2>/dev/null || echo ''`)).stdout.trim();
@@ -1396,29 +1252,33 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return await attachStored(state);
   };
 
-  /** Returns what the store then holds; `tmpStaged` means the archive sits on tmpfs. */
-  const publishStagedArchive = async (
+  /** Bytes never reach this isolate (D57). Record what the store holds, checked against what the
+   *  container sent, and only once it reads back as a squashfs (D54). */
+  const streamAndPut = async (
     key: string,
-    staged: string,
-    storeHeld: boolean,
-    tmpStaged: boolean,
+    sourceDir: string,
+    excludes: readonly string[],
+    /** The store mount is already held by this checkpoint; the SDK refuses a second mount
+     *  at one path (see {@link mountStoreOnce}). */
+    storeHeld = false,
   ): Promise<ChainLayer> => {
     // The mount is required though no byte goes through s3fs: its registration routes
     // `r2.internal` to the bucket, and it serves the layers' reads for the container's life.
     if (!storeHeld) await mountStoreOnce();
     const objectUrl = ports.storeObjectUrl(key);
-    const published = await shell.publishArchive(staged, objectUrl);
+    const room = await shell.stageRoom(sourceDir, excludes);
+    const onDisk = room === null || room.free >= Math.min(room.need, 2 * STREAM_WINDOW_BYTES);
+
+    if (!onDisk) ports.log(`${stageDir} has ${String(room.free)} bytes free; streaming ${sourceDir} through ${tmpStageDir}.`);
+
+    const published = await shell.streamArchive({
+      sourceDir, archivePath: `${onDisk ? stageDir : tmpStageDir}/layer.sqsh`, excludes, objectUrl,
+      windowBytes: onDisk ? STREAM_WINDOW_BYTES : PLATFORM_TMPFS_BYTES / 4,
+    });
+
+    if (!onDisk) await ports.exec(`rm -rf ${shellPath(tmpStageDir)}`);
+
     const landed = await ports.objectFacts(key);
-
-    if (tmpStaged) {
-      try {
-        const removed = await ports.exec(`rm -rf ${shellPath(tmpStageDir)}`);
-
-        if (removed.exitCode !== 0) ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${removed.stderr.trim()}`);
-      } catch (error) {
-        ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${describe({ cause: error })}`);
-      }
-    }
 
     if (landed === undefined) {
       throw new DevboxError("io", `the container published ${key} to ${objectUrl} and the store holds no `
@@ -1433,28 +1293,6 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     await shell.layerReads(key);
 
     return landed;
-  };
-
-  /** Bytes never reach this isolate: the container stages the archive and PUTs it via egress.
-   *  Record what the store holds, checked against the container's re-read, not the staged count. */
-  const stageAndPut = async (
-    key: string,
-    sourceDir: string,
-    excludes: readonly string[],
-    /** The store mount is already held by this checkpoint; the SDK refuses a second mount
-     *  at one path (see {@link mountStoreOnce}). */
-    storeHeld = false,
-  ): Promise<ChainLayer> => {
-    const archivePath = `${stageDir}/layer.sqsh`;
-    // Check room before archiving: a full disk kills the box mid-checkpoint; short disks stage in tmpfs.
-    // Staging stays on a filesystem because mksquashfs seeks back to its superblock at the end.
-    const short = await shell.stagingShortfall(sourceDir, excludes);
-    const staged = short === null ? archivePath : `${tmpStageDir}/layer.sqsh`;
-
-    if (short !== null) ports.log(`${short} Staging ${sourceDir} in memory at ${tmpStageDir} instead.`);
-    await shell.makeSquashfs(sourceDir, staged, excludes);
-
-    return await publishStagedArchive(key, staged, storeHeld, short !== null);
   };
 
   const runOpsBatched = async (doing: string, ops: readonly string[]): Promise<void> => {
@@ -1501,7 +1339,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (upperProbe.length === 0) return fallback('upper-empty', 'the probe listed nothing');
     // The package and hash scratch are bounded by the upper's own bytes, so a disk short of
     // those stages in tmpfs, as the whole-tree archive does.
-    const short = await shell.stagingShortfall(upperDir, ports.archiveExcludes());
+    const short = shortfallOf(upperDir, await shell.stageRoom(upperDir, ports.archiveExcludes()));
     const stageRoot = short === null ? stageDir : tmpStageDir;
 
     if (short !== null) ports.log(`${short} Staging the chunked delta in memory at ${tmpStageDir} instead.`);
@@ -1595,7 +1433,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     try {
-      return { kind: 'chunked', layer: await stageAndPut(deltaObjectKey(root, deltaId), pkgDir, [], storeHeld) };
+      return { kind: 'chunked', layer: await streamAndPut(deltaObjectKey(root, deltaId), pkgDir, [], storeHeld) };
     } finally {
       // The package lives in memory when the disk was short; it is released
       // whether or not the publication landed.
@@ -1779,7 +1617,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     let deltaFallback: DeltaFallback | undefined;
 
     if (fresh) {
-      layer = await stageAndPut(
+      layer = await streamAndPut(
         baseObjectKey(root, chainId), DEVBOX_WORKDIR, ports.archiveExcludes(), storeHeld,
       );
     } else {
@@ -1807,7 +1645,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         layer = chunked.layer;
       } else {
         deltaFallback = chunked.fallback;
-        layer = await stageAndPut(deltaObjectKey(root, deltaId), upperDir, ports.archiveExcludes(), storeHeld);
+        layer = await streamAndPut(deltaObjectKey(root, deltaId), upperDir, ports.archiveExcludes(), storeHeld);
       }
     }
 
@@ -2009,42 +1847,15 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   return { attach, checkpoint, discard };
 }
 
+/** Null when the directory's archive fits on the disk, or when the probe could not say. */
+function shortfallOf(sourceDir: string, room: { readonly need: number; readonly free: number } | null): string | null {
+  if (room === null || room.free >= room.need) return null;
+
+  return `staging ${sourceDir} needs up to ${String(room.need)} bytes and ${stageDir} has ${String(room.free)} free.`;
+}
+
 function shellPaths(paths: readonly string[]): string {
   return paths.map(shellPath).join(' ');
-}
-
-/** One command: a spot container can be replaced between execs, so build and stat must share one.
- *  Patterns travel as base64 so none becomes shell syntax; `-ef` carries non-anchored lines. */
-export function archiveCommand(input: {
-  sourceDir: string;
-  archivePath: string;
-  excludeFile: string;
-  excludes: readonly string[];
-}): string {
-  let bytes = '';
-
-  for (const byte of new TextEncoder().encode(archiveExcludeFile(input.excludes))) {
-    bytes += String.fromCharCode(byte);
-  }
-
-  const encoded = btoa(bytes);
-  const parent = input.archivePath.slice(0, input.archivePath.lastIndexOf('/'));
-
-  return `mkdir -p ${shellPath(parent)} && printf %s ${shellPath(encoded)} | base64 -d > ${shellPath(input.excludeFile)} `
-    + `&& /usr/bin/mksquashfs ${shellPath(input.sourceDir)} ${shellPath(input.archivePath)} `
-    + `-noappend -comp zstd -no-progress -wildcards -ef ${shellPath(input.excludeFile)} >/dev/null; `
-    + `rc=$?; printf '%s %s' "$rc" `
-    + `"$(stat -c %s ${shellPath(input.archivePath)} 2>/dev/null || echo 0)"`;
-}
-
-/** Not through s3fs, which cannot PUT in one attempt (D15); the script's HEAD fails the command
- *  before a record names an unstored object. */
-export function publishCommand(input: { archivePath: string; objectUrl: string }): string {
-  const script = `${DEVBOX_RUNTIME_DIR}/devbox-publish.mjs`;
-
-  return `mkdir -p ${shellPath(DEVBOX_RUNTIME_DIR)} && printf %s ${shellPath(PUBLISH_SCRIPT_B64)} | base64 -d > ${shellPath(script)}; `
-    + `out=$(bun ${shellPath(script)} ${shellPath(input.archivePath)} ${shellPath(input.objectUrl)} ${String(PUBLISH_PART_BYTES)} ${String(PUBLISH_PARTS_IN_FLIGHT)}); `
-    + `rc=$?; printf '%s %s' "$rc" "$out"`;
 }
 
 // Must match the archive's excludes: the `*/` `-path` form covers every depth; `-prune` skips

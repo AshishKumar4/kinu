@@ -4,7 +4,7 @@ import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
  * one on sampled turns until `decidePromotion` is conclusive.
  *
  * Trials are expensive, so a turn only enqueues into `scaffold_trial_queue`; the
- * cadence lane runs them (evolution/control.ts `runQueuedShadowTrials`). Queued
+ * cadence lane runs them (evolution/control.ts `runDueScaffoldEvaluations`). Queued
  * trials stay out of `scaffold_evaluations` so they never count toward `trialsSoFar`.
  *
  * Actor-scoped: `status = 'current'` is a per-actor pointer and `actor_id` is in
@@ -26,6 +26,7 @@ import { Effect } from 'effect';
 import { diagnostics, settle, toKinuError, KinuError } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
+import { markPromoted } from '../evolution/scaffold-scores';
 import { checkMisevolution, recordMisevolutionVeto } from '../safety/misevolution';
 import type { RunEventRecorder } from '../events/recorder';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
@@ -543,6 +544,7 @@ export function applyPromotionDecision(
             AND (version = ${pending.version}
                  OR (status = 'current' AND version != ${pending.version}))`;
       markStoreChanged(sql);
+      markPromoted(sql, rt.actor, pending.version);
       yield* Effect.promise(() => rt.identity.scaffold.write(pendingCode));
       yield* recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
 
