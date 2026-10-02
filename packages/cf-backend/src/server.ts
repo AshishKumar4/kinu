@@ -5,7 +5,8 @@
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { routeAgentRequest } from "agents";
-import { WorkerEntrypoint } from 'cloudflare:workers';
+import { tracing, WorkerEntrypoint } from 'cloudflare:workers';
+import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
 import { containerEventResolver, handleContainerEgress, handleContainerEvent, parseEgressParams, type KinuEgressParams } from './egress/outbound';
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
 import { diagnostics, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
@@ -93,6 +94,9 @@ export { DeployRunDO } from "./deploy/deploy-do";
 // SupervisorRPC comes from its declaring module, never `@nimbus-sh/sdk/worker`,
 // whose root composes a hosted fabric first (first-write-wins per isolate).
 export { SupervisorRPC } from "@nimbus-sh/worker/workspace-host";
+
+// Without it Nimbus records no span: only its own Worker entry adopts.
+adoptTracing(tracing);
 
 function authError(request: Request, e: AuthError): Response {
   if (e.status === 401 && wantsHtml(request)) {

@@ -16,7 +16,7 @@ import {
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { RouteableFacetTarget, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, SCRIPT_EXPORTS } from './helpers/programmatic-host';
+import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, HELD_NIMBUS_TASKS, SCRIPT_EXPORTS } from './helpers/programmatic-host';
 import { workerCompatibility } from '../vite-agent-bundle';
 
 type KernelVfs = ReturnType<Awaited<ReturnType<HostedWorkspace['bundle']['session']>>['vfs']['as']>;
@@ -113,6 +113,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const actor = actorObject();
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -150,6 +151,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     actor.database.run(`INSERT INTO workspace_identity (id, name, mission) VALUES ('w', 'Atlas', 'Help with testing.')`);
 
     return () => createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -307,6 +309,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const actor = actorObject();
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -333,6 +336,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const actor = actorObject();
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -351,6 +355,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const actor = actorObject();
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -376,6 +381,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const actor = actorObject();
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -401,6 +407,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     });
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -422,6 +429,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const actor = actorObject();
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       // Only the runtime catalogue bucket may be read, and none is bound here.
       env: workspaceBindings(),
@@ -438,6 +446,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const actor = actorObject();
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -461,6 +470,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const actor = actorObject();
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -494,6 +504,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     });
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -515,6 +526,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     let refusal: Refusal | null = null;
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx,
       env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
@@ -575,6 +587,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     let source = 'old';
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx, env: workspaceBindings(),
       previewUrl: async () => ({ url: 'https://preview.test/' }),
       ensureSlate: async () => {
@@ -608,6 +621,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const released: string[] = [];
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx, env: workspaceBindings(),
       previewUrl: async () => ({ url: 'https://preview.test/' }),
       ensureSlate: async () => null,
@@ -638,6 +652,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const renders: string[] = [];
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx, env: workspaceBindings(),
       previewUrl: async () => ({ url: 'https://preview.test/' }),
       ensureSlate: async () => null,
@@ -693,6 +708,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     Object.assign(actor.ctx.storage, durableStorage(kv));
 
     const activate = () => createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx, env: workspaceBindings(),
       previewUrl: async (_port, capability) => ({ url: 'https://preview.test/' + capability }),
     });
@@ -724,6 +740,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const asked: string[] = [];
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx, env: workspaceBindings(),
       previewUrl: async (_port, capability) => ({ url: `https://preview.test/${capability}/` }),
       // What the slate host answers for an owner that names no slate (`SlateHost.ensureDurable`).
@@ -756,6 +773,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     Object.assign(actor.ctx.storage, durableStorage(kv));
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx, env: workspaceBindings(),
       previewUrl: async (_port, capability) => ({ url: `https://preview.test/${capability}/` }),
     });
@@ -790,6 +808,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const redriven: string[] = [];
 
     const workspace = createHostedWorkspace({
+      tasks: HELD_NIMBUS_TASKS,
       ctx: actor.ctx, env: workspaceBindings(),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
       ensureSlate: async (owner) => {
@@ -812,6 +831,7 @@ test('a port that starts or stops listening is heard by the workspace, which re-
   let moved = 0;
 
   const workspace = createHostedWorkspace({
+    tasks: HELD_NIMBUS_TASKS,
     ctx: actorObject().ctx,
     env: workspaceBindings(),
     previewUrl: async () => ({ unavailable: 'no preview host in this test' }),

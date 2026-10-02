@@ -3,7 +3,7 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 
 
 import type { VfsMount } from '../vfs/mounts';
-import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
 import { BUILTIN_SKILL_FILES } from './builtins';
 import { compareSkillNames, listSkillFiles, resolveSkillFile, type SkillFile } from './discover';
@@ -18,12 +18,12 @@ type Located =
 /** `plane` is the agent's whole file plane, read per call. */
 export function skillsMount(plane: () => VFS): VfsMount {
   const encoder = new TextEncoder();
-  const absent = (path: string) => new VfsError('ENOENT', 'no such file or directory', `${SKILLS_VIEW}${path}`);
+  const absent = (path: string, syscall: string) => syscallError('ENOENT', syscall, `${SKILLS_VIEW}${path}`);
 
-  const readOnly = (path: string) => new VfsError('EROFS',
-  `${SKILLS_VIEW} is a read-only view of every skill; write one at ${WORKSPACE_SKILLS_DIR}/<name>/${SKILL_FOLDER_FILE}, `
-    + `or under ${SHARED_SKILLS_DIR} for the owner's Drive`,
-  `${SKILLS_VIEW}${path}`,);
+  const readOnly = (path: string, syscall: string) => syscallError('EROFS', syscall, `${SKILLS_VIEW}${path}`, {
+    detail: `${SKILLS_VIEW} is a read-only view of every skill; write one at ${WORKSPACE_SKILLS_DIR}/<name>/${SKILL_FOLDER_FILE}, `
+      + `or under ${SHARED_SKILLS_DIR} for the owner's Drive`,
+  });
 
   /** The skill a path names and the rest of the path; null for the root or an unknown name. */
   const locate = async (path: string): Promise<Located | null> => {
@@ -71,7 +71,7 @@ export function skillsMount(plane: () => VFS): VfsMount {
 
       const real = located?.kind === 'file' ? source(located) : null;
 
-      if (real === null) throw absent(path);
+      if (real === null) throw absent(path, 'open');
 
       return plane().readFile(real);
     },
@@ -79,7 +79,7 @@ export function skillsMount(plane: () => VFS): VfsMount {
       const located = await locate(path);
 
       if (located === null) {
-        if (path.split('/').some((segment) => segment !== '')) throw absent(path);
+        if (path.split('/').some((segment) => segment !== '')) throw absent(path, 'scandir');
         const names = [...Object.keys(BUILTIN_SKILL_FILES), ...(await listSkillFiles(plane())).map((file) => file.name)];
 
         return names.sort(compareSkillNames).map((name) => ({ name, type: 'directory' }));
@@ -87,14 +87,14 @@ export function skillsMount(plane: () => VFS): VfsMount {
 
       if (located.rest === '' && (located.kind === 'builtin' || located.file.folder === null)) return [{ name: SKILL_FOLDER_FILE, type: 'file' }];
 
-      if (located.kind === 'builtin' || located.file.folder === null) throw absent(path);
+      if (located.kind === 'builtin' || located.file.folder === null) throw absent(path, 'scandir');
 
       return plane().readdir(located.rest === '' ? located.file.folder : `${located.file.folder}/${located.rest}`);
     },
     stat,
-    async writeFile(path) { throw readOnly(path); },
-    async unlink(path) { throw readOnly(path); },
-    async mkdir(path) { throw readOnly(path); },
+    async writeFile(path) { throw readOnly(path, 'open'); },
+    async unlink(path) { throw readOnly(path, 'unlink'); },
+    async mkdir(path) { throw readOnly(path, 'mkdir'); },
   };
 
   // Skills live in the owner's Drive too.

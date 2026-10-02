@@ -4526,7 +4526,6 @@ const NO_QUEUE: PendingAction[] = [];
 
 const NO_JOBS: BackgroundJob[] = [];
 
-/** A build a job took, printing: its card shows the last lines its frames told. */
 const BUILD_LINES = [
   "$ bun run build",
   "resolving 412 packages",
@@ -4552,7 +4551,6 @@ function buildingJob(output: JobOutputTail): BackgroundJob {
   };
 }
 
-/** `lines` frames folded, as a page folds each `job_output` frame; `live=1` folds one more a second. */
 function useBuildingJob(): BackgroundJob {
   const params = new URLSearchParams(location.search);
   const live = params.get("live") === "1";
@@ -4568,7 +4566,6 @@ function useBuildingJob(): BackgroundJob {
   return buildingJob(buildTail(lines));
 }
 
-/** The whole workspace with the build printing in Work, as a desktop page shows it. */
 function JobStreamingFrame() {
   const building = useBuildingJob();
 

@@ -32,8 +32,9 @@ const DIST = join(CF_BACKEND, 'dist/kinu');
 
 export const GATE = 'worker-heap';
 
-/** 48.9 MB measured (header), plus room for the product to grow before this row asks why. */
-export const HEAP_AFTER_SETUP_BOUND_BYTES = 56_000_000;
+/** Measured 2026-10-02: 42.7 and 42.6 MB on lane/nimbus-014 2b6eb90d5 (Nimbus 0.14), 42.5 MB on integration 33d93e529
+ *  (0.13.1); plus the same 7 MB of room the 48.9 MB in the header had, for the product to grow before this row asks why. */
+export const HEAP_AFTER_SETUP_BOUND_BYTES = 50_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8

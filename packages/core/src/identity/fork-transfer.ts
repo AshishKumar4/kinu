@@ -172,6 +172,7 @@ type UnsealedForkSectionFrame =
 function pageJson(page: VfsExportPage): JsonObject {
   return {
     schema: page.schema,
+    source: page.source,
     root: page.root,
     nextIno: page.nextIno,
     after: page.after,

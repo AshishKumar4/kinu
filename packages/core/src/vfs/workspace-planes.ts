@@ -3,13 +3,12 @@
 import type { ForkFileSink } from '../identity/fork-sink';
 import type { ForkFileSource } from '../identity/fork';
 import type { ArchiveFileSource, ArchiveFileTarget, ArchivePinnedStore, ArchiveStoreSource, ArchiveStoreTarget } from '../identity/archive';
-import { SOUL_PATH, storeDurableSoulDb, summarizeSoul } from '../identity/soul';
+import { isWorkspaceSoul, storeDurableSoulDb, summarizeSoul } from '../identity/soul';
 import { tolerate } from '../obs/index';
 import { resealWorkspaceSoul, sealWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 import type { WorkspaceBundle, WorkspaceSession } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import type { CredentialedVfs, SqliteVFS, VfsExportPage, VfsStat } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
 type FileSessionSource = { session(): Promise<Pick<WorkspaceSession, 'vfs' | 'sql'>> };
@@ -175,7 +174,7 @@ export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarg
   const store = async (): Promise<SqliteVFS> => (await bundle.session()).vfs;
 
   return {
-    writeFile: async (path, data) => (normalizeVfsPath(workspacePath(path)) === normalizeVfsPath(workspacePath(SOUL_PATH))
+    writeFile: async (path, data) => (isWorkspaceSoul(path)
       ? await writeWorkspaceSoul(bundle, data)
       : await bundle.vfs.writeFile(path, data)),
     mkdir: async (path, opts) => { await bundle.vfs.mkdir(path, opts); },

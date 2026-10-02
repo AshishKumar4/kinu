@@ -7,7 +7,7 @@ import type { OutputSink, Shell } from '../types/primitives';
 import { collectExecStream, type ExecChunk, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
 import type { MountedVfs } from '../vfs/mounts';
 import { atVfsPath } from '../vfs/errno';
-import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
@@ -38,7 +38,7 @@ async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8
   const { box, files, path, offset, length, cred } = read;
 
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-    throw new VfsError('EIO', 'range offset and length must be positive safe integers', path);
+    throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
   }
 
   const absolute = workspacePath(path);
@@ -47,7 +47,7 @@ async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8
   if (native) {
     const bytes = await native.call(files, absolute, offset, length);
 
-    if (bytes === null) throw new VfsError('ENOENT', 'no such file or directory, open', path);
+    if (bytes === null) throw syscallError('ENOENT', 'open', path);
 
     return bytes;
   }
@@ -58,9 +58,9 @@ async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8
   });
 
   if (!result.success || result.exitCode !== 0) {
-    throw new VfsError('EIO',
-    `this file's bytes could not be read right now: try opening it again, or download it instead`,
-    path,);
+    throw syscallError('EIO', 'read', path, {
+      detail: `this file's bytes could not be read right now: try opening it again, or download it instead`,
+    });
   }
 
   return base64ToBytes(result.stdout.trim());
@@ -699,14 +699,14 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       if (files.readBytes) {
         const bytes = await atVfsPath(absolute, 'open', () => files.readBytes?.(absolute) ?? null);
 
-        if (bytes === null) throw new VfsError('ENOENT', 'no such file or directory, open', absolute);
+        if (bytes === null) throw syscallError('ENOENT', 'open', absolute);
 
         return bytes;
       }
 
       const content = await atVfsPath(absolute, 'open', () => files.read(absolute));
 
-      if (content === null) throw new VfsError('ENOENT', 'no such file or directory, open', absolute);
+      if (content === null) throw syscallError('ENOENT', 'open', absolute);
 
       return new TextEncoder().encode(content);
     },
@@ -736,7 +736,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       if (files.readlink) {
         const target = await atVfsPath(absolute, 'readlink', () => files.readlink?.(absolute) ?? null);
 
-        if (target === null) throw new VfsError('ENOENT', 'no such file or directory, readlink', absolute);
+        if (target === null) throw syscallError('ENOENT', 'readlink', absolute);
 
         return target;
       }
@@ -744,7 +744,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       // Like the `stat` fallback, a failed readlink reads as an absent link; its stderr says why.
       const r = await box.exec(`readlink -- ${shellQuote(absolute)}`, asCred(cred));
 
-      if (!r.success || r.exitCode !== 0) throw new VfsError('ENOENT', `readlink: ${r.stderr.trim()}`, absolute);
+      if (!r.success || r.exitCode !== 0) throw syscallError('ENOENT', 'readlink', absolute, { detail: r.stderr.trim() || undefined });
 
       return r.stdout.replace(/\n$/, '');
     },
@@ -774,7 +774,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
     async unlink(path) { await files.delete(workspacePath(path)); },
     async removeRecursive(path) { await files.delete(workspacePath(path), { recursive: true }); },
     async rename(from, to) {
-      if (!files.rename) throw new VfsError('EIO', 'Nimbus SDK handle does not expose rename', from);
+      if (!files.rename) throw syscallError('EIO', 'rename', from, { detail: 'Nimbus SDK handle does not expose rename', dest: to });
       await files.rename(workspacePath(from), workspacePath(to));
     },
     async mkdir(path, opts) {
@@ -787,7 +787,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       const r = await box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(workspacePath(path))}`, asCred(cred));
 
       if (!r.success || r.exitCode !== 0) {
-        throw new VfsError('EIO', `${r.stderr.trim() || 'operation failed'}, mkdir`, path);
+        throw syscallError('EIO', 'mkdir', path, { detail: r.stderr.trim() || undefined });
       }
     },
   };

@@ -77,7 +77,15 @@ export async function apiJson(origin: string, path: string, init?: RequestInit):
 
   if (!headers.has('content-type')) headers.set('content-type', 'application/json');
 
-  const response = await fetch(`${origin}${path}`, { ...init, headers });
+  // A fresh connection per call: Vite's Node server retires an idle keep-alive socket after 5 s, and Bun
+  // reuses the pooled one as it closes, so the next POST dies with ECONNRESET before its handler runs.
+  let response: Response;
+
+  try {
+    response = await fetch(`${origin}${path}`, { ...init, headers, keepalive: false });
+  } catch (error) {
+    throw new Error(`${init?.method ?? 'GET'} ${path} never got an answer${serverAccount(origin)}`, { cause: error });
+  }
 
   const text = await response.text();
 

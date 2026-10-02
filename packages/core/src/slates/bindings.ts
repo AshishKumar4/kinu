@@ -3,7 +3,7 @@ import { isJsonObject, JsonValueSchema, type JsonObject, type JsonValue } from '
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
-import { canonicalWorkspacePath } from '../vfs/workspace-path';
+import { workspaceScopePath } from '../vfs/workspace-path';
 import { isSlateMethodName } from './rpc';
 import type { SlateReadModel } from './read-models';
 import type { SlateBinding, SlateProject } from './project';
@@ -122,7 +122,7 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
 
   // Each call's first argument must resolve inside a declared prefix.
   if (binding.paths !== undefined) {
-    const prefixes = binding.paths.map(canonicalWorkspacePath);
+    const prefixes = binding.paths;
     const FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists'];
 
     if (!FILE_MEMBERS.includes(member)) {
@@ -130,13 +130,18 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
     }
 
     const named = v.safeParse(v.string(), args[0]);
-    const target = named.success ? canonicalWorkspacePath(named.output) : '';
+    const raw = named.success ? named.output : '';
+    const absolute = raw.startsWith('/') && !raw.split('/').includes('..');
+    const target = absolute ? workspaceScopePath(raw) : '';
 
-    if (!target.startsWith('/') || target.split('/').includes('..')
-      || !prefixes.some((prefix) => target === prefix || target.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))) {
-      return Effect.fail(new KinuError('denied',
-        `${name}.${member} names a path outside its prefixes: ${prefixes.join(', ')}`));
+    if (!absolute || !prefixes.some((prefix) => target === prefix || target.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))) {
+      return Effect.fail(new KinuError('denied', `${name}.${member} names a path outside its prefixes: ${prefixes.join(', ')}`));
     }
+
+    const forwarded = args.slice();
+    forwarded[0] = target;
+
+    return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args: forwarded });
   }
 
   return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args });

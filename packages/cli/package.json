@@ -23,7 +23,7 @@
   "devDependencies": {
     "@ai-sdk/provider": "3.0.12",
     "@kinu.run/test-utils": "workspace:*",
-    "@nimbus-sh/core": "0.13.1",
+    "@nimbus-sh/core": "0.14.0",
     "@types/react": "^19.2.14"
   },
   "scripts": {

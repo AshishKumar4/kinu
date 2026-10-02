@@ -154,6 +154,7 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
     browser?: string; project?: Record<string, JsonValue>; app?: { port: number } | null;
   }): Promise<void>;
   stop(): Promise<void>;
+  esbuildInThisIsolate(): Promise<boolean>;
   facetImages(): Promise<string[]>;
   call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
   socket(method: string, args?: JsonValue[]): Promise<{ ok?: boolean; value?: string; error?: string }>;
@@ -212,6 +213,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   portReservations(workspace: string): Promise<DurabilityReservation[]>;
   programOnWhiteboard(input: { workspace: string; owner: string; program: string }): Promise<string>;
   forgetActivation(workspace: string): Promise<void>;
+  pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
   drivePreview(url: string): Promise<PreviewAnswer>;
   rpcPreview(url: string, method: string, args?: JsonValue[]): Promise<RpcAnswer>;
   removeSlate(workspace: string, id: string): Promise<RemovedSlate>;

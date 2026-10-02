@@ -9,7 +9,7 @@ import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
-import { isVfsError, VfsError, VFS_ERRNO, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -809,8 +809,6 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
     return p.slice(p.lastIndexOf('/') + 1);
   };
 
-  const isErrnoCode = (code: string): code is VfsErrorCode => Object.hasOwn(VFS_ERRNO, code);
-
   const errnoOf = (cause: Error): VfsErrorCode | null => {
     if (isVfsError(cause)) return null;
     const visited = new Set<Error>();
@@ -822,13 +820,13 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
       if (!detail.success) continue;
       const { code } = detail.output;
 
-      return isErrnoCode(code) ? code : 'EIO';
+      return isVfsErrorCode(code) ? code : 'EIO';
     }
 
     return null;
   };
 
-  const serving = async <T>(path: string, op: () => Promise<T>): Promise<T> => {
+  const serving = async <T>(path: string, syscall: string, op: () => Promise<T>): Promise<T> => {
     try {
       return await op();
     } catch (cause) {
@@ -838,19 +836,16 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
 
       if (code === null) throw cause;
 
-      const error = new VfsError(code, `${cause.message} (on '${path}')`, path);
-      error.cause = cause;
-
-      throw error;
+      throw syscallError(code, syscall, path, { cause });
     }
   };
 
   return {
     async readFile(path) {
-      const result = await serving(path, () => handle.readFile(path, { encoding: 'base64' }));
+      const result = await serving(path, 'open', () => handle.readFile(path, { encoding: 'base64' }));
 
       if (result.exitCode != null && result.exitCode !== 0) {
-        throw new VfsError('ENOENT', `no such file or directory, open '${path}' (exit ${result.exitCode})`, path);
+        throw syscallError('ENOENT', 'open', path, { detail: `no such file or directory (exit ${result.exitCode})` });
       }
 
       return result.encoding === 'base64' ? base64ToBytes(result.content ?? '') : new TextEncoder().encode(result.content ?? '');
@@ -859,7 +854,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
     /** Bounded window via `dd` + base64; the SDK's `readFile` has no offset/length. Bounds validated before use. */
     async readRange(path, offset, length) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-        throw new VfsError('EIO', 'range offset and length must be positive safe integers', path);
+        throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
       }
 
       const r = await handle.exec(
@@ -867,18 +862,18 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
       );
 
       if ((r.exitCode ?? 0) !== 0) {
-        throw new VfsError('EIO', `${(r.stderr ?? r.output ?? '').trim() || 'range read failed'}, open '${path}'`, path);
+        throw syscallError('EIO', 'read', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
       }
 
       return base64ToBytes(r.stdout ?? r.output ?? '');
     },
 
     async writeFile(path, data) {
-      await serving(path, () => handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }));
+      await serving(path, 'open', () => handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }));
     },
 
     async readdir(path) {
-      const result = await serving(path, () => handle.listFiles(path, { recursive: false }));
+      const result = await serving(path, 'scandir', () => handle.listFiles(path, { recursive: false }));
 
       return (result.files ?? [])
         .map((entry) => ({ name: nameOf(entry), entry }))
@@ -897,7 +892,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
 
       const name = clean.slice(clean.lastIndexOf('/') + 1);
 
-      const listing = await tolerateAsync(() => serving(clean, () =>
+      const listing = await tolerateAsync(() => serving(clean, 'stat', () =>
         handle.listFiles(vfsDirname(clean), { recursive: false })), 'enoent');
 
       if (listing === undefined) return null;
@@ -908,13 +903,13 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
       return { size: entry.size ?? 0, mtimeMs: 0, type: isDir(entry) ? 'directory' : 'file' };
     },
 
-    async unlink(path) { await serving(path, () => handle.deleteFile(path)); },
+    async unlink(path) { await serving(path, 'unlink', () => handle.deleteFile(path)); },
 
     async mkdir(path, opts) {
       const r = await handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`);
 
       if ((r.exitCode ?? 0) !== 0) {
-        throw new VfsError('EIO', `${(r.stderr ?? r.output ?? '').trim() || 'operation failed'}, mkdir '${path}'`, path);
+        throw syscallError('EIO', 'mkdir', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
       }
     },
 

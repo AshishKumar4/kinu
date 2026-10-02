@@ -844,7 +844,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   const ownActorIdRef = useRef<string | null>(null);
   const [paneActorId, setPaneActorId] = useState<string | null>(null);
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
-  /** Each running job's output as its frames told it, from the tail the listing held when the first arrived. */
   const [jobOutputs, setJobOutputs] = useState<Readonly<Record<string, JobOutputTail>>>({});
   const listedJobs = useRef<BackgroundJob[]>([]);
   listedJobs.current = backgroundJobs;

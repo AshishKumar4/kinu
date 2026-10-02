@@ -34,7 +34,6 @@ function interruptionNote(job: BackgroundJob, now: number): string | null {
   return `Interrupted and re-driven ${times}. The work was not lost.${waiting}`;
 }
 
-/** The last lines a running job printed, as its frames told them. */
 function lastOutput(output: BackgroundJob["output"]): string | null {
   const lines = (output?.chunks ?? []).map(({ text }) => text).join("").replace(/\n$/, "").split("\n");
 
@@ -159,7 +158,6 @@ export interface BackgroundJobRowJob {
   readonly settledAt: number | null;
 }
 
-/** One job in Supervise's list, named as the card names it; `tone` is the dot's status class. */
 export function BackgroundJobRow({ job, tone }: { job: BackgroundJobRowJob; tone: string }) {
   const name = jobName(job);
 

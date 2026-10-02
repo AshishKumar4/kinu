@@ -7,12 +7,12 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { FileCheckpoints, FileReach, MountedVfs } from '@kinu.run/core';
-import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '@kinu.run/core';
-import { toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { SLATES_ROOT, WORKSPACE_ROOT, workspaceScopePath } from '@kinu.run/core';
+import { syscallError, toVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
 
-function throwVfsError(input: { error: unknown; path: string }): never {
-  throw toVfsError(input.error, input.path);
+function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
+  throw toVfsError(input.error, input.syscall, input.path);
 }
 
 function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): VFS {
@@ -26,7 +26,7 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
     async readFile(path) {
       try {
         return new Uint8Array(await fs.readFile(path));
-      } catch (error) { throwVfsError({ error, path }) }
+      } catch (error) { throwVfsError({ error, syscall: 'open', path }); }
     },
     async writeFile(path, data) {
       await snapshot(path, 'file write');
@@ -34,7 +34,7 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
       try {
         await fs.mkdir(dirname(path), { recursive: true });
         await fs.writeFile(path, data);
-      } catch (error) { throwVfsError({ error, path }) }
+      } catch (error) { throwVfsError({ error, syscall: 'open', path }); }
     },
     async readdir(path) {
       try {
@@ -44,7 +44,7 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
           return { name: entry.name, type: entry.isDirectory() ? 'directory' as const : 'file' as const };
         });
       }
-      catch (error) { throwVfsError({ error, path }) }
+      catch (error) { throwVfsError({ error, syscall: 'scandir', path }); }
     },
     async stat(path, options) {
       try {
@@ -54,39 +54,48 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
         const type = stat.isSymbolicLink() ? 'symlink' as const : 'file' as const;
 
         return { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDirectory() ? 'directory' : type };
-      } catch (error) { throwVfsError({ error, path }) }
+      } catch (error) { throwVfsError({ error, syscall: options?.follow === false ? 'lstat' : 'stat', path }); }
     },
     async unlink(path) {
       await snapshot(path, 'file delete');
 
       try { await fs.rm(path, { recursive: true, force: true }); }
-      catch (error) { throwVfsError({ error, path }) }
+      catch (error) { throwVfsError({ error, syscall: 'rm', path }); }
     },
     async mkdir(path, opts) {
       try { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }
-      catch (error) { throwVfsError({ error, path }) }
+      catch (error) { throwVfsError({ error, syscall: 'mkdir', path }); }
     },
   };
 }
 
-/** Relative paths and aliases (`/workspace`, `/home/main`, `/`, `/slates`) stay in the tree, or EACCES; any other
- *  absolute path is that host path. Not a sandbox. */
+/** The native directory wins over virtual home/slate paths. Other absolute paths name the host, not a sandbox. */
 function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: string; readonly outside: boolean } {
   const root = resolve(cwd);
 
   return (path) => {
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
 
-    // A real path inside the directory wins over every alias.
-    if (withinRoot(root, direct)) return { hostPath: direct, outside: false };
-    const inner = isAbsolute(path) ? planeRootRelative(path) : null;
+    if (isAbsolute(path) && withinRoot(root, direct)) return { hostPath: direct, outside: false };
+    const canonical = workspaceScopePath(path);
+    let mapped: string;
 
-    if (inner === null && isAbsolute(path)) return { hostPath: direct, outside: true };
-    const mapped = inner === null ? null : resolve(root, inner || '.');
+    if (canonical === '/' || canonical === WORKSPACE_ROOT) mapped = root;
+    else if (canonical.startsWith(`${WORKSPACE_ROOT}/`)) mapped = resolve(root, canonical.slice(WORKSPACE_ROOT.length + 1));
+    else if (canonical === SLATES_ROOT || canonical.startsWith(`${SLATES_ROOT}/`)) mapped = resolve(root, `.${canonical}`);
+    else return { hostPath: direct, outside: true };
 
-    if (mapped !== null && withinRoot(root, mapped)) return { hostPath: mapped, outside: false };
+    if (!withinRoot(root, mapped)) {
+      throwVfsError({
+        error: syscallError('EACCES', 'access', path, {
+          detail: `the path escapes the workspace directory ${root}; name a file outside it by its absolute path`,
+        }),
+        syscall: 'access',
+        path,
+      });
+    }
 
-    throw new VfsError('EACCES', `path escapes the workspace directory ${root}: ${path}; name a file outside it by its absolute path`, path);
+    return { hostPath: mapped, outside: false };
   };
 }
 
@@ -103,41 +112,36 @@ export function directoryFileReach(cwd: string | null, table: MountedVfs | null)
 
 /** The working directory as the file plane ({@link cwdPlaneLocator}). */
 export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
-  const host = createHostMountVFS(resolve(cwd), checkpoints);
-  const locate = cwdPlaneLocator(cwd);
+  const root = resolve(cwd);
+  const host = createHostMountVFS(root, checkpoints);
+  const locate = cwdPlaneLocator(root);
   const hostPath = (path: string): string => locate(path).hostPath;
+
+  const remove = (path: string) => {
+    const target = hostPath(path);
+
+    if (target === root) {
+      throwVfsError({
+        error: syscallError('EACCES', 'unlink', path, { detail: 'the workspace directory itself cannot be removed' }),
+        syscall: 'unlink',
+        path,
+      });
+    }
+
+    return host.unlink(target);
+  };
 
   return {
     readFile: (path) => host.readFile(hostPath(path)),
     writeFile: (path, data) => host.writeFile(hostPath(path), data),
     readdir: (path) => host.readdir(hostPath(path)),
     stat: (path, options) => host.stat(hostPath(path), options),
-    unlink: (path) => host.unlink(hostPath(path)),
+    unlink: remove,
+    removeRecursive: remove,
     mkdir: (path, opts) => host.mkdir(hostPath(path), opts),
   };
 }
 
-/** One table, so a new spelling cannot be honoured by only some operations: each root and the directory it names. */
-const PLANE_ROOTS: readonly (readonly [root: string, directory: string])[] = [
-  ['/', ''], [WORKSPACE_ROOT, ''], [LEGACY_WORKSPACE_ROOT, ''], ['/workspace', ''],
-  // The workspace's slates are the project's own.
-  [SLATES_ROOT, 'slates'],
-];
-
-function planeRootRelative(path: string): string | null {
-  for (const [planeRoot, directory] of PLANE_ROOTS) {
-    if (path === planeRoot) return directory;
-
-    // `/` names the root only: `/etc/passwd` is never `<cwd>/etc/passwd`.
-    if (planeRoot !== '/' && path.startsWith(`${planeRoot}/`)) {
-      const inner = path.slice(planeRoot.length + 1);
-
-      return directory === '' ? inner : `${directory}/${inner}`;
-    }
-  }
-
-  return null;
-}
 
 function withinRoot(root: string, candidate: string): boolean {
   const distance = relative(root, candidate);

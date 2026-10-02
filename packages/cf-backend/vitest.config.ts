@@ -374,6 +374,7 @@ export default defineConfig({
         }, {
           name: 'slate-egress-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
           modules: probeModules(slateEgressProbe),
+          serviceBindings: { ASSETS: nimbusAssets },
           durableObjects: { SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', useSQLite: true } },
           // Final transport only: the actual CodemodeEgress policy and resident
           // global fetch run above this mock. No unmatched request reaches a network.
@@ -462,6 +463,7 @@ export default defineConfig({
           // `SlateBinding` resolves `env.OrchestratorAgent`, so the probe class is bound under that name too.
           name: 'slate-share-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
           modules: probeModules(slateShareProbe),
+          serviceBindings: { ASSETS: nimbusAssets },
           durableObjects: {
             SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', useSQLite: true },
             OrchestratorAgent: { className: 'SlateShareProbeDO', useSQLite: true },
@@ -569,6 +571,8 @@ export default defineConfig({
         // A miniflare service binding carries a WebSocket upgrade (measured 2026-09-16), so the chat
         // protocol runs in-pool.
         serviceBindings: {
+          // A slate's esbuild facet loads its adapter from ASSETS.
+          ASSETS: nimbusAssets,
           PUBLIC_SURFACE: { name: 'public-surface-probe' },
           HIRE_APP: { name: 'hire-probe' },
           // Node-side fake state is shared across workers; these entrypoints reset and read it.

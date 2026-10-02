@@ -76,6 +76,12 @@ const NAMED_SHELL_STATE = {
   cli: LAZY_ON_FIRST_USE("a named shell's first command"),
 } satisfies RootStatuses;
 
+const HOSTED_NODE_TRANSFORMS = {
+  'cf-orchestrator': LAZY_ON_FIRST_USE("a hosted node launch's first module transform"),
+  'cf-subordinate': { absent: "a subordinate's node runs through the workspace object's facet manager" },
+  cli: { absent: 'the local workspace has no facet manager or esbuild transform host' },
+} satisfies RootStatuses;
+
 const NO_LOCAL_INGRESS = 'a local workspace has no inbound HTTP transport, and `kinu triggers <name> webhook` refuses a local target';
 
 export const BACKEND_CONFORMANCE: ConformanceManifest = {
@@ -255,7 +261,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     agent_data_tables: EVERYWHERE,
 
     kinu_workspace_generation: NIMBUS_BASE,
-    // What @nimbus-sh/core 0.13.1 creates; additions signal a storage contract change.
+    // What @nimbus-sh/core 0.14.0 creates; additions signal a storage contract change.
     // NimbusWorkspace.destroy() drops the vfs_* tables.
     vfs_state: NIMBUS_BASE,
     vfs_inodes: NIMBUS_BASE,
@@ -284,6 +290,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     nimbus_storage_ledger: NIMBUS_BASE,
     nimbus_storage_reservation: NIMBUS_BASE,
     nimbus_facet_storage: NIMBUS_BASE,
+    // Nimbus 0.14's transform store: the workspace object's facet manager caches a node launch's module transforms,
+    // charged to the storage ledger and bounded at 64 MiB (worker dist facets/transform-store.js).
+    nimbus_transform_results: HOSTED_NODE_TRANSFORMS,
+    nimbus_transform_result_parts: HOSTED_NODE_TRANSFORMS,
+    nimbus_transform_store: HOSTED_NODE_TRANSFORMS,
     actor_subordinates: {
       'cf-orchestrator': WIRED,
       // SubordinateRosterStore creates it on first read.

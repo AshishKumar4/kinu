@@ -18,7 +18,7 @@ import type { PortReservationTransaction } from '@nimbus-sh/worker/port-capabili
 import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
-import type { WorkspaceHostTarget } from '../../src/workspace-host';
+import type { HostedWorkspaceDeps, WorkspaceHostTarget } from '../../src/workspace-host';
 import { noEntrypoints, workerContext } from './bindings';
 
 export type DurableState = Map<string, unknown>;
@@ -300,6 +300,12 @@ const noFacetLoader = Object.assign(
   { get: (): never => { throw new Error('no suite over this host spawns a facet'); } },
   { load: (): never => { throw new Error('no suite over this host spawns a facet'); } },
 );
+
+/** Nimbus's tasks held as an alarm holds them: none runs until a test calls `onScheduled`. */
+export const HELD_NIMBUS_TASKS: HostedWorkspaceDeps<string>['tasks'] = {
+  schedule: async () => undefined,
+  cancel: async () => undefined,
+};
 
 /** Composed once per test isolate: first write wins. */
 let fabricComposed = false;

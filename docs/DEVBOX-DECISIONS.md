@@ -2636,35 +2636,187 @@ the crash after each round restored that round's new state, 5 of 5
 
 Image `ea5d88ee…`, sync.js `cf631788…`.
 
-D55. Full-disk snapshots against today's chain, head to head under R1 and R2
-(2026-10-01; the measurements are in progress). The owner's refinement of
-D53: DirectoryBackup is out, because its fallback downloads everything
-(72 to 401 s at 10 to 17.5 GiB, and the 30 s gate cut it off 10 of 10), which
-breaks R2. Two candidates remain:
-- The chain alone, with its 10 GiB save defect fixed.
-- Snapshot-first, with the chain as its only fallback.
+D55. The hybrid: platform snapshots are the primary save and wake, and the
+chain is the R2 backup, on `cloudflare/debian-trixie` with a golden snapshot
+(the owner's design, approved 2026-09-30 in m1889, m1890 and m1902, and
+restated 2026-10-02). This is not a contest between snapshots and the chain.
+An earlier version of this entry framed it as one, with a bar for replacing
+the chain; that framing was wrong and is withdrawn (git history keeps it).
 
-Snapshots replace the chain only if they are much more performant. The bar
-below was set and committed before any head-to-head figure was taken. It
-compares medians of at least 5. Snapshot-first replaces the chain only if
-all of these hold:
-1. At 10 GiB and at 17.5 GiB of random data, with 1 and with 5 boxes at
-   once: wake to first exec, the first 256 MiB read and the whole read are
-   each at least 3x faster than the chain's.
-2. Its checkpoint, a snapshot, is no slower than the chain's checkpoint after
-   a small edit and after 100 MiB, at every size; its base save is no slower
-   than the chain's base save. Its quiesce also writes the chain, so the
-   fallback is never older than the last quiesce; that cost is reported
-   beside it.
-3. On the realistic workspace (a clone of `microsoft/vscode` with a Next.js
-   app's `node_modules`), no figure in 1 or 2 reverses.
-4. With 20 boxes at once, its slowest tenth of wakes is no slower than the
-   chain's slowest tenth.
-5. Each snapshot failure costs no more than detecting it plus the chain's
-   own wake, and none loses work silently. The failures are a slow
-   placement, a lost id, a start that never runs, and a missing or expired
-   snapshot.
-If any of these fails, the chain stays (R3).
+The design:
+- Base image. `cloudflare/debian-trixie`, pinned by digest. Cloudflare
+  distributes and prepares it on eligible hosts before requests arrive
+  (blog.cloudflare.com/faster-agent-sandboxes). Our own Ubuntu image
+  (`block-lower/Dockerfile`) is downloaded by every new host, and every
+  image change makes Cloudflare prepare it again for 12 to 20 minutes
+  (D57).
+- Golden snapshot. One container starts from the base image and installs
+  Kinu's tools by exec: squashfuse, fuse-overlayfs, s3fs, devbox-block-lower,
+  sync.js, the sandbox shim, bun, tmux, git and the egress CA trust. It is
+  then saved with `snapshotContainer()`, and every new box starts from that
+  snapshot. A tool change rebuilds the golden snapshot instead of an image,
+  and it is rebuilt before its 30-day life ends. This also removes the
+  obstacle that set trixie aside: our binaries could not take it as a
+  Docker `FROM` base, but an exec can install them.
+- The workspace lives on the container's disk, not behind FUSE. A snapshot
+  then captures it whole, and a wake from one serves it at disk speed: on a
+  chain-mounted box the snapshot holds only the overlay's upper, and the
+  attach redoes the chain's work on every wake (D51's hybrid probe).
+- Per-box snapshots are the primary save and wake, for saves in a session
+  and for wakes.
+- The chain is the backup. It is packed from the disk and written to R2, so
+  an image change, an expired snapshot or a lost snapshot id still recovers
+  exactly, inside the start gate (R1, R2).
+
+What decides it, measured before building (n>=5 per figure, Medium, the
+durable_object policy):
+1. Whether `cloudflare/debian-trixie` carries what Devbox's native
+   `ctx.container` path needs, and what the golden snapshot must add. Native
+   exec runs on it with no shim (first exec 72 ms median, n=4, against
+   363 ms on our Ubuntu image, `bench-artifacts/image-start/`); the
+   sandbox shim, which `Files` and `S3Mount` use, is not in it.
+2. A fresh box's wake from the golden snapshot, 20 boxes at once: the first
+   wave after the snapshot is made, and later waves.
+3. A per-box snapshot's wake, 20 at once at 10 GiB, with its slow tail. The
+   earlier 20-at-once runs had wakes of 14 s, 16 s and 351 s.
+4. The long-session row: a dev server running from `/workspace`, a ~500 MB
+   install, then 10 small edits, each saved with a snapshot. Reported per
+   save: bytes, time, and the pause the box sees; then exactness after a
+   wake.
+5. How the chain backup is written from the disk without a cumulative delta,
+   and how fresh it is when a snapshot is lost.
+
+Already measured, on our Ubuntu image (2026-10-02, run `h5510020546ses2`):
+the long-session row for both save paths. With an npm install of next,
+react, typescript, eslint, vite and @swc/core in place:
+- a snapshot saved each 3 KiB edit in 2.8 s median (2.3 to 3.1, n=10) as
+  about 10 KB. The container paused 0.75 s median (0.51 to 0.99) during
+  each save, measured as the longest gap of a 50 ms ticker;
+- the chain's tick, with its excludes turned off so that it kept every
+  path as a snapshot does, republished the whole upper on each edit: 145 MB
+  in 10.7 s median (10.2 to 11.1, n=10), with no pause (ticker gap 61 ms).
+  D61 explains why: a tick never reseats, because a reseat unmounts
+  `/workspace`. With the product's excludes (`CHAIN_EXCLUDES`:
+  `node_modules`, `.cache`, `.next`, `dist`, `target`, `.venv`, `*.log` and
+  others) an install never enters the chain. Through the real 5-minute sync
+  loop on a live box, the install saved as 28,672 bytes and the 10 edits as
+  28 to 57 KB each, in 1.1 to 2.2 s (`bench-artifacts/reseat-holders/
+  session-live.log`). The cumulative republish remains for what the excludes
+  keep, such as a clone's `.git`, its sources and data.
+Both woke exact: the chain in 4.2 s, the snapshot in 1.2 s. On a workspace
+on the disk there is no upper, so the chain backup needs its own record of
+what changed (item 5).
+
+The chain's root delta, for when the whole filesystem must come back from R2
+(run `r5510020601b`, n=5 each, through the real Devbox). A setup of
+build-essential, python3-pip, typescript and requests changed 5,519 files
+(331 MB). Packed as one squashfs, it was 127 MB: 3.8 s to pack and 9.8 s to
+upload. Applied after a wake on a fresh container:
+- eagerly (unsquashfs onto `/`) in 3.6 s median (3.3 to 5.9), with the first
+  use (gcc, tsc, requests) in 0.76 s;
+- lazily (squashfuse from the store, one fuse-overlayfs per top-level
+  directory) in 1.4 s median (1.2 to 2.1), with the first use in 1.54 s.
+Every application worked, and the box had no gcc before it.
+
+Measured on 2026-10-02, on throwaway Workers on Medium, the durable_object
+policy (`bench-artifacts/storage-designs/g55.ts`; runs `g5510020614a`,
+`g5510020615b`, `g5510020705c` and `g5510020758e`):
+
+1. What trixie carries. Debian 13 with node 24.20.0, apt, `/dev/fuse` and
+   the capabilities FUSE needs. Native exec runs on it with no shim, so
+   Devbox's `ctx.container` path works as it stands: a first start reached
+   its first exec in 115 and 178 ms. It lacks bun, git, tmux, tini, s3fs,
+   fuse-overlayfs, the squashfs tools, zstd, curl, python3, the sandbox
+   shim and a CA bundle, and `Files` fails without the shim. The golden
+   snapshot adds them all:
+   - apt installs the Debian packages. Our binaries come in as one 30 MB
+     tarball, piped from R2 into an exec's stdin in under 1 s. They are
+     block-lower and the shim (both static), squashfuse (glibc and libfuse2,
+     which runs on trixie), bun and sync.js.
+   - Each build was checked in its own container: squashfuse and
+     fuse-overlayfs mount and read, `Files` goes through the shim, and bun
+     and node run.
+   - A build took 22.1 s median (20.7 to 31.2, n=7), of which apt took
+     16.7 s. Its snapshot took 6.3 s and holds 148 MB.
+2. Fresh boxes from the golden snapshot, 20 at once. The first wave, made
+   six minutes after the snapshot, so most hosts could not have had it,
+   reached its first exec in 0.27 s median (0.20 to 0.53, n=20). A wave on
+   20 new objects took 0.27 s (0.20 to 0.41, n=20). Every box had its tools,
+   and `Files` worked in all 50 of the boxes that started. When the same 20
+   objects were destroyed and started again at once, 10 of the 20 starts
+   were refused with "Container acquisition rate limits exceeded"; the
+   other 10 came up in 1.46 s (0.57 to 2.99). Host placement cannot be
+   observed from inside a box, so "a host that has it" is not separable
+   from these figures.
+3. A per-box snapshot at 10 GiB, 20 boxes at once. Each save took 126 s
+   median (96 to 176, n=20) and recorded 10.74 GB. Wakes from those
+   snapshots took 1.31 s median (0.20 to 53.0, n=59), with p90 3.1 s.
+   - 4 of the 59 wakes took 30.7, 31.8, 52.6 and 53.0 s. One more start
+     failed with "Network connection lost".
+   - The first 256 MiB read in 0.33 s, and the whole 10 GiB in 16.5 s
+     (11.7 to 21.2). All 19 full reads were exact.
+4. The long session on the golden snapshot. A node server ran from
+   `/workspace/app` throughout, and it answered 200 before and after a
+   snapshot. The npm install was 420 MB in 12,132 files. Then came 10 edits
+   of 3 KiB each, every one saved with a snapshot; n=40 over four sessions.
+   - The install's save took 6.5 to 9.2 s and recorded 366 to 390 MB.
+   - Each edit's save took 3.0 s median (2.5 to 3.6) and recorded 10 KB
+     (7 to 14 KB).
+   - Every save paused the container: the ticker's longest gap was 725 ms
+     median (452 to 1,014), and exec answers through the object waited up
+     to 700 ms. A dev server cannot answer during that pause.
+   - Every wake from the last save was exact, in 0.84 to 1.88 s.
+   (The sessions' own liveness check read the exec's shell instead of the
+   server and reports it gone; the separate check above is the evidence.)
+5. The chain backup packed from the disk (`chain.mjs`). It walks the tree's
+   metadata and hashes the 16 KiB blocks of changed files, so each save holds
+   only what changed since the last save. The base also carries a block
+   index. Measured with a ticker running:
+
+   | Workspace | Base save | Save after a small edit | Save after 100 MiB | Full restore |
+   | --- | --- | --- | --- | --- |
+   | Clone of vscode with Next.js `node_modules`, 761 MB, 38,832 files | 27.0 s, 261 MB (18.5 s of it the block index) | 1.75 s (1.72 to 1.87), 11 KB | 3.5 s (2.8 to 4.3), 105 MB | 18.6 s (15.6 to 23.5), 3 of 3 exact |
+   | 6 GiB of random data | 86.0 s, 6.46 GB | 0.94 s (0.89 to 1.60), 66 KB | 2.9 s (2.4 to 4.6), 105 MB | 114.5 s (93.5 to 154.4), 3 of 3 exact |
+
+   n=5 for each save and n=3 for each restore. No save paused the box:
+   the ticker's longest gap was 53 to 59 ms. At 10 GiB the prototype failed,
+   because it stages the whole base on the disk; the product's streamed
+   base (D57, D58) saves 10 GiB in 219 s on one box.
+
+The second quiesce with a holder the release cannot keep down: through the
+product's own loop (run `sbs10020600nsess3`), a respawner whose cwd is `/`
+restarted a server in `/workspace` whenever it died. Two stops in a row both
+succeeded, in 962 and 488 ms. A rest unmounts nothing: the commit runs, then
+the container stops, and that ends every process. Only a first base's
+reseat needs `/workspace` unheld (D61).
+
+What the measurements decide:
+- Build on `cloudflare/debian-trixie` with the golden snapshot. The image
+  needs no shim for native exec, the tools install in about 22 s, and boxes
+  start from the snapshot in 0.27 s, 20 at once.
+- Per-box snapshots are the primary wake: 1.3 s median at 10 GiB, and the
+  whole tree on the disk.
+  - The tail must be bounded. 4 of 59 wakes took 30 to 53 s, so a wake
+    that has not reached its first exec in 10 s should be cut over to the
+    chain's lazy wake (about 4 s at 10 GiB, D57). The worst case is then
+    about 15 s.
+  - A refused start ("rate limits exceeded") is retried with backoff.
+- In-session snapshot saves cost a pause the user can feel, 0.45 to 1.0 s
+  per save. Take them when the box is quiet (no exec running, no input),
+  and at the rest.
+- The chain backup is written from the disk as deltas since its last
+  write, with no pause, at every save. That bounds what a lost or expired
+  snapshot costs to one save period: a recovery serves the newer of the
+  snapshot and the chain, and its notice says to what time it restored.
+  The chain excludes `node_modules` and caches, so a recovery from the
+  chain alone names the excluded folders that need rebuilding.
+- Recovery from the chain stays lazy inside the gate. A full restore took
+  18.6 s at 761 MB but 93 to 154 s at 6 GiB, past the 30 s gate (R2). So
+  the fallback mounts the base and the deltas from R2 as today's attach
+  does, then copies the tree down to the disk in the background.
+- The deltas are compacted into a new base at the rest once they outgrow a
+  share of it. With the workspace on the disk, that is a repack of the
+  disk: no overlay to reseat and no holders to stop.
 
 D56. The box decides its own rest from its own use; the workspace neither
 asks nor tells it (2026-10-01, corrected the same day). This replaces D35's
@@ -2816,6 +2968,97 @@ Platform time on a new image: the first deploy of `a41e4a11…` polled
 17:00:43Z) before it was stopped. The retry polled 179 times in 7 minutes
 (17:01:49 to 17:08:49Z), then deployed. That is about 20 minutes, which any
 deploy of a new image may pay.
+
+D58. A chain layer packs at zstd level 1 and uploads sixteen 16 MiB parts at
+once (2026-10-01). D57 left a large base bound by its upload: about 13 MiB/s a
+box, with four 5 MiB parts in flight. That put a 10 GiB save near or past the
+platform's 900 s alarm cut, and a flush past it is delivered twice. D53's E′
+shape (zstd level 1, sixteen 16 MiB parts) saved a 224 MiB base in 4.3 s,
+against 11.9 s for E.
+
+The change (`stream-archive.ts`):
+- mksquashfs packs at `-Xcompression-level 1`. Its zstd default is level 15
+  (mksquashfs 4.6.1 in the image).
+- A layer staged on disk streams as 16 MiB parts, 16 in flight, with a
+  512 MiB window. So the disk path now needs up to 1 GiB free, twice the
+  window; with less, the layer streams through tmpfs.
+- A layer staged on the platform's 64 MiB tmpfs keeps 5 MiB parts, R2's
+  least, two in flight, in a 16 MiB window.
+
+Before and after ran on the same fixtures, all but one sample in the same
+hours: Medium boxes, random data, internet off, the durable_object policy. The
+images were
+`648726e8…` (sync.js `22c7f1af…`) and `daefe832…` (sync.js `2171d5f4…`),
+pinned through `BENCH_IMAGE_DIGEST`. Each figure is the median (range, n) of
+the save's time at the driver. "Five at once" means five boxes saving
+together. The two lanes ran side by side, so up to ten boxes saved at once.
+
+| Base save | Before | After | Per box, before → after |
+|---|---|---|---|
+| 224 MiB, one box | 24.7 s (23.3 to 29.2, n=5) | 16.4 s (15.0 to 18.4, n=5) | 9 → 14 MiB/s |
+| 2 GiB, one box | 193.8 s (173.7 to 208.7, n=5) | 52.9 s (42.9 to 53.0, n=5) | 11 → 39 MiB/s |
+| 2 GiB, five at once | 158.9 s (153.5 to 198.7, n=5) | 133.5 s (53.0 to 143.5, n=5) | 13 → 15 MiB/s |
+| 10 GiB, one box | 974.3 s (751.6 to 989.7, n=5) | 219.1 s (173.8 to 234.1, n=5) | 11 → 47 MiB/s |
+| 10 GiB, five at once | 1,010.4 s (964.3 to 1,315.9, n=5) | 380.0 s (269.4 to 420.1, n=5) | 10 → 27 MiB/s |
+
+Every save committed, and every record held the whole base. Random data does
+not compress, so level 1 stored 4 KiB more at each size: 2,147,504,128
+against 2,147,508,224 bytes at 2 GiB, and 10,737,442,816 against
+10,737,446,912 at 10 GiB. Every before-lane 10 GiB save run alongside other
+boxes took longer than 900 s and was delivered twice. Each second delivery
+reported the commit it waited behind (D57's fix), so the records stayed
+correct. The one before-lane sample run with no other box saving took 752 s,
+which is the low end of its row.
+
+The level costs bytes on data that compresses. On this host, packing the
+repository's `node_modules` (1,948,715,012 bytes in 121,250 files) with
+`-processors 2`, as a Medium box has two CPUs, n=3 each with identical sizes:
+the default level packed 465,465,344 bytes in 81 to 84 s; level 1 packed
+566,403,072 bytes in 2.1 to 2.4 s. That is 22% more stored, at about 40 times
+the pack speed. At the default level such a base packs at about 23 MiB/s,
+which is below the 39 to 47 MiB/s one box now uploads. This host's CPUs are
+not the container's, so the ratio is the finding, not the times
+(`bench-artifacts/save-speed/zstd-levels-node-modules.log`).
+
+Five boxes at once still share the upload. After the change, 2 GiB at five
+at once ran at 15 MiB/s a box against 39 alone, and 10 GiB at 27 against 47.
+What bounds the shared rate is not established here; the boxes, the account
+and R2 are each candidates.
+
+fuse-overlayfs is not what bounds a save. A first base packs `/workspace`
+through the overlay (a delta packs the upper on disk), so each save was
+preceded by a read of the same tree both ways: a `tar` after a cache drop the
+container may refuse (`designA.ts`, `SBS_A_READ_PROBE`). At 2 GiB, which fits
+in the box's 8 GiB of memory, the overlay read 1,809 MiB/s against 1,879 from
+the disk (one box, before). At 10 GiB the overlay read 155 MiB/s (137 to 172)
+against 270 (250 to 279) from the disk, one box after the change, and 129
+(113 to 222) against 208 (188 to 351) at five boxes. Both are well above what
+the save reached, 47 and 27 MiB/s a box.
+
+The 224 MiB rows come from the phases probe. As in D57's small runs, its base
+save reports "committed, but reseating it failed: ... /workspace: Device or
+resource busy" on both images. The commit lands before the reseat, and the
+time is the commit's. D61 traces the cause: the probe's own sampler, whose
+cwd is `/workspace`.
+
+Tests: `stream-script.test.ts` runs the shipped script with its own small
+profile (5 MiB parts, four in flight, 40 MiB window), so a test archive spans
+many windows. The chain's tests use `DISK_STREAM`, and the strategy model
+holds the platform's 64 MiB tmpfs as its own fact. Image `daefe832…`, sync.js
+`2171d5f4…`, re-pinned in `upstream.json` and the three wranglers. devbox
+suite: 524 pass.
+The bench's `BENCH_IMAGE_DIGEST` (`1cca04102`) runs another pushed digest of
+the same repository. Runs: `bench-artifacts/save-speed/` (`lane.sh`, `one.sh`,
+`table.py`; the 224 MiB rows in `small-*.log`); every Worker, app and bucket
+was deleted. The before lane's 10 GiB one-box row took three runs:
+- The first failed at its first request, which got a 404 page from the new
+  Worker's address.
+- The rerun (`one.sh`) saved four boxes; its first save overlapped the after
+  lane's last. A host restart cut it during the fifth box, and its Worker,
+  app and bucket were deleted by hand.
+- The fifth sample ran alone on 2026-10-02 at about 03:55Z. The first try
+  failed the same way, its Worker and app were deleted by hand, and the
+  retry saved.
 
 D59. A box idle long enough to rest, with anything still running in it,
 asks its agent and holds until the agent answers (2026-10-01). Before this:
@@ -2975,6 +3218,76 @@ code without breaking a rule:
   The beat still has to run for the quiet window and the ask, so the watch
   would add a path and remove none.
 So the timeout stays a backstop that only fires when the beat itself stops.
+
+D61. A quiesce releases a process that maps the work directory; the
+reseat refusal D57 and D58 saw is the bench's own (2026-10-02). After a
+quiesce commits a first base, it reseats `/workspace`: it unmounts the
+overlay, mounts the base as the lower and starts an empty upper. While
+anything holds `/workspace`, the unmount is refused, the outcome is "committed,
+but reseating it failed", and the quiesce fails. In production the holders
+that matter are a dev server and a terminal shell, so this entry measures what
+the reseat does with each.
+
+The bench's refusal. The phases probe records, just before each commit, every
+process holding `/workspace` by its cwd, an open fd or a mapping
+(`side-by-side/phases.ts`). Live (run `sbs10020448nrspws`, image `daefe832…`,
+n=2), the holders were the probe's sampler (`bash /tmp/phase-sampler.sh`), the
+sampler's `sleep`, and the probe's own scan, all with their cwd in
+`/workspace`. Both commits failed the reseat. The bench drives that commit
+through `POST /checkpoint`, which calls `checkpointNow('quiesce')`. That is a
+commit without the quiesce's holder release. In the product only the bench
+calls `checkpointNow`; the heartbeat calls `quiesce()`, which releases holders
+first. With the sampler started from `/` instead (`sbs10020521nrsproot3`,
+n=2), both commits reseated and committed 234,885,120 bytes. The only process
+listed was the probe's own scan, which exits before the commit.
+
+What the product does, measured in the image with a real fuse-overlayfs at
+`/workspace`. The image's own sync.js ran against a box and store served
+inside the container (`bench-artifacts/reseat-holders/run.ts`, as
+`concurrent-flush-image.test.ts` does). The workspace held 64 MiB of random
+data and 40 small files; then came a first base and two 4 KiB edits.
+
+| Holders, and the path | Reseat | Record exact | Upper after | The two edits moved |
+|---|---|---|---|---|
+| dev server and terminal shell, cwd in `/workspace`; quiesce (release, then commit) | ok, both holders stopped | yes | 0 B | 8,192 and 12,288 B (deltas) |
+| the same; commit only, as the bench does | refused (EBUSY) | yes | 67,109,215 B | 67,117,056 and 67,121,152 B (full rebases) |
+| the same plus a program run from `/workspace`, its cwd elsewhere; quiesce, before the fix | refused (EBUSY) | yes | 67,144,551 B | 67,129,344 and 67,133,440 B (full rebases) |
+| the same, after the fix | ok, all three stopped | yes | 0 B | 8,192 and 12,288 B (deltas) |
+
+The dev server is `python3 -m http.server` started in `/workspace`. The
+terminal shell is a tmux pane, as `terminal.ts` opens it: a tmux server
+started from `/`, with its pane's shell in `/workspace`. "Exact" means every
+file `/workspace` shows is in the recorded layers, and no layer holds a file
+it does not.
+
+So a refused reseat loses nothing: the base is durable before it, and every
+record stayed exact. Its cost is that the box keeps the old overlay, with the
+whole tree in the upper, which grows with every write and never shrinks. Each
+later commit then republishes the whole tree as a rebase, about 64 MiB for a
+4 KiB edit here. And the quiesce fails, so the box does not stop. What the
+next quiesce does with the holder still alive was not measured.
+
+The defect. The release found holders by cwd and by open fd only. A process
+whose binary or library comes from `/workspace` holds the mount through its
+mapping, with no fd open there and its cwd elsewhere: for example a dev server
+built into the workspace and started from `/`, or a native addon a server
+loads. The release said "none", the holder outlived it, and the reseat was
+refused. The scan now also reads `/proc/<pid>/maps` (`f5d992608`,
+`releaseWorkdirHoldersCommand`). `workdir-holders-image.test.ts` starts four
+holders in the image: a dev server and a terminal shell (cwd), a program run
+from `/workspace`, and a process with a library preloaded from it. It was red
+on `20804a4f0`: the last two survived the release and the unmount was refused
+(`bench-artifacts/reseat-holders/holders-red.log`). It is green now
+(`holders-green.log`). devbox suite: 539 pass.
+
+One image for both lanes. lane/devbox-rest-ask changed no file the image
+carries: its code runs in the Durable Object, and the sync bundle is unchanged
+at `2171d5f4…`. Built from the merged tree, the image is byte-identical to
+`daefe832…` (local image id `d8372d0b…` for both builds), so `daefe832…` stays
+the pin. Live on `f5d992608` (run `sbs10020453nmlive`, one Medium box, 2 GiB
+of random data): the base saved in 37.8 s and committed 2,147,508,224 bytes.
+The box woke twice, in 4.2 s and 3.1 s at the driver, both exact. The first
+256 MiB read in 11.1 s and 3.2 s, and the whole workspace in 41 s and 25 s.
 
 ## Measurement contract for a strategy comparison
 

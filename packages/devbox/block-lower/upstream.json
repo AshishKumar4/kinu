@@ -1,7 +1,7 @@
 {
   "date": "2026-10-01",
-  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:648726e8746acc9f8868649e6769cab0450bcb6a8390963cc436ace105d72148",
-  "digest": "sha256:648726e8746acc9f8868649e6769cab0450bcb6a8390963cc436ace105d72148",
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:daefe832d4698906d0d813a8011cd1ada60935149e01c382db541ab844ba741e",
+  "digest": "sha256:daefe832d4698906d0d813a8011cd1ada60935149e01c382db541ab844ba741e",
   "sandboxVersion": "1.0.0",
   "sandbox": "docker.io/cloudflare/sandbox@sha256:5bc187515bad0d9d486a4f1476f7d8ad39fe97c57965f044e4b0a0dcc93eac06",
   "rust": "docker.io/library/rust@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d",
@@ -14,7 +14,7 @@
     "devbox-block-lower": "ad76e1563916b158ba9f43a73bb784937fdb669893c84bac6bd86ffe79e41b9c",
     "devbox-squashfuse": "2c9f758b480621826d0d40d832512998b74c672fb5e7daaa6205d1e0b030df18",
     "sandbox-shim": "a2973893e48d9b80c4ea9d763affdb5ea0135c94ed467716c8e3a57add032d97",
-    "sync.js": "22c7f1affb7d058a0c60fb6c91188e371a586490b707a583bda59c860c3f516a"
+    "sync.js": "2171d5f4de54cc2c22eef71e6ea7437cccb04389286c27560040ec53e9688b94"
   },
   "files": {
     "Cargo.toml": "e1a269141da13953785f1fbaa6a18edb10cf644fdc9a710858ac02f31e426f83",
