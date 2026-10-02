@@ -211,6 +211,8 @@ export const DriveOnceInputSchema = v.object({
   model: v.string(),
   text: v.string(),
   seedFile: v.optional(v.object({ path: v.string(), content: v.string() })),
+  /** A workspace whose sleep-time wakes run inside this drive's recording window. */
+  sibling: v.optional(v.string()),
 });
 
 export type DriveOnceInput = v.InferOutput<typeof DriveOnceInputSchema>;

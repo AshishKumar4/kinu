@@ -3,6 +3,7 @@
 
 import * as acorn from 'acorn';
 import { renderThrownChain } from '../obs/index';
+import { CRAFTED_TOOL_BODY } from '../types/codemode';
 
 const ECMA: acorn.Options = { ecmaVersion: 'latest', sourceType: 'module', allowAwaitOutsideFunction: true };
 
@@ -113,8 +114,8 @@ function stripExports(program: acorn.Program, source: string): string {
 function refused(reason: string): CraftedSourceAdmission {
   return {
     ok: false,
-    error: `${reason}. Write the tool as \`async (args) => { ... }\`, \`async function name(args) { ... }\`, `
-      + 'or `const name = async (args) => { ... }`',
+    error: `${reason}. A tool body is ${CRAFTED_TOOL_BODY}; \`async function name(args) { ... }\` and `
+      + '`const name = async (args) => { ... }` work too',
   };
 }
 

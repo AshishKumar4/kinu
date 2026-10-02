@@ -5,9 +5,10 @@
 
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 import { join } from 'node:path';
@@ -27,6 +28,8 @@ interface DaemonMessage {
   readonly id: string;
   readonly method: string;
   readonly params: readonly (string | number)[];
+  /** The hub asks for the command's output while it runs. */
+  readonly output?: boolean;
 }
 
 interface ReplySocket { send(data: string): void }
@@ -35,6 +38,7 @@ const DaemonFrameSchema = v.object({
   id: v.string(),
   method: v.string(),
   params: v.array(v.union([v.string(), v.number()])),
+  output: v.optional(v.boolean()),
 });
 
 /** A dropped socket calls into `inFlight` directly, so disconnect is exercised without a real WebSocket. */
@@ -55,6 +59,7 @@ const PcAgentModuleSchema = v.object({
   CANCEL_METHOD: v.string(),
   CANCEL_PROTOCOL: v.number(),
   EXEC_ACK_METHOD: v.string(),
+  EXEC_OUTPUT_FRAME: v.string(),
   PTY_OPEN_METHOD: v.string(),
   PTY_INPUT_FRAME: v.string(),
   PTY_RESIZE_FRAME: v.string(),
@@ -63,6 +68,7 @@ const PcAgentModuleSchema = v.object({
   PTY_EXIT_FRAME: v.string(),
   requestDirectory: v.function(),
   supervisionSupported: v.function(),
+  processStartIdentity: v.pipe(v.function(), v.returnsAsync(v.string())),
   waitForFile: v.function(),
   waitForSupervisorState: v.function(),
 });
@@ -74,6 +80,7 @@ const SupervisorRegistrySchema2 = v.object({
 const SupervisorRegistrySchema = v.object({
   reconcile: v.pipe(v.function(), v.returnsAsync(RecoveredSchema)),
   cancel: v.function(),
+  result: v.function(),
   acknowledge: v.function(),
 });
 
@@ -101,6 +108,21 @@ const DaemonReplySchema = v.object({
 });
 
 type DaemonReply = v.InferOutput<typeof DaemonReplySchema>;
+
+/** The daemon's output frame as a hub reads it. */
+const OutputFrameSchema = v.object({
+  type: v.literal(pcAgent.EXEC_OUTPUT_FRAME),
+  request: v.string(),
+  chunks: v.array(v.object({ stream: v.picklist(['stdout', 'stderr']), data: v.string() })),
+  dropped: v.number(),
+});
+
+type OutputFrame = v.InferOutput<typeof OutputFrameSchema>;
+
+function outputText(frames: readonly OutputFrame[], stream: 'stdout' | 'stderr'): string {
+  return frames.flatMap((frame) => frame.chunks).filter((chunk) => chunk.stream === stream)
+    .map((chunk) => Buffer.from(chunk.data, 'base64').toString()).join('');
+}
 
 let execSequence = 0;
 
@@ -164,6 +186,85 @@ describe('pc-agent exec RPC', () => {
     await ws.answerTo(rpcId(101));
 
     expect(ws.of(id)).toHaveLength(1);
+    // The frame did not ask, as an older hub's never does.
+    expect(ws.outputsOf(id)).toEqual([]);
+  });
+});
+
+describe('a running command\'s output, for a hub that asked', () => {
+  test('reaches the hub while the command runs, and the result follows it unchanged', async () => {
+    const gate = join(scratchDir('pc-agent-live'), 'gate');
+    execFileSync('mkfifo', [gate]);
+    const ws = recorder();
+    const id = rpcId(400);
+
+    handle({ id, method: 'exec', params: [`echo first; read -r word < ${gate}; echo "second $word" >&2`], output: true }, ws.socket);
+    const first = await ws.firstOutput(id);
+
+    // The command is held on the gate, so this frame left while it ran.
+    expect(ws.of(id)).toEqual([]);
+    expect(outputText([first], 'stdout')).toBe('first\n');
+    writeFileSync(gate, 'go\n');
+    const reply = await ws.answerTo(id);
+    const result = v.parse(ExecResultSchema, reply.result);
+
+    expect(result).toMatchObject({ stdout: 'first\n', stderr: 'second go\n', exitCode: 0 });
+    expect(outputText(ws.outputsOf(id), 'stdout')).toBe(result.stdout);
+    expect(outputText(ws.outputsOf(id), 'stderr')).toBe(result.stderr);
+    expect(ws.arrivals.indexOf(reply)).toBeGreaterThan(Math.max(...ws.outputsOf(id).map((frame) => ws.arrivals.indexOf(frame))));
+    acknowledge(rpcId(401), id, ws.socket);
+    await ws.answerTo(rpcId(401));
+  });
+
+  test('a flood goes out as a bounded number of windows, every byte sent or counted', async () => {
+    const ws = recorder();
+    const id = rpcId(410);
+    const total = 3_000_000;
+    const spill = join(tmpdir(), 'kinu-tool-output', `device-${id}.stdout.log`);
+    const started = performance.now();
+
+    handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(${total}))"`], output: true }, ws.socket);
+    const reply = await ws.answerTo(id);
+    const elapsed = performance.now() - started;
+    rmSync(spill, { force: true });
+    const frames = ws.outputsOf(id);
+    const sizes = frames.map((frame) => frame.chunks.reduce((sum, chunk) => sum + Buffer.from(chunk.data, 'base64').length, 0));
+
+    expect(v.parse(ExecResultSchema, reply.result).stdout).toContain(`[stdout: ${total} bytes, `);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(16 * 1024);
+    // One frame per 250 ms window at most, plus the one that closes the pipe.
+    expect(frames.length).toBeLessThanOrEqual(Math.ceil(elapsed / 250) + 1);
+    expect(sizes.reduce((sum, size) => sum + size, 0) + frames.reduce((sum, frame) => sum + frame.dropped, 0)).toBe(total);
+    acknowledge(rpcId(411), id, ws.socket);
+    await ws.answerTo(rpcId(411));
+  });
+
+  test('a supervisor whose daemon is gone still finishes and records its result', async () => {
+    const gate = join(scratchDir('pc-agent-live-orphan'), 'gate');
+    execFileSync('mkfifo', [gate]);
+    const id = rpcId(420);
+
+    const frame = {
+      id, method: 'exec', params: [`echo running; cat ${gate} > /dev/null; seq 1 50000`], output: true, sandbox: { tier: 'raw', agentHome: '', roots: [] },
+    };
+
+    // A daemon of its own over this file's root, which leaves once the command's first output reached it. The root
+    // is passed: a spawned process reads it afresh, while this module kept the one its first require saw.
+    const daemon = Bun.spawn([process.execPath, '-e', `
+      const pcAgent = require(${JSON.stringify(join(import.meta.dir, '../../pc-agent/src/index.js'))});
+      pcAgent.handle(${JSON.stringify(frame)}, { send(data) { if (JSON.parse(data).type === pcAgent.EXEC_OUTPUT_FRAME) process.exit(0); } });
+    `], { stdout: 'inherit', stderr: 'inherit', env: { ...process.env, KINU_INFLIGHT_ROOT: pcAgent.INFLIGHT_ROOT } });
+
+    expect(await daemon.exited).toBe(0);
+    // Released only now, so every chunk the supervisor forwards meets a closed pipe.
+    writeFileSync(gate, 'go\n');
+    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
+    expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: false });
+    const completed = v.parse(v.object({ result: ExecResultSchema }), await restarted.result(id));
+
+    // Every line the command printed after its daemon left is in the capture, which the closed pipe never touched.
+    expect(completed.result).toEqual({ stdout: `running\n${Array.from({ length: 50_000 }, (_, at) => `${at + 1}\n`).join('')}`, stderr: '', exitCode: 0 });
+    await expect(restarted.acknowledge(id)).resolves.toEqual({ requestId: id, acknowledged: true });
   });
 });
 
@@ -174,18 +275,46 @@ describe('pc-agent exec RPC', () => {
 
 function recorder() {
   const replies: DaemonReply[] = [];
+  const outputs: OutputFrame[] = [];
+  /** Both kinds in arrival order, so a test can say which came first. */
+  const arrivals: Array<OutputFrame | DaemonReply> = [];
   const awaited = new Map<string, (reply: DaemonReply) => void>();
+  const watching = new Map<string, (frame: OutputFrame) => void>();
 
   return {
     replies,
+    arrivals,
     socket: {
       send: (data: string) => {
-        const reply = v.parse(DaemonReplySchema, JSON.parse(data));
+        const frame: unknown = JSON.parse(data);
+        const output = v.safeParse(OutputFrameSchema, frame);
+
+        if (output.success) {
+          outputs.push(output.output);
+          arrivals.push(output.output);
+          watching.get(output.output.request)?.(output.output);
+
+          return;
+        }
+
+        const reply = v.parse(DaemonReplySchema, frame);
         replies.push(reply);
+        arrivals.push(reply);
         awaited.get(reply.id)?.(reply);
       },
     },
     of(id: string): DaemonReply[] { return replies.filter((reply) => reply.id === id); },
+    outputsOf(id: string): OutputFrame[] { return outputs.filter((frame) => frame.request === id); },
+    /** The first output frame for `id`, awaitable before it arrives. */
+    firstOutput(id: string): Promise<OutputFrame> {
+      const arrived = outputs.find((frame) => frame.request === id);
+
+      if (arrived) return Promise.resolve(arrived);
+      const { promise, resolve } = Promise.withResolvers<OutputFrame>();
+      watching.set(id, resolve);
+
+      return promise;
+    },
     /** Awaitable before arrival, so a wait on command output can race the answer. */
     answerTo(id: string): Promise<DaemonReply> {
       const arrived = replies.find((reply) => reply.id === id);
@@ -470,7 +599,114 @@ describe('pc-agent command cancellation', () => {
   });
 });
 
+/** Lets the command held on `gate` finish; throws (ENXIO) rather than waits when nothing reads the gate. */
+function release(gate: string): void {
+  const fd = openSync(gate, constants.O_WRONLY | constants.O_NONBLOCK);
+
+  try {
+    writeSync(fd, 'go\n');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** A process holding `dir`'s `life` FIFO open for writing from its start, as a supervisor does; it is no supervisor. */
+function holdingLife(dir: string, file: string, ...args: string[]): ChildProcess {
+  const life = join(dir, 'life');
+  execFileSync('mkfifo', [life]);
+  // Read-write, so the open waits for no reader; once this copy closes, the child's is the only writer.
+  const fd = openSync(life, 'r+');
+
+  try {
+    return spawn(file, args, { stdio: ['ignore', 'ignore', 'inherit', fd] });
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The record a supervisor publishes, naming `pid` and the command group `group`, as the daemon reads identities. */
+async function recordSupervisor(dir: string, pid: number, group: number): Promise<void> {
+  const [start, groupStart] = await Promise.all([pcAgent.processStartIdentity(pid), pcAgent.processStartIdentity(group)]);
+  writeFileSync(join(dir, 'state'), `pid=${String(pid)}\nstart=${start}\ngroup=${String(group)}\ngroupStart=${groupStart}\n`, { mode: 0o600 });
+}
+
 describe('pc-agent durable supervisor', () => {
+  // 2026-10-02: a supervisor killed before its result left its exec waiting on a file nothing would write.
+  test('a supervisor killed mid-command answers its exec with its death, not silence', async () => {
+    const gate = join(scratchDir('pc-agent-supervisor-killed'), 'gate');
+    execFileSync('mkfifo', [gate]);
+    const ws = recorder();
+    const id = rpcId(440);
+    handle({ id, method: 'exec', params: [`cat ${gate} > /dev/null`] }, ws.socket);
+    const { pid, group } = await supervisorState(id);
+
+    process.kill(pid, 'SIGKILL');
+    const reply = await ws.answerTo(id);
+
+    expect(reply.error).toContain(`the supervisor of ${id} (pid ${String(pid)}) exited without recording the command's result`);
+    expect(reply.error).toContain(`process group ${String(group)}`);
+    // The command outlived its supervisor: let it finish, so the run leaves nothing behind.
+    release(gate);
+  });
+
+  test('a daemon that adopted a supervisor after a restart hears of its death too', async () => {
+    const gate = join(scratchDir('pc-agent-adopted-killed'), 'gate');
+    execFileSync('mkfifo', [gate]);
+    const ws = recorder();
+    const id = rpcId(450);
+    handle({ id, method: 'exec', params: [`cat ${gate} > /dev/null`] }, ws.socket);
+    const { pid } = await supervisorState(id);
+    // Built over the same root, as a restarted daemon builds its registry: it is not the supervisor's parent.
+    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
+    expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: false });
+
+    process.kill(pid, 'SIGKILL');
+    // Gone before the registry asks: its FIFO then has no writer left to hang up, so the open itself must tell.
+    await Bun.spawn(['tail', `--pid=${String(pid)}`, '-f', '/dev/null']).exited;
+
+    await expect(restarted.result(id)).rejects.toThrow(`the supervisor of ${id} (pid ${String(pid)}) exited without recording the command's result`);
+    await ws.answerTo(id);
+    release(gate);
+  });
+
+  // A supervisor gone between the daemon's identity check and the step it waits on: each wait hears of its death.
+  test('a supervisor that dies when told to stop answers the stop with its death, its command still running', async () => {
+    const root = scratchDir('pc-agent-stop-window');
+    const id = rpcId(460);
+    const dir = join(root, id);
+    mkdirSync(dir, { mode: 0o700 });
+    // The command, in a process group of its own as a supervisor starts it.
+    const command = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' });
+    const commandEnded = new Promise((resolve) => command.once('exit', resolve));
+    // SIGUSR1 ends `sleep` (its default action) before it does anything a supervisor does on it.
+    const supervisor = holdingLife(dir, 'sleep', '60');
+    await recordSupervisor(dir, v.parse(PidSchema, supervisor.pid), v.parse(PidSchema, command.pid));
+    const registry = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+
+    await expect(registry.cancel(id)).rejects.toThrow(`the supervisor of ${id} (pid ${String(supervisor.pid)}) exited without recording the command's result`);
+    // Not a stop: the command did outlive its supervisor.
+    expect(alive(v.parse(PidSchema, command.pid))).toBe(true);
+    process.kill(-v.parse(PidSchema, command.pid), 'SIGKILL');
+    await commandEnded;
+  });
+
+  test('a supervisor that dies on reading its ACK leaves its directory to the daemon, and the ACK answers', async () => {
+    const root = scratchDir('pc-agent-ack-window');
+    const id = rpcId(470);
+    const dir = join(root, id);
+    mkdirSync(dir, { mode: 0o700 });
+    writeFileSync(join(dir, 'result'), 'kind=exited\nexitCode=0\n', { mode: 0o600 });
+    execFileSync('mkfifo', [join(dir, 'ack')]);
+    // Reads the ACK, then exits without removing its directory.
+    const supervisor = holdingLife(dir, 'cat', join(dir, 'ack'));
+    const pid = v.parse(PidSchema, supervisor.pid);
+    await recordSupervisor(dir, pid, pid);
+    const registry = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+
+    expect(await registry.acknowledge(id)).toEqual({ requestId: id, acknowledged: true });
+    expect(existsSync(dir)).toBe(false);
+  });
+
   test('bounds captured output, keeps its head and tail, and saves the whole of it', async () => {
     const ws = recorder();
     const id = rpcId(300);
@@ -647,6 +883,23 @@ describe('the daemon answers in the words the hub reads', () => {
     await expect(tunnel.rpc('methodFromALaterHub', [])).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
     tunnel.dispose();
   });
+
+  // The daemon cannot import core's frame name: its frames reaching core's tunnel are the drift check.
+  test("a watched command's output frames reach core's tunnel as the call's output, before its answer", async () => {
+    const { tunnel } = deviceChain();
+    const id = rpcId(430);
+    const heard = { stdout: '', stderr: '' };
+
+    const answer = await tunnel.rpc('exec', ['echo first; echo second >&2'], {
+      requestId: id,
+      onOutput: ({ chunks }) => { for (const { stream, data } of chunks) heard[stream] += Buffer.from(data, 'base64').toString(); },
+    });
+
+    expect(heard).toEqual({ stdout: 'first\n', stderr: 'second\n' });
+    expect(v.parse(ExecResultSchema, answer)).toEqual({ stdout: 'first\n', stderr: 'second\n', exitCode: 0 });
+    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [id, DEVICE_CANCEL_PROTOCOL]);
+    tunnel.dispose();
+  });
 });
 
 /** The whole chain, executor → tunnel → daemon → real process, aborted the way a stopped turn does. */
@@ -671,16 +924,14 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     tunnel.dispose();
   });
 
-  /** The far end genuinely cannot kill: with the supervisor gone, the group is beyond the daemon's reach. */
-  test('a stop the device cannot perform is reported as unconfirmed, with the command still running', async () => {
+  /** With the supervisor gone the group is beyond the daemon's reach, and the exec says so, needing no stop to. */
+  test('a supervisor gone mid-command ends its exec with its death, its command still running', async () => {
     const dir = scratchDir('pc-agent-orphan');
     const { command, pidOf } = commandWithDescendant(dir, 'orphan');
     const { provider, tunnel } = deviceChain();
-    const controller = new AbortController();
     const issued: string[] = [];
 
     const pending = provider.tools.exec.execute(command, {
-      signal: controller.signal,
       onDeviceRequest: (requestId: string) => { issued.push(requestId); },
     });
 
@@ -688,13 +939,12 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     const supervisor = await supervisorState(issued[0]);
 
     process.kill(supervisor.pid, 'SIGKILL');
-    // Gone, not just signalled: a supervisor corpse would never answer, a different failure.
-    expect(await gone(supervisor.pid)).toBe(true);
-    controller.abort();
 
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    await expect(pending).rejects.toThrow(/could not stop the command, which may still be running/);
-    await expect(pending).rejects.toThrow(/supervisor identity no longer matches/);
+    expect(await pending).toMatchObject({
+      reason: 'io',
+      error: expect.stringContaining(`may still be running in process group ${String(supervisor.group)}`),
+    });
+    // Not a guess: the command did outlive its supervisor.
     expect(alive(descendant)).toBe(true);
 
     tunnel.dispose();

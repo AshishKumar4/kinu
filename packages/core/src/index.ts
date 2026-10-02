@@ -538,7 +538,8 @@ export {
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, codemodeInputSchema,
-  renderCraftedToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
+  renderCraftedToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
+  slateToolReach, callCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
@@ -674,8 +675,9 @@ export {
 
 export {
   buildBuiltinTools,
+  codemodeSurface,
   type BuiltinToolDeps,
-  type CraftedToolSet, type CodemodeBuilder, type CodemodeSurface,
+  type CodemodeBuilder, type CodemodeSurface,
   type ReportToolDeps,
 } from './tools/builtins';
 
@@ -741,8 +743,6 @@ export { handRolledFileWrite, createFileToolSteer } from './tools/shell-file-ste
 export {
   toCraftedToolSource,
   selectInjectableCraftedTools,
-  type CraftedToolExecute,
-  type CraftedToolExecuteFn,
   type CraftedToolSource,
 } from './tools/crafted-executor';
 
@@ -1022,10 +1022,6 @@ export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } 
 
 export { craftFailureMarker, CRAFT_NEUTRAL_PRIOR } from './craft/in-episode';
 
-export {
-  attributeCraftedFailure,
-} from './craft/attribution';
-
 
 export { periodicCraftConsolidation } from './craft/consolidation';
 
@@ -1059,7 +1055,7 @@ export {
   DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE, DEVICE_PTY_CLOSE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
-  type DeviceCancelResult,
+  type DeviceCancelResult, type DeviceExecOutput,
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_CHATGPT, DEVICE_RELAY, DeviceChatGptStatusSchema, EGRESS_ROUTE_HEADER,
   type DeviceChatGptMethod, type DeviceChatGptStatus, type DeviceRelayRequest, type RelayedProvider,
@@ -1093,7 +1089,7 @@ export {
   type InlineExecutorDeps, type NimbusWorkspaceExecutorOpts,
 } from './tools/inline-executor';
 
-export { explainNativeToolReferenceError } from './tools/sandbox-errors';
+export { explainSandboxError } from './tools/sandbox-errors';
 
 export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 

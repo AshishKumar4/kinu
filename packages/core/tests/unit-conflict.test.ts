@@ -49,7 +49,7 @@ describe('CraftStore conflict detection', () => {
   });
 });
 
-/** Compiles and calls the stored expression as both backends do (cli-backend/src/craft-executor.ts); the shared executor only parses. */
+/** Compiles and calls the stored expression as a program defines it (`renderCraftedDefinitions`); the shared executor only parses. */
 function evaluatingExecutor(): Executor {
   return {
     languages: ['javascript'],

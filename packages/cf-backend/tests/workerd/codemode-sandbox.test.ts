@@ -321,6 +321,27 @@ describe('the eval sandbox under workerd', () => {
     ] });
   });
 
+  test('a module import names the workspace binding, and a crafted body reads and writes files through it', async () => {
+    // The live eval's first and corrected attempts at `report_totals` (packages/cli-backend/tests/crafted-file-capability.test.ts).
+    const imported = await executor.execute("// read with node:fs\nconst fs = await import('fs');\nreturn fs.readFileSync('notes.md');", [toolsProvider([]), workspace]);
+    expect(imported.error).toContain('No such module "node:fs"');
+    expect(imported.error).toContain('`await workspace.readFile(path)`');
+
+    const crafted = [{
+      name: 'copy_notes',
+      code: 'async (args) => { await workspace.writeFile(args.to, (await workspace.readFile(args.from)).toUpperCase()); return await workspace.readFile(args.to); }',
+      description: '',
+    }];
+
+    const copied = await executor.execute(
+      `return await tools.copy_notes({ from: '${WORKSPACE_ROOT}/notes.md', to: '${WORKSPACE_ROOT}/copy.md' });`,
+      [toolsProvider(crafted), workspace],
+    );
+
+    expect(copied.error).toBeUndefined();
+    expect(copied.result).toBe('HELLO FROM THE WORKSPACE');
+  });
+
   test('a bare native tool name is corrected toward tools.<name>', async () => {
     const result = await executor.execute("// misuse\nreturn await shell({ command: 'ls' })", [toolsProvider([]), stateProvider, workspace]);
     expect(result.error).toContain('"shell" is a native Kinu tool');

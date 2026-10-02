@@ -1,14 +1,14 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The `eval` codemode tool, shared by every CF actor with a runtime. Crafted tools are re-read
- * from the CraftStore on every call, so a tool saved mid-turn is callable on the next program.
+ * from the surface on every call, so a tool saved mid-turn is callable on the next program.
  */
 
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
-import { type Tool, type ToolSet } from 'ai';
-import type { ActorHandle, AgentsToolDeps, DeviceRequestChannel, SqlExecutor, CraftStore, ExecutionRouter } from "@kinu.run/core";
-import { createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, selectInjectableCraftedTools, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
+import { type Tool } from 'ai';
+import type { ActorHandle, AgentsToolDeps, CodemodeSurface, DeviceRequestChannel, ExecutionRouter } from "@kinu.run/core";
+import { createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
@@ -17,8 +17,7 @@ import { BROWSER_PRELUDE } from './browser-prelude';
 
 export interface CodemodeFactoryOptions {
   launch: (online: boolean) => ProgramLaunch;
-  rt: { actor: ActorHandle; craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'>; storage: { vfs: VFS; home: string } };
-  sql: SqlExecutor;
+  rt: { actor: ActorHandle; executionRouter?: Pick<ExecutionRouter, 'getProviders'>; storage: { vfs: VFS; home: string } };
   workspace: string;
   webSearch: WebSearchProvider;
   /** The actor's Chrome sessions, which `web.connectBrowser` in its programs reaches. */
@@ -51,14 +50,12 @@ function withDeviceOwnership(args: unknown[], channel: DeviceRequestChannel | un
 }
 
 export interface CodemodeFactory {
-  toolFor(native: ToolSet): Tool;
-  callTool(native: ToolSet, name: string, input: JsonObject): Promise<JsonValue | undefined>;
+  toolFor(surface: CodemodeSurface): Tool;
+  callTool(surface: CodemodeSurface, name: string, input: JsonObject): Promise<JsonValue | undefined>;
 }
 
 export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
-  const { rt, sql, webSearch } = options;
-  const craftedTools = () => selectInjectableCraftedTools(rt.craftStore, sql);
-
+  const { rt, webSearch } = options;
   const stateProvider = createStateCodemodeProvider(rt.actor.programState);
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
 
@@ -90,9 +87,9 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
   });
 
   return {
-    async callTool(native, name, input) {
+    async callTool(surface, name, input) {
       const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async () => {
-        const functions = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), native));
+        const functions = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.native));
         const entry = Object.hasOwn(functions, name) ? functions[name] : undefined;
 
         if (entry !== undefined) {
@@ -105,11 +102,11 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
           throw new KinuError('denied', `${name} is not within this actor's reach right now`);
         }
 
-        if (!craftedTools().some((tool) => tool.name === name)) {
+        if (!surface.craftedTools().some((tool) => tool.name === name)) {
           throw new KinuError('missing', `tools has no member ${name}`);
         }
 
-        const execute = this.toolFor(native).execute;
+        const execute = this.toolFor(surface).execute;
 
         if (execute === undefined) throw new KinuError('unavailable', 'The codemode executor is not callable');
 
@@ -122,9 +119,9 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
       return call(input);
     },
-    toolFor(native) {
-      const reachable = options.reach === undefined ? native
-        : Object.fromEntries(Object.entries(native).filter(([name]) => options.reach?.allowsTool(name)));
+    toolFor(surface) {
+      const reachable = options.reach === undefined ? surface.native
+        : Object.fromEntries(Object.entries(surface.native).filter(([name]) => options.reach?.allowsTool(name)));
 
       const build = (mode: WorkMode): Tool => {
         const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'));
@@ -153,7 +150,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
           executor: {
             // Per call: crafted set and prelude are rebuilt; native fns were frozen at build time.
             execute: (code, resolved) => {
-              const crafted = craftedTools();
+              const crafted = surface.craftedTools();
               const failures = Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute]));
 
               const live = Array.isArray(resolved)
@@ -192,7 +189,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
             result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())),
           }), await execute(input, context)));
         },
-      }), craftedTools);
+      }), surface.craftedTools);
     },
   };
 }

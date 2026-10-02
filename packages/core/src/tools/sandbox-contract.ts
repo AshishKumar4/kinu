@@ -12,6 +12,8 @@ import { branchableToolCall, bindProgramCall } from './outcome';
 import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
 import { KinuError, settle, settleSync } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
+import { parsesAsExpression } from '../craft/source';
+import type { CraftedToolSource } from './crafted-executor';
 
 export {
   CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
@@ -144,6 +146,25 @@ export function codemodeFunction<Result>(namespace: string, member: string, invo
 
     return value === undefined ? undefined : decodeJsonValue({ value });
   };
+}
+
+/**
+ * A program's crafted tools, defined in its scope ahead of its code: a body reads the caller's `workspace`, `state`
+ * and `tools`. `tools[name]` enters as the host's failure census for that name.
+ */
+export function renderCraftedDefinitions(crafted: readonly CraftedToolSource[]): string {
+  const definitions = crafted.map((entry) => {
+    const parseError = parsesAsExpression(entry.code);
+
+    const factory = parseError === null
+      // Async: the gate admits top-level `await`, which in a sync arrow is a SyntaxError that breaks the program.
+      ? `async () => (\n${entry.code}\n)`
+      : `() => { throw new Error(${JSON.stringify(`stored source does not parse: ${parseError}`)}); }`;
+
+    return `  ${JSON.stringify(entry.name)}: __kinu.defineCrafted(${JSON.stringify(entry.name)}, ${factory}, tools[${JSON.stringify(entry.name)}]),`;
+  });
+
+  return ['Object.assign(tools, {', ...definitions, '});'].join('\n');
 }
 
 export function craftedFailureFunctions(crafted: readonly CraftedDeclaration[]): CodemodeProvider['tools'] {

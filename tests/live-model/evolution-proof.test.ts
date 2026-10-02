@@ -692,7 +692,7 @@ describe('Evolution Proof', () => {
     //     call before building from scratch. Store rows alone do not prove that
     //     projection.
     //   binding   — a listed name still has to RESOLVE inside the sandbox.
-    //     Measured with `craftedToolExecute` absent: three rows listed, and
+    //     Measured with crafted bindings absent: three rows listed, and
     //     `tools.doubleIt` was `undefined`. The reuse metric read 1/1.
     //   invocation — a resolved binding still has to reach the tool BODY. This is
     //     the row that separates a wiring fault from the tool's own contract: an

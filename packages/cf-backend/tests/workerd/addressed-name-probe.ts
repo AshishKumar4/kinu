@@ -6,11 +6,12 @@
  */
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
+import * as v from 'valibot';
 import { ownerCaller } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
-import type { AddressedAnswers } from './addressed-name-shapes';
+import type { AddressedAnswers, AlarmAfterDestroy } from './addressed-name-shapes';
 
 export * from '../../src/server';
 
@@ -19,7 +20,7 @@ const PROBE_OWNER_ID = 'fedcba9876543210fedcba9876543210';
 const EVICTED = 'the workspace object is evicted';
 
 /** Names the probe adds; none is start-gated, so reading them never starts the object. */
-const PROBE_RPC = ['evict', 'startCount', 'failNextStart'];
+const PROBE_RPC = ['evict', 'startCount', 'failNextStart', 'probeAlarm', 'probeState'];
 
 /** The production orchestrator plus the eviction a deploy or a memory reset performs, and a start count. */
 export class OrchestratorAgent extends ProductionOrchestrator {
@@ -51,6 +52,22 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     await this.ctx.storage.sync();
     this.ctx.abort(EVICTED);
   }
+
+  /** The platform's alarm delivery: this activation, however it was built, runs its alarm. */
+  async probeAlarm(): Promise<string> {
+    await this.alarm();
+
+    return 'retired';
+  }
+
+  /** What a workspace holds: its starts, its identity rows and its actor rows. */
+  async probeState(): Promise<{ starts: number; identity: number; actors: number }> {
+    const rows = (table: string): number => (this.ctx.storage.sql.exec(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table,
+    ).toArray().length === 0 ? 0 : v.parse(v.number(), this.ctx.storage.sql.exec(`SELECT COUNT(*) AS n FROM ${table}`).one().n));
+
+    return { starts: await this.startCount(), identity: rows('workspace_identity'), actors: rows('workspace_actors') };
+  }
 }
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
@@ -61,9 +78,10 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 
 type NamedTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator, 'claimOwner'> & Pick<OrchestratorAgent, 'evict'>;
 
-type IdTarget = Pick<ProductionOrchestrator, 'supervisorOp'>;
+type IdTarget = Pick<ProductionOrchestrator, 'supervisorOp'> & Pick<OrchestratorAgent, 'probeAlarm' | 'evict'>;
 
-type RawTarget = Pick<ProductionOrchestrator, 'accountSpend' | 'destroyAgent'> & Pick<OrchestratorAgent, 'startCount' | 'failNextStart' | 'evict'>;
+type RawTarget = Pick<ProductionOrchestrator, 'accountSpend' | 'destroyAgent'>
+  & Pick<OrchestratorAgent, 'startCount' | 'failNextStart' | 'evict' | 'probeAlarm' | 'probeState'>;
 
 /** A thrown chain as its text, so the test reads what each entry answered. */
 async function answer(run: () => Promise<string>): Promise<string> {
@@ -137,6 +155,33 @@ export class AddressedNameProbeRoot extends DurableObject<ProbeRootEnv> {
     });
 
     return { evicted, spend, destroyed };
+  }
+
+  /** Destroyed, and then an alarm the platform still owes it arrives: by id, as the platform delivers it, and by name. */
+  async alarmAfterDestroy(workspace: string): Promise<AlarmAfterDestroy> {
+    await this.claimAndEvict(workspace);
+
+    const destroyed = await answer(async () => {
+      await this.raw(workspace).destroyAgent(PROBE_OWNER_ID);
+
+      return 'destroyed';
+    });
+
+    // Each delivery builds the object anew, as a redelivery after the destroyed activation is gone. Ended by id, so
+    // the first by id finds no tables at all, and a later one finds the tables a named entry made, empty.
+    const evictById = () => answer(async () => {
+      await this.byId(workspace).evict();
+
+      return 'evicted';
+    });
+
+    await evictById();
+    const byId = await answer(() => this.byId(workspace).probeAlarm());
+    const byName = await answer(() => this.raw(workspace).probeAlarm());
+    await evictById();
+    const byIdOverTables = await answer(() => this.byId(workspace).probeAlarm());
+
+    return { destroyed, byId, byName, byIdOverTables, left: await this.raw(workspace).probeState() };
   }
 
   /** A Nimbus sibling (`nbf:`) never runs the workspace start. */
