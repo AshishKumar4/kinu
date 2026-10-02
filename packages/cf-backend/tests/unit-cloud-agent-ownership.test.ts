@@ -95,7 +95,7 @@ function indexFeed(): IndexFeed {
 function registryStub(): CloudWorkspaceRegistry {
   return {
     ...NO_RELAY_MACHINE,
-    async getProfileCatalog(_caller: UserCaller) { return DEFAULT_ENVELOPE; },
+    async getWorkspaceProfileCatalog(_caller: UserCaller) { return DEFAULT_ENVELOPE; },
     async getAuth(_caller: UserCaller) {
       return { headers: { authorization: 'Bearer token' }, baseURL: 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1' };
     },
