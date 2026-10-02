@@ -68,15 +68,25 @@ function memoryBucket(objects: Map<string, Uint8Array>): R2Bucket {
         checksums: { sha256: await crypto.subtle.digest('SHA-256', bytes.slice()) },
       };
     },
+    // R2 refuses a delete of no keys or of more than 1,000 (10027), and lists 1,000 at a time.
     delete: async (keys: string | string[]) => {
-      for (const key of Array.isArray(keys) ? keys : [keys]) objects.delete(key);
+      const named = Array.isArray(keys) ? keys : [keys];
+
+      if (named.length === 0 || named.length > 1000) throw new Error('delete: The number of keys in the request must be between 1 and 1000 inclusive. (10027)');
+
+      for (const key of named) objects.delete(key);
     },
-    list: async (options?: R2ListOptions) => ({
-      objects: [...objects.keys()]
-        .filter((key) => key.startsWith(options?.prefix ?? ''))
-        .map((key) => ({ key })),
-      truncated: false,
-    }),
+    // A cursor names the last key listed, so a page deleted in between does not shift the next one.
+    list: async (options?: R2ListOptions) => {
+      const after = options?.cursor ?? '';
+      const matching = [...objects.keys()].filter((key) => key.startsWith(options?.prefix ?? '') && key > after).sort();
+      const page = matching.slice(0, 1000);
+      const truncated = page.length < matching.length;
+
+      const listed = page.map((key) => ({ key }));
+
+      return truncated ? { objects: listed, truncated, cursor: page.at(-1) } : { objects: listed, truncated };
+    },
   });
 }
 

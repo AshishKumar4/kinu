@@ -750,6 +750,16 @@ class BenchBox extends Devbox<BenchEnv> {
     this.ctx.abort('bench eviction');
   }
 
+  /** A lost or expired snapshot, as the platform answers one (D64). */
+  loseSnapshotForBench(): boolean {
+    const held = v.safeParse(v.looseObject({ id: v.string() }), this.ctx.storage.kv.get('devbox:snapshot'));
+
+    if (!held.success) return false;
+    this.ctx.storage.kv.put('devbox:snapshot', { ...held.output, id: crypto.randomUUID() });
+
+    return true;
+  }
+
   /**
    * Force a container reset for the benchmark. Actual container stop, sleep,
    * or restart loses container-local disk. A stable sandbox or Durable Object
@@ -972,6 +982,12 @@ async function serveInstrumentRoutes(
       const [evicted] = await Promise.allSettled([box.evictForBench()]);
 
       return json({ payload: { ok: evicted.status === 'rejected', strategy, box: name, ms: Date.now() - started } });
+    }
+
+    case 'POST /lose-snapshot': {
+      const lost = await box.loseSnapshotForBench();
+
+      return json({ payload: { ok: lost, strategy, box: name, ms: Date.now() - started } });
     }
 
     case 'GET /state': {

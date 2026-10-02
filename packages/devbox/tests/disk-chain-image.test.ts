@@ -21,8 +21,10 @@ const ROOT = 'boxes/disk-test/backups';
 
 const EXCLUDES = ['node_modules', '*.log'];
 
+/** Answers when the command's stdout closes, as the platform's exec does, not when its shell exits:
+ *  a process left holding that pipe holds the exec too. */
 function sh(script: string) {
-  const ran = spawnSync('docker', ['exec', name, 'bash', '-c', script], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  const ran = spawnSync('docker', ['exec', name, 'bash', '-o', 'pipefail', '-c', `{ ${script}\n} | cat`], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
 
   return { status: ran.status ?? -1, stdout: ran.stdout.trim(), stderr: ran.stderr.trim() };
 }

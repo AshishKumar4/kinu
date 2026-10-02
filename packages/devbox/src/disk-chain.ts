@@ -367,7 +367,8 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
       `top=''; held=''`,
       ...deltas.map(delta => `[ -e ${shellPath(`${delta}/.devbox-delta/manifest.json`)} ] && held=1`),
       `if [ -n "$held" ]; then`,
-      `  mountpoint -q ${shellPath(BLOCK_LOWER)} || { cd / && setsid nohup ${blocks} >${shellPath(`${BLOCK_LOWER}.log`)} 2>&1 </dev/null &`,
+      // A shell holding the exec's stdout holds the exec (D64).
+      `  mountpoint -q ${shellPath(BLOCK_LOWER)} || { (cd / && exec setsid nohup ${blocks}) >${shellPath(`${BLOCK_LOWER}.log`)} 2>&1 </dev/null &`,
       `    for i in $(seq 1 100); do mountpoint -q ${shellPath(BLOCK_LOWER)} && break; sleep 0.1; done; }`,
       `  mountpoint -q ${shellPath(BLOCK_LOWER)} || { cat ${shellPath(`${BLOCK_LOWER}.log`)} >&2; exit 1; }`,
       `  top=${shellPath(BLOCK_LOWER)}:`,

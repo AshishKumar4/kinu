@@ -1,6 +1,6 @@
 // D55's hybrid at the box boundary: a rest's snapshot is the next wake, and a wake that cannot use it
 // recovers from the chain and says so. The chain is chain-box's model; disk-chain-image.test.ts runs the real one.
-import { afterEach, expect, setSystemTime, test } from 'bun:test';
+import { afterEach, expect, jest, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { DiskChainStateSchema } from '../src/disk-chain';
 import { ChainTestBox, asked, chainBox } from './support/chain-box';
@@ -63,13 +63,21 @@ test('a snapshot wake that is not admitted within the cutover starts from the im
   });
 });
 
-test('a snapshot the platform no longer has starts from the image at once', async () => {
+test('a snapshot the platform no longer has starts from the image at once, and leaves no exec to abort later', async () => {
   const { box, container } = await rested();
   container.snapshots.delete('snapshot-1');
-  await box.devboxStartup();
+  jest.useFakeTimers();
 
-  expect({ starts: container.startOptions.map(startedFrom), asked }).toEqual({
-    starts: ['image', 'snapshot-1', 'image'], asked: ['attach from image', 'commit quiesce', 'attach from image'],
+  try {
+    await box.devboxStartup();
+    // Live, an exec's signal aborting after the cutover took the image's container down with it.
+    jest.advanceTimersByTime(60_000);
+  } finally {
+    jest.useRealTimers();
+  }
+
+  expect({ starts: container.startOptions.map(startedFrom), asked, aborted: container.execSignals.filter(signal => signal.aborted).length }).toEqual({
+    starts: ['image', 'snapshot-1', 'image'], asked: ['attach from image', 'commit quiesce', 'attach from image'], aborted: 0,
   });
 });
 
@@ -112,4 +120,17 @@ test('a rest whose snapshot is refused still rests, says why, and the next wake 
     rest: rest.kind, running: container.running.running, starts: container.startOptions.map(startedFrom),
     said: reasons.some(reason => reason.includes('took no snapshot') && reason.includes('snapshot quota exceeded')),
   }).toEqual({ rest: 'committed', running: true, starts: ['image', 'image'], said: true });
+});
+
+test('a discard empties the box\'s store whether it holds no object or more than one listing of them', async () => {
+  const empty = chainBox(HybridBox);
+  await empty.box.devboxStartup();
+  const many = chainBox(HybridBox);
+  await many.box.devboxStartup();
+
+  for (let at = 0; at < 1500; at++) many.objects.set(`boxes/devbox-under-test/backups/disk/layer-${String(at)}.sqsh`, new Uint8Array([1]));
+  const discarded = await Promise.allSettled([empty.box.discardState(), many.box.discardState()]);
+
+  expect({ discarded: discarded.map(outcome => outcome.status), left: many.objects.size, record: many.rows.has('devbox:disk-chain') })
+    .toEqual({ discarded: ['fulfilled', 'fulfilled'], left: 0, record: false });
 });

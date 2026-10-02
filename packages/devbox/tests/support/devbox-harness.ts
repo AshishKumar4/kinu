@@ -391,6 +391,8 @@ export class FakeSandbox {
   readonly startOptions: (ContainerStartupOptions | undefined)[] = [];
   /** Each snapshot the platform holds, and how a start from it behaves: `hang` never admits a command. */
   readonly snapshots = new Map<string, 'ok' | 'hang'>();
+  /** Every signal a native exec was given: the platform may act on one long after the exec settled. */
+  readonly execSignals: AbortSignal[] = [];
   /** What each snapshot holds: the container's disk as it was when it was taken. */
   readonly #snapshotDisks = new Map<string, { readonly files: Map<string, string>; readonly binaryFiles: Map<string, Uint8Array>; readonly directories: Set<string> }>();
   /** Thrown by the next `snapshotContainer`, as a refused snapshot is. */
@@ -872,6 +874,7 @@ export class FakeSandbox {
   }
 
   async #native(args: string[], options: ContainerExecOptions = {}): Promise<ExecProcess> {
+    if (options.signal !== undefined) this.execSignals.push(options.signal);
     await this.#admitNative(options);
 
     if (this.nativeExec !== undefined && (args[0] === "bash" || args[3] === "kill-tree" || args[3] === "port-listeners")) return this.nativeExec(args, options);

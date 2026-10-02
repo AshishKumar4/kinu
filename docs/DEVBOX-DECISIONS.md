@@ -3432,6 +3432,45 @@ unchanged. Lines: the crate +684 / -526, `disk-chain.ts` +195 / -32. The record'
 format is `disk-chain/2`; no box holds `/1` (the hybrid was opt-in until
 D62), and a format change ships as a reset.
 
+D64. The hybrid's live runs pass, after three fixes they found (2026-10-02).
+Run `sbs10021640nhyf` (`bench-artifacts/hybrid-live/`): the bench fixture of
+this tree, image `e7444653…`, Medium, `durable_object` policy, three fresh
+boxes, each through a base and a block delta (16,384 bytes moved), a rest, a
+wake from its snapshot, a second rest, the snapshot lost (the bench points
+the record at an id the platform does not hold), a wake, a rest and a wake of
+the recovered box. Every Worker, application and bucket is deleted, and so
+is every snapshot tag the runs made.
+
+| Step, n=3 | Driver | The box's restore | Result |
+|---|---|---|---|
+| rest (commit, then snapshot) | 4.4 to 7.1 s | | committed |
+| wake from the snapshot | 0.64, 0.65, 0.89 s | 34 to 38 ms | exact, excluded folders included |
+| wake with the snapshot lost | 4.3, 4.5, 5.3 s | 3.5 to 4.1 s | image start, lazy recovery of 3 layers; exact without the excluded folders; the notice names the time and the folders |
+| wake of the recovered box | 0.66, 0.72, 1.13 s | 157 to 210 ms | "recovery made plain", exact |
+
+What the runs found, each red first:
+- A snapshot start the platform refuses ("Snapshot … was not found")
+  fails its first exec at once, and the cutover started the image. The
+  10 s cutover timer was an `AbortSignal.timeout` handed to that exec; it
+  fired 10 s later and took the image's container down mid-recovery. The
+  timer is now cleared once the exec settles (`hybrid.test.ts`, on fake
+  timers, red on the old form).
+- The recovery started the block lower as `cd / && setsid nohup … >log &`.
+  The background shell held the exec's stdout, and the platform's exec
+  answers when stdout closes, so the mount step held the start gate past its
+  25 s budget. The whole job is redirected now. `disk-chain-image.test.ts`
+  answers an exec when its stdout closes, as the platform does; on the old
+  form its recoveries held until a 60 s bound added for that run failed them
+  (`bench-artifacts/block-deltas/image-pipe-red.log`).
+- A discard deleted every listed key in one call: R2 refuses a delete of no
+  keys (10027), and lists 1,000 at a time. A box with no objects failed its
+  teardown, and one with more than 1,000 kept the rest. The discard now
+  pages and skips an empty delete; the test bucket models both limits.
+
+Each snapshot's manifest names its box: `deployment_id` is the Durable
+Object id under the `durable_object` policy. That maps a tag to a box and so
+to an environment's bucket, which the sweep can use.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

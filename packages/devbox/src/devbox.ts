@@ -323,8 +323,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #adoptionPending = false;
   #lastInteraction: number | undefined;
   #lastInteractionPersisted = 0;
-  /** Every strategy checkpoint on this instance runs through one gate, so two
-   *  overlapping entry points can never interleave inside a strategy. */
+  /** One checkpoint at a time on this instance. */
   readonly #lane = createCheckpointLane();
   /** Public work with no resource name: shell commands and supervised starts.
    *  Resource and checkpoint work reports directly through their own lanes. */
@@ -583,7 +582,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** A snapshot start that fails or misses the cutover falls back to the image and the chain. */
   async #admit(container: Container, signal: AbortSignal, inputs: StartInputs): Promise<void> {
     if (this.#startedFromSnapshot) {
-      const [woke] = await Promise.allSettled([firstExec(container, AbortSignal.any([signal, AbortSignal.timeout(this.snapshotWakeCutoverMs)]))]);
+      // Cleared once settled: a later abort killed the image's container (D64).
+      const cutover = new AbortController();
+      const timer = setTimeout(() => { cutover.abort(new DevboxError('io', 'the snapshot start was not admitted within the cutover')); }, this.snapshotWakeCutoverMs);
+      const [woke] = await Promise.allSettled([firstExec(container, AbortSignal.any([signal, cutover.signal]))]);
+      clearTimeout(timer);
 
       if (woke.status === 'fulfilled') return;
       this.#trace('startup.snapshot.cutover', { reason: describe({ cause: woke.reason }) });
@@ -2293,8 +2296,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       default: throw new DevboxError("io", `unknown devbox alarm: ${callback}`);
     }
   }
-  /** Failures go to both the strategy record and an incident: the alarm loop reduces a thrown
-   *  callback to a console line. Not re-armed while down; waking a container would keep it alive. */
   /** An exec on a stopped container would start a blank one, and save its empty disk. */
   async #runCheckpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
     if (this.store !== undefined && this.ctx.container?.running !== true) {
@@ -2304,6 +2305,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return await this.#requireStorage().checkpoint(kind);
   }
 
+  /** A failure becomes an incident: the alarm loop reduces a throw to a console line.
+   *  Not re-armed while down; waking a container would keep it alive. */
   devboxCheckpoint(): Promise<void> {
     return settle(attempt('io', async () => {
       // The ambient schedule is this row's only writer; with it disabled the row is never armed,
@@ -2580,8 +2583,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       discard: async () => {
         this.ctx.storage.kv.delete(DISK_STATE_KEY);
         this.#supersede(SNAPSHOT_KEY);
-        const listed = await store.bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/` });
-        await store.bucket.delete(listed.objects.map(object => object.key));
+
+        // R2 pages at 1,000, refuses an empty delete (D64).
+        for (let listed = await store.bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/` }); listed.objects.length > 0;) {
+          await store.bucket.delete(listed.objects.map(object => object.key));
+
+          if (!listed.truncated) break;
+          listed = await store.bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/`, cursor: listed.cursor });
+        }
       },
     });
   }
