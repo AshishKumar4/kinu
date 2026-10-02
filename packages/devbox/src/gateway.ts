@@ -4,6 +4,7 @@ import { SandboxFileError, S3Mount, type Files, type S3MountRequest, type S3Gate
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
+import { TRUST } from './processes';
 import { CHAIN_STORE_MOUNT, STORE_PUBLISH_ROUTE, storeRouteHost } from './snapshot-chain';
 import type { Devbox } from './devbox';
 import type { GatewayBindings } from './contracts';
@@ -56,8 +57,8 @@ export class DevboxOutbound extends WorkerEntrypoint<{}, OutboundProps> {
 }
 
 // @cloudflare/sandbox 1.0.0, sandbox-tools/s3_mount/marker_store.rs:100-104.
-// This reads the SDK's authoritative file, never a mirrored registration. D40 and the upstream
-// ask record this internal-format coupling; replace this read when the SDK exposes registrations.
+// D40 and the upstream ask record this internal-format coupling; replace this read when the SDK
+// exposes registrations.
 const SDK_STORE_MARKER = '/run/sandbox/s3-mounts/markers/'
   + createHash('sha256').update(CHAIN_STORE_MOUNT).digest('hex') + '.json';
 
@@ -183,6 +184,11 @@ export class ContainerRoutes {
       this.#fallback = policy.fallback;
       this.#source = source;
       yield* this.#install();
+      // Its CA appears with the HTTPS intercept.
+      const trust = yield* attempt('io', () => this.host.container.exec([...TRUST]));
+      const trusted = yield* attempt('io', () => trust.output());
+
+      if (trusted.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `the container did not trust the intercept CA: ${new TextDecoder().decode(trusted.stderr)}`));
     })));
   }
 

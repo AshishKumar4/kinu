@@ -340,6 +340,8 @@ export class FakeSandbox {
   /** Configured probe answers for services on a started container, retained
    *  with the other fault controls; this is not a live process registry. */
   readonly listening = new Set<number>();
+  /** Answers a port's fetch in place of the probe status, e.g. with an upgrade. */
+  portAnswer: ((port: number, request: Request) => Response) | undefined;
   readonly fileOperations: FileOperation[] = [];
   readonly mountCalls: string[] = [];
   /** Mounts and execs share one chronological list: stop order is a property of the order
@@ -1145,13 +1147,13 @@ export class FakeSandbox {
       destroy: async () => { await this.destroy(); this.#ended.resolve(); },
       signal: () => { void this.stop().then(this.#ended.resolve, this.#ended.reject); },
       getTcpPort: port => ({
-        fetch: async () => new Response('', { status: this.listening.has(port) ? 200 : 503 }),
+        fetch: async (request: Request) => this.portAnswer?.(port, request) ?? new Response('', { status: this.listening.has(port) ? 200 : 503 }),
         connect: () => unreached('port.connect'),
       }),
       setInactivityTimeout: async () => { this.activityRenewals++; },
       interceptOutboundHttp: async (host) => { this.outboundHosts.set(host, host); },
       interceptAllOutboundHttp: async () => { this.outboundHosts.set(DEVBOX_SYNC_HOST, DEVBOX_SYNC_HOST); },
-      interceptOutboundHttps: async () => undefined,
+      interceptOutboundHttps: async () => { this.sequence.push('intercept:https'); },
       snapshotContainer: () => unreached('container.snapshotContainer'),
       inspect: () => unreached('container.inspect'),
       exec: (args, options) => this.#native(args, options),
@@ -1205,6 +1207,12 @@ export class FakeSandbox {
     }
 
     if (PROCESS_SCRIPTS.has(args[3] ?? '')) return await this.#processScript(args, pid);
+
+    if (args[3] === 'devbox-trust') {
+      this.sequence.push('trust');
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+    }
 
     const command = args[2] ?? '';
 

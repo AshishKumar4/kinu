@@ -368,9 +368,9 @@ describe('a sandbox lifecycle failure', () => {
     const harness = orchestratorHarness();
     const { agent } = harness;
 
-    const first = await agent.acceptSandboxLifecycleFailure(incident);
-    const second = await agent.acceptSandboxLifecycleFailure(incident);
-    const third = await agent.acceptSandboxLifecycleFailure(incident);
+    const first = await agent.acceptSandboxLifecycleIncident(incident);
+    const second = await agent.acceptSandboxLifecycleIncident(incident);
+    const third = await agent.acceptSandboxLifecycleIncident(incident);
 
     expect(first).toMatchObject({ status: 'queued', incidentId: 'inc-1', duplicate: false });
     expect(second).toMatchObject({ status: 'queued', duplicate: true });
@@ -386,12 +386,12 @@ describe('a sandbox lifecycle failure', () => {
     // Another activation drives the conversation, so the turn the incident needs cannot run here.
     agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another activation is driving' });
 
-    const refused = await agent.acceptSandboxLifecycleFailure(incident);
+    const refused = await agent.acceptSandboxLifecycleIncident(incident);
     // `undelivered`, not `queued`: the box maps `queued` to `deliveredAt` and stops offering the row.
     expect(refused).toMatchObject({ status: 'undelivered', duplicate: false });
 
     agent.harnessRefuseDriving(null);
-    const retried = await agent.acceptSandboxLifecycleFailure(incident);
+    const retried = await agent.acceptSandboxLifecycleIncident(incident);
 
     expect(retried).toMatchObject({ status: 'queued', duplicate: false });
     expect(await programmaticTurns(harness)).toHaveLength(1);
@@ -401,7 +401,7 @@ describe('a sandbox lifecycle failure', () => {
     const harness = orchestratorHarness();
     const { agent } = harness;
 
-    await agent.acceptSandboxLifecycleFailure({
+    await agent.acceptSandboxLifecycleIncident({
       version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
       incidentId: 'inc-2',
       stage: 'attach',
@@ -423,7 +423,7 @@ describe('a sandbox lifecycle failure', () => {
     const { agent } = harness;
 
     // Stripping it would let the caller believe the agent had read it.
-    const rejected = await agent.acceptSandboxLifecycleFailure({
+    const rejected = await agent.acceptSandboxLifecycleIncident({
       ...incident,
       incidentId: 'inc-3',
       r2Key: 'backups/abc/data.sqsh',
@@ -439,7 +439,7 @@ describe('a sandbox lifecycle failure', () => {
     const { agent } = harness;
 
     for (const stage of INCIDENT_STAGES) {
-      const answer = await agent.acceptSandboxLifecycleFailure({
+      const answer = await agent.acceptSandboxLifecycleIncident({
         version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
         incidentId: `inc-${stage}`, stage, reason: 'measured failure', attempts: 1,
       });
@@ -457,7 +457,7 @@ describe('a sandbox lifecycle failure', () => {
   test('a stage outside the closed set is refused rather than given a generic consequence', async () => {
     const { agent } = orchestratorHarness();
 
-    const answer = await agent.acceptSandboxLifecycleFailure({
+    const answer = await agent.acceptSandboxLifecycleIncident({
       version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
       incidentId: 'inc-4', stage: 'defrost', reason: 'measured failure', attempts: 1,
     });

@@ -4,7 +4,7 @@ import type { SandboxHandle } from '../../src/index';
 export const sandboxHandleLifecycle: Pick<
   SandboxHandle,
   | 'ensureReady' | 'startSupervisedProcess' | 'stopSupervisedProcess'
-  | 'listSupervisedProcesses' | 'portToken' | 'notePortRemoved' | 'resize' | 'portListeners'
+  | 'listSupervisedProcesses' | 'portToken' | 'notePortRemoved' | 'resize' | 'portListeners' | 'answerRest'
 > = {
   ensureReady: async () => {},
   startSupervisedProcess: async () => ({ processId: 'proc-1' }),
@@ -14,6 +14,7 @@ export const sandboxHandleLifecycle: Pick<
   notePortRemoved: async () => {},
   resize: async (size) => ({ kind: 'recorded', size }),
   portListeners: async () => null,
+  answerRest: async () => ({ kind: 'refused', reason: 'no rest ask is pending' }),
 };
 
 /** A file read as the native `Devbox.readFile` answers it: the bytes only when asked for base64,

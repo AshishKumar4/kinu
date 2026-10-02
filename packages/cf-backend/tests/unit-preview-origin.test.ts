@@ -363,6 +363,20 @@ describe('serving the preview host', () => {
     expect(forwarded.headers.get('authorization')).toBe('Bearer guest-token');
   });
 
+  // SDK audit (b), 2026-10-01: the port is the hostname's; a visitor's header or path cannot name another.
+  test('the forwarded port is the label\'s, whatever port the visitor\'s header or path names', async () => {
+    containerResponse = new Response(null, { status: 204 });
+    containerRequest = null;
+    await servePreviewRequest(new Request(`${PREVIEW_URL}_devbox/preview/3000/other/x`, {
+      headers: { 'x-sandbox-port': '3000' },
+    }), CONTAINERS);
+
+    if (!containerRequest) throw new Error('Sandbox preview request was not forwarded');
+    const forwarded: Request = containerRequest;
+    expect(new URL(forwarded.url).pathname)
+      .toBe(`/_devbox/preview/${String(PREVIEW_PORT)}/${PREVIEW_TOKEN}/_devbox/preview/3000/other/x`);
+  });
+
   test('a host that resolves to no exposed port gets a 404, never the app', async () => {
     const res = await serve(`https://not-a-preview.${SUFFIX}/login`, null);
     expect(res.status).toBe(404);

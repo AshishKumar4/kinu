@@ -251,8 +251,8 @@ import {
 import { EmailOutbox } from "@kinu.run/core";
 import { dispatchRecoveredNotice, type RecoveredNotice } from "./fiber-recovery";
 import {
-  acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
-  type SandboxLifecycleFailureResult,
+  acceptSandboxLifecycleIncident, initSandboxLifecycleTable,
+  type SandboxLifecycleIncidentResult,
 } from "./sandbox-lifecycle";
 
 import type { RestoreStatus } from "@kinu.run/devbox";
@@ -5836,9 +5836,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Plain method (not `@callable`): only another DO calls it. `waitUntil` is a no-op in a DO, so work
    * happens in this invocation; the incident id makes caller retries safe.
    */
-  async acceptSandboxLifecycleFailure(body: JsonValue): Promise<SandboxLifecycleFailureResult> {
+  async acceptSandboxLifecycleIncident(body: JsonValue): Promise<SandboxLifecycleIncidentResult> {
 
-    return acceptSandboxLifecycleFailure({
+    return acceptSandboxLifecycleIncident({
       sql: this.boundSql,
       inbox: this.orch.inbox,
       // The workspace name is the only dimension the lifecycle module cannot know.
