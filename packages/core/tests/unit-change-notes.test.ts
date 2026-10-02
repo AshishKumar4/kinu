@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { Result } from 'effect';
 import { admitReviewAnnotations, MAX_PLAN_ANNOTATIONS_BYTES } from '../src/plans/review';
 import { anchoredText, comparePaths, inReadingOrder } from '../src/read-models/change-view';
 import {
@@ -59,7 +60,7 @@ describe('notes on a change-set', () => {
   test('a note carries its place in the diff through the one admission plan review uses, and a bad place is refused', () => {
     const [clamp] = NOTES.filter((each) => each.id === 'clamp');
 
-    expect(admitReviewAnnotations({ value: [clamp] })).toEqual({ ok: true, annotations: [clamp] });
+    expect(admitReviewAnnotations({ value: [clamp] })).toEqual(Result.succeed([clamp]));
 
     for (const anchor of [
       { ...lines(APPLY, 30, 27) },
@@ -67,12 +68,12 @@ describe('notes on a change-set', () => {
       { ...lines(APPLY, 27, 27), side: 'both' },
       { ...lines(APPLY, 27, 27), note: 'unasked' },
     ]) {
-      expect(admitReviewAnnotations({ value: [{ ...clamp, anchor }] }).ok).toBe(false);
+      expect(Result.isFailure(admitReviewAnnotations({ value: [{ ...clamp, anchor }] }))).toBe(true);
     }
 
     // The same admission keeps a set within plan review's limit: a long note is kept, an oversized set is not.
-    expect(admitReviewAnnotations({ value: [{ ...clamp, text: 'x'.repeat(4096) }] }).ok).toBe(true);
-    expect(admitReviewAnnotations({ value: [{ ...clamp, text: 'x'.repeat(MAX_PLAN_ANNOTATIONS_BYTES) }] }).ok).toBe(false);
+    expect(Result.isSuccess(admitReviewAnnotations({ value: [{ ...clamp, text: 'x'.repeat(4096) }] }))).toBe(true);
+    expect(Result.isFailure(admitReviewAnnotations({ value: [{ ...clamp, text: 'x'.repeat(MAX_PLAN_ANNOTATIONS_BYTES) }] }))).toBe(true);
   });
 
   test('notes are kept per source until replaced, with one note on all the changes at most', () => {

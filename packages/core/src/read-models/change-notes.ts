@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import * as v from 'valibot';
 import type { RawSqlExec } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -33,9 +34,9 @@ function keptNotes(rt: NotesRuntime, source: string): { readonly json: string; r
   if (row === undefined) return null;
   const admission = admitReviewAnnotations({ value: JSON.parse(row.notes_json) });
 
-  if (!admission.ok) throw new Error(`the notes kept on ${source} no longer admit: ${admission.error}`);
+  if (Result.isFailure(admission)) throw new Error(`the notes kept on ${source} no longer admit: ${admission.failure.error}`);
 
-  return { json: row.notes_json, notes: admission.annotations };
+  return { json: row.notes_json, notes: admission.success };
 }
 
 export function readChangeNotes(rt: NotesRuntime, source: string): ReviewAnnotation[] {
@@ -54,20 +55,21 @@ export function saveChangeNotes(rt: NotesRuntime, source: string, notes: { value
   rt.actor.assertCurrent();
   const admission = admitReviewAnnotations(notes);
 
-  if (!admission.ok) return admission;
-  const refused = refusal(admission.annotations);
+  if (Result.isFailure(admission)) return { ok: false, error: admission.failure.error };
+  const admitted = admission.success;
+  const refused = refusal(admitted);
 
   if (refused !== null) return { ok: false, error: refused };
   const actorId = rt.actor.actorId;
 
-  if (admission.annotations.length === 0) {
+  if (admitted.length === 0) {
     void rt.storage.sql`DELETE FROM change_notes WHERE actor_id = ${actorId} AND source = ${source}`;
   } else {
     void rt.storage.sql`INSERT OR REPLACE INTO change_notes (actor_id, source, notes_json)
-      VALUES (${actorId}, ${source}, ${JSON.stringify(admission.annotations)})`;
+      VALUES (${actorId}, ${source}, ${JSON.stringify(admitted)})`;
   }
 
-  return { ok: true, notes: admission.annotations };
+  return { ok: true, notes: admitted };
 }
 
 const NotedChangesSchema = v.strictObject({

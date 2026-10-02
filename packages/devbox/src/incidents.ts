@@ -1,6 +1,8 @@
 /** Incident ledger: a failure is stored before delivery. A thrown delivery retries with backoff;
  *  a `rejected` one is frozen, which is safe only while both sides share `INCIDENT_STAGES`. */
 
+import { Effect } from 'effect';
+import { settle } from './errors';
 import {
   describeThrown as describe,
   incidentRetryDelayMs,
@@ -56,56 +58,59 @@ export async function recordIncident(
 
 /** Returns the delay until the next pass, or `null` when nothing is undelivered;
  *  then nothing wakes, and the next `recordIncident` starts a chain again. */
-export async function deliverIncidents(
+export function deliverIncidents(
   store: IncidentStore,
   deliver: (incident: DevboxIncident, attempt: number) => Promise<IncidentDisposition>,
 ): Promise<number | null> {
-  const rows = await store.list({ prefix: INCIDENT_PREFIX });
-  let nextDelayMs: number | undefined;
+  return settle(Effect.gen(function* () {
+    const rows = yield* Effect.promise(async () => store.list({ prefix: INCIDENT_PREFIX }));
+    let nextDelayMs: number | undefined;
 
-  for (const [key, row] of rows) {
-    if (row.deliveredAt !== undefined || row.rejectedAt !== undefined) continue;
-    let disposition: IncidentDisposition;
+    for (const [key, row] of rows) {
+      if (row.deliveredAt !== undefined || row.rejectedAt !== undefined) continue;
 
-    try {
-      disposition = await deliver({
-        incidentId: row.incidentId,
-        stage: row.stage,
-        reason: row.reason,
-        processId: row.processId,
-        port: row.port,
-        at: row.at,
-      // `row.attempts` is only incremented after the handler returns, so this delivery's ordinal is
-      // `+ 1`: the host needs the ordinal of the announcement it is making.
-      }, row.attempts + 1);
-    } catch (error) {
-      // A thrown handler is `undelivered` per the disposition contract, so it takes the same path.
-      // The error is logged here because nothing downstream sees it.
-      console.error(
-        `[devbox] incident ${row.incidentId} was not delivered, retrying: `
-        + describe({ cause: error }),
-      );
-      disposition = 'undelivered';
+      const disposition: IncidentDisposition = yield* Effect.tryPromise({
+        try: async () => deliver({
+          incidentId: row.incidentId,
+          stage: row.stage,
+          reason: row.reason,
+          processId: row.processId,
+          port: row.port,
+          at: row.at,
+        // `row.attempts` is only incremented after the handler returns, so this delivery's ordinal is
+        // `+ 1`: the host needs the ordinal of the announcement it is making.
+        }, row.attempts + 1),
+        catch: (cause) => ({ cause }),
+      }).pipe(Effect.catch((failed) => Effect.sync((): IncidentDisposition => {
+        // A thrown handler is `undelivered` per the disposition contract, so it takes the same path.
+        // The error is logged here because nothing downstream sees it.
+        console.error(
+          `[devbox] incident ${row.incidentId} was not delivered, retrying: `
+          + describe(failed),
+        );
+
+        return 'undelivered';
+      })));
+
+      if (disposition === 'undelivered') {
+        // An `undelivered` row must not get `deliveredAt`: the host still holds it re-deliverable,
+        // so the row stays pending, the attempt is counted, and the schedule retries.
+        nextDelayMs = incidentRetryDelayMs(row.attempts + 1);
+        yield* Effect.promise(async () => store.put(key, { ...row, attempts: row.attempts + 1 }));
+        continue;
+      }
+
+      yield* Effect.promise(async () => store.put(key, {
+        ...row,
+        attempts: row.attempts + 1,
+        ...(disposition === 'queued' ? { deliveredAt: Date.now() } : { rejectedAt: Date.now() }),
+      }));
     }
 
-    if (disposition === 'undelivered') {
-      // An `undelivered` row must not get `deliveredAt`: the host still holds it re-deliverable,
-      // so the row stays pending, the attempt is counted, and the schedule retries.
-      nextDelayMs = incidentRetryDelayMs(row.attempts + 1);
-      await store.put(key, { ...row, attempts: row.attempts + 1 });
-      continue;
-    }
+    yield* Effect.promise(() => reapDeliveredIncidents(store));
 
-    await store.put(key, {
-      ...row,
-      attempts: row.attempts + 1,
-      ...(disposition === 'queued' ? { deliveredAt: Date.now() } : { rejectedAt: Date.now() }),
-    });
-  }
-
-  await reapDeliveredIncidents(store);
-
-  return nextDelayMs === undefined ? null : Math.max(1, Math.ceil(nextDelayMs / 1000));
+    return nextDelayMs === undefined ? null : Math.max(1, Math.ceil(nextDelayMs / 1000));
+  }));
 }
 
 /** Reaps settled rows oldest-settled first; a pending row is never reaped, so a host

@@ -11,6 +11,7 @@ import {
   type ReviewAnnotation,
   type PlanReviewResult,
 } from "@kinu.run/core";
+import { Result } from "effect";
 import { Viewer } from "@/components/plan-review/Viewer";
 import { AnnotationPanel } from "@/components/plan-review/AnnotationPanel";
 import type { Annotation, Block, EditorMode } from "@plannotator/ui/types";
@@ -34,9 +35,9 @@ const COPY_ICON = {
 function parsePlanAnnotations(values: readonly ReviewAnnotation[]): Annotation[] {
   const admission = admitReviewAnnotations({ value: values });
 
-  if (!admission.ok) return [];
+  if (Result.isFailure(admission)) return [];
 
-  return admission.annotations.map((annotation) => ({
+  return admission.success.map((annotation) => ({
     ...annotation,
     type: annotationType(annotation.type),
     author: annotation.author ?? "Owner",

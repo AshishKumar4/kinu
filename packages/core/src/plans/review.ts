@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { settleSync } from '../obs/effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
@@ -43,13 +43,13 @@ export const PlanReviewSchema = v.object({
   annotations: v.pipe(JsonArraySchema, v.rawTransform(({ dataset, addIssue, NEVER }): readonly ReviewAnnotation[] => {
     const admitted = admitReviewAnnotations({ value: dataset.value });
 
-    if (!admitted.ok) {
-      addIssue({ message: admitted.error });
+    if (Result.isFailure(admitted)) {
+      addIssue({ message: admitted.failure.error });
 
       return NEVER;
     }
 
-    return admitted.annotations;
+    return admitted.success;
   })),
   feedback: v.nullable(v.string()), handoffAccepted: v.boolean(),
   createdAt: v.number(), updatedAt: v.number(),
@@ -146,136 +146,112 @@ export const DiffAnchorSchema: v.GenericSchema<unknown, DiffAnchor> = v.pipe(
     'an anchor on words covers at least one character'),
 );
 
-type AnnotationAdmission =
-  | { readonly ok: true; readonly annotations: ReviewAnnotation[] }
-  | { readonly ok: false; readonly error: string };
+interface Refused { readonly error: string }
+
+const refused = (error: string): Effect.Effect<never, Refused> => Effect.fail({ error });
 
 function unsupportedField(value: JsonObject, allowed: ReadonlySet<string>): string | null {
   return Object.keys(value).find((key) => !allowed.has(key)) ?? null;
 }
 
-type OptionalAdmission<T> =
-  | { readonly ok: true; readonly value?: T }
-  | { readonly ok: false; readonly error: string };
+function admitTextPosition(value: JsonValue | undefined, field: string): Effect.Effect<PlanAnnotationTextPosition | undefined, Refused> {
+  if (value === undefined) return Effect.succeed(undefined);
 
-function admitTextPosition(value: JsonValue | undefined, field: string): OptionalAdmission<PlanAnnotationTextPosition> {
-  if (value === undefined) return { ok: true };
-
-  if (!isJsonObject(value)) return { ok: false, error: `${field} must be a text position` };
+  if (!isJsonObject(value)) return refused(`${field} must be a text position`);
   const extra = unsupportedField(value, PLAN_ANNOTATION_POSITION_FIELDS);
 
-  if (extra) return { ok: false, error: `${field} has unsupported field ${extra}` };
+  if (extra) return refused(`${field} has unsupported field ${extra}`);
 
   if (!v.is(NonEmptyStringSchema, value.parentTagName)
     || !v.is(NonNegativeIntegerSchema, value.parentIndex)
     || !v.is(NonNegativeIntegerSchema, value.textOffset)) {
-    return { ok: false, error: `${field} must contain a tag and non-negative integer offsets` };
+    return refused(`${field} must contain a tag and non-negative integer offsets`);
   }
 
-  return { ok: true, value: {
+  return Effect.succeed({
     parentTagName: value.parentTagName,
     parentIndex: value.parentIndex,
     textOffset: value.textOffset,
-  } };
+  });
 }
 
-function admitMathTargets(value: JsonValue | undefined): OptionalAdmission<readonly PlanAnnotationMathTarget[]> {
-  if (value === undefined) return { ok: true };
+function admitMathTargets(value: JsonValue | undefined): Effect.Effect<readonly PlanAnnotationMathTarget[] | undefined, Refused> {
+  if (value === undefined) return Effect.succeed(undefined);
 
-  if (!Array.isArray(value)) return { ok: false, error: 'mathTargets must be an array' };
-  const targets: PlanAnnotationMathTarget[] = [];
+  if (!Array.isArray(value)) return refused('mathTargets must be an array');
 
-  for (const target of value) {
-    if (!isJsonObject(target)) return { ok: false, error: 'each math target must be an object' };
+  return Effect.forEach(value, (target) => {
+    if (!isJsonObject(target)) return refused('each math target must be an object');
     const extra = unsupportedField(target, PLAN_ANNOTATION_MATH_FIELDS);
 
-    if (extra) return { ok: false, error: `mathTargets has unsupported field ${extra}` };
+    if (extra) return refused(`mathTargets has unsupported field ${extra}`);
 
     if (!v.is(NonEmptyStringSchema, target.blockId)
       || !v.is(StringSchema, target.tex)
       || !v.is(BooleanSchema, target.displayMode)) {
-      return { ok: false, error: 'each math target requires blockId, tex, and displayMode' };
+      return refused('each math target requires blockId, tex, and displayMode');
     }
 
-    targets.push({ blockId: target.blockId, tex: target.tex, displayMode: target.displayMode });
-  }
-
-  return { ok: true, value: targets };
+    return Effect.succeed({ blockId: target.blockId, tex: target.tex, displayMode: target.displayMode });
+  });
 }
 
 type Places = Pick<ReviewAnnotation, 'startMeta' | 'endMeta' | 'mathTargets' | 'anchor'>;
 
-function admitPlaces(annotation: JsonObject): { readonly ok: true; readonly value: Places } | { readonly ok: false; readonly error: string } {
-  const startMeta = admitTextPosition(annotation.startMeta, 'startMeta');
+function admitPlaces(annotation: JsonObject): Effect.Effect<Places, Refused> {
+  return Effect.gen(function* () {
+    const startMeta = yield* admitTextPosition(annotation.startMeta, 'startMeta');
+    const endMeta = yield* admitTextPosition(annotation.endMeta, 'endMeta');
+    const mathTargets = yield* admitMathTargets(annotation.mathTargets);
+    const anchor = annotation.anchor === undefined ? undefined : v.safeParse(DiffAnchorSchema, annotation.anchor);
 
-  if (!startMeta.ok) return startMeta;
-  const endMeta = admitTextPosition(annotation.endMeta, 'endMeta');
+    if (anchor?.success === false) return yield* refused(anchor.issues[0].message);
+    const places: { -readonly [K in keyof Places]: Places[K] } = {};
 
-  if (!endMeta.ok) return endMeta;
-  const mathTargets = admitMathTargets(annotation.mathTargets);
+    if (startMeta) places.startMeta = startMeta;
 
-  if (!mathTargets.ok) return mathTargets;
-  const anchor = annotation.anchor === undefined ? undefined : v.safeParse(DiffAnchorSchema, annotation.anchor);
+    if (endMeta) places.endMeta = endMeta;
 
-  if (anchor?.success === false) return { ok: false, error: anchor.issues[0].message };
-  const places: { -readonly [K in keyof Places]: Places[K] } = {};
+    if (mathTargets) places.mathTargets = mathTargets;
 
-  if (startMeta.value) places.startMeta = startMeta.value;
+    if (anchor?.success === true) places.anchor = anchor.output;
 
-  if (endMeta.value) places.endMeta = endMeta.value;
-
-  if (mathTargets.value) places.mathTargets = mathTargets.value;
-
-  if (anchor?.success === true) places.anchor = anchor.output;
-
-  return { ok: true, value: places };
+    return places;
+  });
 }
 
-export function admitReviewAnnotations(input: { value: unknown }): AnnotationAdmission {
-  let encoded: string;
-
-  try { encoded = JSON.stringify(input.value); }
-  catch (error) { return { ok: false, error: `annotations must be JSON-serializable: ${renderThrownChain({ cause: error })}` }; }
-
-  if (byteLength(encoded) > MAX_PLAN_ANNOTATIONS_BYTES) return { ok: false, error: 'annotations exceed the maximum size of 256 KiB' };
-  const parsed = v.safeParse(JsonArraySchema, input.value);
-
-  if (!parsed.success) return { ok: false, error: 'annotations must be an array' };
-  const annotations: ReviewAnnotation[] = [];
-
-  for (const [index, annotation] of parsed.output.entries()) {
-    if (!isJsonObject(annotation)) return { ok: false, error: `annotation ${index} must be an object` };
+function admittedAnnotation(annotation: JsonValue, index: number): Effect.Effect<ReviewAnnotation, Refused> {
+  return Effect.gen(function* () {
+    if (!isJsonObject(annotation)) return yield* refused(`annotation ${index} must be an object`);
     const extra = unsupportedField(annotation, PLAN_ANNOTATION_FIELDS);
 
-    if (extra) return { ok: false, error: `annotation ${index} has unsupported field ${extra}` };
+    if (extra) return yield* refused(`annotation ${index} has unsupported field ${extra}`);
 
     if (!v.is(NonEmptyStringSchema, annotation.id)
       || !v.is(NonEmptyStringSchema, annotation.blockId)) {
-      return { ok: false, error: `annotation ${index} requires id and blockId` };
+      return yield* refused(`annotation ${index} requires id and blockId`);
     }
 
     if (!v.is(NonNegativeIntegerSchema, annotation.startOffset)
       || !v.is(NonNegativeIntegerSchema, annotation.endOffset)
       || annotation.endOffset < annotation.startOffset) {
-      return { ok: false, error: `annotation ${index} has invalid offsets` };
+      return yield* refused(`annotation ${index} has invalid offsets`);
     }
 
     const type = annotation.type;
 
     if (type !== 'DELETION' && type !== 'COMMENT' && type !== 'GLOBAL_COMMENT') {
-      return { ok: false, error: `annotation ${index} has invalid type` };
+      return yield* refused(`annotation ${index} has invalid type`);
     }
 
     if (!v.is(StringSchema, annotation.originalText)
       || !v.is(NonNegativeNumberSchema, annotation.createdA)
       || (annotation.text !== undefined && !v.is(StringSchema, annotation.text))
       || (annotation.author !== undefined && !v.is(StringSchema, annotation.author))) {
-      return { ok: false, error: `annotation ${index} has invalid text or author fields` };
+      return yield* refused(`annotation ${index} has invalid text or author fields`);
     }
 
-    const places = admitPlaces(annotation);
-
-    if (!places.ok) return { ok: false, error: `annotation ${index}: ${places.error}` };
+    const places = yield* Effect.mapError(admitPlaces(annotation), (place) => ({ error: `annotation ${index}: ${place.error}` }));
 
     const admitted: ReviewAnnotation = {
       id: annotation.id,
@@ -285,16 +261,32 @@ export function admitReviewAnnotations(input: { value: unknown }): AnnotationAdm
       type,
       originalText: annotation.originalText,
       createdA: annotation.createdA,
-      ...places.value,
+      ...places,
     };
 
     if (v.is(StringSchema, annotation.text)) Object.assign(admitted, { text: annotation.text });
 
     if (v.is(StringSchema, annotation.author)) Object.assign(admitted, { author: annotation.author });
-    annotations.push(admitted);
-  }
 
-  return { ok: true, annotations };
+    return admitted;
+  });
+}
+
+/** The annotations, each admitted, or why the first refused one is refused. */
+export function admitReviewAnnotations(input: { value: unknown }): Result.Result<ReviewAnnotation[], Refused> {
+  return settleSync(Effect.result(Effect.gen(function* () {
+    const encoded = yield* Effect.try({
+      try: () => JSON.stringify(input.value),
+      catch: (cause) => ({ error: `annotations must be JSON-serializable: ${renderThrownChain({ cause })}` }),
+    });
+
+    if (byteLength(encoded) > MAX_PLAN_ANNOTATIONS_BYTES) return yield* refused('annotations exceed the maximum size of 256 KiB');
+    const parsed = v.safeParse(JsonArraySchema, input.value);
+
+    if (!parsed.success) return yield* refused('annotations must be an array');
+
+    return yield* Effect.forEach(parsed.output, (annotation, index) => admittedAnnotation(annotation, index));
+  })));
 }
 
 function toPlanReview(row: PlanReviewRow): PlanReview {
@@ -609,13 +601,13 @@ export class PlanReviewStore {
 
     const admission = admitReviewAnnotations(annotations);
 
-    if (!admission.ok) return { ok: false, error: admission.error, plan: current };
+    if (Result.isFailure(admission)) return { ok: false, error: admission.failure.error, plan: current };
 
-    if (admission.annotations.some((annotation) => annotation.anchor !== undefined)) {
+    if (admission.success.some((annotation) => annotation.anchor !== undefined)) {
       return { ok: false, error: 'a plan note has no place in a diff', plan: current };
     }
 
-    const encoded = JSON.stringify(admission.annotations);
+    const encoded = JSON.stringify(admission.success);
 
     if (byteLength(current.content) + byteLength(encoded) > MAX_PLAN_REVIEW_ROW_BYTES) {
       return { ok: false, error: `plan content and annotations exceed the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };

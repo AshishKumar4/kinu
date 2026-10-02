@@ -106,6 +106,16 @@ export const DECLARED = new Map<string, Declaration>([
     within: classes,
     reason: 'a KinuError refinement: it fails on Effect\'s channel and crosses as a KinuError (code, wire), and callers also read it by class for its extra field',
   }] as const),
+  ['packages/core/src/read-models/change-notes.ts', {
+    mechanisms: ['result-literal', 'result-type'],
+    within: ['ChangeNotesResult', 'saveChangeNotes', 'sendChangeNotes'],
+    reason: '`ChangeNotesResult`, the change-set notes\' RPC answer: the Changes surface and the CLI read `ok` and `error` off it',
+  }],
+  ['packages/devbox/src/devbox.ts', {
+    mechanisms: ['result-literal'],
+    within: ['devboxSync'],
+    reason: 'the container sync\'s HTTP answer body: the in-container sync client reads `ok` off the wire',
+  }],
   ['packages/core/src/tools/outcome.ts', {
     mechanisms: ['result-literal', 'result-type'],
     reason: '`ToolOutcome`, the recorded outcome of a native tool invocation; `success` is its stored field',
