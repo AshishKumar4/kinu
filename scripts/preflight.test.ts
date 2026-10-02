@@ -42,6 +42,7 @@ function declaredMarkers(file: string, source: string): (string | undefined)[] {
 
 /** A healthy machine, so each case below moves exactly one fact. */
 const HEALTHY: Environment = {
+  bun: { actual: '1.4.2', pinned: '1.4.2' },
   temp: '/tmp',
   freeInodes: 900_000,
   freeBytes: 40 * 1024 ** 3,
@@ -54,6 +55,14 @@ const HEALTHY: Environment = {
   mergeInProgress: null,
   conflictedPaths: 0,
 };
+
+test('a different Bun than the checkout pins is an environment fault', () => {
+  for (const actual of ['1.4.0', '1.4.3']) {
+    expect(judge({ ...HEALTHY, bun: { actual, pinned: '1.4.2' } })).toHaveLength(1);
+  }
+
+  expect(judge({ ...HEALTHY, bun: { actual: '1.4.2', pinned: '1.4.2' } })).toEqual([]);
+});
 
 describe('the test browsers --reclaim ends', () => {
   const chrome = (pid: number, ppid: number, ...flags: string[]): ProcessRow => ({

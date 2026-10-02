@@ -3,7 +3,7 @@
 Self-evolving agent framework: swarm tree-search exploration, mutable scaffolding, durable skill evolution. Two backends over one core: Cloudflare Workers (`cf-backend`, Agents SDK DOs) and local CLI (`cli-backend`, bun:sqlite). Bun workspaces under `packages/*`.
 
 ## Commands
-`bun install` · `bun run check` (strict lint + typecheck; all anti-slop rules are errors, warnings fail) · `bun test --cwd packages/core` · `bun run dev` · `bun run layergate` · `bun run deploy` (the only deploy path; never bare `wrangler deploy`) · `bash scripts/setup-worktree.sh` (once per fresh worktree; never symlink the primary's `node_modules`; never `bun install` in a linked worktree, the root `preinstall` refuses).
+`bun install` · `bun run check` (strict lint + typecheck; all anti-slop rules are errors, warnings fail) · `bun test --cwd packages/core` · `bun run dev` · `bun run layergate` · `bun run deploy` (the only deploy path; never bare `wrangler deploy`) · `bash scripts/setup-worktree.sh` (once per fresh worktree; matching dependencies are linked per entry, a different lock gets a real install; never symlink the primary's whole `node_modules`). Hooks use the exact Bun installed in this checkout's `node_modules/.bin`, never the shared global. Do not install over borrowed dependency links: the scanner refuses before writing through them.
 
 ## Gates
 - A gate governs exactly the set it measures; read the corpus through `scripts/sources.ts`, never a hand list. Prove a gate red in every direction it claims before trusting it green; print its blind spots on the green path.

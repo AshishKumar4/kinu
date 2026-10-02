@@ -23,4 +23,5 @@
 
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
-exec bun scripts/commit-hygiene.ts "$1"
+source scripts/repo-runtime.sh
+exec "$PWD/node_modules/.bin/bun" scripts/commit-hygiene.ts "$1"

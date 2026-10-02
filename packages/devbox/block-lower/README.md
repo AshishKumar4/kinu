@@ -19,6 +19,8 @@ bun packages/devbox/block-lower/bundle-sync.ts
 docker build -t kinu-devbox-block-layer:<date> packages/devbox/block-lower
 ```
 
+Run the bundle step with the Bun version in the root `package.json`; local preflight checks it against the running binary. The runtime image pins that Bun version too. On 2026-10-02, Bun 1.4.2 built `sync.js` with digest `d57ec595…`, and the pushed image `518fa86d…` restored a saved marker after a real stop and wake through the bench fixture. Its resource cleanup passed.
+
 ## Format and reads
 
 `over.index` names `.devbox-delta/<sha256>`, a file in the same delta image.

@@ -63,7 +63,7 @@ echo "mutation pilot: ref $(git -C "$TREE" rev-parse --short HEAD), budget ${BUD
 echo "report: ${REPORT}"
 
 set +e
-(cd "$TREE" && bun scripts/mutation-pilot.ts --budget "$BUDGET") 2>&1 | tee "$REPORT"
+(cd "$TREE" && source scripts/repo-runtime.sh && bun scripts/mutation-pilot.ts --budget "$BUDGET") 2>&1 | tee "$REPORT"
 STATUS="${PIPESTATUS[0]}"
 set -e
 

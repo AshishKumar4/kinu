@@ -30,7 +30,10 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
             bun-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - run: |
+          bun install --frozen-lockfile
+          source scripts/repo-runtime.sh
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
       - id: plan
         run: echo "matrix=$(bun scripts/ladder.ts --ci-matrix)" >> "$GITHUB_OUTPUT"
 
@@ -59,7 +62,10 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
             bun-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - run: |
+          bun install --frozen-lockfile
+          source scripts/repo-runtime.sh
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
       # Browser rows use the runner's Chrome. bubblewrap and ffmpeg/ffprobe are
       # absent from its image; the upload part runs neither and needs no apt.
       - name: Resolve system prerequisites
@@ -121,7 +127,10 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
             bun-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - run: |
+          bun install --frozen-lockfile
+          source scripts/repo-runtime.sh
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
       - uses: actions/download-artifact@v4
         with:
           pattern: ladder-verdicts-${{ github.sha }}-${{ github.run_attempt }}-*
@@ -151,6 +160,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      - run: bun install --frozen-lockfile
+      - run: |
+          bun install --frozen-lockfile
+          source scripts/repo-runtime.sh
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Verify Lean proofs, consistency, and traceability
         run: bash scripts/verify-lean.sh

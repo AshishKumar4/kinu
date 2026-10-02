@@ -38,6 +38,7 @@
 # 16,000-line tier.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
+source scripts/repo-runtime.sh
 
 # The tier proves the checked-out tree, so it must be the tree being pushed: a push of
 # another branch from this worktree once ran the tier on main and refused a green commit.
@@ -56,7 +57,7 @@ if [ -n "$(git status --porcelain=v1)" ]; then
 fi
 
 log="$(git rev-parse --git-dir)/push-tier.log"
-if bun scripts/ladder.ts --tier=push > "$log" 2>&1; then
+if "$PWD/node_modules/.bin/bun" scripts/ladder.ts --tier=push > "$log" 2>&1; then
   tail -n 1 "$log"
   exit 0
 fi
