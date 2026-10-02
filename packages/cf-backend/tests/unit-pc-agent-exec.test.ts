@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 import { join } from 'node:path';
@@ -598,7 +598,56 @@ describe('pc-agent command cancellation', () => {
   });
 });
 
+/** Lets the command held on `gate` finish; throws (ENXIO) rather than waits when nothing reads the gate. */
+function release(gate: string): void {
+  const fd = openSync(gate, constants.O_WRONLY | constants.O_NONBLOCK);
+
+  try {
+    writeSync(fd, 'go\n');
+  } finally {
+    closeSync(fd);
+  }
+}
+
 describe('pc-agent durable supervisor', () => {
+  // 2026-10-02: a supervisor killed before its result left its exec waiting on a file nothing would write.
+  test('a supervisor killed mid-command answers its exec with its death, not silence', async () => {
+    const gate = join(scratchDir('pc-agent-supervisor-killed'), 'gate');
+    execFileSync('mkfifo', [gate]);
+    const ws = recorder();
+    const id = rpcId(440);
+    handle({ id, method: 'exec', params: [`cat ${gate} > /dev/null`] }, ws.socket);
+    const { pid, group } = await supervisorState(id);
+
+    process.kill(pid, 'SIGKILL');
+    const reply = await ws.answerTo(id);
+
+    expect(reply.error).toContain(`the supervisor of ${id} (pid ${String(pid)}) exited without recording the command's result`);
+    expect(reply.error).toContain(`process group ${String(group)}`);
+    // The command outlived its supervisor: let it finish, so the run leaves nothing behind.
+    release(gate);
+  });
+
+  test('a daemon that adopted a supervisor after a restart hears of its death too', async () => {
+    const gate = join(scratchDir('pc-agent-adopted-killed'), 'gate');
+    execFileSync('mkfifo', [gate]);
+    const ws = recorder();
+    const id = rpcId(450);
+    handle({ id, method: 'exec', params: [`cat ${gate} > /dev/null`] }, ws.socket);
+    const { pid } = await supervisorState(id);
+    // Built over the same root, as a restarted daemon builds its registry: it is not the supervisor's parent.
+    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
+    expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: false });
+
+    process.kill(pid, 'SIGKILL');
+    // Gone before the registry asks: its FIFO then has no writer left to hang up, so the open itself must tell.
+    await Bun.spawn(['tail', `--pid=${String(pid)}`, '-f', '/dev/null']).exited;
+
+    await expect(restarted.result(id)).rejects.toThrow(`the supervisor of ${id} (pid ${String(pid)}) exited without recording the command's result`);
+    await ws.answerTo(id);
+    release(gate);
+  });
+
   test('bounds captured output, keeps its head and tail, and saves the whole of it', async () => {
     const ws = recorder();
     const id = rpcId(300);
@@ -816,16 +865,14 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     tunnel.dispose();
   });
 
-  /** The far end genuinely cannot kill: with the supervisor gone, the group is beyond the daemon's reach. */
-  test('a stop the device cannot perform is reported as unconfirmed, with the command still running', async () => {
+  /** With the supervisor gone the group is beyond the daemon's reach, and the exec says so, needing no stop to. */
+  test('a supervisor gone mid-command ends its exec with its death, its command still running', async () => {
     const dir = scratchDir('pc-agent-orphan');
     const { command, pidOf } = commandWithDescendant(dir, 'orphan');
     const { provider, tunnel } = deviceChain();
-    const controller = new AbortController();
     const issued: string[] = [];
 
     const pending = provider.tools.exec.execute(command, {
-      signal: controller.signal,
       onDeviceRequest: (requestId: string) => { issued.push(requestId); },
     });
 
@@ -833,13 +880,12 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     const supervisor = await supervisorState(issued[0]);
 
     process.kill(supervisor.pid, 'SIGKILL');
-    // Gone, not just signalled: a supervisor corpse would never answer, a different failure.
-    expect(await gone(supervisor.pid)).toBe(true);
-    controller.abort();
 
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    await expect(pending).rejects.toThrow(/could not stop the command, which may still be running/);
-    await expect(pending).rejects.toThrow(/supervisor identity no longer matches/);
+    expect(await pending).toMatchObject({
+      reason: 'io',
+      error: expect.stringContaining(`may still be running in process group ${String(supervisor.group)}`),
+    });
+    // Not a guess: the command did outlive its supervisor.
     expect(alive(descendant)).toBe(true);
 
     tunnel.dispose();
