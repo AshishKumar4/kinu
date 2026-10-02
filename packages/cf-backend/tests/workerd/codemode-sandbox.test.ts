@@ -151,7 +151,7 @@ describe('the eval sandbox under workerd', () => {
     expect(result.result).toEqual({
       cwd: WORKSPACE_ROOT,
       nextTick: 'function',
-      missing: `ENOENT: no such directory, '${WORKSPACE_ROOT}/skills'`,
+      missing: `ENOENT: no such directory, scandir '${WORKSPACE_ROOT}/skills'`,
     });
   });
 
