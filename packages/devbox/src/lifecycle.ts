@@ -21,8 +21,7 @@ export interface DevboxPolicy {
   /** Minimum checkpoint gap and the sync's tick period are one number, so an early tick (a
    *  container restart re-arms it) cannot double-commit. It bounds the loss window (D30). */
   readonly checkpointIntervalMs: number;
-  /** Whole onStart restore budget: identity, attachment, workload resumption, durable settlement.
-   *  A raced timer bounds each step; control-listener proof precedes the SDK opening the block. */
+  /** The whole onStart restore budget; a raced timer bounds each step. */
   readonly attachBudgetMs: number;
   /** Cap on waiting for a restored server to listen; a forked process is STARTED before it binds.
    *  A cap, not a per-port timer: each port gets min(this, remaining `attachBudgetMs`). */
@@ -456,9 +455,8 @@ export function findMount(procMounts: string, dir: string): MountLine | undefine
   return undefined;
 }
 
-/** TERM's grace before KILL, for work-directory holders and supervised processes alike: without
- *  KILL one process that ignores TERM is unstoppable, and a waiting caller's stop runs this. Long
- *  enough to flush, short enough to stop within ceilings. */
+/** TERM's grace before KILL for holders and supervised processes: long enough to flush, short
+ *  enough to stop within ceilings. */
 export const TERM_GRACE_MS = 5_000;
 
 /** After admissions drain, release fd, mapped-file and cwd holders. PID 1 and this command

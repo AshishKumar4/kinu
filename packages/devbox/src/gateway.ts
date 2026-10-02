@@ -79,9 +79,8 @@ interface StorePath {
   readonly mounts: Pick<S3Mount, 'inspect'>;
 }
 
-/** `undefined`: nothing is mounted at the store path, so there is no route to rebuild and the chain's
- *  next mount registers its own. `mount-marker` is terminal (D47), so only what the container
- *  answered about the marker carries it; a failure to reach the container is retried as itself. */
+/** `undefined`: nothing is mounted, so the next mount registers its own route. `mount-marker` is
+ *  terminal (D47), so only the container's answer about the marker carries it. */
 function restoredStoreRoute(at: StorePath, source: S3MountRequest['source'], prefix: string, gateway: S3GatewayBinding): Effect.Effect<Readonly<{ hostname: string; handler: Fetcher }> | undefined, DevboxError> {
   return Effect.gen(function* () {
     const read = yield* Effect.result(attempt('io', () => at.files.readFile(SDK_STORE_MARKER)));

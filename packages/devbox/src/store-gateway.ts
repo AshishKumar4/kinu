@@ -1,6 +1,5 @@
 /** A store mount's S3 requests, answered from the Worker's own R2 binding: no key pair exists (D41).
- *  S3Mount runs `s3fs` in the guest with the shim's placeholder password and routes each mount's
- *  host here, as 0.12.9's R2 mount did; the SDK's `S3Gateway` would sign them for R2's S3 API. */
+ *  S3Mount's `s3fs` holds a placeholder password and each mount's host routes here. */
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { S3GatewayBinding, S3MountRequest } from '@cloudflare/sandbox';
 import { Effect } from 'effect';
@@ -232,9 +231,8 @@ function serveObject({ request, bucket, root }: StoreCall, key: string): Effect.
   });
 }
 
-/** Holds each route to the bucket and access S3Mount recorded for it, rooted at the box's prefix
- *  Devbox set on it: a key the guest names is a path under that root (D46), as 0.12.9's Worker
- *  rooted its mount, so it reaches no other binding and no other box's keys. */
+/** Holds each route to its recorded bucket and access, rooted at the box's prefix: a key the guest
+ *  names is a path under that root (D46), so it reaches no other binding or box. */
 export function serveStore(request: Request, props: StoreGatewayProps, bucketOf: (name: string) => R2Bucket | undefined): Effect.Effect<Response, DevboxError> {
   return Effect.gen(function* () {
     if (props.mode === 'deny') return refused(request, 403, 'AccessDenied', 'this store route has been revoked');

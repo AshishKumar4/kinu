@@ -6,6 +6,7 @@ import { Processes, CONTAINER_TRUST_ENV } from "./processes";
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, ListedFile, GatewayBindings } from './contracts';
 import { NativeArchives } from './native-archives';
+import { DISK_CHAIN_STORE_MOUNT, DiskChainStateSchema, DiskChainStorage, SNAPSHOT_SAFE_COMMAND, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import { Effect, Result } from 'effect';
@@ -185,8 +186,7 @@ const PORT_SPEC_PREFIX = 'devbox:port:';
 
 const LAST_ATTACH_KEY = 'devbox:last-attach';
 
-/** Recovery progress for one container identity: written only by the recovery ladder, deleted
- *  on the first landed attach; durable because a fresh object often runs the scheduled retry. */
+/** One container identity's recovery progress, written only by the ladder, deleted on the first attach. */
 const ATTACH_RECOVERY_KEY = 'devbox:attach-recovery';
 
 const LAST_TICK_KEY = 'devbox:last-tick';
@@ -195,8 +195,7 @@ const REST_ASK_KEY = 'devbox:rest-ask';
 
 const BOOT_ID_KEY = 'devbox:boot-id';
 
-/** Persisted so a mid-restore object reset is survivable; a stored `restoring` phase needs recovery.
- *  Generation turnover clears the row, so a stale phase cannot admit a different container. */
+/** Survives a mid-restore object reset; turnover clears it, so no stale phase admits another container. */
 const SETTLED_KEY = 'devbox:restoration';
 
 const REPLACED_COUNT_KEY = 'devbox:replaced-count';
@@ -211,6 +210,16 @@ const DEFAULT_SIZE_KEY = 'devbox:default-size';
 const RUNNING_SIZE_KEY = 'devbox:running-size';
 
 const START_REFUSED_KEY = 'devbox:start-refused';
+
+const DISK_STATE_KEY = 'devbox:disk-chain';
+
+const SNAPSHOT_KEY = 'devbox:snapshot';
+
+const SUPERSEDED_SNAPSHOTS_KEY = 'devbox:superseded-snapshots';
+
+const SnapshotRecord = v.object({ id: v.string(), chainRev: v.number(), takenAt: v.number() });
+
+const SNAPSHOT_LIFE_MS = 29 * 24 * 60 * 60 * 1000;
 
 const NO_START_IMAGE = 'no image to start: name it `devbox` in the container `images` map';
 
@@ -308,6 +317,8 @@ function sameToken(held: string | undefined, given: string): boolean {
 export class Devbox<Env = unknown> extends DurableObject<Env> {
   readonly #gateways: GatewayBindings;
   #storage: DevboxStorage | undefined;
+
+  #startedFromSnapshot = false;
   #gateRestore: Flight | undefined;
   /** Fences every write below: an abandoned startup continuation keeps running, and must
    *  re-check this token after every await or it can clear its successor's single-flight entry. */
@@ -437,6 +448,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return DEFAULT_DEVBOX_STRATEGY;
   }
 
+  /** D55: workspace on disk, a snapshot at each rest as the wake, the disk chain as backup. */
+  protected get hybrid(): boolean {
+    return false;
+  }
+
+  /** D55: 55 of 59 snapshot wakes answered within 3.1 s, 4 took 30 to 53 s. */
+  protected get snapshotWakeCutoverMs(): number {
+    return 10_000;
+  }
+
   protected get policy(): DevboxPolicy {
     return DEFAULT_DEVBOX_POLICY;
   }
@@ -502,8 +523,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.onRestorePhase('settled', Date.now() - clock.openedAt);
   }
 
-  /** A benchmark box overrides to `false`: an ambient tick would commit its pending change and
-   *  reset the interval stamp, so the driver's measured tick would skip. The gate still applies. */
+  /** A benchmark box turns them off, so no ambient tick pre-empts the driver's own. */
   protected get ambientCheckpoints(): boolean {
     return true;
   }
@@ -552,17 +572,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (!wasRunning) {
       // D50: the one start boundary.
       this.ctx.storage.kv.put(RUNNING_SIZE_KEY, inputs.size);
-      container.start({ image: inputs.image, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
+      this.#startFrom(container, inputs, this.#wakeSnapshot());
       this.#routes().started();
     }
 
     const cancel = new AbortController();
 
     const run = (async () => {
-      const ready = await container.exec(['/bin/true'], { signal: cancel.signal });
-      const result = await ready.output();
-
-      if (result.exitCode !== 0) throw new DevboxError("io", `native container admission exited ${result.exitCode}`);
+      await this.#admit(container, cancel.signal, inputs);
 
       if (!this.#owns(generation) || this.#closed) return;
       await this.configureContainer(wasRunning && (this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'));
@@ -579,6 +596,49 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     } finally {
       this.#admissions.delete(admission);
     }
+  }
+
+  #wakeSnapshot(): string | undefined {
+    if (!this.hybrid) return undefined;
+    const held = v.safeParse(SnapshotRecord, this.ctx.storage.kv.get(SNAPSHOT_KEY));
+    const chain = v.safeParse(DiskChainStateSchema, this.ctx.storage.kv.get(DISK_STATE_KEY));
+
+    if (!held.success || Date.now() - held.output.takenAt > SNAPSHOT_LIFE_MS) return undefined;
+
+    return chain.success && chain.output.rev > held.output.chainRev ? undefined : held.output.id;
+  }
+
+  #startFrom(container: Container, inputs: StartInputs, snapshot: string | undefined): void {
+    this.#startedFromSnapshot = snapshot !== undefined;
+    container.start({
+      ...(snapshot === undefined ? { image: inputs.image } : { containerSnapshot: { id: snapshot } }),
+      instance: instanceOf(inputs.size), enableInternet: this.enableInternet,
+    });
+  }
+
+  /** A snapshot start that fails or misses the cutover falls back to the image and the chain. */
+  async #admit(container: Container, signal: AbortSignal, inputs: StartInputs): Promise<void> {
+    if (this.#startedFromSnapshot) {
+      const [woke] = await Promise.allSettled([firstExec(container, AbortSignal.any([signal, AbortSignal.timeout(this.snapshotWakeCutoverMs)]))]);
+
+      if (woke.status === 'fulfilled') return;
+      this.#trace('startup.snapshot.cutover', { reason: describe({ cause: woke.reason }) });
+      await container.destroy();
+      await this.#awaitContainerStopped();
+      this.#supersede(SNAPSHOT_KEY);
+      this.#startFrom(container, inputs, undefined);
+    }
+
+    await firstExec(container, signal);
+  }
+
+  #supersede(key: string): void {
+    const held = v.safeParse(SnapshotRecord, this.ctx.storage.kv.get(key));
+
+    if (!held.success) return;
+    const superseded = v.safeParse(v.array(v.string()), this.ctx.storage.kv.get(SUPERSEDED_SNAPSHOTS_KEY));
+    this.ctx.storage.kv.put(SUPERSEDED_SNAPSHOTS_KEY, [...(superseded.success ? superseded.output : []), held.output.id]);
+    this.ctx.storage.kv.delete(key);
   }
 
   /** Joins a re-entered hook; adopts a settled boot without re-attaching. */
@@ -811,7 +871,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** A box that may extract runs in local `wrangler dev`, whose container cannot reach it. */
   #syncsInContainer(): boolean {
-    return this.store !== undefined && !this.allowExtraction;
+    return this.store !== undefined && !this.allowExtraction && !this.hybrid;
   }
 
   #syncRuns(): boolean {
@@ -942,8 +1002,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
   }
 
-  /** All phases share one budget (D19). An attach overrun throws `ContainerStartOverrun` (identity is
-   *  replaced); later steps mutate no mount, so exhaustion is reported in `unready` and never re-arms. */
+  /** One budget for all phases (D19): an attach overrun replaces the identity; a later step's
+   *  exhaustion is reported in `unready` and never re-arms. */
   async #attachAndRestore(
     generation: number,
     claim: RecoveryClaim,
@@ -1936,6 +1996,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       }
 
       resumeResidents = false;
+
+      if (this.hybrid) await this.#restSnapshot();
       await this.#detachStorage();
       this.#invalidateGeneration();
       await this.#stopContainer();
@@ -1950,6 +2012,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
   }
 
+
+  async #restSnapshot(): Promise<void> {
+    const [taken] = await Promise.allSettled([this.#takeRestSnapshot()]);
+    const skipped = taken.status === 'fulfilled' ? taken.value : describe({ cause: taken.reason });
+
+    if (skipped !== undefined) await this.#record('quiesce', `the rest took no snapshot, so the next wake recovers from the backup: ${skipped}`);
+  }
+
+  async #takeRestSnapshot(): Promise<string | undefined> {
+    const safe = await this.#rawExec(SNAPSHOT_SAFE_COMMAND, DEVBOX_RUNTIME_DIR);
+
+    if (safe.stdout.trim() !== 'safe') return 'the workspace is still an older chain\'s overlay';
+    const chain = v.safeParse(DiskChainStateSchema, this.ctx.storage.kv.get(DISK_STATE_KEY));
+    const snapshot = await this.#container().snapshotContainer({ name: `${this.ctx.id.toString()}-${String(Date.now())}` });
+
+    this.#supersede(SNAPSHOT_KEY);
+    this.ctx.storage.kv.put(SNAPSHOT_KEY, { id: snapshot.id, chainRev: chain.success ? chain.output.rev : 0, takenAt: Date.now() });
+
+    return undefined;
+  }
 
   /** Kill live supervised processes via `killProcess`, not `stopSupervised`: that drops the spec,
    *  and the wake's restoration restarts exactly those specs. */
@@ -2658,7 +2740,66 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       };
     }
 
-    return snapshotChainStorage(this.#chainPorts(store));
+    return this.hybrid ? this.#hybridStorage(store) : snapshotChainStorage(this.#chainPorts(store));
+  }
+
+  protected hybridChain(ports: DiskChainPorts): DiskChain {
+    return diskChain(ports);
+  }
+
+  #hybridStorage(store: DevboxStore): DevboxStorage {
+    const legacy = snapshotChainStorage(this.#chainPorts(store));
+
+    return new DiskChainStorage(this.hybridChain(this.#diskChainPorts(store)), {
+      fromSnapshot: () => this.#startedFromSnapshot,
+      legacy: () => this.ctx.storage.kv.get(DISK_STATE_KEY) === undefined && this.ctx.storage.kv.get(STORAGE_KEY) !== undefined ? legacy : undefined,
+      recovered: async (restoredTo) => { await this.#record('attach', recoveryNotice(restoredTo, this.archiveExcludes)); },
+      discard: async () => {
+        this.ctx.storage.kv.delete(DISK_STATE_KEY);
+        this.#supersede(SNAPSHOT_KEY);
+        await legacy.discard();
+        const listed = await store.bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/disk/` });
+        await store.bucket.delete(listed.objects.map(object => object.key));
+      },
+    });
+  }
+
+  #diskChainPorts(store: DevboxStore): DiskChainPorts {
+    const root = chainStoreRoot(this.#boxPrefix());
+    const exec = (command: string) => this.#rawExec(command, DEVBOX_RUNTIME_DIR);
+
+    return {
+      exec,
+      readState: async () => {
+        const stored = await this.ctx.storage.get<StoredValue>(DISK_STATE_KEY);
+
+        return stored === undefined ? null : v.parse(DiskChainStateSchema, stored);
+      },
+      writeState: async (state, expectedRev) => this.ctx.storage.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
+        const stored = yield* attemptSync('io', () => this.ctx.storage.kv.get<StoredValue>(DISK_STATE_KEY));
+        const rev = stored === undefined ? null : (yield* attemptSync('io', () => v.parse(DiskChainStateSchema, stored))).rev;
+
+        if (rev !== expectedRev) return yield* Effect.fail(chainAdvanced(expectedRev, rev));
+        yield* attemptSync('io', () => this.ctx.storage.kv.put(DISK_STATE_KEY, state));
+      }))),
+      storeRoot: () => root,
+      storeObjectUrl: (key) => storeObjectUrl(root, store.binding, key),
+      objectBytes: async (key) => (await store.bucket.head(key))?.size,
+      deleteObjects: async (keys) => {
+        await store.bucket.delete([...keys]);
+      },
+      mountStore: async () => {
+        if ((await exec(`mountpoint -q ${DISK_CHAIN_STORE_MOUNT}`)).exitCode === 0) return;
+        await this.#routes().unmount(DISK_CHAIN_STORE_MOUNT);
+        await this.#routes().mount(DISK_CHAIN_STORE_MOUNT);
+      },
+      excludes: () => this.archiveExcludes,
+      checkpointIntervalMs: () => this.policy.checkpointIntervalMs,
+      now: () => Date.now(),
+      log: (message) => {
+        console.log(`[devbox] ${message}`);
+      },
+    };
   }
 
   /** The Durable Object id is hex and unique per box: no escaping, no collision. */
@@ -3059,3 +3200,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 }
 
+
+async function firstExec(container: Container, signal: AbortSignal): Promise<void> {
+  const ready = await container.exec(['/bin/true'], { signal });
+  const result = await ready.output();
+
+  if (result.exitCode !== 0) throw new DevboxError("io", `native container admission exited ${result.exitCode}`);
+}

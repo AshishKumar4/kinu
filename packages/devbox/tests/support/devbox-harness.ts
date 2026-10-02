@@ -8,7 +8,8 @@ export { Devbox };
 import { createHash } from 'node:crypto';
 
 import { snapshotChainStorage } from '../../src/snapshot-chain';
-import { DEVBOX_RUNTIME_DIR, type StoredValue } from '../../src/storage';
+import { DEVBOX_RUNTIME_DIR, DEVBOX_WORKDIR, type StoredValue } from '../../src/storage';
+import { SNAPSHOT_SAFE_COMMAND } from '../../src/disk-chain';
 import {
   DEVBOX_SYNC_HOST, containerChainPorts, decodeSyncConfig, parseCheckpointKind, syncCaller,
   syncWorker, type SyncAnswer,
@@ -398,6 +399,10 @@ export class FakeSandbox {
   readonly startWaitOptions: unknown[] = [];
   /** Each platform start's options (D50). */
   readonly startOptions: (ContainerStartupOptions | undefined)[] = [];
+  /** Each snapshot the platform holds, and how a start from it behaves: `hang` never admits a command. */
+  readonly snapshots = new Map<string, 'ok' | 'hang'>();
+  /** Thrown by the next `snapshotContainer`, as a refused snapshot is. */
+  snapshotFault: Error | undefined;
   readonly files = new Map<string, string>();
   /** Files whose bytes are not UTF-8 text, which `files` cannot hold; the SDK's file reads serve them as bytes. */
   readonly binaryFiles = new Map<string, Uint8Array>();
@@ -738,6 +743,8 @@ export class FakeSandbox {
     const answered = await this.#execBoxProgram(command);
 
     if (answered !== null) return answered;
+
+    if (command === SNAPSHOT_SAFE_COMMAND) return { stdout: this.overlayMounts.has(DEVBOX_WORKDIR) ? 'unsafe' : 'safe', stderr: '', exitCode: 0 };
 
     if (command.startsWith('sync')) {
       // `sync -f <dir> && sync; echo $?`: the fake holds no pages to flush, so it answers
@@ -1141,7 +1148,7 @@ export class FakeSandbox {
         // As the platform does without an image.
         if (options?.image === '') throw new TypeError('ctx.container.start(): image must not be empty');
         this.#ended = Promise.withResolvers<void>();
-        this.#opening = Promise.allSettled([this.start(options)]);
+        this.#opening = Promise.allSettled([this.#open(options)]);
       },
       monitor: () => this.#ended.promise,
       destroy: async () => { await this.destroy(); this.#ended.resolve(); },
@@ -1154,15 +1161,38 @@ export class FakeSandbox {
       interceptOutboundHttp: async (host) => { this.outboundHosts.set(host, host); },
       interceptAllOutboundHttp: async () => { this.outboundHosts.set(DEVBOX_SYNC_HOST, DEVBOX_SYNC_HOST); },
       interceptOutboundHttps: async () => { this.sequence.push('intercept:https'); },
-      snapshotContainer: () => unreached('container.snapshotContainer'),
+      snapshotContainer: async (options) => {
+        const fault = this.snapshotFault;
+        this.snapshotFault = undefined;
+
+        if (fault !== undefined) throw fault;
+        const id = `snapshot-${String(this.snapshots.size + 1)}`;
+        this.snapshots.set(id, 'ok');
+
+        return { id, size: 1, name: options?.name };
+      },
       inspect: () => unreached('container.inspect'),
       exec: (args, options) => this.#native(args, options),
     };
   }
 
+  /** A start from a snapshot the platform no longer holds fails; one marked `hang` never comes up. */
+  #open(options: ContainerStartupOptions | undefined): Promise<void> {
+    const snapshot = options?.containerSnapshot?.id;
+
+    if (snapshot === undefined) return this.start(options);
+    const behaviour = this.snapshots.get(snapshot);
+
+    if (behaviour === 'hang') return new Promise<void>(() => undefined);
+
+    return behaviour === undefined ? Promise.reject(new Error(`snapshot ${snapshot} not found`)) : this.start(options);
+  }
+
   /** What the platform does before a native exec runs: the start it is behind, then the running check. */
   async #admitNative(options: ContainerExecOptions): Promise<void> {
-    const [opened] = await this.#opening ?? [];
+    const signal = options.signal;
+    const aborted = new Promise<never>((_, reject) => signal?.addEventListener('abort', () => { reject(signal.reason); }, { once: true }));
+    const [opened] = await Promise.race([this.#opening ?? Promise.resolve([]), aborted]);
 
     this.#opening = undefined;
 
