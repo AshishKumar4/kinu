@@ -2818,6 +2818,53 @@ What the measurements decide:
   share of it. With the workspace on the disk, that is a repack of the
   disk: no overlay to reseat and no holders to stop.
 
+The registry, measured 2026-10-02 (run `p5510020813`, `l5510020823`,
+`l5510020825dep`, `bench-artifacts/storage-designs/`):
+- Each snapshot adds two tags, `rootfs-set-*` and `rootfs-snapshot-*`, to a
+  `cloudchamber-snapshots/<hash>` repository (or to the image's own repository
+  for a snapshot of our image). Both name one manifest with one layer, the
+  snapshot's own increment: 67 MB for a 64 MiB base, 4.7 KB after a 3 KB
+  edit, 10.5 MB after a 10 MiB write. The manifest's annotations carry
+  `snapshot_id` and `parent_snapshot_id`, so snapshots form a lineage from
+  the first save.
+- Snapshot tags do not count toward the 50 GB image limit. With 574.5 GB of
+  snapshot layers (143 snapshots, every one a bench leftover) beside 17.6 GB
+  of images, a 1 MiB image push succeeded (`limit-push-1002.log`). The 143
+  were then deleted (`registry-snapshots-1002.json` is the record); none
+  belonged to a production or staging instance, and no product code
+  snapshots. Bench runs delete their own snapshot tags since.
+- A child restores exactly after its ancestors' tags are deleted: C1 and C2
+  after their base's tags, and C2 after both ancestors', at once, after 30
+  minutes and after 90 minutes (n=2 each, all exact). Whether the platform
+  keeps an ancestor's data until the child's 30 days end is unknown; a
+  sweep therefore deletes only snapshots outside every live lineage until
+  that is measured.
+- Depth costs little: wakes on fresh objects at lineage depth 1, 10 and 30
+  took 0.20, 0.20 and 0.28 s median (n=10 each, all exact; one depth-30 wake
+  took 1.7 s). Re-rooting is not needed for wake time.
+- Growth between sweeps is the boxes' own saves: each box adds its first
+  save (the whole workspace, about 0.4 GB for a fresh npm app) and then each
+  save's increment. An eval pass makes 20 to 40 boxes, several passes a day,
+  so a daily sweep sees on the order of 10 to 80 GB, none of it against the
+  image limit.
+
+Built so far (2026-10-02, `980ee7404`): a hybrid box (`Devbox.hybrid`, off
+by default). A rest commits the disk chain (`disk-chain.ts`), then takes a
+snapshot; the next wake starts from it unless the chain moved past it or it
+is 29 days old. A snapshot start that fails or is not admitted within 10 s
+is destroyed and the box starts from the image: the start hook mounts the
+chain's layers lazily (O(layers), inside the gate) and records an incident
+naming the time it restored to and the excluded folders to rebuild. A
+finished copy to the disk becomes the plain workspace at the next start, its
+overlay upper merged in. A box the older chain holds keeps its overlay until
+the disk chain's first base. Limits as built: a delta holds whole files, so
+an in-place write re-sends the file; ticks run from the object (no in-box
+sync loop); no snapshot is taken during a session; the golden snapshot and
+`cloudflare/debian-trixie` are not yet used. Tests: the real chain in the
+image (`disk-chain-image.test.ts`: a base and deltas recover exactly lazily
+and then as plain disk, compaction, a baseline mismatch) and the box with a
+model chain (`hybrid.test.ts`, red on the box before it, then green).
+
 D56. The box decides its own rest from its own use; the workspace neither
 asks nor tells it (2026-10-01, corrected the same day). This replaces D35's
 third hold reason, the root's `sandboxInUse`, and keeps the other two. While a
