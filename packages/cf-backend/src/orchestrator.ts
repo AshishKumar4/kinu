@@ -10,6 +10,7 @@ import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } fr
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
 import { supervisorEsbuildService } from "@nimbus-sh/worker/facet-host";
 import { KINU_TIMER_JOB } from "./wake-jobs";
+import { NimbusTasks } from "./nimbus-tasks";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
@@ -400,8 +401,11 @@ interface HostedTarget {
 export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly addressedName: string;
 
+  private readonly nimbusTasks = new NimbusTasks((task) => this.hostedWorkspace().onScheduled(task));
+
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
+    this.lifecycle.use(this.nimbusTasks);
     const name = ctx.id.name ?? this.recordedName();
 
     if (name === undefined) {
@@ -500,6 +504,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this._workspace ??= createHostedWorkspace({
       ctx: this.ctx,
       env: this.env,
+      tasks: this.nimbusTasks,
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       onFilesChanged: (paths) => {
         this.changes.touched(paths);
