@@ -298,14 +298,90 @@ Three properties follow:
   one (`diffs:<actor>:<id>`).
 - POSIX semantics: one filesystem, addressed the same way by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
-  resolve at `WORKSPACE_ROOT` (`/home/main`; `/home/user` links to it). Ownership is uid/gid/mode on
-  inodes. That makes a swarm node's `/home/<node>` and its private `/tmp` an
-  enforced boundary, not a convention (`core/src/vfs/agent-home.ts`).
+  resolve at `WORKSPACE_ROOT` (`/home/main`) through the one `workspacePath`
+  rule in core. Home and slate paths cannot climb out of their named root.
+  Ownership is uid/gid/mode on inodes, so agent homes and private tmp trees
+  remain enforced boundaries (`core/src/vfs/agent-home.ts`).
 - Chunked blobs: `SqliteVFS` cuts file content into `vfs_chunks` rows of at
   most `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it (one
   chunk up to that size, content-defined cuts above it). Merge-back
   sizes its write batches with the same constant, imported rather than
   restated (`core/src/strategy/merge-back.ts:60`).
+
+### Workspace path cutover
+
+`workspacePath` owns normalization and aliasing on both backends. Relative
+names start at `/home/main`; `.` and repeated separators collapse, as do
+trailing slashes. `..` may remove a child segment but may not climb above the
+named home or `/slates` root (`EACCES`). Other absolute paths stay in their
+native namespace. `/workspace` is not a home alias. A mounted path remains
+its mount's: `/shared/..` and a path leaving `/pc` refuse with `EPERM`; a
+relative `shared/...` or `pc/...` is an ordinary workspace file.
+
+A parent segment before a bounded root is refused too: `/../home/main/SOUL.md`
+and `/home/x/../main/SOUL.md` cannot hide the owner policy from file-manager
+checks. The POSIX-resolved prefix is checked before it can leave a reached
+home or slate root; `/../home/main/../x` is also `EACCES`. Native and mounted
+operands that never reach those roots, such as `/shared/../x`, keep their
+namespace's own traversal rule.
+
+The bare `/home/user` name stays a symbolic link: `lstat`, `readlink`,
+`unlink`, rename and tree removal address that inode, not `/home/main`.
+Only descendants use the canonical home name. Directory grants and the
+CLI's bound plane follow the link through `workspaceScopePath`, over the
+same normalization pass. The CLI checks the mapped host path is still in
+the bound directory, and refuses removal of that directory itself before
+walking or deleting any child. Its directory rename route refuses before
+I/O. File-manager path refusals return error values, including SOUL saves,
+rename and delete; archives use the same SOUL classification.
+
+The duplicate rules at `70464f439` gave the following answers, measured
+2026-10-01 through the two runtime file planes. `f` is a seeded workspace
+file; “absent” means `stat` returned null. The local plane was bound to a
+scratch directory, with no device or Drive connected.
+
+| Input class | Cloud before | Directory-bound CLI before | Shared rule now |
+|---|---|---|---|
+| Empty, `.`, `./` | Home directory | Bound directory | Home |
+| `f`, `./f`, `.//f`, `dir/../f` | Home file | Bound-directory file | Same home file |
+| `../f`, `dir/../../f` | Outside home, absent | `EACCES` | `EACCES` |
+| `/home/main[/]`, `/home/user[/]` | Home directory | Bound directory | Same directory view; the bare Nimbus link keeps its inode name |
+| `/home/main/f[/]`, `/home/user/f`, `/home/main/./f` | Home file | Bound-directory file | Canonical home file |
+| `/home/main/../f`, `/home/user/../f` | Outside home, absent | `EACCES` | `EACCES` |
+| `/home//main/f` | Home file | Native host path, absent | Canonical home file |
+| `/workspace[/f]` | Native path, absent | Home directory/file | Native path only |
+| `/workspace/../f` | Native path, absent | `EACCES` | Native path only |
+| `/`, `//` | Native Nimbus root (`stat` null in this handle) | Bound directory | Native plane root; layout differs |
+| `/slates[/]` | Slate directory | Project's `slates/` | Separate slate root |
+| `/slates/../f` | Outside slates, absent | Home file | `EACCES` |
+| `/slates/../../f` | Outside slates, absent | `EACCES` | `EACCES` |
+| `/pc/studio/f` | Disconnected mount, `ENXIO` | Native host path, absent | Mount/native ownership unchanged |
+| `/pc/studio/../../f` | `EPERM` | Native host path, absent | Mount/native ownership unchanged |
+| `/shared/f` | `ENXIO` | `ENXIO` | Mount ownership unchanged |
+| `/shared/../f` | `EPERM` | `EPERM` | Mount ownership unchanged |
+| Relative `pc/studio/f`, `shared/f` | Home file path, absent | Bound-directory file path, absent | Workspace-local, never a mount |
+
+The defect was namespace escape in core and raw-prefix alias matching in
+the host adapter. Separate rule owners and backend-only tests let it persist.
+The cutover removes `canonicalWorkspacePath` and the CLI alias table; the
+public-surface pin is `cf-backend/tests/backends/workspace-paths.test.ts`.
+
+`/home/user` remains only as `NIMBUS_WORKSPACE_ROOT`, a link to `/home/main`,
+because the installed Nimbus 0.13.1 still produces these values with
+`HOME=/home/main` (same measured boot):
+
+- `PATH=/usr/local/bin:/usr/bin:/bin:/home/user/.local/bin:/home/user/.gem/bin`
+- `XDG_CONFIG_HOME=/home/user/.config`
+- `XDG_DATA_HOME=/home/user/.local/share`
+- `/etc/passwd`: `user:x:1000:1000:Nimbus User:/home/user:/bin/sh`
+
+Delete the alias once Nimbus derives these from HOME. It is not a
+stored-history compatibility period: current conversation payload paths
+come from the actor's canonical artifact directory; archives carry native
+inodes and relative transfer paths. Prompts render `WORKSPACE_ROOT`, while
+their `/pc/<name>/home/user` examples name a machine's native home, not this
+alias. Tests of Nimbus's live home link keep it; unrelated loopback and
+memory fixtures and the scripted model name `/home/main`.
 
 Every file plane implements Nimbus's `VFS`, imported directly from
 `@nimbus-sh/core/vfs/vfs.js`, with `VfsStat`, `VfsDirent` and `VfsRevision`.
@@ -337,9 +413,9 @@ overturned the single-SQLite local plane; these are they.
 | | Cloud (`cf-backend/src/runtime.ts`) | Local, placed in a directory (`cli-backend/src/runtime.ts`) | Local with no directory (evals, `cwd: null`) |
 |---|---|---|---|
 | Nimbus plane | `createWorkspace` over the Durable Object's `ctx.storage.sql` (`workspace-host.ts`) | `createWorkspace` over `agent.db`; holds agent state only | `createWorkspace` over `agent.db`; also the workspace |
-| `file` tool plane | the Nimbus plane | `createCwdPlaneVFS(cwd)` (`cli-backend/src/host-mount.ts`): the directory through `node:fs`; `/home/main`, `/home/user` and `/workspace` name the directory, `/slates` its `slates/`, and a path outside it is `EACCES` | the Nimbus plane |
+| `file` tool plane | the Nimbus plane | `createCwdPlaneVFS(cwd)` (`cli-backend/src/host-mount.ts`): `workspacePath` maps home paths to the directory and `/slates` to its `slates/`; other absolute paths name the host and writes keep the approval gate | the Nimbus plane |
 | Shell | Nimbus `runtime-bash` in the box (`nimbusSessionShell`) | the host shell rooted in the directory (`createHostShell`), behind the approval gate, with a shadow-git checkpoint at most once per turn before a command runs | Nimbus `runtime-bash` |
-| Mounts on the file plane | `/pc`, `/sandbox`, `/skills`, `/shared` (Drive), `/context` | the same table; `/pc`, `/sandbox` and `/shared` answer `ENXIO`, as no local device, container or Drive is bound | same as placed |
+| Mounts on the file plane | `/pc`, `/sandbox`, `/skills`, `/shared` (Drive), `/context` | `/skills`, `/shared`, `/context`, `/agent`; `/shared` answers `ENXIO` without a Drive; `/pc` and `/sandbox` are native host paths, never device/container mounts | `/skills`, `/shared`, `/context`; no device/container mounts |
 | Mounts in the shell | the same table, through `mountedAuthority` | none: `/pc` in the host shell is the machine's own path | the same table, through `workspace.mountTable` |
 
 Both backends mount through one Kinu API: `withMountTable(base, mounts)`

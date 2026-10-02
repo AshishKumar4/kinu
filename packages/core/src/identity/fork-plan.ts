@@ -6,7 +6,7 @@
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
-import { canonicalWorkspacePath } from '../vfs/workspace-path';
+import { workspacePath } from '../vfs/workspace-path';
 import {
   ForkContextMemberRowSchema,
   ForkConversationEntryPartRowSchema,
@@ -64,27 +64,25 @@ function assertArtifactSegments(relative: string, path: string, root: string): v
 /** One payload path relative to its owning artifact directory. A path outside it is refused:
  *  carrying another workspace's absolute path would re-root or escape into a directory the fork does not own. */
 function forkArtifactRelativePath(stored: string, artifactDirectory: string): string {
-  // One trailing-separator rule so `/a/b` and `/a/b/` relativize and re-root identically.
-  const root = canonicalWorkspacePath(artifactDirectory.endsWith('/') ? artifactDirectory.slice(0, -1) : artifactDirectory);
+  const root = workspacePath(artifactDirectory);
   const prefix = `${root}/`;
-  const path = canonicalWorkspacePath(stored);
+  // Refuse raw segments before normalization can erase traversal.
+  assertArtifactSegments(stored.startsWith('/') ? stored.slice(1) : stored, stored, root);
+  const path = workspacePath(stored);
 
-  if (!path.startsWith(prefix)) {
+  if (!stored.startsWith('/') || !path.startsWith(prefix)) {
     throw new Error(
       `fork cannot carry payload ${JSON.stringify(path)}: it is outside the artifact directory `
       + `${JSON.stringify(root)}`,
     );
   }
 
-  const relative = path.slice(prefix.length);
-  assertArtifactSegments(relative, path, root);
-
-  return relative;
+  return path.slice(prefix.length);
 }
 
 /** Absolute payload path for a carried relative path under one artifact directory. */
 export function forkArtifactPath(relative: string, artifactDirectory: string): string {
-  const root = artifactDirectory.endsWith('/') ? artifactDirectory.slice(0, -1) : artifactDirectory;
+  const root = workspacePath(artifactDirectory);
   assertArtifactSegments(relative, relative, root);
 
   return `${root}/${relative}`;

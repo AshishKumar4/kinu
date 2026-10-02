@@ -757,6 +757,13 @@
       "decision": "framing"
     },
     {
+      "file": "scripts/ladder.ts",
+      "kind": "hand-parser",
+      "owner": "splitCIGate",
+      "sourceSha256": "6d44030560c602dcb98022748b49c89b70e647ed5639c24671111dc3c26027e6",
+      "decision": "traversal"
+    },
+    {
       "file": "scripts/patch-parity.ts",
       "kind": "hand-parser",
       "owner": "parsePatch",
