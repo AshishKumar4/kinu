@@ -9,7 +9,7 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import * as v from 'valibot';
 import {
-  LEGACY_WORKSPACE_ROOT, TurnContextBudget, WORKSPACE_ROOT, createFileDispatcher, nimbusSessionFiles, settleWorkspaceRoot,
+  NIMBUS_WORKSPACE_ROOT, TurnContextBudget, WORKSPACE_ROOT, createFileDispatcher, nimbusSessionFiles, settleWorkspaceRoot,
 } from '@kinu.run/core';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
 import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
@@ -65,7 +65,7 @@ function doneFrames(sent: readonly string[]): Array<{ id: string }> {
   });
 }
 
-/** A workspace booted as Kinu boots one: the root at /home/main, /home/user a link to it. */
+/** A workspace booted as Kinu boots one: Nimbus's default home links to /home/main. */
 async function linkedWorkspace(db: Database): Promise<NimbusWorkspace> {
   const workspace = await NimbusWorkspace.create({
     ...inlineWorkspaceStorage(db),
@@ -118,15 +118,15 @@ describe('installed Nimbus dependency integrity', () => {
 
   // Nimbus ask N21, fixed in core 0.13.0: SqliteVFS.readdir keyed its children on the path as given, so a directory
   // reached through a link listed nothing.
-  test('the workspace root, reached through its legacy link, lists what the root holds', async () => {
+  test('the workspace root, reached through the Nimbus home link, lists what the root holds', async () => {
     const db = new Database(':memory:');
     const workspace = await linkedWorkspace(db);
 
     workspace.vfs.as(CRED_SESSION_USER).writeFile(`${WORKSPACE_ROOT}/flow-probe.txt`, new TextEncoder().encode('probe'));
 
-    const listed = workspace.vfs.as(CRED_SESSION_USER).readdir(LEGACY_WORKSPACE_ROOT).map((entry) => entry.name);
+    const listed = workspace.vfs.as(CRED_SESSION_USER).readdir(NIMBUS_WORKSPACE_ROOT).map((entry) => entry.name);
 
-    const shell = await workspace.exec(`ls ${LEGACY_WORKSPACE_ROOT}`);
+    const shell = await workspace.exec(`ls ${NIMBUS_WORKSPACE_ROOT}`);
 
     const file = createFileDispatcher({
       vfs: nimbusSessionFiles({
@@ -138,7 +138,7 @@ describe('installed Nimbus dependency integrity', () => {
       budget: new TurnContextBudget(),
     });
 
-    const tool = v.parse(v.object({ entries: v.array(v.string()) }), await file({ action: 'list', path: LEGACY_WORKSPACE_ROOT }));
+    const tool = v.parse(v.object({ entries: v.array(v.string()) }), await file({ action: 'list', path: NIMBUS_WORKSPACE_ROOT }));
 
     expect(listed).toContain('flow-probe.txt');
     expect(shell).toMatchObject({ exitCode: 0 });
@@ -149,8 +149,8 @@ describe('installed Nimbus dependency integrity', () => {
 
   // Nimbus ask N22, fixed in core 0.13.0: SqliteVFS keyed a new entry on the path as given, so one made through the
   // link landed under the link's own name, where nothing reached through the link finds it; rmdir and revision read
-  // that name too. Old SOULs and conversations still name /home/user.
-  describe('through the legacy link, an entry lands where the root holds it', () => {
+  // that name too. Nimbus's own PATH and XDG defaults still name /home/user.
+  describe('through the Nimbus home link, an entry lands where the root holds it', () => {
     test('the file plane writes into a directory that does not exist yet', async () => {
       const db = new Database(':memory:');
       const workspace = await linkedWorkspace(db);
@@ -161,7 +161,7 @@ describe('installed Nimbus dependency integrity', () => {
         exec: async () => { throw new Error('the plane runs no commands'); },
       });
 
-      await writeText(plane, `${LEGACY_WORKSPACE_ROOT}/slates/a/package.json`, '{}');
+      await writeText(plane, `${NIMBUS_WORKSPACE_ROOT}/slates/a/package.json`, '{}');
 
       expect(workspace.vfs.as(CRED_SESSION_USER).readFileString(`${WORKSPACE_ROOT}/slates/a/package.json`)).toBe('{}');
       db.close();
@@ -171,13 +171,13 @@ describe('installed Nimbus dependency integrity', () => {
       const db = new Database(':memory:');
       const vfs = (await linkedWorkspace(db)).vfs.as(CRED_SESSION_USER);
 
-      vfs.mkdir(`${LEGACY_WORKSPACE_ROOT}/a/b`, { recursive: true });
-      vfs.mkdir(`${LEGACY_WORKSPACE_ROOT}/c`);
+      vfs.mkdir(`${NIMBUS_WORKSPACE_ROOT}/a/b`, { recursive: true });
+      vfs.mkdir(`${NIMBUS_WORKSPACE_ROOT}/c`);
 
       expect(vfs.isDirectory(`${WORKSPACE_ROOT}/a/b`)).toBe(true);
       expect(vfs.isDirectory(`${WORKSPACE_ROOT}/c`)).toBe(true);
       expect(namesIn(vfs, `${WORKSPACE_ROOT}/a`)).toEqual(['b']);
-      expect(namesIn(vfs, `${LEGACY_WORKSPACE_ROOT}/a`)).toEqual(['b']);
+      expect(namesIn(vfs, `${NIMBUS_WORKSPACE_ROOT}/a`)).toEqual(['b']);
       db.close();
     });
 
@@ -185,7 +185,7 @@ describe('installed Nimbus dependency integrity', () => {
       const db = new Database(':memory:');
       const vfs = (await linkedWorkspace(db)).vfs.as(CRED_SESSION_USER);
 
-      vfs.mkdirBatch([`${LEGACY_WORKSPACE_ROOT}/pkg/lib`]);
+      vfs.mkdirBatch([`${NIMBUS_WORKSPACE_ROOT}/pkg/lib`]);
 
       expect(vfs.isDirectory(`${WORKSPACE_ROOT}/pkg/lib`)).toBe(true);
       db.close();
@@ -199,15 +199,15 @@ describe('installed Nimbus dependency integrity', () => {
 
       vfs.writeBatch({
         inodes: [
-          { ...at(`${LEGACY_WORKSPACE_ROOT}/mod`), isDir: true, size: 0, mtime: 1, mode: 0o755, chunkCount: 0 },
-          { ...at(`${LEGACY_WORKSPACE_ROOT}/mod/index.js`), isDir: false, size: bytes.length, mtime: 1, mode: 0o644, chunkCount: 1 },
+          { ...at(`${NIMBUS_WORKSPACE_ROOT}/mod`), isDir: true, size: 0, mtime: 1, mode: 0o755, chunkCount: 0 },
+          { ...at(`${NIMBUS_WORKSPACE_ROOT}/mod/index.js`), isDir: false, size: bytes.length, mtime: 1, mode: 0o644, chunkCount: 1 },
         ],
-        chunks: [{ path: `${LEGACY_WORKSPACE_ROOT}/mod/index.js`, chunkId: 0, data: bytes }],
+        chunks: [{ path: `${NIMBUS_WORKSPACE_ROOT}/mod/index.js`, chunkId: 0, data: bytes }],
       });
 
       expect(vfs.readFileString(`${WORKSPACE_ROOT}/mod/index.js`)).toBe('export {};');
 
-      vfs.writeBatch({ inodes: [], chunks: [], deletePaths: [`${LEGACY_WORKSPACE_ROOT}/mod/index.js`] });
+      vfs.writeBatch({ inodes: [], chunks: [], deletePaths: [`${NIMBUS_WORKSPACE_ROOT}/mod/index.js`] });
 
       expect(vfs.exists(`${WORKSPACE_ROOT}/mod/index.js`)).toBe(false);
       db.close();
@@ -218,7 +218,7 @@ describe('installed Nimbus dependency integrity', () => {
       const vfs = (await linkedWorkspace(db)).vfs.as(CRED_SESSION_USER);
 
       vfs.writeFile(`${WORKSPACE_ROOT}/target.txt`, 'target');
-      vfs.symlink(`${WORKSPACE_ROOT}/target.txt`, `${LEGACY_WORKSPACE_ROOT}/shortcut`);
+      vfs.symlink(`${WORKSPACE_ROOT}/target.txt`, `${NIMBUS_WORKSPACE_ROOT}/shortcut`);
 
       expect(vfs.readlink(`${WORKSPACE_ROOT}/shortcut`)).toBe(`${WORKSPACE_ROOT}/target.txt`);
       db.close();
@@ -229,7 +229,7 @@ describe('installed Nimbus dependency integrity', () => {
       const vfs = (await linkedWorkspace(db)).vfs.as(CRED_SESSION_USER);
 
       vfs.mkdir(`${WORKSPACE_ROOT}/emptied`);
-      vfs.rmdir(`${LEGACY_WORKSPACE_ROOT}/emptied`);
+      vfs.rmdir(`${NIMBUS_WORKSPACE_ROOT}/emptied`);
 
       expect(vfs.exists(`${WORKSPACE_ROOT}/emptied`)).toBe(false);
       db.close();
@@ -244,9 +244,9 @@ describe('installed Nimbus dependency integrity', () => {
       kernel.mkdir(`${WORKSPACE_ROOT}/locked`);
       kernel.chmod(`${WORKSPACE_ROOT}/locked`, 0o555);
 
-      expect(() => vfs.mkdir(`${LEGACY_WORKSPACE_ROOT}/locked/made`)).toThrow('EACCES');
-      expect(() => vfs.mkdirBatch([`${LEGACY_WORKSPACE_ROOT}/locked/batch/deep`])).toThrow('EACCES');
-      expect(() => vfs.writeFile(`${LEGACY_WORKSPACE_ROOT}/locked/written.txt`, 'x')).toThrow('EACCES');
+      expect(() => vfs.mkdir(`${NIMBUS_WORKSPACE_ROOT}/locked/made`)).toThrow('EACCES');
+      expect(() => vfs.mkdirBatch([`${NIMBUS_WORKSPACE_ROOT}/locked/batch/deep`])).toThrow('EACCES');
+      expect(() => vfs.writeFile(`${NIMBUS_WORKSPACE_ROOT}/locked/written.txt`, 'x')).toThrow('EACCES');
       expect(namesIn(kernel, `${WORKSPACE_ROOT}/locked`)).toEqual([]);
       db.close();
     });
@@ -256,12 +256,12 @@ describe('installed Nimbus dependency integrity', () => {
       const vfs = (await linkedWorkspace(db)).vfs.as(CRED_SESSION_USER);
 
       vfs.writeFile(`${WORKSPACE_ROOT}/watched.txt`, 'one');
-      const before = vfs.revision(`${LEGACY_WORKSPACE_ROOT}/watched.txt`);
+      const before = vfs.revision(`${NIMBUS_WORKSPACE_ROOT}/watched.txt`);
 
       vfs.writeFile(`${WORKSPACE_ROOT}/watched.txt`, 'two');
 
-      expect(vfs.revision(`${LEGACY_WORKSPACE_ROOT}/watched.txt`)).toBeGreaterThan(before);
-      expect(vfs.revision(`${LEGACY_WORKSPACE_ROOT}/watched.txt`)).toBe(vfs.revision(`${WORKSPACE_ROOT}/watched.txt`));
+      expect(vfs.revision(`${NIMBUS_WORKSPACE_ROOT}/watched.txt`)).toBeGreaterThan(before);
+      expect(vfs.revision(`${NIMBUS_WORKSPACE_ROOT}/watched.txt`)).toBe(vfs.revision(`${WORKSPACE_ROOT}/watched.txt`));
       db.close();
     });
   });

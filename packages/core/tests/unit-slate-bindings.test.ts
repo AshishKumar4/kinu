@@ -114,9 +114,19 @@ test('a path-scoped workspace binding offers only file members inside its prefix
   });
   expect(route('FILES', 'readdir', ['/home/main/notes'])).toMatchObject({ kind: 'namespace', member: 'readdir' });
   expect(route('FILES', 'exists', ['/home/main/shared/x'])).toMatchObject({ kind: 'namespace', member: 'exists' });
+  expect(route('FILES', 'readFile', ['/home/user/notes/./a.md', 'utf8']))
+    .toMatchObject({ args: ['/home/main/notes/a.md', 'utf8'] });
 
   expect(() => route('FILES', 'exec', ['/home/main/notes/a.md'])).toThrow('a path-scoped workspace binding offers only file members');
-  expect(() => route('FILES', 'readFile', ['/etc/passwd'])).toThrow('outside its prefixes: /home/main/notes, /home/main/shared/');
+
+  let denial: unknown;
+
+  try { route('FILES', 'readFile', ['/etc/passwd']); }
+  catch (cause) { denial = cause; }
+
+  expect(denial).toHaveProperty('code', 'denied');
+  expect(denial).toHaveProperty('message', expect.stringMatching(/\/home\/main\/notes.*\/home\/main\/shared/u));
+
   // A sibling sharing the prefix string is not inside it.
   expect(() => route('FILES', 'readFile', ['/home/main/notes2/x'])).toThrow('outside its prefixes');
   expect(() => route('FILES', 'readFile', ['/home/main/notes/../other'])).toThrow('outside its prefixes');

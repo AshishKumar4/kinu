@@ -63,7 +63,7 @@ that every declared namespace has a real factory.
 `skills` is not on the standing list. Every skill loads from the
 read-only `/skills` view as `/skills/<name>/SKILL.md` (`skills/view.ts`): a
 built-in from its source, any other name from the workspace's
-`/home/user/skills/` or the owner's `/shared/skills/`, by the one precedence in
+`/home/main/skills/` or the owner's `/shared/skills/`, by the one precedence in
 `skills/discover.ts`. The prompt lists them through `renderSkillsIndexSection`;
 only a user's `/name` or an operator pin loads a body at turn start.
 
@@ -319,7 +319,7 @@ through `LOADER` (`@cloudflare/codemode`). The CLI evaluates in-process through
 
 `createInlineExecutor` registers `workspace` in `ExecutionRouter`. Native
 `file` and `workspace.*` share its `TurnFileLedger` read-before-write state.
-Workspace skills are written at `WORKSPACE_SKILLS_DIR` (`/home/user/skills`) on
+Workspace skills are written at `WORKSPACE_SKILLS_DIR` (`/home/main/skills`) on
 that VFS. In an `eval` program, `process.cwd()` is the workspace root, and the
 `fs` shim resolves a relative path against it.
 
@@ -335,6 +335,14 @@ and a `dev` or `start` script. Capabilities are declared in the strict
 `slate.bindings` field and called as `this.env.NAME.member(...args)`. Write the
 files through the ordinary file plane, then call
 `workspace.slates.<id>.$preview()` to boot a live preview.
+
+Workspace namespace path prefixes must be absolute and contain neither
+traversal nor NUL; a malformed prefix refuses the project instead of
+shrinking its grant. `/folder/` and `/folder` both grant the directory itself
+and its descendants. A Nimbus home prefix follows the link to the canonical
+home. A denied file call names its permitted prefixes; an allowed call uses
+the checked canonical path as its first argument, not the original spelling.
+
 `workspace.slates.<id>.<method>(...args)` calls a class method with JSON
 arguments, as the slate's own client does. `$commit()` freezes source,
 `$history(after?)` reads versions a page at a time, oldest first, and names the

@@ -1,10 +1,10 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * FEAT-17: the workspace root is `/home/main`. A workspace made when it was `/home/user` boots with its
- * whole tree moved there, and `/home/user` stays a link to it, so an absolute path written before still
- * reaches its file. A new workspace gets the same layout, and a move cut short finishes on the next boot.
- * Slates are the workspace's, at `/slates`, where every agent makes and changes them; they move there too.
+ * Nimbus 0.13.1 seeds `/home/user` and names it in PATH, XDG and passwd even with another HOME.
+ * Kinu publishes that tree at `/home/main` and keeps the required link for Nimbus's live defaults.
+ * Cold boot and interrupted publication preserve the files and their ownership.
+ * Slates are shared at `/slates`, where every agent makes and changes them.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -22,7 +22,7 @@ const workspaceSql = (database: Database): SqlDatabase => inlineWorkspaceStorage
 
 const transactions = (database: Database) => inlineWorkspaceStorage(database).transactions;
 
-/** The substrate alone, as every workspace ran before the move: its tree lives under `/home/user`. */
+/** Nimbus's own default boot, before Kinu publishes the canonical home. */
 async function substrate(database: Database) {
   const workspace = await NimbusWorkspace.create({
     sql: workspaceSql(database), transactions: transactions(database), generation: 1_000, cwd: '/home/user',
@@ -40,8 +40,8 @@ async function boot(database: Database) {
   return { bundle, kernel: session.vfs.as(CRED_KERNEL), user: session.vfs.as(CRED_SESSION_USER) };
 }
 
-/** A workspace as its agent left it before the move: the agent's files, and SOUL.md kernel-owned. */
-async function legacyWorkspace(): Promise<Database> {
+/** Files under Nimbus's default home before Kinu initializes its layout. */
+async function nimbusSeededWorkspace(): Promise<Database> {
   const database = new Database(':memory:');
   const { kernel, user } = await substrate(database);
 
@@ -58,9 +58,9 @@ async function legacyWorkspace(): Promise<Database> {
 
 
 
-describe('a workspace made before the move', () => {
+describe('Nimbus home initialization', () => {
   test('boots with its files and SOUL.md at /home/main, and its slates at /slates', async () => {
-    const { kernel } = await boot(await legacyWorkspace());
+    const { kernel } = await boot(await nimbusSeededWorkspace());
 
     expect(kernel.isDirectory('/home/main')).toBe(true);
     expect(kernel.readFileString('/home/main/notes.md')).toBe('# coupon regression\n');
@@ -74,8 +74,8 @@ describe('a workspace made before the move', () => {
     expect(kernel.stat('/home/main/SOUL.md').mode & 0o777).toBe(0o444);
   });
 
-  test('still reaches every file by its old absolute path, from every plane', async () => {
-    const { bundle, user } = await boot(await legacyWorkspace());
+  test('Nimbus home paths reach the one published tree from every plane', async () => {
+    const { bundle, user } = await boot(await nimbusSeededWorkspace());
 
     expect(user.isSymlink('/home/user')).toBe(true);
     expect(user.readlink('/home/user')).toBe('/home/main');
@@ -88,14 +88,14 @@ describe('a workspace made before the move', () => {
   });
 
   test('runs its shell from /home/main', async () => {
-    const { bundle } = await boot(await legacyWorkspace());
+    const { bundle } = await boot(await nimbusSeededWorkspace());
     const ran = await bundle.shell.exec('pwd && cat /home/user/notes.md && echo "$HOME"');
 
     expect(ran.stdout).toBe('/home/main\n# coupon regression\n/home/main\n');
   });
 
   test('moves once: a second boot finds the same tree and changes nothing', async () => {
-    const database = await legacyWorkspace();
+    const database = await nimbusSeededWorkspace();
     await boot(database);
     const { kernel } = await boot(database);
 
@@ -117,6 +117,29 @@ describe('a new workspace', () => {
 });
 
 describe('the link', () => {
+  test('the public file plane keeps the Nimbus home link as its own inode', async () => {
+    const { bundle } = await boot(new Database(':memory:'));
+
+    expect(await bundle.vfs.stat('/home/user', { follow: false })).toMatchObject({ type: 'symlink' });
+    expect(await bundle.vfs.readlink('/home/user')).toBe('/home/main');
+  });
+
+  for (const operation of ['unlink', 'rename', 'removeRecursive'] as const) {
+    test(`${operation} of a writable Nimbus home link leaves the canonical home intact`, async () => {
+      const { bundle, kernel } = await boot(new Database(':memory:'));
+      kernel.chmod('/home', 0o777);
+      await writeText(bundle.vfs, 'notes.md', 'keep the home');
+
+      if (operation === 'rename') await bundle.vfs.rename('/home/user', '/home/nimbus-link');
+      else await bundle.vfs[operation]('/home/user');
+
+      expect(await readText(bundle.vfs, '/home/main/notes.md')).toBe('keep the home');
+      expect(kernel.exists('/home/user')).toBe(false);
+
+      if (operation === 'rename') expect(kernel.readlink('/home/nimbus-link')).toBe('/home/main');
+    });
+  }
+
   test('the agent can neither remove nor replace it', async () => {
     const { bundle, kernel, user } = await boot(new Database(':memory:'));
 
@@ -129,7 +152,7 @@ describe('the link', () => {
   });
 
   test("a workspace settled while /home was its agent's takes /home back on its next boot", async () => {
-    const database = await legacyWorkspace();
+    const database = await nimbusSeededWorkspace();
     const settled = await boot(database);
     // As a boot before this one left it.
     settled.kernel.chown('/home', SESSION_UID, SESSION_UID);
@@ -142,7 +165,7 @@ describe('the link', () => {
 
 describe('a subagent', () => {
   test('keeps its own home at /home/<name>, beside the main agent\'s', async () => {
-    const database = await legacyWorkspace();
+    const database = await nimbusSeededWorkspace();
     const { kernel } = await boot(database);
     const name = subordinateAgentName('reviewer');
 
@@ -156,7 +179,7 @@ describe('a subagent', () => {
 
 describe('a move cut short', () => {
   test('finishes on the next boot when /home/main holds only part of the tree', async () => {
-    const database = await legacyWorkspace();
+    const database = await nimbusSeededWorkspace();
     const { user } = await substrate(database);
     // What a boot that stopped after publishing the first entries left behind.
     user.mkdir('/home/main/data', { recursive: true });
@@ -171,7 +194,7 @@ describe('a move cut short', () => {
   });
 
   test('finishes on the next boot when /home/user holds only what was not yet retired', async () => {
-    const database = await legacyWorkspace();
+    const database = await nimbusSeededWorkspace();
     await boot(database);
     // A boot that published everything and stopped while retiring the old name, deepest first, so before /home
     // was taken from the agent.
@@ -187,7 +210,7 @@ describe('a move cut short', () => {
   });
 
   test('a boot that stops before the link leaves /home to the agent, so the next boot still starts', async () => {
-    const database = await legacyWorkspace();
+    const database = await nimbusSeededWorkspace();
     const { kernel } = await substrate(database);
     const stopping: RootMoveVfs = { ...kernel, symlink: () => { throw new Error('stopped before the link'); } };
 
@@ -201,7 +224,7 @@ describe('a move cut short', () => {
   });
 
   test('a removed link comes back on the next boot', async () => {
-    const database = await legacyWorkspace();
+    const database = await nimbusSeededWorkspace();
     const { kernel, user } = await boot(database);
     // Its agent could remove the link while /home was its own, as every boot before this one left it.
     kernel.chown('/home', SESSION_UID, SESSION_UID);
@@ -227,7 +250,7 @@ async function withHire(database: Database) {
 
 describe('slates', () => {
   test('a hired agent makes a slate at /slates, and the main agent and it each change the other\'s', async () => {
-    const { kernel, user, builder, home } = await withHire(await legacyWorkspace());
+    const { kernel, user, builder, home } = await withHire(await nimbusSeededWorkspace());
 
     builder.mkdir('/slates/widgets/src', { recursive: true });
     builder.writeFile('/slates/widgets/package.json', '{"name":"widgets"}');
@@ -246,7 +269,7 @@ describe('slates', () => {
   });
 
   test('a slate built in a hired agent\'s home and moved to /slates is shared as if made there', async () => {
-    const { kernel, user, builder, home } = await withHire(await legacyWorkspace());
+    const { kernel, user, builder, home } = await withHire(await nimbusSeededWorkspace());
 
     builder.mkdir(`${home}/gauges/src`, { recursive: true });
     builder.writeFile(`${home}/gauges/package.json`, '{"name":"gauges"}');
@@ -262,7 +285,7 @@ describe('slates', () => {
   });
 
   test('every agent renames and removes a slate, whichever agent made it', async () => {
-    const { kernel, user, builder } = await withHire(await legacyWorkspace());
+    const { kernel, user, builder } = await withHire(await nimbusSeededWorkspace());
 
     builder.mkdir('/slates/widgets/src', { recursive: true });
     builder.writeFile('/slates/widgets/src/app.tsx', 'export default null;\n');
@@ -275,7 +298,7 @@ describe('slates', () => {
   });
 
   test('no agent changes who shares /slates, and a /slates an agent made is the workspace\'s on the next boot', async () => {
-    const database = await legacyWorkspace();
+    const database = await nimbusSeededWorkspace();
     const { kernel, user, builder } = await withHire(database);
 
     expect(() => user.chmod('/slates', 0o755)).toThrow('EPERM');
@@ -295,7 +318,7 @@ describe('slates', () => {
   });
 
   test('a slates move cut short finishes on the next boot', async () => {
-    const database = await legacyWorkspace();
+    const database = await nimbusSeededWorkspace();
     await boot(database);
     // What a boot that stopped after moving the first slate left behind: the rest still under the old root.
     const { kernel } = await substrate(database);
