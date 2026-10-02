@@ -17,7 +17,7 @@ import type { SocketCallProbeAgent } from './socket-call-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
-import type { AddressedAnswers } from './addressed-name-shapes';
+import type { AddressedAnswers, AlarmAfterDestroy } from './addressed-name-shapes';
 import type { CraftedFromNodeObservation, OnePlaneObservation, RelayedAnswer } from './agent-facet-shapes';
 import type { AttributedLine } from './attribution-shapes';
 import type {
@@ -192,6 +192,7 @@ interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
   rpcFirst(workspace: string): Promise<{ before: number; spend: string; after: number }>;
   destroyAfterFailedStart(workspace: string): Promise<{ evicted: string; spend: string; destroyed: string }>;
   siblingStarts(): Promise<{ spend: string; starts: number }>;
+  alarmAfterDestroy(workspace: string): Promise<AlarmAfterDestroy>;
 }
 
 interface AttributionProbeRpc extends Rpc.DurableObjectBranded {
