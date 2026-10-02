@@ -584,6 +584,11 @@ A defect is anything else thrown or died; the runner is `obs/effect.ts`.
 | `Effect.result(effect)` | A first-party result for local recovery paths; not an RPC envelope. |
 | `flight(run, { key, keep })` | One run per key, built once and held: every caller joins it and gets its exit, failure included. The one runner called mid-body; `gate:error-model` lists each and refuses one called where it is built or keyed by a fresh value. |
 
+Each step `settle` awaits costs scheduling hops a plain `await` does not. A wrapper whose only job is to forward a
+call on the tick a gate opens stays a plain promise chain (`gate().then(() => method(...))`): run through `settle`,
+the forwarded call ran several microtasks late, and its read of the chat queue trailed the pump's refusal
+(`activation-gate.ts`, 2026-10-02; `unit-live-reads.test.ts` holds it).
+
 `settle` runs on a microtask scheduler. Effect's default scheduler yields to a
 macrotask every 2,048 steps and on every fork. Measured 2026-09-23 under workerd
 (miniflare 5.20260903.0-alpha, compatibility dates 2025-12-01 and 2026-04-21):

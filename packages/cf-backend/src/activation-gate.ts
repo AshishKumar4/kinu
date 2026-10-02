@@ -60,15 +60,14 @@ export function startBeforeRpc(instance: StartGated, names: readonly string[], r
     if (gated.has(name) || descriptor === undefined) continue;
     const method: SurfaceMethod = descriptor.value;
 
+    // The method runs on the tick the gate opens, as an awaited gate runs it: a read it makes must not trail work the
+    // same tick started.
     const gatedMethod: SurfaceMethod = function (...args) {
-      return settle(Effect.gen({ self: this }, function* () {
-        const gate = startGates.get(this);
+      const gate = startGates.get(this);
 
-        if (gate === undefined) return yield* new KinuError('unsupported', `${name} was called on an object that installed no start gate.`);
-        yield* Effect.promise(async () => gate());
+      if (gate === undefined) return settle(Effect.fail(new KinuError('unsupported', `${name} was called on an object that installed no start gate.`)));
 
-        return yield* Effect.promise(async () => method.apply(this, args));
-      }));
+      return gate().then(() => method.apply(this, args));
     };
 
     Object.defineProperty(gatedMethod, 'name', { value: name });

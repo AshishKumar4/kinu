@@ -272,7 +272,6 @@ function admittedAnnotation(annotation: JsonValue, index: number): Effect.Effect
   });
 }
 
-/** The annotations, each admitted, or why the first refused one is refused. */
 export function admitReviewAnnotations(input: { value: unknown }): Result.Result<ReviewAnnotation[], Refused> {
   return settleSync(Effect.result(Effect.gen(function* () {
     const encoded = yield* Effect.try({
