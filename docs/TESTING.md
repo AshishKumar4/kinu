@@ -4,6 +4,8 @@ Most tests run on Bun: core, cf-backend, cli-backend, cli. Durable Object tests 
 
 ## Commands
 
+`bun install` can bootstrap with the machine's Bun. It installs the exact `bun` npm package this repo pins; hooks and shell entry points put `node_modules/.bin` first and refuse a missing local binary. GitHub workflows use it after installation too. Use `node_modules/.bin/bun` for direct ladder commands. `bash scripts/setup-worktree.sh` prepares a fresh worktree with its own workspace links or its own locked install, without changing the machine's runtime.
+
 ```bash
 bash scripts/test.sh                     # core + cf-backend + cli-backend + cli
 bash scripts/test.sh --coverage          # + coverage report

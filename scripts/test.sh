@@ -10,6 +10,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+source scripts/repo-runtime.sh
 
 # No per-test clock: bun applies a preload's setDefaultTimeout(0) to the first
 # file only (measured 2026-09-15, bun 1.4.0), so the flag is the one switch

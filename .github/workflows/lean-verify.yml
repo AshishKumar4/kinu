@@ -69,7 +69,10 @@ jobs:
           bun-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile
+          source scripts/repo-runtime.sh
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Verify Lean proofs, consistency, and traceability
         shell: bash

@@ -14,6 +14,7 @@
 # when there is one.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/repo-runtime.sh
 : "${KINU_EVAL_ORIGIN:?names the deployment this pass drives; the deploy exports it}"
 export KINU_EVAL_TRIALS=1
 if [[ -n "${KINU_DEPLOY_REPORT:-}" ]]; then

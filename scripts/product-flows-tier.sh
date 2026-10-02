@@ -12,6 +12,7 @@
 # calls a row names is the evals' question (evals/).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/repo-runtime.sh
 
 # The live consent the test preload asks for before a suite may read
 # KINU_ORIGIN (scripts/test-scratch-home.ts); these rows drive a deployment.
