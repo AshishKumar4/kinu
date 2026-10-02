@@ -24,6 +24,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Freight reuse is measured across turns, not calls within one turn.** The grader records the crafted tool's public reviewed-turn counter in September and requires an increase in October. The jcnu57 case, with one September call and two October calls but `uses=2`, is accepted without weakening the independently computed manifest totals.
 - **The hosted hammer reads Bun’s Actions report as well as its terminal report.** Grouped file headings and colour codes no longer hide executed files, and an exit-zero run with missing coverage keeps its complete output as red evidence.
 - **A reset that stops partway can be finished.** `bun run deploy --reset` checks the REST token and everything else it needs before it deletes anything, writes its record and the rollback barrier before its first deletion, and run again against its own placeholder finishes what that record says is left, instead of refusing it.
 - **Queued hired-agent receipts no longer make the regression model resend or leave a caller unfinished.** The hire-message case now observes the real workspace socket's roster and completed reply stream, not cross-actor test gates. Dismiss awaits its own caller and retirement, so eviction cannot resume a turn the case abandoned.

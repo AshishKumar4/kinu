@@ -4,6 +4,7 @@ import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
 import { Seeded } from './seeded';
+import { reusedInLaterTurn, ToolTurnUseSchema } from './crafted-reuse';
 
 // A freight co-op's month at its desk: the agent builds itself a tool for the manifests that come in and uses it; a
 // month later the forwarder's manifests arrive as a zip, one of them September's again under an October name, which it
@@ -175,7 +176,8 @@ reply with one line: the total quantity, a space, and the total weight.`,
       await verifier.check('the-tool-is-listed', async () => {
         const tools = await verifier.tools();
 
-        return { pass: tools.some((tool) => tool.name === TOOL), evidence: { tools: tools.map((tool) => tool.name) } };
+        return { pass: tools.some((tool) => tool.name === TOOL),
+          evidence: { tools: tools.map((tool) => ({ name: tool.name, usageCount: tool.usageCount ?? 0 })) } };
       });
 
       await checkTotals(verifier, 'answers-with-the-totals', SEPTEMBER);
@@ -201,13 +203,14 @@ total quantity across them, a space, and its total weight.`,
 
       await checkTotals(verifier, 'answers-with-octobers-totals', OCTOBER.flatMap((file) => file.lines));
 
-      // One tool of that name, used on all three manifests: a rebuilt tool starts its count again.
+      // The product records reviewed turns, not invocations within one eval block.
       await verifier.check('reuses-the-tool-it-built', async () => {
-        const named = (await verifier.tools()).filter((tool) => tool.name === TOOL);
+        const before = v.parse(v.object({ tools: v.array(ToolTurnUseSchema) }), verifier.earlierCheck('the-tool-is-listed')?.evidence).tools;
+        const after = await verifier.tools();
 
         return {
-          pass: named.length === 1 && (named[0]?.usageCount ?? 0) >= 3,
-          evidence: { tools: named.map((tool) => ({ name: tool.name, uses: tool.usageCount ?? null })) },
+          pass: reusedInLaterTurn(before, after, TOOL),
+          evidence: { before, after: after.map((tool) => ({ name: tool.name, usageCount: tool.usageCount ?? 0 })) },
         };
       });
     },
