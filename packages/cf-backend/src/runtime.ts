@@ -32,7 +32,7 @@ import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
-import { diagnostics, toKinuError, settle, settleLogged } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, toKinuError, settle, settleLogged, settleSync } from "@kinu.run/core/obs";
 import { kinuEgressParams } from "./egress/configure";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
@@ -252,308 +252,313 @@ export function createCFRuntime(
   actor: ActorRuntimeIdentity,
   hooks: CFRuntimeHooks,
 ): CFRuntime {
-  const sql = bindAgentSql(agent);
-  const execRaw: RawSqlExec = (ddl: string) => access.ctx.storage.sql.exec(ddl);
+  return settleSync(Effect.gen(function* () {
+    const sql = bindAgentSql(agent);
+    const execRaw: RawSqlExec = (ddl: string) => access.ctx.storage.sql.exec(ddl);
 
-  const env = access.env;
-  const workspaceBox = access.workspaceBox(actor.shellId);
+    const env = access.env;
+    const workspaceBox = access.workspaceBox(actor.shellId);
 
-  const executionBox = hooks.workspaceExecution
-    ? withHostedNodeExecution(workspaceBox, hooks.workspaceExecution)
-    : workspaceBox;
+    const executionBox = hooks.workspaceExecution
+      ? withHostedNodeExecution(workspaceBox, hooks.workspaceExecution)
+      : workspaceBox;
 
-  // Workspace state belongs to the session user: a facet's uid could not create entries under `.kinu`.
-  const originVfs = nimbusSessionFiles(workspaceBox);
+    // Workspace state belongs to the session user: a facet's uid could not create entries under `.kinu`.
+    const originVfs = nimbusSessionFiles(workspaceBox);
 
-  // Both of the actor's planes or neither (see `workspaceExecution`). This unmounted tree keeps foreign
-  // bytes out of memory and agent-state snapshots.
-  const baseWorkspaceVfs = hooks.workspaceExecution
-    ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution.cred)
-    : originVfs;
+    // Both of the actor's planes or neither (see `workspaceExecution`). This unmounted tree keeps foreign
+    // bytes out of memory and agent-state snapshots.
+    const baseWorkspaceVfs = hooks.workspaceExecution
+      ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution.cred)
+      : originVfs;
 
-  const observedWorkspaceVfs = hooks.workspaceObserver
-    ? observeWrites(baseWorkspaceVfs, hooks.workspaceObserver)
-    : baseWorkspaceVfs;
+    const observedWorkspaceVfs = hooks.workspaceObserver
+      ? observeWrites(baseWorkspaceVfs, hooks.workspaceObserver)
+      : baseWorkspaceVfs;
 
-  const memoryStore = new MemoryStore(originVfs, sql);
-  memoryStore.ensureSchema();
+    const memoryStore = new MemoryStore(originVfs, sql);
+    memoryStore.ensureSchema();
 
-  // Built before the memory adapter so writes embed.
-  const vectorStore = buildVectorStore(env, actor, hooks.reportModelCall);
-  const memoryConfig = actor.actor.config;
+    // Built before the memory adapter so writes embed.
+    const vectorStore = yield* buildVectorStore(env, actor, hooks.reportModelCall);
+    const memoryConfig = actor.actor.config;
 
-  const craftStore = new AgentUtilsCraftStore(sql);
-  craftStore.ensureSchema();
+    const craftStore = new AgentUtilsCraftStore(sql);
+    craftStore.ensureSchema();
 
-  const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
+    const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
 
-  const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }));
+    const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }));
 
-  const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
-    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
-    refusals: hooks.refusals,
-    modelOperations: hooks.modelOperations,
-  });
-
-  // The one required lane: `AgentRuntime.llm` is not optional.
-  const llm: LLM = profileLane('reflection') ?? {
-    async *stream() { yield ""; },
-    complete(): Promise<string> {
-      return settle(Effect.die(new Error('reflection model lane has no active profile')));
-    },
-  };
-
-  const schedule = createRealSchedule(agent);
-  const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
-
-  // Main vs hosted is stated (`rootActor`), never derived from the name. Grants are only written to
-  // main's rows, so a hosted actor inherits the root's answers intersected with its own narrowing, with no
-  // `remember`: never a superset. `deferrals` parks a 'gate' decision under 'strict' on the owner.
-  const isRootActor = actor.rootActor;
-
-  const approvalPolicy: ShellApprovalPolicy = isRootActor
-    ? {
-      mode: () => memoryConfig.getShellApprovalMode(),
-      granted: (grant) => holdsGrant(memoryConfig.getShellApprovalGrants(), grant),
-      requestApproval: null,
-      get deferrals() { return hooks.deferrals?.(); },
-    }
-    : createInheritedApprovalPolicy({
-      fetchRoot: () => fetchRootApprovalPolicy(env, actor.workspaceName),
-      ownGrants: () => memoryConfig.getShellApprovalGrants(),
+    const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
+      agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
+      refusals: hooks.refusals,
+      modelOperations: hooks.modelOperations,
     });
 
-  // The agent's own workspace, whose shell also serves the user's device and Drive; codemode runs in it too.
-  const sessionShell = nimbusSessionShell(executionBox);
-
-  const shellSession = createShellSession({
-    home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT,
-    userRoots: () => agentFileVfs.userRoots(),
-    // A hosted node's box pins every call's cwd to its home (withHostedNodeExecution).
-    keepsCwd: hooks.workspaceExecution === undefined,
-    stored: () => shellCwd(sessionShell),
-  });
-
-  const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession }, approvalPolicy);
-
-  const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
-  // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
-  // the only per-actor entry.
-  const mounts = [...standardMounts((name) => executionRouter.getProvider(name)), skillsMount((): CoreVFS => agentFileVfs)];
-
-  // `/shared`: the owner's Drive, resolved at every call, never captured, so a later claim mounts it.
-  let drive: { tenant: string; files: MossaicVfs } | null = null;
-
-  mounts.push(sharedDriveMount(
-    () => {
-      const tenant = actor.ownerUserId();
-
-      if (tenant === null) return null;
-
-      if (drive === null || drive.tenant !== tenant) {
-        const files = tenantDrive(env, tenant);
-
-        if (files === null) return null;
-        drive = { tenant, files };
-      }
-
-      return drive.files;
-    },
-    () => (driveBound(env) ? SHARED_DRIVE_UNCLAIMED : SHARED_DRIVE_UNBOUND),
-  ));
-  const plane = hooks.contextPlane;
-
-  if (plane) {
-    mounts.push(contextMount({
-      actorId: plane.actorId,
-      // A thunk: a mount must not capture a store bound to a since-retired identity.
-      own: () => plane.own(),
-      children: plane.children,
-    }));
-  }
-
-  const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
-  const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
-
-  const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
-    userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
-  }, approvalPolicy);
-
-  executionRouter.register(createNimbusWorkspaceExecutor({
-    box: executionBox,
-    shellSession,
-    // Declared exactly when NIMBUS_RUNTIME_CACHE is bound: without it there is nothing to install.
-    runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
-    inboundNetwork: nimbusPreviewConfigured(env),
-    inline: {
-      vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell,
-      sql,
-      ledger: () => access.acc?.().files,
-      budget: () => access.acc?.().context,
-      slate: hooks.slate,
-    },
-  }));
-  const previewSuffix = previewHostSuffix(env) ?? undefined;
-  const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
-  let sandboxHandle: SandboxHandle | null = null;
-  let sandboxUsed = false;
-
-  if (env.KinuDevbox) {
-    try {
-      const sdk = env.KinuDevbox.getByName(sandboxId);
-
-      // Egress is configured before the container runs anything, not in `onStart` (too late); until then
-      // the container has no network, so it fails closed. Only the owning workspace configures.
-      const handle = adaptCloudflareSandbox(sdk, async () => {
-        sandboxUsed = true;
-        const userId = actor.ownerUserId();
-
-        if (!userId) return;
-        await sdk.configureEgress(kinuEgressParams({
-          workspaceName: actor.workspaceName,
-          ownerUserId: userId,
-          vault: await listOwnerEgressVault(env, actor),
-          grants: memoryConfig.getShellApprovalGrants(),
-        }));
-        // Unread, the box keeps its last default.
-        const [accountSize] = await Promise.allSettled([ownerSandboxSize(env, actor)]);
-
-        if (accountSize.status === 'fulfilled') await sdk.useDefaultSize(accountSize.value);
-        else diagnostics.failure('sandbox.account_size_unread', toKinuError({
-          doing: "reading the owner's sandbox size", cause: accountSize.reason, otherwise: 'unavailable',
-        }), { sandboxId });
+    // The one required lane: `AgentRuntime.llm` is not optional.
+    const llm: LLM = profileLane('reflection') ?? {
+      async *stream() { yield ""; },
+      complete(): Promise<string> {
+        return settle(Effect.die(new Error('reflection model lane has no active profile')));
       },
-      // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
-      env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
-      async () => {
-        hooks.liveReadsMoved?.(['getExposedPorts']);
-        await hooks.servingMoved?.();
+    };
+
+    const schedule = createRealSchedule(agent);
+    const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
+
+    // Main vs hosted is stated (`rootActor`), never derived from the name. Grants are only written to
+    // main's rows, so a hosted actor inherits the root's answers intersected with its own narrowing, with no
+    // `remember`: never a superset. `deferrals` parks a 'gate' decision under 'strict' on the owner.
+    const isRootActor = actor.rootActor;
+
+    const approvalPolicy: ShellApprovalPolicy = isRootActor
+      ? {
+        mode: () => memoryConfig.getShellApprovalMode(),
+        granted: (grant) => holdsGrant(memoryConfig.getShellApprovalGrants(), grant),
+        requestApproval: null,
+        get deferrals() { return hooks.deferrals?.(); },
+      }
+      : createInheritedApprovalPolicy({
+        fetchRoot: () => fetchRootApprovalPolicy(env, actor.workspaceName),
+        ownGrants: () => memoryConfig.getShellApprovalGrants(),
       });
 
-      sandboxHandle = handle;
-      executionRouter.register(createSandboxExecutor(handle, previewSuffix,
-        () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts']), SANDBOX_SIZES));
-      diagnostics.event('sandbox.executor_registered', {
-        sandboxId,
-        previews: previewSuffix ?? '',
-      });
-    } catch (err) {
-      diagnostics.failure('sandbox.executor_registration_failed', toKinuError({
-        doing: 'registering the sandbox executor',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { sandboxId });
+    // The agent's own workspace, whose shell also serves the user's device and Drive; codemode runs in it too.
+    const sessionShell = nimbusSessionShell(executionBox);
+
+    const shellSession = createShellSession({
+      home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT,
+      userRoots: () => agentFileVfs.userRoots(),
+      // A hosted node's box pins every call's cwd to its home (withHostedNodeExecution).
+      keepsCwd: hooks.workspaceExecution === undefined,
+      stored: () => shellCwd(sessionShell),
+    });
+
+    const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession }, approvalPolicy);
+
+    const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
+    // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
+    // the only per-actor entry.
+    const mounts = [...standardMounts((name) => executionRouter.getProvider(name)), skillsMount((): CoreVFS => agentFileVfs)];
+
+    // `/shared`: the owner's Drive, resolved at every call, never captured, so a later claim mounts it.
+    let drive: { tenant: string; files: MossaicVfs } | null = null;
+
+    mounts.push(sharedDriveMount(
+      () => {
+        const tenant = actor.ownerUserId();
+
+        if (tenant === null) return null;
+
+        if (drive === null || drive.tenant !== tenant) {
+          const files = tenantDrive(env, tenant);
+
+          if (files === null) return null;
+          drive = { tenant, files };
+        }
+
+        return drive.files;
+      },
+      () => (driveBound(env) ? SHARED_DRIVE_UNCLAIMED : SHARED_DRIVE_UNBOUND),
+    ));
+    const plane = hooks.contextPlane;
+
+    if (plane) {
+      mounts.push(contextMount({
+        actorId: plane.actorId,
+        // A thunk: a mount must not capture a store bound to a since-retired identity.
+        own: () => plane.own(),
+        children: plane.children,
+      }));
+    }
+
+    const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
+    const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
+
+    const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
+      userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
+    }, approvalPolicy);
+
+    executionRouter.register(createNimbusWorkspaceExecutor({
+      box: executionBox,
+      shellSession,
+      // Declared exactly when NIMBUS_RUNTIME_CACHE is bound: without it there is nothing to install.
+      runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
+      inboundNetwork: nimbusPreviewConfigured(env),
+      inline: {
+        vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell,
+        sql,
+        ledger: () => access.acc?.().files,
+        budget: () => access.acc?.().context,
+        slate: hooks.slate,
+      },
+    }));
+    const previewSuffix = previewHostSuffix(env) ?? undefined;
+    const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
+    let sandboxHandle: SandboxHandle | null = null;
+    let sandboxUsed = false;
+
+    if (env.KinuDevbox) {
+      const devbox = env.KinuDevbox;
+
+      yield* Effect.catchCause(Effect.sync(() => {
+        const sdk = devbox.getByName(sandboxId);
+
+        // Egress is configured before the container runs anything, not in `onStart` (too late); until then
+        // the container has no network, so it fails closed. Only the owning workspace configures.
+        const handle = adaptCloudflareSandbox(sdk, async () => {
+          sandboxUsed = true;
+          const userId = actor.ownerUserId();
+
+          if (!userId) return;
+          await sdk.configureEgress(kinuEgressParams({
+            workspaceName: actor.workspaceName,
+            ownerUserId: userId,
+            vault: await listOwnerEgressVault(env, actor),
+            grants: memoryConfig.getShellApprovalGrants(),
+          }));
+          // Unread, the box keeps its last default.
+          const [accountSize] = await Promise.allSettled([ownerSandboxSize(env, actor)]);
+
+          if (accountSize.status === 'fulfilled') await sdk.useDefaultSize(accountSize.value);
+          else diagnostics.failure('sandbox.account_size_unread', toKinuError({
+            doing: "reading the owner's sandbox size", cause: accountSize.reason, otherwise: 'unavailable',
+          }), { sandboxId });
+        },
+        // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
+        env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
+        async () => {
+          hooks.liveReadsMoved?.(['getExposedPorts']);
+          await hooks.servingMoved?.();
+        });
+
+        sandboxHandle = handle;
+        executionRouter.register(createSandboxExecutor(handle, previewSuffix,
+          () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts']), SANDBOX_SIZES));
+        diagnostics.event('sandbox.executor_registered', {
+          sandboxId,
+          previews: previewSuffix ?? '',
+        });
+      }), (failed) => Effect.sync(() => {
+        diagnostics.failure('sandbox.executor_registration_failed', toKinuError({
+          doing: 'registering the sandbox executor',
+          cause: Cause.squash(failed),
+          otherwise: 'unavailable',
+        }), { sandboxId });
+        executionRouter.register(createSandboxExecutor());
+      }));
+    } else {
       executionRouter.register(createSandboxExecutor());
     }
-  } else {
-    executionRouter.register(createSandboxExecutor());
-  }
 
-  // The device socket lives on the user's UserDO, so each call is forwarded there.
-  const cliCwdForDevice = () => access.getCliCwdForDevice?.() ?? null;
+    // The device socket lives on the user's UserDO, so each call is forwarded there.
+    const cliCwdForDevice = () => access.getCliCwdForDevice?.() ?? null;
 
-  const deviceTransportOptions: HubDeviceTransportOpts = {
-    hub: () => userDOStubFor(env, actor),
-    caller: () => userCallerFor(actor),
-    agentName: actor.workspaceName,
-    cliCwd: cliCwdForDevice,
-    checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
-    onStatusChanged: () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions']),
-  };
+    const deviceTransportOptions: HubDeviceTransportOpts = {
+      hub: () => userDOStubFor(env, actor),
+      caller: () => userCallerFor(actor),
+      agentName: actor.workspaceName,
+      cliCwd: cliCwdForDevice,
+      checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
+      onStatusChanged: () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions']),
+    };
 
-  const deviceTransport = createHubDeviceTransport(deviceTransportOptions);
+    const deviceTransport = createHubDeviceTransport(deviceTransportOptions);
 
-  const startupWork: Promise<void> = (async () => {
-    await Promise.all([
-      (async (): Promise<void> => {
-        await settleLogged('memory.vector_backfill_detached_failed', { doing: 'backfilling semantic-memory vectors at runtime construction', otherwise: 'unavailable' }, () => backfillMemoryVectors(memoryStore, memoryConfig, vectorStore), { workspace: actor.workspaceName });
-      })(),
-      (async (): Promise<void> => {
-        await settleLogged('device.status_warmup_failed', { doing: 'warming the device hub presence at runtime construction', otherwise: 'unavailable' }, async () => { await deviceTransport.refreshStatus(); }, { workspace: actor.workspaceName });
-      })(),
-    ]);
-  })();
+    const startupWork: Promise<void> = (async () => {
+      await Promise.all([
+        (async (): Promise<void> => {
+          await settleLogged('memory.vector_backfill_detached_failed', { doing: 'backfilling semantic-memory vectors at runtime construction', otherwise: 'unavailable' }, () => backfillMemoryVectors(memoryStore, memoryConfig, vectorStore), { workspace: actor.workspaceName });
+        })(),
+        (async (): Promise<void> => {
+          await settleLogged('device.status_warmup_failed', { doing: 'warming the device hub presence at runtime construction', otherwise: 'unavailable' }, async () => { await deviceTransport.refreshStatus(); }, { workspace: actor.workspaceName });
+        })(),
+      ]);
+    })();
 
-  // Scoped to the directory named at `kinu connect` unless the device's Sandbox switch is off. A failed
-  // hub read is rethrown with its cause, never answered as null. Answers are per machine.
-  const deviceScope = async (
-    field: 'consentedRoot' | 'deviceHome',
-    deviceId: string | undefined,
-  ): Promise<string | null> => {
-    const hub = userDOStubFor(env, actor);
+    // Scoped to the directory named at `kinu connect` unless the device's Sandbox switch is off. A failed
+    // hub read is rethrown with its cause, never answered as null. Answers are per machine.
+    const deviceScope = (
+      field: 'consentedRoot' | 'deviceHome',
+      deviceId: string | undefined,
+    ): Effect.Effect<string | null, KinuError> => {
+      const cwd = cliCwdForDevice();
 
-    if (!hub) return null;
+      if (cwd !== null) return Effect.succeed(cwd);
+      const hub = userDOStubFor(env, actor);
 
-    try {
-      const status = await hub.deviceRuntimeStatus(await userCallerFor(actor));
+      if (!hub) return Effect.succeed(null);
 
-      if (deviceId === undefined) return status[field] ?? null;
+      return Effect.catchCause(Effect.gen(function* () {
+        const status = yield* Effect.promise(async () => hub.deviceRuntimeStatus(await userCallerFor(actor)));
 
-      return status.devices?.find((device) => device.id === deviceId)?.[field] ?? null;
-    } catch (cause) {
-      throw toKinuError({
+        if (deviceId === undefined) return status[field] ?? null;
+
+        return status.devices?.find((device) => device.id === deviceId)?.[field] ?? null;
+      }), (failed) => Effect.fail(toKinuError({
         doing: "reading the device's consented directory",
-        cause,
+        cause: Cause.squash(failed),
         otherwise: 'unavailable',
-      });
-    }
-  };
+      })));
+    };
 
-  executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
-    consentedRoot: async (deviceId) => cliCwdForDevice() ?? await deviceScope('consentedRoot', deviceId),
-    deviceHome: async (deviceId) => cliCwdForDevice() ?? await deviceScope('deviceHome', deviceId),
-    scope: (deviceId) => {
-      return settle(Effect.gen(function* () {
-        const hub = userDOStubFor(env, actor);
+    executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
+      consentedRoot: (deviceId) => settle(deviceScope('consentedRoot', deviceId)),
+      deviceHome: (deviceId) => settle(deviceScope('deviceHome', deviceId)),
+      scope: (deviceId) => {
+        return settle(Effect.gen(function* () {
+          const hub = userDOStubFor(env, actor);
 
-        if (!hub) return 'root';
+          if (!hub) return 'root';
 
-        return yield* Effect.catchCause(Effect.gen(function* () {
-          return (yield* Effect.promise(async () => hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId))).scope;
-        }), (failed) => Effect.gen(function* () {
-          const cause = Cause.squash(failed);
+          return yield* Effect.catchCause(Effect.gen(function* () {
+            return (yield* Effect.promise(async () => hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId))).scope;
+          }), (failed) => Effect.gen(function* () {
+            const cause = Cause.squash(failed);
 
-          return yield* Effect.die(toKinuError({
-            doing: "reading the device's file-view scope",
-            cause,
-            otherwise: 'unavailable',
+            return yield* Effect.die(toKinuError({
+              doing: "reading the device's file-view scope",
+              cause,
+              otherwise: 'unavailable',
+            }));
           }));
         }));
-      }));
-    },
-  }, approvalPolicy));
+      },
+    }, approvalPolicy));
 
-  const runtime: CFRuntime = {
-    actor: actor.actor,
-    storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
-    agentStateVfs: originVfs,
-    toolFiles,
-    workspaceIsMachine: false,
-    startupWork,
-    memory, executor, llm, schedule, identity, craftStore,
-    get judgeModel() { return profileLane('judge'); },
-    get fastLlm() { return profileLane('fast'); },
-    executionRouter,
-    shell,
-    localVfs: baseWorkspaceVfs,
-    deviceTransport,
-    vectorStore,
-    sandboxHandle,
-    sandboxPortHolders: () => {
-      const handle = sandboxHandle;
+    const runtime: CFRuntime = {
+      actor: actor.actor,
+      storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
+      agentStateVfs: originVfs,
+      toolFiles,
+      workspaceIsMachine: false,
+      startupWork,
+      memory, executor, llm, schedule, identity, craftStore,
+      get judgeModel() { return profileLane('judge'); },
+      get fastLlm() { return profileLane('fast'); },
+      executionRouter,
+      shell,
+      localVfs: baseWorkspaceVfs,
+      deviceTransport,
+      vectorStore,
+      sandboxHandle,
+      sandboxPortHolders: () => {
+        const handle = sandboxHandle;
 
-      if (handle === null || !sandboxUsed || previewSuffix === undefined) return null;
+        if (handle === null || !sandboxUsed || previewSuffix === undefined) return null;
 
-      return {
-        exposedPorts: async () => (await handle.getExposedPorts(previewSuffix)).map((row) => row.port),
-        holders: (ports) => handle.portListeners(JOB_STAMP_ENV, ports),
-      };
-    },
-  };
+        return {
+          exposedPorts: async () => (await handle.getExposedPorts(previewSuffix)).map((row) => row.port),
+          holders: (ports) => handle.portListeners(JOB_STAMP_ENV, ports),
+        };
+      },
+    };
 
-  if (unmount !== undefined) runtime.release = unmount;
+    if (unmount !== undefined) runtime.release = unmount;
 
-  return runtime;
+    return runtime;
+  }));
 }
 
 const EMBEDDING_MODEL = '@cf/baai/bge-small-en-v1.5';
@@ -563,15 +568,15 @@ function buildVectorStore(
   env: Env,
   actor: ActorRuntimeIdentity,
   reportModelCall: ModelCallSink,
-): VectorStore {
+): Effect.Effect<VectorStore> {
   const embedder = createWorkersAIEmbedder({ env, model: EMBEDDING_MODEL, dimensions: 384, report: reportModelCall });
   const vectorizeBinding = env.MEMORY_VECTORS;
 
   if (!embedder || !vectorizeBinding) {
-    return createNoopVectorStore();
+    return Effect.succeed(createNoopVectorStore());
   }
 
-  try {
+  return Effect.catchCause(Effect.sync(() => {
     const store = createCloudflareVectorStore({
       index: vectorizeBinding,
       embedder,
@@ -582,15 +587,15 @@ function buildVectorStore(
     diagnostics.event('vector.store_registered', { namespace: actor.workspaceName });
 
     return store;
-  } catch (err) {
+  }), (failed) => Effect.sync(() => {
     diagnostics.failure('vector.store_construction_failed', toKinuError({
       doing: 'constructing the Vectorize memory store',
-      cause: err,
+      cause: Cause.squash(failed),
       otherwise: 'unavailable',
     }), { namespace: actor.workspaceName });
 
     return createNoopVectorStore();
-  }
+  }));
 }
 
 

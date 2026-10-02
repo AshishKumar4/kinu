@@ -3,7 +3,7 @@
  * `MCPClientManager`. Descriptors are serialized because `execute` closures can't cross DO RPC.
  */
 
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { sha256Hex } from '@kinu.run/core';
 import {
   JsonArraySchema, JsonObjectSchema,
@@ -12,7 +12,7 @@ import {
   type JsonObject, type JsonValue, type ListedMcpTools, type McpPreset, type McpPresetId, type McpToolRefusal,
   type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderCauseChain, settle, tolerate, toKinuError, settleSync } from '@kinu.run/core/obs';
+import { diagnostics, flight, KinuError, renderCauseChain, settle, tolerate, toKinuError, settleSync } from '@kinu.run/core/obs';
 import { SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as v from 'valibot';
@@ -367,20 +367,18 @@ function causeChain(input: { cause: unknown }): Error[] {
 
 export type McpToolListing = { readonly listed: ListedMcpTools } | { readonly failure: string };
 
-export async function readUndiscoveredToolList(server: { readonly name: string }, client: Pick<Client, 'request'>): Promise<McpToolListing> {
-  try {
-    return {
-      listed: await listMcpToolsLeniently(server, (cursor) => client.request(
-        { method: 'tools/list', params: cursor === undefined ? {} : { cursor } },
-        ResultSchema,
-      )),
-    };
-  } catch (cause) {
-    const error = toKinuError({ doing: `reading the tool list of MCP server ${server.name}`, cause, otherwise: 'unavailable' });
+export function readUndiscoveredToolList(server: { readonly name: string }, client: Pick<Client, 'request'>): Promise<McpToolListing> {
+  const listed = Effect.promise(() => listMcpToolsLeniently(server, (cursor) => client.request(
+    { method: 'tools/list', params: cursor === undefined ? {} : { cursor } },
+    ResultSchema,
+  )));
+
+  return settle(Effect.catchCause(Effect.map(listed, (tools): McpToolListing => ({ listed: tools })), (failed) => Effect.sync((): McpToolListing => {
+    const error = toKinuError({ doing: `reading the tool list of MCP server ${server.name}`, cause: Cause.squash(failed), otherwise: 'unavailable' });
     diagnostics.failure('mcp.tool_list_unreadable', error, { server: server.name });
 
     return { failure: renderCauseChain(error) };
-  }
+  })));
 }
 
 export function mcpListingRefusals(server: { readonly id: string; readonly name: string }, listed: ListedMcpTools): McpToolRefusal[] {
@@ -402,9 +400,17 @@ interface McpSessionConnection {
   clearResumedSession(): void;
 }
 
+interface SessionRenewal {
+  readonly host: McpSessionHost;
+  readonly serverId: string;
+  readonly expired: string;
+  readonly traffic: SessionTraffic;
+}
+
 interface SessionTraffic {
   readonly calls: Set<Promise<unknown>>;
-  readonly renewals: Map<string, Promise<void>>;
+  /** One renewal per expired session, joined by every call that found it expired. */
+  readonly renew: (renewal: SessionRenewal) => Effect.Effect<void, KinuError>;
 }
 
 const sessionTraffic = new WeakMap<McpSessionHost, Map<string, SessionTraffic>>();
@@ -416,23 +422,17 @@ export async function callRenewingExpiredSession<Result>(
 ): Promise<Result> {
   const servers = sessionTraffic.get(host) ?? new Map<string, SessionTraffic>();
   sessionTraffic.set(host, servers);
-  const traffic = servers.get(serverId) ?? { calls: new Set(), renewals: new Map() };
+  const traffic = servers.get(serverId) ?? { calls: new Set(), renew: flight(renewSession, { key: (renewal) => renewal.expired }) };
   servers.set(serverId, traffic);
   const expired = host.mcpConnections[serverId]?.sessionId;
 
-  try {
-    return await sent(traffic, call);
-  } catch (cause) {
-    if (expired === undefined || !causeChain({ cause }).some((error) => error instanceof SdkHttpError && error.status === 404)) throw cause;
-  }
+  return settle(Effect.catchCause(Effect.promise(() => sent(traffic, call)), (failed) => {
+    if (expired === undefined || !causeChain({ cause: Cause.squash(failed) }).some((error) => error instanceof SdkHttpError && error.status === 404)) {
+      return Effect.failCause(failed);
+    }
 
-  const renewal = traffic.renewals.get(expired)
-    ?? renewSession({ host, serverId, expired, traffic }).finally(() => traffic.renewals.delete(expired));
-
-  traffic.renewals.set(expired, renewal);
-  await renewal;
-
-  return sent(traffic, call);
+    return Effect.andThen(traffic.renew({ host, serverId, expired, traffic }), Effect.promise(() => sent(traffic, call)));
+  }));
 }
 
 async function sent<Result>(traffic: SessionTraffic, call: () => Promise<Result>): Promise<Result> {
@@ -446,21 +446,23 @@ async function sent<Result>(traffic: SessionTraffic, call: () => Promise<Result>
   }
 }
 
-async function renewSession(input: { host: McpSessionHost; serverId: string; expired: string; traffic: SessionTraffic }): Promise<void> {
-  const { host, serverId, expired } = input;
-  // Starting a session closes the old client and every call still on it.
-  await Promise.allSettled(input.traffic.calls);
-  const connection = host.mcpConnections[serverId];
+function renewSession(input: SessionRenewal): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    const { host, serverId, expired } = input;
+    // Starting a session closes the old client and every call still on it.
+    yield* Effect.promise(() => Promise.allSettled(input.traffic.calls));
+    const connection = host.mcpConnections[serverId];
 
-  if (connection === undefined || connection.sessionId !== expired) return;
-  connection.clearResumedSession();
-  const started = await host.connectToServer(serverId);
+    if (connection === undefined || connection.sessionId !== expired) return;
+    connection.clearResumedSession();
+    const started = yield* Effect.promise(() => host.connectToServer(serverId));
 
-  if (started.state !== 'connected') {
-    throw new KinuError('unavailable', `MCP server ${serverId} ended its session and a new one did not start (${started.error ?? started.state})`);
-  }
+    if (started.state !== 'connected') {
+      return yield* new KinuError('unavailable', `MCP server ${serverId} ended its session and a new one did not start (${started.error ?? started.state})`);
+    }
 
-  await host.discoverIfConnected(serverId);
+    yield* Effect.promise(() => host.discoverIfConnected(serverId));
+  });
 }
 
 /** Avoids importing the SDK enum so this module doesn't pull the agents SDK transitively. */

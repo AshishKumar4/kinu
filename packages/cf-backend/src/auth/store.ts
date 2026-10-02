@@ -217,69 +217,68 @@ export class SessionAuthorityUnavailableError extends Data.TaggedError('SessionA
 /** Null when not signed in; throws {@link SessionAuthorityUnavailableError} when the answer cannot be
  *  obtained. Liveness is the authority row on every request; identity comes from the KV projection,
  *  or the row when KV has not caught up. Revocation deletes the row, so neither copy can revive it. */
-export async function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise<AuthIdentity | null> {
-  const userId = parseSessionTokenUserId(token);
+export function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise<AuthIdentity | null> {
+  return settle(Effect.gen(function* () {
+    const userId = parseSessionTokenUserId(token);
 
-  if (!userId) return null;
-  const tokenHash = await sha256Hex(token);
-  let record: v.InferOutput<typeof SessionSchema> | null;
+    if (!userId) return null;
+    const tokenHash = sha256Hex(token);
 
-  try {
-    record = await readKvJson(env.AUTH_KV, sessionKey(tokenHash), SessionSchema);
-  } catch (unreadable) {
-    // Told apart by the decoder's error type, never prose. An unreachable namespace is an outage;
-    // undecodable bytes are cleaned out and answered as signed out (a 503 would trap the browser).
-    if (!isMalformedRecord({ cause: unreadable })) {
-      throw new SessionAuthorityUnavailableError({ cause: unreadable });
-    }
+    const record = yield* Effect.catchCause(Effect.promise(() => readKvJson(env.AUTH_KV, sessionKey(tokenHash), SessionSchema)), (failed) => {
+      const unreadable = Cause.squash(failed);
 
-    await discardCorruptSession(env, userId, tokenHash, toKinuError({
-      doing: 'decoding the browser session record this cookie names',
-      cause: unreadable,
-      otherwise: 'bad_input',
-    }));
+      // Told apart by the decoder's error type, never prose. An unreachable namespace is an outage;
+      // undecodable bytes are cleaned out and answered as signed out (a 503 would trap the browser).
+      if (!isMalformedRecord({ cause: unreadable })) {
+        return Effect.die(new SessionAuthorityUnavailableError({ cause: unreadable }));
+      }
 
-    return null;
-  }
+      return Effect.as(Effect.promise(() => discardCorruptSession(env, userId, tokenHash, toKinuError({
+        doing: 'decoding the browser session record this cookie names',
+        cause: unreadable,
+        otherwise: 'bad_input',
+      }))), 'discarded' as const);
+    });
 
-  // kv.ts floors TTLs, so a record can outlive its deadline; this only picks which identity copy to read.
-  const projected = record && record.expiresAt > Date.now() ? record : null;
+    if (record === 'discarded') return null;
 
-  // Outside the try: a missing owner secret is a misconfiguration, not an unreachable DO.
-  const caller = await ownerCaller(env);
-  let live: LiveBrowserSession | null;
+    // kv.ts floors TTLs, so a record can outlive its deadline; this only picks which identity copy to read.
+    const projected = record && record.expiresAt > Date.now() ? record : null;
 
-  try {
-    live = await sessionAuthority(env, userId).verifyBrowserSession(caller, tokenHash);
-  } catch (unreachable) {
-    throw new SessionAuthorityUnavailableError({ cause: unreachable });
-  }
+    // Outside the catch: a missing owner secret is a misconfiguration, not an unreachable DO.
+    const caller = yield* Effect.promise(() => ownerCaller(env));
 
-  if (!live) return null;
+    const live: LiveBrowserSession | null = yield* Effect.catchCause(
+      Effect.promise(() => sessionAuthority(env, userId).verifyBrowserSession(caller, tokenHash)),
+      (failed) => Effect.die(new SessionAuthorityUnavailableError({ cause: Cause.squash(failed) })),
+    );
 
-  // Row fallback serves the first request after sign-in at a colo KV has not reached. `identity` is
-  // null only on rows registered before the row carried one.
-  const snapshot = projected ?? live.identity;
+    if (!live) return null;
 
-  if (!snapshot) return null;
+    // Row fallback serves the first request after sign-in at a colo KV has not reached. `identity` is
+    // null only on rows registered before the row carried one.
+    const snapshot = projected ?? live.identity;
 
-  // Once OAuth is declared, built-in sessions end with built-in sign-in.
-  if (BUILTIN_METHODS.has(snapshot.provider) && !builtinSignInOn(env)) return null;
+    if (!snapshot) return null;
 
-  // Annotated, not inferred, so the field-supply census sees the one site connecting `sessionTokenHash`.
-  const identity: AuthIdentity = {
-    // From the token, never a record, so no stored field can point a cookie at another user.
-    userId,
-    email: snapshot.email,
-    sub: snapshot.sub,
-    provider: snapshot.provider,
-    displayName: snapshot.displayName,
-    authTime: snapshot.authTime,
-    // Lets a later logout reach websockets tagged with this session.
-    sessionTokenHash: tokenHash,
-  };
+    // Once OAuth is declared, built-in sessions end with built-in sign-in.
+    if (BUILTIN_METHODS.has(snapshot.provider) && !builtinSignInOn(env)) return null;
 
-  return identity;
+    // Annotated, not inferred, so the field-supply census sees the one site connecting `sessionTokenHash`.
+    const identity: AuthIdentity = {
+      // From the token, never a record, so no stored field can point a cookie at another user.
+      userId,
+      email: snapshot.email,
+      sub: snapshot.sub,
+      provider: snapshot.provider,
+      displayName: snapshot.displayName,
+      authTime: snapshot.authTime,
+      // Lets a later logout reach websockets tagged with this session.
+      sessionTokenHash: tokenHash,
+    };
+
+    return identity;
+  }));
 }
 
 /** Decided by type, never by matching an error's prose. */

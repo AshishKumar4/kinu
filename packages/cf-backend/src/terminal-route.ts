@@ -6,7 +6,8 @@
 
 import { Hono, type Context } from "hono";
 import { getAgentByName } from "agents";
-import { diagnostics, renderThrownChain, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
+import { Cause, Effect } from "effect";
+import { diagnostics, renderThrownChain, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 
 import { err, json } from "@kinu.run/core";
@@ -122,150 +123,140 @@ function notAnUpgrade(request: Request): Response | null {
   return null;
 }
 
-/** The shell runs on the owner's machine: the upgrade is handed to the DO holding its outbound socket. */
-async function deviceTerminal(call: TerminalCall): Promise<Response> {
-  const { request, url, deps, agentName, executor, scope } = call;
+function unreachable(doing: string, report: (error: KinuError) => void) {
+  return (failed: Cause.Cause<unknown>) => Effect.sync(() => {
+    const error = toKinuError({ doing, cause: Cause.squash(failed), otherwise: "unavailable" });
 
-  // Guards only: they keep a device request off the container path, which would beat a foreign lease.
-  if (call.verb !== "attach") {
-    if (request.method !== "POST") return err(405, "use POST");
-
-    return json({ body: { ok: true } });
-  }
-
-  const refused = notAnUpgrade(request);
-
-  if (refused !== null) return refused;
-
-  let opened: { session: string; user: string } | { error: string };
-
-  try {
-    const agent = await deps.resolveWorkspace(agentName);
-    const ready = await agent.prepareTerminal(executor);
-
-    if ("error" in ready) {
-      diagnostics.failure("terminal.not_ready", toKinuError({
-        doing: "reaching this workspace's machine for a terminal",
-        cause: ready.error,
-        otherwise: "unavailable",
-      }), scope);
-
-      return err(503, ready.error);
-    }
-
-    opened = await agent.openDeviceTerminal(paneWindow(url));
-  } catch (cause) {
-    const error = toKinuError({
-      doing: "reaching this workspace to open a terminal",
-      cause,
-      otherwise: "unavailable",
-    });
-
-    diagnostics.failure("terminal.device_open_failed", error, scope);
+    report(error);
 
     return err(503, renderThrownChain({ cause: error }));
-  }
-
-  if ("error" in opened) {
-    // Already a rendered chain from the RPC's other side, so it rides as the cause.
-    diagnostics.failure("terminal.device_refused", toKinuError({
-      doing: "opening a terminal on this machine",
-      cause: opened.error,
-      otherwise: "unavailable",
-    }), scope);
-
-    return err(503, opened.error);
-  }
-
-  if (request.signal.aborted) return abandonedAttach();
-  // A WebSocket cannot cross an RPC boundary, but an upgrade request can. The session is single-use.
-  const socketUrl = new URL(request.url);
-  socketUrl.pathname = DEVICE_TERMINAL_PATH;
-  socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
-  const namespace = deps.UserDO;
-
-  return namespace.get(namespace.idFromName(opened.user)).fetch(new Request(socketUrl, request));
+  });
 }
 
-/** The shell is the runtime's, inside the workspace object; keepalive/reset are guards as for a device. */
-async function workspaceTerminal(call: TerminalCall): Promise<Response> {
-  const { request, deps, agentName, executor, scope } = call;
+/** The shell runs on the owner's machine: the upgrade is handed to the DO holding its outbound socket. */
+function deviceTerminal(call: TerminalCall): Effect.Effect<Response> {
+  return Effect.gen(function* () {
+    const { request, url, deps, agentName, executor, scope } = call;
 
-  if (call.verb !== "attach") {
-    if (request.method !== "POST") return err(405, "use POST");
+    // Guards only: they keep a device request off the container path, which would beat a foreign lease.
+    if (call.verb !== "attach") {
+      if (request.method !== "POST") return err(405, "use POST");
 
-    return json({ body: { ok: true } });
-  }
+      return json({ body: { ok: true } });
+    }
 
-  const refused = notAnUpgrade(request);
+    const refused = notAnUpgrade(request);
 
-  if (refused !== null) return refused;
+    if (refused !== null) return refused;
 
-  try {
-    const agent = await deps.resolveWorkspace(agentName);
-    const ready = await agent.prepareTerminal(executor);
+    const opened = yield* Effect.catchCause(Effect.gen(function* () {
+      const agent = yield* Effect.promise(() => deps.resolveWorkspace(agentName));
+      const ready = yield* Effect.promise(() => agent.prepareTerminal(executor));
 
-    if ("error" in ready) {
-      diagnostics.failure("terminal.workspace_not_ready", toKinuError({
-        doing: "composing this workspace's runtime for a terminal",
-        cause: ready.error,
+      if ("error" in ready) {
+        diagnostics.failure("terminal.not_ready", toKinuError({
+          doing: "reaching this workspace's machine for a terminal",
+          cause: ready.error,
+          otherwise: "unavailable",
+        }), scope);
+
+        return err(503, ready.error);
+      }
+
+      return yield* Effect.promise(() => agent.openDeviceTerminal(paneWindow(url)));
+    }), unreachable("reaching this workspace to open a terminal", (error) => diagnostics.failure("terminal.device_open_failed", error, scope)));
+
+    if (opened instanceof Response) return opened;
+
+    if ("error" in opened) {
+      // Already a rendered chain from the RPC's other side, so it rides as the cause.
+      diagnostics.failure("terminal.device_refused", toKinuError({
+        doing: "opening a terminal on this machine",
+        cause: opened.error,
         otherwise: "unavailable",
       }), scope);
 
-      return err(503, ready.error);
+      return err(503, opened.error);
     }
 
     if (request.signal.aborted) return abandonedAttach();
-    // The gate's identity headers ride along: one revocation closes chat and socket.
+    // A WebSocket cannot cross an RPC boundary, but an upgrade request can. The session is single-use.
     const socketUrl = new URL(request.url);
-    socketUrl.pathname = WORKSPACE_TERMINAL_PATH;
+    socketUrl.pathname = DEVICE_TERMINAL_PATH;
+    socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
+    const namespace = deps.UserDO;
 
-    return await agent.fetch(new Request(socketUrl, request));
-  } catch (cause) {
-    const error = toKinuError({
-      doing: "reaching this workspace to open its shell",
-      cause,
-      otherwise: "unavailable",
-    });
+    return yield* Effect.promise(() => namespace.get(namespace.idFromName(opened.user)).fetch(new Request(socketUrl, request)));
+  });
+}
 
-    diagnostics.failure("terminal.workspace_open_failed", error, scope);
+/** The shell is the runtime's, inside the workspace object; keepalive/reset are guards as for a device. */
+function workspaceTerminal(call: TerminalCall): Effect.Effect<Response> {
+  return Effect.gen(function* () {
+    const { request, deps, agentName, executor, scope } = call;
 
-    return err(503, renderThrownChain({ cause: error }));
-  }
+    if (call.verb !== "attach") {
+      if (request.method !== "POST") return err(405, "use POST");
+
+      return json({ body: { ok: true } });
+    }
+
+    const refused = notAnUpgrade(request);
+
+    if (refused !== null) return refused;
+
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const agent = yield* Effect.promise(() => deps.resolveWorkspace(agentName));
+      const ready = yield* Effect.promise(() => agent.prepareTerminal(executor));
+
+      if ("error" in ready) {
+        diagnostics.failure("terminal.workspace_not_ready", toKinuError({
+          doing: "composing this workspace's runtime for a terminal",
+          cause: ready.error,
+          otherwise: "unavailable",
+        }), scope);
+
+        return err(503, ready.error);
+      }
+
+      if (request.signal.aborted) return abandonedAttach();
+      // The gate's identity headers ride along: one revocation closes chat and socket.
+      const socketUrl = new URL(request.url);
+      socketUrl.pathname = WORKSPACE_TERMINAL_PATH;
+
+      return yield* Effect.promise(() => agent.fetch(new Request(socketUrl, request)));
+    }), unreachable("reaching this workspace to open its shell", (error) => diagnostics.failure("terminal.workspace_open_failed", error, scope)));
+  });
 }
 
 /** One sandbox call behind a POST. A failure keeps its whole chain (AGENTS.md § Errors): it is
  *  never broken at a display boundary. */
-async function sandboxCommand(
+function sandboxCommand(
   call: TerminalCall,
   run: () => Promise<void>,
   failed: { readonly doing: string; readonly report: (error: KinuError) => void },
-): Promise<Response> {
-  if (call.request.method !== "POST") return err(405, "use POST");
+): Effect.Effect<Response> {
+  if (call.request.method !== "POST") return Effect.succeed(err(405, "use POST"));
 
-  try {
-    await run();
-
-    return json({ body: { ok: true } });
-  } catch (cause) {
-    const error = toKinuError({ doing: failed.doing, cause, otherwise: "unavailable" });
+  return Effect.catchCause(Effect.as(Effect.promise(run), json({ body: { ok: true } })), (cause) => Effect.sync(() => {
+    const error = toKinuError({ doing: failed.doing, cause: Cause.squash(cause), otherwise: "unavailable" });
 
     failed.report(error);
 
     return err(503, renderThrownChain({ cause: error }));
-  }
+  }));
 }
 
 /**
  * Same preflight as exec (up, /workspace attached, egress installed), under the attach's diagnostic
  * scope. Not fenced by cancellation: the start is shared and idempotent.
  */
-async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
+function sandboxPreflight(call: TerminalCall): Effect.Effect<Response | null> {
   const { deps, agentName, executor, scope } = call;
 
-  try {
-    const agent = await deps.resolveWorkspace(agentName);
-    const ready = await agent.prepareTerminal(executor);
+  return Effect.catchCause(Effect.gen(function* () {
+    const agent = yield* Effect.promise(() => deps.resolveWorkspace(agentName));
+    const ready = yield* Effect.promise(() => agent.prepareTerminal(executor));
 
     if ("error" in ready) {
       diagnostics.failure("terminal.not_ready", toKinuError({
@@ -276,95 +267,75 @@ async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
 
       return err(503, ready.error);
     }
-  } catch (cause) {
-    const error = toKinuError({
-      doing: "reaching this workspace to prepare a terminal",
-      cause,
-      otherwise: "unavailable",
-    });
 
-    diagnostics.failure("terminal.preflight_failed", error, scope);
-
-    return err(503, renderThrownChain({ cause: error }));
-  }
-
-  return null;
+    return null;
+  }), unreachable("reaching this workspace to prepare a terminal", (error) => diagnostics.failure("terminal.preflight_failed", error, scope)));
 }
 
 /**
  * Fenced by `request.signal`, not a clock: no single deadline exceeds a cold start yet undercuts an
  * open tab.
  */
-async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
+function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Effect.Effect<Response> {
   const { request, scope } = call;
 
-  if (request.signal.aborted) return abandonedAttach();
+  if (request.signal.aborted) return Effect.succeed(abandonedAttach());
 
-  try {
-    await sandbox.noteTerminalActivity();
+  return Effect.catchCause(Effect.gen(function* () {
+    yield* Effect.promise(() => sandbox.noteTerminalActivity());
     const url = new URL(request.url);
     url.pathname = "/_devbox/terminal";
     const size = paneWindow(call.url);
     url.searchParams.set("cols", String(size.cols));
     url.searchParams.set("rows", String(size.rows));
     const upgrade = sandbox.fetch(new Request(url.toString(), ptyUpgradeRequest(request)));
-    const settled = await Promise.race([upgrade, clientGone(request.signal)]);
+    const settled = yield* Effect.promise(() => Promise.race([upgrade, clientGone(request.signal)]));
 
     if (settled === CLIENT_GONE) {
       // Release the orphaned upgrade, else the PTY stream stays open until the edge idle reap
       // (PLATFORM_CATALOG `edge.websocket_idle_reap_ms`). `waitUntil` retains it past the response.
-      ctx.waitUntil((async () => {
-        await settleLogged("terminal.abandoned_upgrade_not_released", { doing: "releasing the terminal upgrade a departed client left behind", otherwise: "unavailable" }, async () => {
-          const response = await upgrade;
-          response.webSocket?.accept();
-          response.webSocket?.close(1001, "terminal client went away");
-        }, scope);
-      })());
+      ctx.waitUntil(settleLogged("terminal.abandoned_upgrade_not_released", { doing: "releasing the terminal upgrade a departed client left behind", otherwise: "unavailable" }, async () => {
+        const response = await upgrade;
+        response.webSocket?.accept();
+        response.webSocket?.close(1001, "terminal client went away");
+      }, scope));
 
       return abandonedAttach();
     }
 
     return settled;
-  } catch (cause) {
-    const error = toKinuError({
-      doing: "attaching a terminal to the sandbox container",
-      cause,
-      otherwise: "unavailable",
-    });
-
-    diagnostics.failure("terminal.attach_failed", error, scope);
-
-    return err(503, renderThrownChain({ cause: error }));
-  }
+  }), unreachable("attaching a terminal to the sandbox container", (error) => diagnostics.failure("terminal.attach_failed", error, scope)));
 }
 
-async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
-  const sandbox = call.deps.resolveSandbox(call.agentName);
+function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Effect.Effect<Response> {
+  return Effect.gen(function* () {
+    const sandbox = call.deps.resolveSandbox(call.agentName);
 
-  if (sandbox === null) return err(503, "no Sandbox binding is configured on this deployment");
+    if (sandbox === null) return err(503, "no Sandbox binding is configured on this deployment");
 
-  // Proxied frames renew the platform's activity clock but not the durable lease `Devbox` reads
-  // before quiescing; without this beat a container can stop under a typing user.
-  if (call.verb === "keepalive") {
-    return sandboxCommand(call, () => sandbox.noteTerminalActivity(), {
-      doing: "renewing the container's lease for an attached terminal",
-      report: (error) => diagnostics.failure("terminal.lease_renewal_failed", error, call.scope),
-    });
-  }
+    // Proxied frames renew the platform's activity clock but not the durable lease `Devbox` reads
+    // before quiescing; without this beat a container can stop under a typing user.
+    if (call.verb === "keepalive") {
+      return yield* sandboxCommand(call, () => sandbox.noteTerminalActivity(), {
+        doing: "renewing the container's lease for an attached terminal",
+        report: (error) => diagnostics.failure("terminal.lease_renewal_failed", error, call.scope),
+      });
+    }
 
-  // The persistent tmux session goes; the next native PTY attach creates its shell.
-  if (call.verb === "reset") {
-    return sandboxCommand(call, () => sandbox.resetShell(), {
-      doing: "restarting the terminal's shell",
-      report: (error) => diagnostics.failure("terminal.reset_failed", error, call.scope),
-    });
-  }
+    // The persistent tmux session goes; the next native PTY attach creates its shell.
+    if (call.verb === "reset") {
+      return yield* sandboxCommand(call, () => sandbox.resetShell(), {
+        doing: "restarting the terminal's shell",
+        report: (error) => diagnostics.failure("terminal.reset_failed", error, call.scope),
+      });
+    }
 
-  const refused = notAnUpgrade(call.request) ?? await sandboxPreflight(call);
+    const refused = notAnUpgrade(call.request) ?? (yield* sandboxPreflight(call));
 
-  if (refused !== null) return refused;
+    if (refused !== null) return refused;
 
-  return sandboxAttach(sandbox, call, ctx);
+    return yield* sandboxAttach(sandbox, call, ctx);
+  });
 }
 
 /** One route per verb; the query names the executor. */
@@ -373,7 +344,7 @@ export function terminalRoutes<Bindings extends object>(
 ): Hono<FamilyEnv<Bindings, WorkspaceVariables>> {
   const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables>>();
 
-  const terminal = (verb: TerminalCall['verb']) => async (c: Context<FamilyEnv<Bindings, WorkspaceVariables>>): Promise<Response> => {
+  const terminal = (verb: TerminalCall['verb'], c: Context<FamilyEnv<Bindings, WorkspaceVariables>>): Effect.Effect<Response> => Effect.gen(function* () {
     const { name: agentName, request } = c.get('workspace');
     const url = new URL(request.url);
     const executor = url.searchParams.get("executor");
@@ -392,16 +363,16 @@ export function terminalRoutes<Bindings extends object>(
 
     const call: TerminalCall = { request, url, deps: depsFor(c.env), agentName, executor, verb, scope };
 
-    if (executor === DEVICE_EXECUTOR) return deviceTerminal(call);
+    if (executor === DEVICE_EXECUTOR) return yield* deviceTerminal(call);
 
-    if (executor === WORKSPACE_EXECUTOR) return workspaceTerminal(call);
+    if (executor === WORKSPACE_EXECUTOR) return yield* workspaceTerminal(call);
 
-    return sandboxTerminal(call, c.executionCtx);
-  };
+    return yield* sandboxTerminal(call, c.executionCtx);
+  });
 
-  routes.all(`${LITERAL_WORKSPACE}/terminal`, terminal("attach"));
-  routes.all(`${LITERAL_WORKSPACE}/terminal/keepalive`, terminal("keepalive"));
-  routes.all(`${LITERAL_WORKSPACE}/terminal/reset`, terminal("reset"));
+  routes.all(`${LITERAL_WORKSPACE}/terminal`, (c) => settle(terminal("attach", c)));
+  routes.all(`${LITERAL_WORKSPACE}/terminal/keepalive`, (c) => settle(terminal("keepalive", c)));
+  routes.all(`${LITERAL_WORKSPACE}/terminal/reset`, (c) => settle(terminal("reset", c)));
 
   return routes;
 }

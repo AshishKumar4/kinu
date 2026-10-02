@@ -70,6 +70,12 @@ export const DECLARED = byFile([
     within: ['heldFiber'],
     reason: 'a held fiber\'s start: nothing awaits a detached fiber, so the host\'s rejection is observed here and handed to `onStartFailed`',
   }],
+  ['packages/cf-backend/src/workspace-host.ts', {
+    mechanisms: ['catch', 'throw'],
+    within: ['compose'],
+    reason: 'the hosted runtime\'s start gate, observed as state: its forwarders stay promise chains (settle\'s hops would move '
+      + 'readiness), and a failed composition is forgotten so the next operation composes again',
+  }],
   ['packages/core/src/slates/content.ts', {
     mechanisms: ['throw'],
     reason: 'a vendored `ContentStore`: its failures are the vendored package\'s `AgentCoreError` codes, its contract',

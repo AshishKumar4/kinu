@@ -326,6 +326,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     box: (shellId) => workspaceBox({
       runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
       mountTable: (plane, cred) => bundle.mountTable(plane, cred),
+      expose: (port) => settle(exposedPort({ runtime, previewUrl: deps.previewUrl, previewGates }, port)),
     }),
     facetManager: async () => (await compose()).facets,
     ports: async () => (await compose()).ports,
@@ -437,7 +438,7 @@ class ObservedPortRegistry extends PortRegistry {
   }
 }
 
-function workspaceBox(deps: {
+interface WorkspaceBoxDeps {
   runtime: () => Promise<HostedRuntime>;
   ports: PortRegistry;
   ctx: DurableObjectState;
@@ -446,7 +447,30 @@ function workspaceBox(deps: {
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   previewGates(port: number, handle: string): Promise<PreviewGates>;
   mountTable: NonNullable<NimbusSandboxHandle['mountTable']>;
-}): NimbusSandboxHandle {
+  expose: NonNullable<NonNullable<NimbusSandboxHandle['ports']>['expose']>;
+}
+
+function exposedPort(deps: Pick<WorkspaceBoxDeps, 'runtime' | 'previewUrl' | 'previewGates'>, port: number) {
+  const { runtime } = deps;
+
+  return Effect.gen(function* () {
+    const exposed = yield* Effect.promise(async () => (await runtime()).exposeApp({ port }));
+    const capability = exposed.capability;
+
+    if (capability === null) return yield* Effect.die(new Error(`No process is listening on workspace port ${port}`));
+    const answer = yield* Effect.promise(() => deps.previewUrl(port, capability));
+
+    if (answer.url === undefined) {
+      return yield* new KinuError('unsupported', `workspace port ${port} is listening and has no preview URL: ${answer.unavailable}`);
+    }
+
+    const gates = yield* Effect.promise(() => deps.previewGates(port, capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH)));
+
+    return { port: exposed.port, pid: exposed.pid, capability, url: answer.url, route: routeCheck(gates) };
+  });
+}
+
+function workspaceBox(deps: WorkspaceBoxDeps): NimbusSandboxHandle {
   const { runtime, shellId } = deps;
 
   return {
@@ -471,20 +495,7 @@ function workspaceBox(deps: {
       logs: async (pid, options) => await jsonResultOrVoid((await runtime()).processLogs(pid, options)),
     },
     ports: {
-      expose: async (port) => {
-        const exposed = await (await runtime()).exposeApp({ port });
-
-        if (exposed.capability === null) throw new Error(`No process is listening on workspace port ${port}`);
-        const answer = await deps.previewUrl(port, exposed.capability);
-
-        if (answer.url === undefined) {
-          throw new KinuError('unsupported', `workspace port ${port} is listening and has no preview URL: ${answer.unavailable}`);
-        }
-
-        const gates = await deps.previewGates(port, exposed.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH));
-
-        return { port: exposed.port, pid: exposed.pid, capability: exposed.capability, url: answer.url, route: routeCheck(gates) };
-      },
+      expose: deps.expose,
       // Retire the capability before dropping the listener, so a crash leaves a dead token, not a live one.
       unexpose: async (port) => {
         await runtime();
