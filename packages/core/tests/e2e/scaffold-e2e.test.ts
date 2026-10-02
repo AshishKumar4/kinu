@@ -16,6 +16,7 @@ import {
   makeSql, makeExecRaw, createTestActor, createMemoryVFS, createMemoryMemory,
   createMemoryCraftStore, createMockExecutor, createMemorySchedule,
 } from '../helpers';
+import { WORKSPACE_ROOT } from '../../src/vfs/workspace-path';
 
 function createScaffoldTestRuntime(llm: LLM) {
   const db = new Database(':memory:');
@@ -29,7 +30,7 @@ function createScaffoldTestRuntime(llm: LLM) {
     workspaceIsMachine: false,
     actor,
     toolFiles: vfs,
-    storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
+    storage: { vfs, home: WORKSPACE_ROOT, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory: createMemoryMemory(db, vfs),
     executor: createMockExecutor(),
     llm, schedule: createMemorySchedule(db, actor),

@@ -118,6 +118,7 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
     toolFiles: vfs,
     storage: {
       vfs,
+      home: WORKSPACE_ROOT,
       sql: w.sql,
       execRaw: w.execRaw,
       transactionSync: (write) => w.db.transaction(write)(),

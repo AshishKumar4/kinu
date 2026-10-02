@@ -20,6 +20,7 @@ import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../src/utils/json';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 interface ShellToolInput {
   command: string;
@@ -47,7 +48,7 @@ describe('the shared budget', () => {
     expect(estimateTokens(DEFAULT_TOOL_RESULT_MAX_CHARS)).toBe(2_000);
 
     const { rt } = createTestRuntime();
-    const clamped = await clampToolResult('y'.repeat(500_000), { vfs: rt.storage.vfs });
+    const clamped = await clampToolResult('y'.repeat(500_000), { files: rt.storage });
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
     expect(clamped).toContain('[truncated;');
   });
@@ -60,10 +61,10 @@ describe('clampToolResult', () => {
     const exact = 'x'.repeat(DEFAULT_TOOL_RESULT_MAX_CHARS);
     const over = 'x'.repeat(DEFAULT_TOOL_RESULT_MAX_CHARS + 1);
 
-    expect(await clampToolResult(under, { vfs: rt.storage.vfs })).toBe(under);
-    expect(await clampToolResult(exact, { vfs: rt.storage.vfs })).toBe(exact);
+    expect(await clampToolResult(under, { files: rt.storage })).toBe(under);
+    expect(await clampToolResult(exact, { files: rt.storage })).toBe(exact);
 
-    const clamped = await clampToolResult(over, { vfs: rt.storage.vfs });
+    const clamped = await clampToolResult(over, { files: rt.storage });
     expect(clamped).not.toBe(over);
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
   });
@@ -74,13 +75,13 @@ describe('clampToolResult', () => {
     const tail = ' TAIL-OF-OUTPUT'.repeat(10);
     const original = head + 'y'.repeat(500_000) + tail;
 
-    const clamped = await clampToolResult(original, { vfs: rt.storage.vfs });
+    const clamped = await clampToolResult(original, { files: rt.storage });
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
     expect(clamped).toContain('HEAD-OF-OUTPUT');
     expect(clamped).toContain('TAIL-OF-OUTPUT');
 
     const path = markerPath(clamped);
-    expect(path).toStartWith(`${TOOL_OUTPUT_DIR}/`);
+    expect(path).toStartWith(`${WORKSPACE_ROOT}/${TOOL_OUTPUT_DIR}/`);
     const restored = await readText(rt.storage.vfs, path);
     expect(restored).toBe(original);
   });
@@ -89,7 +90,7 @@ describe('clampToolResult', () => {
     const { rt } = createTestRuntime();
 
     for (const size of [DEFAULT_TOOL_RESULT_MAX_CHARS + 1, 50_000, 2_000_000]) {
-      const clamped = await clampToolResult('z'.repeat(size), { vfs: rt.storage.vfs });
+      const clamped = await clampToolResult('z'.repeat(size), { files: rt.storage });
       expect(clamped.length, `input ${size}`).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
       expect(clamped, `input ${size}`).toContain('[truncated;');
     }
@@ -109,7 +110,7 @@ describe('clampToolResult', () => {
       writeFile: () => Promise.reject(new Error('EROFS: read-only workspace')),
     };
 
-    const clamped = await clampToolResult('z'.repeat(100_000), { vfs: failing, budget, producer: 'shell' });
+    const clamped = await clampToolResult('z'.repeat(100_000), { files: { vfs: failing, home: WORKSPACE_ROOT }, budget, producer: 'shell' });
     expect(clamped).toContain('was not saved');
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
     expect(budget.snapshot()).toMatchObject({ trips: { shell: 1 }, referenced: 0 });
@@ -124,7 +125,7 @@ describe('clampToolResult', () => {
     const { rt } = createTestRuntime();
     const original = '🙂🚀'.repeat(20_000);
 
-    const clamped = await clampToolResult(original, { vfs: rt.storage.vfs, budget: new TurnContextBudget() });
+    const clamped = await clampToolResult(original, { files: rt.storage, budget: new TurnContextBudget() });
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(clamped)).toBe(false);
     expect(await readText(rt.storage.vfs, markerPath(clamped))).toBe(original);
@@ -141,7 +142,7 @@ describe('clampToolResult', () => {
     const budget = new TurnContextBudget();
     const { rt } = createTestRuntime();
     const original = '🙂'.repeat(30_000);
-    const clamped = await clampToolResult(original, { vfs: rt.storage.vfs, budget, producer: 'shell' });
+    const clamped = await clampToolResult(original, { files: rt.storage, budget, producer: 'shell' });
     const [head, , tail] = clamped.split('\n\n');
     expect(budget.snapshot().omittedChars)
       .toBe(original.length - (head?.length ?? 0) - (tail?.length ?? 0));
@@ -150,7 +151,7 @@ describe('clampToolResult', () => {
     const { rt } = createTestRuntime();
     const budget = new TurnContextBudget();
     const original = 'L'.repeat(200_000);
-    const clamped = await clampToolResult(original, { vfs: rt.storage.vfs, budget, producer: 'shell' });
+    const clamped = await clampToolResult(original, { files: rt.storage, budget, producer: 'shell' });
     const [head, , tail] = clamped.split('\n\n');
     const snapshot = budget.snapshot();
 
@@ -179,7 +180,7 @@ describe('clampSerializedToolResult', () => {
   test('oversize structured results are offloaded as JSON and clamped', async () => {
     const { rt } = createTestRuntime();
     const value = { result: 'r'.repeat(200_000), logs: [] };
-    const clamped = await clampSerializedToolResult({ output: value }, { vfs: rt.storage.vfs });
+    const clamped = await clampSerializedToolResult({ output: value }, { files: rt.storage });
     const clampedText = v.parse(v.string(), clamped);
     expect(clampedText.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
 
@@ -200,7 +201,7 @@ describe('clampSerializedToolResult', () => {
       execute: async () => 'b'.repeat(120_000),
     });
 
-    const wrapped = withClampedToolResult(entry, { vfs: rt.storage.vfs });
+    const wrapped = withClampedToolResult(entry, { files: rt.storage });
     expect(wrapped.description).toBe('desc');
     const out = await toolExecute(wrapped)({});
     expect(String(out)).toContain('[truncated;');
@@ -335,7 +336,7 @@ describe('withClampedToolResults (external/MCP tool surfaces)', () => {
 
     const wrapped = withClampedToolResults(
       { mcp_srv_a: entry('A'.repeat(300_000)), mcp_srv_b: entry({ rows: 'B'.repeat(300_000) }) },
-      { vfs: rt.storage.vfs, budget, producer: 'external_tool' },
+      { files: rt.storage, budget, producer: 'external_tool' },
     );
 
     expect(Object.keys(wrapped)).toEqual(['mcp_srv_a', 'mcp_srv_b']);

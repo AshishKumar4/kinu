@@ -18,6 +18,7 @@ import { bytesToBase64 } from '../src/utils/base64';
 
 import type { JsonValue } from '../src/utils/json';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 /** A native file failure as it reaches core: the errno travels in `Error.cause`, which Worker RPC keeps. */
 const nativeFileError = (code: string, path: string): Error =>
@@ -172,6 +173,7 @@ function rig(fs: ContainerFs) {
 		name === 'sandbox' ? executor : undefined));
 
 	const file = toolExecute<FileToolInput, JsonValue>(createFileTool({
+		home: WORKSPACE_ROOT,
 		vfs: mounted, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
 	}));
 

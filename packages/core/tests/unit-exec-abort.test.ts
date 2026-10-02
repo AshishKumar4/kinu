@@ -12,10 +12,12 @@ import {
 import type { JsonValue } from '../src/utils/json';
 import { createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
 import {
-  nimbusSessionFiles, nimbusSessionShell,
+  nimbusSessionFiles,
+  nimbusSessionShell,
   type NimbusExecResult,
   type NimbusSandboxHandle,
 } from '../src/execution/nimbus';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
@@ -374,7 +376,7 @@ describe('remote executor exec abort', () => {
     const { rt } = createTestRuntime();
 
     const provider = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
     });
 
     const controller = new AbortController();

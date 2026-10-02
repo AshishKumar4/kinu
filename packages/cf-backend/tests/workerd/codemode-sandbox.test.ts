@@ -301,7 +301,7 @@ describe('the eval sandbox under workerd', () => {
 
     const provider: WebSearchProvider = { search: unused, fetch: unused, render: unused, screenshot: unused };
 
-    const web = createWebCodemodeProvider({ provider, vfs: null, sessions: { missing: 'no sessions here' }, prelude: { source: BROWSER_PRELUDE } });
+    const web = createWebCodemodeProvider({ provider, files: null, sessions: { missing: 'no sessions here' }, prelude: { source: BROWSER_PRELUDE } });
     const fns = Object.fromEntries(Object.entries(web.tools).map(([name, entry]) => [name, (...args: unknown[]) => entry.execute(...args)]));
     const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }));
 

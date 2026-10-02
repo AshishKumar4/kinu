@@ -382,7 +382,7 @@ function clampLimit(requested: number | undefined, max: number): number {
   return Math.min(Math.max(Math.floor(requested), 1), max);
 }
 
-/** agents 0.24's Lifecycle reads this key back at start when `ctx.id` has no name (a migration read; it never writes it). */
+/** agents 0.24's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
 const PERSISTED_NAME_KEY = '__ps_name';
 
 /** A terminal that cannot open: the owner's pane reads the whole chain. */
@@ -439,18 +439,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Nimbus enters by `idFromString`, and the platform fixes `ctx.id` for the activation, so it has no name. */
   private recordedName(): string | undefined {
-    if (!tableExists(this.boundSql, 'workspace_identity')) return undefined;
+    if (!tableExists(this.boundSql, 'workspace_identity')) return this.ctx.storage.kv.get<string>(PERSISTED_NAME_KEY);
     const name = this.sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0]?.name;
 
     if (name !== undefined && this.ctx.storage.kv.get(PERSISTED_NAME_KEY) !== name) {
       this.ctx.storage.kv.put(PERSISTED_NAME_KEY, name);
     }
 
-    return name;
+    return name ?? this.ctx.storage.kv.get<string>(PERSISTED_NAME_KEY);
   }
 
   override get name(): string {
     return this.addressedName;
+  }
+
+  override async alarm(): Promise<void> {
+    if (this.storageRefusal === undefined && !this.nimbusSibling && !this.workspaceBorn()) return;
+    await super.alarm();
   }
 
   protected actorKind(): AgentKind {
@@ -2417,7 +2422,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           if (!sleepTimeDue(window)) {
             this.armSleepTimeWake(window);
             diagnostics.event('memory.facts_deferred', {
-              completedTurns: window.completedTurns, unprocessed: window.turns.length,
+              workspace: this.name, completedTurns: window.completedTurns, unprocessed: window.turns.length,
             });
 
             return { status: 'completed', detail: 'the cadence is not due' };
@@ -2630,6 +2635,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       diagnostics.event('memory.facts_compressed', {
+        workspace: this.name,
         upserted: summary.upserted,
         decayed: summary.decayed,
         skipped: summary.skipped,
@@ -4169,7 +4175,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     // Drops SDK tables, alarms and storage; the isolate resets later, so a concurrent delete joins `wipe`.
+    const name = this.name;
     await this.destroy();
+    this.ctx.storage.kv.put(PERSISTED_NAME_KEY, name);
   }
 
   @callable()

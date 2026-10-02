@@ -44,11 +44,10 @@ function readNimbusOriginRange(read: NimbusOriginRangeRead): Effect.Effect<Uint8
       return yield* Effect.fail(syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' }));
     }
 
-    const absolute = workspacePath(path);
     const native = files.readRange;
 
     if (native) {
-      const bytes = yield* Effect.promise(() => native.call(files, absolute, offset, length));
+      const bytes = yield* Effect.promise(() => native.call(files, path, offset, length));
 
       if (bytes === null) return yield* Effect.fail(syscallError('ENOENT', 'open', path));
 
@@ -56,7 +55,7 @@ function readNimbusOriginRange(read: NimbusOriginRangeRead): Effect.Effect<Uint8
     }
 
     const result = yield* Effect.promise(() => box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
-      env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path: absolute, offset, length }) },
+      env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path, offset, length }) },
       ...asCred(cred),
     }));
 
@@ -655,7 +654,13 @@ function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, n
   return cred === undefined ? {} : { cred };
 }
 
-export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VFS & Required<Pick<VFS, 'readlink' | 'removeRecursive' | 'rename' | 'readRange'>> {
+export function nimbusSessionFiles(
+  box: NimbusSandboxHandle,
+  plane: { readonly home: string; readonly cred?: VfsCred },
+): VFS & Required<Pick<VFS, 'readlink' | 'removeRecursive' | 'rename' | 'readRange'>> {
+  const { home, cred } = plane;
+  const at = (path: string): string => workspacePath(path, home);
+
   return settleSync(Effect.gen(function* () {
     let files = box.files;
 
@@ -670,7 +675,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
     return {
       readFile(path) {
         return settle(Effect.gen(function* () {
-          const absolute = workspacePath(path);
+          const absolute = at(path);
 
           if (files.readBytes) {
             const bytes = yield* Effect.promise(() => atVfsPath(absolute, 'open', () => files.readBytes?.(absolute) ?? null));
@@ -690,18 +695,18 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       /** Prefix the origin's fixed Node reader reads; the SDK file methods cannot express a range. */
       readRange(path, offset, length) {
         return settle(Effect.gen(function* () {
-          return yield* readNimbusOriginRange({ box, files, path, offset, length, cred });
+          return yield* readNimbusOriginRange({ box, files, path: at(path), offset, length, cred });
         }));
       },
       async writeFile(path, data) {
-        const absolute = workspacePath(path);
+        const absolute = at(path);
 
         await atVfsPath(absolute, 'open', () => files.write(absolute, data));
       },
       // No `writeFileIfRevision`: the SDK write takes no precondition and stat has no revision, so
       // `writeExecutorFileOp` answers `unsupported`.
       async readdir(path) {
-        const absolute = workspacePath(path);
+        const absolute = at(path);
 
         return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => {
           if (entry.type === 'symlink') return { name: entry.name, type: 'symlink' as const };
@@ -711,7 +716,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       },
       readlink(path) {
         return settle(Effect.gen(function* () {
-          const absolute = workspacePath(path);
+          const absolute = at(path);
 
           if (files.readlink) {
             const target = yield* Effect.promise(() => atVfsPath(absolute, 'readlink', () => files.readlink?.(absolute) ?? null));
@@ -730,7 +735,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
         }));
       },
       async stat(path, options) {
-        const absolute = workspacePath(path);
+        const absolute = at(path);
         const native = options?.follow === false ? files.lstat?.bind(files) : files.stat?.bind(files);
 
         if (native) {
@@ -752,26 +757,26 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
 
         return { size: Number(size), mtimeMs: Number(seconds) * 1_000, type: type === 'directory' ? 'directory' : entryType };
       },
-      async unlink(path) { await files.delete(workspacePath(path)); },
-      async removeRecursive(path) { await files.delete(workspacePath(path), { recursive: true }); },
+      async unlink(path) { await files.delete(at(path)); },
+      async removeRecursive(path) { await files.delete(at(path), { recursive: true }); },
       rename(from, to) {
         const rename = files.rename?.bind(files);
 
         return settle(rename === undefined
           ? Effect.fail(syscallError('EIO', 'rename', from, { detail: 'Nimbus SDK handle does not expose rename', dest: to }))
-          : Effect.promise(() => rename(workspacePath(from), workspacePath(to))));
+          : Effect.promise(() => rename(at(from), at(to))));
       },
       mkdir(path, opts) {
         const native = files.mkdir?.bind(files);
 
         return settle(Effect.gen(function* () {
           if (native) {
-            yield* Effect.promise(() => native(workspacePath(path)));
+            yield* Effect.promise(() => native(at(path)));
 
             return;
           }
 
-          const r = yield* Effect.promise(() => box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(workspacePath(path))}`, asCred(cred)));
+          const r = yield* Effect.promise(() => box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(at(path))}`, asCred(cred)));
 
           if (!r.success || r.exitCode !== 0) {
             return yield* Effect.fail(syscallError('EIO', 'mkdir', path, { detail: r.stderr.trim() || undefined }));

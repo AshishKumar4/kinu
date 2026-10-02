@@ -327,7 +327,6 @@ export class BackgroundJobRunner {
     this.runToSettlement(jobId, kind, () => promise);
   }
 
-  /** The fiber host holds the run; nothing awaits it, so neither half may fail. */
   private runToSettlement<T>(jobId: string, kind: string, exec: () => Promise<T>): void {
     this.fiber(
       `${BACKGROUND_FIBER_PREFIX}${kind}`,

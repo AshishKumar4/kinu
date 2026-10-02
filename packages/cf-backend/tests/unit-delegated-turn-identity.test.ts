@@ -6,7 +6,7 @@ import { readText } from '@nimbus-sh/core/vfs/vfs.js';
  * (kinu-logs/onstart/DESIGN.md, S2 turn identity).
  */
 import { expect, test } from 'bun:test';
-import { parseMemoryNotes } from '@kinu.run/core';
+import { MEMORY_PATH, parseMemoryNotes, WORKSPACE_ROOT } from '@kinu.run/core';
 import { gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
@@ -31,7 +31,8 @@ test('two turns of one hire making the same call under a reused call id each run
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Save the note.');
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Save the note again.');
 
-  const memory = await readText(child.actor.runtime.storage.vfs, 'memory/MEMORY.md');
+  // Memory is the workspace's, kept in main's home whoever saves it.
+  const memory = await readText(child.actor.runtime.storage.vfs, `${WORKSPACE_ROOT}/${MEMORY_PATH}`);
   const notes = parseMemoryNotes(String(memory)).filter((note) => note.content === NOTE);
 
   expect(notes).toHaveLength(2);

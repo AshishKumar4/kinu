@@ -127,7 +127,7 @@ export function adaptCloudflareSandbox(
   portsMoved?: () => Promise<void>,
 ): SandboxHandle {
   // Memoized on the promise so concurrent first calls share it; failures are not cached.
-  // One configuration at a time, held once it lands; a failed one frees the next caller to retry.
+  // One configuration at a time, held once it lands; a failed one is retried.
   const configured = flight(() => Effect.promise(configure), { keep: 'success' });
 
   const onContainerEffect = <T>(run: Effect.Effect<T>): Effect.Effect<T, KinuError> => Effect.catchCause(Effect.gen(function* () {

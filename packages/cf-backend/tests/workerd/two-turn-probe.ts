@@ -4,12 +4,13 @@
  * request shape, never prompt text. Defends (2026-09-08): a transcript count naming a
  * missing column, and the second turn's request dropping the message that started it.
  */
-import { Agent, getAgentByName, type AgentContext } from 'agents';
+import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
   SleepTimeUpdateSchema,
+  SLEEP_TIME_CADENCE,
   parseWorkspaceTitle,
   hostedActorSocketPath, JsonValueSchema,
 } from '@kinu.run/core';
@@ -18,8 +19,8 @@ import {
   createConsoleLogger,
   createRecordingLogger,
   setDiagnosticsSink,
+  type Logger,
   type RecordedLog,
-  type RecordingLogger,
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
@@ -153,7 +154,14 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'meterBegin');
     Reflect.deleteProperty(this, 'meterEnd');
     Reflect.deleteProperty(this, 'settleState');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed']);
+    Reflect.deleteProperty(this, 'sleepTimeNow');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed']);
+  }
+
+  /** The closed-tab sleep-time wake, run now: the tab closed past its grace, then a timer tick. */
+  async sleepTimeNow(): Promise<void> {
+    this.config.set('sleep_time_closed_at', String(Date.now() - SLEEP_TIME_CADENCE.closeGraceMs));
+    await this._kinuTimerTick();
   }
 
   async settleState(): Promise<SettleState> {
@@ -697,8 +705,43 @@ function owedEffectKeys(emitted: readonly RecordedLog[]): string[] {
 }
 
 /** A close that never finishes hangs here, ended by the row's deadline, not a side clock. */
-function awaitSleepTimeSettled(recording: RecordingLogger, count: number): Promise<void> {
-  return recording.until((emitted) => sleepTimeSettled(emitted) >= count);
+function awaitSleepTimeSettled(recording: WorkspaceRecording, workspace: string, count: number): Promise<void> {
+  return recording.until(workspace, (emitted) => sleepTimeSettled(emitted) >= count);
+}
+
+/** The workspace whose invocation emits a line, or null outside one: the SDK names the current object. */
+function emittingWorkspace(): string | null {
+  const { agent } = getCurrentAgent();
+
+  return agent instanceof ObservedOrchestrator ? agent.name : null;
+}
+
+/**
+ * Suites share an isolate (`isolate: false`), so the one diagnostics sink hears every workspace in it, an earlier
+ * file's included. Each line remembers the workspace that emitted it, and a probe reads only its own.
+ */
+interface WorkspaceRecording extends Logger {
+  of(workspace: string): RecordedLog[];
+  until(workspace: string, holds: (emitted: readonly RecordedLog[]) => boolean): Promise<void>;
+}
+
+function createWorkspaceRecording(): WorkspaceRecording {
+  const recording = createRecordingLogger();
+  const emitters: (string | null)[] = [];
+  const own = (emitted: readonly RecordedLog[], workspace: string) => emitted.filter((_, at) => emitters[at] === workspace);
+
+  return {
+    event(name, fields) {
+      emitters.push(emittingWorkspace());
+      recording.event(name, fields);
+    },
+    failure(name, error, fields) {
+      emitters.push(emittingWorkspace());
+      recording.failure(name, error, fields);
+    },
+    of: (workspace) => own(recording.emitted, workspace),
+    until: (workspace, holds) => recording.until((emitted) => holds(own(emitted, workspace))),
+  };
 }
 
 async function awaitWithLimit<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
@@ -755,10 +798,18 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     return recordedCalls;
   }
 
+  /** Another workspace's sleep-time wakes, run inside a drive's recording window. */
+  private async sleepSibling(workspace: string): Promise<void> {
+    const sibling = await getAgentByName<ProbeEnv, ObservedOrchestrator>(this.env.OrchestratorAgent, workspace);
+
+    await sibling.sleepTimeNow();
+    await sibling.sleepTimeNow();
+  }
+
   async exercise(): Promise<ExerciseResult> {
     // Capture after warmup, before every turn: each DO constructor replaces the sink on first
     // stub use (actor-agent.ts:1453-1462); nothing reinstalls after (install.ts:309).
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
 
     const capture = (): (() => void) => setDiagnosticsSink(
       createCompositeLogger([createConsoleLogger(), recording]),
@@ -796,7 +847,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         throw new Error(`two-turn probe: turn A skipped at enqueue: ${JSON.stringify(turnA)}`);
       }
 
-      await awaitSleepTimeSettled(recording, 1);
+      await awaitSleepTimeSettled(recording, 'two-turn-workspace', 1);
 
       restore = capture();
       const turnB = await target.runTaskFromMcp('B');
@@ -805,7 +856,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         throw new Error(`two-turn probe: turn B skipped at enqueue: ${JSON.stringify(turnB)}`);
       }
 
-      await awaitSleepTimeSettled(recording, 2);
+      await awaitSleepTimeSettled(recording, 'two-turn-workspace', 2);
       await awaitSettled(target);
 
       const snapshot = await target.getWorkspaceSnapshot();
@@ -816,12 +867,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         register, claim, model, turnA, turnB, snapshot, history,
         calls: recordedCalls,
         http: await this.httpCalls(),
-        failures: recording.emitted
+        failures: recording.of('two-turn-workspace')
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
-        owedEffects: owedEffectKeys(recording.emitted),
-        sleepTimeSettled: sleepTimeSettled(recording.emitted),
-        catalogFallbacks: recording.emitted.filter((e) => e.event === 'models_dev.catalog_fallback').length,
+        owedEffects: owedEffectKeys(recording.of('two-turn-workspace')),
+        sleepTimeSettled: sleepTimeSettled(recording.of('two-turn-workspace')),
+        catalogFallbacks: recording.of('two-turn-workspace').filter((e) => e.event === 'models_dev.catalog_fallback').length,
         catalogHits: (await this.probeLog()).catalogHits,
       });
     } finally {
@@ -844,14 +895,14 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     });
     await target.setModel('openai-compat/probe-long');
     await this.httpReset();
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
     setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
 
     for (let i = 0; i < 20; i += 1) {
       const queued = await target.runTaskFromMcp(`long:${String(priorDeltas)}`);
 
       if (queued.status !== 'queued') throw new Error(`long cost: prior turn ${JSON.stringify(queued)}`);
-      await awaitSleepTimeSettled(recording, i + 1);
+      await awaitSleepTimeSettled(recording, workspace, i + 1);
     }
 
     // The twentieth turn's tail (its detached task, keepAlive hold, fiber and retry tick) outlasts its sleep-time
@@ -861,7 +912,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const queued = await target.runTaskFromMcp('long:500');
 
     if (queued.status !== 'queued') throw new Error(`long cost: measured turn ${JSON.stringify(queued)}`);
-    await awaitSleepTimeSettled(recording, 21);
+    await awaitSleepTimeSettled(recording, workspace, 21);
     await awaitSettled(target);
 
     return await target.meterEnd();
@@ -902,7 +953,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await target.setSoul('# Queue Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
     await this.httpReset();
     await fetch('http://probe-control.invalid/queue/hold', { method: 'POST' });
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
     const submission = Promise.withResolvers<void>();
 
@@ -1006,7 +1057,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
       // The held genesis and one user-origin rerun of the sends it could not land; a signal or peer
       // event that waited with them rides its first step.
-      await awaitSleepTimeSettled(recording, { chat: 2, peer: 2, signal: 2, yield: 1, attach: 2 }[mode]);
+      await awaitSleepTimeSettled(recording, workspace, { chat: 2, peer: 2, signal: 2, yield: 1, attach: 2 }[mode]);
       await awaitSettled(target);
 
       return { http: await this.httpCalls(), task };
@@ -1266,7 +1317,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   async completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[]; transcript: SocketHistory; runEnds: Array<{ runId: string; reason: string }> }> {
     const target: QueueTarget = await this.queueTarget(prepared.workspace);
 
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
 
     try {
@@ -1274,7 +1325,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       await this.httpReset();
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       // One turn: the re-opened genesis, with B and C landed at its first step.
-      await awaitSleepTimeSettled(recording, 1);
+      await awaitSleepTimeSettled(recording, prepared.workspace, 1);
       await awaitSettled(target);
 
       return {
@@ -1398,7 +1449,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await target.setModel('openai-compat/probe-parity');
     await target.setSoul('# Parity\n\n## Mission\n\nFollow the owner\'s exact request.');
     await this.httpReset();
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
     const frames: ParityFrame[] = [];
     const landings: Record<string, string | null> = {};
@@ -1411,7 +1462,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       try {
         socket.send(this.parityFrame('PARITY-ONE'));
         landings['PARITY-ONE'] = (await done('PARITY-ONE')).landed ?? null;
-        await awaitSleepTimeSettled(recording, 1);
+        await awaitSleepTimeSettled(recording, workspace, 1);
 
         // 2. Mid-turn send with a file while the call is parked: it reruns as the next turn,
         //    answered under its own id, not at admission (admission announces `queued`).
@@ -1423,7 +1474,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
         landings['PARITY-TWO'] = (await done('PARITY-TWO')).landed ?? null;
         landings['PARITY-TWO-STEER'] = (await done('PARITY-TWO-STEER')).landed ?? null;
-        await awaitSleepTimeSettled(recording, 3);
+        await awaitSleepTimeSettled(recording, workspace, 3);
         await awaitSettled(target);
         afterTwo = await target.parityRows();
 
@@ -1461,7 +1512,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   async parityComplete(prepared: ParityPrepared): Promise<ParityCompleted> {
     const target: QueueTarget = await this.queueTarget(prepared.workspace);
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
     const frames: ParityFrame[] = [];
     const landings: Record<string, string | null> = {};
@@ -1476,12 +1527,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         socket.send(JSON.stringify({ type: 'cf_agent_stream_resume_request' }));
         await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
         await awaitSettled(target);
-        await awaitSleepTimeSettled(recording, 1);
+        await awaitSleepTimeSettled(recording, prepared.workspace, 1);
         await awaitSettled(target);
 
         socket.send(this.parityFrame('PARITY-FIVE'));
         landings['PARITY-FIVE'] = (await done('PARITY-FIVE')).landed ?? null;
-        await awaitSleepTimeSettled(recording, 2);
+        await awaitSleepTimeSettled(recording, prepared.workspace, 2);
         await awaitSettled(target);
       } finally {
         socket.close(1000, 'parity complete');
@@ -1491,7 +1542,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         frames, landings,
         end: await target.parityRows(),
         modelCallsAfter: (await this.parityModelCalls()).slice(callsBefore),
-        failures: recording.emitted.filter((e) => e.code !== null).map((e) => ({ event: e.event, code: e.code ?? '', cause: e.cause ?? '' })),
+        failures: recording.of(prepared.workspace).filter((e) => e.code !== null).map((e) => ({ event: e.event, code: e.code ?? '', cause: e.cause ?? '' })),
         seed: await (await target.fetch(`https://probe/agents/orchestrator-agent/${prepared.workspace}/get-messages`)).text(),
       });
     } finally {
@@ -1595,7 +1646,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await target.setSoul('# First Chat\n\n## Mission\n\nAnswer briefly.');
     await this.httpReset();
 
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
 
     try {
@@ -1606,20 +1657,26 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       // Wait on the model call, not the turn's settle, which the stall never reaches.
       const began = Date.now();
 
+      let reached = false;
+
       for (;;) {
         const calls = (await this.httpCalls()).filter((call) => call.model === 'probe-queue');
+        reached = calls.length > 0;
 
-        if (calls.length > 0) break;
+        if (reached) break;
 
         if (Date.now() - began > 20000) break; // stall is the finding, not a hang
         await new Promise<void>((resolve) => setTimeout(resolve, 50));
       }
 
+      // A turn that reached the model is joined on its own settlement, so the count reads a closed turn.
+      if (reached) await awaitSleepTimeSettled(recording, workspace, 1);
+
       return {
         http: await this.httpCalls(),
         steers: await target.pendingSteers(),
         transcript: await this.socketHistory(target, workspace),
-        sleepTimeSettled: sleepTimeSettled(recording.emitted),
+        sleepTimeSettled: sleepTimeSettled(recording.of(workspace)),
       };
     } finally {
       restore();
@@ -1633,7 +1690,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
    */
   async twinSends(): Promise<{ http: HttpCall[]; transcript: SocketHistory; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }> {
     const { target, workspace } = await this.claimQueueWorkspace('twin');
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
     const sockets: WebSocket[] = [];
 
@@ -1659,7 +1716,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       for (const socket of sockets) socket.send(wire);
 
       // A second admitted turn would compress its facts too, so this count discriminates.
-      await awaitSleepTimeSettled(recording, 1);
+      await awaitSleepTimeSettled(recording, workspace, 1);
       await awaitSettled(target);
 
       return {
@@ -1761,7 +1818,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await target.setSoul('# First Gen\n\n## Mission\n\nAnswer briefly.');
     await this.httpReset();
 
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
     setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
     // Genesis parks before its first step, so the prompt steers into it without a race.
     await fetch('http://probe-control.invalid/wake/hold', { method: 'POST', body: JSON.stringify({ where: 'start' }) });
@@ -1793,7 +1850,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       inbox: await target.inboxState(),
       landed,
       transcript: await this.socketHistory(target, workspace),
-      failures: recording.emitted
+      failures: recording.of(workspace)
         .filter((e) => e.code !== null)
         .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
     };
@@ -1821,7 +1878,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await this.httpReset();
     await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 1 }) });
 
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
     const frames: v.InferOutput<typeof RawChatFrameSchema>[] = [];
     const admitted = Promise.withResolvers<string>();
@@ -1874,7 +1931,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       const landing = await answered.promise;
       // One turn when the words landed inside it; two when they ran after it.
-      await awaitSleepTimeSettled(recording, persistedWhileHeld ? 2 : 1);
+      await awaitSleepTimeSettled(recording, workspace, persistedWhileHeld ? 2 : 1);
       await awaitSettled(target);
 
       return {
@@ -1898,7 +1955,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   async driveOnce(input: DriveOnceInput): Promise<DriveOnceResult> {
     const drive = v.parse(DriveOnceInputSchema, input);
     // Capture after warmup: each DO constructor replaces the sink on first stub use.
-    const recording = createRecordingLogger();
+    const recording = createWorkspaceRecording();
 
     const capture = (): (() => void) => setDiagnosticsSink(
       createCompositeLogger([createConsoleLogger(), recording]),
@@ -1936,6 +1993,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       }
 
       restore = capture();
+
+      if (drive.sibling !== undefined) await this.sleepSibling(drive.sibling);
       const turn = await target.runTaskFromMcp(drive.text);
 
       if (turn.status !== 'queued') {
@@ -1943,14 +2002,14 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
         const history = await target.chatHistoryPage();
 
-        const failures = recording.emitted
+        const failures = recording.of(drive.workspace)
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' }));
 
         throw new Error(`two-turn probe: turn skipped at enqueue: ${JSON.stringify({ turn, http, history, failures })}`);
       }
 
-      await awaitSleepTimeSettled(recording, 1);
+      await awaitSleepTimeSettled(recording, drive.workspace, 1);
       await awaitSettled(target);
 
       const snapshot = await target.getWorkspaceSnapshot();
@@ -1960,12 +2019,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         turn, snapshot, history,
         calls: recordedCalls,
         http: await this.httpCalls(),
-        failures: recording.emitted
+        failures: recording.of(drive.workspace)
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
-        owedEffects: owedEffectKeys(recording.emitted),
-        sleepTimeSettled: sleepTimeSettled(recording.emitted),
-        catalogFallbacks: recording.emitted.filter((e) => e.event === 'models_dev.catalog_fallback').length,
+        owedEffects: owedEffectKeys(recording.of(drive.workspace)),
+        sleepTimeSettled: sleepTimeSettled(recording.of(drive.workspace)),
+        catalogFallbacks: recording.of(drive.workspace).filter((e) => e.event === 'models_dev.catalog_fallback').length,
         catalogHits: (await this.probeLog()).catalogHits,
       });
     } finally {

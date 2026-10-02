@@ -23,6 +23,7 @@ import { WORKSPACE_IDENTITY_DDL, tableExists } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspaceId: string, name: string) {
   if (tableExists(sql, 'workspace_identity') && sql`SELECT id FROM workspace_identity LIMIT 1`.length > 0) return openWorkspaceMainActor(sql);
@@ -245,7 +246,7 @@ export function createTestRuntime(opts?: {
     workspaceIsMachine: false,
     actor,
     toolFiles: vfs,
-    storage: { vfs, sql, execRaw, transactionSync },
+    storage: { vfs, home: WORKSPACE_ROOT, sql, execRaw, transactionSync },
     memory,
     executor,
     llm,

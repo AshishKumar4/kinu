@@ -17,7 +17,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
-  isSubordinateOrigin,
+  isSubordinateOrigin, WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -2311,7 +2311,7 @@ export abstract class ActorAgent extends Agent<Env> {
           durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
         clamp: {
-          vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
+          files: this.rt.storage, budget: this.acc.context, producer: 'external_tool',
         },
       }));
 
@@ -2327,7 +2327,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly stores = createAgentStores(
     () => this.boundSql, () => this.actorHandle(), write => this.ctx.storage.transactionSync(write),
     async () => ({
-      vfs: nimbusSessionFiles(this.workspaceBox(this.shellId()), CRED_SESSION_USER),
+      vfs: nimbusSessionFiles(this.workspaceBox(this.shellId()), { home: WORKSPACE_ROOT, cred: CRED_SESSION_USER }),
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
     }),
   );

@@ -114,7 +114,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   private open(snapshot: AgentSnapshot): AgentDatabase {
     this.database ??= new AgentDatabase(this.ctx.storage, {
-      agent: () => this.workspace(), state: () => this.state(), enqueueTurn: (input) => this.env.WORKSPACE.enqueueTurn(input),
+      agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(), enqueueTurn: (input) => this.env.WORKSPACE.enqueueTurn(input),
       memory: () => this.env.WORKSPACE.memory(), program: (...args) => this.env.WORKSPACE.program(...args),
       sayToParent: (signal) => this.env.WORKSPACE.sayToParent(signal),
     });

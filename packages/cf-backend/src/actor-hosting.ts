@@ -176,12 +176,12 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         if (provisioning === null) {
           if (bound.record.origin !== 'system') return yield* new KinuError('denied', 'Actor has no credentialed artifact home');
 
-          return { vfs: nimbusSessionFiles(box), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
+          return { vfs: nimbusSessionFiles(box, { home: agentHome(MAIN_AGENT) }), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
         }
 
         const home = yield* Effect.promise(async () => provisioning);
 
-        return { vfs: nimbusSessionFiles(box, home.cred), artifactDirectory: agentArtifactDirectory(home.home) };
+        return { vfs: nimbusSessionFiles(box, home), artifactDirectory: agentArtifactDirectory(home.home) };
       }));
     },
 

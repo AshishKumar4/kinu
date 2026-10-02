@@ -450,6 +450,32 @@ describe('two real turns over the HTTP model seam', () => {
     expect(out.sleepTimeSettled).toBe(1);
   });
 
+  it('counts only its own workspace when a sibling settles turns in the same window', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('sibling-driver'));
+    const sibling = { workspace: 'sibling-sleep-workspace', owner: 'sibling-sleep-owner', displayName: 'Sibling', model: 'openai-compat/probe' };
+
+    // Two settled turns give the sibling a sleep-time window its closed-tab wake compresses.
+    await root.driveOnce({ ...sibling, text: 'SIBLING-SLEEP:A' });
+    await root.driveOnce({ ...sibling, text: 'SIBLING-SLEEP:B' });
+
+    const out = await root.driveOnce({
+      workspace: 'sibling-target-workspace',
+      owner: 'sibling-target-owner',
+      displayName: 'Sibling Target',
+      model: 'openai-compat/probe',
+      text: 'SIBLING-TARGET',
+      sibling: sibling.workspace,
+    });
+
+    // The sibling did settle inside the window: its compression ran while this drive recorded.
+    const calls = v.parse(v.array(CallRecordSchema), out.calls);
+
+    expect(calls.filter((call) => call.lane === 'sleep' && call.users.some((user) => user.includes('SIBLING-SLEEP')))).toHaveLength(1);
+    expect(v.parse(FailuresSchema, out.failures)).toEqual([]);
+    expect(out.owedEffects).toEqual([]);
+    expect(out.sleepTimeSettled).toBe(1);
+  });
+
   it('settles the turn after a provider error', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('error-driver'));
 

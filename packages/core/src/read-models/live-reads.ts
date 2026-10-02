@@ -1,5 +1,5 @@
 import { MEMORY_PATH } from '../memory/note';
-import { workspacePath } from '../vfs/workspace-path';
+import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
@@ -76,7 +76,7 @@ export function readsWrittenBy(query: string): readonly LiveRead[] {
   return byMembership === NONE ? byRow : [...byRow, ...byMembership];
 }
 
-const MEMORY_FILE = workspacePath(MEMORY_PATH).slice(1);
+const MEMORY_FILE = workspacePath(MEMORY_PATH, WORKSPACE_ROOT).slice(1);
 
 const MEMORY_READS: readonly LiveRead[] = ['getMemoryContent', 'getWorkspaceTabPresence'];
 

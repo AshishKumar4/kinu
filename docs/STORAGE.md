@@ -298,8 +298,9 @@ Three properties follow:
   one (`diffs:<actor>:<id>`).
 - POSIX semantics: one filesystem, addressed the same way by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
-  resolve at `WORKSPACE_ROOT` (`/home/main`) and `..` resolves as POSIX
-  resolves it, by Nimbus's namespace rule (`workspacePath`). Ownership is
+  resolve at the acting agent's home, its shell's working directory (main's is
+  `/home/main`), and `..` resolves as POSIX resolves it, by Nimbus's namespace
+  rule (`workspacePath`). Ownership is
   uid/gid/mode on inodes, so agent homes and private tmp trees remain enforced
   boundaries (`core/src/vfs/agent-home.ts`).
 - Chunked blobs: `SqliteVFS` cuts file content into `vfs_chunks` rows of at
@@ -310,9 +311,11 @@ Three properties follow:
 
 ### Workspace paths
 
-A path is resolved once, as a process in `/home/main` names it, by Nimbus's
+A path is resolved once, as the acting agent's process names it, by Nimbus's
 namespace rule (`normalizePath` in `@nimbus-sh/core/vfs/composite.js`):
-relative names start at `/home/main`, `.` and repeated separators collapse,
+relative names start at that agent's home, where its shell starts (`/home/main`
+for main; a hired agent's or a node's own home otherwise, so its
+`.kinu/tool-output` is its own), `.` and repeated separators collapse,
 and `..` climbs as on Linux, so `../../tmp/x` is `/tmp/x`. What the path then
 reaches is decided by what already governs it: uid and mode on the cloud
 (the session user may write `/tmp`, as on any machine), and the approval gate

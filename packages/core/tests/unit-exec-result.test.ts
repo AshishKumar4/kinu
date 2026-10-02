@@ -6,6 +6,7 @@ import { KinuError, refusalOf } from '../src/obs/index';
 import { parseJsonValue } from '../src/utils/json';
 import { createInlineExecutor, createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
 import { nimbusSessionFiles, nimbusSessionShell, type NimbusSandboxHandle } from '../src/execution/nimbus';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime, conversationsFor } from './helpers';
@@ -144,7 +145,7 @@ describe('the surfaces the model reads', () => {
     };
 
     const workspace = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
     });
 
     const out = await workspace.tools.exec?.execute('pytest');

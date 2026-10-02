@@ -78,7 +78,7 @@ function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: st
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
 
     if (isAbsolute(path) && withinRoot(root, direct)) return { hostPath: direct, outside: false };
-    const named = workspacePath(path);
+    const named = workspacePath(path, WORKSPACE_ROOT);
     const home = [WORKSPACE_ROOT, NIMBUS_WORKSPACE_ROOT].find((at) => named === at || named.startsWith(`${at}/`));
 
     if (named === '/') return { hostPath: root, outside: false };

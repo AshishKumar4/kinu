@@ -145,6 +145,30 @@ describe('Now owes the work in hand whatever the plan read is doing', () => {
     expect(settled).not.toContain('warn: four');
   });
 
+  // 2026-10-02: a card showing a cut tail read as the whole output.
+  test("a running job's card marks where its output was dropped, with the bytes dropped there", () => {
+    const output = {
+      seq: 9, omitted: 1_258_291 + 4_096,
+      chunks: [
+        { stream: 'stdout' as const, text: 'compiled 120 modules\ncompiled 121 modules\n', omitted: 1_258_291 },
+        { stream: 'stdout' as const, text: 'compiled 377 modules\n', omitted: 4_096 },
+      ],
+    };
+
+    expect(workTabMarkup([job({ id: 'bgjob-5d0c2b11', status: 'running', settledAt: null, output })]))
+      .toContain('... 1.2 MB omitted ...\ncompiled 120 modules\ncompiled 121 modules\n... 4.0 KB omitted ...\ncompiled 377 modules');
+  });
+
+  test("a running job's card with more lines than it shows marks the bytes dropped before the ones it shows", () => {
+    const output = {
+      seq: 9, omitted: 1_258_291,
+      chunks: [{ stream: 'stdout' as const, text: 'one\ntwo\nthree\nfour\nfive\nsix\n', omitted: 1_258_291 }],
+    };
+
+    expect(workTabMarkup([job({ id: 'bgjob-5d0c2b11', status: 'running', settledAt: null, output })]))
+      .toContain('... 1.2 MB omitted ...\nthree\nfour\nfive\nsix');
+  });
+
   test('one decision and no work in flight renders Needs you and no journal frame', () => {
     const decision: PendingAction = {
       id: 'defer-1', kind: 'deferred_action', title: 'Approve: a command the agent wants to run on device',

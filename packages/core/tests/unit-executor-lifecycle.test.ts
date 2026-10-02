@@ -11,6 +11,7 @@ import {
   isSandboxTransientError,
   type NimbusSandboxHandle,
   type SandboxHandle,
+  WORKSPACE_ROOT,
 } from "../src/index";
 
 function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknown[] } {
@@ -163,7 +164,7 @@ function nimbusWorkspace(box: NimbusSandboxHandle) {
   const { rt } = createTestRuntime();
 
   return createNimbusWorkspaceExecutor({
-    box, inline: { vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+    box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
   });
 }
 

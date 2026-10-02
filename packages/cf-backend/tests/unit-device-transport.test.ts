@@ -223,19 +223,24 @@ describe('createHubDeviceTransport', () => {
     expect(requiredCall(hub.rpcCalls, 1)[2]?.requestId).toBeUndefined();
   });
 
-  test("a watched exec's output reaches the call's sink as the bytes printed, with what the machine dropped", async () => {
-    const written: string[] = [];
-    let lost = 0;
+  test("a watched exec's output reaches the call's sink as the bytes printed, each loss the machine reports at its place", async () => {
+    const heard: string[] = [];
     const decoder = new TextDecoder();
+
     // Bytes, as the machine printed them: the transport decodes nothing into text.
-    const output = { write: (stream: string, data: Uint8Array | string) => { written.push(`${stream}: ${decoder.decode(v.parse(v.instance(Uint8Array), data))}`); }, lost: (count: number) => { lost += count; } };
+    const output = {
+      write: (stream: string, data: Uint8Array | string) => { heard.push(`${stream}: ${decoder.decode(v.parse(v.instance(Uint8Array), data))}`); },
+      lost: (bytes: number) => { heard.push(`lost ${String(bytes)}`); },
+    };
 
     const hub: DeviceHubClient = {
       deviceRuntimeStatus: async () => ({ connected: true, registered: true, toolchain: null }),
       deviceRpc: async (_caller, _method, _params, opts) => {
         // As UserDO hands the daemon's frames over while the command runs: base64, a frame per window.
         opts?.onOutput?.({ chunks: [{ stream: 'stdout', data: btoa('compiled 1\n') }, { stream: 'stderr', data: btoa('warn\n') }], dropped: 0 });
+        // A daemon from before placed losses counts them only: before its first chunk, where its window sheds them.
         opts?.onOutput?.({ chunks: [{ stream: 'stdout', data: Buffer.from('café\n').toString('base64') }], dropped: 4096 });
+        opts?.onOutput?.({ chunks: [{ stream: 'stdout', data: btoa('a\n') }, { stream: 'stdout', data: btoa('b\n'), omitted: 1000 }], dropped: 1000 });
 
         return JSON.stringify({ stdout: 'compiled 1\ncafé\n', stderr: 'warn\n', exitCode: 0 });
       },
@@ -246,8 +251,7 @@ describe('createHubDeviceTransport', () => {
 
     expect(await transport.rpc('exec', ['make'], { timeoutMs: 0, requestId: nextDeviceRequestId(), output }))
       .toEqual({ stdout: 'compiled 1\ncafé\n', stderr: 'warn\n', exitCode: 0 });
-    expect(written).toEqual(['stdout: compiled 1\n', 'stderr: warn\n', 'stdout: café\n']);
-    expect(lost).toBe(4096);
+    expect(heard).toEqual(['stdout: compiled 1\n', 'stderr: warn\n', 'lost 4096', 'stdout: café\n', 'stdout: a\n', 'lost 1000', 'stdout: b\n']);
   });
 
   test('an exec with nowhere to show its output asks the hub for none', async () => {

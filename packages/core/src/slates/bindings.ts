@@ -177,7 +177,7 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
     }
 
     const forwarded = args.slice();
-    forwarded[0] = workspacePath(named.output);
+    forwarded[0] = workspacePath(named.output, '/');
 
     return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args: forwarded, within: binding.paths });
   }

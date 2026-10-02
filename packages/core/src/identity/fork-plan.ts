@@ -8,7 +8,7 @@ import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
-import { workspacePath } from '../vfs/workspace-path';
+import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import {
   ForkContextMemberRowSchema,
   ForkConversationEntryPartRowSchema,
@@ -66,12 +66,12 @@ function artifactSegments(relative: string, path: string, root: string): Effect.
 /** One payload path relative to its owning artifact directory. A path outside it is refused:
  *  carrying another workspace's absolute path would re-root or escape into a directory the fork does not own. */
 function forkArtifactRelativePath(stored: string, artifactDirectory: string): Effect.Effect<string> {
-  const root = workspacePath(artifactDirectory);
+  const root = workspacePath(artifactDirectory, WORKSPACE_ROOT);
   const prefix = `${root}/`;
 
   // Refuse raw segments before normalization can erase traversal.
   return Effect.flatMap(artifactSegments(stored.startsWith('/') ? stored.slice(1) : stored, stored, root), () => {
-    const path = workspacePath(stored);
+    const path = workspacePath(stored, WORKSPACE_ROOT);
 
     return stored.startsWith('/') && path.startsWith(prefix)
       ? Effect.succeed(path.slice(prefix.length))
@@ -84,7 +84,7 @@ function forkArtifactRelativePath(stored: string, artifactDirectory: string): Ef
 
 /** Absolute payload path for a carried relative path under one artifact directory. */
 export function forkArtifactPath(relative: string, artifactDirectory: string): string {
-  const root = workspacePath(artifactDirectory);
+  const root = workspacePath(artifactDirectory, WORKSPACE_ROOT);
 
   return settleSync(Effect.map(artifactSegments(relative, relative, root), () => `${root}/${relative}`));
 }

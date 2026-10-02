@@ -388,6 +388,8 @@ export function createCLIRuntime(
     const agentStateVfs = workspace.vfs;
     const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
     const cwd = config.cwd ? resolvePath(config.cwd) : null;
+    // Where its shell starts; the cwd plane names the host directory by its host path too.
+    const shellHome = cwd ?? WORKSPACE_ROOT;
 
     const memoryStore = new MemoryStore(agentStateVfs, sql);
     memoryStore.ensureSchema();
@@ -485,6 +487,7 @@ export function createCLIRuntime(
     const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
       vfs: toolFiles,
       files: agentVfs,
+      home: shellHome,
       memory,
       craftStore,
       shell,
@@ -506,6 +509,7 @@ export function createCLIRuntime(
       actor, sql,
       execRaw,
       vfs: agentVfs,
+      home: shellHome,
       agentStateVfs,
       toolFiles,
       llm,
@@ -576,7 +580,7 @@ export function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLIRuntim
     const plane = yield* Effect.promise(async () => nodeRuntime(home, actor.actor, actor));
 
     return Object.assign(actor, {
-      storage: { ...actor.storage, vfs: plane.storage.vfs }, toolFiles: plane.toolFiles, memory: workspace.memory, craftStore: workspace.craftStore,
+      storage: { ...actor.storage, vfs: plane.storage.vfs, home: plane.storage.home }, toolFiles: plane.toolFiles, memory: workspace.memory, craftStore: workspace.craftStore,
       executionRouter: plane.executionRouter, shell: plane.shell, checkpoints: workspace.checkpoints, cwd: workspace.cwd ?? null,
       nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell,
     });
@@ -700,7 +704,7 @@ async function buildCLIHeadRuntime(
   const executionRouter = new DefaultExecutionRouter();
 
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs: withApprovalGatedFiles(vfs, 'workspace', directoryFileReach(parent.cwd ?? null, null), parent.approvalPolicy), files: vfs,
+    vfs: withApprovalGatedFiles(vfs, 'workspace', directoryFileReach(parent.cwd ?? null, null), parent.approvalPolicy), files: vfs, home: parent.storage.home,
     memory: parent.memory, craftStore: parent.craftStore, shell, sql,
     // The same machine the parent's shell runs on.
     filesOwner: parent.cwd ? 'user' : 'agent',
@@ -758,7 +762,7 @@ async function buildCLIHeadRuntime(
     // The agent-state plane is shared, so the path alone separates actors'
     // programs; with the default, the parent would execute its head's source.
     scaffoldPath: actorScaffoldPath(opts.actorBinding),
-    actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, agentStateVfs,
+    actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, home: parent.storage.home, agentStateVfs,
     toolFiles: withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(parent.cwd ?? null, agentVfs), parent.approvalPolicy),
     workspaceIsMachine: parent.workspaceIsMachine,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,

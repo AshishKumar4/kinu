@@ -94,7 +94,7 @@ function forkSinkOver(
       const plane = (await store()).as(CRED_SESSION_USER);
 
       for (const path of paths) {
-        const at = workspacePath(path);
+        const at = workspacePath(path, WORKSPACE_ROOT);
         const stat = lstatOrNull(plane, at);
 
         if (stat === null) continue;

@@ -59,7 +59,7 @@ const DEVICE_EXEC_OUTPUT = 'EXEC_OUT';
 const ExecOutputFrameSchema = v.object({
   type: v.literal(DEVICE_EXEC_OUTPUT),
   request: v.string(),
-  chunks: v.array(v.object({ stream: v.picklist(['stdout', 'stderr']), data: v.string() })),
+  chunks: v.array(v.object({ stream: v.picklist(['stdout', 'stderr']), data: v.string(), omitted: v.optional(v.number()) })),
   dropped: v.number(),
 });
 

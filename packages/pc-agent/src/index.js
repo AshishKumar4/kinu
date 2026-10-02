@@ -1183,7 +1183,7 @@ const SUPERVISOR_SCRIPT = `
 const fs = require('node:fs');
 const { execFile, spawn } = require('node:child_process');
 
-const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile] = process.argv.slice(1);
+const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile, lifeFile] = process.argv.slice(1);
 const maxOutput = Number(maxText);
 // Half kept from the start, half from the end, as core's BoundedOutput keeps them (COMMAND_OUTPUT_LIMITS).
 const HEAD = Math.floor(maxOutput / 2);
@@ -1248,7 +1248,12 @@ function abandonStartup() {
 }
 
 async function publishState() {
+  // First, before anything yields: on Linux the command's identity is read before the event loop can reap it.
   const [start, groupStart] = await startIdentities();
+  // Held until this process exits, however it exits: the kernel closes it, and the daemon reads that close as
+  // this supervisor gone. Opened before the state exists, so whoever reads the state finds it held.
+  await run('mkfifo', [lifeFile]);
+  fs.openSync(lifeFile, 'r+');
   const stateTemporary = stateFile + '.tmp.' + process.pid;
   fs.writeFileSync(
     stateTemporary,
@@ -1636,19 +1641,105 @@ function waitForFile(file, signal) {
   return waitForPath(file, true, signal);
 }
 
-function waitForDirectoryRemoval(dir) {
-  return waitForPath(dir, false);
+/**
+ * Resolves once the supervisor of `dir` is gone, or `signal` aborts. It holds `life` open for writing from before
+ * its state was published, so a reader opened while that end is held is hung up when the supervisor exits, and one
+ * opened after finds no writer at all. A record from a supervisor older than `life` has nothing to watch.
+ */
+async function supervisorExit(dir, signal) {
+  let fd;
+
+  try {
+    fd = fs.openSync(path.join(dir, 'life'), fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+    throw err;
+  }
+
+  try {
+    if (!lifeHeld(fd)) return;
+    // Bun alone sees a FIFO's hang-up here (its net.Socket over the fd never ends); it leaves the fd to us.
+    const reader = Bun.file(fd).stream().getReader();
+    let cancelled = Promise.resolve();
+    const cancel = () => { cancelled = reader.cancel(); };
+
+    signal.addEventListener('abort', cancel, { once: true });
+
+    try {
+      // Nothing is ever written: the read ends at the writer's close, or at the cancel.
+      while (!(await reader.read()).done);
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      await cancelled;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
-function writeAcknowledgement(dir) {
+/** Whether a writer holds the FIFO `fd` reads: with none left a non-blocking read ends (0); with one, it would wait. */
+function lifeHeld(fd) {
+  try {
+    return fs.readSync(fd, Buffer.alloc(1)) !== 0;
+  } catch (err) {
+    if (err && err.code === 'EAGAIN') return true;
+    throw err;
+  }
+}
+
+/**
+ * Resolves once the supervisor of `entry` has written its result. One that exits first never will, and that is
+ * the answer: what became of its command is unknown.
+ */
+async function resultWritten(entry, requestId) {
+  const resultFile = path.join(entry.dir, 'result');
+  const settled = new AbortController();
+  const written = waitForFile(resultFile, settled.signal);
+  const exited = supervisorExit(entry.dir, settled.signal);
+
+  try {
+    await Promise.race([written, exited]);
+  } finally {
+    settled.abort();
+    await Promise.allSettled([written, exited]);
+  }
+
+  // The supervisor writes its result before it can exit, so one gone without a result never wrote one.
+  if (!fs.existsSync(resultFile)) {
+    throw new Error(`the supervisor of ${requestId} (pid ${entry.pid}) exited without recording the command's result, `
+      + `so its outcome is unknown; the command may still be running in process group ${entry.group}`);
+  }
+}
+
+/** The ACK to a live supervisor, settled once it has removed its directory or once it is gone, whichever is first. */
+async function handOver(dir) {
+  const settled = new AbortController();
+  // Watched before the ACK goes: the supervisor that reads it removes `life` with the directory.
+  const exited = supervisorExit(dir, settled.signal);
+  const removed = writeAcknowledgement(dir, settled.signal).then(() => waitForDirectoryRemoval(dir, settled.signal));
+
+  try {
+    await Promise.race([removed, exited]);
+  } finally {
+    settled.abort();
+    await Promise.allSettled([removed, exited]);
+  }
+}
+
+function waitForDirectoryRemoval(dir, signal) {
+  return waitForPath(dir, false, signal);
+}
+
+/** `signal` ends a writer still waiting for its reader, which a supervisor gone before it opened the FIFO never is. */
+function writeAcknowledgement(dir, signal) {
   const ack = path.join(dir, 'ack');
 
   return new Promise((resolve, reject) => {
-    const writer = spawn('/bin/sh', ['-c', 'printf 1 > "$1"', 'kinu-ack', ack], { stdio: 'ignore' });
+    const writer = spawn('/bin/sh', ['-c', 'printf 1 > "$1"', 'kinu-ack', ack], { stdio: 'ignore', signal });
     writer.once('error', reject);
-    writer.once('exit', (code, signal) => {
+    writer.once('exit', (code, killedBy) => {
       if (code === 0) resolve();
-      else reject(new Error(`supervisor acknowledgement writer exited with ${signal ?? code}`));
+      else reject(new Error(`supervisor acknowledgement writer exited with ${killedBy ?? code}`));
     });
   });
 }
@@ -1737,7 +1828,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
     }
 
     process.kill(entry.pid, 'SIGUSR1');
-    await waitForFile(path.join(entry.dir, 'result'));
+    await resultWritten(entry, requestId);
     const terminal = readTerminalResult(entry.dir);
 
     if (terminal.kind !== 'cancelled') {
@@ -1758,7 +1849,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
     const entry = await loadEntry(requestId);
 
     if (!entry) return undefined;
-    await waitForFile(path.join(entry.dir, 'result'));
+    await resultWritten(entry, requestId);
 
     return { entry, ...readExecResult(entry.dir) };
   }
@@ -1778,13 +1869,12 @@ function createInFlight(root = INFLIGHT_ROOT) {
     // longer matches is gone (its daemon died and it left the result behind),
     // and this daemon owns the directory instead. The supervisor alone is
     // asked: a finished command's group leader has exited, so the group half
-    // of the identity never matches here.
-    if (terminal.kind === 'exited' && (await startedAs(entry.pid, entry.start))) {
-      await writeAcknowledgement(entry.dir);
-      await waitForDirectoryRemoval(entry.dir);
-    } else {
-      removeRequestDirectory(entry.dir);
-    }
+    // of the identity never matches here. One that dies after this check is
+    // heard of through its `life` FIFO.
+    if (terminal.kind === 'exited' && (await startedAs(entry.pid, entry.start))) await handOver(entry.dir);
+
+    // Gone already when a supervisor removed it on reading the ACK.
+    removeRequestDirectory(entry.dir);
 
     entries.delete(requestId);
 
@@ -1895,7 +1985,7 @@ function startSupervisor(requestId, command, plan, { uncheckpointed, watched }) 
     '-e', SUPERVISOR_SCRIPT,
     commandFile, path.join(dir, 'state'), path.join(dir, 'result'),
     path.join(dir, 'stdout'), path.join(dir, 'stderr'), path.join(dir, 'ack'),
-    String(EXEC_STREAM_MAX_BYTES), planFile,
+    String(EXEC_STREAM_MAX_BYTES), planFile, path.join(dir, 'life'),
   ], { detached: true, env: COMMAND_ENV, stdio: watched ? ['ignore', 'ignore', 'ignore', 'pipe'] : 'ignore' });
 
   child.unref();
@@ -2380,61 +2470,66 @@ const outputWatches = new Map();
 /**
  * One watched command: its supervisor's records, coalesced into frames for
  * the socket that asked, at most one per EXEC_OUTPUT_FLUSH_MS holding the
- * newest EXEC_OUTPUT_WINDOW_BYTES, with every byte left out counted in the
- * next frame's `dropped`. A re-delivered exec binds it to the socket that sent
- * it. `ended` resolves once the pipe has closed and its last frame went out, so
- * the command's result follows its output.
+ * newest EXEC_OUTPUT_WINDOW_BYTES. Every byte left out is counted where it
+ * was: a chunk's `omitted` is what was lost just before it, and a loss with
+ * no chunk after it ends the frame as an empty one. `dropped` is their sum. A
+ * re-delivered exec binds it to the socket that sent it. `ended` resolves once
+ * the pipe has closed and its last frame went out, so the command's result
+ * follows its output.
  */
 function watchOutput(requestId, pipe, ws) {
   let socket = ws;
   let chunks = [];
   let held = 0;
-  let dropped = 0;
+  let lost = 0;
   let timer = null;
 
   function flush() {
     clearTimeout(timer);
     timer = null;
 
-    if (chunks.length === 0 && dropped === 0) return;
+    if (chunks.length === 0 && lost === 0) return;
+    const sent = chunks.map(({ stream, bytes, omitted }) => ({ stream, data: bytes.toString('base64'), ...(omitted > 0 && { omitted }) }));
 
-    const frame = {
-      type: EXEC_OUTPUT_FRAME,
-      request: requestId,
-      chunks: chunks.map(({ stream, bytes }) => ({ stream, data: bytes.toString('base64') })),
-      dropped,
-    };
+    if (lost > 0) sent.push({ stream: chunks.at(-1)?.stream ?? 'stdout', data: '', omitted: lost });
+    const dropped = sent.reduce((sum, chunk) => sum + (chunk.omitted ?? 0), 0);
+    const frame = { type: EXEC_OUTPUT_FRAME, request: requestId, chunks: sent, dropped };
 
-    dropped = !socketClosed(socket) && sendLiveFrame(socket, frame) ? 0 : dropped + held;
+    // A frame the socket refused is lost whole, before whatever comes next.
+    lost = !socketClosed(socket) && sendLiveFrame(socket, frame) ? 0 : dropped + held;
     chunks = [];
     held = 0;
   }
 
-  function arm(lost) {
-    dropped += lost;
+  function arm() {
     timer ??= setTimeout(flush, EXEC_OUTPUT_FLUSH_MS);
   }
 
   function keep(stream, bytes) {
     const kept = bytes.subarray(Math.max(0, bytes.length - EXEC_OUTPUT_WINDOW_BYTES));
-    let lost = bytes.length - kept.length;
+    const omitted = lost + bytes.length - kept.length;
     const last = chunks.at(-1);
 
-    if (last !== undefined && last.stream === stream) last.bytes = Buffer.concat([last.bytes, kept]);
-    else chunks.push({ stream, bytes: Buffer.from(kept) });
+    if (omitted === 0 && last !== undefined && last.stream === stream) last.bytes = Buffer.concat([last.bytes, kept]);
+    else chunks.push({ stream, bytes: Buffer.from(kept), omitted });
+    lost = 0;
     held += kept.length;
 
+    // Past the window the oldest bytes go, lost before the first chunk kept; the newest chunk always stays.
     while (held > EXEC_OUTPUT_WINDOW_BYTES) {
       const first = chunks[0];
       const cut = Math.min(first.bytes.length, held - EXEC_OUTPUT_WINDOW_BYTES);
       first.bytes = first.bytes.subarray(cut);
-
-      if (first.bytes.length === 0) chunks.shift();
+      first.omitted += cut;
       held -= cut;
-      lost += cut;
+
+      if (first.bytes.length === 0) {
+        chunks.shift();
+        chunks[0].omitted += first.omitted;
+      }
     }
 
-    arm(lost);
+    arm();
   }
 
   let header = Buffer.alloc(0);
@@ -2460,8 +2555,12 @@ function watchOutput(requestId, pipe, ws) {
       const size = header.readUIntBE(1, 6);
       header = Buffer.alloc(0);
 
-      if (source === 0) arm(size);
-      else remaining = size;
+      if (source === 0) {
+        lost += size;
+        arm();
+      } else {
+        remaining = size;
+      }
     }
   });
 
@@ -3576,6 +3675,8 @@ module.exports = {
   INFLIGHT_ROOT,
   requestDirectory,
   supervisionSupported,
+  processStartIdentity,
+  watchOutput,
   waitForFile,
   waitForSupervisorState,
   createCheckpoints,
