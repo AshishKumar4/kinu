@@ -8,6 +8,7 @@ import { asSchema, jsonSchema, tool } from 'ai';
 import {
   decodeJsonValue,
   BUILTIN_TOOL_DESCRIPTIONS, CODEMODE_CODE_DESCRIPTION,
+  codemodeSurface,
   createAgentsCodemodeProvider,
   parseJsonValue,
   type AgentsToolDeps,
@@ -74,7 +75,6 @@ function buildCodemode(agents?: () => AgentsToolDeps) {
   const options = {
     launch: unlaunched,
     rt,
-    sql: testSql.sql,
     workspace: 'test-workspace',
     webSearch: webSearchProvider(), browserSessions: noBrowsers,
   };
@@ -92,8 +92,8 @@ function buildCodemode(agents?: () => AgentsToolDeps) {
   };
 
   return agents
-    ? createCodemodeToolFactory({ ...options, agents }).toolFor(native)
-    : createCodemodeToolFactory(options).toolFor(native);
+    ? createCodemodeToolFactory({ ...options, agents }).toolFor(codemodeSurface(rt, native))
+    : createCodemodeToolFactory(options).toolFor(codemodeSurface(rt, native));
 }
 
 function codemodeDescription(agents?: () => AgentsToolDeps): string {
@@ -205,9 +205,9 @@ describe('the eval docstring the model receives', () => {
     initCraftedToolsTables(testSql.sql);
 
     const built = createCodemodeToolFactory({
-      launch: unlaunched, rt, sql: testSql.sql, workspace: 'test-workspace', webSearch: webSearchProvider(), browserSessions: noBrowsers,
+      launch: unlaunched, rt, workspace: 'test-workspace', webSearch: webSearchProvider(), browserSessions: noBrowsers,
       extraProviders: () => [{ name: 'probe', tools: {}, types, positionalArgs: true }],
-    }).toolFor({});
+    }).toolFor(codemodeSurface(rt, {}));
 
     expect(built.description).toContain(types);
   });

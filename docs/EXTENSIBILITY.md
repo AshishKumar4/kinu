@@ -301,7 +301,7 @@ and crafted tools alike. One constant, `CRAFTED_TOOL_NAMESPACE`
 `packages/core/src/tools/sandbox-contract.ts` builds the declarations from it,
 and both backends' codemode tools import it. There is no alias namespace, and
 a name outside `tools` is not a tool. A bare identifier naming a native tool
-comes back as `explainNativeToolReferenceError`'s sentence naming the right
+comes back as `explainSandboxError`'s sentence naming the right
 form.
 
 ## The agent's persistent state

@@ -177,8 +177,9 @@ describe("ExecutorFileUpload", () => {
 });
 
 describe("the owner's SOUL.md is set, not moved or deleted", () => {
+  // A parent segment before the home names SOUL.md as POSIX resolves it, so it is SOUL.md: never deleted, saved as the owner's.
   for (const path of ['/../home/main/SOUL.md', '/home/x/../main/SOUL.md']) {
-    test(`a parent segment before the home cannot delete or upload over SOUL.md: ${path}`, async () => {
+    test(`a parent segment before the home names SOUL.md itself: ${path}`, async () => {
       const db = new Database(':memory:');
       const bundle = createWorkspaceBundle(db);
 
@@ -192,41 +193,23 @@ describe("the owner's SOUL.md is set, not moved or deleted", () => {
           getProvider: (id: string) => id === 'workspace' ? { files: bundle.vfs, homeDir: async () => '/home/main' } : undefined,
         };
 
-        expect(await deleteExecutorPathOp(router, 'workspace', path)).toMatchObject({ error: expect.stringContaining('EACCES') });
+        expect(await deleteExecutorPathOp(router, 'workspace', path)).toMatchObject({ error: expect.stringContaining('Settings') });
         expect(await readText(bundle.vfs, '/home/main/SOUL.md')).toBe(soul);
 
+        const souls: string[] = [];
+
         const upload = new ExecutorFileUpload(router, 'workspace', path, {
-          writeSoul: async () => { throw new Error('a refused path must not invoke the SOUL writer'); },
+          writeSoul: async (bytes) => { souls.push(new TextDecoder().decode(bytes)); },
         });
 
-        expect(await upload.chunk(0, new TextEncoder().encode('changed policy'), true))
-          .toMatchObject({ error: expect.stringContaining('EACCES') });
+        expect(await upload.chunk(0, new TextEncoder().encode('changed policy'), true)).toEqual({ ok: true });
+        expect(souls).toEqual(['changed policy']);
         expect(await readText(bundle.vfs, '/home/main/SOUL.md')).toBe(soul);
       } finally {
         db.close();
       }
     });
   }
-
-  test('invalid workspace paths answer errors for every mutation without changing a file', async () => {
-    const plane = makePlane({ '/home/main/keep.md': new TextEncoder().encode('keep') });
-
-    expect(await deleteExecutorPathOp(plane.router, 'workspace', '../outside.md'))
-      .toMatchObject({ error: expect.stringContaining('EACCES') });
-    expect(await renameExecutorPathOp(plane.router, 'workspace', '../outside.md', 'renamed.md'))
-      .toMatchObject({ error: expect.stringContaining('EACCES') });
-    expect(await renameExecutorPathOp(plane.router, 'workspace', 'keep.md', '../outside.md'))
-      .toMatchObject({ error: expect.stringContaining('EACCES') });
-
-    const upload = new ExecutorFileUpload(plane.router, 'workspace', '../outside.md', {
-      writeSoul: async () => { throw new Error('a traversal is not an owner SOUL write'); },
-    });
-
-    expect(await upload.chunk(0, new TextEncoder().encode('escaped'), true))
-      .toMatchObject({ error: expect.stringContaining('EACCES') });
-    expect([...plane.files.keys()]).toEqual(['/home/main/keep.md']);
-    expect(new TextDecoder().decode(plane.files.get('/home/main/keep.md'))).toBe('keep');
-  });
 
   test("a rename onto it or a delete of it says where the soul is set, and writes nothing", async () => {
     const plane = makePlane();

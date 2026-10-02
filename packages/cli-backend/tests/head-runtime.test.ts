@@ -391,9 +391,9 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     ]));
   });
 
-  test('a head neither advertises nor invokes workspace crafts its sandbox does not bind', async () => {
+  test('a head advertises and invokes the workspace\'s crafted tools, as every actor does', async () => {
     const parent = makeParent();
-    parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-only echo', code: '(input) => input' });
+    parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-wide doubler', code: '(input) => input.n * 2' });
     let calls = 0;
 
     const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
@@ -401,7 +401,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
       return {
         content: invoke
-          ? [{ type: 'tool-call', toolName: 'eval', toolCallId: 'unbound', input: JSON.stringify({ code: '// Probe an unbound function\nreturn await tools.secret_echo({});' }) }]
+          ? [{ type: 'tool-call', toolName: 'eval', toolCallId: 'crafted', input: JSON.stringify({ code: '// Call the workspace craft\nreturn await tools.secret_echo({ n: 21 });' }) }]
           : [{ type: 'text', text: 'done' }],
         finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
         usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -413,8 +413,8 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     await (await runtime.spawnHead(aHeadInput({ task: 'Inspect the available sandbox.' }))).run();
 
     expect(model.doStreamCalls).toHaveLength(2);
-    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).not.toContain('secret_echo');
-    expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('not a function');
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain('secret_echo');
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('{"result":42}');
   });
 
   test('the prompt identifies the canonical workspace reached by its file tools', async () => {

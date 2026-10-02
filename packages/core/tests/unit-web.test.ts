@@ -20,7 +20,6 @@ import {
   DEFAULT_TOOL_RESULT_MAX_CHARS,
   decodeJsonValue,
   projectJsonValue,
-  type CraftedToolExecute,
   type CodemodeProvider,
   type CodemodeBuilder,
   type JsonValue,
@@ -32,10 +31,6 @@ import { cutShareGrant, grantAdmits, slateCapabilityGraph } from '../src/slates/
 import { parseSlateProject } from '../src/slates/project';
 
 const NO_BROWSER_RUN = { missing: 'this suite reaches no Browser Run' };
-
-const unusedCraftedExecute: CraftedToolExecute = () => async () => {
-  throw new Error('This web-tool suite does not install crafted tools');
-};
 
 function createNodeCodemodeBuilder(codemodeProviders: CodemodeProvider[] = []): CodemodeBuilder {
   return (surface) => {
@@ -504,7 +499,6 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
   return buildActorTools({
     rt,
     conversations: conversationsFor(rt),
-    craftedToolExecute: unusedCraftedExecute,
     codemode: createNodeCodemodeBuilder([createWebCodemodeProvider({ provider, vfs: rt.storage.vfs, sessions: NO_BROWSER_RUN })]),
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
     webSearch: provider,
@@ -514,7 +508,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
 describe('web builtin', () => {
   test('gated on the webSearch dep', () => {
     const { rt } = createTestRuntime();
-    const without = buildBuiltinTools({ rt, craftedToolExecute: unusedCraftedExecute, conversations: conversationsFor(rt) });
+    const without = buildBuiltinTools({ rt, conversations: conversationsFor(rt) });
     expect(Object.keys(without)).not.toContain('web');
 
     const withWeb = buildWithWeb(rt);

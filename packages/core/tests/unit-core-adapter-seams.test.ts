@@ -19,7 +19,6 @@ import {
   DEFAULT_ROLE_ID, REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
   craftedToolDescription, toCraftedToolSource, type CraftedTool,
   CRAFTED_TOOL_NAMESPACE, nativeToolFunctions,
-  attributeCraftedFailure, craftFailureMarker,
   initCompletedTurnTable, createCompletedTurnStore,
   initEventsHubTables, EventLog,
   type ModelPricing, type CompletedTurn, type SqlExec,
@@ -617,42 +616,7 @@ describe('the sandbox contract — one namespace for every tool', () => {
 });
 
 /** The Error a rejected promise threw; a non-Error rejection fails loudly rather than being coerced. */
-async function rejectionOf(work: Promise<unknown>): Promise<Error> {
-  try {
-    await work;
-  } catch (err) {
-    if (err instanceof Error) return err;
-    throw new Error(`expected an Error rejection, got ${String(err)}`, { cause: err });
-  }
-
-  throw new Error('expected a rejection, got a resolved value');
-}
-
-describe('craft failure attribution — the same marker in both substrates', () => {
-  test('a compiled tool failure is stamped with the tool that raised', async () => {
-    const wrapped = attributeCraftedFailure('summarize', async () => { throw new Error('boom'); });
-    await expect(wrapped()).rejects.toThrow(craftFailureMarker('summarize'));
-  });
-
-  test('the original error survives as the cause', async () => {
-    const cause = new Error('boom');
-    const wrapped = attributeCraftedFailure('summarize', async () => { throw cause; });
-    expect((await rejectionOf(wrapped())).cause).toBe(cause);
-  });
-
-  test('a success passes straight through', async () => {
-    const wrapped = attributeCraftedFailure('double', async (n: number) => n * 2);
-    expect(await wrapped(21)).toBe(42);
-  });
-
-  // buildCraftedTools is the one attribution point; a substrate that also wraps its own compile makes
-  // one failure read as several (`[crafted:x] [crafted:x]`).
-  test('attribution stamps exactly once, never twice', async () => {
-    const wrapped = attributeCraftedFailure('brokenIt', async () => { throw new Error('nope'); });
-    const message = (await rejectionOf(wrapped())).message;
-    expect(message.split(craftFailureMarker('brokenIt')).length - 1).toBe(1);
-  });
-
+describe('crafted tool source and description', () => {
   // The codec and the label answer different questions; do not merge them.
   test('the label replaces an empty description; the codec preserves it', () => {
     expect(craftedToolDescription('f', '')).toBe('Crafted tool: f');

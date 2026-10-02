@@ -1,12 +1,12 @@
 /**
- * What a codemode program receives when a call fails, and explainNativeToolReferenceError: a ReferenceError for a
+ * What a codemode program receives when a call fails, and explainSandboxError: a ReferenceError for a
  * native tool used as a codemode global becomes a correction naming that tool's own namespace from TOOL_REACH.
  */
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { asSchema } from 'ai';
 import { present } from '@kinu.run/test-utils';
-import { explainNativeToolReferenceError } from '../src/tools/sandbox-errors';
+import { explainSandboxError } from '../src/tools/sandbox-errors';
 import { BUILTIN_TOOLS, renderCodemodeDescription, TOOL_REACH } from '../src/tools/registry';
 import { branchableToolCall, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/tools/outcome';
 import { codemodeFunction, nativeToolFunctions } from '../src/tools/sandbox-contract';
@@ -204,11 +204,11 @@ test('every member of every namespace refuses with the one declared Refusal, and
   expect({ undeclared, unadmitted, diverged }).toEqual({ undeclared: [], unadmitted: [], diverged: [] });
 });
 
-describe('explainNativeToolReferenceError', () => {
+describe('explainSandboxError', () => {
   test('every native tool is pointed at tools.<name>, and at the namespace its reach declares', () => {
     for (const name of BUILTIN_TOOLS) {
       const namespace = TOOL_REACH[name].codemode;
-      const out = explainNativeToolReferenceError(`${name} is not defined`);
+      const out = explainSandboxError(`${name} is not defined`);
 
       if (name === 'eval') {
         // eval IS the sandbox; a program cannot call it from inside itself.
@@ -225,28 +225,28 @@ describe('explainNativeToolReferenceError', () => {
 
   test('shell and file point at workspace; the six namespace owners point at themselves', () => {
     // Spelled out so the derivation above cannot pass by agreeing with a wrong declaration.
-    expect(explainNativeToolReferenceError('shell is not defined')).toContain('`workspace` namespace');
-    expect(explainNativeToolReferenceError('file is not defined')).toContain('`workspace` namespace');
+    expect(explainSandboxError('shell is not defined')).toContain('`workspace` namespace');
+    expect(explainSandboxError('file is not defined')).toContain('`workspace` namespace');
 
     for (const name of ['agents', 'memory', 'tasks', 'web', 'report'] as const) {
-      expect(explainNativeToolReferenceError(`${name} is not defined`)).toContain(`\`${name}\` namespace`);
+      expect(explainSandboxError(`${name} is not defined`)).toContain(`\`${name}\` namespace`);
     }
   });
 
   test('no native tool is told it is unreachable from inside eval', () => {
     for (const name of BUILTIN_TOOLS) {
-      expect(explainNativeToolReferenceError(`${name} is not defined`))
+      expect(explainSandboxError(`${name} is not defined`))
         .not.toContain('not reachable from inside eval');
     }
   });
 
   test('eval itself is never rewritten — it names no OTHER tool', () => {
-    const out = explainNativeToolReferenceError('eval is not defined');
+    const out = explainSandboxError('eval is not defined');
     expect(out).toBe('eval is not defined');
   });
 
   test('an undefined identifier that is not a native tool name passes through unchanged', () => {
-    const out = explainNativeToolReferenceError('fooBarBaz is not defined');
+    const out = explainSandboxError('fooBarBaz is not defined');
     expect(out).toBe('fooBarBaz is not defined');
   });
 
@@ -259,6 +259,6 @@ describe('explainNativeToolReferenceError', () => {
       'is not defined',  // no identifier captured: must not match
     ];
 
-    for (const m of messages) expect(explainNativeToolReferenceError(m)).toBe(m);
+    for (const m of messages) expect(explainSandboxError(m)).toBe(m);
   });
 });

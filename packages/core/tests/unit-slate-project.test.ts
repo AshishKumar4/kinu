@@ -88,39 +88,22 @@ test('the class contract is what a missing main names, and inline height is boun
 });
 
 test('malformed workspace prefixes fail project parsing rather than changing a declared grant', () => {
-  for (const prefix of ['relative/path', '/home/main/../private', '/home/main/notes\0']) {
+  for (const prefix of ['relative/path', '/home/main/notes\0']) {
     expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: {
       FILES: { kind: 'namespace', namespace: 'workspace', paths: ['/home/main/notes', prefix] },
     } } })).toThrow(expect.objectContaining({ code: 'bad_input' }));
   }
 });
 
-function workspaceFileCall(prefix: string) {
-  const project = parseSlateProject({ main: 'server.js', slate: { bindings: {
-    FILES: { kind: 'namespace', namespace: 'workspace', paths: [prefix] },
-  } } });
+test('a declared prefix is carried as the path it names', () => {
+  for (const prefix of ['/home/main/shared', '/home/main/shared/', '/home/main/x/../shared']) {
+    const project = parseSlateProject({ main: 'server.js', slate: { bindings: {
+      FILES: { kind: 'namespace', namespace: 'workspace', paths: [prefix] },
+    } } });
 
-  return (member: string, path: string) => routeSlateBindingCall({
-    id: 'app', project, name: 'FILES', request: { member, args: [path], invocation: null }, chain: [],
-  });
-}
-
-test('a directory prefix with a trailing slash grants the directory itself and its descendants', () => {
-  for (const prefix of ['/home/main/shared', '/home/main/shared/']) {
-    const call = workspaceFileCall(prefix);
-
-    expect(call('readdir', '/home/main/shared')).toMatchObject({ kind: 'namespace', member: 'readdir' });
-    expect(call('readFile', '/home/main/shared/item.txt')).toMatchObject({ kind: 'namespace', member: 'readFile' });
-    expect(() => call('readFile', '/home/main/shared2/item.txt')).toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(routeSlateBindingCall({ id: 'app', project, name: 'FILES', request: { member: 'readdir', args: ['/home/main/shared'], invocation: null }, chain: [] }))
+      .toMatchObject({ kind: 'namespace', within: ['/home/main/shared'] });
   }
-});
-
-test('a Nimbus home scope grants the followed home while retaining the same boundary', () => {
-  const call = workspaceFileCall('/home/user/');
-
-  expect(call('readdir', '/home/user')).toMatchObject({ kind: 'namespace', member: 'readdir', args: ['/home/main'] });
-  expect(call('readFile', '/home/main/item.txt')).toMatchObject({ kind: 'namespace', member: 'readFile' });
-  expect(() => call('readFile', '/home/other/item.txt')).toThrow(expect.objectContaining({ code: 'denied' }));
 });
 
 test('a single-file slate names its browser module as its main module', () => {

@@ -18,7 +18,7 @@ import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 import type { AddressedAnswers, AlarmAfterDestroy } from './addressed-name-shapes';
-import type { OnePlaneObservation, RelayedAnswer } from './agent-facet-shapes';
+import type { CraftedFromNodeObservation, OnePlaneObservation, RelayedAnswer } from './agent-facet-shapes';
 import type { AttributedLine } from './attribution-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
@@ -179,6 +179,7 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
   onePlane(workspace: string, agent: string): Promise<OnePlaneObservation>;
   swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
+  craftedFromNode(workspace: string): Promise<CraftedFromNodeObservation>;
   agentWorkspaceAnswer(workspace: string, agent: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
   agentWorkspaceListing(workspace: string, agent: string): Promise<RelayedAnswer<readonly { readonly key: string; readonly kind: string }[]>>;
   slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateCallResult>>;

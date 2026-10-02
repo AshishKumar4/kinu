@@ -55,7 +55,7 @@ function sandbox(): Sandbox {
 
       // `extraProviders` is the production seam for codemode namespaces; `surface.providers` takes executors.
       const factory = createNodeCodemodeToolFactory({ extraProviders: [createDbCodemodeProvider(store)] });
-      const tool = factory({ native: {}, craftedTools: () => ({}), providers: [] });
+      const tool = factory({ native: {}, craftedTools: () => [], providers: [] });
 
       return toolExecute(tool)({ code });
     },

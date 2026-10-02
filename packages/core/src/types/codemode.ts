@@ -19,3 +19,11 @@ export interface CodemodeProvider {
 
 /** The one namespace every tool, builtin or crafted, is callable in on every backend. */
 export const CRAFTED_TOOL_NAMESPACE = 'tools';
+
+/** A crafted tool body, as its declaration, its parse refusal and its veto all describe it. */
+export const CRAFTED_TOOL_BODY = 'one async function, not an eval script (no top-level `return`): '
+  + '`async (args) => JSON.parse(await workspace.readFile(args.path))`';
+
+/** How a program, or a tool body, reaches the workspace's files. */
+export const WORKSPACE_FILE_BINDINGS = 'read a file with `await workspace.readFile(path)` and write one with '
+  + '`await workspace.writeFile(path, content)`';

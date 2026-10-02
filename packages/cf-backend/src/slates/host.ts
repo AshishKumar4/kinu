@@ -12,7 +12,7 @@ import { SlateLiveShareStore, initSlateLiveShareTables, WorkspaceLiveShares } fr
 import {
   credentialedBindings, ingressAdmitted,
   parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
-  SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, issuedSlateInvocation,
+  SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, issuedSlateInvocation, assertLandsWithin,
   routeViewerBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, publicPage, UsageSchema, usageTotal,
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
@@ -780,6 +780,7 @@ export class SlateHost {
   private async run(caller: SlateCaller, route: SlateBindingRoute, viewer?: SlateViewer): Promise<SlateCallResult> {
     switch (route.kind) {
       case 'namespace': {
+        await assertLandsWithin((await this.deps.session()).filesystem.vfs.as(caller.cred), route);
         const value = await this.deps.dispatch(caller, route);
         const refused = answeredRefusal(value);
 

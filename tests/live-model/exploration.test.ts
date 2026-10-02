@@ -79,7 +79,7 @@ describe('Exploration evals — the agent reaches for exploration', () => {
     rt = target.runtime;
     // The model first, then the surface through the shared production
     // construction (`buildEvalAgentSurface`, harness.ts): same factory, same
-    // craftedToolExecute, same codemode providers, same fork-deps shape.
+    // crafted-tool source, same codemode providers, same fork-deps shape.
     model = liveChatModel(LLM_CONFIG);
     surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
   });

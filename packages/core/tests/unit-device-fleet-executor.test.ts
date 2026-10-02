@@ -3,6 +3,7 @@ import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 // one machine at `/pc` and several under `/pc/<name>`.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { Database } from 'bun:sqlite';
 import {
   createDeviceTunnelExecutor, deviceMountSegment,
   type DeviceTransport,
@@ -16,7 +17,7 @@ import { DefaultExecutionRouter } from '../src/execution/router';
 import type { ApprovalGrant } from '../src/safety/approval-gate';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { toolExecute } from '@kinu.run/test-utils';
-import { createTestRuntime, conversationsFor } from './helpers';
+import { createTestRuntime, createWorkspaceBundle, conversationsFor } from './helpers';
 import type { JsonValue } from '../src/utils/json';
 
 const STUDIO: DeviceFleetEntry = {
@@ -368,6 +369,27 @@ describe('where the file browser lands on a mount', () => {
   }
 });
 
+describe('a file on a machine that is offline', () => {
+  function reading(fleet: readonly DeviceFleetEntry[], path: string): Promise<string> {
+    const router = new DefaultExecutionRouter();
+
+    router.register(createDeviceTunnelExecutor(fleetTransport(fleet)));
+    const plane = withMountTable(createTestRuntime().rt.storage.vfs, standardMounts((name) => router.getProvider(name)));
+
+    return readText(plane, path);
+  }
+
+  test('is refused naming that machine as offline, beside the ones that are connected', async () => {
+    await expect(reading([STUDIO, SPARE], '/pc/spare box/notes.md'))
+      .rejects.toMatchObject({ code: 'ENXIO', message: expect.stringContaining('"spare box" is offline') });
+  });
+
+  test('is refused naming it as offline when no machine is connected', async () => {
+    await expect(reading([SPARE], '/pc/spare box/notes.md'))
+      .rejects.toMatchObject({ code: 'ENXIO', message: expect.stringContaining('"spare box" is offline') });
+  });
+});
+
 describe('the shell tool names the machine', () => {
   /** `shell` over the real router and provider, as `shell { runtime: "<nickname>" }` runs. */
   function runTool(fleet: readonly DeviceFleetEntry[]) {
@@ -421,5 +443,69 @@ describe('the shell tool names the machine', () => {
     await expect(early).rejects.toThrow('"spare box" cannot be matched');
     await expect(early).rejects.not.toThrow('not registered');
     expect(t.sent).toEqual([]);
+  });
+});
+
+describe('the workspace shell on a machine confined to one directory', () => {
+  /** A machine's files, as its daemon serves them: null is a directory. */
+  const TREE = new Map<string, string | null>([['/', null], ['/home', null], ['/home/rig', null], ['/home/rig/notes.md', 'rig notes\n']]);
+
+  function confinedRig(): DeviceTransport {
+    const status = (): DeviceStatus => ({ connected: true, registered: true, toolchain: null, devices: [RIG] });
+
+    return {
+      status, refreshStatus: async () => status(),
+      rpc: async (method, params): Promise<JsonValue> => {
+        const path = v.parse(v.string(), params[0]);
+        const entry = TREE.get(path);
+
+        if (method === 'statPath') return entry === undefined ? null : { size: entry?.length ?? 0, mtimeMs: 0, isDir: entry === null };
+
+        if (method === 'listFiles') {
+          const prefix = path === '/' ? '/' : `${path}/`;
+
+          return [...TREE.keys()].filter((p) => p !== path && p.startsWith(prefix) && !p.slice(prefix.length).includes('/'))
+            .map((p) => ({ name: p.slice(prefix.length), type: TREE.get(p) === null ? 'directory' : 'file' }));
+        }
+
+        if (method === 'readRange') {
+          // The window asked for, as the daemon's readRangeBytes reads it: past the end is empty.
+          const [offset, length] = [v.parse(v.number(), params[1]), v.parse(v.number(), params[2])];
+
+          return { content: Buffer.from(entry ?? '').subarray(offset, offset + length).toString('base64'), encoding: 'base64' };
+        }
+
+        throw new Error(`the daemon was asked ${method}`);
+      },
+    };
+  }
+
+  async function shellOver(consentedRoot: string) {
+    const provider = createDeviceTunnelExecutor(confinedRig(), {
+      consentedRoot: async () => consentedRoot, deviceHome: async () => '/home/rig', scope: async () => 'root',
+    });
+
+    const router = new DefaultExecutionRouter();
+
+    router.register(provider);
+    const bundle = createWorkspaceBundle(new Database(':memory:'));
+
+    bundle.mountTable(withMountTable(bundle.vfs, standardMounts((name) => router.getProvider(name))));
+
+    return bundle.shell;
+  }
+
+  // Nimbus resolves a mounted path one component at a time, so the shell stats each directory above the consented one.
+  test('cat reads a consented file and ls lists the consented directory, and nothing beside the path to it shows', async () => {
+    const shell = await shellOver('/home/rig');
+
+    expect(await shell.exec('cat /pc/mrwhite@rig/home/rig/notes.md')).toMatchObject({ exitCode: 0, stdout: 'rig notes\n' });
+    expect(await shell.exec('ls /pc/mrwhite@rig/home/rig')).toMatchObject({ exitCode: 0, stdout: 'notes.md\n' });
+    expect(await shell.exec('ls /pc/mrwhite@rig/home')).toMatchObject({ exitCode: 0, stdout: 'rig\n' });
+    expect(await shell.exec('cat /pc/mrwhite@rig/etc/passwd')).toMatchObject({ exitCode: 1 });
+  });
+
+  test('a machine that consented its whole disk lists its own root', async () => {
+    expect(await (await shellOver('/')).exec('ls /pc/mrwhite@rig/')).toMatchObject({ exitCode: 0, stdout: 'home\n' });
   });
 });

@@ -37,3 +37,13 @@ it('a swarm node runs its inherited loop and keeps its completed claim in its ow
   expect(seen.reportedItself).toBe(true);
   expect(seen.retired).toBe(true);
 });
+
+it("a tool main crafted is callable from a swarm node's eval, and main's score retires it there too", async () => {
+  // Crafted tools are the workspace's (`crafted_tools` has no actor): a node's eval reads main's rows and scores.
+  const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('crafted-node'));
+  const seen = await probe.craftedFromNode('crafted-node-workspace');
+
+  expect(seen.nodeActorId).not.toBe(seen.mainActorId);
+  expect(JSON.parse(seen.called)).toMatchObject({ result: 42 });
+  expect(seen.retired).toContain('double');
+});

@@ -9,6 +9,7 @@ import { exists, type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/
 import type { CheckpointFiles } from '../types/primitives';
 import { Effect } from 'effect';
 import type { FilesOwner } from '../safety/approval-gate';
+import type { ExecutorStatus } from '../execution/types';
 import { renderThrownChain, settle } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { isVfsError, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -43,6 +44,7 @@ export const MOUNT_EXECUTORS: Record<string, string> = Object.fromEntries(
 export interface MountableProvider {
 	files?: VFS;
 	isAvailable(): boolean;
+	getStatus?: () => Pick<ExecutorStatus, 'status' | 'label'>;
 }
 
 /** A device mount is gated on presence (answering now); a container mount on its binding, so a first call boots it. */
@@ -55,7 +57,11 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 
 				return device && device.isAvailable() ? device.files ?? null : null;
 			},
-			absentReason: () => 'no device connected',
+			absentReason: () => {
+				const status = provider('device')?.getStatus?.();
+
+				return status?.status === 'disconnected' && status.label !== undefined ? `"${status.label}" is offline` : 'no device connected';
+			},
 			filesOwner: 'user',
 		},
 		{

@@ -51,7 +51,7 @@ Four readers keep the declaration authoritative:
 | --- | --- |
 | `BuiltinToolName` (a derived type) | `BUILTIN_TOOL_SPECS` / `BUILTIN_TOOL_DESCRIPTIONS` cannot compile without an entry for a newly native capability, and `BUILTIN_TOOLS` cannot list one the declaration does not call native |
 | every `*-codemode.ts` factory | takes its provider `name` from the table, so a namespace cannot exist for a capability the table gives none, and cannot be spelled differently. Deleting `report`'s namespace from the table makes `report-codemode.ts` fail to compile |
-| `explainNativeToolReferenceError` | tells the model where a capability is when it uses a native tool name inside the sandbox. It reads the table instead of hardcoding names |
+| `explainSandboxError` | tells the model where a capability is when it uses a native tool name inside the sandbox. It reads the table instead of hardcoding names |
 | `getToolDescriptions` (cf) | reports `exposure` and `wired` to the Tools panel instead of guessing `nativeNames.has(name) ? 'native' : 'codemode'` |
 
 Reach says what a surface exposes. Deps say what an actor gets. An orchestrator
@@ -336,12 +336,13 @@ and a `dev` or `start` script. Capabilities are declared in the strict
 files through the ordinary file plane, then call
 `workspace.slates.<id>.$preview()` to boot a live preview.
 
-Workspace namespace path prefixes must be absolute and contain neither
-traversal nor NUL; a malformed prefix refuses the project instead of
-shrinking its grant. `/folder/` and `/folder` both grant the directory itself
-and its descendants. A Nimbus home prefix follows the link to the canonical
-home. A denied file call names its permitted prefixes; an allowed call uses
-the checked canonical path as its first argument, not the original spelling.
+Workspace namespace path prefixes must be absolute and free of NUL; a
+malformed prefix refuses the project instead of shrinking its grant.
+`/folder/` and `/folder` both grant the directory itself and its descendants.
+A call's path must be absolute; it is resolved as POSIX resolves it and then
+judged where it lands, every link followed, against the prefixes, also
+followed (a Nimbus home prefix grants the home it links to). A link that
+leads outside, or names nothing, is refused naming the prefixes.
 
 `workspace.slates.<id>.<method>(...args)` calls a class method with JSON
 arguments, as the slate's own client does. `$commit()` freezes source,
@@ -378,18 +379,18 @@ on every backend. There is no second spelling and no alias.
 | Backend | How `tools.<name>` becomes callable |
 |---|---|
 | Cloudflare | one `CodemodeProvider` named `tools` (`packages/cf-backend/src/codemode-tool.ts`): native tools are host-dispatched functions, crafted tools are defined by its `prelude`, and each native tool's own schema is its declaration |
-| CLI | the `tools` parameter of the evaluated function (`packages/cli-backend/src/codemode-tool-factory.ts`), beside `workspace` and `console`: native tools through the same `nativeToolFunctions` Cloudflare uses, crafted tools from the per-call set. `buildActorTools` builds the sandbox last, over the finished surface, so `tools` binds every tool the actor holds |
+| CLI | the `tools` parameter of the evaluated function (`packages/cli-backend/src/codemode-tool-factory.ts`), beside `workspace` and `console`: native tools through the same `nativeToolFunctions` Cloudflare uses, crafted tools defined ahead of the program by the same `renderCraftedDefinitions` the Cloudflare prelude uses. `buildActorTools` builds the sandbox last, over the finished surface, so `tools` binds every tool the actor holds |
 
 Both re-read the crafted set per call, so a tool saved one program earlier is
 callable now. A native tool used as a bare identifier gets an explanation, not
-a bare `ReferenceError`: `explainNativeToolReferenceError` names
+a bare `ReferenceError`: `explainSandboxError` names
 `tools.<name>(input)` as the form. See
 [CRAFT-ARCHITECTURE.md](./CRAFT-ARCHITECTURE.md).
 
-`buildCraftedToolSetFromExecute` reads the injectable crafted tools
-(`selectInjectableCraftedTools`, effective score at least 0.2) and dispatches
-through `deps.craftedToolExecute`: LOADER on Cloudflare, Node on the CLI.
-`buildBuiltinTools` re-reads it every call. The preamble uses the same filter.
+`codemodeSurface` (`packages/core/src/tools/builtins.ts`) is the one reader of
+the injectable crafted tools (`selectInjectableCraftedTools`, effective score at
+least 0.2); both backends' `eval` read its `craftedTools()` on every call. The
+preamble uses the same filter.
 
 ### agents.*
 
