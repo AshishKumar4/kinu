@@ -675,6 +675,7 @@ export {
 
 export {
   buildBuiltinTools,
+  codemodeSurface,
   type BuiltinToolDeps,
   type CodemodeBuilder, type CodemodeSurface,
   type ReportToolDeps,

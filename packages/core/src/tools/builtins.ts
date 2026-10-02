@@ -59,6 +59,17 @@ export interface CodemodeSurface {
 /** Core has no codegen; the CLI supplies `createNodeCodemodeToolFactory`. */
 export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 
+/** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */
+export function codemodeSurface(
+  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'executionRouter'>, native: ToolSet,
+): CodemodeSurface {
+  return {
+    native,
+    craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
+    providers: rt.executionRouter?.getProviders() ?? [],
+  };
+}
+
 export interface BuiltinToolDeps {
   workMode?: WorkMode;
   rt: AgentRuntime;
@@ -379,9 +390,7 @@ export function installCodemode(
   deps: BuiltinToolDeps,
 ): void {
   const { rt } = deps;
-  const craftedTools = () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql);
-
-  const built = build({ native: toolsInWorkMode(deps.workMode ?? 'build', surface), craftedTools, providers: rt.executionRouter?.getProviders() ?? [] });
+  const built = build(codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface)));
   const clamp = { vfs: rt.storage.vfs, producer: 'eval' as const, images: true as const };
   surface.eval = withCheckedInput('eval', withClampedToolResult(
     built,

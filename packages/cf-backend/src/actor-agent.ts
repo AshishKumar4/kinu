@@ -39,7 +39,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
+import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -3171,12 +3171,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const factory = createCodemodeToolFactory({
       launch: this.codemodeLaunch(rt.actor.actorId), rt,
-      sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
+      workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
       browserSessions: this.browserSessionsFor(rt.actor.actorId),
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
     });
 
-    return await inWorkMode(mode, () => factory.callTool(native, route.name, route.input)) ?? null;
+    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, native), route.name, route.input)) ?? null;
   }
 
   /** Workspace read models belong to the root; the orchestrator supplies them. */
@@ -3273,7 +3273,6 @@ export abstract class ActorAgent extends Agent<Env> {
         rt: this.rt,
         browserSessions: this.browserSessionsFor(this.rt.actor.actorId),
         reach: narrowing,
-        sql: this.boundSql,
         workspace: this.workspaceName(),
         webSearch: this.ownedModelServices.getWebSearchProvider(),
         agents: () => this.getAgentsToolDeps(mode),
@@ -3740,7 +3739,7 @@ export abstract class ActorAgent extends Agent<Env> {
           durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
         // The sandbox declares the finished native surface, so core builds it last over all other tools.
-        codemode: ({ native }) => this.getCodemodeToolFactory(mode, profileKey).toolFor(native),
+        codemode: (surface) => this.getCodemodeToolFactory(mode, profileKey).toolFor(surface),
         // Lives on the accumulator so the cached toolset keeps a stable reference and resets per turn.
         contextBudget: this.acc.context,
         // Same ownership: rides the accumulator so the cached toolset sees the turn's ledger.

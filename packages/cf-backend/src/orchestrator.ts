@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { codemodeSurface, storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -989,10 +989,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       codemodeTool: (runtime, webSearch) => {
         const factory = createCodemodeToolFactory({
           launch: this.codemodeLaunch(runtime.actor.actorId), rt: runtime,
-          sql: this.boundSql, workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(runtime.actor.actorId),
+          workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(runtime.actor.actorId),
         });
 
-        return (finished) => factory.toolFor(finished);
+        return (finished) => factory.toolFor(codemodeSurface(runtime, finished));
       },
       recordStep: async (headId, seq, step) => { await this.recordHeadStep(headId, seq, step); },
       publishDelta: (kind, delta) => { this.publishHeadStreamFrame({ headId: '', kind, delta }); },
@@ -1025,7 +1025,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const factory = createCodemodeToolFactory({
       launch: this.codemodeLaunch(turn.runtime.actor.actorId), rt: turn.runtime,
-      sql: this.boundSql, workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
+      workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
       // A thunk, so it reads the `report` deps declared below rather than a construction-time copy.
       extraProviders: () => [createReportCodemodeProvider(() => report)],
     });
@@ -1063,7 +1063,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         turnId: () => turn.turnId,
         durable: (callId, signal) => turn.actor.session.durableCall(callId, signal),
       },
-      codemode: ({ native }) => factory.toolFor(native),
+      codemode: (surface) => factory.toolFor(surface),
       agents,
       // Rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite what the workspace
       // observed under the same words.

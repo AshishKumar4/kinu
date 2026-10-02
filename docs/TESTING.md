@@ -379,7 +379,7 @@ Mock boundaries, never the pure function under test.
 | SQL (DO storage) | `createTestSql()`: bun:sqlite `:memory:` + template tag |
 | Credentials | `createTestAuth({ key: { headers: { Authorization: 'Bearer tok' } } })`: resolved auth headers, not raw secrets |
 | AgentRuntime | `createTestRuntime()`: full minimal AgentRuntime |
-| Crafted-tool sandbox | already mocked by `createNodeCraftedExecute` from `@kinu.run/cli-backend` |
+| Crafted-tool sandbox | `createNodeCodemodeToolFactory` from `@kinu.run/cli-backend` runs a program with its crafted tools in-process |
 
 Call `parseModelSpec` or `effortFor` directly when either is the subject.
 
