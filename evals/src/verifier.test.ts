@@ -22,6 +22,8 @@ function session(methods: Record<string, (input: JsonValue) => JsonValue>): Veri
     writeFile: () => Promise.resolve(),
     listFiles: () => Promise.resolve([]),
     craftedTools: () => Promise.resolve([]),
+    memoryContent: () => Promise.resolve(''),
+    memoryFacts: () => Promise.resolve([]),
     workspaceWork: () => Promise.reject(new Error('no work board here')),
     inspect: () => Promise.reject(new Error('no inspector here')),
     swarmRuns: () => Promise.resolve([]),
@@ -37,7 +39,11 @@ function refusing(error: string, reason = 'io'): VerifierSession {
 
 /** A turn of one check that makes one slate call over `connection`. */
 function oneCall(connection: VerifierSession) {
+<<<<<<< HEAD
   return new EvalVerifier(connection, [], []).collect(async (verifier) => {
+=======
+  return new EvalVerifier(connection, [], 0).collect(async (verifier) => {
+>>>>>>> 9ff46df67 (eval: scope and reorder the combined release journey)
     await verifier.check('builds', async () => ({ pass: (await verifier.call('app', 'total', [])) !== null }));
   });
 }
@@ -69,7 +75,11 @@ const script = async (client: SlateClient<Method>) => {
 
 describe('EvalVerifier', () => {
   test('a check that throws fails alone, with its error as evidence, and the others still run', async () => {
+<<<<<<< HEAD
     const checks = await new EvalVerifier(session({}), [], []).collect(async (verifier) => {
+=======
+    const checks = await new EvalVerifier(session({}), [], 0).collect(async (verifier) => {
+>>>>>>> 9ff46df67 (eval: scope and reorder the combined release journey)
       await verifier.check('first', () => Promise.resolve({ pass: true }));
       await verifier.check('refused', async () => ({ pass: (await verifier.call('app', 'missing', [])) === null }));
       await verifier.check('last', () => Promise.resolve({ pass: true, evidence: { seen: [1, 2] } }));
@@ -82,7 +92,11 @@ describe('EvalVerifier', () => {
   test('a check\'s own evidence is stored scrubbed: what the agent built and said can carry a capability', async () => {
     const leaky = 'served at https://library-0000000000-fixture.kinu.run/ with x-kinu-dev-identity-secret: abc123';
 
+<<<<<<< HEAD
     const [check] = await new EvalVerifier(session({}), [leaky], []).collect(async (verifier) => {
+=======
+    const [check] = await new EvalVerifier(session({}), [leaky], 0).collect(async (verifier) => {
+>>>>>>> 9ff46df67 (eval: scope and reorder the combined release journey)
       await verifier.check('answers', () => Promise.resolve({ pass: false, evidence: { replies: verifier.recentReplies() } }));
     });
 
@@ -94,10 +108,17 @@ describe('EvalVerifier', () => {
       'Let me count the overdue loans in the library first.',
       '**3**',
       'Those open tasks are all finished now.',
+<<<<<<< HEAD
     ], []);
 
     expect(answered.bareAnswer(/^(\d+)$/)).toBe('3');
     expect(new EvalVerifier(session({}), ['I could not reach the library.'], []).bareAnswer(/^(\d+)$/)).toBeNull();
+=======
+    ], 0);
+
+    expect(answered.bareAnswer(/^(\d+)$/)).toBe('3');
+    expect(new EvalVerifier(session({}), ['I could not reach the library.'], 0).bareAnswer(/^(\d+)$/)).toBeNull();
+>>>>>>> 9ff46df67 (eval: scope and reorder the combined release journey)
   });
 
   test('a call the deployment could not carry fails the trial as infrastructure, not the check', async () => {
@@ -131,7 +152,7 @@ describe('EvalVerifier', () => {
  * live children only, and a released helper is reached by its actor.
  */
 function inspecting(): VerifierSession {
-  const runs = (status: string, userMessage: string) => ({ view: 'runs' as const, page: { status: 'end' as const, items: [{ status, userMessage }] } });
+  const runs = (status: string, userMessage: string) => ({ view: 'runs' as const, page: { status: 'end' as const, items: [{ startedAt: 10, status, userMessage }] } });
   const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
 
   return {
@@ -159,24 +180,61 @@ describe("a helper's runs", () => {
   // Staging f75f06932, 2026-10-01: both task helpers of a capture were dismissed once they answered, and their runs
   // read by name answered missing (kinu-logs/evals-fast/FINDINGS.md F3B), as every task helper's do.
   test('a released helper is read by its actor, a live one by its name', async () => {
+<<<<<<< HEAD
     const work = await new EvalVerifier(inspecting(), [], []).helperWork();
+=======
+    const work = await new EvalVerifier(inspecting(), [], 0).helperWork();
+>>>>>>> 9ff46df67 (eval: scope and reorder the combined release journey)
 
     expect(work).toEqual([
-      { name: 'ask-task-live', status: 'working', runs: [{ status: 'running', userMessage: 'Write the ratings' }] },
-      { name: 'ask-task-done', status: 'dismissed', runs: [{ status: 'completed', userMessage: 'Write the totals' }] },
+      { name: 'ask-task-live', status: 'working', runs: [{ startedAt: 10, status: 'running', userMessage: 'Write the ratings' }] },
+      { name: 'ask-task-done', status: 'dismissed', runs: [{ startedAt: 10, status: 'completed', userMessage: 'Write the totals' }] },
     ]);
   });
 
   test('a reused helper must finish the assigned run, not just an earlier unrelated run', () => {
     const work = [
       { name: 'earlier-completion', status: 'dismissed', runs: [
-        { status: 'completed', userMessage: 'Build src/maybe.ts' },
-        { status: 'error', userMessage: 'Build test-results' },
+        { startedAt: 10, status: 'completed', userMessage: 'Build src/maybe.ts' },
+        { startedAt: 20, status: 'error', userMessage: 'Build test-results' },
       ] },
-      { name: 'finished-dashboard', status: 'dismissed', runs: [{ status: 'completed', userMessage: 'Build test-results' }] },
+      { name: 'finished-dashboard', status: 'dismissed', runs: [{ startedAt: 20, status: 'completed', userMessage: 'Build test-results' }] },
     ];
 
     expect(finishedWork(work, 'test-results')).toEqual(['finished-dashboard']);
+  });
+
+  test('a later retry can finish the assignment without repeating its subject', () => {
+    const work = [{ name: 'resumed', status: 'idle', runs: [
+      { startedAt: 120, status: 'completed', userMessage: 'Continue the interrupted work' },
+      { startedAt: 110, status: 'error', userMessage: 'Build src/maybe.ts' },
+    ] }];
+
+    expect(finishedWork(work, 'maybe.ts')).toEqual(['resumed']);
+  });
+
+  test('old helper runs cannot satisfy this turn', async () => {
+    const connection = {
+      ...inspecting(),
+      inspect: (request: Parameters<VerifierSession['inspect']>[0]) => request.view === 'runs'
+        ? Promise.resolve({ view: 'runs' as const, page: { status: 'end' as const, items: [
+          { startedAt: 90, status: 'completed', userMessage: 'Build src/maybe.ts' },
+        ] } })
+        : inspecting().inspect(request),
+    };
+
+    const verifier = new EvalVerifier(connection, [], 100);
+
+    expect((await verifier.helperWork()).flatMap((helper) => helper.runs)).toEqual([]);
+  });
+
+  test('old swarms cannot satisfy this turn', async () => {
+    const connection = {
+      ...session({}),
+      swarmRuns: () => Promise.resolve([{ run: { id: 'old', startedAt: 90, status: 'completed', winnerScore: null }, params: null, head: null }]),
+    };
+
+    expect(await new EvalVerifier(connection, [], 100).swarms()).toEqual([]);
   });
 });
 

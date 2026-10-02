@@ -31,6 +31,8 @@ export type VerifierSession = {
   writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void>;
   listFiles(dir: string): Promise<readonly PublicDirEntry[]>;
   craftedTools(): Promise<readonly PublicCraftedTool[]>;
+  memoryContent(): Promise<string>;
+  memoryFacts(): Promise<readonly { key: string; value: JsonValue }[]>;
   workspaceWork(): Promise<WorkBoard>;
   inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer>;
   swarmRuns(): Promise<PublicSwarmRun[]>;
@@ -39,16 +41,16 @@ export type VerifierSession = {
 };
 
 /** A helper and its runs, as the inspector lists them: how each run ended, and the message that started it. */
-export type HelperWork = { name: string; status: string; runs: { status: string | null; userMessage: string | null }[] };
+export type HelperWork = { name: string; status: string; runs: { startedAt: number; status: string | null; userMessage: string | null }[] };
 
 /**
- * The helpers whose run naming `subject` completed. Told is not done: on 2026-10-01 every helper's model call
- * on staging was refused, the lead
- * did the helpers' work itself, and the helpers' transcripts still held the work they were given.
+ * A run naming `subject` assigns the work; that run or a later continuation must finish it.
+ * On staging, 2026-10-01, refused helpers still held their briefs while the lead did their work.
  */
 export function finishedWork(helpers: readonly HelperWork[], subject: string): string[] {
   return helpers
-    .filter((helper) => helper.runs.some((run) => run.status === 'completed' && (run.userMessage ?? '').includes(subject)))
+    .filter((helper) => helper.runs.some((assignment) => (assignment.userMessage ?? '').includes(subject)
+      && helper.runs.some((run) => run.status === 'completed' && run.startedAt >= assignment.startedAt)))
     .map((helper) => helper.name);
 }
 
@@ -145,13 +147,15 @@ export class EvalVerifier {
   readonly replies: readonly string[];
   readonly #session: VerifierSession;
   readonly #previousTurns: readonly EvalTurnResult[];
+  readonly #startedAt: number;
   readonly #checks: EvalCheck[] = [];
   readonly #pending: Promise<void>[] = [];
 
-  constructor(session: VerifierSession, replies: readonly string[], previousTurns: readonly EvalTurnResult[]) {
+  constructor(session: VerifierSession, replies: readonly string[], startedAt: number, previousTurns: readonly EvalTurnResult[]) {
     this.#session = session;
     this.replies = replies;
     this.#previousTurns = previousTurns;
+    this.#startedAt = startedAt;
   }
 
   /** Read observations from completed grades belonging to this trial. */
@@ -257,6 +261,13 @@ export class EvalVerifier {
     return this.#session.craftedTools();
   }
 
+  /** The memory pane's note and keyed facts, read without consulting the agent's answer. */
+  async memory(): Promise<{ content: string; facts: readonly { key: string; value: JsonValue }[] }> {
+    const [content, facts] = await Promise.all([this.#session.memoryContent(), this.#session.memoryFacts()]);
+
+    return { content, facts };
+  }
+
   /** Every agent's plans and tasks, as the Work tab shows them. */
   workspaceWork(): Promise<WorkBoard> {
     return this.#session.workspaceWork();
@@ -277,7 +288,7 @@ export class EvalVerifier {
     }
   }
 
-  /** Every helper the lead hired, with its runs. */
+  /** The lead's helpers, with only runs started during this turn. */
   async helperWork(): Promise<HelperWork[]> {
     return Promise.all((await this.helpers()).map(async (helper) => ({
       name: helper.name, status: helper.status, runs: await this.runsOf(helper),
@@ -308,16 +319,16 @@ export class EvalVerifier {
       const answer = await this.#session.inspect(actor === undefined ? { path: [...path], view: 'runs', page } : { path: [...path], actor, view: 'runs', page });
 
       if (answer.view !== 'runs') throw new Error(`${helper.name}'s runs could not be listed: ${JSON.stringify(answer)}`);
-      runs.push(...answer.page.items);
+      runs.push(...answer.page.items.filter((run) => run.startedAt >= this.#startedAt));
 
       if (answer.page.status === 'end') return runs;
       cursor = answer.page.next;
     }
   }
 
-  /** The swarms the lead ran, newest first, as the Swarms pane draws them. */
-  swarms(): Promise<PublicSwarmRun[]> {
-    return this.#session.swarmRuns();
+  /** Swarms started during this turn, as the Swarms pane draws them. */
+  async swarms(): Promise<PublicSwarmRun[]> {
+    return (await this.#session.swarmRuns()).filter((swarm) => swarm.run.startedAt >= this.#startedAt);
   }
 
   /** One command on an executor, the call the Env pane makes, answered whole: output, exit code and any refusal. */

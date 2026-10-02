@@ -703,7 +703,7 @@ const InspectionAnswerSchema = v.variant('view', [
   v.object({ view: v.literal('children'), page: pageOf(v.object({
     name: v.string(), status: v.string(), lifetime: v.string(), actorReference: v.nullable(v.object({ actorId: v.string() })),
   })) }),
-  v.object({ view: v.literal('runs'), page: pageOf(v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
+  v.object({ view: v.literal('runs'), page: pageOf(v.object({ startedAt: v.number(), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
   v.object({ view: v.literal('missing'), reason: v.string(), error: v.string() }),
 ]);
 
@@ -1780,6 +1780,22 @@ export class KinuPublicSession {
     return v.parse(v.array(QualityDaySchema), await this.boundary(
       `getQuality on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getQuality', [days]),
+    ));
+  }
+
+  /** The memory note displayed by the UI's memory pane. */
+  async memoryContent(): Promise<string> {
+    return v.parse(v.string(), await this.boundary(
+      `getMemoryContent on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getMemoryContent', []),
+    ));
+  }
+
+  /** The same public fact listing the workspace exposes to its owner. */
+  async memoryFacts(): Promise<readonly { key: string; value: JsonValue }[]> {
+    return v.parse(v.array(v.object({ key: v.string(), value: JsonValueSchema })), await this.boundary(
+      `getFacts on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getFacts', []),
     ));
   }
 

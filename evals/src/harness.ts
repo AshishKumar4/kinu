@@ -222,7 +222,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
   const checks: EvalCheck[] = cut.length === 0 ? [] : [{ id: CUT_REPORTED_COMPLETED, pass: false, evidence: { runs: cut } }];
   const verify = turn.verify;
 
-  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies, previousTurns).collect(verify)));
+  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies, startedAt, previousTurns).collect(verify)));
   const afterEviction = turn.verifyAfterEviction;
 
   if (afterEviction !== undefined && checks.every((check) => check.pass)) {
@@ -231,7 +231,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
       session.disconnect();
       await session.connect();
 
-      return new EvalVerifier(session, replies, previousTurns).collect(afterEviction);
+      return new EvalVerifier(session, replies, startedAt, previousTurns).collect(afterEviction);
     }));
   }
 

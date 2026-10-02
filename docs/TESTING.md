@@ -210,7 +210,7 @@ AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the 
 | `swarm-optimise` | 2 | A module that picks five contest winners by asking a paid judge about every pair, handed to an `optimise` swarm with a seeded `exec-ratio` objective; the Swarms pane must show the run ranked by that objective's verifier, and the module left behind must pick the right winners on the checker's own weeks within twice the judge calls of the checker's own selection. Then eight winners from a hundred entries, under the same bound. |
 | `swarm-research` | 2 | 42 wiki documents on an e-bike recall, read by a `research` swarm and joined into a brief whose six fields each rest on facts planted in different documents among decoys: the firmware, the board batch, the bikes delivered with it (some still in the yard, one delivery straddling the affected serials), the dealers, the supplier's quality contact and the notice deadline. Then a late note from the other plant changes the count and the dealers. |
 | `swarm-audit` | 2 | A small invoicing library with six planted defects of six kinds, each against a rule its README states, audited by an `audit` swarm: at least five reported at the right file, line and kind, and at most two claims about code that keeps every rule. Then the fixes, graded by the checker's own probes run in the workspace's shell: every reported defect fixed, and everything else still working. |
-| `true-myth-combinators` | 7 | DeepSWE v1.1's `true-myth-iterable-collection-combinators`, with its original library job split in two and its pinned held-out verifier intact. Three helpers finish the Maybe, Result and Task modules while the lead maintains the board, then add the toolbelt change. The same workspace becomes a release desk: two helpers finish two live slates; a crafted report calculator is called directly through a grader-authored, read-only consumer; actual Vitest reports are checked against an independent test run; workspace and sandbox previews serve visible and API summaries. Independent swarm branches review the calculator's boundaries; npm version and integrity are checked live; a ZIP is re-imported through the Files route and byte-diffed against every requested source. Unseen report/provenance edits must show up without a rebuild. A fresh conversation recalls corrected private handoff facts and still reads the live review, before naming the finished commit. |
+| `true-myth-combinators` | 7 | DeepSWE v1.1's library job and pinned held-out verifier, with three current-turn helper completions and one normalized board predicate. Independent npm provenance, corrected recall in a fresh conversation, and a current-turn parallel search precede the live-view chain. Recall must agree with the public memory note or keyed facts, read through `getMemoryContent` and `getFacts`. The report calculator must have agent uses before the grader invokes it, and return computed answers for different reports. Two live views read actual Vitest files; workspace and sandbox previews serve visible/API totals before and after unseen edits. ZIP bytes are decoded in memory: required library/report/declared view entry-point bytes must appear, and every member must match a file under the allowed source roots. Member names and scratch added after packing do not affect the grade. New-view helper attribution is not graded. The last turn names the library commit. |
 
 ```bash
 bun run evals                                  # every task, 10 trials each, all at once, on kinu.run
@@ -222,27 +222,7 @@ bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.jso
 bun evals/scripts/timing.ts bench-artifacts/evals-<task>-<time> [--steps]   # where each trial's time went
 ```
 
-**Combined-journey Muse pilot, 2026-10-01.** One trial of definitions `41bc1a011b2b`, on staging `f75f06932`,
-ran as `eval-service`'s `trial-12` account with `opencode-go/muse-spark-1.3-contributor`. The command took
-22m 7.7s; the trial itself took 21m 57.8s. No provider waits or infrastructure errors were recorded.
-
-| Turn | Work and settle, excluding grading | Grading | Result |
-|---|---:|---:|---|
-| 1: library modules | 8m 13.0s | 35.6s | 3/3 checks; DeepSWE 85/85 f2p and 561/561 p2p |
-| 2: toolbelt | 4m 58.0s | 25.8s | 2/2 checks; DeepSWE 96/96 f2p and 561/561 p2p |
-| 3: live review desk | 7m 22.1s | 8.8s | 6/8 checks |
-| 4–7 | Not reached | Not reached | The harness stops after a failed turn |
-
-The lead changed the requested `summary({path})` and `snapshot({path})` interfaces to string arguments
-when briefing its helpers. The dashboard then threw `path.trim is not a function` on the grader's object
-argument, and the review caught that error and returned a null summary. Helpers, board, real reports,
-the crafted calculator and both previews passed. No prompt workaround, relaxed check or repeat trial
-was made. The retained transcript, files and timings are under
-`bench-artifacts/evals-true-myth-combinators-1790879476907/`.
-
-Expected successful seven-turn duration: **about 30–40 minutes on Muse [INFERENCE]**, extrapolating
-from this measured prefix and the fast-model measurements in `evals/src/config.ts`. The full journey's
-duration is **unmeasured**, not 22 minutes; this planning estimate is not a runtime limit.
+2026-10-01 Muse pilot (`41bc1a011b2b`, staging `f75f06932`): 22m 7.7s, stopped at turn 3 on wrong object-argument interfaces; turns 4–7 and full duration were not measured.
 
 **Each trial its own account.** Every trial acts as an eval account of its own, `trial-<n>` (`evals/src/slot.ts`; core `parseEvalAccount`, the rule the deployment's dev identity follows too), so no trial reaches another: peers, messages, spawned workspaces, swarm publications and the experience library are all the account's. A trial's slot is its place in the run's whole matrix (every task file, sorted, by model, arm and trial), which every worker process works out alone; a matrix past 512 fails at collection. Before a trial opens, a workspace another run marks live on its account fails it as taken, one a stopped run left is deleted, and a row in any table but its provider keys and the account's own bookkeeping (`GET /api/user/held-rows`) fails it, naming each table; after it opens, of two runs that opened on one account at once the earlier workspace name keeps it. The deploy's `scripts/eval-provider-keys.ts` gives every slot of the full matrix the eval provider keys, and resets a slot holding such rows when no run is on it. A deployment that predates trial accounts runs its trials on eval-service, and the comparison says so for its leg.
 

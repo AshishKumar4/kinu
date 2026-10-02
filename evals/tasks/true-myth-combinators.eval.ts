@@ -3,7 +3,8 @@ import { infraBoundary } from '@kinu.run/test-utils';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
 import { finishedWork, type EvalCheckOutcome, type EvalVerifier } from '../src/verifier';
-import { combinatorsJourney } from './combinators-journey';
+import { combinatorsJourney, handoff } from './combinators-journey';
+import { boardHolds } from './work-board';
 
 // DeepSWE v1.1's true-myth-iterable-collection-combinators, worked the way a lead would: the library cloned and
 // installed in the sandbox, three helpers adding the Maybe, Result and Task combinators at once while the lead plans
@@ -14,7 +15,7 @@ import { combinatorsJourney } from './combinators-journey';
 // commits applied as a patch, then the held-out tests and their node-id whitelists.
 //
 // From DeepSWE (https://github.com/datacurve-ai/deep-swe, Datacurve AI Inc., Apache-2.0, at DEEPSWE_COMMIT): the
-// prompt is the task's instruction.md, changed only in that its toolbelt paragraph is the second turn; the verifier
+// library prompt is the task's instruction.md, changed only in that its toolbelt paragraph is the second turn; the verifier
 // files are the task's tests/, fetched unchanged when a check runs, and the first turn grades with config.json less
 // its toolbelt node ids. true-myth (MIT, Chris Krycho) is cloned by the agent. THIRD_PARTY_NOTICES.md has both.
 
@@ -127,19 +128,6 @@ async function graded(verifier: EvalVerifier, scope: 'without-toolbelt' | 'whole
   };
 }
 
-// ── Checker helpers ──────────────────────────────────────────────────
-
-const plainTitle = (title: string): string => title.trim().replace(/^`+|[`.]+$/g, '').toLowerCase();
-
-/** Whether the lead's board holds a done task titled with each module's path. */
-async function boardHolds(verifier: EvalVerifier, modules: readonly string[]): Promise<EvalCheckOutcome> {
-  const tasks = await verifier.leadTasks();
-  const paths = modules.map((module) => `src/${module}.ts`);
-  const notDone = paths.filter((path) => !tasks.some((item) => plainTitle(item.title) === path && item.status === 'done'));
-
-  return { pass: notDone.length === 0, evidence: { notDone, tasks } };
-}
-
 // ── The task ─────────────────────────────────────────────────────────
 
 const task = defineEvalTask({
@@ -158,7 +146,10 @@ const task = defineEvalTask({
 
 The job:
 
-${JOB}`,
+${JOB}
+
+For our later private handoff, keep coordinator ${handoff.coordinator} and release code ${handoff.cancelled}.
+I'll ask for them in a new conversation.`,
     verify: async (verifier) => {
       await verifier.check('three-helpers-each-finished-a-module', async () => {
         const worked = await verifier.helperWork();
@@ -178,7 +169,7 @@ ${JOB}`,
         };
       });
 
-      await verifier.check('the-board-holds-each-module-done', () => boardHolds(verifier, MODULES));
+      await verifier.check('the-board-holds-each-module-done', () => boardHolds(verifier, MODULES.map((module) => `src/${module}.ts`)));
 
       await verifier.check('deepswe-verifier-passes-without-the-toolbelt', () => graded(verifier, 'without-toolbelt'));
     },
@@ -187,9 +178,12 @@ ${JOB}`,
 
 ${TOOLBELT}
 
-Add it to your task board as src/toolbelt.ts, mark it done once it works, and commit it.`,
+Add it to your task board as src/toolbelt.ts, mark it done once it works, and commit it.
+
+A correction for the private handoff: ${handoff.cancelled} is cancelled. Our release code is now ${handoff.current};
+${handoff.coordinator} still coordinates it. Keep the corrected code for the new conversation.`,
     verify: async (verifier) => {
-      await verifier.check('the-board-holds-the-toolbelt-done', () => boardHolds(verifier, [...MODULES, 'toolbelt']));
+      await verifier.check('the-board-holds-the-toolbelt-done', () => boardHolds(verifier, [...MODULES, 'toolbelt'].map((module) => `src/${module}.ts`)));
 
       await verifier.check('deepswe-verifier-passes', () => graded(verifier, 'whole'));
     },
