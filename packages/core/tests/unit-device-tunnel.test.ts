@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import {
   DeviceTunnel, TUNNEL_DISCONNECTED, DEVICE_UNRESPONSIVE, DEVICE_DUPLICATE_REQUEST,
   DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
-  nextDeviceRequestId, type TunnelSocket,
+  nextDeviceRequestId, type DeviceExecOutput, type TunnelSocket,
 } from '../src/execution/device-tunnel';
 import { JsonValueSchema } from '../src/utils/json';
 import { handClock } from '@kinu.run/test-utils';
@@ -14,6 +14,7 @@ const SentFrameSchema = v.object({
   method: v.string(),
   params: v.array(JsonValueSchema),
   checkpoint: v.optional(JsonValueSchema),
+  output: v.optional(v.boolean()),
 });
 
 type SentFrame = v.InferOutput<typeof SentFrameSchema>;
@@ -86,6 +87,30 @@ describe('DeviceTunnel', () => {
     t.handleMessage(JSON.stringify({ id: idA, result: 'A' }));
     expect(await a).toBe('A');
     expect(await b).toBe('B');
+  });
+
+  // The daemon's name for the frame; unit-pc-agent-exec pins the daemon's frames reaching this tunnel.
+  const DEVICE_EXEC_OUTPUT = 'EXEC_OUT';
+
+  test('output frames reach the pending call that asked, by request id, and its answer still settles it', async () => {
+    const sock = fakeSocket();
+    const t = new DeviceTunnel(sock);
+    const seen: DeviceExecOutput[] = [];
+    const watched = t.rpc('exec', ['make'], { onOutput: (output) => { seen.push(output); } });
+    const unwatched = t.rpc('exec', ['ls']);
+    const [asked, quiet] = sock.sent;
+    const chunks: DeviceExecOutput['chunks'] = [{ stream: 'stdout', data: btoa('building\n') }];
+
+    t.handleMessage(JSON.stringify({ type: DEVICE_EXEC_OUTPUT, request: asked.id, chunks, dropped: 3 }));
+    t.handleMessage(JSON.stringify({ type: DEVICE_EXEC_OUTPUT, request: 'rpc-elsewhere0-1', chunks, dropped: 0 }));
+    t.handleMessage(JSON.stringify({ id: asked.id, result: 'built' }));
+    t.handleMessage(JSON.stringify({ type: DEVICE_EXEC_OUTPUT, request: asked.id, chunks, dropped: 0 }));
+    t.handleMessage(JSON.stringify({ id: quiet.id, result: 'listed' }));
+
+    expect([asked.output, quiet.output]).toEqual([true, undefined]);
+    expect(await watched).toBe('built');
+    expect(await unwatched).toBe('listed');
+    expect(seen).toEqual([{ chunks, dropped: 3 }]);
   });
 
   test('unrelated / HELLO frames are ignored (no pending match)', async () => {

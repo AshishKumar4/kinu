@@ -38,6 +38,7 @@ const DaemonFrameSchema = v.object({
   id: v.string(),
   method: v.string(),
   params: v.array(v.union([v.string(), v.number()])),
+  output: v.optional(v.boolean()),
 });
 
 /** A dropped socket calls into `inFlight` directly, so disconnect is exercised without a real WebSocket. */
@@ -772,6 +773,23 @@ describe('the daemon answers in the words the hub reads', () => {
     const { tunnel } = deviceChain();
 
     await expect(tunnel.rpc('methodFromALaterHub', [])).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
+    tunnel.dispose();
+  });
+
+  // The daemon cannot import core's frame name: its frames reaching core's tunnel are the drift check.
+  test("a watched command's output frames reach core's tunnel as the call's output, before its answer", async () => {
+    const { tunnel } = deviceChain();
+    const id = rpcId(430);
+    const heard = { stdout: '', stderr: '' };
+
+    const answer = await tunnel.rpc('exec', ['echo first; echo second >&2'], {
+      requestId: id,
+      onOutput: ({ chunks }) => { for (const { stream, data } of chunks) heard[stream] += Buffer.from(data, 'base64').toString(); },
+    });
+
+    expect(heard).toEqual({ stdout: 'first\n', stderr: 'second\n' });
+    expect(v.parse(ExecResultSchema, answer)).toEqual({ stdout: 'first\n', stderr: 'second\n', exitCode: 0 });
+    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [id, DEVICE_CANCEL_PROTOCOL]);
     tunnel.dispose();
   });
 });
