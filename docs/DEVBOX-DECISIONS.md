@@ -2636,84 +2636,80 @@ the crash after each round restored that round's new state, 5 of 5
 
 Image `ea5d88ee…`, sync.js `cf631788…`.
 
-D55. Full-disk snapshots against today's chain, head to head under R1 and R2
-(2026-10-01; the measurements are in progress). The owner's refinement of
-D53: DirectoryBackup is out, because its fallback downloads everything
-(72 to 401 s at 10 to 17.5 GiB, and the 30 s gate cut it off 10 of 10), which
-breaks R2. Two candidates remain:
-- The chain alone, with its 10 GiB save defect fixed.
-- Snapshot-first, with the chain as its only fallback.
+D55. The hybrid: platform snapshots are the primary save and wake, and the
+chain is the R2 backup, on `cloudflare/debian-trixie` with a golden snapshot
+(the owner's design, approved 2026-09-30 in m1889, m1890 and m1902, and
+restated 2026-10-02). This is not a contest between snapshots and the chain.
+An earlier version of this entry framed it as one, with a bar for replacing
+the chain; that framing was wrong and is withdrawn (git history keeps it).
 
-Snapshots replace the chain only if they are much more performant. The bar
-below was set and committed before any head-to-head figure was taken. It
-compares medians of at least 5. Snapshot-first replaces the chain only if
-all of these hold:
-1. At 10 GiB and at 17.5 GiB of random data, with 1 and with 5 boxes at
-   once: wake to first exec, the first 256 MiB read and the whole read are
-   each at least 3x faster than the chain's.
-2. Its checkpoint, a snapshot, is no slower than the chain's checkpoint after
-   a small edit and after 100 MiB, at every size; its base save is no slower
-   than the chain's base save. Its quiesce also writes the chain, so the
-   fallback is never older than the last quiesce; that cost is reported
-   beside it.
-3. On the realistic workspace (a clone of `microsoft/vscode` with a Next.js
-   app's `node_modules`), no figure in 1 or 2 reverses.
-4. With 20 boxes at once, its slowest tenth of wakes is no slower than the
-   chain's slowest tenth.
-5. Each snapshot failure costs no more than detecting it plus the chain's
-   own wake, and none loses work silently. The failures are a slow
-   placement, a lost id, a start that never runs, and a missing or expired
-   snapshot.
-If any of these fails, the chain stays (R3).
+The design:
+- Base image. `cloudflare/debian-trixie`, pinned by digest. Cloudflare
+  distributes and prepares it on eligible hosts before requests arrive
+  (blog.cloudflare.com/faster-agent-sandboxes). Our own Ubuntu image
+  (`block-lower/Dockerfile`) is downloaded by every new host, and every
+  image change makes Cloudflare prepare it again for 12 to 20 minutes
+  (D57).
+- Golden snapshot. One container starts from the base image and installs
+  Kinu's tools by exec: squashfuse, fuse-overlayfs, s3fs, devbox-block-lower,
+  sync.js, the sandbox shim, bun, tmux, git and the egress CA trust. It is
+  then saved with `snapshotContainer()`, and every new box starts from that
+  snapshot. A tool change rebuilds the golden snapshot instead of an image,
+  and it is rebuilt before its 30-day life ends. This also removes the
+  obstacle that set trixie aside: our binaries could not take it as a
+  Docker `FROM` base, but an exec can install them.
+- The workspace lives on the container's disk, not behind FUSE. A snapshot
+  then captures it whole, and a wake from one serves it at disk speed: on a
+  chain-mounted box the snapshot holds only the overlay's upper, and the
+  attach redoes the chain's work on every wake (D51's hybrid probe).
+- Per-box snapshots are the primary save and wake, for saves in a session
+  and for wakes.
+- The chain is the backup. It is packed from the disk and written to R2, so
+  an image change, an expired snapshot or a lost snapshot id still recovers
+  exactly, inside the start gate (R1, R2).
 
-How it runs (2026-10-01, agreed before any figure). The real Devbox has no
-way to start from a container snapshot, and no product-side snapshot start is
-built before the decision. Snapshots therefore run in a probe Worker
-(`bench-artifacts/storage-designs/worker.ts`) that has Devbox's start shape:
-an admission exec outside the gate, then the in-gate work inside
-`blockConcurrencyWhile`, which on a snapshot wake is the O(1) generation check
-the product would do. The chain runs through the real Devbox, on the bench
-fixture, with its product save (the streamed base, D57 and D58). The matrix is
-trimmed to what decides the bar, n>=5 per figure:
-- the realistic workspace and 10 GiB of random data, at 1 and at 5 boxes;
-- 17.5 GiB at 1 box, so condition 1 at 17.5 GiB is judged at 1 box;
-- 20 boxes at once, at 10 GiB only;
-- the snapshot failure modes, priced in wake time;
-- the chain's root delta, applied in the gate, eagerly and lazily.
-The two designs run interleaved, round by round, so each pair shares its
-conditions; the first design alternates between rounds.
+What decides it, measured before building (n>=5 per figure, Medium, the
+durable_object policy):
+1. Whether `cloudflare/debian-trixie` carries what Devbox's native
+   `ctx.container` path needs, and what the golden snapshot must add. Native
+   exec runs on it with no shim (first exec 72 ms median, n=4, against
+   363 ms on our Ubuntu image, `bench-artifacts/image-start/`); the
+   sandbox shim, which `Files` and `S3Mount` use, is not in it.
+2. A fresh box's wake from the golden snapshot, 20 boxes at once: the first
+   wave after the snapshot is made, and later waves.
+3. A per-box snapshot's wake, 20 at once at 10 GiB, with its slow tail. The
+   earlier 20-at-once runs had wakes of 14 s, 16 s and 351 s.
+4. The long-session row: a dev server running from `/workspace`, a ~500 MB
+   install, then 10 small edits, each saved with a snapshot. Reported per
+   save: bytes, time, and the pause the box sees; then exactness after a
+   wake.
+5. How the chain backup is written from the disk without a cumulative delta,
+   and how fresh it is when a snapshot is lost.
 
-A session row (added 2026-10-02 at Main's direction, before any head-to-head
-figure; it reports, and is not one of the five conditions). A running dev
-server holds `/workspace`, a ~500 MB install lands, then 10 small edits, each
-saved the way that design saves during a session: the chain by its sync
-loop's tick, snapshots by a snapshot. Reported per save: bytes, time, and the
-pause the box sees (the longest gap of a 50 ms ticker in the container, and
-exec latency through the object), then exactness after a wake. D61 found
-why this row matters for the chain. A tick never reseats, because a reseat
-unmounts `/workspace`, so every save while processes run republishes
-everything written since the last reseat: in the image, after a 548 MB
-install, each 4 KiB edit re-uploaded 164 MB as the whole upper on a woken box
-and 231 MB as a whole new base on a box that had not yet rested
-(`bench-artifacts/reseat-holders/session-head.log`).
+Already measured, on our Ubuntu image (2026-10-02, run `h5510020546ses2`):
+the long-session row for both save paths. With an npm install of next,
+react, typescript, eslint, vite and @swc/core in place:
+- a snapshot saved each 3 KiB edit in 2.8 s median (2.3 to 3.1, n=10) as
+  about 10 KB. The container paused 0.75 s median (0.51 to 0.99) during
+  each save, measured as the longest gap of a 50 ms ticker;
+- the chain's tick republished the whole upper on each edit: 145 MB in
+  10.7 s median (10.2 to 11.1, n=10), with no pause (ticker gap 61 ms). D61
+  explains why: a tick never reseats, because a reseat unmounts
+  `/workspace`.
+Both woke exact: the chain in 4.2 s, the snapshot in 1.2 s. On a workspace
+on the disk there is no upper, so the chain backup needs its own record of
+what changed (item 5).
 
-The chain's required fix, if it stays: layered deltas. The record keeps one
-base and a short stack of delta layers, L1 to Lm with m at most 4. Each save
-publishes one layer holding only what changed since an earlier commit j: the
-upper's inventory (path, inode, size, mtime, ctime, type) is compared with the
-one stored at commit j, and paths that are gone become whiteouts. The new
-layer replaces Lj to Lm, LSM-style, so layer sizes shrink going up and m stays
-bounded. An install is uploaded once, and each later edit uploads about its
-own size and a manifest. A wake mounts at most m+1 lazy lowers, one
-block-lower instance per layer for chunked files, so it stays O(1). Because a
-layer is a diff against the stored inventory rather than against the mounted
-lower, a box that has not yet rested stops re-uploading a whole base on every
-tick. The rest still rebases when the layers outgrow the base. The work: the
-record format (`ChainState` across the container and the object), the commit,
-the attach, retention, the conformance model, and an image test that ten 4 KiB
-edits after a 500 MB install each publish under 1 MiB and every wake is exact;
-then a live re-run of the session row. Estimate: about three days, and one
-image rebuild.
+The chain's root delta, for when the whole filesystem must come back from R2
+(run `r5510020601b`, n=5 each, through the real Devbox). A setup of
+build-essential, python3-pip, typescript and requests changed 5,519 files
+(331 MB). Packed as one squashfs, it was 127 MB: 3.8 s to pack and 9.8 s to
+upload. Applied after a wake on a fresh container:
+- eagerly (unsquashfs onto `/`) in 3.6 s median (3.3 to 5.9), with the first
+  use (gcc, tsc, requests) in 0.76 s;
+- lazily (squashfuse from the store, one fuse-overlayfs per top-level
+  directory) in 1.4 s median (1.2 to 2.1), with the first use in 1.54 s.
+Every application worked, and the box had no gcc before it.
 
 D56. The box decides its own rest from its own use; the workspace neither
 asks nor tells it (2026-10-01, corrected the same day). This replaces D35's
