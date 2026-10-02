@@ -129,18 +129,20 @@ export class HeadController {
    * The unfinished run for this task if there is one, else a fresh id, so a re-drive of a detached
    * fork reuses its run. Reclaimed heads are re-run under their derived ids, not retired.
    */
-  private resolveTopLevelRun(task: string): HeadId {
-    const journal = this.journal;
+  private resolveTopLevelRun(task: string): Effect.Effect<HeadId> {
+    return Effect.gen({ self: this }, function* () {
+      const journal = this.journal;
 
-    if (!isRootJournal(journal)) {
-      // A facet's port reaching this is a wiring error: minting a fresh id would split the run.
-      throw new Error(
-        'A top-level split must run against the ROOT workspace journal: run reclamation reads every '
-        + 'unfinished run in the store. A recursive split has to pass parentHeadId.',
-      );
-    }
+      if (!isRootJournal(journal)) {
+        // A facet's port reaching this is a wiring error: minting a fresh id would split the run.
+        return yield* Effect.die(new Error(
+          'A top-level split must run against the ROOT workspace journal: run reclamation reads every '
+          + 'unfinished run in the store. A recursive split has to pass parentHeadId.',
+        ));
+      }
 
-    return journal.findResumableRun(task) ?? nanoid();
+      return journal.findResumableRun(task) ?? nanoid();
+    });
   }
 
   /** Full split, await, merge cycle; fires `onPhase` on split (real head IDs) and on merge. */
@@ -156,7 +158,7 @@ export class HeadController {
     onPhase?: (event: SplitPhaseEvent) => void;
   }): Promise<MergeResult> {
     return settle(Effect.gen({ self: this }, function* () {
-      const rootId = opts.rootId ?? opts.parentHeadId ?? this.resolveTopLevelRun(opts.request.rationale);
+      const rootId = opts.rootId ?? opts.parentHeadId ?? (yield* this.resolveTopLevelRun(opts.request.rationale));
       const strategy: MergeStrategy = opts.request.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
 
       const parentBudget = opts.parentBudget;

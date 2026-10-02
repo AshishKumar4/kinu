@@ -61,13 +61,15 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /** A malformed signature is false, never a throw. */
-export async function verifyRelease(release: SignedRelease, publicKeyHex: string): Promise<boolean> {
-  const key = await crypto.subtle.importKey('raw', hexToBytes(publicKeyHex), { name: 'Ed25519' }, false, ['verify']);
-  const signature = base64ToBytes(release.signature);
+export function verifyRelease(release: SignedRelease, publicKeyHex: string): Promise<boolean> {
+  return settle(Effect.gen(function* () {
+    const key = yield* Effect.promise(async () => crypto.subtle.importKey('raw', hexToBytes(publicKeyHex), { name: 'Ed25519' }, false, ['verify']));
+    const signature = base64ToBytes(release.signature);
 
-  if (signature.byteLength !== 64) return false;
+    if (signature.byteLength !== 64) return false;
 
-  return crypto.subtle.verify('Ed25519', key, signature, releaseMessage(release.version, release.checksums));
+    return yield* Effect.promise(async () => crypto.subtle.verify('Ed25519', key, signature, releaseMessage(release.version, release.checksums)));
+  }));
 }
 
 /** Private key is PKCS#8 base64. */

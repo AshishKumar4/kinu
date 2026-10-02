@@ -294,6 +294,9 @@ export const HOST_BOUNDARIES = new Map<string, string>([
 
 const RUNNERS: readonly string[] = ['settle', 'settleSync', 'observe'];
 
+/** A Hono app's registrations: each takes its handlers after the path. */
+const ROUTE_METHODS: readonly string[] = ['get', 'post', 'put', 'delete', 'patch', 'options', 'all', 'use', 'on'];
+
 /**
  * The one sanctioned mid-body runner: a surface adapter's `flight(run, { key, keep })` runs `run` once per
  * key and replays its exit to every joiner. Built once and held, its runs are shared; called where it is
@@ -324,6 +327,8 @@ export interface BridgeCensus {
   readonly bridges: string[];
   /** Each `flight` built and held: the sanctioned mid-body runner. */
   readonly flights: string[];
+  /** Each runner a Hono route handler returns: the handler is the edge, Hono owns the call. */
+  readonly routes: string[];
   /** A runner returned from a private helper or a local function: not a bridge, a mistake. */
   readonly findings: string[];
 }
@@ -331,6 +336,7 @@ export interface BridgeCensus {
 export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus {
   const bridges: string[] = [];
   const flights: string[] = [];
+  const routes: string[] = [];
   const findings: string[] = [];
 
   for (const [file, text] of sources) {
@@ -359,6 +365,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     });
 
     if (runners.size === 0 && flightNames.size === 0) continue;
+    const apps = honoApps(parsed.root);
 
     walk(parsed.root, (node) => {
       const { raw } = node;
@@ -387,6 +394,12 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         return;
       }
 
+      if (isRouteHandler(holder.raw.type === 'ReturnStatement' ? holder : { parent: holder }, apps)) {
+        routes.push(site);
+
+        return;
+      }
+
       if (syncRunners.has(raw.callee.name) && isTransactionCallback(holder.raw.type === 'ReturnStatement' ? holder : { parent: holder })) {
         bridges.push(site);
 
@@ -400,7 +413,67 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     });
   }
 
-  return { bridges: bridges.sort(), flights: flights.sort(), findings: findings.sort() };
+  return { bridges: bridges.sort(), flights: flights.sort(), routes: routes.sort(), findings: findings.sort() };
+}
+
+/** Whether an expression is, or chains off, `new Hono(…)`. */
+function isHonoBuilt(raw: SyntaxNode['raw'] | null | undefined): boolean {
+  if (raw?.type === 'NewExpression') return raw.callee.type === 'Identifier' && raw.callee.name === 'Hono';
+
+  if (raw?.type === 'CallExpression' && raw.callee.type === 'MemberExpression') return isHonoBuilt(raw.callee.object);
+
+  return false;
+}
+
+/** Names bound to a Hono app in this file: `const app = new Hono()`, a `new Hono()` class field, or one assigned to it. */
+function honoApps(tree: SyntaxNode): ReadonlySet<string> {
+  const apps = new Set<string>();
+
+  walk(tree, (node) => {
+    const { raw } = node;
+
+    if (raw.type === 'VariableDeclarator' && raw.id.type === 'Identifier' && isHonoBuilt(raw.init)) apps.add(raw.id.name);
+
+    if (raw.type === 'PropertyDefinition' && raw.key.type === 'Identifier' && isHonoBuilt(raw.value)) apps.add(raw.key.name);
+
+    if (raw.type === 'AssignmentExpression' && raw.left.type === 'MemberExpression' && raw.left.property.type === 'Identifier' && isHonoBuilt(raw.right)) {
+      apps.add(raw.left.property.name);
+    }
+  });
+
+  return apps;
+}
+
+/** Whether a registration's receiver is a Hono app: a bound name, `this.<name>`, `new Hono()`, or a chain off one. */
+function isHonoReceiver(raw: SyntaxNode['raw'], apps: ReadonlySet<string>): boolean {
+  if (raw.type === 'Identifier') return apps.has(raw.name);
+
+  if (raw.type === 'MemberExpression' && raw.object.type === 'ThisExpression' && raw.property.type === 'Identifier') return apps.has(raw.property.name);
+
+  if (raw.type === 'CallExpression' && raw.callee.type === 'MemberExpression' && raw.callee.property.type === 'Identifier'
+    && ROUTE_METHODS.includes(raw.callee.property.name)) return isHonoReceiver(raw.callee.object, apps);
+
+  if (raw.type === 'AssignmentExpression') return isHonoBuilt(raw.right);
+
+  return isHonoBuilt(raw);
+}
+
+/** Whether the return belongs directly to a handler a Hono app registers: an argument after the path. */
+function isRouteHandler(statement: Pick<SyntaxNode, 'parent'>, apps: ReadonlySet<string>): boolean {
+  let node: SyntaxNode | undefined = statement.parent;
+
+  while (node !== undefined && !isFunctionLike(node)) node = node.parent;
+  const call = node?.parent;
+
+  if (node === undefined || call?.raw.type !== 'CallExpression' || call.raw.callee.type !== 'MemberExpression') return false;
+  const { callee } = call.raw;
+
+  if (callee.property.type !== 'Identifier' || !ROUTE_METHODS.includes(callee.property.name) || !isHonoReceiver(callee.object, apps)) return false;
+  const handler = node.raw;
+  const at = call.raw.arguments.findIndex((argument) => argument === handler);
+
+  // `use(handler)` takes no path; every other registration takes one first.
+  return at > 0 || (at === 0 && callee.property.name === 'use');
 }
 
 const enclosingFunction = (node: SyntaxNode): SyntaxNode | undefined => {
@@ -765,7 +838,7 @@ if (import.meta.main) {
     console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}): ${reason}`);
   }
 
-  const { bridges, flights, findings } = bridgeSites(sources);
+  const { bridges, flights, routes, findings } = bridgeSites(sources);
 
   console.log(`  bridges: ${String(bridges.length)} (the migration ends at zero)`);
 
@@ -773,6 +846,9 @@ if (import.meta.main) {
   console.log(`  flights: ${String(flights.length)} (\`flight\`, the sanctioned mid-body runner)`);
 
   for (const site of flights) console.log(`    ${site}`);
+  console.log(`  routes: ${String(routes.length)} (a Hono route handler's runner: Hono owns the call)`);
+
+  for (const site of routes) console.log(`    ${site}`);
 
   for (const wrong of findings) console.log(`  finding: ${wrong}`);
 

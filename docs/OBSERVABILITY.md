@@ -583,6 +583,7 @@ A defect is anything else thrown or died; the runner is `obs/effect.ts`.
 | `settle(effect, { signal, interrupted })` | The only runner. It resolves the value, or rejects with the `KinuError`, the `VfsError` or the defect unchanged. An abort interrupts the run and rejects with `cancelled`. |
 | `Effect.result(effect)` | A first-party result for local recovery paths; not an RPC envelope. |
 | `flight(run, { key, keep })` | One run per key, built once and held: every caller joins it and gets its exit, failure included. A settled run frees its key; `keep: 'success'` holds a success, `keep: 'exit'` any exit; `forget(key)` lets the next call start afresh. The one runner called mid-body; `gate:error-model` lists each and refuses one called where it is built or keyed by a fresh value. |
+| A Hono route handler | Hono owns the call, so a handler is an edge: `app.post(path, (c) => settle(…))`, the runner as the handler's whole body or return, on a Hono app built in the file. `gate:error-model` lists each under `routes`; a runner mid-body in a handler, or one in an arrow passed to any other call, is still a finding. |
 
 Each step `settle` awaits costs scheduling hops a plain `await` does not. A wrapper whose only job is to forward a
 call on the tick a gate opens stays a plain promise chain (`gate().then(() => method(...))`): run through `settle`,

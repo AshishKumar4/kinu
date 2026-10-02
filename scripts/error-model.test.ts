@@ -149,6 +149,7 @@ function ordinary(): number { const n = settleSync(writeEffect()); return n; }
   expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
     bridges: [`${FILE}:5`, `${FILE}:6`],
     flights: [],
+    routes: [],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:11: a runner called mid-body; the effect is run once, at the edge, as its return`,
@@ -188,12 +189,43 @@ export function done(): number { return settle(1); }
   expect(bridgeSites(new Map([[FILE, bridged], ['packages/fixture/src/b.ts', local]]))).toEqual({
     bridges: [`${FILE}:11`, `${FILE}:13`, `${FILE}:13`, `${FILE}:14`, `${FILE}:3`, `${FILE}:4`, `${FILE}:5`, `${FILE}:7`],
     flights: [],
+    routes: [],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:12: a runner returned outside an exported function or public member`,
       `${FILE}:15: a runner returned outside an exported function or public member`,
       `${FILE}:16: a runner called mid-body; the effect is run once, at the edge, as its return`,
       `${FILE}:8: a runner returned outside an exported function or public member`,
+    ],
+  });
+});
+
+test('a runner a Hono route handler returns is the edge; one mid-body, or in a handler-shaped arrow off a route, is not', () => {
+  const source = `
+import { Hono } from 'hono';
+import { settle } from '../obs/index';
+const app = new Hono();
+app.get('/a', (c) => settle(read(c)));
+app.post('/b', async (c) => { return settle(write(c)); });
+app.use(async (c, next) => settle(guard(c, next)));
+export const routes = new Hono().get('/c', (c) => settle(read(c))).delete('/d', (c) => settle(drop(c)));
+app.put('/e', async (c) => { const n = await settle(read(c)); return json(n); });
+app.patch('/f', async (c) => { await settle(first(c)); return settle(second(c)); });
+other.get('/g', (c) => settle(read(c)));
+queue.on('/h', (c) => settle(read(c)));
+app.get((c) => settle(read(c)));
+`;
+
+  expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
+    bridges: [],
+    flights: [],
+    routes: [`${FILE}:10`, `${FILE}:5`, `${FILE}:6`, `${FILE}:7`, `${FILE}:8`, `${FILE}:8`],
+    findings: [
+      `${FILE}:10: a runner called mid-body; the effect is run once, at the edge, as its return`,
+      `${FILE}:11: a runner returned outside an exported function or public member`,
+      `${FILE}:12: a runner returned outside an exported function or public member`,
+      `${FILE}:13: a runner returned outside an exported function or public member`,
+      `${FILE}:9: a runner called mid-body; the effect is run once, at the edge, as its return`,
     ],
   });
 });
@@ -218,6 +250,7 @@ export async function mid() { const n = await settle(countEffect()); return n; }
   expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
     bridges: [`${FILE}:10`, `${FILE}:6`, `${FILE}:8`, `${FILE}:9`],
     flights: [`${FILE}:3`, `${FILE}:5`, `${FILE}:8`],
+    routes: [],
     findings: [
       `${FILE}:10: a flight called where it is built runs once per call; build it once and hold it`,
       `${FILE}:11: a flight keyed by a fresh value never joins a run; key it by what its callers share`,

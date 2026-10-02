@@ -3,6 +3,8 @@
  * Details must be stable per failure: the incident ledger dedupes on them.
  */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import { CLI_DIST_PATHS } from './deployed-assets';
 import { sha256Hex } from '../safety/argument-digest';
 import * as v from 'valibot';
@@ -43,12 +45,14 @@ const TIMEOUT_MS = 10_000;
 
 const VERSION_MANIFEST = '/downloads/kinu-version.json';
 
-export async function runSyntheticProbes(deps: ProbeDeps): Promise<ProbeOutcome[]> {
-  return [
-    await probeHealth(deps),
-    await probeDownloads(deps),
-    await probeLogin(deps),
-  ];
+export function runSyntheticProbes(deps: ProbeDeps): Promise<ProbeOutcome[]> {
+  return settle(Effect.gen(function* () {
+    return [
+      yield* Effect.promise(async () => probeHealth(deps)),
+      yield* Effect.promise(async () => probeDownloads(deps)),
+      yield* Effect.promise(async () => probeLogin(deps)),
+    ];
+  }));
 }
 
 async function get(deps: ProbeDeps, path: string): Promise<Response> {

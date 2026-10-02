@@ -8,6 +8,8 @@
  * (refunded), a thought node's unanswered proposal, and a fan-in barrier's partial accumulation.
  */
 
+import { Effect, Cause } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
@@ -523,89 +525,92 @@ export function harvestSwarm(deps: {
   /** Whose harvest; tree and node records are actor-private. */
   readonly actor: ActorHandle;
 }, task: string): SwarmHarvest | null {
-  deps.actor.assertCurrent();
-  const actorId = deps.actor.actorId;
-  const [running] = deps.ledger.findRunningSwarms(task);
+  return settleSync(Effect.gen(function* () {
+    deps.actor.assertCurrent();
+    const actorId = deps.actor.actorId;
+    const [running] = deps.ledger.findRunningSwarms(task);
 
-  if (!running) return null;
+    if (!running) return null;
 
-  const records = new Map<string, SwarmNodeRecord>();
-  const unreadable = new Set<string>();
+    const records = new Map<string, SwarmNodeRecord>();
+    const unreadable = new Set<string>();
 
-  for (const row of deps.sql<{ node_id: string; record_json: string }>`
+    for (const row of deps.sql<{ node_id: string; record_json: string }>`
     SELECT node_id, record_json FROM swarm_node_records
     WHERE actor_id = ${actorId} AND root_id = ${running.rootId}`) {
-    // Skipped, unlike `parseRecord`: a harvest is final, so partial delivery beats none.
-    try {
-      records.set(row.node_id, parseRecord(row.node_id, row.record_json));
-    } catch (error) {
-      diagnostics.event('swarm.harvest_record_unreadable', {
-        nodeId: row.node_id,
-        error: renderThrownChain({ cause: error }),
-      });
-      unreadable.add(row.node_id);
+      // Skipped, unlike `parseRecord`: a harvest is final, so partial delivery beats none.
+      yield* Effect.catchCause(Effect.sync(() => {
+        records.set(row.node_id, parseRecord(row.node_id, row.record_json));
+      }), (failed) => Effect.sync(() => {
+        const error = Cause.squash(failed);
+        diagnostics.event('swarm.harvest_record_unreadable', {
+          nodeId: row.node_id,
+          error: renderThrownChain({ cause: error }),
+        });
+        unreadable.add(row.node_id);
+      }));
     }
-  }
 
-  const candidates: HarvestedCandidate[] = [];
+    const candidates: HarvestedCandidate[] = [];
 
-  for (const row of deps.sql<NodeRow>`
+    for (const row of deps.sql<NodeRow>`
     SELECT id, parent_id, depth, observation FROM search_nodes
     WHERE actor_id = ${actorId} AND root_id = ${running.rootId} AND parent_id IS NOT NULL
     ORDER BY depth ASC, created_at ASC`) {
-    const outcome = records.get(row.id)?.outcome ?? null;
+      const outcome = records.get(row.id)?.outcome ?? null;
 
-    if (unreadable.has(row.id)) continue;
-    const artifact = row.observation.trim();
+      if (unreadable.has(row.id)) continue;
+      const artifact = row.observation.trim();
 
-    if (outcome?.kind === 'incomplete' || artifact.length === 0) continue;
-    const { score, breach, witnessFound } = outcomeFacts(outcome);
-    candidates.push({
-      nodeId: row.id, depth: row.depth, artifact, score, outcome: outcome?.kind ?? 'unrecorded', breach, witnessFound,
-    });
-  }
+      if (outcome?.kind === 'incomplete' || artifact.length === 0) continue;
+      const { score, breach, witnessFound } = outcomeFacts(outcome);
+      candidates.push({
+        nodeId: row.id, depth: row.depth, artifact, score, outcome: outcome?.kind ?? 'unrecorded', breach, witnessFound,
+      });
+    }
 
-  if (candidates.length === 0 && unreadable.size > 0) {
-    throw new KinuError(
-      'io',
-      `the bounded search has ${String(unreadable.size)} candidate record(s), but none can be decoded: `
-        + [...unreadable].join(', '),
-    );
-  }
+    if (candidates.length === 0 && unreadable.size > 0) {
+      return yield* new KinuError(
+        'io',
+        `the bounded search has ${String(unreadable.size)} candidate record(s), but none can be decoded: `
+          + [...unreadable].join(', '),
+      );
+    }
 
-  if (candidates.length === 0) return null;
+    if (candidates.length === 0) return null;
 
-  let best: HarvestedCandidate | null = null;
+    let best: HarvestedCandidate | null = null;
 
-  for (const candidate of candidates) {
-    if (candidate.score === null) continue;
+    for (const candidate of candidates) {
+      if (candidate.score === null) continue;
 
-    if (best === null || candidate.score > (best.score ?? Number.NEGATIVE_INFINITY)) best = candidate;
-  }
+      if (best === null || candidate.score > (best.score ?? Number.NEGATIVE_INFINITY)) best = candidate;
+    }
 
-  const firstBreach = candidates.find((candidate) => candidate.breach !== null)?.breach ?? null;
+    const firstBreach = candidates.find((candidate) => candidate.breach !== null)?.breach ?? null;
 
-  const publication: SwarmHarvest['publication'] = firstBreach === null
-    ? { state: { kind: 'open' }, caveat: null }
-    : {
-        state: { kind: 'sealed', breach: firstBreach },
-        caveat: 'At least one candidate crossed the objective floor. Harvested artifacts are not publishable until the floor is re-derived.',
-      };
+    const publication: SwarmHarvest['publication'] = firstBreach === null
+      ? { state: { kind: 'open' }, caveat: null }
+      : {
+          state: { kind: 'sealed', breach: firstBreach },
+          caveat: 'At least one candidate crossed the objective floor. Harvested artifacts are not publishable until the floor is re-derived.',
+        };
 
-  const witnessed = candidates
-    .map((candidate) => candidate.witnessFound)
-    .filter((found): found is boolean => found !== null);
+    const witnessed = candidates
+      .map((candidate) => candidate.witnessFound)
+      .filter((found): found is boolean => found !== null);
 
-  const witnessFound = witnessed.length === 0 ? null : witnessed.some(Boolean);
+    const witnessFound = witnessed.length === 0 ? null : witnessed.some(Boolean);
 
-  return {
-    rootId: running.rootId,
-    generations: running.epoch + 1,
-    iteration: running.iteration,
-    candidates,
-    best,
-    unreadableNodes: [...unreadable],
-    publication,
-    witnessFound,
-  };
+    return {
+      rootId: running.rootId,
+      generations: running.epoch + 1,
+      iteration: running.iteration,
+      candidates,
+      best,
+      unreadableNodes: [...unreadable],
+      publication,
+      witnessFound,
+    };
+  }));
 }

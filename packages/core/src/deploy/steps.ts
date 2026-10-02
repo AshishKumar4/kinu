@@ -3,7 +3,9 @@
 // API shapes follow Cloudflare's v4 reference. Unmeasured premises: re-declaring migrations on a
 // version upload is refused, a version upload drops secrets not named in `keep_bindings`, and a
 // deployment takes a 0% version (wrangler 4.129.0 sends one).
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import type { KinuError } from '../obs/index';
 import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';
 import {
   FACT_ACCESS_APP, FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
@@ -22,7 +24,7 @@ import type { ReleaseBinding, ReleaseManifest } from './manifest';
 export interface DeployStep {
   readonly id: string;
   readonly title: string;
-  run(context: DeployContext): Promise<string>;
+  run(context: DeployContext): Effect.Effect<string, KinuError>;
 }
 
 const NamedSchema = v.object({ id: v.optional(v.string()), name: v.optional(v.string()) });
@@ -86,34 +88,36 @@ function accountStep(): DeployStep {
   return {
     id: 'account',
     title: 'Read the account',
-    async run(context: DeployContext): Promise<string> {
-      const account = await cloudflareResult(
-        context.transport,
-        { method: 'GET', path: `/accounts/${context.inputs.accountId}` },
-        NamedSchema,
-      );
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const account = yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          { method: 'GET', path: `/accounts/${context.inputs.accountId}` },
+          NamedSchema,
+        ));
 
-      const name = account.name ?? context.inputs.accountId;
+        const name = account.name ?? context.inputs.accountId;
 
-      context.facts.set(FACT_ACCOUNT_NAME, name);
+        context.facts.set(FACT_ACCOUNT_NAME, name);
 
-      // Settled first: the Access application is keyed by hostname.
-      if (context.inputs.address.kind === 'zone') {
-        context.facts.set(FACT_ADDRESS, context.inputs.address.hostname);
+        // Settled first: the Access application is keyed by hostname.
+        if (context.inputs.address.kind === 'zone') {
+          context.facts.set(FACT_ADDRESS, context.inputs.address.hostname);
 
-        return `Deploying into ${name}, answering on ${context.inputs.address.hostname}.`;
-      }
+          return `Deploying into ${name}, answering on ${context.inputs.address.hostname}.`;
+        }
 
-      const workers = await cloudflareResult(
-        context.transport,
-        { method: 'GET', path: `/accounts/${context.inputs.accountId}/workers/subdomain` },
-        SubdomainSchema,
-      );
+        const workers = yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          { method: 'GET', path: `/accounts/${context.inputs.accountId}/workers/subdomain` },
+          SubdomainSchema,
+        ));
 
-      context.facts.set(FACT_WORKERS_SUBDOMAIN, workers.subdomain);
-      context.facts.set(FACT_ADDRESS, `${context.inputs.instanceName}.${workers.subdomain}.workers.dev`);
+        context.facts.set(FACT_WORKERS_SUBDOMAIN, workers.subdomain);
+        context.facts.set(FACT_ADDRESS, `${context.inputs.instanceName}.${workers.subdomain}.workers.dev`);
 
-      return `Deploying into ${name}, answering on ${context.inputs.instanceName}.${workers.subdomain}.workers.dev.`;
+        return `Deploying into ${name}, answering on ${context.inputs.instanceName}.${workers.subdomain}.workers.dev.`;
+      });
     },
   };
 }
@@ -122,37 +126,39 @@ function kvStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'kv',
     title: 'Create the session store',
-    async run(context: DeployContext): Promise<string> {
-      const wanted = manifest.bindings.filter((binding) => binding.kind === 'kv');
-      const base = `/accounts/${context.inputs.accountId}/storage/kv/namespaces`;
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const wanted = manifest.bindings.filter((binding) => binding.kind === 'kv');
+        const base = `/accounts/${context.inputs.accountId}/storage/kv/namespaces`;
 
-      const existing = await cloudflareResult(
-        context.transport,
-        { method: 'GET', path: `${base}?per_page=100` },
-        v.array(v.object({ id: v.string(), title: v.string() })),
-      );
+        const existing = yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          { method: 'GET', path: `${base}?per_page=100` },
+          v.array(v.object({ id: v.string(), title: v.string() })),
+        ));
 
-      for (const binding of wanted) {
-        const title = resourceName(context.inputs, binding.resource);
-        const found = existing.find((row) => row.title === title);
+        for (const binding of wanted) {
+          const title = resourceName(context.inputs, binding.resource);
+          const found = existing.find((row) => row.title === title);
 
-        if (found !== undefined) {
-          context.facts.set(kvFact(binding.binding), found.id);
-          context.note(`${title} already exists.`);
-          continue;
+          if (found !== undefined) {
+            context.facts.set(kvFact(binding.binding), found.id);
+            context.note(`${title} already exists.`);
+            continue;
+          }
+
+          const created = yield* Effect.promise(async () => cloudflareResult(
+            context.transport,
+            { method: 'POST', path: base, body: { title } },
+            IdSchema,
+          ));
+
+          context.facts.set(kvFact(binding.binding), created.id);
+          context.note(`${title} created.`);
         }
 
-        const created = await cloudflareResult(
-          context.transport,
-          { method: 'POST', path: base, body: { title } },
-          IdSchema,
-        );
-
-        context.facts.set(kvFact(binding.binding), created.id);
-        context.note(`${title} created.`);
-      }
-
-      return `${wanted.length} KV namespace(s) ready.`;
+        return `${wanted.length} KV namespace(s) ready.`;
+      });
     },
   };
 }
@@ -161,36 +167,38 @@ function bucketStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'r2',
     title: 'Create the buckets',
-    async run(context: DeployContext): Promise<string> {
-      const wanted = manifest.bindings.filter((binding) => binding.kind === 'r2');
-      const base = `/accounts/${context.inputs.accountId}/r2/buckets`;
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const wanted = manifest.bindings.filter((binding) => binding.kind === 'r2');
+        const base = `/accounts/${context.inputs.accountId}/r2/buckets`;
 
-      const existing = await cloudflareResult(
-        context.transport,
-        { method: 'GET', path: `${base}?per_page=100` },
-        v.object({ buckets: v.optional(v.array(v.object({ name: v.string() }))) }),
-      );
+        const existing = yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          { method: 'GET', path: `${base}?per_page=100` },
+          v.object({ buckets: v.optional(v.array(v.object({ name: v.string() }))) }),
+        ));
 
-      const held = new Set((existing.buckets ?? []).map((bucket) => bucket.name));
+        const held = new Set((existing.buckets ?? []).map((bucket) => bucket.name));
 
-      for (const binding of wanted) {
-        const name = resourceName(context.inputs, binding.resource);
+        for (const binding of wanted) {
+          const name = resourceName(context.inputs, binding.resource);
 
-        if (held.has(name)) {
-          context.note(`${name} already exists.`);
-          continue;
+          if (held.has(name)) {
+            context.note(`${name} already exists.`);
+            continue;
+          }
+
+          yield* Effect.promise(async () => cloudflareResult(
+            context.transport,
+            { method: 'POST', path: base, body: { name } },
+            v.object({ name: v.optional(v.string()) }),
+          ));
+
+          context.note(`${name} created.`);
         }
 
-        await cloudflareResult(
-          context.transport,
-          { method: 'POST', path: base, body: { name } },
-          v.object({ name: v.optional(v.string()) }),
-        );
-
-        context.note(`${name} created.`);
-      }
-
-      return `${wanted.length} bucket(s) ready.`;
+        return `${wanted.length} bucket(s) ready.`;
+      });
     },
   };
 }
@@ -199,39 +207,41 @@ function vectorizeStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'vectorize',
     title: 'Create the memory index',
-    async run(context: DeployContext): Promise<string> {
-      const base = `/accounts/${context.inputs.accountId}/vectorize/v2/indexes`;
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const base = `/accounts/${context.inputs.accountId}/vectorize/v2/indexes`;
 
-      const existing = await cloudflareResult(
-        context.transport,
-        { method: 'GET', path: base },
-        v.array(v.object({ name: v.string() })),
-      );
+        const existing = yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          { method: 'GET', path: base },
+          v.array(v.object({ name: v.string() })),
+        ));
 
-      const held = new Set(existing.map((index) => index.name));
+        const held = new Set(existing.map((index) => index.name));
 
-      for (const index of manifest.vectorIndexes) {
-        const name = resourceName(context.inputs, index.name);
+        for (const index of manifest.vectorIndexes) {
+          const name = resourceName(context.inputs, index.name);
 
-        if (held.has(name)) {
-          context.note(`${name} already exists.`);
-          continue;
+          if (held.has(name)) {
+            context.note(`${name} already exists.`);
+            continue;
+          }
+
+          yield* Effect.promise(async () => cloudflareResult(
+            context.transport,
+            {
+              method: 'POST',
+              path: base,
+              body: { name, config: { dimensions: index.dimensions, metric: index.metric } },
+            },
+            v.object({ name: v.optional(v.string()) }),
+          ));
+
+          context.note(`${name} created at ${index.dimensions} dimensions, ${index.metric}.`);
         }
 
-        await cloudflareResult(
-          context.transport,
-          {
-            method: 'POST',
-            path: base,
-            body: { name, config: { dimensions: index.dimensions, metric: index.metric } },
-          },
-          v.object({ name: v.optional(v.string()) }),
-        );
-
-        context.note(`${name} created at ${index.dimensions} dimensions, ${index.metric}.`);
-      }
-
-      return `${manifest.vectorIndexes.length} index(es) ready.`;
+        return `${manifest.vectorIndexes.length} index(es) ready.`;
+      });
     },
   };
 }
@@ -240,34 +250,36 @@ function gatewayStep(): DeployStep {
   return {
     id: 'ai-gateway',
     title: 'Create the AI gateway',
-    async run(context: DeployContext): Promise<string> {
-      const accountId = context.inputs.accountId;
-      const id = context.inputs.instanceName;
-      const base = `/accounts/${accountId}/ai-gateway/gateways`;
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const accountId = context.inputs.accountId;
+        const id = context.inputs.instanceName;
+        const base = `/accounts/${accountId}/ai-gateway/gateways`;
 
-      const existing = await cloudflareResult(
-        context.transport,
-        { method: 'GET', path: `${base}?per_page=100` },
-        v.array(v.object({ id: v.string() })),
-      );
-
-      if (!existing.some((gateway) => gateway.id === id)) {
-        await cloudflareResult(
+        const existing = yield* Effect.promise(async () => cloudflareResult(
           context.transport,
-          {
-            method: 'POST',
-            path: base,
-            body: { id, cache_ttl: 0, collect_logs: true, rate_limiting_interval: 0, rate_limiting_limit: 0 },
-          },
-          v.object({ id: v.optional(v.string()) }),
-        );
-      }
+          { method: 'GET', path: `${base}?per_page=100` },
+          v.array(v.object({ id: v.string() })),
+        ));
 
-      const url = `https://gateway.ai.cloudflare.com/v1/${accountId}/${id}/workers-ai/v1`;
+        if (!existing.some((gateway) => gateway.id === id)) {
+          yield* Effect.promise(async () => cloudflareResult(
+            context.transport,
+            {
+              method: 'POST',
+              path: base,
+              body: { id, cache_ttl: 0, collect_logs: true, rate_limiting_interval: 0, rate_limiting_limit: 0 },
+            },
+            v.object({ id: v.optional(v.string()) }),
+          ));
+        }
 
-      context.facts.set(FACT_GATEWAY_URL, url);
+        const url = `https://gateway.ai.cloudflare.com/v1/${accountId}/${id}/workers-ai/v1`;
 
-      return `Gateway ${id} ready.`;
+        context.facts.set(FACT_GATEWAY_URL, url);
+
+        return `Gateway ${id} ready.`;
+      });
     },
   };
 }
@@ -276,50 +288,52 @@ function accessStep(): DeployStep {
   return {
     id: 'access',
     title: 'Set up sign-in',
-    async run(context: DeployContext): Promise<string> {
-      const hostname = context.facts.get(FACT_ADDRESS);
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const hostname = context.facts.get(FACT_ADDRESS);
 
-      if (hostname === undefined) throw new Error('the account step settled no address for the Access application');
+        if (hostname === undefined) return yield* Effect.die(new Error('the account step settled no address for the Access application'));
 
-      const emails = new Set([context.inputs.ownerEmail, ...context.inputs.accessEmails]);
-      const base = `/accounts/${context.inputs.accountId}/access/apps`;
+        const emails = new Set([context.inputs.ownerEmail, ...context.inputs.accessEmails]);
+        const base = `/accounts/${context.inputs.accountId}/access/apps`;
 
-      const apps = await cloudflareResult(
-        context.transport,
-        { method: 'GET', path: base },
-        v.array(v.object({ id: v.string(), domain: v.optional(v.string()) })),
-      );
+        const apps = yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          { method: 'GET', path: base },
+          v.array(v.object({ id: v.string(), domain: v.optional(v.string()) })),
+        ));
 
-      const held = apps.find((app) => app.domain === hostname);
+        const held = apps.find((app) => app.domain === hostname);
 
-      const appId = held?.id ?? (await cloudflareResult(
-        context.transport,
-        {
-          method: 'POST',
-          path: base,
-          body: { name: `Kinu ${context.inputs.instanceName}`, domain: hostname, type: 'self_hosted', session_duration: '24h' },
-        },
-        IdSchema,
-      )).id;
-
-      context.facts.set(FACT_ACCESS_APP, appId);
-      context.facts.set(FACT_OWNER_EMAIL, context.inputs.ownerEmail);
-
-      await cloudflareResult(
-        context.transport,
-        {
-          method: 'POST',
-          path: `${base}/${appId}/policies`,
-          body: {
-            name: 'Owners',
-            decision: 'allow',
-            include: [...emails].map((email) => ({ email: { email } })),
+        const appId = held?.id ?? (yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          {
+            method: 'POST',
+            path: base,
+            body: { name: `Kinu ${context.inputs.instanceName}`, domain: hostname, type: 'self_hosted', session_duration: '24h' },
           },
-        },
-        v.object({ id: v.optional(v.string()) }),
-      );
+          IdSchema,
+        ))).id;
 
-      return `One-time PIN sign-in for ${emails.size} address(es).`;
+        context.facts.set(FACT_ACCESS_APP, appId);
+        context.facts.set(FACT_OWNER_EMAIL, context.inputs.ownerEmail);
+
+        yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          {
+            method: 'POST',
+            path: `${base}/${appId}/policies`,
+            body: {
+              name: 'Owners',
+              decision: 'allow',
+              include: [...emails].map((email) => ({ email: { email } })),
+            },
+          },
+          v.object({ id: v.optional(v.string()) }),
+        ));
+
+        return `One-time PIN sign-in for ${emails.size} address(es).`;
+      });
     },
   };
 }
@@ -328,48 +342,50 @@ function seedStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'seed',
     title: 'Seed the runtime cache',
-    async run(context: DeployContext): Promise<string> {
-      const seed = manifest.seed;
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const seed = manifest.seed;
 
-      if (seed === null) {
-        return 'This release publishes no runtime cache seed; hosted runtimes stay absent.';
-      }
+        if (seed === null) {
+          return 'This release publishes no runtime cache seed; hosted runtimes stay absent.';
+        }
 
-      const index = await context.http(seed.url);
+        const index = yield* Effect.promise(async () => context.http(seed.url));
 
-      if (!index.ok) {
-        throw new Error(`the runtime cache seed at ${seed.url} answered HTTP ${index.status}`);
-      }
+        if (!index.ok) {
+          return yield* Effect.die(new Error(`the runtime cache seed at ${seed.url} answered HTTP ${index.status}`));
+        }
 
-      const objects = v.parse(
-        v.object({ objects: v.array(v.object({ key: v.string(), url: v.pipe(v.string(), v.url()) })) }),
-        await index.json(),
-      );
+        const objects = v.parse(
+          v.object({ objects: v.array(v.object({ key: v.string(), url: v.pipe(v.string(), v.url()) })) }),
+          yield* Effect.promise(async () => index.json()),
+        );
 
-      const bucket = resourceName(context.inputs, seed.bucket);
-      let uploaded = 0;
+        const bucket = resourceName(context.inputs, seed.bucket);
+        let uploaded = 0;
 
-      for (const object of objects.objects) {
-        const path = `/accounts/${context.inputs.accountId}/r2/buckets/${bucket}/objects/${object.key}`;
+        for (const object of objects.objects) {
+          const path = `/accounts/${context.inputs.accountId}/r2/buckets/${bucket}/objects/${object.key}`;
 
-        if (await objectExists(context.transport, path)) continue;
-        const body = await context.http(object.url);
+          if (yield* Effect.promise(async () => objectExists(context.transport, path))) continue;
+          const body = yield* Effect.promise(async () => context.http(object.url));
 
-        if (!body.ok) throw new Error(`${object.url} answered HTTP ${body.status}`);
+          if (!body.ok) return yield* Effect.die(new Error(`${object.url} answered HTTP ${body.status}`));
 
-        await context.transport.upload({
-          method: 'PUT',
-          path,
-          parts: [{
-            name: 'file',
-            contentType: 'application/octet-stream',
-            body: new Uint8Array(await body.arrayBuffer()),
-          }],
-        });
-        uploaded += 1;
-      }
+          yield* Effect.promise(async () => context.transport.upload({
+            method: 'PUT',
+            path,
+            parts: [{
+              name: 'file',
+              contentType: 'application/octet-stream',
+              body: new Uint8Array(await body.arrayBuffer()),
+            }],
+          }));
+          uploaded += 1;
+        }
 
-      return `${String(uploaded)} of ${String(objects.objects.length)} toolchain object(s) uploaded; the rest were already there.`;
+        return `${String(uploaded)} of ${String(objects.objects.length)} toolchain object(s) uploaded; the rest were already there.`;
+      });
     },
   };
 }
@@ -378,35 +394,37 @@ function secretsStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'secrets',
     title: 'Mint the deployment secrets',
-    async run(context: DeployContext): Promise<string> {
-      // Runs before the upload: secrets are bindings of a version.
-      // Root keys are minted once; re-minting `CREDENTIAL_ENCRYPTION_KEY` would make stored
-      // credentials unreadable. Updates carry them via `keep_bindings`.
-      if (context.update) {
-        return `${MINTED_SECRETS.length} secret(s) kept from the running version.`;
-      }
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        // Runs before the upload: secrets are bindings of a version.
+        // Root keys are minted once; re-minting `CREDENTIAL_ENCRYPTION_KEY` would make stored
+        // credentials unreadable. Updates carry them via `keep_bindings`.
+        if (context.update) {
+          return `${MINTED_SECRETS.length} secret(s) kept from the running version.`;
+        }
 
-      for (const name of MINTED_SECRETS) {
-        if (await context.vault.read(name) !== null) continue;
-        const bytes = new Uint8Array(32);
+        for (const name of MINTED_SECRETS) {
+          if ((yield* Effect.promise(async () => context.vault.read(name))) !== null) continue;
+          const bytes = new Uint8Array(32);
 
-        crypto.getRandomValues(bytes);
-        await context.vault.write(name, base64(bytes));
-      }
+          crypto.getRandomValues(bytes);
+          yield* Effect.promise(async () => context.vault.write(name, base64(bytes)));
+        }
 
-      const supplied = context.inputs.providerKeyNames.length;
+        const supplied = context.inputs.providerKeyNames.length;
 
-      const missing = manifest.secrets
-        .filter((secret) => secret.required && secret.handling === 'prompted')
-        .filter((secret) => !MINTED_SECRETS.includes(secret.name))
-        .map((secret) => secret.name)
-        .filter((name) => !context.inputs.providerKeyNames.includes(name));
+        const missing = manifest.secrets
+          .filter((secret) => secret.required && secret.handling === 'prompted')
+          .filter((secret) => !MINTED_SECRETS.includes(secret.name))
+          .map((secret) => secret.name)
+          .filter((name) => !context.inputs.providerKeyNames.includes(name));
 
-      if (missing.length > 0) {
-        throw new Error(`this release requires ${missing.join(', ')}, which no answer supplied`);
-      }
+        if (missing.length > 0) {
+          return yield* Effect.die(new Error(`this release requires ${missing.join(', ')}, which no answer supplied`));
+        }
 
-      return `${MINTED_SECRETS.length} secret(s) minted, ${supplied} supplied.`;
+        return `${MINTED_SECRETS.length} secret(s) minted, ${supplied} supplied.`;
+      });
     },
   };
 }
@@ -417,44 +435,46 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'upload',
     title: 'Upload the Worker',
-    async run(context: DeployContext): Promise<string> {
-      const accountId = context.inputs.accountId;
-      const script = context.inputs.instanceName;
-      const session = await openAssetSession(context, manifest, script);
-      const carried = await carryArtifact(context, manifest, session);
-      const exists = await scriptExists(context.transport, accountId, script);
-      const metadata = await versionMetadata(context, manifest, carried.token, exists);
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const accountId = context.inputs.accountId;
+        const script = context.inputs.instanceName;
+        const session = yield* openAssetSession(context, manifest, script);
+        const carried = yield* Effect.promise(() => carryArtifact(context, manifest, session));
+        const exists = yield* Effect.promise(async () => scriptExists(context.transport, accountId, script));
+        const metadata = yield* Effect.promise(async () => versionMetadata(context, manifest, carried.token, exists));
 
-      const path = exists
-        ? `/accounts/${accountId}/workers/scripts/${script}/versions`
-        : `/accounts/${accountId}/workers/scripts/${script}`;
+        const path = exists
+          ? `/accounts/${accountId}/workers/scripts/${script}/versions`
+          : `/accounts/${accountId}/workers/scripts/${script}`;
 
-      // The transport copies every part, so the module set is held twice in flight.
-      context.artifact.held.hold(carried.bytes);
+        // The transport copies every part, so the module set is held twice in flight.
+        context.artifact.held.hold(carried.bytes);
 
-      const response = await context.transport.upload({
-        method: exists ? 'POST' : 'PUT',
-        path,
-        parts: [
-          { name: 'metadata', contentType: 'application/json', body: JSON.stringify(metadata) },
-          ...carried.modules,
-        ],
+        const response = yield* Effect.promise(async () => context.transport.upload({
+          method: exists ? 'POST' : 'PUT',
+          path,
+          parts: [
+            { name: 'metadata', contentType: 'application/json', body: JSON.stringify(metadata) },
+            ...carried.modules,
+          ],
+        }));
+
+        context.artifact.held.release(carried.bytes * 2);
+
+        const uploaded = readEnvelope(path, response, VersionSchema);
+        // A first upload answers the script; its deployment names the version.
+        const version = exists ? uploaded.id : servingVersion(yield* Effect.promise(async () => liveDeployment(context)), '');
+        const peak = context.artifact.held.peak();
+
+        if (version === undefined) return yield* Effect.die(new Error(`${script} was created, and no deployment names its version`));
+
+        context.facts.set(FACT_VERSION_ID, version);
+        context.facts.set(FACT_UPLOAD_PEAK, String(peak));
+
+        return `Version ${version} uploaded with ${carried.modules.length} module(s), `
+          + `holding ${mebibytes(peak)} at the peak.`;
       });
-
-      context.artifact.held.release(carried.bytes * 2);
-
-      const uploaded = readEnvelope(path, response, VersionSchema);
-      // A first upload answers the script; its deployment names the version.
-      const version = exists ? uploaded.id : servingVersion(await liveDeployment(context), '');
-      const peak = context.artifact.held.peak();
-
-      if (version === undefined) throw new Error(`${script} was created, and no deployment names its version`);
-
-      context.facts.set(FACT_VERSION_ID, version);
-      context.facts.set(FACT_UPLOAD_PEAK, String(peak));
-
-      return `Version ${version} uploaded with ${carried.modules.length} module(s), `
-        + `holding ${mebibytes(peak)} at the peak.`;
     },
   };
 }
@@ -463,45 +483,47 @@ function addressStep(inputs: DeployInputs): DeployStep {
   return {
     id: 'address',
     title: 'Bind the address',
-    async run(context: DeployContext): Promise<string> {
-      const accountId = context.inputs.accountId;
-      const script = context.inputs.instanceName;
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const accountId = context.inputs.accountId;
+        const script = context.inputs.instanceName;
 
-      if (inputs.address.kind === 'workers-dev') {
-        await cloudflareResult(
-          context.transport,
-          {
-            method: 'POST',
-            path: `/accounts/${accountId}/workers/scripts/${script}/subdomain`,
-            body: { enabled: true, previews_enabled: false },
-          },
-          v.object({ enabled: v.optional(v.boolean()) }),
-        );
-      } else {
-        // A Workers custom domain creates the proxied DNS record itself.
-        await cloudflareResult(
-          context.transport,
-          {
-            method: 'PUT',
-            path: `/accounts/${accountId}/workers/domains`,
-            body: { hostname: inputs.address.hostname, zone_id: inputs.address.zoneId, service: script, environment: 'production' },
-          },
-          v.object({ id: v.optional(v.string()) }),
-        );
-      }
+        if (inputs.address.kind === 'workers-dev') {
+          yield* Effect.promise(async () => cloudflareResult(
+            context.transport,
+            {
+              method: 'POST',
+              path: `/accounts/${accountId}/workers/scripts/${script}/subdomain`,
+              body: { enabled: true, previews_enabled: false },
+            },
+            v.object({ enabled: v.optional(v.boolean()) }),
+          ));
+        } else {
+          // A Workers custom domain creates the proxied DNS record itself.
+          yield* Effect.promise(async () => cloudflareResult(
+            context.transport,
+            {
+              method: 'PUT',
+              path: `/accounts/${accountId}/workers/domains`,
+              body: { hostname: inputs.address.hostname, zone_id: inputs.address.zoneId, service: script, environment: 'production' },
+            },
+            v.object({ id: v.optional(v.string()) }),
+          ));
+        }
 
-      const version = context.facts.get(FACT_VERSION_ID);
+        const version = context.facts.get(FACT_VERSION_ID);
 
-      if (version !== undefined) {
-        const serving = servingVersion(await liveDeployment(context), version);
+        if (version !== undefined) {
+          const serving = servingVersion(yield* Effect.promise(async () => liveDeployment(context)), version);
 
-        // At 0% only the smoke's override reaches it.
-        await deploy(context, serving === undefined
-          ? [{ version_id: version, percentage: 100 }]
-          : [{ version_id: version, percentage: 0 }, { version_id: serving, percentage: 100 }]);
-      }
+          // At 0% only the smoke's override reaches it.
+          yield* Effect.promise(async () => deploy(context, serving === undefined
+            ? [{ version_id: version, percentage: 100 }]
+            : [{ version_id: version, percentage: 0 }, { version_id: serving, percentage: 100 }]));
+        }
 
-      return `Answering on ${context.facts.get(FACT_ADDRESS) ?? ''}.`;
+        return `Answering on ${context.facts.get(FACT_ADDRESS) ?? ''}.`;
+      });
     },
   };
 }
@@ -510,34 +532,36 @@ function smokeStep(): DeployStep {
   return {
     id: 'smoke',
     title: 'Check it answers',
-    async run(context: DeployContext): Promise<string> {
-      const address = context.facts.get(FACT_ADDRESS);
-      const version = context.facts.get(FACT_VERSION_ID);
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const address = context.facts.get(FACT_ADDRESS);
+        const version = context.facts.get(FACT_VERSION_ID);
 
-      if (address === undefined) throw new Error('no address was bound, so nothing can be checked');
+        if (address === undefined) return yield* Effect.die(new Error('no address was bound, so nothing can be checked'));
 
-      if (version === undefined) throw new Error('no version was uploaded, so nothing can be checked');
-      const url = `https://${address}/api/health`;
-      const response = await context.http(url, { [VERSION_OVERRIDE_HEADER]: `${context.inputs.instanceName}="${version}"` });
+        if (version === undefined) return yield* Effect.die(new Error('no version was uploaded, so nothing can be checked'));
+        const url = `https://${address}/api/health`;
+        const response = yield* Effect.promise(async () => context.http(url, { [VERSION_OVERRIDE_HEADER]: `${context.inputs.instanceName}="${version}"` }));
 
-      if (!response.ok) throw new Error(`${url} answered HTTP ${response.status}`);
+        if (!response.ok) return yield* Effect.die(new Error(`${url} answered HTTP ${response.status}`));
 
-      const { build, versionId } = v.parse(HealthAnswerSchema, await response.json());
+        const { build, versionId } = v.parse(HealthAnswerSchema, yield* Effect.promise(async () => response.json()));
 
-      // An unapplied override reaches the serving version, which may be this build.
-      if (versionId !== version) {
-        throw new Error(`${url} was answered by version ${versionId ?? 'unnamed'}, and the version under test is ${version}`);
-      }
+        // An unapplied override reaches the serving version, which may be this build.
+        if (versionId !== version) {
+          return yield* Effect.die(new Error(`${url} was answered by version ${versionId ?? 'unnamed'}, and the version under test is ${version}`));
+        }
 
-      if (build === null || build.version !== context.manifest.version || build.sha !== context.manifest.sha) {
-        throw new Error(
-          `${url} answers ${build?.version ?? 'an unstamped build'}`
-          + ` (${build?.sha ?? 'no sha'}), and this release is ${context.manifest.version}`
-          + ` (${context.manifest.sha})`,
-        );
-      }
+        if (build === null || build.version !== context.manifest.version || build.sha !== context.manifest.sha) {
+          return yield* Effect.die(new Error(
+            `${url} answers ${build?.version ?? 'an unstamped build'}`
+            + ` (${build?.sha ?? 'no sha'}), and this release is ${context.manifest.version}`
+            + ` (${context.manifest.sha})`,
+          ));
+        }
 
-      return `Version ${version} answers ${build.version}.`;
+        return `Version ${version} answers ${build.version}.`;
+      });
     },
   };
 }
@@ -546,14 +570,16 @@ function promoteStep(): DeployStep {
   return {
     id: 'promote',
     title: 'Send it all traffic',
-    async run(context: DeployContext): Promise<string> {
-      const version = context.facts.get(FACT_VERSION_ID);
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const version = context.facts.get(FACT_VERSION_ID);
 
-      if (version === undefined) throw new Error('no version was uploaded, so nothing can take the traffic');
+        if (version === undefined) return yield* Effect.die(new Error('no version was uploaded, so nothing can take the traffic'));
 
-      await deploy(context, [{ version_id: version, percentage: 100 }]);
+        yield* Effect.promise(async () => deploy(context, [{ version_id: version, percentage: 100 }]));
 
-      return `Version ${version} serves all traffic.`;
+        return `Version ${version} serves all traffic.`;
+      });
     },
   };
 }
@@ -562,46 +588,48 @@ function handoverStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'handover',
     title: 'Hand the deployment its own key',
-    async run(context: DeployContext): Promise<string> {
-      const accountId = context.inputs.accountId;
-      const script = context.inputs.instanceName;
-      const refresh = await context.vault.read(REFRESH_TOKEN_KEY);
-      const clientId = await context.vault.read(DEPLOY_CLIENT_ID_KEY);
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const accountId = context.inputs.accountId;
+        const script = context.inputs.instanceName;
+        const refresh = yield* Effect.promise(async () => context.vault.read(REFRESH_TOKEN_KEY));
+        const clientId = yield* Effect.promise(async () => context.vault.read(DEPLOY_CLIENT_ID_KEY));
 
-      if (refresh === null) {
-        throw new Error('the run holds no refresh token, so the deployment cannot own its own key');
-      }
+        if (refresh === null) {
+          return yield* Effect.die(new Error('the run holds no refresh token, so the deployment cannot own its own key'));
+        }
 
-      if (clientId === null) {
-        throw new Error('the run cannot name the OAuth client, so the deployment could never refresh');
-      }
+        if (clientId === null) {
+          return yield* Effect.die(new Error('the run cannot name the OAuth client, so the deployment could never refresh'));
+        }
 
-      const record: DeploymentRecord = {
-        inputs: context.inputs,
-        address: context.facts.get(FACT_ADDRESS) ?? '',
-        version: manifest.version,
-        channelOrigin: manifest.channelOrigin,
-        clientId,
-        deployedAt: new Date().toISOString(),
-      };
+        const record: DeploymentRecord = {
+          inputs: context.inputs,
+          address: context.facts.get(FACT_ADDRESS) ?? '',
+          version: manifest.version,
+          channelOrigin: manifest.channelOrigin,
+          clientId,
+          deployedAt: new Date().toISOString(),
+        };
 
-      const base = `/accounts/${accountId}/workers/scripts/${script}/secrets`;
+        const base = `/accounts/${accountId}/workers/scripts/${script}/secrets`;
 
-      await cloudflareResult(
-        context.transport,
-        { method: 'PUT', path: base, body: { name: DEPLOYMENT_REFRESH_SECRET, text: refresh, type: 'secret_text' } },
-        v.object({ name: v.optional(v.string()) }),
-      );
+        yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          { method: 'PUT', path: base, body: { name: DEPLOYMENT_REFRESH_SECRET, text: refresh, type: 'secret_text' } },
+          v.object({ name: v.optional(v.string()) }),
+        ));
 
-      await cloudflareResult(
-        context.transport,
-        { method: 'PUT', path: base, body: { name: DEPLOYMENT_RECORD_SECRET, text: JSON.stringify(record), type: 'secret_text' } },
-        v.object({ name: v.optional(v.string()) }),
-      );
+        yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          { method: 'PUT', path: base, body: { name: DEPLOYMENT_RECORD_SECRET, text: JSON.stringify(record), type: 'secret_text' } },
+          v.object({ name: v.optional(v.string()) }),
+        ));
 
-      await context.vault.wipe();
+        yield* Effect.promise(async () => context.vault.wipe());
 
-      return `${script} holds its own key; this run holds nothing.`;
+        return `${script} holds its own key; this run holds nothing.`;
+      });
     },
   };
 }
@@ -614,37 +642,39 @@ interface AssetSession {
 }
 
 /** Empty token: no assets (`keep_assets`). No wanted hashes: the token is already the completion token. */
-async function openAssetSession(
+function openAssetSession(
   context: DeployContext,
   manifest: ReleaseManifest,
   script: string,
-): Promise<AssetSession> {
-  const prefix = `${manifest.worker.assets}/`;
-  const hashes = new Map<string, string>();
-  const wire: JsonObject = {};
+): Effect.Effect<AssetSession, KinuError> {
+  return Effect.gen(function* () {
+    const prefix = `${manifest.worker.assets}/`;
+    const hashes = new Map<string, string>();
+    const wire: JsonObject = {};
 
-  for (const file of manifest.files) {
-    if (!file.path.startsWith(prefix) || file.assetHash === null) continue;
+    for (const file of manifest.files) {
+      if (!file.path.startsWith(prefix) || file.assetHash === null) continue;
 
-    hashes.set(file.path, file.assetHash);
-    wire[`/${file.path.slice(prefix.length)}`] = { hash: file.assetHash, size: file.size };
-  }
+      hashes.set(file.path, file.assetHash);
+      wire[`/${file.path.slice(prefix.length)}`] = { hash: file.assetHash, size: file.size };
+    }
 
-  if (hashes.size === 0) return { token: '', wanted: new Set(), hashes };
+    if (hashes.size === 0) return { token: '', wanted: new Set(), hashes };
 
-  const sessionPath = `/accounts/${context.inputs.accountId}/workers/scripts/${script}/assets-upload-session`;
+    const sessionPath = `/accounts/${context.inputs.accountId}/workers/scripts/${script}/assets-upload-session`;
 
-  const session = await cloudflareResult(
-    context.transport,
-    { method: 'POST', path: sessionPath, body: { manifest: wire } },
-    AssetSessionSchema,
-  );
+    const session = yield* Effect.promise(async () => cloudflareResult(
+      context.transport,
+      { method: 'POST', path: sessionPath, body: { manifest: wire } },
+      AssetSessionSchema,
+    ));
 
-  const wanted = new Set((session.buckets ?? []).flat());
+    const wanted = new Set((session.buckets ?? []).flat());
 
-  context.note(`${hashes.size} asset(s), ${wanted.size} of them to upload.`);
+    context.note(`${hashes.size} asset(s), ${wanted.size} of them to upload.`);
 
-  return { token: session.jwt ?? '', wanted, hashes };
+    return { token: session.jwt ?? '', wanted, hashes };
+  });
 }
 
 interface CarriedRelease {

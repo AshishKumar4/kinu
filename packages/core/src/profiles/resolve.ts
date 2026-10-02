@@ -253,8 +253,10 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     );
 
     // A pin is refused when no model of the chain is listed.
-    const requireAvailable = (model: string, fallbacks: readonly string[], id: TierId): void => {
-      if (!servable(model, fallbacks)) throw unavailable(model, fallbacks, id);
+    const requireAvailable = (model: string, fallbacks: readonly string[], id: TierId): Effect.Effect<void> => {
+      return Effect.gen(function* () {
+        if (!servable(model, fallbacks)) return yield* Effect.die(unavailable(model, fallbacks, id));
+      });
     };
 
     const defaultAssignment = envelope.catalog.tiers.default;
@@ -324,7 +326,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     let model = assignment.model;
 
     for (const pin of modelPins(input)) {
-      requireAvailable(pin.model, tierFallbacks, tierId);
+      yield* requireAvailable(pin.model, tierFallbacks, tierId);
       model = pin.model;
       source = pin.source;
       replaced = null;
