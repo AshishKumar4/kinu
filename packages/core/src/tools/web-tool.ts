@@ -1,4 +1,3 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** The native `web` tool: search, fetch (plain or rendered) and screenshot. `web.*` in eval is `web/provider.ts`. */
 import { tool, type ToolSet } from 'ai';
 import { Effect } from 'effect';
@@ -12,6 +11,7 @@ import { attemptInItsWords, KinuError, settle } from '../obs/index';
 import { BUILTIN_TOOL_DESCRIPTIONS, WEB_TOOL_ACTIONS, type WebToolAction } from './registry';
 import { oneOf } from './tool-schema';
 import { clampToolResult } from './clamp';
+import type { Storage } from '../types/primitives';
 import { actionFieldRefusal } from './field-names';
 import { imageModelOutput, type ImageCarrier } from './image-results';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
@@ -38,12 +38,12 @@ type WebToolInput = z.infer<typeof WebToolInputSchema>;
 
 export interface WebToolDeps {
   readonly provider: WebSearchProvider;
-  readonly vfs: VFS;
+  readonly files: Pick<Storage, 'vfs' | 'home'>;
   readonly budget: TurnContextBudget;
 }
 
 export function createWebTool(deps: WebToolDeps): ToolSet[string] {
-  const { provider, vfs, budget } = deps;
+  const { provider, files, budget } = deps;
 
   const needs = (action: WebToolAction, field: 'query' | 'url', value: string | undefined): Effect.Effect<string, KinuError> => (
     value ? Effect.succeed(value) : Effect.fail(new KinuError('bad_input', `web.${action} requires \`${field}\``))
@@ -73,7 +73,7 @@ export function createWebTool(deps: WebToolDeps): ToolSet[string] {
         // The provenance header is inside the clamped text so a hostile title cannot buy room outside the cap.
         const header = `# ${page.title ?? page.url}\nSource: ${page.url}\nRetrieved: ${page.retrievedAt}\n\n`;
 
-        return yield* attemptInItsWords('unavailable', () => clampToolResult(header + page.markdown, { vfs, budget, producer: 'web_fetch' }));
+        return yield* attemptInItsWords('unavailable', () => clampToolResult(header + page.markdown, { files, budget, producer: 'web_fetch' }));
       }
 
       case 'screenshot': {
@@ -81,7 +81,7 @@ export function createWebTool(deps: WebToolDeps): ToolSet[string] {
         yield* Effect.sync(() => { requireBuild('web.screenshot'); });
         const fullPage = args.full_page === true;
         const shot = yield* attemptInItsWords('unavailable', () => provider.screenshot(url, { fullPage, engine: args.engine }));
-        const path = yield* attemptInItsWords('unavailable', () => saveScreenshot(vfs, shot));
+        const path = yield* attemptInItsWords('unavailable', () => saveScreenshot(files.vfs, shot));
 
         if (fullPage) return `Saved the whole page of ${shot.url} to ${path}.`;
 

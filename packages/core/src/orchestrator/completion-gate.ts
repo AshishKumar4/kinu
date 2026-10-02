@@ -1,4 +1,3 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * One-shot runs (`kinu exec`, `kinu run`) do not end on the model's say-so: once per task, the
  * harness shows state it read itself and requires a second claim. Fires on what the turn did,
@@ -10,6 +9,7 @@ import type { CompletionGateRecord } from '../events/types';
 import type { ExecOutcome } from '../execution/exec-result';
 import { formatExecResult } from '../execution/exec-result';
 import { clampToolResult } from '../tools/clamp';
+import type { Storage } from '../types/primitives';
 import { diagnostics, renderThrownChain } from '../obs/index';
 
 /** `kinuEvent` on the gate's turn; the turn pump recognises the confirming turn by it. */
@@ -28,7 +28,7 @@ export const COMPLETION_TASK_ECHO_MAX_CHARS = 2_000;
 /** Null when nothing could be read; the caller must then not gate. */
 export async function observeCompletionState(deps: {
   exec: (command: string) => Promise<ExecOutcome>;
-  vfs?: VFS;
+  files?: Pick<Storage, 'vfs' | 'home'>;
 }): Promise<string | null> {
   const blocks: string[] = [];
 
@@ -51,7 +51,7 @@ export async function observeCompletionState(deps: {
 
   if (blocks.length === 0) return null;
 
-  return clampToolResult(blocks.join('\n\n'), { vfs: deps.vfs });
+  return clampToolResult(blocks.join('\n\n'), { files: deps.files });
 }
 
 export function completionGateText(opts: { task: string; observed: string }): string {

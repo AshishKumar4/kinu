@@ -34,6 +34,8 @@ export interface CheckpointFiles {
 
 export interface Storage {
   vfs: VFS & CheckpointFiles;
+  /** Where a relative path on `vfs` starts: the actor's home. */
+  readonly home: string;
   sql: SqlExecutor;
   execRaw: RawSqlExec;
   /** Atomic synchronous writes on the same connection as sql; rolls back on throw. */

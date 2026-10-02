@@ -536,7 +536,7 @@ export function createCFRuntime(
 
   const runtime: CFRuntime = {
     actor: actor.actor,
-    storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
+    storage: { vfs: agentFileVfs, home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
     toolFiles,
     workspaceIsMachine: false,

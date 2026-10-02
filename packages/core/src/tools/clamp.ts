@@ -1,4 +1,4 @@
-import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Restorable tool-result compression: oversize results are clamped to head + tail after the full output is saved to the VFS.
  * The marker is priced inside the cap; framing producers compose the whole string before clamping.
@@ -12,6 +12,7 @@ import { nanoid } from '../utils/nanoid';
 import { admissionBytes } from '../llm';
 import { headEnd, tailStart } from '../utils/text';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
+import type { Storage } from '../types/primitives';
 import { assertJsonValue, JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
 import { imageModelOutput, takeImages } from './image-results';
 import { diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
@@ -31,7 +32,7 @@ const MARKER_FENCE_CHARS = 4;
 
 export interface ClampToolResultOptions {
   /** Without it the marker reports the omission but offers no restore path. */
-  vfs?: VFS;
+  files?: Pick<Storage, 'vfs' | 'home'>;
   budget?: TurnContextBudget;
   producer?: BulkProducer;
   /** Image data URLs in the output reach the model as images, outside the clamp (`image-results.ts`). */
@@ -41,13 +42,14 @@ export interface ClampToolResultOptions {
 type Offload = { readonly path: string } | { readonly failure: KinuError };
 
 /** The marker promises a path only after the write resolves. */
-function offload(vfs: VFS, text: string): Effect.Effect<Offload> {
-  const path = `${TOOL_OUTPUT_DIR}/${nanoid(10)}.log`;
+function offload(files: Pick<Storage, 'vfs' | 'home'>, text: string): Effect.Effect<Offload> {
+  const directory = `${files.home}/${TOOL_OUTPUT_DIR}`;
+  const path = `${directory}/${nanoid(10)}.log`;
 
   return Effect.tryPromise({
     try: async () => {
-      await vfs.mkdir(TOOL_OUTPUT_DIR, { recursive: true });
-      await writeText(vfs, path, text);
+      await files.vfs.mkdir(directory, { recursive: true });
+      await writeText(files.vfs, path, text);
     },
     catch: (cause) => toKinuError({ doing: 'saving the full tool result to the workspace', cause, otherwise: 'io' }),
   }).pipe(Effect.match({
@@ -56,7 +58,6 @@ function offload(vfs: VFS, text: string): Effect.Effect<Offload> {
 
       return { failure };
     },
-    // Relative on purpose: a leading slash would name the filesystem root.
     onSuccess: (): Offload => ({ path }),
   }));
 }
@@ -82,9 +83,9 @@ function clampedText(text: string, opts: ClampToolResultOptions): Effect.Effect<
     return Effect.succeed(text);
   }
 
-  const vfs = opts.vfs;
+  const files = opts.files;
 
-  return Effect.map(vfs ? offload(vfs, text) : Effect.succeed(null), (saved) => clampedAround(text, saved, opts));
+  return Effect.map(files ? offload(files, text) : Effect.succeed(null), (saved) => clampedAround(text, saved, opts));
 }
 
 function clampedAround(text: string, saved: Offload | null, opts: ClampToolResultOptions): string {

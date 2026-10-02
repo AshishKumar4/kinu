@@ -2318,7 +2318,7 @@ export abstract class ActorAgent extends Agent<Env> {
           durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
         clamp: {
-          vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
+          files: this.rt.storage, budget: this.acc.context, producer: 'external_tool',
         },
       }));
 

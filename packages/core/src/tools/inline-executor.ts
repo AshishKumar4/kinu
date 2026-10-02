@@ -59,6 +59,8 @@ interface ShellExec {
 
 export interface InlineExecutorDeps {
   vfs: VFS;
+  /** Absent: {@link WORKSPACE_ROOT}, the root's. */
+  home?: string;
   /** The owner's files surface; absent: `vfs`, the plane the tools reach. */
   files?: VFS;
   memory: Memory;
@@ -116,6 +118,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
   const currentFileDispatch = () => createFileDispatcher({
     vfs,
+    home: deps.home ?? WORKSPACE_ROOT,
     ledger: currentLedger(),
     budget: currentBudget(),
     memory,

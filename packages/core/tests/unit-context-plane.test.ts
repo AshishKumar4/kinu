@@ -24,6 +24,7 @@ import type { ContextEditEvent } from '../src/types/context-plane';
 import type { SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 const PROGRAM = { kind: 'builtin' as const, version: 0, digest: null, build: null };
 
@@ -174,7 +175,7 @@ function fileTool(vfs: VFS): (input: {
   content?: string;
   edits?: Array<{ old_text: string; new_text: string }>;
 }) => Promise<JsonValue> {
-  return createFileDispatcher({ vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  return createFileDispatcher({ home: WORKSPACE_ROOT, vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
 }
 
 async function readText(vfs: VFS, path: string): Promise<string> {

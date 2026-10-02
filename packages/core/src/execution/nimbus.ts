@@ -680,7 +680,6 @@ function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, n
   return cred === undefined ? {} : { cred };
 }
 
-/** A relative path starts at `plane.home`, as in the actor's shell. */
 export function nimbusSessionFiles(
   box: NimbusSandboxHandle,
   plane: { readonly home: string; readonly cred?: VfsCred },

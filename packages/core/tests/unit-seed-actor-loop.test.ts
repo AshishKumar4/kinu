@@ -16,6 +16,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 // Not the barrel: this suite must run without the context plane.
 import type { Identity, SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 const PARENT_V1 = '// parent v1 — the promoted loop\nasync function* run(rt, task) { yield "v1"; }\n';
 
@@ -69,7 +70,7 @@ function build(): Fixture {
       return {
         ...template,
         actor: handle,
-        storage: { vfs: plane, sql, execRaw, transactionSync: (write) => db.transaction(write)() },
+        storage: { vfs: plane, home: WORKSPACE_ROOT, sql, execRaw, transactionSync: (write) => db.transaction(write)() },
         agentStateVfs: plane,
         identity: scaffoldIdentity(name, plane, sql, handle.actorId),
       };
