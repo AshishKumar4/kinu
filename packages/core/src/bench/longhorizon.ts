@@ -3,7 +3,7 @@
 // asks, each part deleted once answered, so the final ask tests what survived.
 // Corpus and answer key derive from the same seed; no key exists on disk.
 
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import { fnv1a64 } from '../utils/fnv1a';
 import { parseJsonValue } from '../utils/json';
@@ -425,55 +425,53 @@ export function encodeLongHorizonSpec(spec: LongHorizonSpec): string {
 }
 
 export function decodeLongHorizonSpec(encoded: string): LongHorizonSpec {
-  let raw;
+  return settleSync(Effect.gen(function* () {
+    const raw = yield* Effect.catchCause(Effect.sync(() => parseJsonValue(encoded)), (failed) => Effect.die(new Error('long-horizon spec is not valid JSON', { cause: Cause.squash(failed) })));
 
-  try {
-    raw = parseJsonValue(encoded);
-  } catch (error) {
-    throw new Error('long-horizon spec is not valid JSON', { cause: error });
-  }
+    if (!Array.isArray(raw) || raw.length !== 6) {
+      return yield* Effect.die(new Error('long-horizon spec must be [mode, seed, entries, filler, markers, parts]'));
+    }
 
-  if (!Array.isArray(raw) || raw.length !== 6) {
-    throw new Error('long-horizon spec must be [mode, seed, entries, filler, markers, parts]');
-  }
+    const [mode, seed, entries, filler, markers, parts] = raw;
 
-  const [mode, seed, entries, filler, markers, parts] = raw;
+    if (mode !== 'digest' && mode !== 'continuation') return yield* Effect.die(new Error(`unknown long-horizon mode: ${JSON.stringify(mode)}`));
 
-  if (mode !== 'digest' && mode !== 'continuation') throw new Error(`unknown long-horizon mode: ${JSON.stringify(mode)}`);
+    if (!v.is(FiniteInteger, seed)) return yield* Effect.die(new Error(`long-horizon spec.seed must be a finite integer, got ${JSON.stringify(seed)}`));
 
-  if (!v.is(FiniteInteger, seed)) throw new Error(`long-horizon spec.seed must be a finite integer, got ${JSON.stringify(seed)}`);
+    if (!v.is(FiniteInteger, entries)) return yield* Effect.die(new Error(`long-horizon spec.entries must be a finite integer, got ${JSON.stringify(entries)}`));
 
-  if (!v.is(FiniteInteger, entries)) throw new Error(`long-horizon spec.entries must be a finite integer, got ${JSON.stringify(entries)}`);
+    if (!v.is(FiniteInteger, filler)) return yield* Effect.die(new Error(`long-horizon spec.filler must be a finite integer, got ${JSON.stringify(filler)}`));
 
-  if (!v.is(FiniteInteger, filler)) throw new Error(`long-horizon spec.filler must be a finite integer, got ${JSON.stringify(filler)}`);
+    if (!v.is(FiniteInteger, markers)) return yield* Effect.die(new Error(`long-horizon spec.markers must be a finite integer, got ${JSON.stringify(markers)}`));
 
-  if (!v.is(FiniteInteger, markers)) throw new Error(`long-horizon spec.markers must be a finite integer, got ${JSON.stringify(markers)}`);
+    if (!v.is(FiniteInteger, parts)) return yield* Effect.die(new Error(`long-horizon spec.parts must be a finite integer, got ${JSON.stringify(parts)}`));
 
-  if (!v.is(FiniteInteger, parts)) throw new Error(`long-horizon spec.parts must be a finite integer, got ${JSON.stringify(parts)}`);
+    const spec: LongHorizonSpec = {
+      mode,
+      seed, entries, filler, markers, parts,
+    };
 
-  const spec: LongHorizonSpec = {
-    mode,
-    seed, entries, filler, markers, parts,
-  };
+    assertLongHorizonSpec(spec);
 
-  assertLongHorizonSpec(spec);
-
-  return spec;
+    return spec;
+  }));
 }
 
 export function assertLongHorizonSpec(spec: LongHorizonSpec): void {
   return settleSync(Effect.gen(function* () {
     const positiveInt = (name: string, value: number, min: number) => {
-      if (!Number.isInteger(value) || value < min) {
-        throw new Error(`long-horizon spec.${name} must be an integer >= ${min}, got ${value}`);
-      }
+      return Effect.gen(function* () {
+        if (!Number.isInteger(value) || value < min) {
+          return yield* Effect.die(new Error(`long-horizon spec.${name} must be an integer >= ${min}, got ${value}`));
+        }
+      });
     };
 
-    positiveInt('seed', spec.seed, 0);
-    positiveInt('entries', spec.entries, 1);
-    positiveInt('filler', spec.filler, 0);
-    positiveInt('markers', spec.markers, 1);
-    positiveInt('parts', spec.parts, 1);
+    yield* positiveInt('seed', spec.seed, 0);
+    yield* positiveInt('entries', spec.entries, 1);
+    yield* positiveInt('filler', spec.filler, 0);
+    yield* positiveInt('markers', spec.markers, 1);
+    yield* positiveInt('parts', spec.parts, 1);
 
     if (spec.markers > spec.entries) return yield* Effect.die(new Error(`long-horizon spec plants ${spec.markers} markers in ${spec.entries} entries`));
 

@@ -3,7 +3,7 @@
  * is, mirrored by a per-account read-only cache file. Nothing merges or falls back between the stores.
  */
 
-import { Effect, Result } from 'effect';
+import { Cause, Effect, Result } from 'effect';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -158,26 +158,29 @@ interface AccountRead {
 }
 
 /** Server answer (refreshing the cache), else this account's cache; no entry rethrows. */
-export async function readAccountProfile(accountId: string): Promise<AccountRead> {
-  const auth = requireStoredAuthConfig();
+export function readAccountProfile(accountId: string): Promise<AccountRead> {
+  return settle(Effect.gen(function* () {
+    const auth = requireStoredAuthConfig();
 
-  try {
-    const envelope = await getCloudProfile(auth.origin, auth.token);
-    await cacheAccountProfile(accountId, envelope);
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const envelope = yield* Effect.promise(async () => getCloudProfile(auth.origin, auth.token));
+      yield* Effect.promise(async () => cacheAccountProfile(accountId, envelope));
 
-    return { envelope, source: 'server' };
-  } catch (error) {
-    const cached = loadCachedAccountProfile(accountId);
+      return { envelope, source: 'server' } satisfies AccountRead;
+    }), (failed) => Effect.gen(function* () {
+      const error = Cause.squash(failed);
+      const cached = loadCachedAccountProfile(accountId);
 
-    if (!cached) throw error;
-    diagnostics.failure(
-      'profile.account_cache_served',
-      toKinuError({ doing: 'reading the account profile catalog', cause: error, otherwise: 'unavailable' }),
-      { account: accountId, cachedVersion: cached.version, cachedDigest: cached.digest },
-    );
+      if (!cached) return yield* Effect.failCause(failed);
+      diagnostics.failure(
+        'profile.account_cache_served',
+        toKinuError({ doing: 'reading the account profile catalog', cause: error, otherwise: 'unavailable' }),
+        { account: accountId, cachedVersion: cached.version, cachedDigest: cached.digest },
+      );
 
-    return { envelope: cached, source: 'cache' };
-  }
+      return { envelope: cached, source: 'cache' } satisfies AccountRead;
+    }));
+  }));
 }
 
 function readKnownProfile(): ProfileCatalogEnvelope | null {

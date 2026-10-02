@@ -1,5 +1,7 @@
 /** Subordinates: roster, identity, admission and the one orchestration policy, platform-neutral. */
 
+import { Effect, Cause } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import type { EventLog, PublishResult } from '../events/hub/log';
 import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
@@ -286,18 +288,16 @@ function displayNameForRole(role: string): string {
     .join(' ');
 }
 
-function rollback(input: { cause: unknown }, action: () => void, operation: string): never {
-  try {
-    action();
-  } catch (rollbackError) {
-    throw new AggregateError(
-      [input.cause, rollbackError],
-      `${operation} failed and its roster rollback also failed`,
-      { cause: input.cause },
-    );
-  }
+function rollback(before: SubordinateRosterEntry, roster: SubordinateRosterStore, operation: string) {
+  return <E>(failed: Cause.Cause<E>): Effect.Effect<never, E> => {
+    const cause = Cause.squash(failed);
 
-  throw input.cause;
+    return Effect.catchCause(Effect.sync(() => roster.restore(before)), (restoreFailed) => Effect.die(new AggregateError(
+      [cause, Cause.squash(restoreFailed)],
+      `${operation} failed and its roster rollback also failed`,
+      { cause },
+    ))).pipe(Effect.andThen(Effect.failCause(failed)));
+  };
 }
 
 
@@ -343,16 +343,18 @@ export function createTeamToolDeps(deps: {
   temporary?: TemporaryAgentPort;
 }): TeamToolDeps {
   /** A task agent answers one brief and retires; more work for it belongs to a durable hire. */
-  const requireDurable = (entry: SubordinateRosterEntry): SubordinateRosterEntry => {
-    if (entry.lifetime !== 'durable') {
-      throw new KinuError(
-        'bad_input',
-        `subordinate "${entry.name}" is a temporary agent for one question (lifetime 'task'), `
-          + 'retired once it answers: assign and message apply to durable subordinates only',
-      );
-    }
+  const requireDurable = (entry: SubordinateRosterEntry): Effect.Effect<SubordinateRosterEntry, KinuError> => {
+    return Effect.gen(function* () {
+      if (entry.lifetime !== 'durable') {
+        return yield* new KinuError(
+          'bad_input',
+          `subordinate "${entry.name}" is a temporary agent for one question (lifetime 'task'), `
+            + 'retired once it answers: assign and message apply to durable subordinates only',
+        );
+      }
 
-    return entry;
+      return entry;
+    });
   };
 
   const provision = async (input: {
@@ -482,34 +484,35 @@ export function createTeamToolDeps(deps: {
       return { name, displayName };
     },
 
-    assign: async (input) => {
-      const task = requiredText(input.task, 'task');
-      const before = requireDurable(deps.roster.requireActive(input.name));
-      deps.roster.assign(input.name, task);
-      let handoff: SubordinateHandoff;
+    assign: (input) => {
+      return settle(Effect.gen(function* () {
+        const task = requiredText(input.task, 'task');
+        const before = yield* requireDurable(deps.roster.requireActive(input.name));
+        deps.roster.assign(input.name, task);
 
-      try {
-        const deliverable = optionalText(input.deliverable);
+        const handoff: SubordinateHandoff = yield* Effect.catchCause(Effect.gen(function* () {
+          const deliverable = optionalText(input.deliverable);
 
-        const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
-          body: task,
-          mode: input.mode,
-        };
+          const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
+            body: task,
+            mode: input.mode,
+          };
 
-        if (deliverable) Object.assign(assignment, { deliverable });
+          if (deliverable) Object.assign(assignment, { deliverable });
 
-        // No inherited context: later assignments add no new prefix.
-        handoff = await deps.runtime.assign(input.name, assignment);
-        // Inside the rollback scope: this write compensates the transition, so its failure must restore `before` too.
-        deps.roster.recordAssignmentEvent(input.name, handoff.eventId);
-      } catch (error) {
-        rollback({ cause: error }, () => deps.roster.restore(before), 'subordinate assignment');
-      }
+          // No inherited context: later assignments add no new prefix.
+          const assigned = yield* Effect.promise(async () => deps.runtime.assign(input.name, assignment));
+          // Inside the rollback scope: this write compensates the transition, so its failure must restore `before` too.
+          deps.roster.recordAssignmentEvent(input.name, assigned.eventId);
 
-      deps.rosterMoved();
-      deps.broadcastTask({ subordinate: input.name, content: task, timestamp: deps.now() });
+          return assigned;
+        }), rollback(before, deps.roster, 'subordinate assignment'));
 
-      return { ok: true, name: input.name, ...handoff };
+        deps.rosterMoved();
+        deps.broadcastTask({ subordinate: input.name, content: task, timestamp: deps.now() });
+
+        return { ok: true, name: input.name, ...handoff };
+      }));
     },
 
     knows: async (name) => deps.roster.get(name) !== null,
@@ -520,52 +523,56 @@ export function createTeamToolDeps(deps: {
       return Promise.all(deps.roster.list().map((entry) => statusView(deps.runtime, entry)));
     },
 
-    message: async (input) => {
-      const content = requiredText(input.content, 'content');
-      const before = requireDurable(deps.roster.requireActive(input.name));
-      deps.roster.resumeAfterMessage(input.name);
-      let handoff: SubordinateHandoff;
+    message: (input) => {
+      return settle(Effect.gen(function* () {
+        const content = requiredText(input.content, 'content');
+        const before = yield* requireDurable(deps.roster.requireActive(input.name));
+        deps.roster.resumeAfterMessage(input.name);
 
-      try {
-        handoff = await deps.runtime.message(input.name, content, input.mode);
-      } catch (error) {
-        rollback({ cause: error }, () => deps.roster.restore(before), 'subordinate message');
-      }
+        const handoff: SubordinateHandoff = yield* Effect.catchCause(
+          Effect.promise(async () => deps.runtime.message(input.name, content, input.mode)),
+          rollback(before, deps.roster, 'subordinate message'),
+        );
 
-      deps.rosterMoved();
+        deps.rosterMoved();
 
-      return { ok: true, name: input.name, ...handoff };
+        return { ok: true, name: input.name, ...handoff };
+      }));
     },
 
-    dismiss: async (input) => {
-      const before = deps.roster.requireExisting(input.name);
+    dismiss: (input) => {
+      return settle(Effect.gen(function* () {
+        const before = deps.roster.requireExisting(input.name);
 
-      if (before.origin === 'user' && input.requestedBy !== 'user') {
-        throw new Error(`subordinate "${input.name}" was created by the owner and only the owner can dismiss it`);
-      }
+        if (before.origin === 'user' && input.requestedBy !== 'user') {
+          return yield* Effect.die(new Error(`subordinate "${input.name}" was created by the owner and only the owner can dismiss it`));
+        }
 
-      // Archive by default so a dismissal is never silent data loss; wiping requires keepHistory=false.
-      const keepHistory = input.keepHistory ?? true;
-      const reference = before.actorReference;
+        // Archive by default so a dismissal is never silent data loss; wiping requires keepHistory=false.
+        const keepHistory = input.keepHistory ?? true;
+        const reference = before.actorReference;
 
-      if (!reference) throw new KinuError('missing', 'The subordinate birth has not confirmed an actor reference.');
+        if (!reference) return yield* new KinuError('missing', 'The subordinate birth has not confirmed an actor reference.');
 
-      if (keepHistory && before.deleteRequested) throw new KinuError('denied', 'Physical retirement is already requested.');
+        if (keepHistory && before.deleteRequested) return yield* new KinuError('denied', 'Physical retirement is already requested.');
 
-      if (keepHistory) deps.roster.dismiss(input.name, deps.now());
-      else deps.roster.requestDeletion(input.name, reference, deps.now());
+        if (keepHistory) deps.roster.dismiss(input.name, deps.now());
+        else deps.roster.requestDeletion(input.name, reference, deps.now());
 
-      if (keepHistory) {
-        try { await deps.runtime.dismiss(input.name, { keepHistory: true, interrupt: true }, reference); }
-        catch (cause) { rollback({ cause }, () => deps.roster.restore(before), 'retained subordinate dismissal'); }
-      } else {
-        await deps.runtime.dismiss(input.name, { keepHistory: false, interrupt: true }, reference);
-        deps.roster.removeActor(input.name, reference);
-      }
+        if (keepHistory) {
+          yield* Effect.catchCause(
+            Effect.promise(async () => deps.runtime.dismiss(input.name, { keepHistory: true, interrupt: true }, reference)),
+            rollback(before, deps.roster, 'retained subordinate dismissal'),
+          );
+        } else {
+          yield* Effect.promise(async () => deps.runtime.dismiss(input.name, { keepHistory: false, interrupt: true }, reference));
+          deps.roster.removeActor(input.name, reference);
+        }
 
-      deps.rosterMoved();
+        deps.rosterMoved();
 
-      return { ok: true, name: input.name, historyKept: keepHistory };
+        return { ok: true, name: input.name, historyKept: keepHistory };
+      }));
     },
   };
 

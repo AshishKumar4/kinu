@@ -355,25 +355,27 @@ export function triggersCommand(
     }
 
     const created = target.mode === 'cloud'
-      ? (yield* Effect.promise(async () => createCloudTimerTrigger(target.cloudName, normalized, value)))
+      ? (yield* createCloudTimerTrigger(target.cloudName, normalized, value))
       : (yield* Effect.promise(async () => createLocalTimerTrigger(target.localName, timerInput(normalized, value))));
 
     present(created, opts, () => printScheduled(created));
   }));
 }
 
-async function createCloudTimerTrigger(cloudName: string, action: string, value: string | undefined): Promise<TimerTrigger> {
-  const auth = requireAuthConfig();
-  const input = timerInput(action, value);
+function createCloudTimerTrigger(cloudName: string, action: string, value: string | undefined): Effect.Effect<TimerTrigger> {
+  return Effect.gen(function* () {
+    const auth = requireAuthConfig();
+    const input = timerInput(action, value);
 
-  // trust:'owner': an interactive session token is the owner.
-  return callAgentRpc({
-    origin: auth.origin,
-    token: auth.token,
-    name: cloudName,
-    method: 'createTimerTrigger',
-    schema: TimerTriggerSchema,
-    args: [{ ...input, trust: 'owner' }],
+    // trust:'owner': an interactive session token is the owner.
+    return yield* Effect.promise(() => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: cloudName,
+      method: 'createTimerTrigger',
+      schema: TimerTriggerSchema,
+      args: [{ ...input, trust: 'owner' }],
+    }));
   });
 }
 

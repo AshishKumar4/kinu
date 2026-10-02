@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { SyntaxStyle } from '@opentui/core';
 import { createContext, createElement, useContext, useMemo, type ReactNode } from 'react';
 import * as v from 'valibot';
@@ -470,40 +470,34 @@ function resolveThemeSelection(
 
 
 export function parseCustomTheme(json: string, filename: string): TuiThemeDefinition {
-  let raw: unknown;
+  return settleSync(Effect.gen(function* () {
+    const raw: unknown = yield* Effect.catchCause(Effect.sync(() => JSON.parse(json)), (failed) => Effect.die(new Error(`${filename}: invalid JSON`, { cause: Cause.squash(failed) })));
 
-  try {
-    raw = JSON.parse(json);
-  } catch (error) {
-    throw new Error(`${filename}: invalid JSON`, { cause: error });
-  }
+    const parsed: v.InferOutput<typeof CustomThemeSchema> = yield* Effect.catchCause(Effect.sync(() => v.parse(CustomThemeSchema, raw)), (failed) => Effect.gen(function* () {
+      const error = Cause.squash(failed);
 
-  let parsed: v.InferOutput<typeof CustomThemeSchema>;
+      const detail = error instanceof v.ValiError
+        ? error.issues.slice(0, 3).map((issue) => {
+            const path = issue.path
+              ?.map((item: { readonly key: PropertyKey }) => String(item.key))
+              .join('.') ?? '(root)';
 
-  try {
-    parsed = v.parse(CustomThemeSchema, raw);
-  } catch (error) {
-    const detail = error instanceof v.ValiError
-      ? error.issues.slice(0, 3).map((issue) => {
-          const path = issue.path
-            ?.map((item: { readonly key: PropertyKey }) => String(item.key))
-            .join('.') ?? '(root)';
+            return `${path}: ${issue.message}`;
+          }).join('; ')
+        : 'invalid value';
 
-          return `${path}: ${issue.message}`;
-        }).join('; ')
-      : 'invalid value';
+      return yield* Effect.die(new Error(`${filename}: ${detail}`, { cause: error }));
+    }));
 
-    throw new Error(`${filename}: ${detail}`, { cause: error });
-  }
+    const theme: TuiThemeDefinition = {
+      ...parsed,
+      source: 'custom',
+    };
 
-  const theme: TuiThemeDefinition = {
-    ...parsed,
-    source: 'custom',
-  };
+    validateTheme(theme, filename);
 
-  validateTheme(theme, filename);
-
-  return freezeTheme(theme);
+    return freezeTheme(theme);
+  }));
 }
 
 interface ThemeContrastPair {

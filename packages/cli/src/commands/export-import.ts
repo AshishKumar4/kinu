@@ -1,5 +1,6 @@
 /** `kinu export` / `kinu import`: one archive format (core `identity/archive.ts`) for local and cloud workspaces. */
 
+import { Effect } from 'effect';
 import {
   appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync,
   readSync, renameSync, rmSync, statSync, writeFileSync,
@@ -16,7 +17,7 @@ import {
   type ArchiveCursor,
   type ArchivePage,
 } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
+import { tolerate, settle } from '@kinu.run/core/obs';
 import { requireSchemaGenesis, stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { workspaceArchiveTarget } from '@kinu.run/core';
@@ -81,72 +82,76 @@ function entryType(entry: { isDirectory: () => boolean; isFile: () => boolean; i
   return entry.isSymbolicLink() ? 'symlink' : 'special';
 }
 
-export async function importCommand(file: string, opts: { name?: string }): Promise<void> {
-  if (!existsSync(file)) {
-    printError(`File not found: ${file}`);
-    process.exit(1);
-  }
+export function importCommand(file: string, opts: { name?: string }): Promise<void> {
+  return settle(Effect.gen(function* () {
+    if (!existsSync(file)) {
+      printError(`File not found: ${file}`);
+      process.exit(1);
+    }
 
-  const bareDatabase = isSqliteDatabaseFile(file);
-  const name = opts.name ?? (bareDatabase ? nameFromFilename(file) : archiveWorkspaceName(file) ?? nameFromFilename(file));
-  ensureAgentHome();
-  const dbPath = agentDbPath(name);
+    const bareDatabase = isSqliteDatabaseFile(file);
+    const name = opts.name ?? (bareDatabase ? nameFromFilename(file) : archiveWorkspaceName(file) ?? nameFromFilename(file));
+    ensureAgentHome();
+    const dbPath = agentDbPath(name);
 
-  if (existsSync(dbPath)) {
-    printError(`Workspace "${name}" already exists.`, 'Use --name to choose a different name');
-    process.exit(1);
-  }
+    if (existsSync(dbPath)) {
+      printError(`Workspace "${name}" already exists.`, 'Use --name to choose a different name');
+      process.exit(1);
+    }
 
-  mkdirSync(agentDir(name), { recursive: true });
+    mkdirSync(agentDir(name), { recursive: true });
 
-  // Restore to a partial file and rename on success, so a damaged archive leaves no half-populated workspace.
-  const partial = `${dbPath}.partial`;
-  rmSync(partial, { force: true });
-  let restored: RestoredArchiveCounts;
+    // Restore to a partial file and rename on success, so a damaged archive leaves no half-populated workspace.
+    const partial = `${dbPath}.partial`;
+    rmSync(partial, { force: true });
 
-  try {
-    if (bareDatabase) {
-      // A bare SQLite database, not an archive: copying the file is the restore.
-      copyFileSync(file, partial);
-      restored = countRestored(partial, file);
-    } else {
+    const restored: RestoredArchiveCounts = yield* Effect.catchCause(Effect.gen(function* () {
+      if (bareDatabase) {
+        // A bare SQLite database, not an archive: copying the file is the restore.
+        copyFileSync(file, partial);
+
+        return yield* countRestored(partial, file);
+      }
+
       const db = new Database(partial, { create: true });
 
-      try {
+      return yield* Effect.ensuring(Effect.gen(function* () {
         let workspace: ReturnType<typeof workspaceArchiveTarget> | null = null;
         const target = () => (workspace ??= workspaceArchiveTarget(createInlineWorkspace(db)));
 
-        const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), { files: target, store: target });
+        const result = yield* Effect.promise(async () => restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), { files: target, store: target }));
 
-        restored = { rows: result.rows, tables: result.tables };
         stampSchemaGenesis(db);
-      } finally {
+
+        return { rows: result.rows, tables: result.tables };
+      }), Effect.sync(() => {
         db.close();
-      }
+      }));
+    }), (failed) => Effect.gen(function* () {
+      rmSync(partial, { force: true });
+
+      return yield* Effect.failCause(failed);
+    }));
+
+    renameSync(partial, dbPath);
+    console.log(
+      `\n${OK('✓')} Imported workspace ${ACCENT(name)} from ${DIM(file)}`
+      + ` ${DIM(`(${restored.tables} tables, ${restored.rows} records)`)}`,
+    );
+
+    // One config key holds one ref: a name a cloud workspace already answers to cannot also name this copy.
+    const claimed = resolveAgentRef(name);
+
+    if (claimed && claimed.mode !== 'local') {
+      console.log(`  ${WARN('!')} "${name}" already names a cloud workspace here, so the restored copy has no local name.`);
+      console.log(`  ${DIM('Re-run with --name to give it one.')}\n`);
+
+      return;
     }
-  } catch (err) {
-    rmSync(partial, { force: true });
-    throw err;
-  }
 
-  renameSync(partial, dbPath);
-  console.log(
-    `\n${OK('✓')} Imported workspace ${ACCENT(name)} from ${DIM(file)}`
-    + ` ${DIM(`(${restored.tables} tables, ${restored.rows} records)`)}`,
-  );
-
-  // One config key holds one ref: a name a cloud workspace already answers to cannot also name this copy.
-  const claimed = resolveAgentRef(name);
-
-  if (claimed && claimed.mode !== 'local') {
-    console.log(`  ${WARN('!')} "${name}" already names a cloud workspace here, so the restored copy has no local name.`);
-    console.log(`  ${DIM('Re-run with --name to give it one.')}\n`);
-
-    return;
-  }
-
-  const placed = await adoptUnplacedLocalAgent(name);
-  console.log(`  ${DIM('workspace:')} ${placed.workspaceId} ${DIM('in')} ${placed.cwd}\n`);
+    const placed = yield* Effect.promise(async () => adoptUnplacedLocalAgent(name));
+    console.log(`  ${DIM('workspace:')} ${placed.workspaceId} ${DIM('in')} ${placed.cwd}\n`);
+  }));
 }
 
 async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage | 'snapshot-ended'> {
@@ -271,27 +276,29 @@ function nameFromFilename(file: string): string {
     .replace(/\.db$/, '');
 }
 
-function countRestored(dbPath: string, source: string): RestoredArchiveCounts {
-  const db = new Database(dbPath, { readonly: true });
+function countRestored(dbPath: string, source: string): Effect.Effect<RestoredArchiveCounts> {
+  return Effect.gen(function* () {
+    const db = new Database(dbPath, { readonly: true });
 
-  try {
-    requireSchemaGenesis(db, source);
+    return yield* Effect.ensuring(Effect.gen(function* () {
+      requireSchemaGenesis(db, source);
 
-    const tables = db.query<{ name: string }, []>(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
-    ).all();
+      const tables = db.query<{ name: string }, []>(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+      ).all();
 
-    let rows = 0;
+      let rows = 0;
 
-    for (const table of tables) {
-      const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM "${table.name.replace(/"/g, '""')}"`).get();
+      for (const table of tables) {
+        const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM "${table.name.replace(/"/g, '""')}"`).get();
 
-      if (!row) throw new Error(`Could not count restored table ${table.name}`);
-      rows += row.n;
-    }
+        if (!row) return yield* Effect.die(new Error(`Could not count restored table ${table.name}`));
+        rows += row.n;
+      }
 
-    return { rows, tables: tables.length };
-  } finally {
-    db.close();
-  }
+      return { rows, tables: tables.length };
+    }), Effect.sync(() => {
+      db.close();
+    }));
+  });
 }

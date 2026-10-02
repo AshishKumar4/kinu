@@ -1,3 +1,4 @@
+import { Effect, Cause } from 'effect';
 import { requireAuthConfig, resolveCloudOrigin } from '../config';
 import {
   connectDevice,
@@ -15,91 +16,95 @@ import { readDaemonLogTail } from '../daemon-log';
 import { ACCENT, DIM, ERR, OK } from '../display';
 import { ask, canPrompt, confirm } from '../prompt';
 import { authCommand } from './auth';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 
 function daemonLogTail(lines: number): string {
   return readDaemonLogTail(DAEMON_LOG_PATH, lines) ?? DIM(`No daemon log at ${DAEMON_LOG_PATH}`);
 }
 
-export async function desktopCommand(action: string | undefined, opts: { label?: string }): Promise<void> {
-  const sub = action ?? 'status';
+export function desktopCommand(action: string | undefined, opts: { label?: string }): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const sub = action ?? 'status';
 
-  if (sub === 'connect' || sub === 'install') {
-    const auth = await requireAuthOrLogin();
-    const name = await confirmConnect(opts.label);
+    if (sub === 'connect' || sub === 'install') {
+      const auth = yield* Effect.promise(async () => requireAuthOrLogin());
+      const name = yield* confirmConnect(opts.label);
 
-    if (!name) {
-      console.log(`${DIM('Nothing was installed. This machine is not linked.')}`);
+      if (!name) {
+        console.log(`${DIM('Nothing was installed. This machine is not linked.')}`);
+
+        return;
+      }
+
+      const dots = waitingDots('');
+
+      const result: ConnectDeviceResult = yield* Effect.catchCause(
+        Effect.promise(async () => connectDevice(auth, { label: name, onWaiting: dots.onWaiting })),
+        (failed) => Effect.sync((): never => {
+          // The readiness failure already quotes the daemon log; this only ends the progress line.
+          dots.end();
+          console.error(`${ERR('✗')} ${renderThrownChain({ cause: Cause.squash(failed) })}`);
+          process.exit(1);
+        }),
+      );
+
+      dots.end();
+
+      if (result.kind !== 'connected') {
+        console.error(`${ERR('✗')} ${describeConnectOutcome(result, false).message}`);
+        process.exit(1);
+      }
+
+      console.log('');
+      console.log(`${OK('✓')} Connected as ${ACCENT(result.label)}`);
+
+      for (const line of describeDeviceSandbox(result.sandbox, result.wholeMachine)) console.log(`  ${line}`);
+      console.log(`${DIM('Manage it under Account settings → Devices.')}`);
+      console.log(`${DIM('Daemon log:')} ${DAEMON_LOG_PATH}`);
+      console.log('');
 
       return;
     }
 
-    const dots = waitingDots('');
-    let result: ConnectDeviceResult;
+    if (sub === 'status') {
+      const status = daemonStatus();
+      console.log(`${DIM('Device config:')} ${status.deviceConfigPresent ? OK('present') : 'missing'} ${DIM(DEVICE_CONFIG_PATH)}`);
+      console.log(`${DIM('Daemon log:')} ${status.logPresent ? OK('present') : 'missing'} ${DIM(DAEMON_LOG_PATH)}`);
+      console.log(`${DIM('Daemon process:')} ${status.daemonPid ? OK(`running (pid ${status.daemonPid})`) : 'not running'}`);
 
-    try {
-      result = await connectDevice(auth, { label: name, onWaiting: dots.onWaiting });
-    } catch (err) {
-      // The readiness failure already quotes the daemon log; this only ends the progress line.
-      dots.end();
-      console.error(`${ERR('✗')} ${renderThrownChain({ cause: err })}`);
-      process.exit(1);
+      return;
     }
 
-    dots.end();
+    if (sub === 'logs') {
+      console.log(daemonLogTail(80));
 
-    if (result.kind !== 'connected') {
-      console.error(`${ERR('✗')} ${describeConnectOutcome(result, false).message}`);
-      process.exit(1);
+      return;
     }
 
-    console.log('');
-    console.log(`${OK('✓')} Connected as ${ACCENT(result.label)}`);
-
-    for (const line of describeDeviceSandbox(result.sandbox, result.wholeMachine)) console.log(`  ${line}`);
-    console.log(`${DIM('Manage it under Account settings → Devices.')}`);
-    console.log(`${DIM('Daemon log:')} ${DAEMON_LOG_PATH}`);
-    console.log('');
-
-    return;
-  }
-
-  if (sub === 'status') {
-    const status = daemonStatus();
-    console.log(`${DIM('Device config:')} ${status.deviceConfigPresent ? OK('present') : 'missing'} ${DIM(DEVICE_CONFIG_PATH)}`);
-    console.log(`${DIM('Daemon log:')} ${status.logPresent ? OK('present') : 'missing'} ${DIM(DAEMON_LOG_PATH)}`);
-    console.log(`${DIM('Daemon process:')} ${status.daemonPid ? OK(`running (pid ${status.daemonPid})`) : 'not running'}`);
-
-    return;
-  }
-
-  if (sub === 'logs') {
-    console.log(daemonLogTail(80));
-
-    return;
-  }
-
-  throw new Error('Usage: kinu desktop [connect|status|logs]');
+    return yield* Effect.die(new Error('Usage: kinu desktop [connect|status|logs]'));
+  }));
 }
 
 /** Linking is never a side effect: without a terminal to state the terms in, this refuses. Null when the answer is no. */
-async function confirmConnect(label?: string): Promise<string | null> {
-  console.log('');
+function confirmConnect(label?: string): Effect.Effect<string | null> {
+  return Effect.gen(function* () {
+    console.log('');
 
-  for (const line of DEVICE_CONNECT_DISCLOSURE) console.log(`  ${DIM(line)}`);
-  console.log('');
+    for (const line of DEVICE_CONNECT_DISCLOSURE) console.log(`  ${DIM(line)}`);
+    console.log('');
 
-  if (!canPrompt()) {
-    throw new Error(
-      'Linking a machine needs a terminal. Re-run `kinu connect` from one.',
-    );
-  }
+    if (!canPrompt()) {
+      return yield* Effect.die(new Error(
+        'Linking a machine needs a terminal. Re-run `kinu connect` from one.',
+      ));
+    }
 
-  const given = label?.trim();
-  const name = given === undefined || given === '' ? await ask('Device name', defaultDeviceName()) : given;
-  const proceed = await confirm('Link and start the daemon?', true);
+    const given = label?.trim();
+    const name = given === undefined || given === '' ? (yield* Effect.promise(async () => ask('Device name', defaultDeviceName()))) : given;
+    const proceed = yield* Effect.promise(async () => confirm('Link and start the daemon?', true));
 
-  return proceed ? name : null;
+    return proceed ? name : null;
+  });
 }
 
 async function requireAuthOrLogin(): Promise<{ origin: string; token: string; user?: { id: string; email: string; displayName?: string | null } }> {
