@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { threadLiveTail, type PanelAgent, type TurnLiveness, requestUrl } from "@kinu.run/core";
+import { followJobOutput, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -4525,6 +4526,55 @@ const NO_QUEUE: PendingAction[] = [];
 
 const NO_JOBS: BackgroundJob[] = [];
 
+/** A build a job took, printing: its card shows the last lines its frames told. */
+const BUILD_LINES = [
+  "$ bun run build",
+  "resolving 412 packages",
+  "warn: chunk vendor.js is 1.4 MB after minify",
+  "compiled 120 modules",
+  "compiled 248 modules",
+  "compiled 377 modules",
+] as const;
+
+const BUILD_JOB_ID = "bgjob-4e1a77c0";
+
+function buildTail(lines: number): JobOutputTail {
+  return BUILD_LINES.slice(0, lines).reduce<JobOutputTail | undefined>((tail, line, at) => followJobOutput(tail, {
+    type: JOB_OUTPUT_EVENT, jobId: BUILD_JOB_ID, seq: at + 1, dropped: 0,
+    chunks: [{ stream: line.startsWith("warn:") ? "stderr" : "stdout", text: `${line}\n` }],
+  }), undefined) ?? { seq: 0, chunks: [], omitted: 0 };
+}
+
+function buildingJob(output: JobOutputTail): BackgroundJob {
+  return {
+    id: BUILD_JOB_ID, kind: "shell", label: "workspace: bun run build", workMode: "build", status: "running",
+    result: null, error: null, createdAt: NOW - 95e3, settledAt: null, output,
+  };
+}
+
+/** `lines` frames folded, as a page folds each `job_output` frame; `live=1` folds one more a second. */
+function useBuildingJob(): BackgroundJob {
+  const params = new URLSearchParams(location.search);
+  const live = params.get("live") === "1";
+  const [lines, setLines] = useState(Math.min(Math.max(Number(params.get("lines") ?? 4) || 4, 1), BUILD_LINES.length));
+
+  useEffect(() => {
+    if (!live) return;
+    const timer = setInterval(() => { setLines((shown) => (shown >= BUILD_LINES.length ? 4 : shown + 1)); }, 1000);
+
+    return () => { clearInterval(timer); };
+  }, [live]);
+
+  return buildingJob(buildTail(lines));
+}
+
+/** The whole workspace with the build printing in Work, as a desktop page shows it. */
+function JobStreamingFrame() {
+  const building = useBuildingJob();
+
+  return <Shell backgroundJobs={[building, ...BACKGROUND_JOBS]} />;
+}
+
 function workLane(lane: string | null) {
   if (lane === "settled") {
     return { jobs: NO_JOBS, queue: PENDING_ACTIONS, rpc: settledOnlyRpc, memory: [] };
@@ -4544,7 +4594,11 @@ const WORK_MEMORIES: MemoryEntry[] = [
 ];
 
 function WorkFrame() {
-  const lane = workLane(new URLSearchParams(location.search).get("lane"));
+  const params = new URLSearchParams(location.search);
+  const streaming = params.get("lane") === "streaming";
+  const building = useBuildingJob();
+  const lane = workLane(streaming ? null : params.get("lane"));
+  const jobs = streaming ? [building, ...lane.jobs] : lane.jobs;
 
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -4554,7 +4608,7 @@ function WorkFrame() {
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={lane.memory} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-          backgroundJobs={lane.jobs} onRefreshJobs={() => {}} pendingActions={lane.queue}
+          backgroundJobs={jobs} onRefreshJobs={() => {}} pendingActions={lane.queue}
           tabPresence={{ explorations: true, work: true }}
           rpc={lane.rpc}
         />
@@ -6431,6 +6485,7 @@ async function mount() {
     ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>, entries: ["/"] }],
     ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
+    ["jobstreaming", { node: <JobStreamingFrame />, entries: ["/"] }],
     // `&path=/projects/ops` opens a folder; `shared` is the other tab; `drive-recipient` holds only what others shared.
     ["drive", { node: <DrivePageFrame />, entries: [`${APP_ROUTES.drive}${new URLSearchParams(location.search).get("path") ?? ""}`] }],
     ["shared", { node: <DrivePageFrame />, entries: [APP_ROUTES.shared] }],
