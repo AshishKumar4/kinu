@@ -29,7 +29,6 @@ import {
   type ChainState,
   type SnapshotChainPorts,
 } from '../../src/snapshot-chain';
-import { PLATFORM_TMPFS_BYTES } from '../../src/stream-archive';
 import {
   DEVBOX_RUNTIME_DIR,
   DEVBOX_WORKDIR,
@@ -44,6 +43,9 @@ const STORE_ROOT = chainStoreRoot('boxes/conformance-box');
 /** Must equal `lowerDeltaRoot` in `src/snapshot-chain.ts`, where `deltaLayerServed` looks;
  *  a layer mounted elsewhere is not seen as served and the next commit archives an empty upper. */
 const CHAIN_DELTA_LAYER_ROOT = '/var/tmp/devbox/lower-delta';
+
+/** The platform's tmpfs, measured in a Medium container (D55): the model holds the platform's fact. */
+const PLATFORM_TMPFS_BYTES = 64 * 1024 * 1024;
 
 const deltaLayerMountPoint = (chainId: string): string => `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`;
 

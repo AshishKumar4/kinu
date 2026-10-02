@@ -2813,6 +2813,98 @@ Platform time on a new image: the first deploy of `a41e4a11…` polled
 (17:01:49 to 17:08:49Z), then deployed. That is about 20 minutes, which any
 deploy of a new image may pay.
 
+D58. A chain layer packs at zstd level 1 and uploads sixteen 16 MiB parts at
+once (2026-10-01). D57 left a large base bound by its upload: about 13 MiB/s a
+box, with four 5 MiB parts in flight. That put a 10 GiB save near or past the
+platform's 900 s alarm cut, and a flush past it is delivered twice. D53's E′
+shape (zstd level 1, sixteen 16 MiB parts) saved a 224 MiB base in 4.3 s,
+against 11.9 s for E.
+
+The change (`stream-archive.ts`):
+- mksquashfs packs at `-Xcompression-level 1`. Its zstd default is level 15
+  (mksquashfs 4.6.1 in the image).
+- A layer staged on disk streams as 16 MiB parts, 16 in flight, with a
+  512 MiB window. So the disk path now needs up to 1 GiB free, twice the
+  window; with less, the layer streams through tmpfs.
+- A layer staged on the platform's 64 MiB tmpfs keeps 5 MiB parts, R2's
+  least, two in flight, in a 16 MiB window.
+
+Before and after ran on the same fixtures, all but one sample in the same
+hours: Medium boxes, random data, internet off, the durable_object policy. The
+images were
+`648726e8…` (sync.js `22c7f1af…`) and `daefe832…` (sync.js `2171d5f4…`),
+pinned through `BENCH_IMAGE_DIGEST`. Each figure is the median (range, n) of
+the save's time at the driver. "Five at once" means five boxes saving
+together. The two lanes ran side by side, so up to ten boxes saved at once.
+
+| Base save | Before | After | Per box, before → after |
+|---|---|---|---|
+| 224 MiB, one box | 24.7 s (23.3 to 29.2, n=5) | 16.4 s (15.0 to 18.4, n=5) | 9 → 14 MiB/s |
+| 2 GiB, one box | 193.8 s (173.7 to 208.7, n=5) | 52.9 s (42.9 to 53.0, n=5) | 11 → 39 MiB/s |
+| 2 GiB, five at once | 158.9 s (153.5 to 198.7, n=5) | 133.5 s (53.0 to 143.5, n=5) | 13 → 15 MiB/s |
+| 10 GiB, one box | 974.3 s (751.6 to 989.7, n=5) | 219.1 s (173.8 to 234.1, n=5) | 11 → 47 MiB/s |
+| 10 GiB, five at once | 1,010.4 s (964.3 to 1,315.9, n=5) | 380.0 s (269.4 to 420.1, n=5) | 10 → 27 MiB/s |
+
+Every save committed, and every record held the whole base. Random data does
+not compress, so level 1 stored 4 KiB more at each size: 2,147,504,128
+against 2,147,508,224 bytes at 2 GiB, and 10,737,442,816 against
+10,737,446,912 at 10 GiB. Every before-lane 10 GiB save run alongside other
+boxes took longer than 900 s and was delivered twice. Each second delivery
+reported the commit it waited behind (D57's fix), so the records stayed
+correct. The one before-lane sample run with no other box saving took 752 s,
+which is the low end of its row.
+
+The level costs bytes on data that compresses. On this host, packing the
+repository's `node_modules` (1,948,715,012 bytes in 121,250 files) with
+`-processors 2`, as a Medium box has two CPUs, n=3 each with identical sizes:
+the default level packed 465,465,344 bytes in 81 to 84 s; level 1 packed
+566,403,072 bytes in 2.1 to 2.4 s. That is 22% more stored, at about 40 times
+the pack speed. At the default level such a base packs at about 23 MiB/s,
+which is below the 39 to 47 MiB/s one box now uploads. This host's CPUs are
+not the container's, so the ratio is the finding, not the times
+(`bench-artifacts/save-speed/zstd-levels-node-modules.log`).
+
+Five boxes at once still share the upload. After the change, 2 GiB at five
+at once ran at 15 MiB/s a box against 39 alone, and 10 GiB at 27 against 47.
+What bounds the shared rate is not established here; the boxes, the account
+and R2 are each candidates.
+
+fuse-overlayfs is not what bounds a save. A first base packs `/workspace`
+through the overlay (a delta packs the upper on disk), so each save was
+preceded by a read of the same tree both ways: a `tar` after a cache drop the
+container may refuse (`designA.ts`, `SBS_A_READ_PROBE`). At 2 GiB, which fits
+in the box's 8 GiB of memory, the overlay read 1,809 MiB/s against 1,879 from
+the disk (one box, before). At 10 GiB the overlay read 155 MiB/s (137 to 172)
+against 270 (250 to 279) from the disk, one box after the change, and 129
+(113 to 222) against 208 (188 to 351) at five boxes. Both are well above what
+the save reached, 47 and 27 MiB/s a box.
+
+The 224 MiB rows come from the phases probe. As in D57's small runs, its base
+save reports "committed, but reseating it failed: ... /workspace: Device or
+resource busy" on both images. The commit lands before the reseat, and the
+time is the commit's. The probe's sampler starts by exec from /workspace and
+stays running, which by inference is what holds the mount; this was not
+traced.
+
+Tests: `stream-script.test.ts` runs the shipped script with its own small
+profile (5 MiB parts, four in flight, 40 MiB window), so a test archive spans
+many windows. The chain's tests use `DISK_STREAM`, and the strategy model
+holds the platform's 64 MiB tmpfs as its own fact. Image `daefe832…`, sync.js
+`2171d5f4…`, re-pinned in `upstream.json` and the three wranglers. devbox
+suite: 524 pass.
+The bench's `BENCH_IMAGE_DIGEST` (`1cca04102`) runs another pushed digest of
+the same repository. Runs: `bench-artifacts/save-speed/` (`lane.sh`, `one.sh`,
+`table.py`; the 224 MiB rows in `small-*.log`); every Worker, app and bucket
+was deleted. The before lane's 10 GiB one-box row took three runs:
+- The first failed at its first request, which got a 404 page from the new
+  Worker's address.
+- The rerun (`one.sh`) saved four boxes; its first save overlapped the after
+  lane's last. A host restart cut it during the fifth box, and its Worker,
+  app and bucket were deleted by hand.
+- The fifth sample ran alone on 2026-10-02 at about 03:55Z. The first try
+  failed the same way, its Worker and app were deleted by hand, and the
+  retry saved.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

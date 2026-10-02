@@ -45,7 +45,7 @@ import {
   recordCheckpointFailure,
   stampFailure,
 } from './storage';
-import { normalizeArchiveExclude, PLATFORM_TMPFS_BYTES, STREAM_WINDOW_BYTES, streamCommand } from './stream-archive';
+import { DISK_STREAM, normalizeArchiveExclude, streamCommand, TMPFS_STREAM, type StreamProfile } from './stream-archive';
 
 /** One writable mount for the container's life: the SDK refuses a binding remounted with a
  *  different readOnly setting, and squashfuse holds layer files under it; the prefix bounds. */
@@ -618,7 +618,7 @@ function chainShell(exec: ContainerExec, root: string) {
     },
     streamArchive: async (input: {
       readonly sourceDir: string; readonly archivePath: string; readonly excludes: readonly string[];
-      readonly objectUrl: string; readonly windowBytes: number;
+      readonly objectUrl: string; readonly profile: StreamProfile;
     }): Promise<number> => {
       const { sourceDir, archivePath, objectUrl } = input;
       const result = await exec(streamCommand({ ...input, excludeFile: `${archivePath.slice(0, archivePath.lastIndexOf('/'))}/excludes.txt` }));
@@ -1267,13 +1267,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (!storeHeld) await mountStoreOnce();
     const objectUrl = ports.storeObjectUrl(key);
     const room = await shell.stageRoom(sourceDir, excludes);
-    const onDisk = room === null || room.free >= Math.min(room.need, 2 * STREAM_WINDOW_BYTES);
+    const onDisk = room === null || room.free >= Math.min(room.need, 2 * DISK_STREAM.windowBytes);
 
     if (!onDisk) ports.log(`${stageDir} has ${String(room.free)} bytes free; streaming ${sourceDir} through ${tmpStageDir}.`);
 
     const published = await shell.streamArchive({
       sourceDir, archivePath: `${onDisk ? stageDir : tmpStageDir}/layer.sqsh`, excludes, objectUrl,
-      windowBytes: onDisk ? STREAM_WINDOW_BYTES : PLATFORM_TMPFS_BYTES / 4,
+      profile: onDisk ? DISK_STREAM : TMPFS_STREAM,
     });
 
     if (!onDisk) await ports.exec(`rm -rf ${shellPath(tmpStageDir)}`);

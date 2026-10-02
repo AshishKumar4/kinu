@@ -18,7 +18,7 @@ function devboxScratchDir(label: string): string {
 }
 
 import { chainAdvanced, layerUnreadable } from '../src/errors';
-import { archiveCommand, STREAM_WINDOW_BYTES, streamCommand } from '../src/stream-archive';
+import { archiveCommand, DISK_STREAM, streamCommand } from '../src/stream-archive';
 import {
   archiveSizeCommand,
   baseObjectKey,
@@ -2139,7 +2139,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         excludeFile: '/stage/excludes.txt',
         excludes: [],
         objectUrl: `http://r2.internal/BACKUP_BUCKET/${CHAIN_ID}/data.sqsh`,
-        windowBytes: STREAM_WINDOW_BYTES,
+        profile: DISK_STREAM,
       });
 
       expect(command).toContain('devbox-stream.mjs');
