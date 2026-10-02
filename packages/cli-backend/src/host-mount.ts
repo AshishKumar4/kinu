@@ -7,8 +7,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { FileCheckpoints, FileReach, MountedVfs } from '@kinu.run/core';
-import { SLATES_ROOT, WORKSPACE_ROOT, workspacePath } from '@kinu.run/core';
-import { toVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { SLATES_ROOT, WORKSPACE_ROOT, workspaceScopePath } from '@kinu.run/core';
+import { toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
 
 function throwVfsError(input: { error: unknown; path: string }): never {
@@ -77,19 +77,22 @@ function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: st
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
 
     if (isAbsolute(path) && withinRoot(root, direct)) return { hostPath: direct, outside: false };
-    const canonical = workspacePath(path);
+    const canonical = workspaceScopePath(path);
+    let mapped: string;
 
-    if (canonical === '/' || canonical === WORKSPACE_ROOT) return { hostPath: root, outside: false };
+    if (canonical === '/' || canonical === WORKSPACE_ROOT) mapped = root;
+    else if (canonical.startsWith(`${WORKSPACE_ROOT}/`)) mapped = resolve(root, canonical.slice(WORKSPACE_ROOT.length + 1));
+    else if (canonical === SLATES_ROOT || canonical.startsWith(`${SLATES_ROOT}/`)) mapped = resolve(root, `.${canonical}`);
+    else return { hostPath: direct, outside: true };
 
-    if (canonical.startsWith(`${WORKSPACE_ROOT}/`)) {
-      return { hostPath: resolve(root, canonical.slice(WORKSPACE_ROOT.length + 1)), outside: false };
+    if (!withinRoot(root, mapped)) {
+      throwVfsError({
+        error: new VfsError('EACCES', `path escapes the workspace directory ${root}: ${path}; name a file outside it by its absolute path`, path),
+        path,
+      });
     }
 
-    if (canonical === SLATES_ROOT || canonical.startsWith(`${SLATES_ROOT}/`)) {
-      return { hostPath: resolve(root, `.${canonical}`), outside: false };
-    }
-
-    return { hostPath: direct, outside: true };
+    return { hostPath: mapped, outside: false };
   };
 }
 
@@ -106,16 +109,28 @@ export function directoryFileReach(cwd: string | null, table: MountedVfs | null)
 
 /** The working directory as the file plane ({@link cwdPlaneLocator}). */
 export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
-  const host = createHostMountVFS(resolve(cwd), checkpoints);
-  const locate = cwdPlaneLocator(cwd);
+  const root = resolve(cwd);
+  const host = createHostMountVFS(root, checkpoints);
+  const locate = cwdPlaneLocator(root);
   const hostPath = (path: string): string => locate(path).hostPath;
+
+  const remove = (path: string) => {
+    const target = hostPath(path);
+
+    if (target === root) {
+      throwVfsError({ error: new VfsError('EACCES', 'the workspace directory itself cannot be removed', path), path });
+    }
+
+    return host.unlink(target);
+  };
 
   return {
     readFile: (path) => host.readFile(hostPath(path)),
     writeFile: (path, data) => host.writeFile(hostPath(path), data),
     readdir: (path) => host.readdir(hostPath(path)),
     stat: (path, options) => host.stat(hostPath(path), options),
-    unlink: (path) => host.unlink(hostPath(path)),
+    unlink: remove,
+    removeRecursive: remove,
     mkdir: (path, opts) => host.mkdir(hostPath(path), opts),
   };
 }

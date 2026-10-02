@@ -314,6 +314,16 @@ native namespace. `/workspace` is not a home alias. A mounted path remains
 its mount's: `/shared/..` and a path leaving `/pc` refuse with `EPERM`; a
 relative `shared/...` or `pc/...` is an ordinary workspace file.
 
+The bare `/home/user` name stays a symbolic link: `lstat`, `readlink`,
+`unlink`, rename and tree removal address that inode, not `/home/main`.
+Only descendants use the canonical home name. Directory grants and the
+CLI's bound plane follow the link through `workspaceScopePath`, over the
+same normalization pass. The CLI checks the mapped host path is still in
+the bound directory, and refuses removal of that directory itself before
+walking or deleting any child. Its directory rename route refuses before
+I/O. File-manager path refusals return error values, including SOUL saves,
+rename and delete; archives use the same SOUL classification.
+
 The duplicate rules at `70464f439` gave the following answers, measured
 2026-10-01 through the two runtime file planes. `f` is a seeded workspace
 file; “absent” means `stat` returned null. The local plane was bound to a
@@ -324,7 +334,7 @@ scratch directory, with no device or Drive connected.
 | Empty, `.`, `./` | Home directory | Bound directory | Home |
 | `f`, `./f`, `.//f`, `dir/../f` | Home file | Bound-directory file | Same home file |
 | `../f`, `dir/../../f` | Outside home, absent | `EACCES` | `EACCES` |
-| `/home/main[/]`, `/home/user[/]` | Home directory | Bound directory | Canonical home |
+| `/home/main[/]`, `/home/user[/]` | Home directory | Bound directory | Same directory view; the bare Nimbus link keeps its inode name |
 | `/home/main/f[/]`, `/home/user/f`, `/home/main/./f` | Home file | Bound-directory file | Canonical home file |
 | `/home/main/../f`, `/home/user/../f` | Outside home, absent | `EACCES` | `EACCES` |
 | `/home//main/f` | Home file | Native host path, absent | Canonical home file |

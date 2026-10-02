@@ -335,6 +335,13 @@ and a `dev` or `start` script. Capabilities are declared in the strict
 `slate.bindings` field and called as `this.env.NAME.member(...args)`. Write the
 files through the ordinary file plane, then call
 `workspace.slates.<id>.$preview()` to boot a live preview.
+
+Workspace namespace path prefixes must be absolute and contain neither
+traversal nor NUL; a malformed prefix refuses the project instead of
+shrinking its grant. `/folder/` and `/folder` both grant the directory itself
+and its descendants. A Nimbus home prefix follows the link to the canonical
+home. A denied file call names its permitted prefixes.
+
 `workspace.slates.<id>.<method>(...args)` calls a class method with JSON
 arguments, as the slate's own client does. `$commit()` freezes source,
 `$history(after?)` reads versions a page at a time, oldest first, and names the

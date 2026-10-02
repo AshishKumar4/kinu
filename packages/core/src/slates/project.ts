@@ -6,14 +6,21 @@ import { TierIdSchema } from '../types/profile';
 import { renderIssues, type JsonPrimitive } from '../utils/json';
 import { SLATE_INLINE_HEIGHT } from './host-context';
 import { SLATE_READ_MODELS } from './read-models';
+import { workspaceScopePath } from '../vfs/workspace-path';
 
 const Name = v.pipe(v.string(), v.minLength(1));
 
 const SourcePath = v.pipe(Name, v.check((path) => !path.startsWith('/') && !path.includes('\0') && !path.split('/').includes('..'), 'must name a file inside this Slate'));
 
+const PathPrefix = v.pipe(
+  Name,
+  v.check((path) => path.startsWith('/') && !path.includes('\0') && !path.split('/').includes('..'), 'must name an absolute path without traversal'),
+  v.transform(workspaceScopePath),
+);
+
 const Binding = v.variant('kind', [
   v.pipe(
-    v.strictObject({ kind: v.literal('namespace'), namespace: Name, members: v.optional(v.array(Name)), paths: v.optional(v.array(Name)) }),
+    v.strictObject({ kind: v.literal('namespace'), namespace: Name, members: v.optional(v.array(Name)), paths: v.optional(v.array(PathPrefix)) }),
     v.check((binding) => binding.paths === undefined || binding.namespace === 'workspace', 'paths scope only a workspace namespace binding'),
   ),
   v.strictObject({ kind: v.literal('rpc'), methods: v.pipe(v.array(v.picklist(SLATE_READ_MODELS)), v.minLength(1)) }),

@@ -174,6 +174,26 @@ describe("ExecutorFileUpload", () => {
 });
 
 describe("the owner's SOUL.md is set, not moved or deleted", () => {
+  test('invalid workspace paths answer errors for every mutation without changing a file', async () => {
+    const plane = makePlane({ '/home/main/keep.md': new TextEncoder().encode('keep') });
+
+    expect(await deleteExecutorPathOp(plane.router, 'workspace', '../outside.md'))
+      .toMatchObject({ error: expect.stringContaining('EACCES') });
+    expect(await renameExecutorPathOp(plane.router, 'workspace', '../outside.md', 'renamed.md'))
+      .toMatchObject({ error: expect.stringContaining('EACCES') });
+    expect(await renameExecutorPathOp(plane.router, 'workspace', 'keep.md', '../outside.md'))
+      .toMatchObject({ error: expect.stringContaining('EACCES') });
+
+    const upload = new ExecutorFileUpload(plane.router, 'workspace', '../outside.md', {
+      writeSoul: async () => { throw new Error('a traversal is not an owner SOUL write'); },
+    });
+
+    expect(await upload.chunk(0, new TextEncoder().encode('escaped'), true))
+      .toMatchObject({ error: expect.stringContaining('EACCES') });
+    expect([...plane.files.keys()]).toEqual(['/home/main/keep.md']);
+    expect(new TextDecoder().decode(plane.files.get('/home/main/keep.md'))).toBe('keep');
+  });
+
   test("a rename onto it or a delete of it says where the soul is set, and writes nothing", async () => {
     const plane = makePlane();
 

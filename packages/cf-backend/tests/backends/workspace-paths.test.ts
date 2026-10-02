@@ -7,6 +7,7 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { scratchDir } from '@kinu.run/test-utils';
 import { createCLIRuntime } from '../../../cli-backend/src/runtime';
 import { orchestratorHarness, workspaceFiles } from '../helpers/actor-harness';
+import { testBackends } from './backend';
 
 async function publicPlane(name: 'cf' | 'cli') {
   if (name === 'cf') {
@@ -47,7 +48,7 @@ async function publicPlane(name: 'cf' | 'cli') {
   };
 }
 
-for (const name of ['cf', 'cli'] as const) {
+for (const name of testBackends()) {
   describe(`${name} public workspace paths`, () => {
     test('every home spelling reads and updates the same file, without copying it', async () => {
       const plane = await publicPlane(name);

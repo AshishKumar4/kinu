@@ -117,6 +117,29 @@ describe('a new workspace', () => {
 });
 
 describe('the link', () => {
+  test('the public file plane keeps the Nimbus home link as its own inode', async () => {
+    const { bundle } = await boot(new Database(':memory:'));
+
+    expect(await bundle.vfs.stat('/home/user', { follow: false })).toMatchObject({ type: 'symlink' });
+    expect(await bundle.vfs.readlink('/home/user')).toBe('/home/main');
+  });
+
+  for (const operation of ['unlink', 'rename', 'removeRecursive'] as const) {
+    test(`${operation} of a writable Nimbus home link leaves the canonical home intact`, async () => {
+      const { bundle, kernel } = await boot(new Database(':memory:'));
+      kernel.chmod('/home', 0o777);
+      await writeText(bundle.vfs, 'notes.md', 'keep the home');
+
+      if (operation === 'rename') await bundle.vfs.rename('/home/user', '/home/nimbus-link');
+      else await bundle.vfs[operation]('/home/user');
+
+      expect(await readText(bundle.vfs, '/home/main/notes.md')).toBe('keep the home');
+      expect(kernel.exists('/home/user')).toBe(false);
+
+      if (operation === 'rename') expect(kernel.readlink('/home/nimbus-link')).toBe('/home/main');
+    });
+  }
+
   test('the agent can neither remove nor replace it', async () => {
     const { bundle, kernel, user } = await boot(new Database(':memory:'));
 

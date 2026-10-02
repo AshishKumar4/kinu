@@ -198,6 +198,22 @@ describe('a fork over the bound directory', () => {
 });
 
 describe('addressing the bound directory', () => {
+  test('bare virtual homes cannot remove or rename the bound project directory', async () => {
+    for (const home of ['/home/main', '/home/user']) {
+      const { state, project } = roots('cwd-plane-home-anchor');
+      const rt = agentRuntime(state, 'solo', project);
+      const rename = present(rt.storage.vfs.rename?.bind(rt.storage.vfs), 'the mounted rename route');
+      const removeTree = present(rt.storage.vfs.removeRecursive?.bind(rt.storage.vfs), 'the mounted removal route');
+      await writeText(rt.storage.vfs, 'keep.txt', 'the project survives');
+
+      await expect(rename(home, join(project, '..', 'renamed'))).rejects.toMatchObject({ code: 'EPERM' });
+      await expect(rt.storage.vfs.unlink(home)).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(removeTree(home)).rejects.toMatchObject({ code: 'EACCES' });
+      expect(readFileSync(join(project, 'keep.txt'), 'utf8')).toBe('the project survives');
+      expect(statSync(project).isDirectory()).toBe(true);
+    }
+  });
+
   test('every address family the tree produces names the same bytes', async () => {
     const { state, project } = roots('cwd-plane-addresses');
     const rt = agentRuntime(state, 'solo', project);
