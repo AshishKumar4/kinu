@@ -1,5 +1,5 @@
 export {
-  createInlineWorkspace, inlineWorkspaceStorage, sqlStorageOver, wrapDatabase, type AgentDatabase,
+  createInlineWorkspace, inlineWorkspaceStorage, sqlStorageOver, watchStatements, wrapDatabase, type AgentDatabase,
 } from './inline-primitives';
 
 export {

@@ -190,7 +190,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
 }
 
 
-const JOB_DOT = { running: "p-dot-warning", completed: "p-dot-success", failed: "p-dot-danger" };
+const JOB_DOT = { running: "p-dot-warning", serving: "p-dot-success", completed: "p-dot-success", failed: "p-dot-danger" };
 
 function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const { agentId } = useParams();

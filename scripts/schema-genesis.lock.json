@@ -145,6 +145,12 @@
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "background_job_serves@packages/core/src/jobs/store.ts": [
+    "actor_id TEXT NOT NULL",
+    "job_id TEXT NOT NULL",
+    "port INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, job_id)"
+  ],
   "background_jobs@packages/core/src/jobs/store.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",

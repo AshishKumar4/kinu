@@ -3818,7 +3818,7 @@ function AgentChatsScene() {
   const send = (agent: string) => (text: string, mode: ChatMode) => {
     setSent((current) => [...current, { agent, mode, text }]);
     setTranscripts((current) => ({ ...current, [agent]: [...(current[agent] ?? []), text] }));
-    // The first-message titler, as the `subordinates_changed` delivery.
+    // The first-message titler, as the roster re-read its frame asks for.
     setTimeout(() => {
       setRoster((current) => current.map((entry) =>
         entry.name === agent && entry.displayName === ""

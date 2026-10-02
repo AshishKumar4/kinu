@@ -638,7 +638,6 @@ export {
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
   type SubordinateRuntime,
-  type SubordinatesChangedEvent,
 } from './subordinates/support';
 
 export {
@@ -1614,7 +1613,7 @@ export {
   backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership,
-  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
+  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
@@ -1901,7 +1900,7 @@ export type {
 } from './read-models/workspace-diff';
 
 export {
-  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, readsMovedByFiles, readsWrittenBy,
+  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, ROSTER_READS, readsMovedByFiles, readsWrittenBy,
   type LiveRead, type ReadsChangedFrame,
 } from './read-models/live-reads';
 

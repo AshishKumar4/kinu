@@ -897,6 +897,30 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
     await client.close();
   });
 
+  // 2026-10-01: a cloud workspace's reads_changed frames were dropped here, so the TUI's agents hub went stale on cloud too.
+  test('a frame naming the reads a write moved reaches the client as a broadcast', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('hire a scout');
+    const request = await firstChatRequest(mock);
+
+    mock.reply({ type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubordinates'] });
+
+    const moved = await waitFor(() => events
+      .filter((e): e is Extract<AgentClientEvent, { type: 'broadcast' }> => e.type === 'broadcast')
+      .map((e) => e.event)
+      .find((e) => e.type === 'reads_changed'), 'the reads frame');
+
+    expect(moved).toEqual({ type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubordinates'] });
+
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hired' }, true));
+    await turn;
+    await client.close();
+  });
+
   test('a rejected branch surfaces an honest error status, never a takes set', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);

@@ -340,7 +340,6 @@ describe('an agent\'s window hears only what it may act on', () => {
     const { agent } = orchestratorHarness();
     const heard = new Map<string, string[]>([['workspace', []], ['agent', []]]);
     const windows = [socketConnection({ id: 'workspace', tags: [] })];
-    const rosterSent = Promise.withResolvers<void>();
 
     // The platform's fan-out: every window but the ones named.
     const fanout = spyOn(Object.getPrototypeOf(ActorAgent.prototype), 'broadcast').mockImplementation((message: string, without?: string[]) => {
@@ -348,8 +347,6 @@ describe('an agent\'s window hears only what it may act on', () => {
       const type = frame.success ? frame.output.type : '';
 
       for (const window of windows) if (!(without ?? []).includes(window.id)) heard.get(window.id)?.push(type);
-
-      if (type === 'subordinates_changed' && windows.length === 2) rosterSent.resolve();
     });
 
     Object.defineProperty(agent, 'getConnections', { configurable: true, value: () => windows });
@@ -365,7 +362,6 @@ describe('an agent\'s window hears only what it may act on', () => {
 
       windows.push(socketConnection({ id: 'agent', tags: [tag] }));
       await agent.renameSubordinateAgent(name, 'Ledger auditor');
-      await rosterSent.promise;
       await agent.announceSubordinatePlan({ path: [name], id: 'plan-1', revision: 1 });
       await agent.cancelCurrentWork();
       await agent.setShellApprovalMode('strict');
@@ -383,7 +379,7 @@ describe('an agent\'s window hears only what it may act on', () => {
     }
 
     const own = [
-      'subordinates_changed', 'workspace_plan_updated', 'work_cancelled', 'reads_changed', 'slates_changed', 'changes_moved',
+      'workspace_plan_updated', 'work_cancelled', 'reads_changed', 'slates_changed', 'changes_moved',
     ];
 
     expect(heard.get('workspace')).toEqual(expect.arrayContaining([...own, 'device_available']));

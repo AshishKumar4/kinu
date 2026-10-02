@@ -219,7 +219,7 @@ A workspace holds the state. Agents are the actors that work inside it.
     fresh workspace from the mission and sends it the message: no conversation
     history or file crosses, and no lineage is recorded. The roster the UI shows
     comes from `listSubordinates()`
-    (RPC, plus the `subordinates_changed` socket event) and holds this
+    (RPC, re-read when a `reads_changed` frame names it) and holds this
     workspace's durable subordinates. Swarm nodes are left off because they
     live only for the search that spawned them.
 

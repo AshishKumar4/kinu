@@ -171,6 +171,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // Rows are actor-private; the `*InWorkspace` aggregates are machine-wide because
     // every detached job is a live process tree (jobs/runner.ts).
     background_jobs: EVERYWHERE,
+    background_job_serves: EVERYWHERE,
     // Once-only claims (tools/effect-claim.ts), created by `initWorkspaceSchema`; the
     // wrapper in `buildActorTools` needs it on every root.
     tool_effect_claims: EVERYWHERE,
