@@ -1,6 +1,7 @@
 // OpenCode bridge provider (local only): reuses a local opencode install's
 // providers and auth, reading auth.json at request time and proxying requests.
 
+import { Effect } from 'effect';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
 import {
@@ -8,7 +9,7 @@ import {
 } from '@kinu.run/core';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@kinu.run/core';
-import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '@kinu.run/core/obs';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -154,101 +155,105 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
 
   const availability = () => (availabilityCache ??= probeFn());
 
-  function readCredential(): OpenCodeCredential {
-    // OAuth entries need a provider-native path; they cannot supply the hosted
-    // route map this well-known path consumes.
-    if (!existsSync(authPath)) {
-      throw new Error(`opencode auth not found at ${authPath}. Run: opencode auth login`);
-    }
+  function readCredential(): Effect.Effect<OpenCodeCredential> {
+    return Effect.gen(function* () {
+      // OAuth entries need a provider-native path; they cannot supply the hosted
+      // route map this well-known path consumes.
+      if (!existsSync(authPath)) {
+        return yield* Effect.die(new Error(`opencode auth not found at ${authPath}. Run: opencode auth login`));
+      }
 
-    const doc = v.parse(openCodeAuthSchema, JSON.parse(readFileSync(authPath, 'utf8')));
-    const entries = Object.entries(doc);
+      const doc = v.parse(openCodeAuthSchema, JSON.parse(readFileSync(authPath, 'utf8')));
+      const entries = Object.entries(doc);
 
-    if (entries.length === 0) {
-      throw new Error('opencode auth.json is empty. Run: opencode auth login');
-    }
+      if (entries.length === 0) {
+        return yield* Effect.die(new Error('opencode auth.json is empty. Run: opencode auth login'));
+      }
 
-    const entry = entries[0];
+      const entry = entries[0];
 
-    if (!entry) throw new Error('opencode auth.json is empty. Run: opencode auth login');
-    const [origin, cred] = entry;
+      if (!entry) return yield* Effect.die(new Error('opencode auth.json is empty. Run: opencode auth login'));
+      const [origin, cred] = entry;
 
-    if (cred.type !== 'wellknown' || !cred.token) {
-      throw new Error(`opencode is not authenticated with ${origin}. Run: opencode auth login ${origin}`);
-    }
+      if (cred.type !== 'wellknown' || !cred.token) {
+        return yield* Effect.die(new Error(`opencode is not authenticated with ${origin}. Run: opencode auth login ${origin}`));
+      }
 
-    return {
-      origin: origin.replace(/\/+$/, ''),
-      key: cred.key ?? 'TOKEN',
-      token: cred.token,
-    };
+      return {
+        origin: origin.replace(/\/+$/, ''),
+        key: cred.key ?? 'TOKEN',
+        token: cred.token,
+      };
+    });
   }
 
   function substitute(value: string, cred: OpenCodeCredential): string {
     return value.replaceAll(`{env:${cred.key}}`, cred.token);
   }
 
-  async function loadConfig(): Promise<ResolvedConfig> {
-    const cred = readCredential();
-    const signature = `${cred.origin}:${cred.token}`;
+  function loadConfig(): Effect.Effect<ResolvedConfig> {
+    return Effect.gen(function* () {
+      const cred = yield* readCredential();
+      const signature = `${cred.origin}:${cred.token}`;
 
-    if (configCache && configCache.signature === signature && Date.now() - configCache.loadedAt < CONFIG_TTL_MS) {
-      return configCache.config;
-    }
-
-    const metaRes = await fetchImpl(`${cred.origin}/.well-known/opencode`);
-
-    if (!metaRes.ok) throw new Error(`opencode metadata request failed: HTTP ${metaRes.status}`);
-    const meta = v.parse(metadataSchema, await metaRes.json());
-    const configURL = meta.remote_config?.url;
-
-    if (!configURL) {
-      throw new Error('opencode metadata has no remote configuration URL');
-    }
-
-    // Substitute auth tokens in header values.
-    const configHeaders = new Headers();
-
-    for (const [name, value] of Object.entries(meta.remote_config?.headers ?? {})) {
-      configHeaders.set(name, substitute(value, cred));
-    }
-
-    const configRes = await fetchImpl(configURL, { headers: configHeaders });
-
-    if (!configRes.ok) throw new Error(`opencode configuration request failed: HTTP ${configRes.status}`);
-    const config = v.parse(remoteConfigSchema, await configRes.json());
-
-    const providers: Record<string, ProviderRoute> = {};
-
-    for (const [providerId, provider] of Object.entries(config.provider ?? {})) {
-      if (!provider.options?.baseURL) continue;
-      const headers: Record<string, string> = {};
-
-      for (const [name, value] of Object.entries(provider.options?.headers ?? {})) {
-        headers[name] = substitute(value, cred);
+      if (configCache && configCache.signature === signature && Date.now() - configCache.loadedAt < CONFIG_TTL_MS) {
+        return configCache.config;
       }
 
-      providers[providerId] = {
-        baseURL: provider.options.baseURL.replace(/\/+$/, ''),
-        headers,
-      };
-    }
+      const metaRes = yield* Effect.promise(async () => fetchImpl(`${cred.origin}/.well-known/opencode`));
 
-    const models = await discoverModels(spawnFn);
-    const firstModel = models[0];
+      if (!metaRes.ok) return yield* Effect.die(new Error(`opencode metadata request failed: HTTP ${metaRes.status}`));
+      const meta = v.parse(metadataSchema, yield* Effect.promise(async () => metaRes.json()));
+      const configURL = meta.remote_config?.url;
 
-    if (!firstModel) throw new Error('opencode reports no available models');
-    modelMetadata = new Map(models.map((model) => [model.id, model]));
+      if (!configURL) {
+        return yield* Effect.die(new Error('opencode metadata has no remote configuration URL'));
+      }
 
-    const configuredDefault = config.model ?? '';
+      // Substitute auth tokens in header values.
+      const configHeaders = new Headers();
 
-    const defaultModel = models.some((model) => model.id === configuredDefault)
-      ? configuredDefault
-      : firstModel.id;
+      for (const [name, value] of Object.entries(meta.remote_config?.headers ?? {})) {
+        configHeaders.set(name, substitute(value, cred));
+      }
 
-    configCache = { signature, loadedAt: Date.now(), config: { defaultModel, providers, models } };
+      const configRes = yield* Effect.promise(async () => fetchImpl(configURL, { headers: configHeaders }));
 
-    return configCache.config;
+      if (!configRes.ok) return yield* Effect.die(new Error(`opencode configuration request failed: HTTP ${configRes.status}`));
+      const config = v.parse(remoteConfigSchema, yield* Effect.promise(async () => configRes.json()));
+
+      const providers: Record<string, ProviderRoute> = {};
+
+      for (const [providerId, provider] of Object.entries(config.provider ?? {})) {
+        if (!provider.options?.baseURL) continue;
+        const headers: Record<string, string> = {};
+
+        for (const [name, value] of Object.entries(provider.options?.headers ?? {})) {
+          headers[name] = substitute(value, cred);
+        }
+
+        providers[providerId] = {
+          baseURL: provider.options.baseURL.replace(/\/+$/, ''),
+          headers,
+        };
+      }
+
+      const models = yield* Effect.promise(async () => discoverModels(spawnFn));
+      const firstModel = models[0];
+
+      if (!firstModel) return yield* Effect.die(new Error('opencode reports no available models'));
+      modelMetadata = new Map(models.map((model) => [model.id, model]));
+
+      const configuredDefault = config.model ?? '';
+
+      const defaultModel = models.some((model) => model.id === configuredDefault)
+        ? configuredDefault
+        : firstModel.id;
+
+      configCache = { signature, loadedAt: Date.now(), config: { defaultModel, providers, models } };
+
+      return configCache.config;
+    });
   }
 
   function invalidateCache() {
@@ -272,16 +277,14 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
 
       return undefined;
     },
-    async listModels(): Promise<ModelInfo[]> {
-      const config = await loadConfig();
-
-      return config.models.map((model) => {
+    listModels(): Promise<ModelInfo[]> {
+      return settle(Effect.map(loadConfig(), (config) => config.models.map((model) => {
         const info: ModelInfo = { id: model.id, label: model.name };
 
         if (model.contextWindow) info.contextWindow = model.contextWindow;
 
         return info;
-      });
+      })));
     },
     get defaultModel() {
       return undefined; // resolved lazily via loadConfig in setup
@@ -294,7 +297,7 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
       const reasoning = metadata ? metadata.reasoning === true : isOpenAIReasoningFamily(modelId);
       const useResponsesAPI = reasoning || metadata?.apiNpm === '@ai-sdk/openai';
 
-      return createOpenCodeModel({ modelId, resolveConfig: loadConfig, invalidateCache, fetchImpl, useResponsesAPI, reasoning });
+      return settleSync(createOpenCodeModel({ modelId, resolveConfig: () => settle(loadConfig()), invalidateCache, fetchImpl, useResponsesAPI, reasoning }));
     },
   };
 }
@@ -309,90 +312,92 @@ interface OpenCodeModelSpec {
   reasoning: boolean;
 }
 
-function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
-  const { modelId, resolveConfig, invalidateCache, fetchImpl, useResponsesAPI, reasoning } = spec;
-  const slash = modelId.indexOf('/');
+function createOpenCodeModel(spec: OpenCodeModelSpec): Effect.Effect<LanguageModel> {
+  return Effect.gen(function* () {
+    const { modelId, resolveConfig, invalidateCache, fetchImpl, useResponsesAPI, reasoning } = spec;
+    const slash = modelId.indexOf('/');
 
-  if (slash < 0) throw new Error(`Invalid opencode model id: ${modelId}`);
-  const providerId = modelId.slice(0, slash);
-  const upstreamModel = modelId.slice(slash + 1);
+    if (slash < 0) return yield* Effect.die(new Error(`Invalid opencode model id: ${modelId}`));
+    const providerId = modelId.slice(0, slash);
+    const upstreamModel = modelId.slice(slash + 1);
 
-  const placeholder = 'https://opencode.invalid';
-  // Own lane per route: opencode.ai serves Zen and Go, and a spent Go window must not cool Zen.
-  const modelFetch = withRateLimitRetry(fetchImpl, { provider: providerId, modelId: upstreamModel, lane: providerId });
+    const placeholder = 'https://opencode.invalid';
+    // Own lane per route: opencode.ai serves Zen and Go, and a spent Go window must not cool Zen.
+    const modelFetch = withRateLimitRetry(fetchImpl, { provider: providerId, modelId: upstreamModel, lane: providerId });
 
-  const customFetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const config = await resolveConfig();
-    const route = config.providers[providerId];
+    const customFetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const config = await resolveConfig();
+      const route = config.providers[providerId];
 
-    if (!route) {
-      return new Response(
-        JSON.stringify({ error: `Provider "${providerId}" is not available in your opencode configuration.` }),
-        { status: 503, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    const originalUrl = input instanceof Request ? input.url : input.toString();
-    const url = originalUrl.replace(placeholder, route.baseURL);
-
-    const headers = new Headers(init?.headers);
-
-    for (const [name, value] of Object.entries(route.headers)) {
-      headers.set(name, value);
-    }
-
-    headers.set('content-type', 'application/json');
-
-    let body = init?.body;
-    const textBody = v.safeParse(v.string(), body);
-
-    if (textBody.success) {
-      // An unparsed body leaves the model id unmapped: a 404 far from the cause.
-      const parsed = v.parse(JsonObjectSchema, JSON.parse(textBody.output));
-      parsed.model = upstreamModel;
-
-      // OpenAI Chat Completions uses max_completion_tokens instead of max_tokens.
-      const maxTokens = v.safeParse(v.number(), parsed.max_tokens);
-
-      if (!useResponsesAPI && providerId === 'openai' && maxTokens.success) {
-        parsed.max_completion_tokens = maxTokens.output;
-        delete parsed.max_tokens;
+      if (!route) {
+        return new Response(
+          JSON.stringify({ error: `Provider "${providerId}" is not available in your opencode configuration.` }),
+          { status: 503, headers: { 'Content-Type': 'application/json' } },
+        );
       }
 
-      body = JSON.stringify(parsed);
-    }
+      const originalUrl = input instanceof Request ? input.url : input.toString();
+      const url = originalUrl.replace(placeholder, route.baseURL);
 
-    const response = await modelFetch(url, { ...init, headers, body, signal: init?.signal });
+      const headers = new Headers(init?.headers);
 
-    // Drop cache on auth failure so the next request re-reads auth.json.
-    if (response.status === 401 || response.status === 403) {
-      invalidateCache();
-    }
+      for (const [name, value] of Object.entries(route.headers)) {
+        headers.set(name, value);
+      }
 
-    // Strip encoding headers that may not match after proxying.
-    const responseHeaders = new Headers(response.headers);
-    responseHeaders.delete('content-encoding');
-    responseHeaders.delete('content-length');
+      headers.set('content-type', 'application/json');
 
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
+      let body = init?.body;
+      const textBody = v.safeParse(v.string(), body);
+
+      if (textBody.success) {
+        // An unparsed body leaves the model id unmapped: a 404 far from the cause.
+        const parsed = v.parse(JsonObjectSchema, JSON.parse(textBody.output));
+        parsed.model = upstreamModel;
+
+        // OpenAI Chat Completions uses max_completion_tokens instead of max_tokens.
+        const maxTokens = v.safeParse(v.number(), parsed.max_tokens);
+
+        if (!useResponsesAPI && providerId === 'openai' && maxTokens.success) {
+          parsed.max_completion_tokens = maxTokens.output;
+          delete parsed.max_tokens;
+        }
+
+        body = JSON.stringify(parsed);
+      }
+
+      const response = await modelFetch(url, { ...init, headers, body, signal: init?.signal });
+
+      // Drop cache on auth failure so the next request re-reads auth.json.
+      if (response.status === 401 || response.status === 403) {
+        invalidateCache();
+      }
+
+      // Strip encoding headers that may not match after proxying.
+      const responseHeaders = new Headers(response.headers);
+      responseHeaders.delete('content-encoding');
+      responseHeaders.delete('content-length');
+
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+      });
     });
+
+    if (useResponsesAPI) {
+      return wrapLanguageModel({
+        model: createOpenAI({ name: OPENCODE_PROVIDER_ID, baseURL: placeholder, apiKey: 'placeholder', fetch: customFetch }).responses(modelId),
+        middleware: statelessResponses(reasoning),
+      });
+    }
+
+    return createOpenAICompatible({
+      name: OPENCODE_PROVIDER_ID,
+      baseURL: placeholder,
+      fetch: customFetch,
+    }).chatModel(modelId);
   });
-
-  if (useResponsesAPI) {
-    return wrapLanguageModel({
-      model: createOpenAI({ name: OPENCODE_PROVIDER_ID, baseURL: placeholder, apiKey: 'placeholder', fetch: customFetch }).responses(modelId),
-      middleware: statelessResponses(reasoning),
-    });
-  }
-
-  return createOpenAICompatible({
-    name: OPENCODE_PROVIDER_ID,
-    baseURL: placeholder,
-    fetch: customFetch,
-  }).chatModel(modelId);
 }
 
 /** Cold-map fallback only: OpenAI's gpt-5.x and o-series are Responses-API

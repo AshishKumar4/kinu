@@ -125,19 +125,21 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     });
   }
 
-  async function probeGit(): Promise<boolean> {
-    if (gitAvailable !== null) return gitAvailable;
+  function probeGit(): Effect.Effect<boolean> {
+    return Effect.gen(function* () {
+      if (gitAvailable !== null) return gitAvailable;
 
-    try {
-      await runGit(['--version'], homedir(), isolatedEnv());
-    } catch (error) {
-      // A rejection that did not set `gitAvailable` is not a missing git.
-      if (gitAvailable !== false) throw error;
-    }
+      yield* Effect.catchCause(Effect.gen(function* () {
+        yield* Effect.promise(async () => runGit(['--version'], homedir(), isolatedEnv()));
+      }), (failed) => Effect.gen(function* () {
+        // A rejection that did not set `gitAvailable` is not a missing git.
+        if (gitAvailable !== false) return yield* Effect.failCause(failed);
+      }));
 
-    gitAvailable ??= true;
+      gitAvailable ??= true;
 
-    return gitAvailable;
+      return gitAvailable;
+    });
   }
 
   function dirHash(dir: string): string {
@@ -148,15 +150,17 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     return join(agentBase, dirHash(dir));
   }
 
-  async function initStore(gitDir: string, workdir: string): Promise<void> {
-    if (existsSync(join(gitDir, 'HEAD'))) return;
-    await fs.mkdir(gitDir, { recursive: true });
-    const init = await runGit(['init', '--bare', '--quiet', gitDir], dirname(gitDir), isolatedEnv());
+  function initStore(gitDir: string, workdir: string): Effect.Effect<void> {
+    return Effect.gen(function* () {
+      if (existsSync(join(gitDir, 'HEAD'))) return;
+      yield* Effect.promise(async () => fs.mkdir(gitDir, { recursive: true }));
+      const init = yield* Effect.promise(async () => runGit(['init', '--bare', '--quiet', gitDir], dirname(gitDir), isolatedEnv()));
 
-    if (init.code !== 0) throw new Error(`checkpoint store init failed: ${init.stderr.trim()}`);
-    await fs.mkdir(join(gitDir, 'info'), { recursive: true });
-    await fs.writeFile(join(gitDir, 'info', 'exclude'), CHECKPOINT_EXCLUDES.join('\n') + '\n', 'utf8');
-    await fs.writeFile(join(gitDir, WORKDIR_MARKER), resolve(workdir) + '\n', 'utf8');
+      if (init.code !== 0) return yield* Effect.die(new Error(`checkpoint store init failed: ${init.stderr.trim()}`));
+      yield* Effect.promise(async () => fs.mkdir(join(gitDir, 'info'), { recursive: true }));
+      yield* Effect.promise(async () => fs.writeFile(join(gitDir, 'info', 'exclude'), CHECKPOINT_EXCLUDES.join('\n') + '\n', 'utf8'));
+      yield* Effect.promise(async () => fs.writeFile(join(gitDir, WORKDIR_MARKER), resolve(workdir) + '\n', 'utf8'));
+    });
   }
 
   function snapshotSkipped(dir: string): boolean {
@@ -191,56 +195,60 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
    * `--ignore-errors` so an unreadable path costs only that path instead of silently truncating the
    * snapshot; the skipped paths are returned for `diagnoseStaging`.
    */
-  async function stageCurrent(gitDir: string, workdir: string): Promise<StagedTree> {
-    const env = storeEnv(gitDir, workdir);
-    const add = await runGit(['add', '-A', '--ignore-errors'], workdir, env);
-    const diagnosis = diagnoseStaging(add.stderr);
+  function stageCurrent(gitDir: string, workdir: string): Effect.Effect<StagedTree> {
+    return Effect.gen(function* () {
+      const env = storeEnv(gitDir, workdir);
+      const add = yield* Effect.promise(async () => runGit(['add', '-A', '--ignore-errors'], workdir, env));
+      const diagnosis = diagnoseStaging(add.stderr);
 
-    // A non-zero exit explained entirely by unreadable paths is success; anything unexplained throws.
-    if (diagnosis.unexplained.length > 0 || (add.code !== 0 && diagnosis.unreadable.length === 0)) {
-      throw new Error(`checkpoint staging failed: ${add.stderr.trim()}`);
-    }
+      // A non-zero exit explained entirely by unreadable paths is success; anything unexplained throws.
+      if (diagnosis.unexplained.length > 0 || (add.code !== 0 && diagnosis.unreadable.length === 0)) {
+        return yield* Effect.die(new Error(`checkpoint staging failed: ${add.stderr.trim()}`));
+      }
 
-    const tree = await runGit(['write-tree'], workdir, env);
+      const tree = yield* Effect.promise(async () => runGit(['write-tree'], workdir, env));
 
-    if (tree.code !== 0) throw new Error(`checkpoint write-tree failed: ${tree.stderr.trim()}`);
+      if (tree.code !== 0) return yield* Effect.die(new Error(`checkpoint write-tree failed: ${tree.stderr.trim()}`));
 
-    return { tree: tree.stdout.trim(), unreadable: diagnosis.unreadable };
+      return { tree: tree.stdout.trim(), unreadable: diagnosis.unreadable };
+    });
   }
 
   /** Snapshot dir with turn meta (null for out-of-turn snapshots, as the daemon does). Returns the
    *  new id, or the newest existing id when nothing changed. */
-  async function snapshot(dir: string, meta: CheckpointTurnMeta | null, reason: string): Promise<string | null> {
-    if (snapshotSkipped(dir)) return null;
-    const abs = resolve(dir);
-    const gitDir = storeDirFor(abs);
-    await initStore(gitDir, abs);
-    const env = storeEnv(gitDir, abs);
-    const staged = await stageCurrent(gitDir, abs);
-    const tree = staged.tree;
+  function snapshot(dir: string, meta: CheckpointTurnMeta | null, reason: string): Effect.Effect<string | null> {
+    return Effect.gen(function* () {
+      if (snapshotSkipped(dir)) return null;
+      const abs = resolve(dir);
+      const gitDir = storeDirFor(abs);
+      yield* initStore(gitDir, abs);
+      const env = storeEnv(gitDir, abs);
+      const staged = yield* stageCurrent(gitDir, abs);
+      const tree = staged.tree;
 
-    const refs = await storeRefs(gitDir, abs);
-    const latest = refs[0];
+      const refs = yield* Effect.promise(async () => storeRefs(gitDir, abs));
+      const latest = refs[0];
 
-    if (latest) {
-      const latestTree = await runGit(['rev-parse', `${latest.id}^{tree}`], abs, env);
+      if (latest) {
+        const latestTree = yield* Effect.promise(async () => runGit(['rev-parse', `${latest.id}^{tree}`], abs, env));
 
-      if (latestTree.code === 0 && latestTree.stdout.trim() === tree) return latest.id;
-    }
+        if (latestTree.code === 0 && latestTree.stdout.trim() === tree) return latest.id;
+      }
 
-    const subject = checkpointSubject(meta, checkpointReason(reason, staged.unreadable));
-    const commit = await runGit(['commit-tree', tree, '-m', subject], abs, env);
+      const subject = checkpointSubject(meta, checkpointReason(reason, staged.unreadable));
+      const commit = yield* Effect.promise(async () => runGit(['commit-tree', tree, '-m', subject], abs, env));
 
-    if (commit.code !== 0) throw new Error(`checkpoint commit failed: ${commit.stderr.trim()}`);
-    const sha = commit.stdout.trim();
-    const refName = `${REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
-    const update = await runGit(['update-ref', refName, sha], abs, env);
+      if (commit.code !== 0) return yield* Effect.die(new Error(`checkpoint commit failed: ${commit.stderr.trim()}`));
+      const sha = commit.stdout.trim();
+      const refName = `${REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
+      const update = yield* Effect.promise(async () => runGit(['update-ref', refName, sha], abs, env));
 
-    if (update.code !== 0) throw new Error(`checkpoint ref update failed: ${update.stderr.trim()}`);
+      if (update.code !== 0) return yield* Effect.die(new Error(`checkpoint ref update failed: ${update.stderr.trim()}`));
 
-    await pruneStore(gitDir, abs, refs.length + 1);
+      yield* Effect.promise(async () => pruneStore(gitDir, abs, refs.length + 1));
 
-    return sha;
+      return sha;
+    });
   }
 
   /** Drop refs beyond `keep`, then reclaim unreachable objects. */
@@ -275,7 +283,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
   function diffToCheckpoint(gitDir: string, abs: string, id: string): Effect.Effect<FileRestoreChange[]> {
     return Effect.gen(function* () {
       const env = storeEnv(gitDir, abs);
-      const current = yield* Effect.promise(async () => stageCurrent(gitDir, abs));
+      const current = yield* stageCurrent(gitDir, abs);
       const diff = yield* Effect.promise(async () => runGit(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env));
 
       if (diff.code !== 0) return yield* Effect.die(new Error(`checkpoint diff failed: ${diff.stderr.trim()}`));
@@ -301,45 +309,49 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       turnDone.clear();
     },
 
-    async ensureCheckpoint(dir: string, reason = 'pre-mutation'): Promise<string | null> {
-      if (!(await probeGit())) return null;
-      const abs = resolve(dir);
+    ensureCheckpoint(dir: string, reason = 'pre-mutation'): Promise<string | null> {
+      return settle(Effect.gen(function* () {
+        if (!(yield* probeGit())) return null;
+        const abs = resolve(dir);
 
-      if (turnDone.has(abs)) return null;
-      turnDone.add(abs);
+        if (turnDone.has(abs)) return null;
+        turnDone.add(abs);
 
-      return await snapshot(abs, turn, reason);
+        return yield* snapshot(abs, turn, reason);
+      }));
     },
 
-    async list(query: { limit?: number; turnId?: string } = {}): Promise<FileCheckpointEntry[]> {
-      if (!(await probeGit())) return [];
-      const stores = await tolerateAsync(() => fs.readdir(agentBase), 'enoent') ?? [];
-      const entries: FileCheckpointEntry[] = [];
+    list(query: { limit?: number; turnId?: string } = {}): Promise<FileCheckpointEntry[]> {
+      return settle(Effect.gen(function* () {
+        if (!(yield* probeGit())) return [];
+        const stores = (yield* Effect.promise(async () => tolerateAsync(() => fs.readdir(agentBase), 'enoent'))) ?? [];
+        const entries: FileCheckpointEntry[] = [];
 
-      for (const name of stores) {
-        const gitDir = join(agentBase, name);
-        const markerPath = join(gitDir, WORKDIR_MARKER);
+        for (const name of stores) {
+          const gitDir = join(agentBase, name);
+          const markerPath = join(gitDir, WORKDIR_MARKER);
 
-        if (!existsSync(join(gitDir, 'HEAD')) || !existsSync(markerPath)) continue;
-        const workdir = (await fs.readFile(markerPath, 'utf8')).trim();
+          if (!existsSync(join(gitDir, 'HEAD')) || !existsSync(markerPath)) continue;
+          const workdir = (yield* Effect.promise(async () => fs.readFile(markerPath, 'utf8'))).trim();
 
-        for (const ref of await storeRefs(gitDir, workdir)) {
-          const meta = parseCheckpointSubject(ref.subject);
+          for (const ref of (yield* Effect.promise(async () => storeRefs(gitDir, workdir)))) {
+            const meta = parseCheckpointSubject(ref.subject);
 
-          if (query.turnId !== undefined && meta.turnId !== query.turnId) continue;
-          entries.push({ id: ref.id, dir: workdir, at: checkpointRefTimestampMs(ref.ref), ...meta });
+            if (query.turnId !== undefined && meta.turnId !== query.turnId) continue;
+            entries.push({ id: ref.id, dir: workdir, at: checkpointRefTimestampMs(ref.ref), ...meta });
+          }
         }
-      }
 
-      entries.sort((a, b) => b.at - a.at);
+        entries.sort((a, b) => b.at - a.at);
 
-      // Truncate last, after any turn filter, so a limit never hides a matching checkpoint.
-      return entries.slice(0, Math.max(1, query.limit ?? 50));
+        // Truncate last, after any turn filter, so a limit never hides a matching checkpoint.
+        return entries.slice(0, Math.max(1, query.limit ?? 50));
+      }));
     },
 
     plan(dir: string, id: string): Promise<FileRestorePlan> {
       return settle(Effect.gen(function* () {
-        if (!(yield* Effect.promise(async () => probeGit()))) return yield* Effect.die(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
+        if (!(yield* probeGit())) return yield* Effect.die(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
         const { gitDir, abs } = yield* requireCheckpoint(dir, id);
         const files = yield* diffToCheckpoint(gitDir, abs, id);
 
@@ -349,14 +361,14 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
 
     restore(dir: string, id: string): Promise<FileRestoreResult> {
       return settle(Effect.gen(function* () {
-        if (!(yield* Effect.promise(async () => probeGit()))) return yield* Effect.die(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
+        if (!(yield* probeGit())) return yield* Effect.die(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
         const { gitDir, abs, env } = yield* requireCheckpoint(dir, id);
 
         if (!existsSync(abs)) return yield* Effect.die(new Error(`working directory no longer exists: ${abs}`));
         const files = yield* diffToCheckpoint(gitDir, abs, id);
 
         // Safety snapshot so the restore is undoable; null turn meta keeps it out of the armed turn's /undo group.
-        const preRestoreId = yield* Effect.promise(async () => snapshot(abs, null, 'pre-restore'));
+        const preRestoreId = yield* snapshot(abs, null, 'pre-restore');
 
         for (const change of files) {
           if (change.kind !== 'delete') continue;
@@ -377,10 +389,12 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       }));
     },
 
-    async status(): Promise<CheckpointAvailability> {
-      return (await probeGit())
-        ? { available: true }
-        : { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT };
+    status(): Promise<CheckpointAvailability> {
+      return settle(Effect.gen(function* () {
+        return (yield* probeGit())
+          ? { available: true }
+          : { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT };
+      }));
     },
 
     workdirForPath(path: string): string {

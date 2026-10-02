@@ -76,6 +76,12 @@ export const DECLARED = byFile([
     reason: 'the hosted runtime\'s start gate, observed as state: its forwarders stay promise chains (settle\'s hops would move '
       + 'readiness), and a failed composition is forgotten so the next operation composes again',
   }],
+  ['packages/test-utils/src/mossaic.ts', {
+    mechanisms: ['throw'],
+    within: ['fakeMossaic'],
+    reason: 'a stand-in for the Mossaic client: it rejects with the errno codes that client rejects with, so the tests '
+      + 'exercise the adapter that maps them',
+  }],
   ['packages/core/src/slates/content.ts', {
     mechanisms: ['throw'],
     reason: 'a vendored `ContentStore`: its failures are the vendored package\'s `AgentCoreError` codes, its contract',

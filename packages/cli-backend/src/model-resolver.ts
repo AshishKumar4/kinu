@@ -49,7 +49,8 @@ import type { LLM } from '@kinu.run/core';
 import { OPENCODE_PROVIDER_ID, createOpenCodeProvider } from './opencode-provider';
 import { isOAuthLoginKey, type LocalOAuthStore } from './oauth-store';
 import * as v from 'valibot';
-import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
 
 const proxiedCredentialsSchema = v.object({
   credentials: v.optional(v.array(v.object({
@@ -260,6 +261,50 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   // credential always wins: offline use and explicit override.
   const proxied = cloud ? perCloudSession(proxyCredentialSources, cloud, opts.fetch, () => createProxyCredentialSource(cloud, opts.fetch)) : null;
 
+  const credentialReads: Pick<ProviderDeps, 'getAuth' | 'hasCredential' | 'listCredentialKeys'> = {
+    getAuth(key, authOpts) {
+      return settle(Effect.gen(function* () {
+        const local = yield* Effect.promise(() => authStore.get(key, authOpts));
+
+        if (local) return local;
+        const remote = proxied ? (yield* proxied.load()).byKey.get(key) : undefined;
+
+        if (remote?.failure !== undefined) return yield* Effect.die(new Error(remote.failure));
+
+        return remote ? proxyAuthResolution(key, remote.baseURL) : null;
+      }));
+    },
+    hasCredential(key) {
+      return settle(Effect.gen(function* () {
+        if (authStore.has(key)) return true;
+
+        // A credential the proxy never fronts: the local answer is complete.
+        if (isProxyDeniedCredentialKey(key) || !proxied) return false;
+        const remote = yield* proxied.load();
+        const listed = remote.byKey.get(key);
+
+        // Connected but unreadable is that provider's failure, never an absence.
+        if (listed?.failure !== undefined) return yield* Effect.die(new Error(listed.failure));
+
+        if (listed) return true;
+
+        // Never listed successfully: "not connected" would be a guess.
+        if (remote.error) return yield* Effect.die(new Error(remote.error));
+
+        return false;
+      }));
+    },
+    listCredentialKeys() {
+      return settle(Effect.gen(function* () {
+        const keys = new Set(authStore.keys());
+
+        for (const key of proxied ? (yield* proxied.load()).byKey.keys() : []) keys.add(key);
+
+        return [...keys];
+      }));
+    },
+  };
+
   const depsFor = (accountFor?: (providerId: string) => string | undefined): ProviderDeps => ({
     env: {},
     fetch: cloud
@@ -267,43 +312,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         forwardURL: providerProxyForwardURL(cloud.origin), authorization: `Bearer ${cloud.token}`, fetch: opts.fetch,
       }))
       : opts.fetch,
-    async getAuth(key, authOpts) {
-      const local = await authStore.get(key, authOpts);
-
-      if (local) return local;
-      const remote = (await proxied?.load())?.byKey.get(key);
-
-      if (remote?.failure !== undefined) throw new Error(remote.failure);
-
-      return remote ? proxyAuthResolution(key, remote.baseURL) : null;
-    },
-    async hasCredential(key) {
-      if (authStore.has(key)) return true;
-
-      // A credential the proxy never fronts: the local answer is complete.
-      if (isProxyDeniedCredentialKey(key)) return false;
-      const remote = await proxied?.load();
-
-      if (!remote) return false;
-      const listed = remote.byKey.get(key);
-
-      // Connected but unreadable is that provider's failure, never an absence.
-      if (listed?.failure !== undefined) throw new Error(listed.failure);
-
-      if (listed) return true;
-
-      // Never listed successfully: "not connected" would be a guess.
-      if (remote.error) throw new Error(remote.error);
-
-      return false;
-    },
-    async listCredentialKeys() {
-      const keys = new Set(authStore.keys());
-
-      for (const key of (await proxied?.load())?.byKey.keys() ?? []) keys.add(key);
-
-      return [...keys];
-    },
+    ...credentialReads,
     onProviderWait: (info) => { opts.onProviderWait?.(info); },
     accountFor,
   });
@@ -456,7 +465,7 @@ interface ProxiedCredentials {
 const PROXIED_CREDENTIALS_TTL_MS = 60_000;
 
 interface ProxyCredentialSource {
-  load(): Promise<ProxiedCredentials>;
+  load(): Effect.Effect<ProxiedCredentials>;
 }
 
 /** Shared across resolvers so one listing serves every conversation. */
@@ -469,13 +478,15 @@ function createProxyCredentialSource(
   const baseFetch = fetchImpl ?? fetch;
   let cached: { at: number; value: ProxiedCredentials } | null = null;
 
-  const load = async (): Promise<ProxiedCredentials> => {
-    if (cached && Date.now() - cached.at < PROXIED_CREDENTIALS_TTL_MS) return cached.value;
+  const load = (): Effect.Effect<ProxiedCredentials> => Effect.suspend(() => {
+    const fresh = cached;
 
-    try {
-      const res = await baseFetch(providerProxyCredentialsURL(cloud.origin), {
+    if (fresh && Date.now() - fresh.at < PROXIED_CREDENTIALS_TTL_MS) return Effect.succeed(fresh.value);
+
+    return Effect.catchCause(Effect.gen(function* () {
+      const res = yield* Effect.promise(() => baseFetch(providerProxyCredentialsURL(cloud.origin), {
         headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
-      });
+      }));
 
       // A rejected session is a real answer; serving the last listing would advertise providers that 401.
       if (res.status === 401 || res.status === 403) {
@@ -485,8 +496,8 @@ function createProxyCredentialSource(
         return value;
       }
 
-      if (!res.ok) throw new Error(`the Kinu provider proxy returned HTTP ${res.status}`);
-      const body = v.parse(proxiedCredentialsSchema, await res.json());
+      if (!res.ok) return yield* Effect.die(new Error(`the Kinu provider proxy returned HTTP ${res.status}`));
+      const body = v.parse(proxiedCredentialsSchema, yield* Effect.promise(() => res.json()));
       const byKey = new Map<string, { baseURL?: string; failure?: string }>();
 
       for (const { key, baseURL, failure } of body.credentials) {
@@ -500,15 +511,11 @@ function createProxyCredentialSource(
       cached = { at: Date.now(), value };
 
       return value;
-    } catch (err) {
-      if (cached) return cached.value;
-
-      return {
-        byKey: new Map(),
-        error: `Could not reach your Kinu account to list connected providers (${renderThrownChain({ cause: err })}).`,
-      };
-    }
-  };
+    }), (failed) => Effect.sync((): ProxiedCredentials => cached?.value ?? {
+      byKey: new Map(),
+      error: `Could not reach your Kinu account to list connected providers (${renderThrownChain({ cause: Cause.squash(failed) })}).`,
+    }));
+  });
 
   return { load };
 }
