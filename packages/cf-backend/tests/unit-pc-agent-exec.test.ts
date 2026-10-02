@@ -5,6 +5,7 @@
 
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -27,6 +28,8 @@ interface DaemonMessage {
   readonly id: string;
   readonly method: string;
   readonly params: readonly (string | number)[];
+  /** The hub asks for the command's output while it runs. */
+  readonly output?: boolean;
 }
 
 interface ReplySocket { send(data: string): void }
@@ -55,6 +58,7 @@ const PcAgentModuleSchema = v.object({
   CANCEL_METHOD: v.string(),
   CANCEL_PROTOCOL: v.number(),
   EXEC_ACK_METHOD: v.string(),
+  EXEC_OUTPUT_FRAME: v.string(),
   PTY_OPEN_METHOD: v.string(),
   PTY_INPUT_FRAME: v.string(),
   PTY_RESIZE_FRAME: v.string(),
@@ -74,6 +78,7 @@ const SupervisorRegistrySchema2 = v.object({
 const SupervisorRegistrySchema = v.object({
   reconcile: v.pipe(v.function(), v.returnsAsync(RecoveredSchema)),
   cancel: v.function(),
+  result: v.function(),
   acknowledge: v.function(),
 });
 
@@ -101,6 +106,21 @@ const DaemonReplySchema = v.object({
 });
 
 type DaemonReply = v.InferOutput<typeof DaemonReplySchema>;
+
+/** The daemon's output frame as a hub reads it. */
+const OutputFrameSchema = v.object({
+  type: v.literal(pcAgent.EXEC_OUTPUT_FRAME),
+  request: v.string(),
+  chunks: v.array(v.object({ stream: v.picklist(['stdout', 'stderr']), data: v.string() })),
+  dropped: v.number(),
+});
+
+type OutputFrame = v.InferOutput<typeof OutputFrameSchema>;
+
+function outputText(frames: readonly OutputFrame[], stream: 'stdout' | 'stderr'): string {
+  return frames.flatMap((frame) => frame.chunks).filter((chunk) => chunk.stream === stream)
+    .map((chunk) => Buffer.from(chunk.data, 'base64').toString()).join('');
+}
 
 let execSequence = 0;
 
@@ -164,6 +184,85 @@ describe('pc-agent exec RPC', () => {
     await ws.answerTo(rpcId(101));
 
     expect(ws.of(id)).toHaveLength(1);
+    // The frame did not ask, as an older hub's never does.
+    expect(ws.outputsOf(id)).toEqual([]);
+  });
+});
+
+describe('a running command\'s output, for a hub that asked', () => {
+  test('reaches the hub while the command runs, and the result follows it unchanged', async () => {
+    const gate = join(scratchDir('pc-agent-live'), 'gate');
+    execFileSync('mkfifo', [gate]);
+    const ws = recorder();
+    const id = rpcId(400);
+
+    handle({ id, method: 'exec', params: [`echo first; read -r word < ${gate}; echo "second $word" >&2`], output: true }, ws.socket);
+    const first = await ws.firstOutput(id);
+
+    // The command is held on the gate, so this frame left while it ran.
+    expect(ws.of(id)).toEqual([]);
+    expect(outputText([first], 'stdout')).toBe('first\n');
+    writeFileSync(gate, 'go\n');
+    const reply = await ws.answerTo(id);
+    const result = v.parse(ExecResultSchema, reply.result);
+
+    expect(result).toMatchObject({ stdout: 'first\n', stderr: 'second go\n', exitCode: 0 });
+    expect(outputText(ws.outputsOf(id), 'stdout')).toBe(result.stdout);
+    expect(outputText(ws.outputsOf(id), 'stderr')).toBe(result.stderr);
+    expect(ws.arrivals.indexOf(reply)).toBeGreaterThan(Math.max(...ws.outputsOf(id).map((frame) => ws.arrivals.indexOf(frame))));
+    acknowledge(rpcId(401), id, ws.socket);
+    await ws.answerTo(rpcId(401));
+  });
+
+  test('a flood goes out as a bounded number of windows, every byte sent or counted', async () => {
+    const ws = recorder();
+    const id = rpcId(410);
+    const total = 3_000_000;
+    const spill = join(tmpdir(), 'kinu-tool-output', `device-${id}.stdout.log`);
+    const started = performance.now();
+
+    handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(${total}))"`], output: true }, ws.socket);
+    const reply = await ws.answerTo(id);
+    const elapsed = performance.now() - started;
+    rmSync(spill, { force: true });
+    const frames = ws.outputsOf(id);
+    const sizes = frames.map((frame) => frame.chunks.reduce((sum, chunk) => sum + Buffer.from(chunk.data, 'base64').length, 0));
+
+    expect(v.parse(ExecResultSchema, reply.result).stdout).toContain(`[stdout: ${total} bytes, `);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(16 * 1024);
+    // One frame per 250 ms window at most, plus the one that closes the pipe.
+    expect(frames.length).toBeLessThanOrEqual(Math.ceil(elapsed / 250) + 1);
+    expect(sizes.reduce((sum, size) => sum + size, 0) + frames.reduce((sum, frame) => sum + frame.dropped, 0)).toBe(total);
+    acknowledge(rpcId(411), id, ws.socket);
+    await ws.answerTo(rpcId(411));
+  });
+
+  test('a supervisor whose daemon is gone still finishes and records its result', async () => {
+    const gate = join(scratchDir('pc-agent-live-orphan'), 'gate');
+    execFileSync('mkfifo', [gate]);
+    const id = rpcId(420);
+
+    const frame = {
+      id, method: 'exec', params: [`echo running; cat ${gate} > /dev/null; seq 1 50000`], output: true, sandbox: { tier: 'raw', agentHome: '', roots: [] },
+    };
+
+    // A daemon of its own over this file's root, which leaves once the command's first output reached it. The root
+    // is passed: a spawned process reads it afresh, while this module kept the one its first require saw.
+    const daemon = Bun.spawn([process.execPath, '-e', `
+      const pcAgent = require(${JSON.stringify(join(import.meta.dir, '../../pc-agent/src/index.js'))});
+      pcAgent.handle(${JSON.stringify(frame)}, { send(data) { if (JSON.parse(data).type === pcAgent.EXEC_OUTPUT_FRAME) process.exit(0); } });
+    `], { stdout: 'inherit', stderr: 'inherit', env: { ...process.env, KINU_INFLIGHT_ROOT: pcAgent.INFLIGHT_ROOT } });
+
+    expect(await daemon.exited).toBe(0);
+    // Released only now, so every chunk the supervisor forwards meets a closed pipe.
+    writeFileSync(gate, 'go\n');
+    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
+    expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: false });
+    const completed = v.parse(v.object({ result: ExecResultSchema }), await restarted.result(id));
+
+    // Every line the command printed after its daemon left is in the capture, which the closed pipe never touched.
+    expect(completed.result).toEqual({ stdout: `running\n${Array.from({ length: 50_000 }, (_, at) => `${at + 1}\n`).join('')}`, stderr: '', exitCode: 0 });
+    await expect(restarted.acknowledge(id)).resolves.toEqual({ requestId: id, acknowledged: true });
   });
 });
 
@@ -174,18 +273,46 @@ describe('pc-agent exec RPC', () => {
 
 function recorder() {
   const replies: DaemonReply[] = [];
+  const outputs: OutputFrame[] = [];
+  /** Both kinds in arrival order, so a test can say which came first. */
+  const arrivals: Array<OutputFrame | DaemonReply> = [];
   const awaited = new Map<string, (reply: DaemonReply) => void>();
+  const watching = new Map<string, (frame: OutputFrame) => void>();
 
   return {
     replies,
+    arrivals,
     socket: {
       send: (data: string) => {
-        const reply = v.parse(DaemonReplySchema, JSON.parse(data));
+        const frame: unknown = JSON.parse(data);
+        const output = v.safeParse(OutputFrameSchema, frame);
+
+        if (output.success) {
+          outputs.push(output.output);
+          arrivals.push(output.output);
+          watching.get(output.output.request)?.(output.output);
+
+          return;
+        }
+
+        const reply = v.parse(DaemonReplySchema, frame);
         replies.push(reply);
+        arrivals.push(reply);
         awaited.get(reply.id)?.(reply);
       },
     },
     of(id: string): DaemonReply[] { return replies.filter((reply) => reply.id === id); },
+    outputsOf(id: string): OutputFrame[] { return outputs.filter((frame) => frame.request === id); },
+    /** The first output frame for `id`, awaitable before it arrives. */
+    firstOutput(id: string): Promise<OutputFrame> {
+      const arrived = outputs.find((frame) => frame.request === id);
+
+      if (arrived) return Promise.resolve(arrived);
+      const { promise, resolve } = Promise.withResolvers<OutputFrame>();
+      watching.set(id, resolve);
+
+      return promise;
+    },
     /** Awaitable before arrival, so a wait on command output can race the answer. */
     answerTo(id: string): Promise<DaemonReply> {
       const arrived = replies.find((reply) => reply.id === id);
