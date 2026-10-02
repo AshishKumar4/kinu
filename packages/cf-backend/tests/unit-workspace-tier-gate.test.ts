@@ -260,6 +260,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'device.manage', name: 'verifyDeviceToken', run: (u, c) => u.verifyDeviceToken(c, 'pdt_x') },
   { capability: 'device.manage', name: 'verifyDeviceConnectTicket', run: (u, c) => u.verifyDeviceConnectTicket(c, 'pct_x') },
   { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
+  { capability: 'device.manage', name: 'recordDeviceUpdateRefusal', run: (u, c) => u.recordDeviceUpdateRefusal(c, 'pdt_x', { version: '0.3.0+served', runtime: 'Bun 1.4.0', reason: 'install failed' }) },
   { capability: 'device.manage', name: 'startChatGptSignIn', run: (u, c) => u.startChatGptSignIn(c) },
   { capability: 'device.manage', name: 'signOutChatGpt', run: (u, c) => u.signOutChatGpt(c) },
 

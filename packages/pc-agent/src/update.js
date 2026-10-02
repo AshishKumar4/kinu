@@ -609,8 +609,7 @@ function onApprovedBun() {
 async function provideApprovedBun(deviceHome, log) {
   const script = ['set -euo pipefail', 'die() { echo "$*" >&2; exit 1; }', bunResolutionShell(), 'provide_bun', 'printf \'%s\' "$KINU_BUN"'];
 
-  // Named, so a line the shell reports reads `provide_bun: line N: ...`.
-  const { error, stdout, stderr } = await runToExit('bash', ['-c', script.join('\n'), 'provide_bun'], {
+  const { error, stdout, stderr } = await runToExit('bash', ['-c', script.join('\n')], {
     env: { ...process.env, KINU_HOME: deviceHome },
     encoding: 'utf8',
   });
@@ -632,14 +631,15 @@ async function provideApprovedBun(deviceHome, log) {
 const REFUSAL_REASON_MAX = 1000;
 
 /**
- * Tells the hub this build refuses to run here and why, so the hub stops pushing it and the owner's device row
- * says why the machine is behind. Resolves the hub's HTTP status.
+ * Tells the hub this build refuses to run here, on which runtime, and why: the hub stops pushing it until another
+ * build is served or the daemon runs on another runtime, and the owner's device row says why the machine is
+ * behind. Resolves the hub's HTTP status.
  */
-async function reportRefusal({ origin, cfg, version, reason, fetchFn = fetch }) {
+async function reportRefusal({ origin, cfg, version, runtime, reason, fetchFn = fetch }) {
   const res = await fetchFn(`${origin}/pc/update-refused`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ user: cfg.user, token: cfg.token, version, reason: reason.slice(0, REFUSAL_REASON_MAX) }),
+    body: JSON.stringify({ user: cfg.user, token: cfg.token, version, runtime, reason: reason.slice(0, REFUSAL_REASON_MAX) }),
   });
 
   return res.status;

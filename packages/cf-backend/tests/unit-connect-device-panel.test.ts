@@ -25,7 +25,7 @@ function device(id: string, connected: boolean, label = id): UserDevice {
     replacedAt: null, revokedAt: null, unstoppedAt: null,
     reuseDetectedAt: null, wholeMachine: false,
     sandbox: { tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] },
-    version: null, servedVersion: null, update: 'unreported',
+    version: null, servedVersion: null, update: 'unreported', updateRefusal: null,
   };
 }
 

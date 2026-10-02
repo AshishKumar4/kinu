@@ -30,6 +30,7 @@ interface FakeUserId {
 interface RecordedUserDO {
   idNames: string[];
   tokens: string[];
+  refusals: Array<{ version: string; runtime: string; reason: string }>;
   fetched: Request[];
   ns: PcUserNamespace<FakeUserId>;
 }
@@ -37,6 +38,7 @@ interface RecordedUserDO {
 function makeUserDO(): RecordedUserDO {
   const idNames: string[] = [];
   const tokens: string[] = [];
+  const refusals: Array<{ version: string; runtime: string; reason: string }> = [];
   const fetched: Request[] = [];
 
   const ns = {
@@ -56,6 +58,14 @@ function makeUserDO(): RecordedUserDO {
 
           return { ok: false };
         },
+        async recordDeviceUpdateRefusal(_caller: UserCaller, token: string, refusal: { version: string; runtime: string; reason: string }) {
+          tokens.push(token);
+
+          if (token !== GOOD_TOKEN) return false;
+          refusals.push(refusal);
+
+          return true;
+        },
         async fetch(request: Request) {
           fetched.push(request);
 
@@ -65,7 +75,7 @@ function makeUserDO(): RecordedUserDO {
     },
   };
 
-  return { idNames, tokens, fetched, ns };
+  return { idNames, tokens, refusals, fetched, ns };
 }
 
 function makeEnv(userDO: RecordedUserDO): PcIngressEnv<FakeUserId> {
@@ -190,6 +200,104 @@ describe("/pc/connect upgrade", () => {
     const denied = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
     expect(denied.status).toBe(429);
     expect(userDO.fetched.length).toBe(KNOCKS_PER_WINDOW);
+  });
+});
+
+describe('/pc/update-refused', () => {
+  const refusal = { user: GOOD_USER, token: GOOD_TOKEN, version: '0.3.0+served', runtime: 'Bun 1.4.0', reason: 'Bun 1.4.2 install failed' };
+
+  function post(body: string): Request {
+    return new Request('https://kinu.test/pc/update-refused', { method: 'POST', body });
+  }
+
+  test('malformed JSON is a 400 before any namespace lookup', async () => {
+    const userDO = makeUserDO();
+    const response = await pcRoutes.fetch(post('{not json'), makeEnv(userDO));
+    expect(response.status).toBe(400);
+    expect(userDO.idNames).toEqual([]);
+  });
+
+  test('an oversized body is a 413 before parsing or naming a DO', async () => {
+    const userDO = makeUserDO();
+    const response = await pcRoutes.fetch(post(JSON.stringify({ ...refusal, padding: 'z'.repeat(32 * 1024) })), makeEnv(userDO));
+    expect(response.status).toBe(413);
+    expect(userDO.idNames).toEqual([]);
+    expect(userDO.refusals).toEqual([]);
+  });
+
+  test('missing or malformed fields are 400 and never name a DO', async () => {
+    for (const field of ['user', 'token', 'version', 'runtime', 'reason']) {
+      for (const value of [undefined, null, 123, '']) {
+        const userDO = makeUserDO();
+        const response = await pcRoutes.fetch(post(JSON.stringify({ ...refusal, [field]: value })), makeEnv(userDO));
+        expect(response.status).toBe(400);
+        expect(userDO.idNames).toEqual([]);
+      }
+    }
+  });
+
+  test('a blank version or runtime is refused, and bounded version, runtime and reason lengths are enforced', async () => {
+    for (const fields of [
+      { version: ' \n ' }, { version: 'v'.repeat(201) }, { runtime: ' ' }, { runtime: 'b'.repeat(201) }, { reason: 'r'.repeat(2001) },
+    ]) {
+      const userDO = makeUserDO();
+      const response = await pcRoutes.fetch(post(JSON.stringify({ ...refusal, ...fields })), makeEnv(userDO));
+      expect(response.status).toBe(400);
+      expect(userDO.idNames).toEqual([]);
+    }
+  });
+
+  test('a real daemon reason and the supported length boundaries are accepted without truncation', async () => {
+    for (const reason of ['r'.repeat(1000), '\u754c'.repeat(2000)]) {
+      const userDO = makeUserDO();
+      const version = 'v'.repeat(200);
+      const response = await pcRoutes.fetch(post(JSON.stringify({ ...refusal, version: ` ${version} `, reason })), makeEnv(userDO));
+      expect(response.status).toBe(200);
+      expect(userDO.refusals).toEqual([{ version, runtime: 'Bun 1.4.0', reason }]);
+    }
+  });
+
+  test('the user shape gate runs before idFromName', async () => {
+    for (const user of ['not-a-user', GOOD_USER.slice(1), GOOD_USER.toUpperCase(), `${GOOD_USER}0`]) {
+      const userDO = makeUserDO();
+      const response = await pcRoutes.fetch(post(JSON.stringify({ ...refusal, user })), makeEnv(userDO));
+      expect(response.status).toBe(400);
+      expect(userDO.idNames).toEqual([]);
+    }
+  });
+
+  test('the token shape gate runs before idFromName', async () => {
+    for (const token of ['garbage', 'pdt_short', `${GOOD_TOKEN}/no`, 'pdt_']) {
+      const userDO = makeUserDO();
+      const response = await pcRoutes.fetch(post(JSON.stringify({ ...refusal, token })), makeEnv(userDO));
+      expect(response.status).toBe(401);
+      expect(userDO.idNames).toEqual([]);
+      expect(userDO.refusals).toEqual([]);
+    }
+  });
+
+  test('the ingress knock budget is enforced in its own bucket before naming another DO', async () => {
+    const userDO = makeUserDO();
+    const env = makeEnv(userDO);
+
+    for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
+      expect((await pcRoutes.fetch(ticketPost(JSON.stringify({ user: GOOD_USER, token: WRONG_TOKEN })), env)).status).toBe(401);
+    }
+
+    for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
+      expect((await pcRoutes.fetch(post(JSON.stringify({ ...refusal, token: WRONG_TOKEN })), env)).status).toBe(401);
+    }
+
+    expect(userDO.idNames).toHaveLength(2 * KNOCKS_PER_WINDOW);
+    expect((await pcRoutes.fetch(post(JSON.stringify(refusal)), env)).status).toBe(429);
+    expect(userDO.idNames).toHaveLength(2 * KNOCKS_PER_WINDOW);
+  });
+
+  test('only POST records a refusal', async () => {
+    const userDO = makeUserDO();
+    const response = await pcRoutes.fetch(new Request('https://kinu.test/pc/update-refused'), makeEnv(userDO));
+    expect(response.status).toBe(405);
+    expect(userDO.idNames).toEqual([]);
   });
 });
 

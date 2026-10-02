@@ -16,7 +16,7 @@ function bunVersionKey(version: string): number {
 /** Relative to `$KINU_HOME`. */
 const KINU_MANAGED_BUN_SUBPATH = 'runtime/bin/bun';
 
-/** Requires `$KINU_HOME`; `provide_bun` leaves the path in `$KINU_BUN`. pc-agent's update.js has a copy. */
+/** Requires `$KINU_HOME`; `provide_bun` leaves the path in `$KINU_BUN`. */
 export function bunResolutionShell(): string {
   return `KINU_BUN_VERSION="${KINU_BUN_VERSION}"
 KINU_BUN_MIN_KEY=${bunVersionKey(KINU_BUN_VERSION)}

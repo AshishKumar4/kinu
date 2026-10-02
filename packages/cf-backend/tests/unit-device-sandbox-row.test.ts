@@ -21,6 +21,7 @@ function device(sandbox: UserDevice['sandbox'], label = 'workstation', update: P
     createdAt: AT, lastSeenAt: AT, expiresAt: AT + 864e5,
     replacedAt: null, revokedAt: null, unstoppedAt: null,
     reuseDetectedAt: null, wholeMachine: false,
+    updateRefusal: null,
     sandbox,
     ...update,
   };
@@ -207,6 +208,27 @@ describe('a revoked device names why it was revoked', () => {
 describe('a device row written before the registry recorded a sandbox', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
+
+  test('a refused build survives the API parser and displays its reason as visible row text', async () => {
+    const reason = 'Bun 1.4.2 install failed: permission denied';
+
+    const reported = {
+      ...device({ tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] }),
+      version: '0.2.0+older', servedVersion: SERVED, update: 'refused', updateRefusal: reason,
+    };
+
+    globalThis.fetch = Object.assign(
+      async () => Response.json([reported]),
+      { preconnect: realFetch.preconnect },
+    );
+    const [row] = await listDevices();
+    expect(row).toMatchObject({ update: 'refused', updateRefusal: reason });
+    const html = renderRow(reported.sandbox, undefined, row);
+    expect(updateBadge(html)).toMatchObject({ state: 'refused' });
+    const visible = html.replace(/<[^>]+>/g, '');
+    expect(visible).toContain(reason);
+    expect(visible).toContain(SERVED);
+  });
 
   test('parses as switch-on, capability unproven, rather than failing the listing', async () => {
     const withoutSandbox = {

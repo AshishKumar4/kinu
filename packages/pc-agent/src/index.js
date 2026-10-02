@@ -3551,6 +3551,8 @@ async function main() {
           // every daemon before this field.
           version: REPORTED_VERSION ?? undefined,
           updateCheck: !update.updateOptedOut(DEVICE_HOME),
+          // A build this daemon refused is not pushed again while it runs here.
+          runtime: runtimeName(),
           // What this machine PROVED at startup, in the hub's words: the hub
           // decides the tier and needs one term for what the machine can
           // honour, so a machine that cannot sandbox is never silently given a
@@ -3636,8 +3638,13 @@ async function startOnApprovedBun() {
   await main();
 }
 
+/** The runtime this process runs on, as HELLO and a refusal name it. */
+function runtimeName() {
+  return process.versions.bun === undefined ? `${process.release.name} ${process.version}` : `Bun ${process.versions.bun}`;
+}
+
 async function moveToApprovedBun() {
-  const running = process.versions.bun === undefined ? `${process.release.name} ${process.version}` : `Bun ${process.versions.bun}`;
+  const running = runtimeName();
   let bun;
 
   try {
@@ -3645,7 +3652,7 @@ async function moveToApprovedBun() {
     if (!(process.execve instanceof Function)) throw new Error(`${running} cannot restart this daemon on another runtime`);
     bun = await update.provideApprovedBun(DEVICE_HOME, log);
   } catch (err) {
-    await refuse(`this machine runs ${running}, and ${errorDetail(err)}`);
+    await refuse(running, `this machine runs ${running}, and ${errorDetail(err)}`);
 
     return;
   }
@@ -3659,7 +3666,7 @@ async function moveToApprovedBun() {
  * build and the owner's device row says why the machine is behind; then the
  * process ends, and an updater that started it rolls back and keeps serving.
  */
-async function refuse(reason) {
+async function refuse(runtime, reason) {
   log('device.runtime_refused', reason);
 
   try {
@@ -3667,7 +3674,7 @@ async function refuse(reason) {
       log('device.runtime_refusal_unsent', 'no build stamp: the hub pushes nothing to an unstamped daemon');
     } else {
       const cfg = readDeviceConfig(CONFIG_PATH);
-      const status = await update.reportRefusal({ origin: hubOrigin(cfg), cfg, version: RUNNING_VERSION, reason });
+      const status = await update.reportRefusal({ origin: hubOrigin(cfg), cfg, version: RUNNING_VERSION, runtime, reason });
       log(status === 200 ? 'device.runtime_refusal_sent' : 'device.runtime_refusal_unsent', `HTTP ${String(status)}`);
     }
   } catch (err) {

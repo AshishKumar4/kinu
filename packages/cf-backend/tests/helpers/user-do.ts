@@ -161,6 +161,8 @@ export interface TestUserDOOptions {
   mcpAppCredentials?: readonly string[];
   /** How a workspace answers the owner's ask for its first tile; absent, the ask is only recorded. */
   overviewNudge?: (name: string) => Promise<void>;
+  /** Notify an open workspace roster; its answer says whether the page is still watching. */
+  deviceRosterMoved?: (name: string) => Promise<boolean>;
   /** The slate-picture bucket; absent, a teardown has no pictures to delete. */
   slatePictures?: PictureBucket;
 }
@@ -246,6 +248,7 @@ interface TestUserEnvironment {
       closeRevokedCliSockets(generation: number): Promise<{ closed: number }>;
       closeRevokedSessionSockets(tokenHash: string): Promise<{ closed: number }>;
       requestOverviewPush(): Promise<void>;
+      devicesMoved(): Promise<{ watching: boolean }>;
     };
   };
 }
@@ -550,6 +553,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         async requestOverviewPush() {
           overviewNudges.push(name);
           await options.overviewNudge?.(name);
+        },
+        async devicesMoved() {
+          return { watching: options.deviceRosterMoved === undefined ? false : await options.deviceRosterMoved(name) };
         },
       }),
     },

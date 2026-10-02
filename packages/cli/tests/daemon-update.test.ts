@@ -177,14 +177,16 @@ const installed = (home: string, name: string) => readFileSync(join(home, name),
 
 
 describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
-  test('HELLO names the build, the platform and the opt-out state; a current build gets no UPDATE', async () => {
+  test('HELLO names the build, the platform, the runtime and the opt-out state; a current build gets no UPDATE', async () => {
     const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
     await served.sockets.until((hellos) => hellos[0] !== undefined);
     const socket = present(served.sockets.items[0], 'the HELLO');
-    expect(socket.hello).toMatchObject({ type: 'HELLO', version: OLD, os: process.platform, arch: process.arch, updateCheck: true });
+    expect(socket.hello).toMatchObject({
+      type: 'HELLO', version: OLD, os: process.platform, arch: process.arch, runtime: `Bun ${Bun.version}`, updateCheck: true,
+    });
     await socket.settle();
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
     expect(daemon.log()).not.toContain('device.update_started');
@@ -469,7 +471,7 @@ describe('a release that needs a newer Bun than the machine runs', () => {
 
     await served.sockets.until((hellos) => hellos[1] !== undefined);
     const successor = present(served.sockets.items[1], 'the successor HELLO');
-    expect(successor.hello).toMatchObject({ version: NEW });
+    expect(successor.hello).toMatchObject({ version: NEW, runtime: `Bun ${Bun.version}` });
     expect(await daemon.proc.exited).toBe(0);
     expect(daemon.log()).toContain('device.update_handed_over');
     expect(daemon.log()).not.toContain('device.update_rolled_back');
@@ -496,6 +498,7 @@ describe('a release that needs a newer Bun than the machine runs', () => {
       user: 'user_1',
       token: ROTATED_TOKEN,
       version: NEW,
+      runtime: 'Bun 1.4.0',
       reason: `this machine runs Bun 1.4.0, and Bun ${APPROVED_BUN} could not be provided: curl: (6) Could not resolve host: bun.sh`,
     }]);
 

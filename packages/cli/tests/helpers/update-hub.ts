@@ -56,7 +56,7 @@ const HelloSchema = v.looseObject({
 
 const FrameSchema = v.looseObject({ id: v.optional(v.string()) });
 
-const RefusalSchema = v.object({ user: v.string(), token: v.string(), version: v.string(), reason: v.string() });
+const RefusalSchema = v.object({ user: v.string(), token: v.string(), version: v.string(), runtime: v.string(), reason: v.string() });
 
 export type HubRefusal = v.InferOutput<typeof RefusalSchema>;
 
