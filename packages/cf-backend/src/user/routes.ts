@@ -1,4 +1,5 @@
 /** `/api/user/*`, behind the session gate. `GET /credentials` never returns a secret. */
+import { Effect } from 'effect';
 import { Hono, type Context } from 'hono';
 import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
@@ -8,7 +9,7 @@ import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
-import { diagnostics, authoredRefusal, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, authoredRefusal, toKinuError, settle } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listAvailableModels, listProviderCatalog, testAvailableModel } from './available-models';
 import { readUserAccountUsage } from './account-usage';
@@ -232,23 +233,23 @@ userRoutes.post('/api/user/workspaces', async (c) => handleCreateWorkspaceReques
 
 // A visit the roster did not take is a 404: the workspace is gone, or not visitable while it is created or torn down,
 // and a client that keeps a workspace alive by its visits must hear that rather than an `ok`.
-userRoutes.post('/api/user/workspaces/:name/touch', async (c) => {
-  try {
+userRoutes.post('/api/user/workspaces/:name/touch', (c) => settle(Effect.tryPromise({
+  try: async () => {
     const touched = await c.get('stub').touchWorkspace(c.get('owner'), decodeURIComponent(rawParam(c, 'name')));
 
     return touched ? json({ body: { ok: true } }) : err(404, 'No such workspace.');
-  }
-  catch (cause) { throw authoredRefusal({ doing: 'recording this workspace visit', cause }); }
-});
+  },
+  catch: (cause) => authoredRefusal({ doing: 'recording this workspace visit', cause }),
+})));
 
-userRoutes.delete('/api/user/workspaces/:name', async (c) => {
-  try {
+userRoutes.delete('/api/user/workspaces/:name', (c) => settle(Effect.tryPromise({
+  try: async () => {
     await c.get('stub').removeWorkspace(c.get('owner'), decodeURIComponent(rawParam(c, 'name')), c.get('identity').userId);
 
     return json({ body: { ok: true } });
-  }
-  catch (cause) { throw authoredRefusal({ doing: 'deleting this workspace', cause }); }
-});
+  },
+  catch: (cause) => authoredRefusal({ doing: 'deleting this workspace', cause }),
+})));
 
 userRoutes.get('/api/user/devices', async (c) => json({ body: await c.get('stub').listDevices(c.get('owner')) }));
 
@@ -266,28 +267,26 @@ userRoutes.post('/api/user/devices', async (c) => {
   return json({ body: { origin: cliOrigin, installCommand } }, { status: 201 });
 });
 
-userRoutes.delete('/api/user/devices/:id/unstopped', async (c) => {
-  try {
+userRoutes.delete('/api/user/devices/:id/unstopped', (c) => settle(Effect.tryPromise({
+  try: async () => {
     const result = await c.get('stub').acknowledgeUnstoppedDevice(c.get('owner'), decodeURIComponent(rawParam(c, 'id')));
 
     if (!result.ok) return err(404, 'No incident matched this revoked device');
 
     return json({ body: { ok: true } });
-  } catch (cause) {
-    throw authoredRefusal({ doing: 'acknowledging this device', cause });
-  }
-});
+  },
+  catch: (cause) => authoredRefusal({ doing: 'acknowledging this device', cause }),
+})));
 
 // `/devices/:id` also matches `/devices/consents`.
-userRoutes.delete('/api/user/devices/:id', async (c) => {
-  try {
+userRoutes.delete('/api/user/devices/:id', (c) => settle(Effect.tryPromise({
+  try: async () => {
     const result = await c.get('stub').revokeDevice(c.get('owner'), decodeURIComponent(rawParam(c, 'id')));
 
     return json({ body: result });
-  } catch (cause) {
-    throw authoredRefusal({ doing: 'revoking this device', cause });
-  }
-});
+  },
+  catch: (cause) => authoredRefusal({ doing: 'revoking this device', cause }),
+})));
 
 userRoutes.patch('/api/user/devices/:id', async (c) => {
   const body = await safeJson(c.req.raw, v.object({ name: v.optional(v.string()) }));
@@ -337,26 +336,38 @@ userRoutes.all('/api/user/credentials/:key', async (c, next) => {
   await next();
 });
 
-userRoutes.post('/api/user/credentials/:key', async (c) => {
-  const body = await safeJson(c.req.raw, JsonValueSchema);
+userRoutes.post('/api/user/credentials/:key', (c) => {
+  return settle(Effect.gen(function* () {
+    const body = yield* Effect.promise(async () => safeJson(c.req.raw, JsonValueSchema));
 
-  if (body === null) return err(400, 'Body must be JSON');
+    if (body === null) return err(400, 'Body must be JSON');
 
-  try { await c.get('stub').setCredential(c.get('owner'), c.get('key'), body); }
-  catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause }); }
+    yield* Effect.tryPromise({
+      try: async () => {
+        await c.get('stub').setCredential(c.get('owner'), c.get('key'), body);
+      },
+      catch: (cause) => authoredRefusal({ doing: 'storing this credential', cause }),
+    });
 
-  modelSettingsChanged(c);
+    modelSettingsChanged(c);
 
-  return json({ body: { ok: true } });
+    return json({ body: { ok: true } });
+  }));
 });
 
-userRoutes.delete('/api/user/credentials/:key', async (c) => {
-  try { await c.get('stub').deleteCredential(c.get('owner'), c.get('key')); }
-  catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause }); }
+userRoutes.delete('/api/user/credentials/:key', (c) => {
+  return settle(Effect.gen(function* () {
+    yield* Effect.tryPromise({
+      try: async () => {
+        await c.get('stub').deleteCredential(c.get('owner'), c.get('key'));
+      },
+      catch: (cause) => authoredRefusal({ doing: 'deleting this credential', cause }),
+    });
 
-  modelSettingsChanged(c);
+    modelSettingsChanged(c);
 
-  return json({ body: { ok: true } });
+    return json({ body: { ok: true } });
+  }));
 });
 
 userRoutes.get('/api/user/unrevoked-grants', async (c) => json({ body: await c.get('stub').listUnrevokedGrants(c.get('owner')) }));
@@ -376,28 +387,27 @@ userRoutes.delete('/api/user/codex', async (c) => {
   return json({ body: { ok: true } });
 });
 
-userRoutes.post('/api/user/codex/start', async (c) => {
-  try { return json({ body: await c.get('stub').startCodexDeviceFlow(c.get('owner')) }); }
-  catch (cause) { throw toKinuError({ doing: 'starting the Codex sign-in', cause, otherwise: 'unavailable' }); }
-});
+userRoutes.post('/api/user/codex/start', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    return json({ body: await c.get('stub').startCodexDeviceFlow(c.get('owner')) });
+  },
+  catch: (cause) => toKinuError({ doing: 'starting the Codex sign-in', cause, otherwise: 'unavailable' }),
+})));
 
-userRoutes.post('/api/user/codex/poll', async (c) => {
-  try {
-    const status = await c.get('stub').pollCodexDeviceFlow(c.get('owner'));
+async function answerSettingsRead<T>(c: UserContext, read: Promise<T>, moved: (value: T) => boolean): Promise<Response> {
+  const value = await read;
 
-    if (status.connected) modelSettingsChanged(c);
+  if (moved(value)) modelSettingsChanged(c);
 
-    return json({ body: status });
-  } catch (cause) { throw toKinuError({ doing: 'checking the Codex sign-in', cause, otherwise: 'unavailable' }); }
-});
+  return json({ body: value });
+}
 
-userRoutes.get('/api/user/chatgpt', async (c) => {
-  const plan = await c.get('stub').chatgptPlan(c.get('owner'));
+userRoutes.post('/api/user/codex/poll', (c) => settle(Effect.tryPromise({
+  try: () => answerSettingsRead(c, c.get('stub').pollCodexDeviceFlow(c.get('owner')), (status) => status.connected),
+  catch: (cause) => toKinuError({ doing: 'checking the Codex sign-in', cause, otherwise: 'unavailable' }),
+})));
 
-  if (plan.changed) modelSettingsChanged(c);
-
-  return json({ body: plan });
-});
+userRoutes.get('/api/user/chatgpt', async (c) => answerSettingsRead(c, c.get('stub').chatgptPlan(c.get('owner')), (plan) => plan.changed));
 
 userRoutes.post('/api/user/chatgpt/sign-in', async (c) => json({ body: await c.get('stub').startChatGptSignIn(c.get('owner')) }));
 
@@ -478,47 +488,65 @@ userRoutes.get('/api/user/usage', async (c) => json({ body: await readUserAccoun
 
 userRoutes.get('/api/user/cloudflare/accounts', async (c) => json({ body: await c.get('stub').listCloudflareAccounts(c.get('owner')) }));
 
-userRoutes.put('/api/user/cloudflare/account', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ id: v.string() }));
+userRoutes.put('/api/user/cloudflare/account', (c) => {
+  return settle(Effect.gen(function* () {
+    const body = yield* Effect.promise(async () => safeJson(c.req.raw, v.object({ id: v.string() })));
 
-  if (!body) return err(400, 'id (string) required');
+    if (!body) return err(400, 'id (string) required');
 
-  try { await c.get('stub').selectCloudflareAccount(c.get('owner'), body.id); }
-  catch (cause) { throw authoredRefusal({ doing: 'selecting this Cloudflare account', cause }); }
+    yield* Effect.tryPromise({
+      try: async () => {
+        await c.get('stub').selectCloudflareAccount(c.get('owner'), body.id);
+      },
+      catch: (cause) => authoredRefusal({ doing: 'selecting this Cloudflare account', cause }),
+    });
 
-  modelSettingsChanged(c);
+    modelSettingsChanged(c);
 
-  return json({ body: { ok: true } });
+    return json({ body: { ok: true } });
+  }));
 });
 
 userRoutes.get('/api/user/cloudflare/gateways', async (c) => json({ body: await c.get('stub').listAIGateways(c.get('owner')) }));
 
-userRoutes.put('/api/user/cloudflare/gateway', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ id: v.nullable(v.string()) }));
+userRoutes.put('/api/user/cloudflare/gateway', (c) => {
+  return settle(Effect.gen(function* () {
+    const body = yield* Effect.promise(async () => safeJson(c.req.raw, v.object({ id: v.nullable(v.string()) })));
 
-  if (!body) {
-    return err(400, 'id (string | null) required');
-  }
+    if (!body) {
+      return err(400, 'id (string | null) required');
+    }
 
-  try { await c.get('stub').selectAIGateway(c.get('owner'), body.id); }
-  catch (cause) { throw authoredRefusal({ doing: 'selecting this AI Gateway', cause }); }
+    yield* Effect.tryPromise({
+      try: async () => {
+        await c.get('stub').selectAIGateway(c.get('owner'), body.id);
+      },
+      catch: (cause) => authoredRefusal({ doing: 'selecting this AI Gateway', cause }),
+    });
 
-  modelSettingsChanged(c);
+    modelSettingsChanged(c);
 
-  return json({ body: { ok: true } });
+    return json({ body: { ok: true } });
+  }));
 });
 
 userRoutes.get('/api/user/mcp/servers', mcpRead((stub, owner) => stub.userMcp_list(owner)));
 
 userRoutes.get('/api/user/mcp/presets', mcpRead((stub, owner) => stub.userMcp_presets(owner)));
 
-userRoutes.post('/api/user/mcp/servers', async (c) => {
-  const body = await safeJson(c.req.raw, JsonValueSchema);
+userRoutes.post('/api/user/mcp/servers', (c) => {
+  return settle(Effect.gen(function* () {
+    const body = yield* Effect.promise(async () => safeJson(c.req.raw, JsonValueSchema));
 
-  if (body === null) return err(400, 'Body must be JSON');
+    if (body === null) return err(400, 'Body must be JSON');
 
-  try { return json({ body: await c.get('stub').userMcp_add(c.get('owner'), body, publicOrigin(c)) }, { status: 201 }); }
-  catch (cause) { throw authoredRefusal({ doing: 'adding this MCP server', cause }); }
+    return yield* Effect.tryPromise({
+      try: async () => {
+        return json({ body: await c.get('stub').userMcp_add(c.get('owner'), body, publicOrigin(c)) }, { status: 201 });
+      },
+      catch: (cause) => authoredRefusal({ doing: 'adding this MCP server', cause }),
+    });
+  }));
 });
 
 userRoutes.all('/api/user/mcp/servers/:id', async (c, next) => {
@@ -526,26 +554,30 @@ userRoutes.all('/api/user/mcp/servers/:id', async (c, next) => {
   await next();
 });
 
-userRoutes.delete('/api/user/mcp/servers/:id', async (c) => {
-  try {
+userRoutes.delete('/api/user/mcp/servers/:id', (c) => settle(Effect.tryPromise({
+  try: async () => {
     await c.get('stub').userMcp_remove(c.get('owner'), c.get('key'));
 
     return json({ body: { ok: true } });
-  }
-  catch (cause) { throw authoredRefusal({ doing: 'removing this MCP server', cause }); }
-});
+  },
+  catch: (cause) => authoredRefusal({ doing: 'removing this MCP server', cause }),
+})));
 
-userRoutes.patch('/api/user/mcp/servers/:id', async (c) => {
-  const body = await safeJson(c.req.raw, JsonValueSchema);
+userRoutes.patch('/api/user/mcp/servers/:id', (c) => {
+  return settle(Effect.gen(function* () {
+    const body = yield* Effect.promise(async () => safeJson(c.req.raw, JsonValueSchema));
 
-  if (body === null) return err(400, 'Body must be JSON');
+    if (body === null) return err(400, 'Body must be JSON');
 
-  try {
-    await c.get('stub').userMcp_update(c.get('owner'), c.get('key'), body);
+    return yield* Effect.tryPromise({
+      try: async () => {
+        await c.get('stub').userMcp_update(c.get('owner'), c.get('key'), body);
 
-    return json({ body: { ok: true } });
-  }
-  catch (cause) { throw authoredRefusal({ doing: 'updating this MCP server', cause }); }
+        return json({ body: { ok: true } });
+      },
+      catch: (cause) => authoredRefusal({ doing: 'updating this MCP server', cause }),
+    });
+  }));
 });
 
 userRoutes.get('/api/user/mcp/callback', async (c) => {

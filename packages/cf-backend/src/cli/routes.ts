@@ -1,5 +1,5 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
-import { Result } from 'effect';
+import { Effect, Result } from 'effect';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
@@ -45,7 +45,7 @@ import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
 import { noHead, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
-import { authoredRefusal, classify, diagnostics, renderThrownChain, toKinuError, settleLogged } from '@kinu.run/core/obs';
+import { authoredRefusal, classify, diagnostics, renderThrownChain, toKinuError, settleLogged, settle } from '@kinu.run/core/obs';
 
 const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) });
 
@@ -310,19 +310,22 @@ cliRoutes.post('/api/cli/workspaces', async (c) => {
   return handleCreateWorkspaceRequest({ request: c.req.raw, env: c.env, userId: cli.userId, userDO: cli.userDO });
 });
 
-cliRoutes.delete('/api/cli/workspaces/:name', async (c) => {
-  const cli = c.get('cli');
+cliRoutes.delete('/api/cli/workspaces/:name', (c) => {
+  return settle(Effect.gen(function* () {
+    const cli = c.get('cli');
 
-  try {
-    const name = decodeURIComponent(rawParam(c, 'name'));
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const name = decodeURIComponent(rawParam(c, 'name'));
 
-    if (!(await cli.userDO.hasWorkspace(await ownerCaller(c.env), name))) return err(404, `Agent ${name} not found.`);
-    await cli.userDO.removeWorkspace(await ownerCaller(c.env), name, cli.userId);
+        if (!(await cli.userDO.hasWorkspace(await ownerCaller(c.env), name))) return err(404, `Agent ${name} not found.`);
+        await cli.userDO.removeWorkspace(await ownerCaller(c.env), name, cli.userId);
 
-    return json({ body: { ok: true } });
-  } catch (cause) {
-    throw authoredRefusal({ doing: 'deleting this workspace', cause });
-  }
+        return json({ body: { ok: true } });
+      },
+      catch: (cause) => authoredRefusal({ doing: 'deleting this workspace', cause }),
+    });
+  }));
 });
 
 cliRoutes.post('/api/cli/workspaces/:name/connect-ticket', async (c) => {
@@ -344,36 +347,40 @@ cliRoutes.post('/api/cli/workspaces/:name/connect-ticket', async (c) => {
   return json({ body: { ticket: issued.ticket, expiresAt: issued.expiresAt } });
 });
 
-cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', async (c) => {
-  const cli = c.get('cli');
-  const agent = await cliAgent(c.env, cli, decodeURIComponent(rawParam(c, 'name')));
+cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', (c) => {
+  return settle(Effect.gen(function* () {
+    const cli = c.get('cli');
+    const agent = yield* Effect.promise(async () => cliAgent(c.env, cli, decodeURIComponent(rawParam(c, 'name'))));
 
-  if (agent instanceof Response) return agent;
+    if (agent instanceof Response) return agent;
 
-  // Step-up gated on every path; the CLI's interactive-auth time is its token mint time.
-  if (!isFreshAuthTime(await sessionTokenMintedAt(c.env, cli))) {
-    return err(401, 'step-up auth required: run `kinu auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
-  }
+    // Step-up gated on every path; the CLI's interactive-auth time is its token mint time.
+    if (!isFreshAuthTime(yield* Effect.promise(async () => sessionTokenMintedAt(c.env, cli)))) {
+      return err(401, 'step-up auth required: run `kinu auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
+    }
 
-  // A webhook whose delivery URL cannot be signed is a row nobody can deliver to.
-  if (webhookRouteSecret(c.env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
-  const body = await safeJson(c.req.raw, WebhookRequestSchema);
+    // A webhook whose delivery URL cannot be signed is a row nobody can deliver to.
+    if (webhookRouteSecret(c.env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
+    const body = yield* Effect.promise(async () => safeJson(c.req.raw, WebhookRequestSchema));
 
-  if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
+    if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
+    const { label, auth_mode } = body;
 
-  try {
-    return json({
-      body: await agent.createDurableWebhook({
-        label: body.label,
-        auth_mode: body.auth_mode,
-        secret: body.secret,
-        accepted_content_type: body.accepted_content_type,
-        rate_limit_per_min: body.rate_limit_per_min,
-      }),
-    }, { status: 201 });
-  } catch (cause) {
-    throw authoredRefusal({ doing: 'creating this webhook', cause });
-  }
+    return yield* Effect.tryPromise({
+      try: async () => {
+        return json({
+          body: await agent.createDurableWebhook({
+            label,
+            auth_mode,
+            secret: body.secret,
+            accepted_content_type: body.accepted_content_type,
+            rate_limit_per_min: body.rate_limit_per_min,
+          }),
+        }, { status: 201 });
+      },
+      catch: (cause) => authoredRefusal({ doing: 'creating this webhook', cause }),
+    });
+  }));
 });
 
 cliRoutes.get('/api/cli/devices', async (c) => json({ body: await c.get('cli').userDO.listDevices(await ownerCaller(c.env)) }));
@@ -395,28 +402,40 @@ cliRoutes.all('/api/cli/credentials/:key', async (c, next) => {
   await next();
 });
 
-cliRoutes.post('/api/cli/credentials/:key', async (c) => {
-  const cli = c.get('cli');
-  const body = await safeJson(c.req.raw, JsonValueSchema);
+cliRoutes.post('/api/cli/credentials/:key', (c) => {
+  return settle(Effect.gen(function* () {
+    const cli = c.get('cli');
+    const body = yield* Effect.promise(async () => safeJson(c.req.raw, JsonValueSchema));
 
-  try { await cli.userDO.setCredential(await ownerCaller(c.env), c.get('key'), body); }
-  catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause }); }
+    yield* Effect.tryPromise({
+      try: async () => {
+        await cli.userDO.setCredential(await ownerCaller(c.env), c.get('key'), body);
+      },
+      catch: (cause) => authoredRefusal({ doing: 'storing this credential', cause }),
+    });
 
-  // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
-  notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
+    // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
+    notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
 
-  return json({ body: { ok: true } }, { status: 201 });
+    return json({ body: { ok: true } }, { status: 201 });
+  }));
 });
 
-cliRoutes.delete('/api/cli/credentials/:key', async (c) => {
-  const cli = c.get('cli');
+cliRoutes.delete('/api/cli/credentials/:key', (c) => {
+  return settle(Effect.gen(function* () {
+    const cli = c.get('cli');
 
-  try { await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key')); }
-  catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause }); }
+    yield* Effect.tryPromise({
+      try: async () => {
+        await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key'));
+      },
+      catch: (cause) => authoredRefusal({ doing: 'deleting this credential', cause }),
+    });
 
-  notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
+    notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
 
-  return json({ body: { ok: true } });
+    return json({ body: { ok: true } });
+  }));
 });
 
 cliRoutes.all('/api/cli/*', async (c) => err(404, `No such CLI route: ${c.req.method} ${cliPath(c)}`));

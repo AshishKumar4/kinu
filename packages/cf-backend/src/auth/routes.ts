@@ -1,4 +1,4 @@
-import { Data } from 'effect';
+import { Effect, Cause, Data } from 'effect';
 import * as oauth from 'oauth4webapi';
 import { Hono } from 'hono';
 import {
@@ -25,7 +25,7 @@ import {
   type CloudflareTokenPayload,
 } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError, settle } from '@kinu.run/core/obs';
 import { notifyWorkspacesModelSettingsChanged, type ModelSettingsFanoutTarget } from '../user/workspace-access';
 import type { UserDO } from '../user/user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -82,15 +82,20 @@ export const authApiRoutes = new Hono<FamilyEnv<AuthRoutesEnv<unknown>, object>>
 
 authApiRoutes.get('/api/auth/providers', async (c) => json({ body: { providers: listConfiguredOAuthProviders(c.env) } }));
 
-authApiRoutes.get('/api/auth/me', async (c) => {
-  try {
-    const identity = await authenticateRequest(c.req.raw, c.env);
+authApiRoutes.get('/api/auth/me', (c) => {
+  return settle(Effect.gen(function* () {
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const identity = yield* Effect.promise(async () => authenticateRequest(c.req.raw, c.env));
 
-    return json({ body: { user: publicIdentity(identity) } });
-  } catch (e) {
-    if (e instanceof AuthError && e.status === 401) return json({ body: { user: null } }, { status: 401 });
-    throw e;
-  }
+      return json({ body: { user: publicIdentity(identity) } });
+    }), (failed) => Effect.gen(function* () {
+      const e = Cause.squash(failed);
+
+      if (e instanceof AuthError && e.status === 401) return json({ body: { user: null } }, { status: 401 });
+
+      return yield* Effect.failCause(failed);
+    }));
+  }));
 });
 
 /** Sign-in pages and OAuth legs. */

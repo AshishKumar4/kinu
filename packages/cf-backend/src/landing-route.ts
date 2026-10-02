@@ -1,5 +1,7 @@
 /** `/` for a visitor with no session: streams the built landing asset. */
 
+import { Effect, Cause } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { Hono } from 'hono';
 import { AuthError, authenticateRequest } from './auth/session';
 import { publicHtmlHeaders } from '@kinu.run/core';
@@ -12,35 +14,39 @@ landingRoutes.get('/assets/kinu-icon.svg', async () => new Response(markDocument
   headers: { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=3600, must-revalidate' },
 }));
 
-landingRoutes.get('/', async (c, next) => {
-  const request = c.req.raw;
-  let signedIn = true;
+landingRoutes.get('/', (c, next) => {
+  return settle(Effect.gen(function* () {
+    const request = c.req.raw;
+    let signedIn = true;
 
-  try {
-    await authenticateRequest(request, c.env);
-  } catch (e) {
-    if (!(e instanceof AuthError) || e.status !== 401) throw e;
-    signedIn = false;
-  }
+    yield* Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => authenticateRequest(request, c.env));
+    }), (failed) => Effect.gen(function* () {
+      const e = Cause.squash(failed);
 
-  if (signedIn) return await next();
+      if (!(e instanceof AuthError) || e.status !== 401) return yield* Effect.failCause(failed);
+      signedIn = false;
+    }));
 
-  const headers = new Headers(publicHtmlHeaders());
+    if (signedIn) return yield* Effect.promise(async () => next());
 
-  if (request.method === 'HEAD') return new Response(null, { headers });
+    const headers = new Headers(publicHtmlHeaders());
 
-  const assetUrl = new URL('/landing.html', request.url);
-  const asset = await c.env.ASSETS.fetch(assetUrl);
+    if (request.method === 'HEAD') return new Response(null, { headers });
 
-  if (!asset.ok) {
-    throw new Error(`landing asset returned ${String(asset.status)}`);
-  }
+    const assetUrl = new URL('/landing.html', request.url);
+    const asset = yield* Effect.promise(async () => c.env.ASSETS.fetch(assetUrl));
 
-  headers.delete('content-length');
+    if (!asset.ok) {
+      return yield* Effect.die(new Error(`landing asset returned ${String(asset.status)}`));
+    }
 
-  return new Response(asset.body, {
-    status: asset.status,
-    statusText: asset.statusText,
-    headers,
-  });
+    headers.delete('content-length');
+
+    return new Response(asset.body, {
+      status: asset.status,
+      statusText: asset.statusText,
+      headers,
+    });
+  }));
 });
