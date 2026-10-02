@@ -17,6 +17,7 @@ import { requireSchemaGenesis } from './schema-stamp';
 import { settle } from '../obs/effect';
 import { KinuError } from '../obs/error';
 import { VfsExportPageSchema } from '../vfs/export-page';
+import { isNimbusTable } from '../vfs/nimbus-tables';
 import { SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { SOUL_PATH } from './soul';
 
@@ -77,10 +78,6 @@ const EXCLUDED_TABLES = {
 
 function isInternalTable(name: string): boolean {
   return name.startsWith('sqlite_') || name.startsWith('_cf_');
-}
-
-function isStoreTable(name: string): boolean {
-  return name.startsWith('vfs_') || name.startsWith('nimbus_');
 }
 
 export const ARCHIVE_PIN_PREFIX = 'archive:';
@@ -885,7 +882,7 @@ export function readWorkspaceArchivePage(
   return settle(Effect.gen(function* () {
     const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
     const cursor = opts.cursor ?? null;
-    const schema = readSchema(sql).filter((o) => !opts.store || !isStoreTable(o.table));
+    const schema = readSchema(sql).filter((o) => !opts.store || !isNimbusTable(o.table));
     const live = schema.filter((o) => o.dumpRows);
     const agents = opts.agents?.list() ?? [];
     const state: PageState = { sink: { lines: [], bytes: 0 }, walk: { index: 0, after: null, rows: cursor?.rows ?? 0 } };

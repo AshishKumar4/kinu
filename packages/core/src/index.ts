@@ -264,7 +264,7 @@ export {
 
 export type * from './types/primitives';
 
-export { VfsRevisionSchema } from './types/primitives';
+export { OutputSinkSchema, ShellExecOptionsSchema, VfsRevisionSchema } from './types/primitives';
 
 export { REAL_CLOCK, waitOn, every, type Clock } from './types/clock';
 
@@ -1125,6 +1125,8 @@ export {
 
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
 
+export { isNimbusTable } from './vfs/nimbus-tables';
+
 export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 
 export { oneAtATime } from './utils/one-at-a-time';
@@ -1619,6 +1621,8 @@ export {
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel,
+  JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, jobName, shortJobId, type JobName,
+  type JobOutputFrame, type JobOutputTail,
 } from './jobs/index';
 
 export {
@@ -2030,7 +2034,7 @@ export {
 } from './read-models/background-jobs';
 
 export type {
-  BackgroundJobControl, BackgroundJobPlaneDeps, CancelWorkDeps, CancelWorkOutcome, RetryOutcome,
+  BackgroundJobControl, BackgroundJobPlaneDeps, CancelWorkDeps, CancelWorkOutcome, ListedBackgroundJob, RetryOutcome,
 } from './read-models/background-jobs';
 
 export {

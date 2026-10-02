@@ -16,6 +16,8 @@ import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
+import { JobOutputFeeds } from '../src/jobs/live-output';
+import { REAL_CLOCK } from '../src/types/clock';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { getRunTimeline } from '../src/read-models/timeline';
@@ -105,6 +107,7 @@ function jobPlane() {
   let created = 0;
 
   const runner: BackgroundJobControl = {
+    output: new JobOutputFeeds({ clock: REAL_CLOCK, send: () => {} }),
     cancel: () => Promise.resolve(true),
     createRetry: ({ sourceId, kind, input, mode }) => {
       const id = `retry-${++created}`;

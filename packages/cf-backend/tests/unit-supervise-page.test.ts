@@ -15,6 +15,8 @@ const page = await import('../src/pages/SupervisePage');
 
 const evolution = await import('../src/components/surfaces/supervise-evolution');
 
+const jobRow = await import('../src/components/surfaces/work-jobs');
+
 async function stubRpc<T>(method: string): Promise<T> {
   throw new Error(`unexpected rpc in markup test: ${method}`);
 }
@@ -47,6 +49,22 @@ function pageMarkup(): string {
 function sectionMarkup(entries: EvolutionEntry[]): string {
   return renderToStaticMarkup(createElement(evolution.EvolutionSection, { entries }));
 }
+
+// Main, 2026-10-02: Supervise named a job by its label or its whole id, and its kind; the card and the TUI did not.
+test("a background job's row names it by its label, then its short id", () => {
+  const row = (label: string | null) => renderToStaticMarkup(createElement(jobRow.BackgroundJobRow, {
+    job: { id: 'bgjob-4e1a77c0aa11', kind: 'shell', label, status: 'running', createdAt: NOW, settledAt: null }, tone: 'p-dot-warning',
+  }));
+
+  const labeled = row('workspace: bun run build');
+  expect(labeled.indexOf('>workspace: bun run build<')).toBeGreaterThan(-1);
+  expect(labeled.indexOf('>4e1a77c0<')).toBeGreaterThan(labeled.indexOf('>workspace: bun run build<'));
+  expect(labeled).not.toContain('>shell<');
+
+  const unlabeled = row(null);
+  expect(unlabeled.indexOf('>shell<')).toBeGreaterThan(-1);
+  expect(unlabeled.indexOf('>4e1a77c0<')).toBeGreaterThan(unlabeled.indexOf('>shell<'));
+});
 
 describe('the supervise view, as markup', () => {
   test('there is no Curriculum section', () => {

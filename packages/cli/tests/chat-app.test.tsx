@@ -6,7 +6,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
-import { missingSubordinateHistory, READS_CHANGED_EVENT, type AgentModelMenu, type SubordinateChild } from '@kinu.run/core';
+import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, type AgentModelMenu, type SubordinateChild } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
@@ -1096,6 +1096,31 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     await screen.waitFor('the hire the frame named', () => screen.frame().includes('Busy Mill · agent'));
     expect(screen.frame()).toContain('Scout · agent');
+  });
+
+  // Main's queue, 2026-10-02: a long build showed nothing in the TUI until it finished.
+  test("the open Agent Hub lists a running job with the line it printed last, and its frames keep that line current", async () => {
+    const main = fakeClient({
+      name: 'checkout',
+      listJobs: async () => [{
+        id: 'bgjob-4e1a77c0aa11', kind: 'shell', status: 'running', label: 'workspace: bun run build',
+        output: { seq: 2, omitted: 0, chunks: [{ stream: 'stdout', text: 'resolving\ncompiled 120 modules\n' }] },
+      }],
+    });
+
+    const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the running job the hub read', () => screen.frame().includes('workspace: bun run build'));
+    expect(screen.frame()).toContain('compiled 120 modules');
+    // Named as every surface names a job: its label, then its short id.
+    expect(screen.frame()).toContain('workspace: bun run build · 4e1a77c0 · running');
+
+    main.emit({ type: 'broadcast', event: {
+      type: JOB_OUTPUT_EVENT, jobId: 'bgjob-4e1a77c0aa11', seq: 3, dropped: 0, chunks: [{ stream: 'stderr', text: 'warn: 2 large chunks\n' }],
+    } });
+
+    await screen.waitFor('the line its frame carried', () => screen.frame().includes('warn: 2 large chunks'));
+    expect(screen.frame()).not.toContain('compiled 120 modules');
   });
 
   test('after a reload, a one-question helper the chat asked is listed as answered, and Enter opens its kept chat by id', async () => {

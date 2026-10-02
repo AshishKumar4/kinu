@@ -6,6 +6,7 @@ import type { StepTelemetry } from './events/step-stats';
 import type { Usage } from './usage';
 import type { WorkspaceSpend } from './read-models/workspace-spend';
 import type { CommandResult } from './execution/exec-result';
+import type { JobOutputTail } from './jobs/live-output';
 import type { MemoryNote } from './memory/note';
 
 /** A journalled branch's lifecycle in the head journal's own vocabulary; distinct from the drawing vocabulary of {@link ForkNode.status}. */
@@ -112,6 +113,7 @@ export interface BackgroundJob {
 	/** When the next attempt may start; null while nothing is owed, including during a running attempt. */
 	resumeAfter?: number | null;
 	serves?: number | null;
+	output?: JobOutputTail;
 }
 
 /** A pending device request (method `connect` asks for a device to exist); `always` is the per-workspace binding. */

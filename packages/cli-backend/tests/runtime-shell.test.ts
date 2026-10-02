@@ -87,6 +87,24 @@ describe('createHostShell', () => {
     expect(result.stdout).toContain('\n20000');
   });
 
+  // Main's queue, 2026-10-02: a job's output is shown as it is printed, not only once the command ends.
+  test('hands each stream to the call\'s sink as it is printed, and still answers with all of it', async () => {
+    const shell = createHostShell(process.cwd());
+    const heard: Array<{ stream: string; text: string }> = [];
+    const decoder = new TextDecoder();
+
+    const output = {
+      write: (stream: 'stdout' | 'stderr', data: Uint8Array | string) => { heard.push({ stream, text: data instanceof Uint8Array ? decoder.decode(data) : data }); },
+      lost: () => {},
+    };
+
+    const result = await shell.exec("printf 'compiled\\n'; printf 'warn: chunk size\\n' >&2; printf 'built\\n'", { output });
+
+    expect(result).toMatchObject({ stdout: 'compiled\nbuilt\n', stderr: 'warn: chunk size\n', exitCode: 0 });
+    expect(heard.filter(({ stream }) => stream === 'stdout').map(({ text }) => text).join('')).toBe('compiled\nbuilt\n');
+    expect(heard.filter(({ stream }) => stream === 'stderr').map(({ text }) => text).join('')).toBe('warn: chunk size\n');
+  });
+
   test('a failing command still reports its exit code and both streams', async () => {
     const shell = createHostShell(process.cwd());
     const result = await shell.exec('echo out; echo err 1>&2; exit 3');

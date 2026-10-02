@@ -127,12 +127,36 @@ export interface Identity {
   };
 }
 
+export type OutputStreamName = 'stdout' | 'stderr';
+
+export interface OutputChunk {
+  readonly stream: OutputStreamName;
+  readonly text: string;
+}
+
+export interface OutputSink {
+  write(stream: OutputStreamName, data: Uint8Array | string): void;
+  lost(count: number): void;
+}
+
+const WritableSchema = v.object({ write: v.function(), lost: v.function() });
+
+export const OutputSinkSchema = v.custom<OutputSink>((value) => v.is(WritableSchema, value));
+
 export interface ShellExecOptions {
   stdin?: string;
   signal?: AbortSignal;
   /** The caller stopped waiting: later commands run, and this one keeps no `cd`. */
   detach?: AbortSignal;
+  output?: OutputSink;
 }
+
+export const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
+  stdin: v.optional(v.string()),
+  signal: v.optional(v.instance(AbortSignal)),
+  detach: v.optional(v.instance(AbortSignal)),
+  output: v.optional(OutputSinkSchema),
+}));
 
 export interface ShellExecResult {
   stdout: string;
