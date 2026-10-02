@@ -10,7 +10,7 @@ import { effectiveScore } from '../craft/ema';
 import { DEFAULT_CONFIG } from '../config';
 import { isoDate, nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
-import { getLesson, listLessons } from '../evolution/outcomes';
+import { getLesson, listLessons } from '../evolution/lessons';
 import {
   DEFAULT_SHADOW_CONFIG, decidePromotion, getCurrentScaffoldVersion, readShadowVerdict,
   type ScaffoldStatus,
@@ -209,15 +209,15 @@ async function scaffoldCandidate(
     };
   }
 
-  // Rows stamped with this version are exactly the turns since promotion; the veto window runs to now.
+  // Ratings stamped with this version are exactly the rated turns since promotion; the veto window runs to now.
   const turns = src.sql<{ created_at: number }>`
-    SELECT created_at FROM turn_outcomes
+    SELECT MIN(created_at) AS created_at FROM turn_ratings
     WHERE actor_id = ${src.actor.actorId} AND scaffold_version = ${version}
-    ORDER BY created_at ASC LIMIT ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}`;
+    GROUP BY turn_id ORDER BY created_at ASC LIMIT ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}`;
 
   if (turns.length < EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS) {
     return {
-      refused: `scaffold v${version} has served ${turns.length} graded turn`
+      refused: `scaffold v${version} has served ${turns.length} rated turn`
         + `${turns.length === 1 ? '' : 's'} since promotion, below the `
         + `${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}-turn probation this workspace's own promotion gate `
         + 'demands as evidence (DEFAULT_SHADOW_CONFIG.minTrials)',
@@ -249,7 +249,7 @@ async function scaffoldCandidate(
     payload: { kind: 'scaffold', version, rationale: row.rationale, code },
     evidence: `promoted here on ${record.pendingWins} of ${decisive} decisive shadow trials `
       + `(win-rate ${Math.round(gate.winRate * 100)}%), then ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS} `
-      + 'graded turns live with no misevolution veto',
+      + 'rated turns live with no misevolution veto',
   };
 }
 

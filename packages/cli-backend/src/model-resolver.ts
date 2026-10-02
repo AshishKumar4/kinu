@@ -4,7 +4,6 @@ import {
   credentialToHeaders,
   normalizeModelMenu,
   createChatGptProvider,
-  availableJudgeSpecs,
   accountDeps,
   specModelInfo,
   createOpenAICompatProvider,
@@ -122,8 +121,6 @@ export interface LocalModelResolver {
   listModels(): Promise<ModelMenu>;
   /** Per-model metadata (e.g. input modalities); null when unknown or unreachable. */
   modelInfo(specOrNull?: string | null): Promise<ModelInfo | null>;
-  /** One spec per available provider, in registry preference order. */
-  judgeCandidates(): Promise<string[]>;
   /** Pre-request token count (core `providers/input-tokens.ts`); `unsupported`
    *  means the turn is assembled ungated rather than gated on an estimate. */
   countInputTokens(specOrNull: string | null | undefined, request: CountableRequest): Promise<InputTokenCount>;
@@ -323,9 +320,6 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     },
     listProviders() {
       return registry.listProviders(own);
-    },
-    judgeCandidates() {
-      return availableJudgeSpecs(registry, own);
     },
     listModels() {
       return registry.listAllModels(own);
@@ -592,6 +586,16 @@ type CliProviderId =
  * adapter's one table, create path included; a copy missing rows would seed the
  * wrong provider.
  */
+/**
+ * Where a Workers AI call from this CLI goes, as the resolver routes one: the configured endpoint when it serves
+ * Workers AI (`KINU_BASE_URL`, a local gateway, a Cloudflare login, the proxy), else the signed-in worker's proxy.
+ */
+export function workersAiEndpoint(llm: LLMProviderConfig | null, cloud: LocalCloudSession | undefined): AuthResolution | null {
+  if (defaultProviderFor(llm) === 'workers-ai' && llm !== null) return { baseURL: llm.baseURL, headers: llm.headers };
+
+  return cloud === undefined ? null : { baseURL: cloudProxyBaseURL(cloud.origin), headers: { Authorization: `Bearer ${cloud.token}` } };
+}
+
 function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null {
   if (llm === null) return null;
 

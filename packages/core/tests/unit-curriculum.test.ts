@@ -5,7 +5,7 @@ import {
 import { createScriptedLLM, createJSONLLM } from '@kinu.run/test-utils';
 import { createTestRuntime, makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
-import { recordTurnOutcome } from '../src/evolution/outcomes';
+import { recordTurnRating } from '../src/evolution/ratings';
 
 function setup() {
   const { rt, db } = createTestRuntime();
@@ -106,15 +106,15 @@ describe('Voyager curriculum proposer', () => {
     await expect(pending).rejects.toThrow(/0\.05/);
   });
 
-  test('leaves abandoned turns out of the prompt context', async () => {
+  test('leaves turns rated neutral out of the prompt context', async () => {
     const { rt } = setup();
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      outcome: 'abandoned', confidence: 0.5, source: 'classifier',
-      userMessage: 'abandoned-marker-task', assistantResponse: 'resp', now: 3,
+    recordTurnRating(rt.storage.sql, rt.actor, {
+      turnId: 'neutral', score: 3, corrected: 0, wrong: null, source: 'model',
+      request: 'abandoned-marker-task', answer: 'resp', now: 3,
     });
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      outcome: 'accepted', confidence: 0.9, source: 'classifier',
-      userMessage: 'accepted-marker-task', assistantResponse: 'resp', now: 4,
+    recordTurnRating(rt.storage.sql, rt.actor, {
+      turnId: 'accepted', score: 4.5, corrected: 0, wrong: null, source: 'model',
+      request: 'accepted-marker-task', answer: 'resp', now: 4,
     });
     const judge = createScriptedLLM(['[]']);
     await proposeNextTasks({ rt, judge });

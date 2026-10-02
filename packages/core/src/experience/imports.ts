@@ -15,7 +15,7 @@ import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import * as v from 'valibot';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
-import { recordLesson } from '../evolution/outcomes';
+import { recordLesson } from '../evolution/lessons';
 import {
   EXPERIENCE_KINDS,
   misevolutionSourceOf,

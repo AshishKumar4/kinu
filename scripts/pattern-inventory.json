@@ -295,13 +295,6 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/core/src/evolution/calibration.ts",
-      "kind": "hand-parser",
-      "owner": "parseLabelingFile",
-      "sourceSha256": "93faff86b9210f06b65f4863242f8f71b0c256cf12455dbf1d4db0cfaed8e937",
-      "decision": "framing"
-    },
-    {
       "file": "packages/core/src/evolution/pathology.ts",
       "kind": "regex-literal",
       "owner": "COMPLAINT_PATTERNS",

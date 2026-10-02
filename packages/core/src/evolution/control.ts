@@ -41,7 +41,7 @@ import { buildOutcomeEvalSplit } from './eval-split';
 import {
   describeSplitDegeneracy, renderOutcomeCriterion, FRESH_RESPONSE_RULE,
   type OutcomeEvalExpectation, type OutcomeEvalSplit, type OutcomeScoringRule,
-} from './outcomes';
+} from './eval-split';
 import { runScaffoldGepa } from './gepa/scaffold-bridge';
 import {
   runSectionGepa, findPromptSectionTarget, PROMPT_SECTION_TARGETS,
@@ -144,7 +144,7 @@ function scaffoldRunOptions(
  * rollout; without it, the live scaffold. No deadline: a candidate cut off early
  * would score as a bad candidate rather than be measured.
  */
-export async function runScaffoldCaptureText(
+async function runScaffoldCaptureText(
   control: ScaffoldControl,
   task: string,
   candidateCode?: string,

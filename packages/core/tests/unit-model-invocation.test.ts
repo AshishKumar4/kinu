@@ -13,7 +13,7 @@ import { createTestWorkspace } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 import { unpricedLedgerSink } from '../src/events/model-call-event';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
-import { createCompletionLLM, createVercelAILLM } from '../src/llm';
+import { createVercelAILLM } from '../src/llm';
 import { createJsonJudge } from '../src/evolution/control';
 import { createWorkersAIEmbedder } from '../src/providers/model-invocation';
 import { buildCfWebSearchProvider } from '../src/web/provider-factory';
@@ -116,17 +116,6 @@ describe('an endpoint LLM files every call it makes', () => {
 });
 
 describe('the raters file their calls as judge spend', () => {
-  test('a completion rater files each answer it gives, priced against its spec', async () => {
-    const { report, producers } = ledger();
-
-    const rater = createCompletionLLM({
-      model: modelAnswering('accepted'), spec: 'workers-ai/@cf/rater', stage: 'judge', spend: { source: 'judge', report },
-    });
-
-    expect(await rater.complete('classify this turn')).toBe('accepted');
-    expect(producers()).toEqual({ judge: { calls: 1, unmeasured: 0, usage: { input: 30, output: 4 } } });
-  });
-
   test('a JSON judge files its call even when the answer fails the schema: the call was billed', async () => {
     const { report, producers } = ledger();
     const judge = createJsonJudge(() => modelAnswering('{"score": "not a number"}'), report);
@@ -134,18 +123,6 @@ describe('the raters file their calls as judge spend', () => {
 
     await expect(judge({ schema: Score, prompt: 'score it' })).rejects.toThrow();
     expect(producers()).toEqual({ judge: { calls: 1, unmeasured: 0, usage: { input: 30, output: 4 } } });
-  });
-
-  test('a call the provider refused was not billed, and files nothing', async () => {
-    const { report, producers } = ledger();
-
-    const rater = createCompletionLLM({
-      model: new MockLanguageModelV3({ doGenerate: async () => { throw new Error('provider down'); } }),
-      spec: 'workers-ai/@cf/rater', stage: 'judge', spend: { source: 'judge', report },
-    });
-
-    await expect(rater.complete('classify this turn')).rejects.toThrow('provider down');
-    expect(producers()).toEqual({});
   });
 });
 

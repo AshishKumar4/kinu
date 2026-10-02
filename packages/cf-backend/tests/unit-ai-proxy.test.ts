@@ -466,3 +466,40 @@ describe('AI proxy model listing', () => {
     }
   });
 });
+
+describe('the decision models through the proxy (/api/user/ai/run)', () => {
+  /** Clef's answer shape (`providers/decision-model.ts`). */
+  const ANSWER = { result: { answers: { corrected: { type: 'noul', noul: 0.9 } }, usage: { input_tokens: 12 } }, success: true };
+
+  function runRequest(token: string | null, model: string): Request {
+    const headers = new Headers({ 'content-type': 'application/json' });
+
+    if (token) headers.set('authorization', `Bearer ${token}`);
+
+    return new Request(`https://kinu.example.com/api/user/ai/run/${model}`, {
+      method: 'POST', headers, body: JSON.stringify({ model: 'clef', state: 's', questions: {} }),
+    });
+  }
+
+  test('a signed-in CLI rates through the owner\'s Cloudflare login at /ai/run', async () => {
+    const { env } = setupEnv({ token: 'cf-user-token' });
+    const captured = captureUpstream(() => Response.json(ANSWER));
+
+    const res = await aiProxy(runRequest(AI_TOKEN, '@cf/cloudflare/clef'), env);
+
+    expect(res?.status).toBe(200);
+    expect(parseJsonObject(await handled(res).text())).toEqual(ANSWER);
+    expect(captured.map((seen) => [seen.url, seen.headers.get('authorization')]))
+      .toEqual([[`${ACCOUNT_ROOT}/ai/run/@cf/cloudflare/clef`, 'Bearer cf-user-token']]);
+  });
+
+  test('refuses anonymous callers, and runs only the decision models', async () => {
+    const { env } = setupEnv();
+    const captured = captureUpstream(() => Response.json(ANSWER));
+
+    expect((await aiProxy(runRequest(null, '@cf/cloudflare/clef'), env))?.status).toBe(401);
+    expect((await aiProxy(runRequest(READ_TOKEN, '@cf/cloudflare/clef'), env))?.status).toBe(403);
+    expect((await aiProxy(runRequest(AI_TOKEN, '@cf/moonshotai/kimi-k2.6'), env))?.status).toBe(404);
+    expect(captured).toEqual([]);
+  });
+});

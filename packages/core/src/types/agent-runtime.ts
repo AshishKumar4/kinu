@@ -10,6 +10,7 @@ import type { FileCheckpoints } from '../checkpoints/types';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate';
 import type { TurnFileLedger } from '../vfs/file-ledger';
 import type { ActorHandle } from '../identity/actor-handle';
+import type { DecisionPort } from '../providers/decision-model';
 
 /** Live channel for 'gate'-tier shell approvals (ACP `session/request_permission`). */
 export type RequestShellApproval = (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
@@ -36,6 +37,8 @@ export interface AgentRuntime {
   /** Same-vendor cheap tier (`MODEL_ROUTE_POLICY.fast`) for mechanical work; readers fall back
    *  to `llm`. Never for user-visible generation or scaffold authoring. */
   fastLlm?: LLM;
+  /** The decision model that rates a turn from the user's reply (evolution/ratings.ts). Absent: turns stay unrated. */
+  decide?: DecisionPort;
   /** Named executor providers (workspace, nimbus, sandbox, device) for the codemode sandbox. */
   executionRouter?: ExecutionRouter;
   /** Device-fleet transport (CF), feeding the dynamic context's fleet roster; absent in the CLI. */

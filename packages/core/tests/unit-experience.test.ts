@@ -18,7 +18,6 @@ import {
   initExperienceLibraryTables,
   initFactsTable,
   initImportedExperienceTable,
-  initTurnOutcomeTables,
   listImportedExperience,
   listPublishable,
   listScaffoldArchive,
@@ -26,7 +25,7 @@ import {
   readScaffoldVersion,
   recordLesson, listLessons,
   recordShadowEvaluation,
-  recordTurnOutcome,
+  recordTurnRating,
   type ExperienceEntry,
   type ExperienceLibraryStore,
   type ExperienceSearchOptions,
@@ -84,20 +83,11 @@ const ImportSchema = v.object({
 
 function workspace(name: string, library: ExperienceLibraryStore, llmResponses?: Record<string, string>): Workspace {
   const { rt, db, stores } = createTestRuntime(llmResponses ? { llmResponses } : undefined);
-  initTurnOutcomeTables(rt.storage.execRaw);
   initFactsTable(rt.storage.execRaw);
   initImportedExperienceTable(rt.storage.execRaw);
   db.exec(`CREATE TABLE IF NOT EXISTS evolution_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, message TEXT NOT NULL,
     data TEXT, created_at INTEGER NOT NULL)`);
-  // Mirrors `cf-backend/src/orchestrator.ts`: `actor_id` leads the key, or one actor's thumbs overwrite a sibling's.
-  db.exec(`CREATE TABLE IF NOT EXISTS turn_feedback (
-    actor_id   TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    feedback   TEXT NOT NULL CHECK (feedback IN ('positive','negative')),
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (actor_id, message_id)
-  )`);
 
   const facts = createFactsStore(rt.storage.sql, rt.actor);
 
@@ -175,19 +165,18 @@ async function promoteScaffold(ws: Workspace, code: string): Promise<number> {
   return proposed.version;
 }
 
-function serveGradedTurns(ws: Workspace, version: number, count: number, from = Date.now()): void {
+function serveRatedTurns(ws: Workspace, version: number, count: number, from = Date.now()): void {
   for (let i = 0; i < count; i++) {
-    recordTurnOutcome(ws.rt.storage.sql, ws.rt.actor, {
-      turnId: `served-v${version}-${i}`, outcome: 'accepted', confidence: 1,
-      source: 'classifier', userMessage: 'ship the thing', assistantResponse: 'shipped',
+    recordTurnRating(ws.rt.storage.sql, ws.rt.actor, {
+      turnId: `served-v${version}-${i}`, score: 4.5, corrected: 0, wrong: null, source: 'model', request: 'ship the thing', answer: 'shipped',
       scaffoldVersion: version, now: from + i,
     });
   }
 }
 
 async function gradeTurn(ws: Workspace, turnId: string, feedback: 'positive' | 'negative'): Promise<void> {
-  void ws.rt.storage.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
-    VALUES (${ws.rt.actor.actorId}, ${turnId}, ${feedback}, ${Date.now()})`;
+  // The user's thumb, recorded before the review adopts it.
+  await ws.engine.applyExplicitFeedback(turnId, feedback);
   await ws.engine.reviewTurn({
     turnId,
     sessionId: 'default',
@@ -503,7 +492,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     expect(beta.facts.recall('deploy.target')?.value).toBe('kinu.workers.dev');
   });
 
-  test('an ungraded turn settles nothing — the import keeps waiting', async () => {
+  test('an unrated turn settles nothing — the import keeps waiting', async () => {
     const library = ownerLibrary();
     const beta = workspace('beta', library);
 
@@ -536,7 +525,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
       SELECT message FROM evolution_events WHERE type = 'experience_import'`;
 
     expect(events).toHaveLength(1);
-    expect(events[0]?.message).toContain('Adopted imported experience after an accepted turn');
+    expect(events[0]?.message).toContain('Adopted imported experience after a turn rated 5.0/5');
     expect(events[0]?.message).toContain('from alpha');
   });
 });
@@ -567,31 +556,31 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     });
   });
 
-  test('a promoted version still serves out its probation of graded turns', async () => {
+  test('a promoted version still serves out its probation of rated turns', async () => {
     const alpha = workspace('alpha', ownerLibrary());
     await seedLiveScaffold(alpha);
     const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
     const sources = publishSources(alpha);
 
     expect(await findPublishable(sources, 'scaffold', String(version))).toEqual({
-      refused: `scaffold v1 has served 0 graded turns since promotion, below the `
+      refused: `scaffold v1 has served 0 rated turns since promotion, below the `
         + `${DEFAULT_SHADOW_CONFIG.minTrials}-turn probation this workspace's own promotion gate `
         + 'demands as evidence (DEFAULT_SHADOW_CONFIG.minTrials)',
     });
 
-    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials - 1);
+    serveRatedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials - 1);
     const short = await findPublishable(sources, 'scaffold', String(version));
     expect('refused' in short && short.refused).toContain(
-      `has served ${DEFAULT_SHADOW_CONFIG.minTrials - 1} graded turns since promotion`,
+      `has served ${DEFAULT_SHADOW_CONFIG.minTrials - 1} rated turns since promotion`,
     );
 
-    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
+    serveRatedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
     const candidate = await findPublishable(sources, 'scaffold', String(version));
 
     if ('refused' in candidate) throw new Error(candidate.refused);
     expect(candidate.evidence).toBe(
       `promoted here on 5 of 5 decisive shadow trials (win-rate 100%), then `
-      + `${DEFAULT_SHADOW_CONFIG.minTrials} graded turns live with no misevolution veto`,
+      + `${DEFAULT_SHADOW_CONFIG.minTrials} rated turns live with no misevolution veto`,
     );
     expect(candidate.payload).toEqual({
       kind: 'scaffold', version, rationale: SCAFFOLD_RATIONALE, code: scaffoldSrc('v1'),
@@ -613,7 +602,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     const vetoAt = alpha.rt.storage.sql<{ created_at: number }>`
       SELECT created_at FROM evolution_events WHERE type = 'misevolution_veto'`[0].created_at;
 
-    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, vetoAt - 2);
+    serveRatedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, vetoAt - 2);
     const refused = await findPublishable(publishSources(alpha), 'scaffold', String(version));
     expect('refused' in refused && refused.refused).toBe(
       `scaffold v1 drew 1 misevolution veto during its ${DEFAULT_SHADOW_CONFIG.minTrials}-turn `
@@ -626,7 +615,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     await seedLiveScaffold(alpha);
     const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
     const first = 1_700_000_000_000;
-    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, first);
+    serveRatedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, first);
     // The probation window runs from the first served turn through now, so the veto still counts.
     const vetoAt = first + DEFAULT_SHADOW_CONFIG.minTrials + 5000;
     void alpha.rt.storage.sql`INSERT INTO evolution_events (actor_id, type, message, data, created_at)
@@ -643,7 +632,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     await seedLiveScaffold(alpha);
     const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
     const first = 1_700_000_000_000;
-    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, first);
+    serveRatedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, first);
     void alpha.rt.storage.sql`INSERT INTO evolution_events (actor_id, type, message, data, created_at)
       VALUES (${alpha.rt.actor.actorId}, 'misevolution_veto', 'Misevolution veto (test)', ${'not-json'}, ${first + 1})`;
     const log = createRecordingLogger();
@@ -668,7 +657,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     const beta = workspace('beta', library);
     await seedLiveScaffold(alpha);
     const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
-    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
+    serveRatedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
 
     const listed = v.parse(v.object({ publishable: v.array(v.object({ kind: v.string(), key: v.string() })) }),
       await alpha.call({ action: 'publish' }));
@@ -691,7 +680,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     const alpha = workspace('alpha', library);
     await seedLiveScaffold(alpha);
     const version = await promoteScaffold(alpha, scaffoldSrc(tag));
-    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
+    serveRatedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
     const candidate = await findPublishable(publishSources(alpha), 'scaffold', String(version));
 
     if ('refused' in candidate) throw new Error(candidate.refused);

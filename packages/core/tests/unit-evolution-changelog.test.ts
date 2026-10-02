@@ -9,10 +9,10 @@ import { renderChangelogText } from '../src/tui/index';
 import {
   buildChangelog, countUnseenChangelog, listUnseenChangelog,
   executeChangelogRevert, revertChangelogEntryById,
-  initScaffoldTables, initShadowTables, initTurnOutcomeTables, initReplayTables,
+  initScaffoldTables, initShadowTables, initTurnRatingTables,
   initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
   startGepaRun, finishGepaRun,
-  recordTurnOutcome, recordShadowEvaluation,
+  recordTurnRating, recordShadowEvaluation, type RecordTurnRatingInput,
   modifyScaffold, applyPromotionDecision, getPendingScaffold,
   EvolutionEngine,
   type AgentRuntime, type EvolutionEvent,
@@ -34,8 +34,7 @@ function setup() {
   const execRaw = rt.storage.execRaw;
   initScaffoldTables(execRaw);
   initShadowTables(execRaw);
-  initTurnOutcomeTables(execRaw);
-  initReplayTables(execRaw);
+  initTurnRatingTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
   initRefinementTables(execRaw);
@@ -53,12 +52,11 @@ async function seedScaffoldPending(rt: AgentRuntime): Promise<number> {
   return present(result.version, 'the version modifyScaffold assigned');
 }
 
-interface ReplayRowSeed {
-  id: string;
-  at: number;
-  n: number;
-  mean: number;
-  scaffoldVersion: number;
+/** One rating; `turnId` defaults to a fresh one. */
+function rate(rt: AgentRuntime, input: Partial<RecordTurnRatingInput> & Pick<RecordTurnRatingInput, 'score' | 'source'>): void {
+  recordTurnRating(rt.storage.sql, rt.actor, {
+    turnId: crypto.randomUUID(), corrected: input.score <= 2 ? 1 : 0, wrong: null, request: 'q', answer: 'a', ...input,
+  });
 }
 
 describe('buildChangelog — every kind from the seeded ledgers', () => {
@@ -194,7 +192,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(item.summary).toBe('Your sandbox runs npm v10');
   });
 
-  test('GEPA, replay, and outcome entries are informational (no revert)', () => {
+  test('GEPA and rating entries are informational (no revert)', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
     const actor = rt.actor;
@@ -209,16 +207,8 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       runId: abortedId, status: 'aborted', stopReason: 'aborted', winnerId: null,
       metricCalls: 0, iterations: 0,
     });
-    void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-        VALUES (${actor.actorId}, 'rpl-1', ${Date.now()}, 6, 4, 2, 0.75, 0, '[]')`;
-    recordTurnOutcome(sql, actor, {
-      outcome: 'accepted', confidence: 1, source: 'explicit',
-      userMessage: 'build it', assistantResponse: 'done',
-    });
-    recordTurnOutcome(sql, actor, {
-      outcome: 'corrected', confidence: 0.8, source: 'classifier',
-      userMessage: 'fix it', assistantResponse: 'wrong', followup: 'no, the other one',
-    });
+    rate(rt, { score: 5, source: 'thumbs', request: 'build it', answer: 'done' });
+    rate(rt, { score: 1.4, source: 'model', request: 'fix it', answer: 'wrong', followup: 'no, the other one' });
 
     const entries = buildChangelog(sql, actor);
     const gepa = entries.filter((e) => e.kind === 'gepa');
@@ -229,81 +219,39 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(gepa[0].evidence).toContain('12 metric calls');
     expect(gepa[0].revert).toBeUndefined();
 
-    const replay = present(entries.find((e) => e.kind === 'replay'), 'the replay entry');
-    expect(replay.summary).toContain('Self-test score');
-    expect(replay.evidence).toContain('loss 0.25');
-    expect(replay.evidence).toContain('6 labeled turns');
-    expect(replay.revert).toBeUndefined();
-
-    const outcomes = present(entries.find((e) => e.kind === 'outcomes'), 'the outcomes entry');
-    expect(outcomes.summary).toContain('Graded 2 turns');
-    expect(outcomes.evidence).toContain('1 accepted');
-    expect(outcomes.evidence).toContain('1 corrected');
-    expect(outcomes.revert).toBeUndefined();
+    const ratings = present(entries.find((e) => e.kind === 'ratings'), 'the ratings entry');
+    expect(ratings.summary).toContain('Rated 2 turns');
+    expect(ratings.evidence).toContain('satisfaction 3.2');
+    expect(ratings.evidence).toContain('corrected 50%');
+    expect(ratings.revert).toBeUndefined();
   });
 
-  test('the digest attributes each verdict to the source that produced it', () => {
+  test('the digest attributes each rating to the source that produced it', () => {
     const { rt } = setup();
-    const sql = rt.storage.sql;
-    const actor = rt.actor;
-    // `execution` verdicts had no user, so the batch must not claim user follow-ups.
-    recordTurnOutcome(sql, actor, {
-      outcome: 'accepted', confidence: 1, source: 'execution',
-      userMessage: 'ship it', assistantResponse: 'shipped',
-    });
-    recordTurnOutcome(sql, actor, {
-      outcome: 'corrected', confidence: 1, source: 'execution',
-      userMessage: 'again', assistantResponse: 'threw',
-    });
-    recordTurnOutcome(sql, actor, {
-      outcome: 'accepted', confidence: 0.9, source: 'classifier',
-      userMessage: 'fix it', assistantResponse: 'fixed', followup: 'thanks',
-    });
+    rate(rt, { score: 5, source: 'thumbs' });
+    rate(rt, { score: 2, source: 'take_pick' });
+    rate(rt, { score: 4.2, source: 'model', followup: 'thanks' });
 
-    const outcomes = present(
-      buildChangelog(sql, actor).find((e) => e.kind === 'outcomes'),
-      'the outcomes entry',
-    );
+    const ratings = present(buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'ratings'), 'the ratings entry');
 
-    expect(outcomes.summary).toContain('Graded 3 turns');
-    expect(outcomes.summary).toContain('2 by whether their tool calls ran');
-    expect(outcomes.summary).toContain('1 from how the user replied');
-    expect(outcomes.summary).not.toContain('real user follow-ups');
-    // The outcome tally is unchanged by provenance.
-    expect(outcomes.evidence).toBe('2 accepted · 1 corrected');
+    expect(ratings.summary).toBe("Rated 3 turns · 1 by the user's thumbs · 1 by the user's picks between takes · "
+      + "1 by the decision model from the user's reply");
   });
 
-  test('each graded turn expands to the reason behind its verdict', () => {
+  test('each rated turn expands to the reason behind its rating', () => {
     const { rt } = setup();
-    const sql = rt.storage.sql;
-    const actor = rt.actor;
-    recordTurnOutcome(sql, actor, {
-      outcome: 'corrected', confidence: 0.75, source: 'classifier',
-      userMessage: 'add pagination to the chat list', assistantResponse: 'done',
-      followup: 'no, the other list',
-      evidence: 'the user named a different list than the one that changed', now: 100,
+    rate(rt, {
+      score: 1.6, corrected: 0.92, wrong: 'misunderstood', source: 'model',
+      request: 'add pagination to the chat list', answer: 'done', followup: 'no, the other list', now: 100,
     });
-    // No reason on record: the source is the reason.
-    recordTurnOutcome(sql, actor, {
-      outcome: 'accepted', confidence: 1, source: 'explicit',
-      userMessage: 'ship it', assistantResponse: 'shipped', now: 200,
-    });
+    // A thumb is its own reason.
+    rate(rt, { score: 5, source: 'thumbs', request: 'ship it', answer: 'shipped', now: 200 });
 
-    const outcomes = present(
-      buildChangelog(sql, actor).find((e) => e.kind === 'outcomes'),
-      'the outcomes entry',
-    );
+    const ratings = present(buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'ratings'), 'the ratings entry');
+    const items = present(ratings.items, 'the rated-turn items');
 
-    const items = present(outcomes.items, 'the graded-turn items');
-
-    expect(items.map((i) => i.summary)).toEqual([
-      'accepted: "ship it"',
-      'corrected: "add pagination to the chat list"',
-    ]);
-    expect(items[1].evidence).toBe(
-      "the user's reply read as corrected"
-      + ': the user named a different list than the one that changed · confidence 75%',
-    );
+    expect(items.map((i) => i.summary)).toEqual(['5.0/5: "ship it"', '1.6/5: "add pagination to the chat list"']);
+    expect(items[1].evidence).toBe("the user's reply read as 1.6/5, misunderstood · corrected 92%");
     expect(items[0].evidence).toBe('thumbs up from the user');
   });
 
@@ -362,34 +310,25 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const sql = rt.storage.sql;
     const actor = rt.actor;
 
-    // The real change sits older than eight bookkeeping rows that would push it off the page.
+    // The real change sits older than the rating card that would push it off a one-entry page.
     const version = await seedScaffoldPending(rt);
     const now = Date.now();
 
-    for (let index = 0; index < 7; index += 1) {
-      void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-          VALUES (${actor.actorId}, ${`rpl-${index}`}, ${now + 2 + index}, 6, 4, 2, 0.75, ${version}, '[]')`;
-    }
-
-    recordTurnOutcome(sql, actor, {
-      outcome: 'accepted', confidence: 1, source: 'explicit',
-      userMessage: 'ship it', assistantResponse: 'shipped', now: now + 1,
-    });
+    rate(rt, { score: 5, source: 'thumbs', request: 'ship it', answer: 'shipped', now: now + 1 });
 
     // The default page is bookkeeping only; the change-only page still finds it.
-    const page = buildChangelog(sql, actor, { limit: 8 });
-    expect(page).toHaveLength(8);
-    expect(page.every((entry) => entry.kind === 'outcomes' || entry.kind === 'replay')).toBe(true);
+    const page = buildChangelog(sql, actor, { limit: 1 });
+    expect(page.map((entry) => entry.kind)).toEqual(['ratings']);
 
-    const changes = buildChangelog(sql, actor, { limit: 8, changesOnly: true });
+    const changes = buildChangelog(sql, actor, { limit: 1, changesOnly: true });
     expect(changes).toHaveLength(1);
     expect(changes[0].id).toBe(`scaffold:v${version}:pending`);
 
     // The unseen marker counts the digest unfiltered.
-    expect(countUnseenChangelog(sql, actor, 0)).toBe(9);
+    expect(countUnseenChangelog(sql, actor, 0)).toBe(2);
   });
 
-  test('humanizes scaffold promotion and replay score direction without losing raw detail', async () => {
+  test('humanizes scaffold promotion without losing raw detail', async () => {
     const { rt } = setup();
     const version = await seedScaffoldPending(rt);
 
@@ -403,28 +342,11 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
 
     await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
-    const now = Date.now();
-
-    const replayRow = ({ id, at, n, mean, scaffoldVersion }: ReplayRowSeed) => {
-      void rt.storage.sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-          VALUES (${rt.actor.actorId}, ${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${scaffoldVersion}, '[]')`;
-    };
-
-    // 0.50 → 0.75 over 4 instances: overlapping intervals, not a direction.
-    replayRow({ id: 'rpl-old', at: now - 1000, n: 4, mean: 0.50, scaffoldVersion: 0 });
-    replayRow({ id: 'rpl-new', at: now, n: 4, mean: 0.75, scaffoldVersion: version });
-    // 0.30 → 0.95 over 40 instances: the intervals clear each other.
-    replayRow({ id: 'rpl-lo', at: now + 1, n: 40, mean: 0.30, scaffoldVersion: version });
-    replayRow({ id: 'rpl-hi', at: now + 2, n: 40, mean: 0.95, scaffoldVersion: version });
-    replayRow({ id: 'rpl-drop', at: now + 3, n: 40, mean: 0.30, scaffoldVersion: version });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor);
     const scaffold = present(entries.find((entry) => entry.kind === 'scaffold'), 'the scaffold entry');
     expect(scaffold.evidence).toContain(`Promoted scaffold v${version}`);
     expect(scaffold.evidence).toContain(RATIONALE);
-    const replay = present(entries.find((entry) => entry.id === 'replay:rpl-new'), 'the rpl-new entry');
- 
-    expect(replay.evidence).toContain(`scaffold v${version}`);
   });
 });
 
@@ -444,24 +366,16 @@ describe('unseen-count logic (the badge)', () => {
     expect(countUnseenChangelog(rt.storage.sql, rt.actor, now)).toBe(0);
   });
 
-  test('the turn-outcome aggregate only counts outcomes inside the window', () => {
+  test('the rating aggregate only counts ratings inside the window', () => {
     const { rt } = setup();
-    const sql = rt.storage.sql;
-    const actor = rt.actor;
     const now = Date.now();
-    recordTurnOutcome(sql, actor, {
-      outcome: 'accepted', confidence: 1, source: 'explicit',
-      userMessage: 'old', assistantResponse: 'old', now: now - 60_000,
-    });
-    recordTurnOutcome(sql, actor, {
-      outcome: 'corrected', confidence: 1, source: 'explicit',
-      userMessage: 'new', assistantResponse: 'new', now,
-    });
+    rate(rt, { score: 5, source: 'thumbs', request: 'old', now: now - 60_000 });
+    rate(rt, { score: 1, source: 'thumbs', request: 'new', now });
 
-    const windowed = buildChangelog(sql, actor, { since: now - 30_000 });
-    const agg = present(windowed.find((e) => e.kind === 'outcomes'), 'the outcomes entry');
-    expect(agg.summary).toContain('Graded 1 turn');
-    expect(agg.evidence).toBe('1 corrected');
+    const windowed = buildChangelog(rt.storage.sql, rt.actor, { since: now - 30_000 });
+    const agg = present(windowed.find((e) => e.kind === 'ratings'), 'the ratings entry');
+    expect(agg.summary).toContain('Rated 1 turn ·');
+    expect(agg.evidence).toContain('corrected 100%');
   });
 
   /** The needs-you queue must never count what the journal would not show. */
@@ -469,10 +383,7 @@ describe('unseen-count logic (the badge)', () => {
     const { rt, facts } = setup();
     const sql = rt.storage.sql;
     const actor = rt.actor;
-    recordTurnOutcome(sql, actor, {
-      outcome: 'accepted', confidence: 1, source: 'execution',
-      userMessage: 'hi', assistantResponse: 'hello',
-    });
+    rate(rt, { score: 4.5, source: 'model', request: 'hi', answer: 'hello' });
     facts.upsert('sandbox.node_version', 'v22');
 
     const unseen = listUnseenChangelog(sql, actor, 0);
@@ -482,16 +393,13 @@ describe('unseen-count logic (the badge)', () => {
     expect(countUnseenChangelog(sql, actor, 0)).toBe(unseen.length);
   });
 
-  /** A first-turn execution verdict is unseen but carries no revert to decide. */
-  test('the first turn of a fresh workspace produces an unseen entry with nothing to decide', () => {
+  /** A first rating is unseen but carries no revert to decide. */
+  test('the first rated turn of a fresh workspace produces an unseen entry with nothing to decide', () => {
     const { rt } = setup();
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      outcome: 'accepted', confidence: 1, source: 'execution',
-      userMessage: 'hi', assistantResponse: 'hello',
-    });
+    rate(rt, { score: 4.5, source: 'model', request: 'hi', answer: 'hello' });
 
     const unseen = listUnseenChangelog(rt.storage.sql, rt.actor, 0);
-    expect(unseen.map((entry) => entry.kind)).toEqual(['outcomes']);
+    expect(unseen.map((entry) => entry.kind)).toEqual(['ratings']);
     expect(unseen.filter((entry) => entry.revert !== undefined)).toEqual([]);
   });
 });
@@ -500,8 +408,7 @@ describe('renderChangelogText — the one text form', () => {
   test('numbers entries, shows evidence, marks revertables', () => {
     const { rt, facts } = setup();
     facts.upsert('k', 'v', { confidence: 0.7 });
-    void rt.storage.sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-        VALUES (${rt.actor.actorId}, 'rpl-2', ${Date.now() - 1000}, 3, 2, 1, 0.9, NULL, '[]')`;
+    rate(rt, { score: 4.5, source: 'model', now: Date.now() - 1000 });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor);
     const text = renderChangelogText(entries, { unseenCount: 2 });
@@ -514,10 +421,10 @@ describe('renderChangelogText — the one text form', () => {
     const factDetailLine = text.split('\n').find((line) => line.includes('confidence 70%'));
     expect(factDetailLine).toBeDefined();
     expect(factDetailLine).not.toContain('revertable');
-    // The replay measurement line is not revertable.
-    const replayLine = text.split('\n').find((l) => l.includes('confidence') === false && l.includes('labeled turns'));
-    expect(replayLine).toBeDefined();
-    expect(replayLine).not.toContain('revertable');
+    // The rating measurement line is not revertable.
+    const ratingLine = text.split('\n').find((l) => l.includes('satisfaction'));
+    expect(ratingLine).toBeDefined();
+    expect(ratingLine).not.toContain('revertable');
   });
 
   test('renders the empty state', () => {
@@ -665,17 +572,14 @@ describe('reverts — real paths only', () => {
 
   test('revertChangelogEntryById: unknown ids and informational entries refuse', async () => {
     const { rt, facts } = setup();
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      outcome: 'accepted', confidence: 1, source: 'explicit',
-      userMessage: 'q', assistantResponse: 'a',
-    });
+    rate(rt, { score: 5, source: 'thumbs' });
     const missing = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, 'nope:1');
     expect(missing.ok).toBe(false);
     expect(missing.error).toContain('not found');
 
     const info = present(
-      buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'outcomes'),
-      'the outcomes entry',
+      buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'ratings'),
+      'the ratings entry',
     );
 
     const refused = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, info.id);
@@ -773,16 +677,12 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     const now = Date.now();
     seedTools(rt, ['t1', 't2', 't3', 't4', 't5', 't6'], (i) => now - (5 - i) * 1000);
 
-    for (let i = 0; i < 6; i++) {
-      void rt.storage.sql`INSERT INTO replay_evals
-        (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-        VALUES (${rt.actor.actorId}, ${`r${i}`}, ${now - (5 - i) * 1000 - 500}, 8, 4, 4, 0.5, 0, '[]')`;
-    }
+    for (let i = 0; i < 6; i++) rate(rt, { score: 4, source: 'model', now: now - (5 - i) * 1000 - 500 });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor, { limit: 3 });
     expect(entries).toHaveLength(3);
     expect(entries.map((e) => e.id)).toEqual([
-      `tool:t6:${now}`, `replay:r5`, `tool:t5:${now - 1000}`,
+      `tool:t6:${now}`, `ratings:${now - 500}:6`, `tool:t5:${now - 1000}`,
     ]);
   });
 
@@ -916,27 +816,6 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
 
     const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'gepa');
     expect(entry.at).toBe(endedAt);
-  });
-
-  test('replay direction is computed against the predecessor even at the limit edge', () => {
-    // A one-row lookahead gives the oldest entry something to compare against.
-    const { rt } = setup();
-    const now = Date.now();
-
-    const row = (id: string, at: number, mean: number) => {
-      void rt.storage.sql`INSERT INTO replay_evals
-        (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
-        VALUES (${rt.actor.actorId}, ${id}, ${at}, 40, 20, 20, ${mean}, 0, '[]')`;
-    };
-
-    row('rp-1', now - 2000, 0.30);
-    row('rp-2', now - 1000, 0.95);
-    row('rp-3', now, 0.30);
-
-    const entries = buildChangelog(rt.storage.sql, rt.actor, { limit: 2 });
-    expect(entries.map((e) => e.id)).toEqual(['replay:rp-3', 'replay:rp-2']);
-    expect(entries[0].summary).toContain('declined');
-    expect(entries[1].summary).toContain('improved');
   });
 });
 

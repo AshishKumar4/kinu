@@ -111,7 +111,7 @@ export function governorDeps() {
 export const agentSelfRest = {
   proposeScaffold: async () => ({ ok: true }),
   listScaffoldVersions: async () => [],
-  getReplayEvals: async () => [],
+  getQuality: async () => [],
   budget: new MissionGovernor(governorDeps()),
   armCompactNow: () => {},
 };

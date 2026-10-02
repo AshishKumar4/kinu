@@ -39,7 +39,7 @@ function agentSelfHost(
     cancelTrigger: () => ({ ok: true, changed: false }),
     jobResult: async () => null,
     listBackgroundJobs: async () => [],
-    getReplayEvals: async () => [],
+    getQuality: async () => [],
     armCompactNow: () => {},
   };
 }

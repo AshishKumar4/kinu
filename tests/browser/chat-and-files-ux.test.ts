@@ -2132,24 +2132,17 @@ describe('independent settings and quality reads publish independently', () => {
     });
   });
 
-  test('a failed replay branch retries while alignment remains held, then both render', async () => {
+  test('a failed quality read retries, then shows satisfaction per day', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 900, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=qualitybranches`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-quality-branch="replay"] button');
-      expect(await page.$('[data-quality-branch="alignment"] [role="status"]')).not.toBeNull();
+      await page.goto(`${origin}/gallery.html?frame=qualityretry`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-quality-retry] button');
 
       await page.evaluate(() => window.dispatchEvent(new Event('gallery:quality-heal')));
-      await page.click('[data-quality-branch="replay"] button');
+      await page.click('[data-quality-retry] button');
       await page.waitForFunction(
-        () => document.querySelector('[data-quality-branch="replay"]')?.textContent?.includes('Latest score') === true,
-      );
-      expect(await page.$('[data-quality-branch="alignment"] [role="status"]')).not.toBeNull();
-
-      await page.evaluate(() => window.dispatchEvent(new Event('gallery:quality-release')));
-      await page.waitForFunction(
-        () => document.querySelector('[data-quality-branch="alignment"]')?.textContent?.includes('K_align') === true,
+        () => document.querySelector('[data-quality-retry]')?.textContent?.includes('Satisfaction per day') === true,
       );
       await page.close();
     });

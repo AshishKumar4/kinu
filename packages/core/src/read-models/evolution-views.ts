@@ -71,7 +71,7 @@ export interface TakePickDeps {
   readonly inbox: AgentInbox;
 }
 
-/** A `turn_outcomes` row (source 'take_pick') plus convergence repoint. A differing pick queues a
+/** A `turn_ratings` row (source 'take_pick') plus convergence repoint. A differing pick queues a
  * continuation; riding the live turn's next step counts as delivered. */
 export function pickAlternateTake(
   deps: TakePickDeps,
@@ -89,7 +89,7 @@ export function pickAlternateTake(
     }));
 
     yield* Effect.try({
-      try: () => deps.engine.applyTakePick(record.set.turnId, record.outcome),
+      try: () => deps.engine.applyTakePick(record.set.turnId, !record.changedAnswer),
       catch: (cause) => toKinuError({ doing: 'corroborate the lesson behind an alternate take', cause, otherwise: 'unavailable' }),
     }).pipe(Effect.catch((failure) => Effect.sync(() => {
       diagnostics.failure('evolution.take_pick_corroboration_failed', failure, { takeId, nodeId });

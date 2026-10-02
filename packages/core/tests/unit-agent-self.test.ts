@@ -83,13 +83,12 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
 
       return { ok: true, changed: true };
     },
-    getReplayEvals: async (limit) => {
-      calls.push(`replay:${limit ?? 'all'}`);
+    getQuality: async (days) => {
+      calls.push(`quality:${days ?? 'default'}`);
 
       return [{
-        id: "rpl-1", ranAt: 1, sampleSize: 1, acceptedCount: 1, negativeCount: 0,
-        meanScore: 0.75, loss: 0.25, interval: { mean: 0.75, lo: 0.5, hi: 1, n: 1 },
-        scaffoldVersion: 0, results: [],
+        day: "2026-10-02", satisfaction: { mean: 4.2, lo: 3.6, hi: 4.7, n: 5 },
+        corrected: { mean: 0.2, lo: 0.04, hi: 0.6, n: 5 }, rated: 5, thumbs: 1, turns: 7,
       }];
     },
     armCompactNow: () => { calls.push("compactNow"); },
@@ -178,13 +177,13 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(host.calls).toEqual(["archive:10"]);
   });
 
-  test("replayEvals exposes the loss curve read-only via the host", async () => {
+  test("quality exposes satisfaction per day read-only via the host", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
-    const r = await p.tools.replayEvals.execute(5);
-    expect(r).toMatchObject([{ id: "rpl-1", loss: 0.25 }]);
-    expect(host.calls).toEqual(["replay:5"]);
-    expect(p.types).toContain("replayEvals");
+    const r = await p.tools.quality.execute(7);
+    expect(r).toMatchObject([{ day: "2026-10-02", rated: 5 }]);
+    expect(host.calls).toEqual(["quality:7"]);
+    expect(p.types).toContain("quality(days?: number)");
   });
 
   test("jobResult on a SETTLED job passes the row through unchanged — the result is there to read", async () => {

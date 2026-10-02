@@ -11,7 +11,7 @@ import type { LLM } from '../types/primitives';
 import type { ResolvedTurnProfile } from './resolve';
 import { resolveModelRoute, type ModelRouteResolution, type ProfileRoutedSource } from './model-route';
 import { currentOperationProfile, operationProfileStream, resolveOperationProfile, runOperationProfile } from './operation';
-import type { TierRefusal, TierRefusals } from './tier-refusals';
+import type { TierRefusal, TierRefusals } from '../types/refusals';
 
 export interface RouteCallComponents {
   llm(resolution: ModelRouteResolution): LLM;

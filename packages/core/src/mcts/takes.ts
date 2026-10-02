@@ -1,4 +1,4 @@
-/** Alternate takes: competing answers offered to the user, whose pick is recorded in turn_outcomes
+/** Alternate takes: competing answers offered to the user, whose pick is recorded in turn_ratings
  *  (source 'take_pick'). */
 
 import { Effect } from 'effect';
@@ -6,7 +6,7 @@ import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { recordTurnOutcome } from '../evolution/outcomes';
+import { recordTurnRating, takePickRating } from '../evolution/ratings';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
@@ -40,7 +40,7 @@ export interface AlternateTakeSet {
 }
 
 export interface TakePickRecord {
-  outcome: 'accepted' | 'corrected';
+  /** The user chose an alternate over the delivered answer. */
   changedAnswer: boolean;
   chosen: AlternateTakeCandidate;
   set: AlternateTakeSet;
@@ -164,8 +164,8 @@ export function latestAlternateTakeSet(sql: SqlExecutor, actor: ActorHandle): Al
 }
 
 /**
- * Record the user's pick: marks the set picked (latest wins) and writes turn_outcomes ('accepted' or
- * 'corrected'). Candidates are synthetic, so no search_nodes row is re-pointed.
+ * Record the user's pick: marks the set picked (latest wins) and rates the delivered answer (`takePickRating`).
+ * Candidates are synthetic, so no search_nodes row is re-pointed.
  */
 export async function recordTakePick(
   sql: SqlExecutor,
@@ -204,24 +204,21 @@ export async function recordTakePick(
     }
   }
 
-  const outcome = changedAnswer ? 'corrected' : 'accepted';
-  recordTurnOutcome(sql, actor, {
-    turnId: set.turnId,
-    outcome,
-    confidence: 1,
-    source: 'take_pick',
-    userMessage,
-    assistantResponse,
-    followup: changedAnswer ? chosen.text : null,
-    scaffoldVersion: input.scaffoldVersion ?? null,
-    evidence: changedAnswer
-      ? 'the user picked an alternate take over the delivered answer'
-      : 'the user re-picked the delivered answer over its alternates',
-    now,
-  });
+  // A take set with no turn has nothing to rate.
+  if (set.turnId) {
+    recordTurnRating(sql, actor, {
+      ...takePickRating(!changedAnswer),
+      turnId: set.turnId,
+      source: 'take_pick',
+      request: userMessage,
+      answer: assistantResponse,
+      followup: changedAnswer ? chosen.text : null,
+      scaffoldVersion: input.scaffoldVersion ?? null,
+      now,
+    });
+  }
 
   return {
-    outcome,
     changedAnswer,
     chosen,
     set: { ...set, chosenNodeId: chosen.nodeId, winnerNodeId: chosen.nodeId },
