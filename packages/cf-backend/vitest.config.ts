@@ -612,6 +612,8 @@ export default defineConfig({
           USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', scriptName: 'plan-announce-probe', useSQLite: true },
           SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', scriptName: 'slate-egress-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
+          DEVICE_OUTPUT_HUB_PROBE: { className: 'DeviceOutputHubProbeDO', useSQLite: true },
+          DEVICE_OUTPUT_WORKSPACE_PROBE: { className: 'DeviceOutputWorkspaceProbeDO', useSQLite: true },
           TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', scriptName: 'two-turn-probe', useSQLite: true },
           HIRE_PROBE: { className: 'HireProbeRoot', scriptName: 'hire-probe', useSQLite: true },
           DEVBOX_NOT_READY_PROBE: { className: 'DevboxNotReadyProbeDO', useSQLite: true },
