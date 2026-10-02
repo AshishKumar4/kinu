@@ -3,7 +3,7 @@
 // code the deploy wrapper reports — and a run that ends is left alone.
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
 import { scratchPath } from '@kinu.run/test-utils';
 import { DEADLINE_EXIT_CODE, deadlineLine, leftoverLine, runUnderDeadline } from './deadline';
@@ -68,6 +68,19 @@ describe('a run under a deadline', () => {
     expect(ok).toMatchObject({ killed: false, exitCode: 0 });
     expect(failed).toMatchObject({ killed: false, exitCode: 3 });
     expect(failed.stderr).not.toContain('KILLED');
+  });
+
+  // A deploy's live status reads each row's last line as it comes (scripts/deploy-live.ts).
+  test('a run\'s output is told as it arrives, with the stream it came on, and then its end', async () => {
+    const told: string[] = [];
+
+    const outcome = await runUnderDeadline({
+      argv: [process.execPath, '-e', 'console.log("to stdout"); console.error("to stderr")'], seconds: 30, label: 'told', stdio: 'pipe',
+      status: { output: (text, from) => { told.push(`${from}: ${text}`); }, ended: () => { told.push('ended'); } },
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect([told.slice(0, -1).sort(), told.at(-1)]).toEqual([['stderr: to stderr\n', 'stdout: to stdout\n'], 'ended']);
   });
 
   // A deploy phase's lone row: its output reaches the terminal as it comes, and the deploy's report still quotes it.
@@ -160,5 +173,90 @@ describe('a run under a deadline', () => {
 
     expect(scriptDeadline('not-a-row')).toEqual({ seconds: GATE_DEADLINE_SECONDS, label: 'not-a-row' });
     expect(scriptDeadline(undefined).seconds).toBe(GATE_DEADLINE_SECONDS);
+  });
+});
+
+
+/** A row's command that writes its pid into `fifo` once its SIGTERM handler is in, and holds the FIFO open until it
+ *  ends; on SIGTERM it does `onTerm`: the shape of a run that records what it was doing when cancelled, as the eval
+ *  harness does. */
+function cancellable(fifo: string, onTerm: string): string[] {
+  return [process.execPath, '-e', `process.on('SIGTERM', () => { ${onTerm} }); const fs = require('node:fs');`
+    + ` fs.writeSync(fs.openSync(${JSON.stringify(fifo)}, 'w'), String(process.pid)); setInterval(() => {}, 1000);`];
+}
+
+/**
+ * A row's FIFO, as the test reads it: `pid` once the row is ready for its SIGTERM, `ended` once it has ended, when its
+ * end of the FIFO closes. Both are waits on the row itself, with no clock.
+ */
+type WatchedRow = { readonly fifo: string; readonly pid: Promise<number>; readonly ended: Promise<void> };
+
+function watchRow(name: string): WatchedRow {
+  const fifo = scratchPath('deadline-cancel', name);
+
+  if (Bun.spawnSync(['mkfifo', fifo]).exitCode !== 0) throw new Error(`mkfifo ${fifo} failed`);
+
+  // Opened on demand: the open waits for the row to open its end.
+  const chunks = (async function* read() { yield* createReadStream(fifo, { encoding: 'utf8' }); })();
+  const pid = chunks.next().then((first) => Number(first.value));
+
+  return { fifo, pid, ended: pid.then(async () => { for await (const _ of chunks); }) };
+}
+
+/**
+ * The ladder's part, cut to it: `rows` under the deadline at once with their output piped, as a deploy wave runs them,
+ * in a process group of its own, as a terminal's foreground job is: a Ctrl-C reaches it, and not the rows, which lead
+ * sessions of their own. A run asked for after its SIGINT says so if it starts.
+ */
+function runner(rows: readonly (readonly string[])[]) {
+  const probe = `import { runUnderDeadline } from ${JSON.stringify(join(import.meta.dir, 'deadline.ts'))};\n`
+    + `const rows = ${JSON.stringify(rows)};\n`
+    + 'const ended = (index) => () => { require(\'node:fs\').writeSync(1, `ENDED row ${String(index)}\\n`); };\n'
+    + 'const runs = rows.map((argv, index) => runUnderDeadline({ argv, seconds: 60, label: `row ${String(index)}`, stdio: \'pipe\', status: { output: () => undefined, ended: ended(index) } }));\n'
+    + 'process.on(\'SIGINT\', () => { runUnderDeadline({ argv: [process.execPath, \'-e\', \'console.log("started after the cancel")\'], seconds: 60, label: \'late\', stdio: \'tee\' }).catch(() => undefined); });\n'
+    + 'console.log(`RETURNED ${JSON.stringify((await Promise.all(runs)).map((outcome) => outcome.exitCode))}`);\n';
+
+  return Bun.spawn([process.execPath, '-e', probe], { detached: true, stdout: 'pipe', stderr: 'pipe' });
+}
+
+describe("a runner that is cancelled, as a person's Ctrl-C or a stop of its service cancels it", () => {
+  // Until 2026-10-01 the runner killed every run at once with SIGKILL, so a run that records what it was doing when
+  // cancelled never did: the eval pass's trials, and what held them, were lost with it.
+  test('passes each run SIGTERM and waits for it to record and end, passing on what it says, then exits 130', async () => {
+    const rows = [watchRow('row-0'), watchRow('row-1')];
+    const running = runner(rows.map((row, index) => cancellable(row.fifo, `setTimeout(() => { console.log('recorded ${String(index)}'); process.exit(143); }, 1000);`)));
+    const pids = await Promise.all(rows.map((row) => row.pid));
+
+    try {
+      process.kill(-running.pid, 'SIGINT');
+      const [code, stdout, stderr] = await Promise.all([running.exited, new Response(running.stdout).text(), new Response(running.stderr).text()]);
+
+      // Every run, not the first one alone: a wave runs many, and each is a session no Ctrl-C reaches. Each end is told
+      // before the exit, so a deploy's live status does not name a run that ended in its grace as still running.
+      expect([code, stdout.split('\n').filter((line) => /^(recorded|ENDED)/u.test(line)).sort()], stderr)
+        .toEqual([130, ['ENDED row 0', 'ENDED row 1', 'recorded 0', 'recorded 1']]);
+      expect(stdout).not.toContain('RETURNED');
+      expect(stdout).not.toContain('started after the cancel');
+      await Promise.all(rows.map((row) => row.ended));
+    } finally {
+      for (const pid of pids) tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
+    }
+  });
+
+  // Its end is never told: a deploy's live status names it as still running when the runner exits.
+  test('kills a run that does not end on SIGTERM once its grace has passed, and still exits', async () => {
+    const row = watchRow('row-stubborn');
+    const running = runner([cancellable(row.fifo, "console.log('ignored SIGTERM');")]);
+    const pid = await row.pid;
+
+    try {
+      process.kill(-running.pid, 'SIGINT');
+      const [code, stdout] = await Promise.all([running.exited, new Response(running.stdout).text()]);
+
+      expect([code, stdout.trim()]).toEqual([130, 'ignored SIGTERM']);
+      await row.ended;
+    } finally {
+      tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
+    }
   });
 });

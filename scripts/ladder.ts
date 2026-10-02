@@ -37,6 +37,7 @@ import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
 import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline, writeFully } from './deadline';
 import { recordNotice, recordRed, recordSkipped, recordStep } from './deploy-report';
+import { openDeployLive } from './deploy-live';
 import {
   CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
 } from './ladder-cache';
@@ -1093,7 +1094,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts',
+    run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
@@ -1102,7 +1103,8 @@ export const LADDER: readonly Gate[] = [
     // report and provider-key suites joined 2026-09-30 at about 3 s (6 tests), and
     // the evals dispatch suite at 0.2 s (3 tests); the reset suite joined
     // 2026-10-01 at 0.1 s (4 tests), the version telemetry suite at 0.1 s
-    // (2 tests), and the continuous staging and promotion suite at 2 s (7 tests).
+    // (2 tests), the continuous staging and promotion suite at 2 s (7 tests), and
+    // the deploy's live status suite at 0.5 s (4 tests).
     seconds: 90,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
       + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
@@ -3827,6 +3829,9 @@ if (import.meta.main) {
     process.exit(1);
   };
 
+  // What each row of a deploy phase is doing while it runs, beside the report (scripts/deploy-live.ts).
+  const live = deployPhase === undefined || report === '' ? undefined : openDeployLive(report, deployPhase.join(','));
+
   const runPending = async (entry: (typeof pending)[number]): Promise<void> => {
     const { index, gate, plan, closure } = entry;
     const header = `\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`;
@@ -3857,6 +3862,7 @@ if (import.meta.main) {
       seconds: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: gate.label,
       env: closure.kind === 'derived' ? gateEnvironment(closure) : undefined,
       stdio,
+      status: live?.started(gate.label),
     });
 
     if (concurrent) await writeFully(process.stdout, `${[header, ...lines, `${outcome.stdout}${outcome.stderr}`.trimEnd()].join('\n')}\n`);
