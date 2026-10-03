@@ -3738,6 +3738,21 @@ detection is not built: it saves about 0.6 s a save at 10 GB, but loses its
 base snapshot at every wake (so the first save after one walks anyway) and its
 held snapshot pins rewritten blocks, which deepens C's ENOSPC at 10 to 18 GB.
 
+D69. An untimed command's kill and a supervised process's stop end it by
+one operation, and answer only once nothing it started is alive
+(2026-10-03). `END_TREE` (`src/processes.ts`) sends TERM to the command's
+tree and to each process group a member of it leads, at once rather than
+leaves first, sends KILL to whatever outlives `TERM_GRACE_MS`, and returns
+once none of them is alive; a zombie counts as gone. The untimed kill (D37)
+answered as soon as the processes it listed first were gone, and did not
+wait after its KILL. The stop (D48) watched the group alone. An untimed
+command now starts under `setsid -w`, so it leads its own group as a
+supervised one does, whatever group the runtime gave the exec. In the real
+image (`tests/kill-image.test.ts`, under docker), a shell answers TERM by
+starting a process that ignores TERM, and exits. On bfb0f35a9 the untimed
+kill answered with that process still running; now both callers answer once
+it is gone, and a command that ignores TERM ends on KILL under both.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
