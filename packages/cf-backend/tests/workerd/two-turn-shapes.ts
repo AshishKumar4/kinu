@@ -10,7 +10,7 @@ export const CallRecordSchema = v.object({
   /** The request's own stream flag, separating turn calls from completion lanes. */
   stream: v.boolean(),
   /** The lane the fake served, keyed on request shape (stream flag, leading system role). */
-  lane: v.picklist(['turn', 'sleep', 'title']),
+  lane: v.picklist(['turn', 'sleep', 'title', 'rating']),
   users: v.array(v.string()),
   /** What `options.signal` arrived as — the spike's answer. */
   signalKind: v.string(),

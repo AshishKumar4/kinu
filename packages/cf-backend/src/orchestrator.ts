@@ -1555,7 +1555,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
               });
             }
 
-            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: crypto.randomUUID(), userTurn: true, carried: [] });
+            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: crypto.randomUUID(), userTurn: true, carried: [], finishedSteps: 0 });
           },
           ended: async (end) => {
             if (hostedTaskEnding(end) === 'errored') await room?.deliver({ type: 'error', message: end.errorMessage ?? end.summary });

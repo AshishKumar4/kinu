@@ -538,6 +538,12 @@ const RunInputsSchema = v.object({
   prompt: v.optional(v.unknown()),
   system: v.optional(v.unknown()),
   stream: v.optional(v.boolean()),
+  state: v.optional(v.string()),
+  questions: v.optional(v.object({
+    satisfaction: v.object({ type: v.literal('score') }),
+    corrected: v.object({ type: v.literal('noul') }),
+    wrong: v.object({ type: v.literal('choice') }),
+  })),
 });
 
 type RunInputs = v.InferOutput<typeof RunInputsSchema>;
@@ -594,7 +600,7 @@ function laneOf(stream: boolean, messages: readonly { role?: string }[]): CallRe
 
 export class FakeAI extends WorkerEntrypoint {
   /** The one method `createDirectWorkersAIFetch` calls on the binding. */
-  async run(model: string, inputs: RunInputs, options?: RunOptions): Promise<Response> {
+  async run(model: string, inputs: RunInputs, options?: RunOptions) {
     const signal = options?.signal;
 
     // Absent and null stay distinct: only one means the adapter never passed a signal.
@@ -605,6 +611,15 @@ export class FakeAI extends WorkerEntrypoint {
     else if (signal instanceof AbortSignal) signalKind = 'AbortSignal';
 
     const parsed = v.parse(RunInputsSchema, inputs);
+
+    if (parsed.state !== undefined && parsed.questions !== undefined) {
+      recordedCalls.push({ model, users: [parsed.state], signalKind, stream: false, lane: 'rating' });
+
+      return { answers: {
+        satisfaction: { type: 'score', score: 2 }, corrected: { type: 'noul', noul: 0 }, wrong: { type: 'choice', choice: 'nothing' },
+      }, usage: { input_tokens: 1, output_tokens: 1 } };
+    }
+
     const stream = parsed.stream ?? false;
     const messages = parsed.messages ?? [];
 

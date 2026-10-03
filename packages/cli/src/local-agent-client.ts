@@ -657,6 +657,8 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
     case 'text-delta':
     case 'reasoning-delta':
       return { type: event.type, delta: event.delta };
+    case 'step-cut':
+      return event;
     case 'tool-call':
       return { type: 'tool-call', toolName: event.toolName, toolCallId: event.toolCallId, args: event.args };
     case 'tool-result':

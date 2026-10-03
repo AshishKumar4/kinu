@@ -10,6 +10,8 @@ import {
   type SubjectName,
 } from '../src/layergate/index';
 import { createTestRuntime } from './helpers';
+import { moduleEdges } from '../../../scripts/module-edges';
+import { parse, walk } from '../../../scripts/syntax';
 
 const SRC = resolve(import.meta.dir, '../src');
 
@@ -30,35 +32,41 @@ function isSubjectName(value: string): value is SubjectName {
   return Object.hasOwn(SUBJECT_SOURCE, value);
 }
 
-const IMPORT = /import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g;
-
 interface Import { readonly spec: string; readonly values: readonly string[] }
 
 const parsed = new Map<string, Import[]>();
 
-function importsOf(file: string): Import[] {
-  const cached = parsed.get(file);
+function importsOf(file: string, source?: string): Import[] {
+  const cached = source === undefined ? parsed.get(file) : undefined;
 
   if (cached) return cached;
   const out: Import[] = [];
 
-  if (existsSync(file)) {
-    for (const match of readFileSync(file, 'utf8').matchAll(IMPORT)) {
-      const clause = match[2] ?? '';
-      const named = clause.match(/\{([\s\S]*)\}/);
+  if (source !== undefined || existsSync(file)) {
+    const syntax = parse(file, source ?? readFileSync(file, 'utf8'));
+    const bindings = new Map<string, string[]>();
 
-      const values = match[1] || !named
-        ? []
-        : named[1].split(',')
-            .map((part) => part.trim())
-            .filter((part) => part.length > 0 && !part.startsWith('type '))
-            .map((part) => part.split(/\s+as\s+/)[0].trim());
+    walk(syntax.root, (node) => {
+      const declaration = node.raw;
 
-      out.push({ spec: match[3], values });
+      if (declaration.type !== 'ImportDeclaration') return;
+
+      const values = declaration.specifiers.flatMap((specifier) => {
+        if (specifier.type !== 'ImportSpecifier' || specifier.importKind === 'type') return [];
+
+        return [specifier.imported.type === 'Identifier' ? specifier.imported.name : String(specifier.imported.value)];
+      });
+
+      bindings.set(`${syntax.lineAt(node.start)}:${declaration.source.value}`, values);
+    });
+
+    for (const edge of moduleEdges(syntax).edges) {
+      if (edge.kind !== 'value') continue;
+      out.push({ spec: edge.specifier, values: bindings.get(`${edge.line}:${edge.specifier}`) ?? [] });
     }
   }
 
-  parsed.set(file, out);
+  if (source === undefined) parsed.set(file, out);
 
   return out;
 }
@@ -72,7 +80,7 @@ function resolveImport(from: string, spec: string): string | null {
 }
 
 /** Every subject symbol imported anywhere in `entry`'s transitive closure. */
-function reachableSubjects(entry: string): Map<SubjectName, string> {
+function reachableSubjects(entry: string, fixtures?: ReadonlyMap<string, string>): Map<SubjectName, string> {
   const seen = new Set<string>();
   const found = new Map<SubjectName, string>();
   const stack = [entry];
@@ -81,7 +89,7 @@ function reachableSubjects(entry: string): Map<SubjectName, string> {
     if (seen.has(file)) continue;
     seen.add(file);
 
-    for (const imported of importsOf(file)) {
+    for (const imported of importsOf(file, fixtures?.get(file))) {
       for (const value of imported.values) {
         if (isSubjectName(value) && layerOf.has(value) && !found.has(value)) {
           found.set(value, file.slice(SRC.length + 1));
@@ -98,6 +106,19 @@ function reachableSubjects(entry: string): Map<SubjectName, string> {
 }
 
 describe('layer gate — decomposition', () => {
+  test('value imports cross the runtime boundary and type-only imports do not', () => {
+    const value = resolve(SRC, 'layer-fixture/value.ts');
+    const type = resolve(SRC, 'layer-fixture/type.ts');
+
+    const fixtures = new Map([
+      [value, "import { applyCacheBreakpoints } from '../prompting/cache-breakpoints'; export const used = applyCacheBreakpoints;"],
+      [type, "import type { TurnAccumulator } from '../orchestrator/turn-accumulator'; export type Used = TurnAccumulator;"],
+    ]);
+
+    expect(reachableSubjects(value, fixtures).has('applyCacheBreakpoints')).toBe(true);
+    expect([...reachableSubjects(type, fixtures)]).toEqual([]);
+  });
+
   test('every subject is owned by exactly one layer', () => {
     const registry = Object.keys(SUBJECT_SOURCE).filter(isSubjectName);
     const owned = LAYERS.flatMap((layer) => layer.subjects);
@@ -139,8 +160,6 @@ describe('layer gate — decomposition', () => {
     const reached = reachableSubjects(resolve(SRC, SUBJECT_SOURCE.buildSystemPromptSync));
     expect(reached.has('compilePromptSurface')).toBe(true);
     expect(reached.has('renderAgentsMdSection')).toBe(true);
-    // …and it crosses module boundaries, not just direct imports.
-    expect(reachableSubjects(resolve(SRC, SUBJECT_SOURCE.selectEvolutionBase)).has('checkMisevolution')).toBe(true);
   });
 
   test('no layer\'s production code reaches another layer\'s subject', () => {

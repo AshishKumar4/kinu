@@ -1,5 +1,5 @@
 /**
- * Both backends' per-step pipeline: mission budget guard (before the spend), tool-error feedback, extension
+ * Both backends' per-step pipeline: mission budget guard (before the spend), extension
  * prepareStep chain, tool-output pruning, the dynamic-context weave, then cache tail markers, last, as markers
  * placed before a rewrite would bust one backend's prefix.
  */
@@ -14,7 +14,7 @@ import { markCacheTail, type PromptCacheRoute, type PromptCacheStrategy } from '
 import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
 import { normalizeReplayForDestination } from './replay-normalization';
 import type { DynamicContext, DynamicContextLedger, TurnInput } from './volatile-context';
-import { projectToolErrorFeedback, type ToolErrorStep } from './tool-error-feedback';
+import type { ToolErrorStep } from './tool-error-feedback';
 
 /** `system`: cache-eligible system override for backends whose turn-level system
  *  channel is string-only (Think) and must re-ride every step; the CLI omits it. */
@@ -88,15 +88,14 @@ export function composePrepareStep(pipeline: StepPipeline, ctx: StepPrepareConte
 function prepareFromContext(
   pipeline: StepPipeline, ctx: StepPrepareContext, turnStart: number | undefined,
 ): StepPrepareResult | Promise<StepPrepareResult> {
-  const projected = projectToolErrorFeedback(ctx.messages, ctx.steps);
-  const prepared = { ...ctx, messages: projected ?? ctx.messages, abortSignal: pipeline.abortSignal };
+  const prepared = { ...ctx, abortSignal: pipeline.abortSignal };
   const steered = pipeline.extensions?.runPrepareStep(prepared);
 
   const input = turnStart === undefined ? undefined : { at: turnStart, firstStep: ctx.stepNumber === 0 } satisfies TurnInput;
 
   return steered instanceof Promise
-    ? steered.then(messages => finishPrepareStep(pipeline, ctx, messages ?? projected, input))
-    : finishPrepareStep(pipeline, ctx, steered ?? projected, input);
+    ? steered.then(messages => finishPrepareStep(pipeline, ctx, messages, input))
+    : finishPrepareStep(pipeline, ctx, steered, input);
 }
 
 function finishPrepareStep(

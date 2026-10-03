@@ -404,6 +404,12 @@ export interface PublicResponseFrame {
   /** Set by the DO on every frame of a stream it REPLAYS. Carried because the
    *  accumulator needs it to stay idempotent across a resume. */
   readonly replay?: boolean;
+  /** On a replayed chunk: a step the ledger records, restated rather than
+   *  relayed, which a client that streamed it skips. A build before 2026-10-01
+   *  restates nothing. */
+  readonly restated?: boolean;
+  /** The replay's last frame: the live chunks follow. */
+  readonly replayComplete?: boolean;
 }
 
 /** What one decoded socket frame is. `other` is not an error: the DO fans
@@ -454,6 +460,8 @@ const FrameSchema = v.object({
    *  admitted here and each branch below reads the one it means. */
   error: v.optional(v.union([v.boolean(), JsonValueSchema])),
   replay: v.optional(v.boolean()),
+  restated: v.optional(v.boolean()),
+  replayComplete: v.optional(v.boolean()),
   success: v.optional(v.boolean()),
   result: v.optional(JsonValueSchema),
   turnId: v.optional(v.string()),
@@ -490,6 +498,8 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
         done: frame.output.done,
         error: frame.output.error === true,
         replay: frame.output.replay,
+        restated: frame.output.restated,
+        replayComplete: frame.output.replayComplete,
         landed: frame.output.landed,
       },
     };
@@ -612,9 +622,7 @@ export function recordPublicTurn(): PublicTurnRecorder {
         return;
       }
 
-      if (frame.body !== undefined && frame.body.trim() !== '') {
-        stream.apply(frame.body, frame.replay === true);
-      }
+      stream.apply(frame);
 
       // The done frame is the DO's verdict on WHERE the send landed. A
       // mid-turn answer opens no stream of its own — `settle` would mint a

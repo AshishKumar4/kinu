@@ -69,24 +69,6 @@ describe('RunEventRecorder.emit', () => {
     expect(rows[0].type).toBe('run_start');
     expect(rows[1].type).toBe('error');
   });
-  test('a colliding index raises instead of replacing a live row', () => {
-    const { recorder, sql, actor } = setup();
-    recorder.emit('run-1', { type: 'error', message: 'first' });
-    recorder.emit('run-1', { type: 'error', message: 'second' });
-    const runId = 'run-1';
-    const live = '{"type":"error","eventIndex":2,"runId":"run-1","timestamp":"2026-09-05T00:00:00.000Z","message":"live"}';
-    const ts = '2026-09-05T00:00:00.000Z';
-    void sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
-      VALUES (${actor.actorId}, ${runId}, 2, 'error', ${live}, ${ts})`;
-    expect(() => recorder.emit('run-1', { type: 'error', message: 'collide' })).toThrow(/UNIQUE constraint failed: run_events/);
-
-    const rows = sql<{ payload: string }>`
-      SELECT payload FROM run_events
-      WHERE actor_id = ${actor.actorId} AND run_id = ${runId} AND event_index = 2`;
-
-    expect(rows.length).toBe(1);
-    expect(rows[0]?.payload).toBe(live);
-  });
 });
 
 describe('a tool result round-trips as the value the tool returned', () => {

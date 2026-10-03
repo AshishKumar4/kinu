@@ -238,6 +238,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         turns: tracing && (() => tracing().turns(actor)),
         history: bound.stores.history,
         events: deps.contextEvents(bound),
+        recording: bound.stores.eventRecorder,
         advisorPort: () => deps.advisorPort?.(bound) ?? null,
         reviewed: bound.record.input,
         advisor: reference.parentActorId === null ? undefined : {

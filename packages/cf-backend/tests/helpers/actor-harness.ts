@@ -522,7 +522,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     this._prepareFailure = null;
 
     try {
-      const prepared = await super.prepareTurn(item, lease);
+      const native = await super.prepareTurn(item, lease);
+      const additions = activationWorlds.get(this.ctx)?.turnExtensions;
+
+      const prepared = additions === undefined ? native : {
+        ...native, execution: { ...native.execution, extensions: [...native.execution.extensions, ...additions] },
+      };
+
       this._preparedTools = prepared.execution.chat.tools ?? {};
       this._preparedDynamic = prepared.execution.dynamic;
       this._preparedExtensions = prepared.execution.extensions;
@@ -1603,6 +1609,7 @@ export interface HarnessActorWorld {
   freshScaffold?: boolean;
   /** The platform AI binding the gateway provider calls; a recording stub by default. */
   aiGateway?: StubbedAiBinding;
+  turnExtensions?: readonly KinuExtension[];
   /** The deployed build's version id at `env.CF_VERSION_METADATA`: a claim on the built-in program names it, and
    *  recovery holds a claim with no build as unverifiable. Unset, the object runs on no named build. */
   versionId?: string;

@@ -1,11 +1,11 @@
 /**
- * One cloud turn's accumulated stream. The DO replays a resumed stream from chunk zero on every ack, so the
- * applied-body count makes replay idempotent.
+ * One cloud turn's accumulated stream. An ack's replay restates the turn from its first step; it is matched to what is
+ * held step by step (D23 (8)).
  */
 import * as v from 'valibot';
 import {
   JsonObjectSchema, parseJsonValue,
-  type JsonValue, type ToolOutcome,
+  type JsonObject, type JsonValue, type ToolOutcome,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { asRecord } from './options';
@@ -22,8 +22,10 @@ export class CloudTurnStream {
   private steps = 0;
   private readonly toolCalls: AgentTurnResult['toolCalls'] = [];
   private readonly toolById = new Map<string, AgentTurnResult['toolCalls'][number]>();
-  private applied = 0;
-  private replayed = 0;
+  private readonly began: { readonly text: number; readonly calls: number }[] = [{ text: 0, calls: 0 }];
+  private stepChunks = 0;
+  private foreign = false;
+  private cursor: { step: number; chunk: number } | null = null;
 
   /** Turn-start owed only if the server answers with a stream; null once announced. */
   private deferredStart: string | null;
@@ -42,23 +44,44 @@ export class CloudTurnStream {
   }
 
   beginReplay(): void {
-    this.replayed = 0;
+    this.cursor = { step: 0, chunk: 0 };
   }
 
   follow(): void {
-    this.applied = 0;
-    this.replayed = 0;
+    this.foreign = true;
   }
 
-  apply(body: string, replay: boolean): void {
-    if (!this.admit(replay)) return;
+  apply(frame: { readonly body?: string; readonly replay?: boolean; readonly restated?: boolean; readonly replayComplete?: boolean }): void {
+    if (frame.body !== undefined && frame.body.trim() !== '') this.applyChunk(frame.body, frame.replay === true, frame.restated === true);
+
+    if (frame.replayComplete !== true) return;
+
+    this.cursor = null;
+    this.foreign = false;
+  }
+
+  private applyChunk(body: string, replay: boolean, restated: boolean): void {
+    const chunk = decodeChunk(body);
+
+    if (chunk === null || (replay && this.repeats(chunk.type, restated))) return;
 
     if (this.deferredStart !== null) {
       this.emit({ type: 'turn-start', kind: 'user', text: this.deferredStart });
       this.deferredStart = null;
     }
 
-    this.decode(body);
+    this.decode(chunk.type, chunk.fields);
+
+    if (chunk.type === 'start') return;
+
+    if (chunk.type !== 'finish-step') {
+      this.stepChunks += 1;
+
+      return;
+    }
+
+    this.stepChunks = 0;
+    this.began[this.steps] = { text: this.text.length, calls: this.toolCalls.length };
   }
 
   /** Exactly one turn-end per turn-start, after any error event. */
@@ -80,34 +103,55 @@ export class CloudTurnStream {
     this.resolve({ landed: 'turn', ...result });
   }
 
-  private admit(replay: boolean): boolean {
-    if (!replay) {
-      this.applied += 1;
+  private repeats(type: string, restated: boolean): boolean {
+    const { cursor } = this;
 
-      return true;
+    if (cursor === null) return false;
+
+    if (type === 'start') return true;
+    const sameStream = !restated && !this.foreign;
+    const held = cursor.step < this.steps ? restated || sameStream : cursor.step === this.steps && sameStream && cursor.chunk < this.stepChunks;
+
+    if (!held) {
+      this.cursor = null;
+      this.foreign = false;
+
+      return false;
     }
 
-    this.replayed += 1;
-
-    if (this.replayed <= this.applied) return false;
-    this.applied = this.replayed;
+    if (type === 'finish-step') {
+      cursor.step += 1;
+      cursor.chunk = 0;
+    } else cursor.chunk += 1;
 
     return true;
   }
 
-  private decode(body: string): void {
-    const parsed = tolerate(() => parseJsonValue(body), 'malformed-input');
+  private cut(step: number): void {
+    const mark = this.began[step];
 
-    if (parsed === undefined) return;
-    const result = v.safeParse(JsonObjectSchema, parsed);
+    if (mark === undefined) return;
+    this.text = this.text.slice(0, mark.text);
 
-    if (!result.success) return;
-    const chunk = result.output;
-    const type = v.safeParse(v.string(), chunk.type);
+    for (const call of this.toolCalls.splice(mark.calls)) {
+      for (const [id, held] of this.toolById) if (held === call) this.toolById.delete(id);
+    }
 
-    if (!type.success) return;
+    this.steps = step;
+    this.stepChunks = 0;
+    this.began.length = step + 1;
+  }
 
-    switch (type.output) {
+  private decode(type: string, chunk: JsonObject): void {
+    switch (type) {
+      case 'data-kinu-step-cut': {
+        const data = v.parse(v.object({ stepIndex: v.number() }), chunk.data);
+        this.cut(data.stepIndex - 1);
+        this.emit({ type: 'step-cut', stepIndex: data.stepIndex });
+
+        return;
+      }
+
       case 'text-delta': {
         const delta = jsonString(chunk.delta, '');
 
@@ -144,11 +188,11 @@ export class CloudTurnStream {
         const toolCallId = jsonString(chunk.toolCallId, '');
         const call = this.toolById.get(toolCallId);
 
-        const toolResult = type.output === 'tool-output-error'
+        const toolResult = type === 'tool-output-error'
           ? jsonErrorMessage(chunk.errorText, 'tool error')
           : stringifyToolOutput(chunk.output ?? null);
 
-        const outcome = type.output === 'tool-output-error'
+        const outcome = type === 'tool-output-error'
           ? { success: false, reason: null } satisfies ToolOutcome
           : { success: true } satisfies ToolOutcome;
 
@@ -200,6 +244,18 @@ export class TurnStreams {
   clear(): void {
     this.moved.clear();
   }
+}
+
+function decodeChunk(body: string): { readonly type: string; readonly fields: JsonObject } | null {
+  const parsed = tolerate(() => parseJsonValue(body), 'malformed-input');
+
+  if (parsed === undefined) return null;
+  const chunk = v.safeParse(JsonObjectSchema, parsed);
+
+  if (!chunk.success) return null;
+  const type = v.safeParse(v.string(), chunk.output.type);
+
+  return type.success ? { type: type.output, fields: chunk.output } : null;
 }
 
 function stringifyToolOutput(output: JsonValue): string {
