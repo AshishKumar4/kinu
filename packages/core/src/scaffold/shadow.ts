@@ -1,4 +1,3 @@
-import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Shadow-mode scaffold rollout. A pending version is judged against the current
  * one on sampled turns until `decidePromotion` is conclusive.
@@ -14,7 +13,6 @@ import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import { modelMessageSchema, type ModelMessage } from 'ai';
-import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -29,6 +27,7 @@ import { nanoid } from '../utils/nanoid';
 import { checkMisevolution, recordMisevolutionVeto } from '../safety/misevolution';
 import type { RunEventRecorder } from '../events/recorder';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
+import { getCurrentScaffoldVersion, readScaffoldVersion } from './versions';
 
 export type { ScaffoldArchiveEntry, ScaffoldStatus } from '../types/scaffold';
 
@@ -295,18 +294,6 @@ export function getPendingScaffold(sql: SqlExecutor, actor: ActorHandle): Pendin
   };
 }
 
-/** Highest status='current' version. Never `pending - 1`: numbering is non-contiguous after rollbacks. */
-export function getCurrentScaffoldVersion(sql: SqlExecutor, actor: ActorHandle): number | null {
-  actor.assertCurrent();
-
-  const rows = sql<{ version: number }>`
-    SELECT version FROM scaffold_versions
-    WHERE actor_id = ${actor.actorId} AND status = 'current'
-    ORDER BY version DESC LIMIT 1`;
-
-  return rows[0]?.version ?? null;
-}
-
 export interface ShadowVerdictTrial {
   id: string;
   task: string;
@@ -363,29 +350,6 @@ export function readShadowVerdict(
     })),
     summary: { trials: rows.length, pendingWins, currentWins, ties, winRate: decisive === 0 ? 0 : pendingWins / decisive },
   };
-}
-
-export async function readVersionedScaffoldSource(rt: AgentRuntime, version: number): Promise<string | null> {
-  const versioned = `${rt.identity.scaffold.path}.v${version}`;
-  const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
-
-  if (!await exists(scaffoldVfs, versioned)) return null;
-
-  return v.parse(v.string(), await readText(scaffoldVfs, versioned));
-}
-
-/** Prefers the canonical `agent.js.v{N}` file; the live file holds the current version, not a pending one. */
-export async function readScaffoldVersion(rt: AgentRuntime, version: number): Promise<string | null> {
-  const versioned = await readVersionedScaffoldSource(rt, version);
-
-  if (versioned !== null) return versioned;
-
-  // No version file (v0): fall back to the live file only for the status='current' version,
-  // not `scaffold.version()` (MAX, which includes pending), or a missing pending file
-  // would be judged as the current code.
-  if (version !== getCurrentScaffoldVersion(rt.storage.sql, rt.actor)) return null;
-
-  return await rt.identity.scaffold.read();
 }
 
 /** The score this queued trial already produced, or null; guards a re-run's rollout. */

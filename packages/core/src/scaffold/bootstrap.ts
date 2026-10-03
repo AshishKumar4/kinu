@@ -16,7 +16,7 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { initScaffoldTables } from './schemas';
-import { getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource } from './shadow';
+import { getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource } from './versions';
 
 import { nowMs } from '../utils/date';
 

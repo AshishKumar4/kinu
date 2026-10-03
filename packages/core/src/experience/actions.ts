@@ -9,7 +9,7 @@ import {
 } from './types';
 import { findPublishable, listPublishable } from './publishable';
 import { stageImport } from './imports';
-import { readScaffoldVersion } from '../scaffold/shadow';
+import { readScaffoldVersion } from '../scaffold/versions';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { renderThrownChain } from '../obs/index';

@@ -13,8 +13,9 @@ import * as v from 'valibot';
 import {
   type PendingScaffold, type ShadowConfig, type ShadowTrialVerdict, type ScaffoldDecisionEvents,
   DEFAULT_SHADOW_CONFIG, getPendingScaffold,
-  recordShadowEvaluation, scoredShadowTrial, decidePromotion, applyPromotionDecision, readScaffoldVersion,
+  recordShadowEvaluation, scoredShadowTrial, decidePromotion, applyPromotionDecision,
 } from './shadow';
+import { readScaffoldVersion } from './versions';
 import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './executor';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 

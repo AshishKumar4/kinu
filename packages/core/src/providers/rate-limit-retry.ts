@@ -22,6 +22,18 @@ const MAX_RETRY_DELAY_MS = 60_000;
 /** This call's retries; never sent upstream. */
 export const PROVIDER_RETRIES_HEADER = 'x-kinu-retries';
 
+/** What a provider that rebuilds a request keeps of the caller's: its retry allowance and its cancel. */
+export interface TransportControls {
+  readonly headers: Readonly<Record<string, string>>;
+  readonly signal: AbortSignal | null;
+}
+
+export function transportControls(requested: Pick<RequestInit, 'headers' | 'signal'> | undefined): TransportControls {
+  const retries = copyHeaders(requested?.headers).get(PROVIDER_RETRIES_HEADER);
+
+  return { headers: retries === null ? {} : { [PROVIDER_RETRIES_HEADER]: retries }, signal: requested?.signal ?? null };
+}
+
 const StreamRequestSchema = v.looseObject({ stream: v.literal(true) });
 
 export interface RateLimitRetryOptions {

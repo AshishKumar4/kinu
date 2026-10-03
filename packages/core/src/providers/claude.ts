@@ -6,7 +6,7 @@ import { listAnthropicModels, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_FAST_MODEL, ANT
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { OAuthTokenError } from './oauth-token-error';
 import { quotaWindowText, withCallAccount } from './quota';
-import { withRateLimitRetry } from './rate-limit-retry';
+import { transportControls, withRateLimitRetry, type TransportControls } from './rate-limit-retry';
 import type { AuthResolution, ModelProvider, ProviderDeps } from './types';
 import { accountOf } from '../credentials/accounts';
 import { Effect } from 'effect';
@@ -378,7 +378,7 @@ interface ClaudeCall {
 interface SdkRequest {
   readonly body: SdkBody;
   readonly betas: readonly string[];
-  readonly signal: AbortSignal | null;
+  readonly controls: TransportControls;
 }
 
 async function resolveLogin(deps: ProviderDeps, rejected: AuthResolution | null): Promise<AuthResolution | 'revoked' | null> {
@@ -465,9 +465,9 @@ async function sendClaudeCode(call: ClaudeCall, request: SdkRequest, auth: AuthR
 
   const sent = await retrying(CLAUDE_MESSAGES_URL, {
     method: 'POST',
-    headers,
+    headers: { ...headers, ...request.controls.headers },
     body: attested(claudeCodeBody(body, version, call.sessionId)),
-    signal: request.signal,
+    signal: request.controls.signal,
   });
 
   return withCallAccount(sent, 'claude', paid);
@@ -500,7 +500,7 @@ async function claudeCall(call: ClaudeCall, init: RequestInit): Promise<Response
   const request: SdkRequest = {
     body,
     betas: (copyHeaders(init.headers).get('anthropic-beta') ?? '').split(','),
-    signal: init.signal ?? null,
+    controls: transportControls(init),
   };
 
   const first = await sendAtAcceptedVersion(call, request, login);

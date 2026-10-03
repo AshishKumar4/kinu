@@ -162,12 +162,11 @@ import {
   reasoningEffortOptions,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, createAgentConfigStore, type PinnedProfile,
-  type ResolveAgentTurnProfileInput,
+  resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
-  resolveModelRoute, completeOnRoute, tierRefusals, type TierRefusals, type ModelRouteResolution,
+  resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
@@ -261,7 +260,7 @@ interface TurnReads {
   readonly choices: TierChoices;
 }
 
-type TierChoices = Pick<ResolveAgentTurnProfileInput, 'activeRoleId' | 'explicitTier' | 'workspaceModel' | 'explicitEffort' | 'inheritedEffort'>;
+type TierChoices = ReturnType<typeof ownProfileChoices>;
 
 interface TurnAssemblyInput {
   readonly history: readonly ModelMessage[];
@@ -3638,22 +3637,9 @@ export abstract class ActorAgent extends Agent<Env> {
     const route = resolveModelRoute('fast', await this.routingProfile());
 
     return suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
-      llm: (resolution) => ({
-        async *stream() { yield ''; },
-        complete: async (text) => {
-          const { model, providerOptions } = this.modelForResolution(resolution);
-          // No output cap: reasoning models spend budget thinking and a cap starves the JSON.
-          const request: GenerateRequest = { model, system, prompt: text };
-
-          if (providerOptions) request.providerOptions = providerOptions;
-
-          // Billed before the caller parses the answer.
-          return (await generateReported(request, {
-            spend: { source: 'fast', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-            spec: resolution.model,
-          })).text;
-        },
-      }),
+      llm: (resolution) => routedLlm((serving) => this.modelForResolution(serving), resolution, {
+        report: (report) => this.reportModelCall(report), operations: this.modelOperations,
+      }, system),
       credentialOf: (spec) => this.ownedModelServices.credentialFor(spec),
       refusals: this.tierRefusals,
     }, prompt), mission);
@@ -4177,10 +4163,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** What picks the turn's tier and model: the role, the request's tier, then the actor's own pins. */
   private tierChoices(profileInputs: ProfileAuthorityInputs, body: JsonObject): TierChoices {
-    const ownChoices = ownProfileChoices(this.config, profileInputs);
-
-    // Request tier, then the tier pinned at hire, then the role's own default.
-    return { activeRoleId: this.activeRoleLabel(), ...ownChoices, explicitTier: readTurnTier(body) ?? ownChoices.explicitTier };
+    return ownProfileChoices(this.config, profileInputs, undefined, { explicitTier: readTurnTier(body) ?? undefined });
   }
 
   /** Effect-free: a measure between turns uses it. */
@@ -4537,14 +4520,17 @@ export abstract class ActorAgent extends Agent<Env> {
   protected async routingProfile(availableTools: readonly string[] = [], preparedMode?: WorkMode): Promise<ResolvedTurnProfile> {
     return resolveRoutingProfile({
       actor: this.actorHandle(),
-      resolve: async () => resolveAgentTurnProfile({
-        ...(await this.profileInputs()),
-        activeRoleId: this.activeRoleLabel(),
-        workMode: preparedMode ?? await this.preparedWorkMode(),
-        availableTools,
-        activeSkills: [],
-        explicitTier: this.config.getAssignedTier() ?? undefined,
-      }),
+      resolve: async () => {
+        const inputs = await this.profileInputs();
+
+        return resolveAgentTurnProfile({
+          ...inputs,
+          ...ownProfileChoices(this.config, inputs),
+          workMode: preparedMode ?? await this.preparedWorkMode(),
+          availableTools,
+          activeSkills: [],
+        });
+      },
     });
   }
   /**
@@ -4559,21 +4545,14 @@ export abstract class ActorAgent extends Agent<Env> {
     readonly explicitTier?: string | undefined;
   }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
     const inputs = await this.profileInputs();
-    const config = input.actor.config;
 
     return {
-      profile: await resolveAgentTurnProfile({
+      profile: resolveAgentTurnProfile({
         ...inputs,
-        activeRoleId: config.getRoleSelection(),
+        ...ownProfileChoices(input.actor.config, inputs, this.ancestorProfiles(input.actor), { explicitTier: input.explicitTier }),
         workMode: input.workMode,
         availableTools: [...input.availableTools],
         activeSkills: [],
-        explicitTier: input.explicitTier ?? config.getAssignedTier() ?? undefined,
-        workspaceModel: this.config.getModel(),
-        // Set by its own pane.
-        actorModel: config.getModel(),
-        explicitEffort: config.getReasoningEffort(),
-        inheritedEffort: parentReasoningEffort(inputs, this.ancestorProfiles(input.actor)),
       }),
       inputs,
     };
@@ -4581,16 +4560,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Ancestors' own pins, nearest first, up to the root. */
   private ancestorProfiles(actor: ActorHandle): PinnedProfile[] {
-    const root = this.actorHandle().actorId;
-    const ancestors: PinnedProfile[] = [];
+    return ancestorPins(actor.parentActorId, { actorId: this.actorHandle().actorId, pins: this.config }, (id) => {
+      const parent = this.actorHost().describe(id);
 
-    for (let id = actor.parentActorId; id !== null && id !== root; id = this.actorHost().describe(id)?.parentActorId ?? null) {
-      ancestors.push(createAgentConfigStore(this.boundSql, id, actor.assertCurrent));
-    }
-
-    ancestors.push(this.config);
-
-    return ancestors;
+      return parent === null ? null : { parentActorId: parent.parentActorId, pins: createAgentConfigStore(this.boundSql, id, actor.assertCurrent) };
+    });
   }
 
   /**

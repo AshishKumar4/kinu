@@ -124,8 +124,9 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
     expect(operations.every((e) => e.source === 'judge' && e.op === 'generate_json')).toBe(true);
     expect(operations[1].outcome).toBe('ok');
     expect(operations[1].usage).toEqual({ input: 41, output: 7 });
+    // The serving spec is priced: the merge walks the deep tier's chain like any fixed-tier call.
     expect(reports).toEqual([{
-      source: 'judge', usage: { input: 41, output: 7 }, modelId: 'mock-model-id',
+      source: 'judge', usage: { input: 41, output: 7 }, modelId: 'mock-model-id', spec: 'fake/deep-grader', account: undefined,
     }]);
   });
 

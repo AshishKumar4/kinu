@@ -939,12 +939,11 @@ export { pumpScaffoldEvents } from './scaffold/event-pump';
 
 export { scaffoldChatTransform } from './scaffold/chat-transform';
 
+export { getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource } from './scaffold/versions';
+
 export {
   initShadowTables,
   getPendingScaffold,
-  getCurrentScaffoldVersion,
-  readScaffoldVersion,
-  readVersionedScaffoldSource,
   readShadowVerdict,
   recordShadowEvaluation, scoredShadowTrial, trimTrialContext,
   decidePromotion,
@@ -1559,7 +1558,7 @@ export {
   MergeOutputSchema, DecisionSchema, type MergeOutput,
   // Resolved here so both backends resolve it identically.
   headMergeLLM,
-  type HeadMergeModelBinder, type HeadMergeModelBinding, type HeadMergePolicyDeps,
+  type HeadMergePolicyDeps,
   extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
@@ -1684,7 +1683,9 @@ export { createScaffoldCandidateSurface, type ScaffoldCandidateBinding } from '.
 export { activeOperationProfile, captureOperationProfile, currentOperationProfile, resolveOperationProfile, runOperationProfile,
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
-export { completeOnRoute, createRoutedModelLane, routedCallOptions } from './profiles/model-lane';
+export {
+  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type RouteModelBinder, type RouteModelBinding,
+} from './profiles/model-lane';
 
 export { tierRefusals } from './profiles/tier-refusals';
 
@@ -2068,7 +2069,7 @@ export type {
 
 export {
   resolveModelRoute,
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, ancestorPins,
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource, type PinnedProfile,
   type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,

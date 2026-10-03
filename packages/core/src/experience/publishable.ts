@@ -12,9 +12,10 @@ import { isoDate, nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { getLesson, listLessons } from '../evolution/lessons';
 import {
-  DEFAULT_SHADOW_CONFIG, decidePromotion, getCurrentScaffoldVersion, readShadowVerdict,
+  DEFAULT_SHADOW_CONFIG, decidePromotion, readShadowVerdict,
   type ScaffoldStatus,
 } from '../scaffold/shadow';
+import { getCurrentScaffoldVersion } from '../scaffold/versions';
 import type { ExperienceKind, PublishableCandidate } from './types';
 
 const EXPERIENCE_MIN_FACT_CONFIDENCE = 0.8;

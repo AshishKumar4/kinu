@@ -1,10 +1,10 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
+import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
-import { applyWorkspaceTitle, getChatHistoryPage, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
   OS_LEASE_PROCESS,
@@ -28,11 +28,7 @@ import {
   resolveMcpServers,
   resolveProviderCredentials,
 } from './config';
-import {
-  renameLocalAgent,
-  suggestAgentIdentityFromMission,
-  type SuggestAgentIdentityOptions,
-} from './agent-create';
+import { renameLocalAgent } from './agent-create';
 import { inspectLocalSubordinate, readLocalWorkspaceWork } from './local-inspection';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
@@ -117,7 +113,6 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     mcpServers: resolveMcpServers(),
     noAutoEvolve: opts.noAutoEvolve ?? false,
     transcript: opts.transcript ?? {},
-    naming: opts,
     surface: opts.surface ?? 'interactive',
   });
 
@@ -139,27 +134,6 @@ export async function runLocalGepa(
   }
 }
 
-/** Titles an untitled agent from its first owner message: its mission is shared with every peer, so the
- * owner's words are what distinguish it. The client settles the operation before closing the database. */
-export async function autoTitleLocalWorkspace(
-  name: string,
-  rt: AgentRuntime,
-  source: { mission: string },
-  opts: SuggestAgentIdentityOptions,
-): Promise<void> {
-  initAgentConfigTable(rt.storage.execRaw);
-  const config = rt.actor.config;
-  await applyWorkspaceTitle({
-    slug: name,
-    displayName: config.getDisplayName(),
-    nameOrigin: config.getNameOrigin(),
-    mission: source.mission,
-  }, {
-    persist: (title) => persistAutoTitle(config, title),
-    suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
-  });
-}
-
 interface LocalAgentClientDeps {
   agentName: string;
   /** The session installs itself as this runtime's model-call ledger; `AgentRuntime` would hide that channel. */
@@ -176,7 +150,6 @@ interface LocalAgentClientDeps {
   mcpServers: Record<string, McpServerConfig>;
   noAutoEvolve: boolean;
   transcript: CliSessionOptions;
-  naming: SuggestAgentIdentityOptions;
   /** 'one-shot' selects the background detach policy and marks turn continuity for the outcome ledger. */
   surface: InvocationSurface;
 }
@@ -186,11 +159,6 @@ interface PendingLocalTurn {
   readonly entry: JsonObject;
   /** Null until the turn's own `turn-end` arrives; see `unfinishedTurn`. */
   result: AgentTurnResult | null;
-}
-
-interface AutoTitleOperation {
-  readonly controller: AbortController;
-  promise: Promise<void> | null;
 }
 
 /** A turn that never reported an end must not read as a clean empty success, or `kinu exec` exits 0 on a turn
@@ -221,8 +189,6 @@ export class LocalAgentClient implements AgentClient {
   private readonly awaiting = new Map<string, PendingLocalTurn>();
   private live: readonly PendingLocalTurn[] = [];
   private closed = false;
-  /** May outlive opening or a turn, never the workspace database; close() joins it. */
-  private autoTitleTask: AutoTitleOperation | null = null;
   private readonly recorder = new SessionRecorder('local');
   /**
      * Held for the client's lifetime: the auto-started daemon drives the same durable work over one SQLite file and
@@ -281,43 +247,6 @@ export class LocalAgentClient implements AgentClient {
     };
   }
 
-  startAutoTitle(source: { mission: string }): void {
-    if (this.closed || this.autoTitleTask !== null) return;
-
-    const owner: AutoTitleOperation = {
-      controller: new AbortController(),
-      promise: null,
-    };
-
-    this.autoTitleTask = owner;
-    owner.promise = (async () => {
-      // Only `close()` aborts this controller, so a failure after the abort is the requested cancellation, not a
-      // `title_save_failed` io fault.
-      let failure: { readonly cause: unknown } | undefined;
-
-      try {
-        await autoTitleLocalWorkspace(this.agentName, this.deps.rt, source, {
-          ...this.deps.naming,
-          signal: owner.controller.signal,
-        });
-      } catch (cause) {
-        failure = { cause };
-      } finally {
-        if (this.autoTitleTask === owner) this.autoTitleTask = null;
-      }
-
-      if (failure !== undefined && !owner.controller.signal.aborted) {
-        diagnostics.failure(
-          'workspace.title_save_failed',
-          toKinuError({
-            doing: 'saving the workspace title', cause: failure.cause, otherwise: 'io',
-          }),
-          { workspace: this.agentName },
-        );
-      }
-    })();
-  }
-
   get cliSession(): CliSession {
     return this.activeCliSession;
   }
@@ -361,7 +290,6 @@ export class LocalAgentClient implements AgentClient {
     // The session decides where the words land; the minted id is the id that turn opens under.
     const id = crypto.randomUUID();
     const pending: PendingLocalTurn = { entry: sessionEntry, result: null };
-    const first = this.awaiting.size === 0;
     this.awaiting.set(id, pending);
 
     try {
@@ -372,9 +300,6 @@ export class LocalAgentClient implements AgentClient {
 
         return { landed };
       }
-
-      // Names the agent once: persisting marks `name_origin` and the shared policy stops matching.
-      if (first) this.startAutoTitle({ mission: text });
 
       return { landed, ...(pending.result ?? unfinishedTurn()) };
     } finally {
@@ -436,11 +361,8 @@ export class LocalAgentClient implements AgentClient {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    const autoTitleTask = this.autoTitleTask;
-    autoTitleTask?.controller.abort(new Error('the client is closing'));
 
     try {
-      if (autoTitleTask?.promise) await autoTitleTask.promise;
       await this.session.end();
     } finally {
       // Released before the handle closes, even when settling threw, so the daemon can drive again at once.

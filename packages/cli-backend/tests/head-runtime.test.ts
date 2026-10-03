@@ -973,7 +973,7 @@ describe("the merge synthesis' operation lifecycle", () => {
     expect(operations[1].outcome).toBe('ok');
     expect(operations[1].usage).toEqual({ input: 8, output: 12 });
     expect(operations[1].modelId).toBe('fake-merge');
-    expect(reports).toEqual([{ source: 'judge', usage: { input: 8, output: 12 }, modelId: 'fake-merge' }]);
+    expect(reports).toEqual([{ source: 'judge', usage: { input: 8, output: 12 }, modelId: 'fake-merge', spec: 'fake/deep-grader', account: undefined }]);
   });
 
   test('a thrown provider leaves a failed end row and rethrows', async () => {
@@ -982,7 +982,8 @@ describe("the merge synthesis' operation lifecycle", () => {
       doGenerate: async () => { throw new Error('socket hung up'); },
     }));
 
-    await expect(runtime.mergeLLM('merging the findings of 2 heads', MergeOutputSchema)).rejects.toThrow('socket hung up');
+    // Said as every fixed-tier call's failure is: the tier it was calling, after its chain ran out.
+    await expect(runtime.mergeLLM('merging the findings of 2 heads', MergeOutputSchema)).rejects.toThrow('calling the deep tier');
 
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
     expect(operations[1].outcome).toBe('failed');

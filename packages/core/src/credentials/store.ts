@@ -27,7 +27,8 @@ export interface OAuthCredential {
 export interface OpenAICompatCredential {
   kind: 'openai-compat';
   baseURL: string;
-  apiKey: string;
+  /** Absent for a header-only endpoint, whose auth rides `extraHeaders`. */
+  apiKey?: string;
   /** Extra headers to merge (some providers want `HTTP-Referer`, `X-Title`, etc.). */
   extraHeaders?: Record<string, string>;
 }

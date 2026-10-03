@@ -10,7 +10,7 @@ import {
   TerminalEffectInterrupt,
   COMPLETION_GATE_EVENT, TERMINAL_EFFECT_RETRY_CEILING_MS,
   TERMINAL_TRANSITION_CALL_ID,
-  listQueuedShadowTrials,
+  listQueuedShadowTrials, readMission,
   type Shell, type TemporaryAgentPort, type TerminalEffectFault,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
@@ -91,6 +91,28 @@ async function restart({ rt, db, model, events, generation = 1, ...sessionOpts }
 
   return next;
 }
+
+describe('a workspace born with its mission as a stand-in title', () => {
+  test('its first turn names it through the session, once, as the cloud genesis turn does', async () => {
+    const { db, rt } = workspace();
+    const mission = 'Audit the OAuth callback flow';
+    void rt.storage.sql`UPDATE workspace_identity SET mission = ${mission}`;
+    rt.actor.config.setDisplayNameOrigin(mission, 'auto');
+    expect(readMission(rt.storage.sql)).toBe(mission);
+    const { model, state } = scriptedModel('found two issues');
+    const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
+
+    await session.send('start', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+    expect(state.titleCalls).toBe(1);
+    expect(rt.actor.config.getDisplayName()).toBe('Parser Work');
+
+    await session.send('and the refresh path?', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+    expect(state.titleCalls).toBe(1);
+    await session.end();
+  });
+});
 
 describe('an interrupted terminal sequence is finished by the next start', () => {
   test('the recording, the trial and the title each run exactly once', async () => {
@@ -391,10 +413,9 @@ describe('a killed CLI process is recovered by the next start', () => {
     const events: SessionEvent[] = [];
     const next = await restart({ rt, db, model, events });
 
-    // The replay pays for nothing: the title is no longer a placeholder, so the lane is a no-op.
-    // This is why a failed persist must reach the ledger instead of being logged.
-    expect(state.titleCalls).toBe(0);
-    expect(displayName(rt)).toBe('refactor the parser');
+    // The stand-in is not a name: the replay asks again until one lands, as the cloud's genesis row does.
+    expect(state.titleCalls).toBe(1);
+    expect(displayName(rt)).toBe('Parser Work');
     expect(completedTurns(rt)).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
     await next.end();
@@ -835,14 +856,16 @@ describe('a turn\'s lessons are one owed terminal effect', () => {
     await session.send('read the README', { id: crypto.randomUUID() });
     await session.end();
 
+    // The naming call fails on this scripted model too and stays owed, as on the cloud; only the lessons are this test's.
+    const owedLessons = () => stillOwed(rt).filter((row) => row.effect_name === 'turn_lessons');
     expect(lessons(rt)).toEqual([]);
-    expect(stillOwed(rt)).toEqual([{ effect_name: 'turn_lessons', status: 'pending' }]);
+    expect(owedLessons()).toEqual([{ effect_name: 'turn_lessons', status: 'pending' }]);
 
     state.refusing = false;
     const next = await restart({ rt, db, model, events: [] });
 
     expect(lessons(rt)).toEqual([{ tool: 'file', text: LESSON }]);
-    expect(stillOwed(rt)).toEqual([]);
+    expect(owedLessons()).toEqual([]);
     await next.end();
   });
 });

@@ -1,7 +1,9 @@
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   credentialToHeaders,
+  type OpenAICompatCredential,
   normalizeModelMenu,
   createChatGptProvider,
   accountDeps,
@@ -58,18 +60,11 @@ const proxiedCredentialsSchema = v.object({
   })), []),
 });
 
-interface LocalOpenAICompatCredential {
-  baseURL: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
-  extraHeaders?: Record<string, string>;
-}
-
 export interface LocalProviderCredentials {
   openaiApiKey?: string;
   anthropicApiKey?: string;
   openrouterApiKey?: string;
-  openaiCompat?: Record<string, LocalOpenAICompatCredential>;
+  openaiCompat?: Record<string, OpenAICompatCredential>;
   apiKeyAccounts?: Readonly<Record<string, string>>;
 }
 
@@ -535,16 +530,14 @@ function createCloudProxyProvider(opts: {
           reasoningEfforts: entry.reasoningEfforts,
         }));
     },
+    // A relay: the worker's transport spends the call's retry allowance, so the header must reach it unspent.
     createModel(modelId, deps): LanguageModel {
-      return createChatModel({
-        kind: 'openai-compat',
+      return createOpenAICompatible({
         name: opts.id,
         baseURL,
         headers: { Authorization: `Bearer ${opts.cloud.token}`, [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
-        modelId,
-        fetch: opts.fetch,
-        onWait: deps.onProviderWait,
-      });
+        ...(opts.fetch !== undefined && { fetch: opts.fetch }),
+      }).chatModel(modelId);
     },
   };
 }
@@ -665,7 +658,7 @@ function buildAuthStore(
   }
 
   for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {
-    store.set(`openai-compat.${name}`, { headers: openAiCompatHeaders(compat), baseURL: compat.baseURL });
+    store.set(`openai-compat.${name}`, { headers: credentialToHeaders(`openai-compat.${name}`, compat), baseURL: compat.baseURL });
   }
 
   return {
@@ -685,11 +678,3 @@ function buildAuthStore(
   };
 }
 
-/** Core's openai-compat order (`credentialToHeaders`): the key's Authorization, then the extra headers over it. */
-export function openAiCompatHeaders(compat: LocalOpenAICompatCredential) {
-  const headers = { ...compat.headers };
-
-  if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
-
-  return { ...headers, ...compat.extraHeaders };
-}

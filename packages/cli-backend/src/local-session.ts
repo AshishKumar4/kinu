@@ -19,7 +19,7 @@ import {
 import type {
   ChatOptions,
   TurnContinuity, FiberCtx,
-  LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
+  LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding,
   BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
   ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
@@ -77,8 +77,7 @@ import { TierIdSchema,
   activePromptSectionOverrides,
   turnReasonForMetadata, type TurnReason,
   type CountableRequest,
-  parseModelSpec, agentAffinityKey,
-  generateReported, type GenerateRequest,
+  parseModelSpec, agentAffinityKey, bindRoute, routedLlm,
   measureCompactionTrigger,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   AdvisorRecoverySnapshotSchema,
@@ -121,7 +120,7 @@ import { TierIdSchema,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
   resolveAgentTurnProfile, resolveModelRoute, completeOnRoute,
-  resolveRoutingProfile, currentOperationProfile, ownProfileChoices,
+  resolveRoutingProfile, currentOperationProfile, ownProfileChoices, ancestorPins, actorReferenceOf,
   type PinnedProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
@@ -1655,7 +1654,6 @@ export class LocalAgentSession {
 
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
-      activeRoleId,
       workMode,
       availableTools: [
         ...candidateBuiltinNames,
@@ -1668,9 +1666,7 @@ export class LocalAgentSession {
         ...codemodeCapabilitiesFor(this.codemodeProviders(workMode)),
       ],
       activeSkills: activeSkills?.active.map((skill) => skill.name) ?? [],
-      ...ownProfileChoices(this.config, profileInputs, this.ancestors?.()),
-      // This message's tier, then the hire's pinned tier, else the role's own default (not the workspace's).
-      explicitTier: tierFromMetadata(item.metadata) ?? this.config.getAssignedTier() ?? undefined,
+      ...ownProfileChoices(this.config, profileInputs, this.ancestors?.(), { explicitTier: tierFromMetadata(item.metadata) ?? undefined }),
     });
 
     return {
@@ -2113,10 +2109,6 @@ export class LocalAgentSession {
       : { workspace: own };
   }
 
-  /**
-   * Auto-title via core's naming policy (identity/naming.ts). The plan is checked synchronously first
-   * so titled workspaces skip the model call. Only an Error from the suggestion is best-effort.
-   */
   private async applyAutoTitle(mission: string): Promise<void> {
     const state: WorkspaceTitleState = {
       // `agentName()` reads the root's slug; a child's codename comes from its roster name.
@@ -2134,19 +2126,7 @@ export class LocalAgentSession {
 
         return true;
       },
-      // Only an Error is absorbed; anything else reaches the owed row.
-      suggest: async (text) => {
-        try {
-          return await this.suggestTitle(text);
-        } catch (cause) {
-          if (!(cause instanceof Error)) throw cause;
-          diagnostics.failure('agent.auto_title_suggestion_failed', toKinuError({
-            doing: 'deriving a title from the mission', cause, otherwise: 'unavailable',
-          }));
-
-          return null;
-        }
-      },
+      suggest: (text) => this.suggestTitle(text),
     });
   }
 
@@ -2618,41 +2598,20 @@ export class LocalAgentSession {
     });
   }
 
-  /** One routed non-turn lane as an {@link LLM}. `system` carries core-declared prompt pairs so the
-   *  CLI issues the same request as the cloud backend. */
+  /** One routed non-turn lane as an {@link LLM}; `system` carries core-declared prompt pairs. */
   private localRouteLlm(resolution: ModelRouteResolution, system?: string): LLM {
-    const { model, providerOptions } = this.bindRouteModel(resolution);
-
-    return {
-      async *stream() { yield ""; },
-      complete: async (prompt: string): Promise<string> => {
-        const request: GenerateRequest = { model, prompt };
-
-        if (system !== undefined) request.system = system;
-
-        if (providerOptions) request.providerOptions = providerOptions;
-
-        return (await generateReported(request, {
-          spend: { source: resolution.source, report: this.modelCallSink, operations: this.modelOperations },
-          spec: resolution.model,
-        })).text.trim();
-      },
-    };
+    return routedLlm((route) => this.bindRouteModel(route), resolution, { report: this.modelCallSink, operations: this.modelOperations }, system);
   }
 
   /** A routed lane's client and effort options, shared with the head merge (policy in core's
    *  `headMergeLLM`). A resolver-less session resolves every lane to its one model. */
-  private bindRouteModel(resolution: ModelRouteResolution): HeadMergeModelBinding {
-    const model = this.modelResolver
-      ? this.modelResolver.resolveModel(resolution.model, this.conversation())
-      : this.defaultModel(`${resolution.source} model lane`);
+  private bindRouteModel(resolution: ModelRouteResolution): RouteModelBinding {
+    const { modelResolver } = this;
 
-    const providerOptions = reasoningEffortOptions(
-      resolution.reasoningEffort,
-      parseModelSpec(this.profiles().normalizeSpec(resolution.model)).provider,
-    );
-
-    return providerOptions ? { model, providerOptions } : { model };
+    return bindRoute({
+      normalize: (spec) => this.profiles().normalizeSpec(spec),
+      resolve: (spec) => (modelResolver ? modelResolver.resolveModel(spec, this.conversation()) : this.defaultModel(`${resolution.source} model lane`)),
+    }, resolution);
   }
   /** Precedence is core's `resolveRoutingProfile`, shared with the Cloudflare backend. Asked per call:
    *  a lane built at construction must not pin the account's tier from then. */
@@ -2881,15 +2840,19 @@ export class LocalAgentSession {
   ): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
     const inputs = await this.profiles().inputs();
 
+    const ancestors = ancestorPins(actor.handle.parentActorId, { actorId: this.rt.actor.actorId, pins: this.config }, (id) => {
+      const parent = this.actorHost.describe(id);
+
+      return parent === null ? null : { parentActorId: parent.parentActorId, pins: this.actorHost.bindStores(actorReferenceOf(parent)).handle.config };
+    });
+
     const profile = resolveAgentTurnProfile({
       ...inputs,
-      activeRoleId: actor.handle.config.getRoleSelection() ?? this.getActiveRoleId(),
+      ...ownProfileChoices(actor.handle.config, inputs, ancestors),
       workMode: input.workMode,
       availableTools: [...input.availableTools],
       // A fork explores under its parent's promoted program and that program's skills.
       activeSkills: [],
-      // The workspace pin applies to hosted-actor turns too.
-      workspaceModel: this.config.getModel(),
     });
 
     return { profile, inputs };

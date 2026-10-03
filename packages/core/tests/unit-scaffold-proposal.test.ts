@@ -7,7 +7,7 @@ import { recordLesson } from '../src/evolution/lessons';
 import { renderScaffoldHandbook } from '../src/evolution/scaffold-handbook';
 import { modifyScaffold } from '../src/scaffold/modify';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { readScaffoldVersion } from '../src/scaffold/shadow';
+import { readScaffoldVersion } from '../src/scaffold/versions';
 import { runScaffold, SCAFFOLD_HOST_TYPES, type ScaffoldEvent } from '../src/scaffold/executor';
 import { createEvalExecutor, createTestRuntime } from './helpers';
 

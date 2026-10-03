@@ -299,6 +299,25 @@ describe('agent status', () => {
     db.close();
   });
 
+  test('the scaffold version is the one the actor runs: not a pending proposal, not a rolled-back one', async () => {
+    const { db, sql, actor } = workspace();
+    const shown = async () => (await getAgentStatus({ sql, actor, model: '', reasoningEffort: null, name: 'jarvis', displayName: 'Jarvis' })).scaffoldVersion;
+
+    const version = (n: number, status: string) => {
+      void sql`INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (${actor.actorId}, ${n}, ${n}, ${'test'}, ${status})`;
+    };
+
+    version(0, 'rolled_back');
+    version(1, 'current');
+    version(2, 'pending');
+    expect(await shown()).toBe(1);
+
+    version(0, 'current');
+    version(1, 'rolled_back');
+    expect(await shown()).toBe(0);
+    db.close();
+  });
+
   test('a workspace with no tables fails the read instead of inventing an identity', async () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);

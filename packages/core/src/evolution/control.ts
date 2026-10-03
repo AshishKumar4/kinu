@@ -28,9 +28,10 @@ import { listScaffoldArchive } from '../scaffold/archive';
 import {
   DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,
   decidePromotion, dropQueuedShadowTrial, getPendingScaffold, listQueuedShadowTrials,
-  purgeQueuedShadowTrials, queueShadowTrial, readScaffoldVersion,
+  purgeQueuedShadowTrials, queueShadowTrial,
   type ScaffoldDecisionEvents,
 } from '../scaffold/shadow';
+import { readScaffoldVersion } from '../scaffold/versions';
 import type {
   ShadowTrialDrain, ShadowTrialPlan, ShadowTrialQueueOutcome, ShadowTrialTurn,
 } from './types';

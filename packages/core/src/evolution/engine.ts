@@ -79,7 +79,7 @@ import {
   listScaffoldArchive, listRejectedProposals, selectEvolutionBase, blendRealOutcomeRates,
   type EvolutionBaseSelection, type ScaffoldArchiveEntry,
 } from '../scaffold/archive';
-import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow';
+import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/versions';
 
 const GeneralizedToolSchema = v.object({
   name: v.optional(v.string()),
