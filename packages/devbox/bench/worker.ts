@@ -89,6 +89,8 @@ interface BenchEnv {
   BENCH_SELECTED_ARMS?: string;
   /** This run's box size, from `wrangler deploy --var`; absent is Devbox's default (D50). */
   BENCH_SIZE?: string;
+  /** `1` arms `POST /fault`: the soak's refused and stalled store writes. Absent, no write consults it. */
+  BENCH_FAULTS?: string;
   BENCH_INTERNET?: string;
   /** 'none' keeps every path, as a snapshot does (D55's head to head). */
   BENCH_EXCLUDES?: string;
@@ -204,6 +206,17 @@ async function maybeFlush(): Promise<void> {
 function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
   const counter = env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops'));
 
+  // The soak's store faults: the next armed write is refused, or held two minutes first.
+  const faulted = async (): Promise<void> => {
+    if (env.BENCH_FAULTS !== '1') return;
+
+    const fault = await counter.takeFault();
+
+    if (fault === 'refuse') throw new Error('bench fault: the store refused this write');
+
+    if (fault === 'stall') await new Promise((resolve) => { setTimeout(resolve, 120_000); });
+  };
+
   const observed = meterPublicationBucket(bucket, {
     begin: async (key, operation, uploadId) => await counter.beginPublicationAttempt(key, operation, uploadId),
     finish: async (id, result) => await counter.finishPublicationAttempt(id, result),
@@ -232,12 +245,12 @@ function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
       countOp('createMultipartUpload');
       await maybeFlush();
 
-      return countingMultipart(await observed.createMultipartUpload(key, options));
+      return countingMultipart(await observed.createMultipartUpload(key, options), faulted);
     },
     resumeMultipartUpload: (key, uploadId) => {
       countOp('resumeMultipartUpload');
 
-      return countingMultipart(observed.resumeMultipartUpload(key, uploadId));
+      return countingMultipart(observed.resumeMultipartUpload(key, uploadId), faulted);
     },
   };
 
@@ -270,6 +283,7 @@ function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
     ) => {
       countOp('put');
       await maybeFlush();
+      await faulted();
 
       return await observed.put(key, value, options);
     },
@@ -279,13 +293,14 @@ function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
 /** The multipart handle. `uploadPart` and `complete` are calls on THIS object,
  *  not on the bucket, so a wrapper that stopped at the bucket would miss every
  *  byte of a large write. */
-function countingMultipart(upload: R2MultipartUpload): R2MultipartUpload {
+function countingMultipart(upload: R2MultipartUpload, faulted: () => Promise<void>): R2MultipartUpload {
   return {
     key: upload.key,
     uploadId: upload.uploadId,
     uploadPart: async (partNumber, value) => {
       countOp('uploadPart');
       await maybeFlush();
+      await faulted();
 
       return await upload.uploadPart(partNumber, value);
     },
@@ -340,6 +355,20 @@ export interface OpCounts {
 }
 
 export class BenchOpCounter extends DurableObject<BenchEnv> {
+  /** Arms the next `count` store writes to fail as `kind` (the soak's R2 faults). */
+  armFault(kind: 'refuse' | 'stall', count: number): void {
+    this.ctx.storage.kv.put('bench-fault', { kind, left: count });
+  }
+
+  takeFault(): 'refuse' | 'stall' | null {
+    const armed = v.safeParse(v.object({ kind: v.picklist(['refuse', 'stall']), left: v.number() }), this.ctx.storage.kv.get('bench-fault'));
+
+    if (!armed.success || armed.output.left <= 0) return null;
+    this.ctx.storage.kv.put('bench-fault', { ...armed.output, left: armed.output.left - 1 });
+
+    return armed.output.kind;
+  }
+
   async openPublicationWindow(token: string, prefix: string): Promise<PublicationWindow> {
     if (token === '' || prefix === '') throw new Error('a publication window requires its token and box prefix');
 
@@ -939,6 +968,7 @@ const DriverBodySchema = v.object({
   processId: v.optional(v.string()),
   port: v.optional(v.number()),
   kill: v.optional(v.boolean()),
+  fault: v.optional(v.picklist(['refuse', 'stall'])),
 });
 
 type DriverBody = v.InferOutput<typeof DriverBodySchema>;
@@ -1001,6 +1031,13 @@ async function serveInstrumentRoutes(
   { route, env, strategy, box, name, started, url, counter, input }: InstrumentRequest,
 ): Promise<Response | null> {
   switch (route) {
+    case 'POST /fault': {
+      if (env.BENCH_FAULTS !== '1' || input.fault === undefined) return json({ status: 400, payload: { ok: false, error: 'this run arms no faults' } });
+      await env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops')).armFault(input.fault, 1);
+
+      return json({ payload: { ok: true, fault: input.fault, ms: Date.now() - started } });
+    }
+
     case 'POST /evict': {
       const [evicted] = await Promise.allSettled([box.evictForBench()]);
 

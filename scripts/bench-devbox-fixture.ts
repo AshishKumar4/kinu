@@ -838,12 +838,13 @@ interface DeployedFixture {
 export async function deployFixture(
   token: string,
   fixture: ArmFixture,
-  boot: { readonly productionSync?: boolean; readonly size?: string } = {},
+  boot: { readonly productionSync?: boolean; readonly size?: string; readonly faults?: boolean } = {},
 ): Promise<DeployedFixture> {
   const output = wrangler([
     'deploy', '--config', fixture.configPath, '--var', `BENCH_TOKEN:${token}`,
     ...(boot.productionSync === true ? ['--var', 'BENCH_PRODUCTION_SYNC:1'] : []),
     ...(boot.size === undefined ? [] : ['--var', `BENCH_SIZE:${boot.size}`]),
+    ...(boot.faults === true ? ['--var', 'BENCH_FAULTS:1'] : []),
   ]);
 
   const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
