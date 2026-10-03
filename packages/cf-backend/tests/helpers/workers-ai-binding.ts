@@ -97,6 +97,10 @@ export async function workersAiBinding(answer: (request: Request) => Promise<Res
     })().catch(outgoing.destroy.bind(outgoing));
   });
 
+  // Node closes an idle keep-alive connection (here 6 s after an answer); a call reaching it as it closes is lost
+  // ("Network connection lost", measured in 1 ms steps 2026-10-03), the more often the busier the process. The
+  // client owns its connections.
+  server.keepAliveTimeout = 0;
   server.on('connection', (socket) => { socket.unref(); });
   await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   server.unref();
