@@ -27,7 +27,7 @@ export function desktopCommand(action: string | undefined, opts: { label?: strin
     const sub = action ?? 'status';
 
     if (sub === 'connect' || sub === 'install') {
-      const auth = yield* Effect.promise(async () => requireAuthOrLogin());
+      const auth = yield* authOrLogin();
       const name = yield* confirmConnect(opts.label);
 
       if (!name) {
@@ -107,16 +107,15 @@ function confirmConnect(label?: string): Effect.Effect<string | null> {
   });
 }
 
-async function requireAuthOrLogin(): Promise<{ origin: string; token: string; user?: { id: string; email: string; displayName?: string | null } }> {
-  try {
+function authOrLogin(): Effect.Effect<{ origin: string; token: string; user?: { id: string; email: string; displayName?: string | null } }> {
+  return Effect.catchCause(Effect.sync(() => requireAuthConfig()), (failed) => Effect.gen(function* () {
+    const err = Cause.squash(failed);
+
+    if (!/Not authenticated/.test(renderThrownChain({ cause: err }))) return yield* Effect.die(err);
+    const origin = resolveCloudOrigin();
+    console.log(`${DIM('Not signed in. Starting Kinu sign-in…')}`);
+    yield* Effect.promise(() => authCommand({ origin }));
+
     return requireAuthConfig();
-  } catch (err) {
-    if (!/Not authenticated/.test(renderThrownChain({ cause: err }))) throw err;
-  }
-
-  const origin = resolveCloudOrigin();
-  console.log(`${DIM('Not signed in. Starting Kinu sign-in…')}`);
-  await authCommand({ origin });
-
-  return requireAuthConfig();
+  }));
 }

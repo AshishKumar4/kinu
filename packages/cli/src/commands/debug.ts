@@ -4,9 +4,10 @@
  * `debugCommand` alone walks, redacts, pages and renders.
  */
 
+import { Effect } from 'effect';
 import { appendFileSync } from 'node:fs';
 import { writeSecretFile } from '@kinu.run/cli-backend';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
 import {
   addUsage, decodeJsonValue, JsonObjectSchema, JsonValueSchema, pageSchema, projectJsonValue,
   redactPayload, usageReported, UsageSchema,
@@ -517,77 +518,83 @@ async function writeCellOccupants(
   }
 }
 
-async function writeTurnRequests(
+function writeTurnRequests(
   source: DebugSource,
   ask: { readonly turnId: string; readonly actor: string | undefined; readonly outPath: string; readonly json: boolean },
-): Promise<void> {
-  const index = await source.turnRequests(ask.turnId, ask.actor);
+): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    const index = yield* Effect.promise(async () => source.turnRequests(ask.turnId, ask.actor));
 
-  if (index === null) {
-    throw new Error('turn requests are read from cloud workspaces; a local agent keeps them under its home\'s .kinu/context/requests');
-  }
-
-  const writer = fileWriter(ask.outPath);
-  const steps: TurnStepSummary[] = [];
-
-  try {
-    writer.write({ t: 'turn', ...index });
-
-    for (const request of index.requests) {
-      let from: number | null = 0;
-      let first: TurnRequestPageRecord | null = null;
-
-      while (from !== null) {
-        const page: TurnRequestPageRecord = await source.turnRequest(ask.turnId, {
-          epoch: request.epoch, revision: request.revision, from, ...(ask.actor !== undefined && { actor: ask.actor }),
-        });
-
-        writer.write({ t: 'turn_request', ...page });
-
-        first ??= page;
-        from = page.nextFrom;
-      }
-
-      steps.push({
-        epoch: request.epoch, revision: request.revision, step: request.step,
-        messages: first?.messageCount ?? 0,
-        finish: v.parse(v.optional(v.string(), ''), first?.head?.response?.['reason']),
-      });
+    if (index === null) {
+      return yield* Effect.die(new Error('turn requests are read from cloud workspaces; a local agent keeps them under its home\'s .kinu/context/requests'));
     }
-  } finally {
-    writer.close();
-  }
 
-  if (ask.json) {
-    printJson(redactPayload(decodeJsonValue({ value: { bundle: ask.outPath, turnId: index.turnId, claim: index.claim, steps } })));
+    const writer = fileWriter(ask.outPath);
+    const steps: TurnStepSummary[] = [];
 
-    return;
-  }
+    yield* Effect.ensuring(Effect.gen(function* () {
+      writer.write({ t: 'turn', ...index });
 
-  console.log(`${ACCENT('turn')} ${index.turnId}  ${DIM(`${String(index.requests.length)} requests`)}`);
+      for (const request of index.requests) {
+        let from: number | null = 0;
+        let first: TurnRequestPageRecord | null = null;
 
-  for (const step of steps) {
-    const label = step.step === null ? 'admission' : `step ${String(step.step)}`;
-    console.log(`  ${label.padEnd(10)} ${String(step.messages).padStart(4)} messages  ${step.finish}`);
-  }
+        while (from !== null) {
+          const at = from;
 
-  console.log(`${OK('wrote')} ${ask.outPath} ${DIM('(owner-only; redaction is not a guarantee)')}`);
+          const page: TurnRequestPageRecord = yield* Effect.promise(async () => source.turnRequest(ask.turnId, {
+            epoch: request.epoch, revision: request.revision, from: at, ...(ask.actor !== undefined && { actor: ask.actor }),
+          }));
+
+          writer.write({ t: 'turn_request', ...page });
+
+          first ??= page;
+          from = page.nextFrom;
+        }
+
+        steps.push({
+          epoch: request.epoch, revision: request.revision, step: request.step,
+          messages: first?.messageCount ?? 0,
+          finish: v.parse(v.optional(v.string(), ''), first?.head?.response?.['reason']),
+        });
+      }
+    }), Effect.sync(() => {
+      writer.close();
+    }));
+
+    if (ask.json) {
+      printJson(redactPayload(decodeJsonValue({ value: { bundle: ask.outPath, turnId: index.turnId, claim: index.claim, steps } })));
+
+      return;
+    }
+
+    console.log(`${ACCENT('turn')} ${index.turnId}  ${DIM(`${String(index.requests.length)} requests`)}`);
+
+    for (const step of steps) {
+      const label = step.step === null ? 'admission' : `step ${String(step.step)}`;
+      console.log(`  ${label.padEnd(10)} ${String(step.messages).padStart(4)} messages  ${step.finish}`);
+    }
+
+    console.log(`${OK('wrote')} ${ask.outPath} ${DIM('(owner-only; redaction is not a guarantee)')}`);
+  });
 }
 
 type DebugTarget = ReturnType<typeof resolveAgentTarget>;
 
-export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<void> {
-  const target = resolveAgentTarget(name);
+export function debugCommand(name: string, opts: DebugOpts = {}): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
 
-  const source = target.mode === 'cloud'
-    ? cloudDebugSource(target.cloudName, requireAuthConfig())
-    : localDebugSource(target.localName);
+    const source = target.mode === 'cloud'
+      ? cloudDebugSource(target.cloudName, requireAuthConfig())
+      : localDebugSource(target.localName);
 
-  if (opts.turn === undefined) return writeDebugBundle(target, source, opts);
+    if (opts.turn === undefined) return yield* Effect.promise(() => writeDebugBundle(target, source, opts));
 
-  return writeTurnRequests(source, {
-    turnId: opts.turn, actor: opts.actor, outPath: opts.out ?? `${target.name}.turn-${opts.turn}.jsonl`, json: opts.json === true,
-  });
+    return yield* writeTurnRequests(source, {
+      turnId: opts.turn, actor: opts.actor, outPath: opts.out ?? `${target.name}.turn-${opts.turn}.jsonl`, json: opts.json === true,
+    });
+  }));
 }
 
 async function writeDebugBundle(target: DebugTarget, source: DebugSource, opts: DebugOpts): Promise<void> {

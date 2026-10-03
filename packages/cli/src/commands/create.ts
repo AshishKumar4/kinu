@@ -11,8 +11,8 @@ interface ModelWarningInput {
   agentName: string;
 }
 
-const createFailed = (spinner: ReturnType<typeof createSpinner>) => (failed: Cause.Cause<unknown>) => Effect.sync(() => {
-  spinner.fail('Create failed');
+const createFailed = (spinner: ReturnType<typeof createSpinner>, failure = 'Create failed') => (failed: Cause.Cause<unknown>) => Effect.sync(() => {
+  spinner.fail(failure);
   printFailure({ cause: Cause.squash(failed) });
   process.exit(1);
 });
@@ -27,7 +27,7 @@ export function createCommand(name: string | undefined, opts: {
 
     // Joining takes nothing: the agent inherits a peer's mission and its first message names it.
     if (opts.join) {
-      yield* Effect.promise(async () => joinWorkspace(opts));
+      yield* joinWorkspace(opts);
 
       return;
     }
@@ -81,24 +81,20 @@ export function createCommand(name: string | undefined, opts: {
   }));
 }
 
-async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: string }): Promise<void> {
+function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: string }): Effect.Effect<void> {
   const spinner = createSpinner('Adding an agent to this workspace…');
   spinner.start();
 
-  try {
-    const created = await createLocalPeerAgent();
+  return Effect.catchCause(Effect.gen(function* () {
+    const created = yield* Effect.promise(() => createLocalPeerAgent());
     spinner.stop('Agent added');
     console.log(`\n${OK('✓')} ${ACCENT(created.name)} ${DIM(`joined "${created.workspaceId}"`)}`);
     console.log(DIM(`Mission inherited from ${created.peers?.length ?? 0} peer(s). It names itself on your first message.`));
-    await warnUnusableModel(
+    yield* Effect.promise(() => warnUnusableModel(
       opts.model ? { agentName: created.name, model: opts.model } : { agentName: created.name },
-    );
+    ));
     console.log(`\n${DIM('Run:')} ${ACCENT(`kinu chat ${created.name}`)}\n`);
-  } catch (err) {
-    spinner.fail('Could not add an agent');
-    printFailure({ cause: err });
-    process.exit(1);
-  }
+  }), createFailed(spinner, 'Could not add an agent'));
 }
 
 /** Warn now rather than when the first turn dies; the workspace exists either way. */

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-03",
   "files": 2960,
-  "functions": 77873,
+  "functions": 78016,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -46,7 +46,7 @@
       "complexity": 39
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
+      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand>gen",
       "complexity": 38
     },
     {
@@ -222,10 +222,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
-      "complexity": 30
-    },
-    {
       "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>checkpoint",
       "complexity": 30
     },
@@ -251,6 +247,10 @@
     },
     {
       "key": "packages/cf-backend/tests/helpers/actor-harness.ts#chatSessionTurns>admit",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand>gen",
       "complexity": 29
     },
     {

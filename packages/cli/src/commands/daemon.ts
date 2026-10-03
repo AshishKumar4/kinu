@@ -3,7 +3,7 @@ import { closeSync, existsSync, openSync, readFileSync, unlinkSync } from 'node:
 import { basename, join } from 'node:path';
 import { spawnKinuScript } from '../self-spawn';
 import type { Database } from 'bun:sqlite';
-import { renderThrownChain, tolerate, settle } from '@kinu.run/core/obs';
+import { renderThrownChain, tolerate, settle, settleSync, type KinuError } from '@kinu.run/core/obs';
 import type { HostedAgentRef } from '@kinu.run/core';
 import {
   LocalAgentHost,
@@ -46,7 +46,7 @@ export function daemonCommand(action: string | undefined, agent?: string): Promi
     const sub = action ?? 'status';
 
     if (sub === 'start') {
-      const pid = startDaemon();
+      const pid = yield* startDaemon();
       console.log(pid !== null
         ? `${OK('✓')} Local scheduler daemon started ${DIM(`pid ${pid} · ${LOG_PATH}`)}`
         : `${DIM('Local scheduler daemon is already running')} ${DIM(LOG_PATH)}`);
@@ -65,7 +65,7 @@ export function daemonCommand(action: string | undefined, agent?: string): Promi
 
     if (sub === 'restart') {
       const stopped = yield* stopDaemonForRestart();
-      const pid = startDaemon();
+      const pid = yield* startDaemon();
 
       if (pid === null) return yield* Effect.die(new Error(`Local scheduler daemon failed to start. See ${LOG_PATH}`));
       console.log(stopped !== null
@@ -137,47 +137,50 @@ export function daemonCommand(action: string | undefined, agent?: string): Promi
 export function ensureLocalDaemonRunning(): void {
   // Skip daemon startup when explicitly disabled (e.g. in tests).
   if (process.env.KINU_SKIP_DAEMON === '1') return;
-  startDaemon({ quiet: true });
+
+  return settleSync(Effect.asVoid(startDaemon({ quiet: true })));
 }
 
 /** The new daemon's pid, or null when a live daemon already owns the pidfile. */
-function startDaemon(opts: { quiet?: boolean } = {}): number | null {
-  ensureAgentHome();
+function startDaemon(opts: { quiet?: boolean } = {}): Effect.Effect<number | null, KinuError> {
+  return Effect.gen(function* () {
+    ensureAgentHome();
 
-  if (readLivePid()) return null;
+    if (readLivePid()) return null;
 
-  const entry = process.argv[1];
+    const entry = process.argv[1];
 
-  if (!entry) {
-    if (!opts.quiet) throw new Error('Cannot locate Kinu CLI entrypoint for daemon startup.');
+    if (!entry) {
+      if (!opts.quiet) return yield* Effect.die(new Error('Cannot locate Kinu CLI entrypoint for daemon startup.'));
 
-    return null;
-  }
+      return null;
+    }
 
-  // Spawning a daemon from a test entry would re-run the test and fork forever. Match the file's basename only:
-  // a checkout path containing "test" is not a test script.
-  if (/test|spec|e2e/i.test(basename(entry))) {
-    if (!opts.quiet) throw new Error(`Refusing to start daemon from a test script: ${entry}`);
+    // Spawning a daemon from a test entry would re-run the test and fork forever. Match the file's basename only:
+    // a checkout path containing "test" is not a test script.
+    if (/test|spec|e2e/i.test(basename(entry))) {
+      if (!opts.quiet) return yield* Effect.die(new Error(`Refusing to start daemon from a test script: ${entry}`));
 
-    return null;
-  }
+      return null;
+    }
 
-  const logFd = openSync(LOG_PATH, 'a');
+    const logFd = openSync(LOG_PATH, 'a');
 
-  try {
-    const child = spawnKinuScript(entry, ['daemon', 'shell'], {
-      detached: true,
-      stdio: ['ignore', logFd, logFd],
-      env: process.env,
-    });
+    return yield* Effect.ensuring(Effect.sync(() => {
+      const child = spawnKinuScript(entry, ['daemon', 'shell'], {
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+        env: process.env,
+      });
 
-    child.unref();
-    writePid(child.pid);
+      child.unref();
+      writePid(child.pid);
 
-    return child.pid ?? null;
-  } finally {
-    closeSync(logFd);
-  }
+      return child.pid ?? null;
+    }), Effect.sync(() => {
+      closeSync(logFd);
+    }));
+  });
 }
 
 /** Waits for the reap: the daemon unlinks its pidfile on exit, so a replacement started earlier would lose its

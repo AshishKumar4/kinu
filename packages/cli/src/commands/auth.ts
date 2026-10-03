@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { spawn } from 'node:child_process';
 import { hostname, platform } from 'node:os';
 import {
@@ -76,48 +76,48 @@ export function whoamiCommand(opts: { origin?: string }): Promise<void> {
   }));
 }
 
-export async function logoutCommand(opts: { origin?: string }): Promise<void> {
-  const config = loadConfigFile();
-  const origin = defaultOrigin(opts);
+export function logoutCommand(opts: { origin?: string }): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const config = loadConfigFile();
+    const origin = defaultOrigin(opts);
+    const token = config.accessToken;
 
-  if (config.accessToken) {
-    let revoked = true;
+    if (token) {
+      const revoked = yield* Effect.catchCause(Effect.as(Effect.promise(() => logout(origin, token)), true), (failed) => Effect.gen(function* () {
+        // The raw token is the only copy (the server stores a hash); deleting it would orphan a live 180-day bearer,
+        // so it stays pending for the next logout or `kinu sessions revoke --all`.
+        const reason = renderThrownChain({ cause: Cause.squash(failed) });
+        console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
+        yield* Effect.promise(() => updateConfigFile((current) => {
+          current.pendingRevocation = {
+            token,
+            origin,
+            at: Date.now(),
+          };
+        }));
 
-    try {
-      await logout(origin, config.accessToken);
-    } catch (error) {
-      // The raw token is the only copy (the server stores a hash); deleting it would orphan a live 180-day bearer,
-      // so it stays pending for the next logout or `kinu sessions revoke --all`.
-      const reason = renderThrownChain({ cause: error });
-      console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
-      await updateConfigFile((current) => {
-        current.pendingRevocation = {
-          token: config.accessToken ?? '',
-          origin,
-          at: Date.now(),
-        };
-      });
-      revoked = false;
+        return false;
+      }));
+
+      if (!revoked) {
+        yield* Effect.promise(() => bumpProviderRevision());
+        console.log(`${WARN('!')} Not signed out: the session is still valid, and this computer keeps its token so a later logout can revoke it.`);
+        console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or revoke it with \`kinu sessions revoke\` from any computer.`));
+
+        return;
+      }
     }
 
-    if (!revoked) {
-      await bumpProviderRevision();
-      console.log(`${WARN('!')} Not signed out: the session is still valid, and this computer keeps its token so a later logout can revoke it.`);
-      console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or revoke it with \`kinu sessions revoke\` from any computer.`));
-
-      return;
-    }
-  }
-
-  await updateConfigFile((current) => {
-    delete current.accessToken;
-    delete current.tokenExpiresAt;
-    delete current.user;
-    delete current.pendingRevocation;
-  });
-  // The inverse of sign-in: every account-held provider just became unreachable.
-  await bumpProviderRevision();
-  console.log(`${OK('✓')} Signed out`);
+    yield* Effect.promise(() => updateConfigFile((current) => {
+      delete current.accessToken;
+      delete current.tokenExpiresAt;
+      delete current.user;
+      delete current.pendingRevocation;
+    }));
+    // The inverse of sign-in: every account-held provider just became unreachable.
+    yield* Effect.promise(() => bumpProviderRevision());
+    console.log(`${OK('✓')} Signed out`);
+  }));
 }
 
 async function revokeSessionCommand(hash: string): Promise<void> {

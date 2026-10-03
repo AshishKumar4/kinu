@@ -1,4 +1,4 @@
-import { Effect, Result } from 'effect';
+import { Cause, Effect, Result } from 'effect';
 import * as readline from 'node:readline';
 import { callAgentRpc, createCloudWebhookTrigger, type CloudWebhookTriggerInput } from '../cloud-api';
 import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
@@ -40,39 +40,41 @@ interface TranscriptFlags {
   transcriptDir?: string;
 }
 
-export async function runCommand(name: string, promptParts: string[], opts: AgentClientFlags & TranscriptFlags & {
+export function runCommand(name: string, promptParts: string[], opts: AgentClientFlags & TranscriptFlags & {
   classic?: boolean;
   mode?: string;
 }): Promise<void> {
-  const outputMode = oneOfFlag(opts.mode, '--mode', ['text', 'json', 'rpc']);
-  const target = resolveAgentTarget(name);
+  return settle(Effect.gen(function* () {
+    const outputMode = oneOfFlag(opts.mode, '--mode', ['text', 'json', 'rpc']);
+    const target = resolveAgentTarget(name);
 
-  if (outputMode === 'rpc') {
-    await runRpc(target, opts);
+    if (outputMode === 'rpc') {
+      yield* runRpc(target, opts);
 
-    return;
-  }
+      return;
+    }
 
-  const rawPrompt = await buildPrompt(promptParts);
+    const rawPrompt = yield* buildPrompt(promptParts);
 
-  if (!rawPrompt) {
-    await chatCommand(target.requestedName, {
-      model: opts.model,
-      baseUrl: opts.baseUrl,
-      auth: opts.auth,
-      classic: opts.classic,
-      ...transcriptOptions(opts),
+    if (!rawPrompt) {
+      yield* Effect.promise(() => chatCommand(target.requestedName, {
+        model: opts.model,
+        baseUrl: opts.baseUrl,
+        auth: opts.auth,
+        classic: opts.classic,
+        ...transcriptOptions(opts),
+      }));
+
+      return;
+    }
+
+    const failed = yield* runOneShot(target, rawPrompt, opts, {
+      json: outputMode === 'json',
+      headless: false,
     });
 
-    return;
-  }
-
-  const failed = await runOneShot(target, rawPrompt, opts, {
-    json: outputMode === 'json',
-    headless: false,
-  });
-
-  await exitOneShot(failed);
+    return yield* Effect.promise(() => exitOneShot(failed));
+  }));
 }
 
 export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
@@ -87,7 +89,7 @@ export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
 /** `kinu exec`: headless for CI. Consents fail closed; exit 0 only when the turn completed without errors or denied consents. */
 export function execCommand(promptParts: string[], opts: ExecOptions): Promise<void> {
   return settle(Effect.gen(function* () {
-    const rawPrompt = yield* Effect.promise(async () => buildPrompt(promptParts));
+    const rawPrompt = yield* buildPrompt(promptParts);
 
     if (!rawPrompt) {
       return yield* Effect.die(new Error('A task prompt is required. Usage: kinu exec "task" [--workspace <name>] [--json]'));
@@ -95,7 +97,7 @@ export function execCommand(promptParts: string[], opts: ExecOptions): Promise<v
 
     const target = resolveAgentTarget(yield* resolveExecWorkspaceName(opts.workspace));
 
-    const failed = yield* Effect.promise(async () => runOneShot(target, rawPrompt, {
+    const failed = yield* runOneShot(target, rawPrompt, {
       model: opts.model,
       baseUrl: opts.baseUrl,
       auth: opts.auth,
@@ -104,7 +106,7 @@ export function execCommand(promptParts: string[], opts: ExecOptions): Promise<v
     }, {
       json: opts.json === true,
       headless: true,
-    }));
+    });
 
     return yield* Effect.promise(async () => exitOneShot(failed));
   }));
@@ -134,78 +136,81 @@ function resolveExecWorkspaceName(explicit?: string): Effect.Effect<string> {
   });
 }
 
-async function runOneShot(
+function runOneShot(
   target: AgentTarget,
   rawPrompt: string,
   opts: AgentClientFlags & TranscriptFlags,
   surface: { json: boolean; headless: boolean },
-): Promise<boolean> {
-  // A one-shot run never starts the evolution pass it cannot finish; the daemon runs it (see AgentOrchestrator's exit contract).
-  if (target.mode === 'local') ensureLocalDaemonRunning();
-  // Diagnostics go to the turn log: in --json mode stderr is empty on success and holds only the error on failure.
-  installTurnDiagnostics();
+): Effect.Effect<boolean> {
+  return Effect.gen(function* () {
+    // A one-shot run never starts the evolution pass it cannot finish; the daemon runs it (see AgentOrchestrator's exit contract).
+    if (target.mode === 'local') ensureLocalDaemonRunning();
+    // Diagnostics go to the turn log: in --json mode stderr is empty on success and holds only the error on failure.
+    installTurnDiagnostics();
 
-  const client = await createAgentClient(
-    target,
-    { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...transcriptOptions(opts) },
-    'one-shot',
-  );
+    const client = yield* Effect.promise(() => createAgentClient(
+      target,
+      { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...transcriptOptions(opts) },
+      'one-shot',
+    ));
 
-  // Resolved after the client exists: it reports the backend's inline cap.
-  const prompt = await resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes });
+    // Resolved after the client exists: it reports the backend's inline cap.
+    const prompt = yield* Effect.promise(() => resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes }));
 
-  for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
+    for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
-  let failed = false;
-  const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;
+    let failed = false;
+    const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;
 
-  const unsubscribe = client.subscribe((event) => {
-    if (event.type === 'error') failed = true;
-    render(event);
+    const unsubscribe = client.subscribe((event) => {
+      if (event.type === 'error') failed = true;
+      render(event);
+    });
+
+    function startConsentWatch(): ConsentWatcher | null {
+      const consents = client.consents;
+
+      if (!consents) return null;
+
+      if (surface.headless) {
+        return watchHeadlessConsents(consents, client.agentName, { json: surface.json, onDenied: () => { failed = true; } });
+      }
+
+      if (surface.json) return null;
+
+      return watchTerminalConsents(consents, client.agentName, askLineOnce);
+    }
+
+    const consentWatch = startConsentWatch();
+
+    yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(() => client.connect());
+
+      const result = yield* Effect.promise(() => client.send(
+        prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text,
+        { cwd: process.cwd() },
+      ));
+
+      if (result.landed === 'turn' && result.hadError) failed = true;
+      // A detached tool's wake turn or the completion gate's confirming turn may follow; drain while the subscription is live.
+      yield* Effect.promise(async () => client.settleBackgroundWork?.());
+    }), (cause) => Effect.sync(() => {
+      const err = Cause.squash(cause);
+      const alreadyReported = failed;
+      failed = true;
+
+      if (!alreadyReported) {
+        if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', message: describeProviderError({ cause: err }) })}\n`);
+        else printFailure({ cause: err });
+      }
+    })), Effect.promise(async () => {
+      consentWatch?.stop();
+      unsubscribe();
+      await client.close();
+    }));
+
+    return failed;
   });
-
-  function startConsentWatch(): ConsentWatcher | null {
-    const consents = client.consents;
-
-    if (!consents) return null;
-
-    if (surface.headless) {
-      return watchHeadlessConsents(consents, client.agentName, { json: surface.json, onDenied: () => { failed = true; } });
-    }
-
-    if (surface.json) return null;
-
-    return watchTerminalConsents(consents, client.agentName, askLineOnce);
-  }
-
-  const consentWatch = startConsentWatch();
-
-  try {
-    await client.connect();
-
-    const result = await client.send(
-      prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text,
-      { cwd: process.cwd() },
-    );
-
-    if (result.landed === 'turn' && result.hadError) failed = true;
-    // A detached tool's wake turn or the completion gate's confirming turn may follow; drain while the subscription is live.
-    await client.settleBackgroundWork?.();
-  } catch (err) {
-    const alreadyReported = failed;
-    failed = true;
-
-    if (!alreadyReported) {
-      if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', message: describeProviderError({ cause: err }) })}\n`);
-      else printFailure({ cause: err });
-    }
-  } finally {
-    consentWatch?.stop();
-    unsubscribe();
-    await client.close();
-  }
-
-  return failed;
 }
 
 function transcriptOptions(opts: TranscriptFlags): CliSessionOptions {
@@ -242,291 +247,313 @@ async function modelRpcCommand(cmd: JsonObject, client: AgentClient): Promise<Js
   return decodeJsonValue({ value: spec ? await client.setModel(spec) : { spec: await client.getModelSpec() } });
 }
 
-async function respondToRpcCommand(
+function respondToRpcCommand(
   cmd: JsonObject,
   client: AgentClient,
   output: (input: { value: unknown }) => void,
-  run: () => Promise<JsonValue>,
-): Promise<void> {
-  try {
-    const data = await (cmd.type === 'model' ? modelRpcCommand(cmd, client) : run());
+  run: () => Effect.Effect<JsonValue>,
+): Effect.Effect<void> {
+  return Effect.catchCause(Effect.gen(function* () {
+    const data = yield* (cmd.type === 'model' ? Effect.promise(() => modelRpcCommand(cmd, client)) : run());
     output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: true, data } });
-  } catch (err) {
-    output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: false, error: renderThrownChain({ cause: err }) } });
-  }
+  }), (failed) => Effect.sync(() => {
+    output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: false, error: renderThrownChain({ cause: Cause.squash(failed) }) } });
+  }));
 }
 
-async function runRpc(
+function runRpc(
   target: AgentTarget,
   opts: AgentClientFlags & TranscriptFlags,
-): Promise<void> {
-  const output = (input: { value: unknown }) => process.stdout.write(`${JSON.stringify(decodeJsonValue(input))}\n`);
-  const clientOpts = { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...transcriptOptions(opts) };
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const output = (input: { value: unknown }) => process.stdout.write(`${JSON.stringify(decodeJsonValue(input))}\n`);
+    const clientOpts = { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...transcriptOptions(opts) };
 
-  if (target.mode === 'cloud') {
-    const auth = requireAuthConfig();
-    const client = await createAgentClient(target, clientOpts);
-    output({ value: { type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'cloud', cwd: process.cwd() } });
-    const unsubscribe = client.subscribe((event) => output({ value: { type: 'event', event } }));
-    const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+    if (target.mode === 'cloud') {
+      const auth = requireAuthConfig();
+      const client = yield* Effect.promise(() => createAgentClient(target, clientOpts));
+      output({ value: { type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'cloud', cwd: process.cwd() } });
+      const unsubscribe = client.subscribe((event) => output({ value: { type: 'event', event } }));
+      const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })[Symbol.asyncIterator]();
 
-    try {
-      for await (const line of rl) {
-        if (!line.trim()) continue;
-        const cmd = parseRpc(line);
+      yield* Effect.ensuring(Effect.gen(function* () {
+        for (;;) {
+          const next = yield* Effect.promise(() => lines.next());
 
-        if (Result.isFailure(cmd)) { output({ value: { type: 'response', success: false, error: cmd.failure } }); continue; }
+          if (next.done === true) break;
+          const line = next.value;
 
-        const command = cmd.success;
+          if (!line.trim()) continue;
+          const cmd = parseRpc(line);
 
-        if (command.type === 'exit' || command.type === 'shutdown') break;
+          if (Result.isFailure(cmd)) { output({ value: { type: 'response', success: false, error: cmd.failure } }); continue; }
 
-        if (command.type !== 'prompt') {
-          await respondToRpcCommand(command, client, output, () => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, command));
-          continue;
+          const command = cmd.success;
+
+          if (command.type === 'exit' || command.type === 'shutdown') break;
+
+          if (command.type !== 'prompt') {
+            yield* respondToRpcCommand(command, client, output, () => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, command));
+            continue;
+          }
+
+          const message = stringField(command, 'message') ?? '';
+
+          if (!message) {
+            output({ value: { id: command.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
+            continue;
+          }
+
+          output({ value: { type: 'turn_start', id: command.id } });
+          const result = yield* Effect.promise(() => client.send(message, { cwd: process.cwd() }));
+          const turn = result.landed === 'turn' ? result : { text: '', steps: 0 };
+          output({ value: { type: 'message_end', role: 'assistant', text: turn.text } });
+          output({ value: { id: command.id, type: 'response', command: 'prompt', success: true } });
+          output({ value: { type: 'turn_end', steps: turn.steps } });
         }
+      }), Effect.promise(async () => {
+        // As `for await` does on leaving early, the reader's return closes the interface.
+        await lines.return?.();
+        unsubscribe();
+        await client.close();
+      }));
 
-        const message = stringField(command, 'message') ?? '';
+      return;
+    }
 
-        if (!message) {
-          output({ value: { id: command.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
-          continue;
+    ensureLocalDaemonRunning();
+    const client = yield* Effect.promise(() => createAgentClient(target, clientOpts));
+    client.subscribe((event) => output({ value: { type: 'event', event } }));
+    output({ value: { type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'local', cwd: process.cwd() } });
+    // Client-owned MCP connects on the first prompt; the daemon owns orphaned-job recovery.
+    let connected = false;
+
+    const ensureConnected = Effect.suspend(() => {
+      if (connected) return Effect.void;
+      connected = true;
+
+      return Effect.promise(() => client.connect());
+    });
+
+    yield* Effect.ensuring(Effect.gen(function* () {
+      const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })[Symbol.asyncIterator]();
+
+      yield* Effect.ensuring(Effect.gen(function* () {
+        for (;;) {
+          const next = yield* Effect.promise(() => lines.next());
+
+          if (next.done === true) break;
+          const line = next.value;
+
+          if (!line.trim()) continue;
+          const cmd = parseRpc(line);
+
+          if (Result.isFailure(cmd)) { output({ value: { type: 'response', success: false, error: cmd.failure } }); continue; }
+
+          const command = cmd.success;
+
+          if (command.type === 'exit' || command.type === 'shutdown') break;
+
+          if (command.type !== 'prompt') {
+            yield* respondToRpcCommand(command, client, output, () => runLocalRpcCommand(target.localName, command, client));
+            continue;
+          }
+
+          const message = stringField(command, 'message') ?? '';
+
+          if (!message) {
+            output({ value: { id: command.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
+            continue;
+          }
+
+          yield* ensureConnected;
+          yield* Effect.promise(() => client.send(message, { cwd: process.cwd() }));
+          output({ value: { id: command.id, type: 'response', command: 'prompt', success: true } });
         }
+      }), Effect.promise(async () => lines.return?.()));
+    }), Effect.catchCause(Effect.promise(() => client.close()), noting('closing the workspace client')));
+  });
+}
 
-        output({ value: { type: 'turn_start', id: command.id } });
-        const result = await client.send(message, { cwd: process.cwd() });
-        const turn = result.landed === 'turn' ? result : { text: '', steps: 0 };
-        output({ value: { type: 'message_end', role: 'assistant', text: turn.text } });
-        output({ value: { id: command.id, type: 'response', command: 'prompt', success: true } });
-        output({ value: { type: 'turn_end', steps: turn.steps } });
-      }
-    } finally {
-      unsubscribe();
-      await client.close();
-    }
-
-    return;
-  }
-
-  ensureLocalDaemonRunning();
-  const client = await createAgentClient(target, clientOpts);
-  client.subscribe((event) => output({ value: { type: 'event', event } }));
-  output({ value: { type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'local', cwd: process.cwd() } });
-  // Client-owned MCP connects on the first prompt; the daemon owns orphaned-job recovery.
-  let connected = false;
-
-  const ensureConnected = async () => {
-    if (connected) return;
-    connected = true;
-    await client.connect();
-  };
-
-  try {
-    const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      const cmd = parseRpc(line);
-
-      if (Result.isFailure(cmd)) { output({ value: { type: 'response', success: false, error: cmd.failure } }); continue; }
-
-      const command = cmd.success;
-
-      if (command.type === 'exit' || command.type === 'shutdown') break;
-
-      if (command.type !== 'prompt') {
-        await respondToRpcCommand(command, client, output, () => runLocalRpcCommand(target.localName, command, client));
-        continue;
-      }
-
-      const message = stringField(command, 'message') ?? '';
-
-      if (!message) {
-        output({ value: { id: command.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
-        continue;
-      }
-
-      await ensureConnected();
-      await client.send(message, { cwd: process.cwd() });
-      output({ value: { id: command.id, type: 'response', command: 'prompt', success: true } });
-    }
-  } finally {
-    try {
-      await client.close();
-    } catch (error) {
-      process.stderr.write(`note: closing the workspace client failed: ${renderThrownChain({ cause: error })}\n`);
-    }
-  }
+/** A cleanup's failure, written as a stderr note: the command's own answer stands. */
+function noting(doing: string): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
+  return (failed) => Effect.sync(() => {
+    process.stderr.write(`note: ${doing} failed: ${renderThrownChain({ cause: Cause.squash(failed) })}\n`);
+  });
 }
 
 const commandType = (cmd: JsonObject): string => stringField(cmd, 'type') ?? '';
 
-async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
-  const rpc = async (method: AgentRpcMethod, args: JsonValue[] = []): Promise<JsonValue> =>
-    callAgentRpc({ origin, token, name, method, schema: JsonValueSchema, args });
+function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Effect.Effect<JsonValue> {
+  const rpc = (method: AgentRpcMethod, args: JsonValue[] = []): Effect.Effect<JsonValue> =>
+    Effect.promise(() => callAgentRpc({ origin, token, name, method, schema: JsonValueSchema, args }));
 
-  const type = commandType(cmd);
+  return Effect.gen(function* () {
+    const type = commandType(cmd);
 
-  switch (type) {
-    case 'get_state':
-    case 'state':
-      return rpc('getWorkspaceSnapshot');
-    case 'status':
-      return rpc('getAgentStatus');
-    case 'tools':
-      return rpc('getToolDescriptions');
-    case 'triggers':
-      return rpc('listTriggers');
-    case 'jobs':
-      return rpc('listBackgroundJobs', [numberField(cmd, 'limit') ?? 20]);
-    case 'memory': {
-      const query = stringField(cmd, 'query');
+    switch (type) {
+      case 'get_state':
+      case 'state':
+        return yield* rpc('getWorkspaceSnapshot');
+      case 'status':
+        return yield* rpc('getAgentStatus');
+      case 'tools':
+        return yield* rpc('getToolDescriptions');
+      case 'triggers':
+        return yield* rpc('listTriggers');
+      case 'jobs':
+        return yield* rpc('listBackgroundJobs', [numberField(cmd, 'limit') ?? 20]);
+      case 'memory': {
+        const query = stringField(cmd, 'query');
 
-      return query
-        ? rpc('searchMemoryHybrid', [query, numberField(cmd, 'limit') ?? 10])
-        : { content: await rpc('getMemoryContent') };
-    }
-
-    case 'events':
-      {
-        const filter: JsonObject = { limit: numberField(cmd, 'limit') ?? 50 };
-        const variant = stringField(cmd, 'variant');
-        const since = numberField(cmd, 'since');
-
-        if (variant) filter.variant = variant;
-
-        if (since !== undefined) filter.since = since;
-
-        return rpc('listRecentEvents', [filter]);
+        return query
+          ? yield* rpc('searchMemoryHybrid', [query, numberField(cmd, 'limit') ?? 10])
+          : { content: yield* rpc('getMemoryContent') };
       }
 
-    case 'timeline':
-      return rpc('getRunTimeline', [{ limit: numberField(cmd, 'limit') ?? 100 }]);
-    case 'swarm': {
-      const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
+      case 'events':
+        {
+          const filter: JsonObject = { limit: numberField(cmd, 'limit') ?? 50 };
+          const variant = stringField(cmd, 'variant');
+          const since = numberField(cmd, 'since');
 
-      return nodeId ? rpc('getMctsNodeDetail', [nodeId]) : rpc('getMctsTree');
+          if (variant) filter.variant = variant;
+
+          if (since !== undefined) filter.since = since;
+
+          return yield* rpc('listRecentEvents', [filter]);
+        }
+
+      case 'timeline':
+        return yield* rpc('getRunTimeline', [{ limit: numberField(cmd, 'limit') ?? 100 }]);
+      case 'swarm': {
+        const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
+
+        return nodeId ? yield* rpc('getMctsNodeDetail', [nodeId]) : yield* rpc('getMctsTree');
+      }
+
+      case 'heads':
+        return yield* rpc('getHeadRuns', [numberField(cmd, 'limit') ?? 20]);
+      case 'gepa': {
+        const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
+
+        return runId ? yield* rpc('getGepaRun', [runId]) : yield* rpc('getGepaRuns', [numberField(cmd, 'limit') ?? 20]);
+      }
+
+      case 'executors':
+        return yield* rpc('getExecutors');
+      case 'exec': {
+        const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
+        const command = stringField(cmd, 'command');
+
+        if (!executor) return yield* Effect.die(new Error('executor required'));
+
+        if (!command) return yield* Effect.die(new Error('command required'));
+
+        return yield* rpc('executeInExecutor', [executor, command]);
+      }
+
+      case 'stop':
+        return yield* rpc('cancelCurrentWork');
+      case 'webhook': {
+        const label = stringField(cmd, 'label');
+
+        if (!label) return yield* Effect.die(new Error('label required'));
+
+        const input: CloudWebhookTriggerInput = {
+          label,
+          auth_mode: normalizeWebhookAuthMode(stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode')),
+        };
+
+        const secret = stringField(cmd, 'secret');
+        const contentType = stringField(cmd, 'contentType');
+        const rateLimit = numberField(cmd, 'rateLimit');
+
+        if (secret) input.secret = secret;
+
+        if (contentType) input.accepted_content_type = contentType;
+
+        if (rateLimit) input.rate_limit_per_min = rateLimit;
+
+        return decodeJsonValue({ value: yield* Effect.promise(() => createCloudWebhookTrigger(origin, token, name, input)) });
+      }
+
+      default:
+        return yield* Effect.die(new Error('Unsupported command'));
     }
-
-    case 'heads':
-      return rpc('getHeadRuns', [numberField(cmd, 'limit') ?? 20]);
-    case 'gepa': {
-      const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
-
-      return runId ? rpc('getGepaRun', [runId]) : rpc('getGepaRuns', [numberField(cmd, 'limit') ?? 20]);
-    }
-
-    case 'executors':
-      return rpc('getExecutors');
-    case 'exec': {
-      const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
-      const command = stringField(cmd, 'command');
-
-      if (!executor) throw new Error('executor required');
-
-      if (!command) throw new Error('command required');
-
-      return rpc('executeInExecutor', [executor, command]);
-    }
-
-    case 'stop':
-      return rpc('cancelCurrentWork');
-    case 'webhook': {
-      const label = stringField(cmd, 'label');
-
-      if (!label) throw new Error('label required');
-
-      const input: CloudWebhookTriggerInput = {
-        label,
-        auth_mode: normalizeWebhookAuthMode(stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode')),
-      };
-
-      const secret = stringField(cmd, 'secret');
-      const contentType = stringField(cmd, 'contentType');
-      const rateLimit = numberField(cmd, 'rateLimit');
-
-      if (secret) input.secret = secret;
-
-      if (contentType) input.accepted_content_type = contentType;
-
-      if (rateLimit) input.rate_limit_per_min = rateLimit;
-
-      return decodeJsonValue({ value: await createCloudWebhookTrigger(origin, token, name, input) });
-    }
-
-    default:
-      throw new Error('Unsupported command');
-  }
+  });
 }
 
-async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentClient): Promise<JsonValue> {
-  const type = commandType(cmd);
+function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentClient): Effect.Effect<JsonValue> {
+  return Effect.gen(function* () {
+    const type = commandType(cmd);
 
-  switch (type) {
-    case 'get_state':
-    case 'state':
-      return decodeJsonValue({ value: {
-        ...getLocalAgentState(name),
-        sessionId: client.cliSession.id,
-        tools: getLocalToolSurface(name),
-        model: await client.getModelSpec(),
-      } });
-    case 'status':
-      return decodeJsonValue({ value: getLocalAgentState(name) });
-    case 'tools':
-      return decodeJsonValue({ value: await client.describeTools() });
-    case 'triggers':
-      return decodeJsonValue({ value: listLocalTriggers(name) });
-    case 'jobs':
-      return decodeJsonValue({ value: await client.listJobs(numberField(cmd, 'limit') ?? 20) });
-    case 'memory': {
-      const query = stringField(cmd, 'query');
+    switch (type) {
+      case 'get_state':
+      case 'state':
+        return decodeJsonValue({ value: {
+          ...getLocalAgentState(name),
+          sessionId: client.cliSession.id,
+          tools: getLocalToolSurface(name),
+          model: yield* Effect.promise(() => client.getModelSpec()),
+        } });
+      case 'status':
+        return decodeJsonValue({ value: getLocalAgentState(name) });
+      case 'tools':
+        return decodeJsonValue({ value: yield* Effect.promise(() => client.describeTools()) });
+      case 'triggers':
+        return decodeJsonValue({ value: listLocalTriggers(name) });
+      case 'jobs':
+        return decodeJsonValue({ value: yield* Effect.promise(() => client.listJobs(numberField(cmd, 'limit') ?? 20)) });
+      case 'memory': {
+        const query = stringField(cmd, 'query');
 
-      return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: readLocalMemory(name) } });
+        return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: readLocalMemory(name) } });
+      }
+
+      case 'events':
+        return decodeJsonValue({ value: listLocalEvents(name, {
+          variant: stringField(cmd, 'variant'),
+          since: numberField(cmd, 'since'),
+          limit: numberField(cmd, 'limit') ?? 50,
+        }) });
+      case 'timeline':
+        return listLocalTimeline(name, numberField(cmd, 'limit') ?? 100);
+      case 'swarm': {
+        const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
+
+        return decodeJsonValue({ value: nodeId ? getLocalMctsNode(name, nodeId) : listLocalMcts(name) });
+      }
+
+      case 'heads':
+        return decodeJsonValue({ value: listLocalHeads(name, numberField(cmd, 'limit') ?? 20) });
+      case 'gepa': {
+        const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
+
+        return decodeJsonValue({ value: runId ? getLocalGepaRun(name, runId) : listLocalGepaRuns(name, numberField(cmd, 'limit') ?? 20) });
+      }
+
+      case 'executors':
+        return decodeJsonValue({ value: listLocalExecutors() });
+      case 'exec': {
+        const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
+        const command = stringField(cmd, 'command');
+
+        if (!executor) return yield* Effect.die(new Error('executor required'));
+
+        if (!command) return yield* Effect.die(new Error('command required'));
+
+        return decodeJsonValue({ value: yield* Effect.promise(() => executeLocalExecutor(name, executor, command)) });
+      }
+
+      case 'stop':
+        client.stop();
+
+        return { interrupted: true, cancelledBackgroundJobs: yield* Effect.promise(() => markLocalBackgroundJobsCancelled(name)) };
+      default:
+        return yield* Effect.die(new Error('Unsupported command'));
     }
-
-    case 'events':
-      return decodeJsonValue({ value: listLocalEvents(name, {
-        variant: stringField(cmd, 'variant'),
-        since: numberField(cmd, 'since'),
-        limit: numberField(cmd, 'limit') ?? 50,
-      }) });
-    case 'timeline':
-      return listLocalTimeline(name, numberField(cmd, 'limit') ?? 100);
-    case 'swarm': {
-      const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
-
-      return decodeJsonValue({ value: nodeId ? getLocalMctsNode(name, nodeId) : listLocalMcts(name) });
-    }
-
-    case 'heads':
-      return decodeJsonValue({ value: listLocalHeads(name, numberField(cmd, 'limit') ?? 20) });
-    case 'gepa': {
-      const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
-
-      return decodeJsonValue({ value: runId ? getLocalGepaRun(name, runId) : listLocalGepaRuns(name, numberField(cmd, 'limit') ?? 20) });
-    }
-
-    case 'executors':
-      return decodeJsonValue({ value: listLocalExecutors() });
-    case 'exec': {
-      const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
-      const command = stringField(cmd, 'command');
-
-      if (!executor) throw new Error('executor required');
-
-      if (!command) throw new Error('command required');
-
-      return decodeJsonValue({ value: await executeLocalExecutor(name, executor, command) });
-    }
-
-    case 'stop':
-      client.stop();
-
-      return { interrupted: true, cancelledBackgroundJobs: await markLocalBackgroundJobsCancelled(name) };
-    default:
-      throw new Error('Unsupported command');
-  }
+  });
 }
 
 function renderRunEvent(event: AgentClientEvent): void {
@@ -649,53 +676,53 @@ async function readStdin(): Promise<string> {
 }
 
 /** Any byte within the grace window makes the pipe real: wait for EOF and keep every byte. */
-async function readOptionalStdin(): Promise<string> {
-  const reader = Bun.stdin.stream().getReader();
+function readOptionalStdin(): Effect.Effect<string> {
+  return Effect.gen(function* () {
+    const reader = Bun.stdin.stream().getReader();
 
-  const first = await Promise.race([
-    reader.read(),
-    new Promise<'idle'>((resolve) => setTimeout(() => resolve('idle'), OPTIONAL_STDIN_GRACE_MS)),
-  ]);
+    const first = yield* Effect.promise(() => Promise.race([
+      reader.read(),
+      new Promise<'idle'>((resolve) => setTimeout(() => resolve('idle'), OPTIONAL_STDIN_GRACE_MS)),
+    ]));
 
-  if (first === 'idle') {
-    try {
-      await reader.cancel();
-    } catch (cause) {
-      process.stderr.write(`note: releasing idle stdin failed: ${renderThrownChain({ cause })}\n`);
+    if (first === 'idle') {
+      yield* Effect.catchCause(Effect.promise(() => reader.cancel()), noting('releasing idle stdin'));
+
+      process.stderr.write(
+        `note: stdin was open but idle for ${OPTIONAL_STDIN_GRACE_MS}ms and was ignored; ` +
+        'pipe data promptly or close it (< /dev/null)\n',
+      );
+
+      return '';
     }
 
-    process.stderr.write(
-      `note: stdin was open but idle for ${OPTIONAL_STDIN_GRACE_MS}ms and was ignored; ` +
-      'pipe data promptly or close it (< /dev/null)\n',
-    );
+    const decoder = new TextDecoder();
+    let text = first.done ? '' : decoder.decode(first.value, { stream: true });
 
-    return '';
-  }
+    while (true) {
+      const chunk = yield* Effect.promise(() => reader.read());
 
-  const decoder = new TextDecoder();
-  let text = first.done ? '' : decoder.decode(first.value, { stream: true });
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
 
-  while (true) {
-    const chunk = await reader.read();
-
-    if (chunk.done) break;
-    text += decoder.decode(chunk.value, { stream: true });
-  }
-
-  return text + decoder.decode();
+    return text + decoder.decode();
+  });
 }
 
 /** With no argv prompt, stdin is the prompt; otherwise it is optional context, since CI runners inherit open idle pipes. */
-async function buildPrompt(parts: string[]): Promise<string> {
-  const chunks = [...parts];
-  const argvPrompt = chunks.join(' ').trim();
-  let stdin = '';
+function buildPrompt(parts: string[]): Effect.Effect<string> {
+  return Effect.gen(function* () {
+    const chunks = [...parts];
+    const argvPrompt = chunks.join(' ').trim();
+    let stdin = '';
 
-  if (!process.stdin.isTTY) {
-    stdin = argvPrompt ? await readOptionalStdin() : await readStdin();
-  }
+    if (!process.stdin.isTTY) {
+      stdin = argvPrompt ? yield* readOptionalStdin() : yield* Effect.promise(() => readStdin());
+    }
 
-  if (stdin.trim()) chunks.push(`<stdin>\n${stdin.trim()}\n</stdin>`);
+    if (stdin.trim()) chunks.push(`<stdin>\n${stdin.trim()}\n</stdin>`);
 
-  return chunks.join(' ').trim();
+    return chunks.join(' ').trim();
+  });
 }
