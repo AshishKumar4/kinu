@@ -45,6 +45,8 @@ export const AGENT_CONFIG_KEYS = {
   sleepTimeCompute: 'sleep_time_compute',
   /** 'true' runs waiting edits as live trials on the main agent; off by default (docs/EVOLUTION-REDESIGN.md §5). */
   liveTrials: 'live_trials',
+  /** 'false' stops this agent learning from its turns: no ratings, struggles, lessons, proposals or trials. On by default. */
+  learning: 'learning',
   advisorMinSeverity: 'advisor_min_severity',
   /** 'true' enables the turn reviewer; off by default since it costs a model call per turn. */
   advisorEnabled: 'advisor_enabled',
@@ -116,6 +118,8 @@ export interface AgentConfigStore {
   setSleepTimeComputeEnabled(enabled: boolean): void;
   getLiveTrials(): boolean;
   setLiveTrials(enabled: boolean): void;
+  getLearning(): boolean;
+  setLearning(enabled: boolean): void;
   getAdvisorEnabled(): boolean;
   setAdvisorEnabled(enabled: boolean): void;
   /** Unset or unknown reads as `concern`. */
@@ -157,14 +161,14 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     void sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${value})
         ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value`;
 
-    if (key === AGENT_CONFIG_KEYS.liveTrials || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
+    if (key === AGENT_CONFIG_KEYS.liveTrials || key === AGENT_CONFIG_KEYS.learning || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
   };
 
   const remove = (key: string): void => {
     authorize();
     void sql`DELETE FROM actor_config WHERE actor_id = ${actorId} AND key = ${key}`;
 
-    if (key === AGENT_CONFIG_KEYS.liveTrials || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
+    if (key === AGENT_CONFIG_KEYS.liveTrials || key === AGENT_CONFIG_KEYS.learning || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
   };
 
   const setValid = (key: string, value: string, valid: boolean, what: string): Effect.Effect<void> =>
@@ -323,6 +327,8 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     getLiveTrials() { return get(AGENT_CONFIG_KEYS.liveTrials) === 'true'; },
     setLiveTrials(enabled) { set(AGENT_CONFIG_KEYS.liveTrials, String(enabled)); },
+    getLearning() { return get(AGENT_CONFIG_KEYS.learning) !== 'false'; },
+    setLearning(enabled) { set(AGENT_CONFIG_KEYS.learning, String(enabled)); },
     getAdvisorEnabled() { return get(AGENT_CONFIG_KEYS.advisorEnabled) === 'true'; },
     setAdvisorEnabled(enabled) { set(AGENT_CONFIG_KEYS.advisorEnabled, String(enabled)); },
     getAdvisorMinSeverity() {

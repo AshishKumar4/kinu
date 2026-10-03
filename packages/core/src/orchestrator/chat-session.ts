@@ -87,7 +87,7 @@ export type SessionEvent =
   | { type: 'turn-end'; turn: CompletedTurn }
   | { type: 'error'; message: string }
   | { type: 'evolution'; event: string; message: string }
-  // Kept apart from `evolution`: `kinu exec --no-auto-evolve` silences evolution while jobs may still settle.
+  // Kept apart from `evolution`: an agent with learning off says no evolution while its jobs may still settle.
   | { type: 'background'; event: string; message: string }
   | { type: 'broadcast'; event: BroadcastEvent }
   /** The durable head moved; surfaces redraw from the store. */

@@ -324,7 +324,8 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
     ...(interruptRecovery ? [four.model] : []),
   ]);
 
-  const a = new LocalAgentSession({ rt, db, model: modelA, noAutoEvolve: true, onEvent: (event) => eventsA.push(event) });
+  rt.actor.config.setLearning(false);
+  const a = new LocalAgentSession({ rt, db, model: modelA, onEvent: (event) => eventsA.push(event) });
   const norm = parityNormalizer();
 
   // 1. An idle send runs as a turn of its own.
@@ -364,7 +365,8 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
     await eventsA.until((frames) => turnEvents(frames, 4).some((event) => event.type === 'text-delta'));
     const recoveryEvents = new AwaitedList<SessionEvent>();
     const recovery = gatedTextModel('recovery paused');
-    new LocalAgentSession({ rt, db, model: recovery.model, noAutoEvolve: true, onEvent: (event) => recoveryEvents.push(event) });
+    rt.actor.config.setLearning(false);
+    new LocalAgentSession({ rt, db, model: recovery.model, onEvent: (event) => recoveryEvents.push(event) });
     await recoveryEvents.until((frames) => frames.some((event) => event.type === 'text-delta'));
   }
 
@@ -373,7 +375,8 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   const eventsB = new AwaitedList<SessionEvent>();
   const restartedPrompts: PromptMessage[][] = [];
   const modelB = sequencedModel([answeringModel('answer four again', restartedPrompts), answeringModel('answer five', restartedPrompts)]);
-  const b = new LocalAgentSession({ rt, db, model: modelB, noAutoEvolve: true, onEvent: (event) => eventsB.push(event) });
+  rt.actor.config.setLearning(false);
+  const b = new LocalAgentSession({ rt, db, model: modelB, onEvent: (event) => eventsB.push(event) });
   await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
   const landingFive = await b.send('five', { id: crypto.randomUUID() });
 

@@ -333,8 +333,9 @@ The internal corpus is a closed loop of our tasks and our checks.
 `bench/harbor/` is a [Harbor](https://github.com/laude-institute/harbor)
 adapter that runs Kinu inside somebody else's task containers, scored by
 somebody else's verifier, on DeepSWE and Terminal-Bench. `--ak evolve=true|false`
-is the experiment. It reaches `kinu exec --no-auto-evolve`, the same switch
-`agent` versus `agent-evolving` flips internally. It measures evolution
+is the experiment. It reaches `kinu exec --no-auto-evolve`, which turns the
+agent's `learning` setting off, the same switch `agent` versus
+`agent-evolving` flips internally. It measures evolution
 within a single task, not across tasks.
 
 ```bash

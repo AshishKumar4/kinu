@@ -67,6 +67,21 @@ describe('a struggling turn teaches one lesson about its tool', () => {
     expect(lessons()).toEqual([{ id: 'tl-t-1', revision: 1, text: LESSON, helpful: 0, harmful: 0, status: 'active' }]);
   });
 
+  test('the agent\'s learning setting, switched off, stops the next turn learning; switched on, it learns again', async () => {
+    const { rt, lessons, prompts, learn, evolution } = engine({ update: null, text: LESSON });
+
+    rt.actor.config.setLearning(false);
+    expect(evolution.recordsTurns).toBe(false);
+    await learn(turn('t-off', [REFUSED]));
+    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([]);
+    expect(prompts).toEqual([]);
+
+    rt.actor.config.setLearning(true);
+    await learn(turn('t-on', [REFUSED]));
+    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([{ turn_id: 't-on' }]);
+    expect(lessons()).toHaveLength(1);
+  });
+
   test('learning twice from one turn records, scores and asks once', async () => {
     const { lessons, prompts, learn } = engine({ update: null, text: LESSON });
 

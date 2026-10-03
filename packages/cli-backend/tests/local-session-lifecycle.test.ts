@@ -80,7 +80,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(events.items).toContainEqual({ type: 'broadcast', event: { type: 'pending_actions_changed' } });
     await session.end();
 
-    const reopened = new LocalAgentSession({ rt, db, model: fakeModel('noted'), noAutoEvolve: true, onEvent: (event) => events.push(event) });
+    rt.actor.config.setLearning(false);
+    const reopened = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: (event) => events.push(event) });
 
     try {
       expect(await reopened.listDeferredApprovals()).toEqual([parked, sandboxAction]);
@@ -109,7 +110,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const db = new Database(scratchPath('local-session-placed', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: project });
-    const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: () => {}, noAutoEvolve: true });
+    rt.actor.config.setLearning(false);
+    const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: () => {}, });
     const shell = present(rt.shell, 'the placed shell');
 
     try {
@@ -750,8 +752,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const events = new AwaitedList<SessionEvent>();
 
+    rt.actor.config.setLearning(false);
+
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('recovered event'), onEvent: (e) => events.push(e), noAutoEvolve: true,
+      rt, db, model: fakeModel('recovered event'), onEvent: (e) => events.push(e),
     });
 
     expect(hub(db).pending()).toEqual([]);
@@ -779,8 +783,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const nextEvents = new AwaitedList<SessionEvent>();
 
+    rt.actor.config.setLearning(false);
+
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('should not run'), onEvent: (e) => nextEvents.push(e), noAutoEvolve: true,
+      rt, db, model: fakeModel('should not run'), onEvent: (e) => nextEvents.push(e),
     });
 
     next.reclaimStrandedEventDeliveries();

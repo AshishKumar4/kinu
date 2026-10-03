@@ -17,8 +17,10 @@ describe('a crafted tool belongs to the workspace', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
-      rt, db, model: new TestLanguageModelV2(), noAutoEvolve: true, cwd: scratchDir('crafted-workspace-wide'), onEvent: () => {},
+      rt, db, model: new TestLanguageModelV2(), cwd: scratchDir('crafted-workspace-wide'), onEvent: () => {},
     });
 
     try {

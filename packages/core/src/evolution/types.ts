@@ -61,6 +61,7 @@ export type EvolutionListener = (event: EvolutionEvent) => void;
 
 /** Session-reflection cadence lives on AgentOrchestrator, not here. */
 export interface EvolutionConfig {
+  /** False for a host whose engine never learns (a facet); elsewhere the agent's `learning` setting decides. */
   enabled: boolean;
   /** Commit a group of writes as one durable unit. The identity default is only atomic
      *  inside a Durable Object; other backends must supply a real transaction. */

@@ -60,7 +60,9 @@ describe('createLocalModelResolver', () => {
 
     try {
       for (const withSession of [false, true]) {
-        if (withSession) session = new LocalAgentSession({ rt, db, modelResolver: createLocalModelResolver({ llm }), noAutoEvolve: true, onEvent: () => {} });
+        rt.actor.config.setLearning(false);
+
+        if (withSession) session = new LocalAgentSession({ rt, db, modelResolver: createLocalModelResolver({ llm }), onEvent: () => {} });
 
         for (const retries of [0, 1]) {
           requests = 0;

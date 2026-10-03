@@ -16,7 +16,7 @@ is two claims and they need separating:
   additionally controls the *within-run* case, so a stateful rollout can be
   re-run with the workspace reset at every instance boundary.
 * **Self-evolution** — ``auto_evolve`` maps to ``kinu exec
-  --no-auto-evolve``, which turns off turn- and session-level evolution while
+  --no-auto-evolve``, which turns the agent's learning setting off (turn- and session-level evolution) while
   leaving durable state intact. Persistent state without evolution is the
   control that says how much of any gain is evolution rather than memory.
 
