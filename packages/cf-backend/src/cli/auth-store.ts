@@ -1,7 +1,7 @@
 // CLI device-authorization flow. Every record is short-lived and lives in KV under its own expiry
 // (no sweep); the durable CLI token is minted and stored in the user's own DO.
 
-import { Effect, Result } from 'effect';
+import { Cause, Effect, Result } from 'effect';
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from '../user/user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -191,7 +191,7 @@ export function startCliAuth<Id>(env: CliAuthEnv<Id>, request: CliAuthRequest): 
   return settle(Effect.gen(function* () {
     const { origin, approvalOrigin, deviceName, clientKey } = request;
     const now = Date.now();
-    yield* Effect.promise(async () => rateLimit(env.AUTH_KV, `start:${cleanRateKey(clientKey)}`, 20, now));
+    yield* rateLimit(env.AUTH_KV, `start:${cleanRateKey(clientKey)}`, 20, now);
 
     const expiresAt = now + AUTH_TTL_MS;
 
@@ -249,61 +249,68 @@ export async function inspectCliAuth(kv: KvStore, userCode: string): Promise<Cli
   };
 }
 
-export async function pollCliAuth<Id>(
+export function pollCliAuth<Id>(
   env: CliAuthEnv<Id>, deviceToken: string, clientKey?: string,
 ): Promise<CliAuthPollResult> {
-  const now = Date.now();
-  await rateLimit(env.AUTH_KV, `poll-ip:${cleanRateKey(clientKey)}`, 300, now);
+  return settle(Effect.gen(function* () {
+    const now = Date.now();
+    yield* rateLimit(env.AUTH_KV, `poll-ip:${cleanRateKey(clientKey)}`, 300, now);
 
-  const hash = await sha256Hex(deviceToken);
-  await rateLimit(env.AUTH_KV, `poll-device:${hash}`, 180, now);
+    const hash = sha256Hex(deviceToken);
+    yield* rateLimit(env.AUTH_KV, `poll-device:${hash}`, 180, now);
 
-  const record = await readKvJson(env.AUTH_KV, deviceKey(hash), CliAuthRecordSchema);
+    const record = yield* Effect.promise(() => readKvJson(env.AUTH_KV, deviceKey(hash), CliAuthRecordSchema));
 
-  if (!record) return { status: 'expired', message: 'Unknown CLI auth request.' };
+    if (!record) return { status: 'expired', message: 'Unknown CLI auth request.' };
 
-  const status = currentStatus(record, now);
+    const status = currentStatus(record, now);
 
-  if (status === 'expired') return { status: 'expired', message: 'CLI auth request expired.' };
+    if (status === 'expired') return { status: 'expired', message: 'CLI auth request expired.' };
 
-  if (status === 'pending') return { status: 'pending' };
+    if (status === 'pending') return { status: 'pending' };
 
-  if (status === 'consumed') {
-    return { status: 'expired', message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.' };
-  }
+    if (status === 'consumed') {
+      return { status: 'expired', message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.' };
+    }
 
-  if (!record.userId || !record.userEmail) {
-    return { status: 'expired', message: 'CLI auth approval is incomplete. Run kinu auth again.' };
-  }
+    if (!record.userId || !record.userEmail) {
+      return { status: 'expired', message: 'CLI auth approval is incomplete. Run kinu auth again.' };
+    }
 
-  // KV is the transport, not the gate: no compare-and-swap and per-colo cached reads, so two polls can
-  // both read `approved`. The one-time claim is the DO mint's, keyed by the device hash.
-  await writeKvJson(
-    env.AUTH_KV, deviceKey(hash), { ...record, status: 'consumed' }, record.expiresAt + RETENTION_MS - now,
-  );
+    // KV is the transport, not the gate: no compare-and-swap and per-colo cached reads, so two polls can
+    // both read `approved`. The one-time claim is the DO mint's, keyed by the device hash.
+    yield* Effect.promise(() => writeKvJson(
+      env.AUTH_KV, deviceKey(hash), { ...record, status: 'consumed' }, record.expiresAt + RETENTION_MS - now,
+    ));
 
-  const userDO = env.UserDO.get(env.UserDO.idFromName(record.userId));
-  let minted: { token: string; expiresAt: number };
+    const userDO = env.UserDO.get(env.UserDO.idFromName(record.userId));
+    const userId = record.userId;
 
-  try {
-    minted = await userDO.mintCliToken(await ownerCaller(env), record.userId, hash, record.deviceName);
-  } catch (cause) {
-    // Error classes do not survive the RPC boundary, so the message is the contract.
-    if (!AUTHORIZATION_SPENT.test(renderThrownChain({ cause }))) throw cause;
+    const minted = yield* Effect.catchCause(
+      Effect.promise(async (): Promise<{ token: string; expiresAt: number }> => userDO.mintCliToken(await ownerCaller(env), userId, hash, record.deviceName)),
+      (failed) => {
+        const cause = Cause.squash(failed);
+
+        // Error classes do not survive the RPC boundary, so the message is the contract.
+        return AUTHORIZATION_SPENT.test(renderThrownChain({ cause })) ? Effect.succeed(null) : Effect.die(cause);
+      },
+    );
+
+    if (minted === null) {
+      return {
+        status: 'expired',
+        message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.',
+      };
+    }
 
     return {
-      status: 'expired',
-      message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.',
+      status: 'approved',
+      origin: record.origin,
+      token: minted.token,
+      expiresAt: new Date(minted.expiresAt).toISOString(),
+      user: { id: record.userId, email: record.userEmail },
     };
-  }
-
-  return {
-    status: 'approved',
-    origin: record.origin,
-    token: minted.token,
-    expiresAt: new Date(minted.expiresAt).toISOString(),
-    user: { id: record.userId, email: record.userEmail },
-  };
+  }));
 }
 
 export function approveCliAuth<Id>(
@@ -314,7 +321,7 @@ export function approveCliAuth<Id>(
 ): Promise<{ status: 'approved'; user: { id: string; email: string } }> {
   return settle(Effect.gen(function* () {
     const now = Date.now();
-    yield* Effect.promise(async () => rateLimit(env.AUTH_KV, `approve:${identity.userId}:${cleanRateKey(clientKey)}`, 30, now));
+    yield* rateLimit(env.AUTH_KV, `approve:${identity.userId}:${cleanRateKey(clientKey)}`, 30, now);
 
     const found = yield* Effect.promise(async () => readByUserCode(env.AUTH_KV, userCode));
 
@@ -354,19 +361,21 @@ export function approveCliAuth<Id>(
 }
 
 /** Abuse ceiling per client key and window; per-region, not exact, since KV reads are colo-cached. */
-async function rateLimit(kv: KvStore, key: string, limit: number, now: number): Promise<void> {
-  const bucketKey = `cli-auth-rate:${key}`;
-  const bucket = await readKvJson(kv, bucketKey, RateBucketSchema);
+function rateLimit(kv: KvStore, key: string, limit: number, now: number): Effect.Effect<void, RateLimitError> {
+  return Effect.gen(function* () {
+    const bucketKey = `cli-auth-rate:${key}`;
+    const bucket = yield* Effect.promise(() => readKvJson(kv, bucketKey, RateBucketSchema));
 
-  if (!bucket || bucket.resetAt <= now) {
-    const resetAt = now + RATE_WINDOW_MS;
-    await writeKvJson(kv, bucketKey, { count: 1, resetAt }, RATE_WINDOW_MS);
+    if (!bucket || bucket.resetAt <= now) {
+      const resetAt = now + RATE_WINDOW_MS;
+      yield* Effect.promise(() => writeKvJson(kv, bucketKey, { count: 1, resetAt }, RATE_WINDOW_MS));
 
-    return;
-  }
+      return;
+    }
 
-  if (bucket.count >= limit) throw new RateLimitError();
-  await writeKvJson(kv, bucketKey, { count: bucket.count + 1, resetAt: bucket.resetAt }, bucket.resetAt - now);
+    if (bucket.count >= limit) return yield* new RateLimitError();
+    yield* Effect.promise(() => writeKvJson(kv, bucketKey, { count: bucket.count + 1, resetAt: bucket.resetAt }, bucket.resetAt - now));
+  });
 }
 
 async function readByUserCode(

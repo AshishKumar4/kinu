@@ -19,7 +19,8 @@ import {
   isWorkMode, INTERRUPTED_TURN,
   type ChatTransport, type ObservedCall, type PromptFile, type SendLanding, type SessionEvent, type WorkMode,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
 export type ChatSocket = Pick<Connection, 'id'>;
 
@@ -216,100 +217,107 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     sendIfOpen(connection, frame({ body: '', done: false, replayComplete: true }));
   }
 
-  async onMessage(connection: Connection, raw: string): Promise<boolean> {
+  onMessage(connection: Connection, raw: string): Promise<boolean> {
     const event = parseProtocolMessage(raw);
 
-    if (event === null) return false;
-    await this.handle(connection, event);
+    if (event === null) return Promise.resolve(false);
 
-    return true;
+    return settle(Effect.as(this.handle(connection, event), true));
   }
 
-  private async handle(connection: Connection, event: ChatProtocolEvent): Promise<void> {
-    switch (event.type) {
-      case 'stream-resume-request':
-        // `idle` is load-bearing: the hook keeps waiting on a probe answered with anything weaker.
-        if (!this.announce(connection, event.probeId)) {
-          sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId: event.probeId }));
+  private handle(connection: Connection, event: ChatProtocolEvent): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      switch (event.type) {
+        case 'stream-resume-request':
+          // `idle` is load-bearing: the hook keeps waiting on a probe answered with anything weaker.
+          if (!this.announce(connection, event.probeId)) {
+            sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId: event.probeId }));
+          }
+
+          return;
+
+        case 'stream-resume-ack':
+          this.replay(connection, event.id);
+
+          return;
+
+        case 'chat-request': {
+          if (event.init.method === 'POST') yield* this.admitChatRequest(event.id, event.init.body);
+
+          return;
         }
 
-        return;
+        case 'cancel':
+          this.wire.interrupt();
 
-      case 'stream-resume-ack':
-        this.replay(connection, event.id);
+          return;
 
-        return;
+        case 'clear': {
+          this.pendingResume.clear();
+          yield* Effect.promise(async () => this.wire.clear());
+          this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_CLEAR }), [connection.id]);
 
-      case 'chat-request': {
-        if (event.init.method === 'POST') await this.admitChatRequest(event.id, event.init.body);
+          return;
+        }
 
-        return;
+        case 'tool-result':
+        case 'tool-approval':
+        case 'messages':
+          diagnostics.event('chat.protocol_frame_ignored', { frame: event.type });
       }
-
-      case 'cancel':
-        this.wire.interrupt();
-
-        return;
-
-      case 'clear': {
-        this.pendingResume.clear();
-        await this.wire.clear();
-        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_CLEAR }), [connection.id]);
-
-        return;
-      }
-
-      case 'tool-result':
-      case 'tool-approval':
-      case 'messages':
-        diagnostics.event('chat.protocol_frame_ignored', { frame: event.type });
-    }
+    });
   }
 
   /** One send per message the loop does not hold (`reconcileMessages`); answered only once the landing is decided.
    *  Every request ends in exactly one terminal frame: its turn's, or this method's, whatever failed. */
-  private async admitChatRequest(requestId: string, body: string | undefined): Promise<void> {
-    const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
+  private admitChatRequest(requestId: string, body: string | undefined): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
 
-    if (parsed === null || !parsed.success || parsed.output.trigger === 'regenerate-message') {
-      this.done(requestId);
+      if (parsed === null || !parsed.success || parsed.output.trigger === 'regenerate-message') {
+        this.done(requestId);
 
-      return;
-    }
-
-    // A message that opens a turn hands the request to it: that turn's `turn-end` closes it. Every other
-    // taken message, a splice or the one that failed, gives its mapping back.
-    let opener: string | null = null;
-    const taken: string[] = [];
-    const release = (): void => { for (const id of taken) if (id !== opener) this.requests.delete(id); };
-
-    try {
-      // The client resends only its window, so reconcile against the window.
-      const storedMessages = await this.wire.history(TRANSCRIPT_WINDOW);
-
-      const unseen = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage).filter((message) => message.role === 'user');
-
-      for (const message of unseen) {
-        if (await this.wire.admitted(message.id)) continue;
-        this.requests.set(message.id, requestId);
-        taken.push(message.id);
-
-        if (await this.wire.send({ ...chatInput(message), id: message.id }) === 'turn') opener = message.id;
+        return;
       }
-    } catch (cause) {
+
+      // A message that opens a turn hands the request to it: that turn's `turn-end` closes it. Every other
+      // taken message, a splice or the one that failed, gives its mapping back.
+      let opener: string | null = null;
+      const taken: string[] = [];
+      const release = (): void => { for (const id of taken) if (id !== opener) this.requests.delete(id); };
+
+      const messages = parsed.output.messages;
+
+      const refused = yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
+        // The client resends only its window, so reconcile against the window.
+        const storedMessages = yield* Effect.promise(async () => this.wire.history(TRANSCRIPT_WINDOW));
+
+        const unseen = reconcileMessages(messages, storedMessages, sanitizeMessage).filter((message) => message.role === 'user');
+
+        for (const message of unseen) {
+          if (yield* Effect.promise(async () => this.wire.admitted(message.id))) continue;
+          this.requests.set(message.id, requestId);
+          taken.push(message.id);
+
+          if ((yield* Effect.promise(async () => this.wire.send({ ...chatInput(message), id: message.id }))) === 'turn') opener = message.id;
+        }
+
+        return false;
+      }), (failed) => {
+        const cause = Cause.squash(failed);
+        release();
+
+        if (opener === null) this.done(requestId, { error: refusalOf(cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' })).error });
+
+        // The loop refused and wrote nothing; anything else is a fault its caller must see.
+        return cause instanceof KinuError ? Effect.succeed(true) : Effect.die(new Error('the loop failed to take a client message', { cause }));
+      });
+
+      if (refused) return;
       release();
 
-      if (opener === null) this.done(requestId, { error: refusalOf(cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' })).error });
-
-      // The loop refused and wrote nothing; anything else is a fault its caller must see.
-      if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
-
-      return;
-    }
-
-    release();
-
-    if (opener === null) this.done(requestId, taken.length === 0 ? {} : { landed: 'mid-turn' });
+      if (opener === null) this.done(requestId, taken.length === 0 ? {} : { landed: 'mid-turn' });
+    });
   }
 
   private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {

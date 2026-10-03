@@ -45,65 +45,52 @@ function errnoOf(thrown: { readonly error: unknown }): string | undefined {
  * Resolve one candidate; a symlink cycle (ELOOP) or ENOENT reports unavailable instead of failing
  * the turn. EACCES/EIO still propagate: a broken disk must not become a silently emptier prompt.
  */
-function candidateAt(dir: string, path: string): Candidate {
-  let entry;
+function candidateAt(dir: string, path: string): Effect.Effect<Candidate> {
+  return Effect.gen(function* () {
+    const entry = yield* probing(() => lstatSync(path), { ENOENT: null, ELOOP: SYMLINK_CYCLE });
 
-  try {
-    entry = lstatSync(path);
-  } catch (error) {
+    if ('answer' in entry) return entry.answer;
+
+    if (!entry.value.isFile() && !entry.value.isSymbolicLink()) return null;
+
+    const real = yield* probing(() => ({ target: realpathSync(path), realDir: realpathSync(dir) }), { ELOOP: SYMLINK_CYCLE, ENOENT: TARGET_MISSING });
+
+    if ('answer' in real) return real.answer;
+    const { target, realDir } = real.value;
+    const rel = relative(realDir, target);
+
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+      return { kind: 'unavailable', reason: 'symlink points outside its own directory' };
+    }
+
+    const stat = yield* probing(() => statSync(target), { ENOENT: TARGET_MISSING, ELOOP: SYMLINK_CYCLE });
+
+    if ('answer' in stat) return stat.answer;
+
+    if (!stat.value.isFile()) return null;
+
+    return {
+      kind: 'file',
+      bytes: stat.value.size,
+      target,
+      dev: stat.value.dev,
+      ino: stat.value.ino,
+    };
+  });
+}
+
+const SYMLINK_CYCLE: Candidate = { kind: 'unavailable', reason: 'symlink cycle' };
+
+const TARGET_MISSING: Candidate = { kind: 'unavailable', reason: 'symlink target is missing' };
+
+/** One fs read: an errno the table names is that answer; any other failure (EACCES, EIO) stays the read's own. */
+function probing<A>(read: () => A, answers: Readonly<Record<string, Candidate>>): Effect.Effect<{ readonly value: A } | { readonly answer: Candidate }> {
+  return Effect.catchCause(Effect.sync(() => ({ value: read() })), (failed) => {
+    const error = Cause.squash(failed);
     const code = errnoOf({ error });
 
-    if (code === 'ENOENT') return null;
-
-    if (code === 'ELOOP') return { kind: 'unavailable', reason: 'symlink cycle' };
-    throw error;
-  }
-
-  if (!entry.isFile() && !entry.isSymbolicLink()) return null;
-
-  let target;
-  let realDir;
-
-  try {
-    target = realpathSync(path);
-    realDir = realpathSync(dir);
-  } catch (error) {
-    const code = errnoOf({ error });
-
-    if (code === 'ELOOP') return { kind: 'unavailable', reason: 'symlink cycle' };
-
-    if (code === 'ENOENT') return { kind: 'unavailable', reason: 'symlink target is missing' };
-    throw error;
-  }
-
-  const rel = relative(realDir, target);
-
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
-    return { kind: 'unavailable', reason: 'symlink points outside its own directory' };
-  }
-
-  let stat;
-
-  try {
-    stat = statSync(target);
-  } catch (error) {
-    const code = errnoOf({ error });
-
-    if (code === 'ENOENT') return { kind: 'unavailable', reason: 'symlink target is missing' };
-
-    if (code === 'ELOOP') return { kind: 'unavailable', reason: 'symlink cycle' };
-    throw error;
-  }
-
-  if (!stat.isFile()) return null;
-
-  return {
-    kind: 'file',
-    bytes: stat.size,
-    target,
-    dev: stat.dev,
-    ino: stat.ino,
-  };
+    return code !== undefined && Object.hasOwn(answers, code) ? Effect.succeed({ answer: answers[code] ?? null }) : Effect.die(error);
+  });
 }
 
 /** `afterAdmission` is a test-only fault-injection seam for the swap-after-admission regression. */
@@ -126,7 +113,7 @@ export function discoverAgentsMd(
 
     for (;;) {
       const path = join(dir, 'AGENTS.md');
-      const candidate = candidateAt(dir, path);
+      const candidate = yield* candidateAt(dir, path);
 
       if (candidate?.kind === 'file') candidates.push({
         ref: { path, bytes: candidate.bytes },

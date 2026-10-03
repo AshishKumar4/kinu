@@ -62,7 +62,7 @@ export const DECLARED = byFile([
   ...Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, {
     mechanisms: MECHANISMS, reason: `${surface.type}'s one runner rethrows its typed failure or a defect`,
   }] as const),
-  ...['packages/core/src/obs/tracer.ts', 'packages/core/src/obs/agent-tracing.ts'].map(file => [file, {
+  ...['packages/core/src/obs/tracer.ts', 'packages/core/src/obs/agent-tracing.ts', 'packages/cf-backend/src/obs/cf-tracer.ts'].map(file => [file, {
     mechanisms: ['promise-rejection'],
     reason: 'a span hands its caller\'s promise back unchanged, so a pipelined RPC stub keeps pipelining; '
       + '`then(close, close)` observes it settle without deriving an unhandled rejection',
@@ -151,6 +151,21 @@ export const DECLARED = byFile([
     mechanisms: ['throw'],
     within: ['chunks', 'members', 'octal'],
     reason: 'the release artifact\'s async iterators: a reader learns a truncated or refused tar from next(), the iterator protocol',
+  }],
+  ['packages/cf-backend/src/obs/cf-tracer.ts', {
+    mechanisms: ['catch', 'throw'],
+    within: ['createWorkersTracer'],
+    reason: 'a span wraps its caller\'s synchronous call: a throw is recorded on the span and rethrown unchanged, so the '
+      + 'caller sees its own failure',
+  }],
+  ['packages/core/src/layergate/layers.ts', {
+    mechanisms: ['throw', 'catch'],
+    reason: 'the Layergate\'s literal fixtures stand in for collaborators: each throws or rejects as that collaborator does, '
+      + 'so a layer\'s answer to it is observed byte for byte',
+  }],
+  ['packages/cf-backend/src/gallery-drive.tsx', {
+    mechanisms: ['throw', 'catch'],
+    reason: 'the gallery\'s drive stub over mock data: it refuses as the drive route does, so a frame can photograph that state',
   }],
   ['packages/test-utils/src/mossaic.ts', {
     mechanisms: ['throw'],

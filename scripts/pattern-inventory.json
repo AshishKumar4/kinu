@@ -277,7 +277,7 @@
       "file": "packages/cli/src/tui/actions.tsx",
       "kind": "hand-parser",
       "owner": "parseStroke",
-      "sourceSha256": "acce03a5d4be2dccd5b10e1e0cdbbe95efe209a6a3b8488b42b55eeec6682e7e",
+      "sourceSha256": "7ab6e0b54ff6e64ce4b117529f010a17eb0225bec39e896dc9508ea3073a8853",
       "decision": "cli"
     },
     {
