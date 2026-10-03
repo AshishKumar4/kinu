@@ -1,11 +1,11 @@
 /**
  * Core's {@link ChatTransport} over the SDK's `cf_agent_*` protocol, one room per actor tag. It writes no
- * row; the loop does, and the answer's one durable copy is the loop's `stream_parts`. A tab that reconnects
- * mid-turn is replayed the chunks this relay sent for the turn in progress, over the SDK's documented resume
- * handshake (RESUME_REQUEST, RESUMING, ACK, replay frames, replayComplete). A turn an ended activation left
- * open is re-driven by a later one under a request id that activation mints, so RESUMING names the turn too:
- * the client whose message opened it follows the turn there. A tab that reconnects before the re-drive opens
- * is told the turn is pending (STREAM_PENDING, the SDK's #1784 frame) and told it is resuming once it opens.
+ * row; the loop does. A tab that joins a turn in progress is replayed it over the SDK's documented resume
+ * handshake (RESUME_REQUEST, RESUMING, ACK, replay frames, replayComplete): the steps the ledger records,
+ * restated, then this relay's chunks after them. A turn an ended activation left open is re-driven by a later
+ * one under a request id that activation mints, so RESUMING names the turn too: the client whose message opened
+ * it follows the turn there. A tab that reconnects before the re-drive opens is told the turn is pending
+ * (STREAM_PENDING, the SDK's #1784 frame) and told it is resuming once it opens.
  */
 import type { Connection } from 'agents';
 import {
@@ -16,22 +16,22 @@ import {
 import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
-  isWorkMode, INTERRUPTED_TURN,
-  type ChatTransport, type ObservedCall, type PromptFile, type SendLanding, type SessionEvent, type WorkMode,
+  isWorkMode, INTERRUPTED_TURN, JsonValueSchema,
+  type ChatTransport, type JsonObject, type ObservedCall, type PromptFile, type SendLanding, type SessionEvent, type WorkMode,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 
-export type ChatSocket = Pick<Connection, 'id'>;
+export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState'>;
 
-/** `resumes` is false for a wire whose turns stream live only: a hosted actor's tab reads its partial from the
- *  transcript. A resuming wire says whether a turn is owed that has not opened in this activation: the one an ended
- *  activation left open, or an acknowledged send. */
-export type ChatWire = ChatWireBase & ({ readonly resumes: false } | { readonly resumes: true; turnOwed(): boolean });
-
-interface ChatWireBase {
+/** Every room replays a joiner the open turn: the steps its ledger records, then the relay's chunks after them. */
+export interface ChatWire {
+  /** A turn this activation has not opened yet: the one an ended activation left open, or an acknowledged send. */
+  turnOwed(): boolean;
+  /** The open turn's finished steps as its ledger records them, drawn. */
+  steps(): readonly (readonly JsonObject[])[];
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
-  getConnection(id: string): Connection | undefined;
+  getConnection(id: string): ChatSocket | undefined;
   history(limit?: number): Promise<UIMessage[]>;
   /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
   admitted(id: string): Promise<boolean>;
@@ -42,9 +42,9 @@ interface ChatWireBase {
 }
 
 export interface ChatRoom {
-  onConnect(connection: Connection): Promise<void>;
-  onClose(connection: ChatSocket): void;
-  onMessage(connection: Connection, raw: string): Promise<boolean>;
+  onConnect(connection: ChatSocket): Promise<void>;
+  onClose(connection: Pick<ChatSocket, 'id'>): void;
+  onMessage(connection: ChatSocket, raw: string): Promise<boolean>;
 }
 
 const UIMessageSchema = v.custom<UIMessage>((value) =>
@@ -72,8 +72,10 @@ interface LiveStream {
   /** Renewed per provider call against the turn's parts, so the answer stays one message under one id. */
   accumulator: StreamAccumulator;
   readonly open: OpenParts;
-  /** Every chunk body this turn relayed, in order: a reconnecting tab's replay. Dropped with the turn. */
-  readonly relayed: string[];
+  /** Every chunk this turn relayed, in order, with its step: the steps finished before it. Dropped with the turn. */
+  readonly relayed: { readonly step: number; readonly type: string; readonly body: string }[];
+  /** Steps whose last chunk went out, those before this activation included. */
+  finished: number;
   /** The relay broke before the stream ended, so the accumulated parts are not the answer. */
   broken: boolean;
   /** Why the turn failed, sent as the frame that ends it. */
@@ -131,38 +133,74 @@ function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: str
   });
 }
 
+const RestatedTextSchema = v.looseObject({ type: v.picklist(['text', 'reasoning']), text: v.string() });
+
+const RestatedFileSchema = v.looseObject({ type: v.literal('file'), url: v.string(), mediaType: v.string() });
+
+const RestatedToolSchema = v.looseObject({
+  type: v.pipe(v.string(), v.startsWith('tool-')), toolCallId: v.string(),
+  state: v.picklist(['input-available', 'output-available', 'output-error']),
+  input: v.optional(JsonValueSchema), output: v.optional(JsonValueSchema), errorText: v.optional(v.string()),
+});
+
+/** A recorded step as the chunks that draw it, ids named for its step and place so no live id meets one. Parts
+ *  other than text, reasoning, tool and file wait for the commit's transcript frame. */
+function restatedChunks(parts: readonly JsonObject[], step: number): UIMessageChunk[] {
+  const chunks: UIMessageChunk[] = [{ type: 'start-step' }];
+
+  for (const [place, part] of parts.entries()) {
+    const id = `restated:${String(step)}:${String(place)}`;
+    const text = v.safeParse(RestatedTextSchema, part);
+    const file = v.safeParse(RestatedFileSchema, part);
+    const tool = v.safeParse(RestatedToolSchema, part);
+
+    if (text.success && text.output.type === 'text') {
+      chunks.push({ type: 'text-start', id }, { type: 'text-delta', id, delta: text.output.text }, { type: 'text-end', id });
+    } else if (text.success) {
+      chunks.push({ type: 'reasoning-start', id }, { type: 'reasoning-delta', id, delta: text.output.text }, { type: 'reasoning-end', id });
+    } else if (file.success) {
+      chunks.push({ type: 'file', url: file.output.url, mediaType: file.output.mediaType });
+    } else if (tool.success) {
+      const { toolCallId, state, input, output, errorText } = tool.output;
+      chunks.push({ type: 'tool-input-available', toolCallId, toolName: tool.output.type.slice('tool-'.length), input: input ?? null });
+
+      if (state === 'output-available') chunks.push({ type: 'tool-output-available', toolCallId, output: output ?? null });
+      else if (state === 'output-error') chunks.push({ type: 'tool-output-error', toolCallId, errorText: errorText ?? '' });
+    }
+  }
+
+  chunks.push({ type: 'finish-step' });
+
+  return chunks;
+}
+
 export class ChatWireTransport implements ChatTransport, ChatRoom {
   /** Tabs told a stream is resuming and not yet acknowledged: live chunks skip them until their replay. */
   private readonly pendingResume = new Set<string>();
   /** Tabs told an owed turn is pending, each with the probe it asked under: told it is resuming when it opens. */
-  private readonly parked = new Map<string, { readonly connection: Connection; readonly probeId: string | undefined }>();
+  private readonly parked = new Map<string, { readonly connection: ChatSocket; readonly probeId: string | undefined }>();
   private readonly requests = new Map<string, string>();
   private live: LiveStream | null = null;
 
   constructor(private readonly wire: ChatWire) {}
 
-  /** The turn a reconnecting tab can be replayed, or null. */
-  private get resumable(): LiveStream | null {
-    return this.wire.resumes ? this.live : null;
-  }
-
   /** The connect frame is the pane's only seed, so a socket opening mid-turn gets the current window. */
-  async onConnect(connection: Connection): Promise<void> {
+  async onConnect(connection: ChatSocket): Promise<void> {
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
     this.announce(connection);
     sendIfOpen(connection, transcriptFrame(history));
   }
 
-  onClose(connection: ChatSocket): void {
+  onClose(connection: Pick<ChatSocket, 'id'>): void {
     this.pendingResume.delete(connection.id);
     this.parked.delete(connection.id);
   }
 
   /** Told proactively on connect and again on the tab's own request; the client acknowledges once. False when no
    *  turn streams here and none is owed. */
-  private announce(connection: Connection, probeId?: string): boolean {
-    const live = this.resumable;
+  private announce(connection: ChatSocket, probeId?: string): boolean {
+    const { live } = this;
 
     if (live !== null) {
       this.notifyResuming(connection, live, probeId);
@@ -170,22 +208,19 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return true;
     }
 
-    const { wire } = this;
-
-    if (!wire.resumes || !wire.turnOwed()) return false;
+    if (!this.wire.turnOwed()) return false;
     this.parked.set(connection.id, { connection, probeId });
     sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_PENDING, ...(probeId !== undefined && { probeId }) }));
 
     return true;
   }
 
-  private notifyResuming(connection: Connection, live: LiveStream, probeId: string | undefined): void {
+  private notifyResuming(connection: ChatSocket, live: LiveStream, probeId: string | undefined): void {
     const frame = { type: MessageType.CF_AGENT_STREAM_RESUMING, id: live.requestId, turnId: live.turnId, ...(probeId !== undefined && { probeId }) };
 
     if (sendIfOpen(connection, JSON.stringify(frame))) this.pendingResume.add(connection.id);
   }
 
-  /** The loop went idle without opening the turn a parked tab waits on: nothing is resuming. */
   quiet(): void {
     for (const { connection, probeId } of this.parked.values()) {
       sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId }));
@@ -194,12 +229,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.parked.clear();
   }
 
-  /** What this relay sent for the turn, then `replayComplete`; the live chunks that follow continue it. */
-  private replay(connection: Connection, requestId: string): void {
+  /** Cut markers precede recorded replacements; later live chunks follow. */
+  private replay(connection: ChatSocket, requestId: string): void {
     this.pendingResume.delete(connection.id);
-    const live = this.resumable;
+    const { wire, live } = this;
 
-    const frame = (fields: { body: string; replayComplete?: true; done: boolean }): string =>
+    const frame = (fields: { body: string; replayComplete?: true; done: boolean; restated?: true }): string =>
       JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, replay: true, ...fields });
 
     // A request that is no longer live settles; its answer is in the transcript frame.
@@ -209,14 +244,39 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return;
     }
 
-    for (const body of live.relayed) {
-      if (!sendIfOpen(connection, frame({ body, done: false }))) return;
+    const recorded = wire.steps();
+    const restated = Math.min(recorded.length, live.finished);
+    const frames: string[] = [];
+    const cuts = new Map<number, string[]>();
+
+    for (const { step, type, body } of live.relayed) {
+      if (step >= restated || type !== 'data-kinu-step-cut') continue;
+      const before = cuts.get(step) ?? [];
+      before.push(frame({ body, done: false }));
+      cuts.set(step, before);
     }
 
-    sendIfOpen(connection, frame({ body: '', done: false, replayComplete: true }));
+    // Before anything is replayed, the relay's first chunk opens the message live.
+    if (restated > 0 || live.relayed.length > 0) frames.push(frame({ body: JSON.stringify({ type: 'start', messageId: live.accumulator.messageId }), done: false }));
+
+    for (const [step, parts] of recorded.slice(0, restated).entries()) {
+      frames.push(...(cuts.get(step) ?? []));
+
+      for (const chunk of restatedChunks(parts, step)) frames.push(frame({ body: JSON.stringify(chunk), done: false, restated: true }));
+    }
+
+    for (const { step, type, body } of live.relayed) {
+      if (step >= restated && type !== 'start') frames.push(frame({ body, done: false }));
+    }
+
+    frames.push(frame({ body: '', done: false, replayComplete: true }));
+
+    for (const sent of frames) {
+      if (!sendIfOpen(connection, sent)) return;
+    }
   }
 
-  async onMessage(connection: Connection, raw: string): Promise<boolean> {
+  async onMessage(connection: ChatSocket, raw: string): Promise<boolean> {
     const event = parseProtocolMessage(raw);
 
     if (event === null) return false;
@@ -225,7 +285,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     return true;
   }
 
-  private async handle(connection: Connection, event: ChatProtocolEvent): Promise<void> {
+  private async handle(connection: ChatSocket, event: ChatProtocolEvent): Promise<void> {
     switch (event.type) {
       case 'stream-resume-request':
         // `idle` is load-bearing: the hook keeps waiting on a probe answered with anything weaker.
@@ -318,7 +378,9 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /** The stream answers under the admitting request (`turnId` is the opening row id), else under an id minted here:
    *  a turn this activation re-drives or opened itself, which a client follows by `turnId`. */
-  async openTurn(turn: { readonly turnId: string; readonly messageId: string; readonly userTurn: boolean; readonly carried: readonly string[] }): Promise<void> {
+  async openTurn(turn: {
+    readonly turnId: string; readonly messageId: string; readonly userTurn: boolean; readonly carried: readonly string[]; readonly finishedSteps: number;
+  }): Promise<void> {
     const requestId = this.requests.get(turn.turnId) ?? crypto.randomUUID();
     this.requests.delete(turn.turnId);
     const carried: string[] = [];
@@ -334,7 +396,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.releaseWaiters();
 
     const live: LiveStream = {
-      requestId, turnId: turn.turnId, carried, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), relayed: [], broken: false, failure: null,
+      requestId, turnId: turn.turnId, carried, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), relayed: [],
+      finished: turn.finishedSteps, broken: false, failure: null,
     };
 
     this.live = live;
@@ -345,11 +408,16 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
   }
 
-  /** The answer row is durable before this. */
+  /** The answer row is durable before this. A turn that ends before this room opened it releases the tabs waiting on it. */
   async closeTurn(): Promise<void> {
     const live = this.live;
 
-    if (live === null) return;
+    if (live === null) {
+      this.quiet();
+
+      return;
+    }
+
     this.live = null;
 
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
@@ -364,9 +432,25 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   async deliver(event: SessionEvent): Promise<void> {
     switch (event.type) {
       case 'turn-start':
-        await this.openTurn({ turnId: event.turnId, messageId: event.messageId, userTurn: event.kind === 'user', carried: event.carried });
+        await this.openTurn({
+          turnId: event.turnId, messageId: event.messageId, userTurn: event.kind === 'user', carried: event.carried, finishedSteps: event.finishedSteps,
+        });
 
         return;
+
+      case 'step-cut': {
+        const live = this.live;
+
+        if (live === null) return;
+        const chunk: UIMessageChunk = { type: 'data-kinu-step-cut', data: { stepIndex: event.stepIndex }, transient: true };
+        const body = JSON.stringify(chunk);
+
+        live.relayed.push({ step: live.finished, type: chunk.type, body });
+        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }),
+          this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
+
+        return;
+      }
 
       case 'turn-end':
         await this.closeTurn();
@@ -446,10 +530,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         const body = JSON.stringify(chunk);
 
-        if (this.wire.resumes) live.relayed.push(body);
+        live.relayed.push({ step: live.finished, type: chunk.type, body });
 
         // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
+
+        if (chunk.type === 'finish-step') live.finished += 1;
       }
     } catch (cause) {
       this.degradeRelay(live, toKinuError({

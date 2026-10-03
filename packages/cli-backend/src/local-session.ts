@@ -224,10 +224,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
 
   engine.onEvent((event) => { input.session().reportEvolutionEvent(event); });
 
-  const reportRunEvent = (event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void => {
-    input.session().reportActorRunEvent(input.runtime.actor, event);
-  };
-
   return {
     engine,
     budget,
@@ -250,8 +246,8 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
       refinementLane: () => input.session().runRefinementLane(),
       sinks: {
         logActivity: (event, detail) => { input.session().logActivity(event, detail); },
-        onToolCallEvent: (ev) => { reportRunEvent({ type: 'tool_call_end', ...ev }); },
-        onStepEvent: (ev) => { reportRunEvent({ type: 'step_finish', ...ev }); },
+        onToolCallEvent: (ev) => input.session().recordActorStepEvent(input.runtime.actor, { type: 'tool_call_end', ...ev }),
+        onStepEvent: (ev) => input.session().recordActorStepEvent(input.runtime.actor, { type: 'step_finish', ...ev }),
       },
     },
   };
@@ -588,6 +584,7 @@ export class LocalAgentSession {
       // No build identity for the builtin loop: a `bun`-run checkout has no build stamp.
       installedBuild: null,
       events: this.eventRecorder,
+      recording: this.eventRecorder,
       orchestration: orchestration.deps,
       advisorPort: () => this.advisorPort(),
       // The completion gate is RAM here: while it waits for its answer, the advisor records its note silently.
@@ -2390,9 +2387,11 @@ export class LocalAgentSession {
     this.recordRunEvent({ type: 'budget_exhausted', ...refusal });
   }
 
-  reportActorRunEvent(actor: ActorHandle, event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void {
+  recordActorStepEvent(actor: ActorHandle, event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void {
     if (sameActorReference(actor, this.rt.actor)) {
-      this.recordRunEvent(event);
+      const runId = this.chat.currentRunId;
+
+      if (runId !== null) this.eventRecorder.emit(runId, event);
 
       return;
     }
@@ -2404,7 +2403,7 @@ export class LocalAgentSession {
       throw new KinuError('missing', 'A reporting actor has no active turn for its event.');
     }
 
-    this.recordRunEvent(event, claim.runId, hosted.stores.eventRecorder);
+    hosted.stores.eventRecorder.emit(claim.runId, event);
   }
 
   reportEvolutionEvent(event: { readonly type: string; readonly message: string }): void {

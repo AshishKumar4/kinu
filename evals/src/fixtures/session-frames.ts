@@ -95,11 +95,13 @@ export const RECOVERY_TURN_CHUNKS: readonly UIMessageChunk[] = [
   { type: 'finish' },
 ];
 
-/** One live streaming frame, as a producer puts it on the wire. */
+/** One streaming frame, as a producer puts it on the wire: live, replayed, or a replayed chunk of a step the ledger
+ *  records, restated (`packages/cf-backend/src/chat-transport.ts`, `replay`). */
 export function chatChunkFrame(input: {
   readonly requestId: string;
   readonly chunk: UIMessageChunk;
   readonly replay?: boolean;
+  readonly restated?: boolean;
 }): string {
   return JSON.stringify({
     type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE,
@@ -107,7 +109,13 @@ export function chatChunkFrame(input: {
     body: JSON.stringify(input.chunk),
     done: false,
     replay: input.replay === true ? true : undefined,
+    restated: input.restated === true ? true : undefined,
   });
+}
+
+/** A replay's last frame: the live chunks follow. */
+export function replayCompleteFrame(requestId: string): string {
+  return JSON.stringify({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: requestId, body: '', done: false, replay: true, replayComplete: true });
 }
 
 /** The frame that ends a turn cleanly: empty body, `done`. */

@@ -35,6 +35,7 @@ import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
+import type { Usage } from '../usage';
 import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
 import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
@@ -78,7 +79,10 @@ export type SessionEvent =
       /** Both minted at admission. */
       turnId: string; messageId: string;
       /** A rerun answers every leftover as one turn; a transport closes their requests with it. */
-      carried: readonly string[] }
+      carried: readonly string[];
+      /** Steps before this activation. */
+      finishedSteps: number }
+  | { type: 'step-cut'; stepIndex: number }
   | { type: 'text-delta'; delta: string }
   /** Shown live; never the answer, never stored. */
   | { type: 'reasoning-delta'; delta: string }
@@ -123,6 +127,7 @@ interface TurnContinuation {
   readonly runId: string;
   readonly messageId: string;
   readonly finishedSteps: number;
+  readonly usage: Usage;
   /** The outputs the cut step left open, named before a claim seals them. */
   readonly openOutputs: readonly string[];
 }
@@ -899,7 +904,7 @@ export class ChatSession {
 
     this.emit({
       type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId,
-      carried: (item.steerIds ?? []).filter((id) => id !== this.turnId),
+      carried: (item.steerIds ?? []).filter((id) => id !== this.turnId), finishedSteps: item.continuation?.finishedSteps ?? 0,
     });
 
     return { event, mode, turnId: this.turnId, runId: this.runId };
@@ -1012,6 +1017,8 @@ export class ChatSession {
 
     if (item.continuation !== undefined && partial === 'text') {
       await this.actorSession.retractCutStep(lease, item.continuation.openOutputs);
+      this.emit({ type: 'step-cut', stepIndex: item.continuation.finishedSteps + 1 });
+      await this.delivery;
     }
 
     /** A Stop before any output leaves the operator's row alone. */
@@ -1026,6 +1033,7 @@ export class ChatSession {
       cacheKeptAliveUntil,
       ...(item.continuation !== undefined && {
         resumedSteps: item.continuation.finishedSteps,
+        resumedUsage: item.continuation.usage,
         resumedMidStep: partial !== null,
       }),
     }, (event) => {
@@ -1330,7 +1338,7 @@ export class ChatSession {
     const open = this.eventRecorder.openTurn();
 
     if (open === null) return;
-    const { runId, turn, steps, finishedSteps } = open;
+    const { runId, turn, steps, finishedSteps, usage } = open;
     const openOutputs = this.actorSession.canonical.openOutputs(runId);
 
     const item: QueueItem = {
@@ -1345,6 +1353,7 @@ export class ChatSession {
         runId,
         messageId: turn.messageId,
         finishedSteps,
+        usage,
         openOutputs,
       },
       settle: () => {},

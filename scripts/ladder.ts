@@ -53,7 +53,7 @@ import {
 import { discoverArgv } from './python-suites';
 import { CLI_TEST_ROOT } from './test-cli';
 import { modulesReaching } from './import-closure';
-import type { ModuleEdges } from './import-graph';
+import type { ModuleEdges } from './module-edges';
 import { identifierCalleeName, literalString, walk, type Parsed } from './syntax';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
 import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';

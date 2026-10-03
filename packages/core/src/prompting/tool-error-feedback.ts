@@ -43,54 +43,45 @@ function stepErrors(step: ToolErrorStep): Map<string, ToolResultPart['output'] |
   return errors;
 }
 
-/** Project only this SDK call's failures; its cumulative response messages
- * delimit the active suffix, so reused ids cannot reclassify history. Inputs are not mutated. */
-export function projectToolErrorFeedback(messages: ModelMessage[], steps: readonly ToolErrorStep[]): ModelMessage[] | undefined {
-  const generated = steps.at(-1)?.response.messages;
-
-  if (generated === undefined || generated.length > messages.length) return undefined;
-  const prefixLength = messages.length - generated.length;
-  let previousLength = 0;
+/** The seal keeps the feedback the next request uses; only this step's suffix is classified. */
+export function modelStepMessages(step: ToolErrorStep, previous: readonly ModelMessage[]): ModelMessage[] {
+  const messages = step.response.messages;
   let projected: ModelMessage[] | undefined;
 
-  for (const step of steps) {
-    const errors = stepErrors(step);
+  for (let index = 0; index < previous.length; index++) {
+    const recorded = previous[index];
 
-    const response = step.response.messages;
-
-    if (errors === undefined) { previousLength = response.length; continue; }
-
-    for (let index = previousLength; index < response.length; index++) {
-      const source = response[index];
-      const messageIndex = prefixLength + index;
-      const target = messages[messageIndex];
-
-      if (source?.role !== 'tool' || target?.role !== 'tool') continue;
-      let content: typeof target.content | undefined;
-
-      for (let partIndex = 0; partIndex < target.content.length; partIndex++) {
-        const part = target.content[partIndex];
-        const original = source.content[partIndex];
-
-        if (part?.type !== 'tool-result' || original?.type !== 'tool-result'
-          || part.toolCallId !== original.toolCallId || part.toolName !== original.toolName
-          || (part.output.type !== 'error-text' && part.output.type !== 'error-json')
-          || (original.output.type !== 'error-text' && original.output.type !== 'error-json')) continue;
-        const output = errors.get(part.toolCallId);
-
-        if (output === undefined) continue;
-        content ??= [...target.content];
-        content[partIndex] = { ...part, output };
-      }
-
-      if (content !== undefined) {
-        projected ??= [...messages];
-        projected[messageIndex] = { ...target, content };
-      }
-    }
-
-    previousLength = response.length;
+    if (recorded === undefined || recorded === messages[index]) continue;
+    projected ??= [...messages];
+    projected[index] = recorded;
   }
 
-  return projected;
+  const errors = stepErrors(step);
+
+  if (errors === undefined) return projected ?? messages;
+
+  for (let index = previous.length; index < messages.length; index++) {
+    const message = messages[index];
+
+    if (message?.role !== 'tool') continue;
+    let content: typeof message.content | undefined;
+
+    for (let partIndex = 0; partIndex < message.content.length; partIndex++) {
+      const part = message.content[partIndex];
+
+      if (part?.type !== 'tool-result' || (part.output.type !== 'error-text' && part.output.type !== 'error-json')) continue;
+      const output = errors.get(part.toolCallId);
+
+      if (output === undefined) continue;
+      content ??= [...message.content];
+      content[partIndex] = { ...part, output };
+    }
+
+    if (content !== undefined) {
+      projected ??= [...messages];
+      projected[index] = { ...message, content };
+    }
+  }
+
+  return projected ?? messages;
 }

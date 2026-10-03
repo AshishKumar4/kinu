@@ -1018,6 +1018,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const {
     messages,
+    setMessages,
     sendMessage,
     regenerate,
     clearHistory,
@@ -1032,6 +1033,31 @@ export function useKinu(target?: string | KinuActorAddress) {
     getInitialMessages: null,
     // Matches the SDK default (cloudflare/agents#2058), pinned so an upstream change cannot move it.
     throttle: 50,
+    onData: (chunk) => {
+      if (chunk.type !== 'data-kinu-step-cut') return;
+      const { stepIndex } = v.parse(v.object({ stepIndex: v.number() }), chunk.data);
+
+      setMessages((current) => {
+        let answer: UIMessage | undefined;
+
+        for (let index = current.length - 1; index >= 0; index -= 1) {
+          const candidate = current[index];
+
+          if (candidate?.role !== 'assistant') continue;
+          answer = candidate;
+          break;
+        }
+
+        if (answer === undefined) return current;
+        let step = 0;
+
+        return current.map((message) => message !== answer ? message : { ...message, parts: message.parts.filter((part) => {
+          if (part.type === 'step-start') step += 1;
+
+          return step < stepIndex;
+        }) });
+      });
+    },
   });
 
   /** The SDK's flag is false during `submitted` (message sent, no token yet); including it keeps

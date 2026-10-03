@@ -22,6 +22,8 @@ import { isSteeredMessage, type AgentModelMenu, type JobOutputTail } from '@kinu
 import type { KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
+export const STEP_RESTART_NOTICE = '\n\nThe agent restarted; this step continues from the start below.\n\n';
+
 export type AgentClientMode = 'local' | 'cloud';
 
 export type AgentPrompt = string | { text: string; files: ReadonlyArray<PromptFile> };
@@ -57,6 +59,7 @@ export type AgentClientEvent =
   | { type: 'reasoning-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: JsonObject }
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
+  | { type: 'step-cut'; stepIndex: number }
   | { type: 'step-finish'; stepIndex: number }
   | { type: 'turn-end'; turn: AgentTurnResult }
   | { type: 'evolution'; event: string; message: string }

@@ -180,7 +180,7 @@ describe('scaffoldChatTransform', () => {
 
     const events = await collect(scaffoldChatTransform({ chat, ...await selected(2, DELEGATING_SCAFFOLD) }));
 
-    expect(events).toEqual([
+    expect(events).toMatchObject([
       { type: 'step-finish', stepIndex: 1, responseMessages: [{ role: 'assistant', content: 'default answer' }] },
       {
         type: 'done',
@@ -202,15 +202,16 @@ describe('scaffoldChatTransform', () => {
       (event): event is Extract<ChatEvent, { type: 'tool-result' }> => event.type === 'tool-result',
     );
 
-    expect(call).toEqual({
+    expect(result?.toolCallId).toBe(call?.toolCallId);
+
+    expect(call).toMatchObject({
       type: 'tool-call', toolName: 'search', toolCallId: expect.any(String), args: { q: 'the task' },
     });
     // The ledger row records the returned value, not its rendering, as the builtin loop does.
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       type: 'tool-result', toolName: 'search', toolCallId: expect.any(String),
       result: '{"hits":2}', output: { hits: 2 }, success: true,
     });
-    expect(result?.toolCallId).toBe(call?.toolCallId);
   });
 
   test('a tool result relayed as an authored chunk keeps its value and its duration', async () => {
@@ -224,7 +225,7 @@ describe('scaffoldChatTransform', () => {
     const events = await collect(scaffoldChatTransform({ chat, ...await selected(1, relaying) }));
     const result = events.find((e) => e.type === 'tool-result');
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       type: 'tool-result', toolName: 'search', toolCallId: 'c1', result: '{"hits":2}', output: { hits: 2 }, durationMs: 7, success: true,
     });
   });

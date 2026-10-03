@@ -7,13 +7,16 @@ import { Chat } from '@ai-sdk/react';
 import { DefaultChatTransport, readUIMessageStream, type UIMessage, type UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList, createTestSql } from '@kinu.run/test-utils';
-import { INTERRUPTED_TURN, type SendLanding, type SessionEvent } from '@kinu.run/core';
+import { INTERRUPTED_TURN, type JsonObject, type SendLanding, type SessionEvent } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { Connection } from 'agents';
 import { ChatWireTransport, type ChatWire } from '../src/chat-transport';
 import { socketConnection } from './helpers/bindings';
 
-const FrameSchema = v.looseObject({ type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()), landed: v.optional(v.string()), replay: v.optional(v.boolean()) });
+const FrameSchema = v.looseObject({
+  type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()), landed: v.optional(v.string()),
+  replay: v.optional(v.boolean()), replayComplete: v.optional(v.boolean()), restated: v.optional(v.boolean()),
+});
 
 /** The loop's side of the wire: a refused send rejects with the loop's classified error, a faulting one
  *  with whatever broke underneath. */
@@ -37,6 +40,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   let clears = 0;
   /** Whether the ledger holds a turn no activation has opened here yet: one an eviction left open. */
   let owed = false;
+  /** The open turn's finished steps as the ledger records them, drawn. */
+  const recorded: JsonObject[][] = [];
   const connections = new Map<string, Connection>();
   const frames = new Map<string, string[]>();
   /** Everything a socket was handed, in order: its sends and broadcasts that included it. */
@@ -55,8 +60,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   };
 
   const wire: ChatWire = {
-    resumes: true,
     turnOwed: () => owed,
+    steps: () => recorded,
     broadcast: (message, exclude) => {
       broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude });
 
@@ -93,7 +98,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
       return new ChatWireTransport(wire);
     },
-    transport, broadcasts, history, reserved, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, db,
+    transport, broadcasts, history, reserved, recorded, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, db,
     interrupts: () => interrupts, clears: () => clears,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
     connectionFrames: (id: string): string[] => frames.get(id) ?? [],
@@ -154,7 +159,7 @@ test('history materialization finishes before connect publication and chat admis
 test('turn completion waits for materialized history before publishing done', async () => {
   const pending = Promise.withResolvers<UIMessage[]>();
   const h = harness('turn', () => pending.promise);
-  await h.transport.openTurn({ turnId: 'background', messageId: 'answer', userTurn: false, carried: [] });
+  await h.transport.openTurn({ turnId: 'background', messageId: 'answer', userTurn: false, carried: [], finishedSteps: 0 });
   const closing = h.transport.closeTurn();
 
   expect(h.responses()).toEqual([]);
@@ -169,8 +174,23 @@ function chunks(parts: UIMessageChunk[]): ReadableStream<UIMessageChunk> {
   return new ReadableStream({ start(controller) { for (const part of parts) controller.enqueue(part); controller.close(); } });
 }
 
-const turnStart = (turnId: string, messageId: string, carried: readonly string[] = []): SessionEvent =>
-  ({ type: 'turn-start', kind: 'user', text: 'x', workMode: 'build', turnId, messageId, carried });
+const turnStart = (turnId: string, messageId: string, carried: readonly string[] = [], finishedSteps = 0): SessionEvent =>
+  ({ type: 'turn-start', kind: 'user', text: 'x', workMode: 'build', turnId, messageId, carried, finishedSteps });
+
+/** A tab's replay, a frame a line: `R ` marks a chunk of a step restated from the ledger. */
+function replayOf(frames: readonly string[]): string[] {
+  return frames.map((text) => v.parse(FrameSchema, JSON.parse(text))).filter((frame) => frame.replay === true).map((frame) => {
+    if (frame.replayComplete === true) return 'complete';
+    const chunk = v.parse(v.looseObject({ type: v.string(), delta: v.optional(v.string()), toolCallId: v.optional(v.string()) }), JSON.parse(frame.body ?? ''));
+
+    return [frame.restated === true ? 'R' : '', chunk.type, chunk.delta ?? '', chunk.toolCallId ?? ''].filter((word) => word !== '').join(' ');
+  });
+}
+
+const STEP_ONE: UIMessageChunk[] = [
+  { type: 'start-step' }, { type: 'text-start', id: 't0' }, { type: 'text-delta', id: 't0', delta: 'one' }, { type: 'text-end', id: 't0' },
+  { type: 'finish-step' },
+];
 
 describe('ChatWireTransport', () => {
   test('a chat request hands the message to the loop under its own id and writes no row; a splice answers at once', async () => {
@@ -518,6 +538,86 @@ describe('ChatWireTransport', () => {
     await h.land(answered);
   });
 
+  // A joining tab's replay restates from the ledger each step it records whose last chunk went out, then the relay's
+  // chunks after them: the loop records a step beside the stream, so either can be ahead.
+  test('a joining tab hears a step the ledger records and the relay sent whole restated, then the relay\'s chunks after it', async () => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE, { type: 'start-step' }, { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'tw' }]), { index: 0 });
+    h.recorded.push([{ type: 'text', text: 'one', state: 'done' }]);
+
+    const joining = h.connection('c2');
+    await h.transport.onConnect(joining);
+    await h.transport.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+
+    expect(replayOf(h.connectionFrames('c2'))).toEqual([
+      'start', 'R start-step', 'R text-start', 'R text-delta one', 'R text-end', 'R finish-step', 'start-step', 'text-start', 'text-delta tw', 'complete',
+    ]);
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'one', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+  });
+
+  test('a step the relay sent whole that the ledger has not recorded is replayed from the relay', async () => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE]), { index: 0 });
+
+    const joining = h.connection('c2');
+    await h.transport.onConnect(joining);
+    await h.transport.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+
+    expect(replayOf(h.connectionFrames('c2'))).toEqual(['start', 'start-step', 'text-start', 'text-delta one', 'text-end', 'finish-step', 'complete']);
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'one', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+  });
+
+  test('a step the ledger records before its last chunk went out is replayed from the relay, and the rest follows live', async () => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE.slice(0, 3)]), { index: 0 });
+    h.recorded.push([{ type: 'text', text: 'one', state: 'done' }]);
+
+    const joining = h.connection('c2');
+    await h.transport.onConnect(joining);
+    await h.transport.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+    await h.transport.observe(chunks(STEP_ONE.slice(3)), { index: 0 });
+
+    const heard = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.body !== undefined && frame.body !== '')
+      .map((frame) => `${frame.replay === true ? 'replay ' : ''}${v.parse(v.looseObject({ type: v.string() }), JSON.parse(frame.body ?? '')).type}`);
+
+    expect(heard).toEqual(['replay start', 'replay start-step', 'replay text-start', 'replay text-delta', 'text-end', 'finish-step']);
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'one', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+  });
+
+  test('a re-opened turn\'s replay restates the steps finished before this activation ahead of the relay\'s', async () => {
+    const h = harness();
+    const first = h.connection('c1');
+    await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
+    const revived = h.afterEviction();
+    h.recorded.push(
+      [{ type: 'tool-shell', toolCallId: 'call_0', state: 'output-available', input: { command: 'echo 1' }, output: '1' }],
+      [{ type: 'tool-shell', toolCallId: 'call_1', state: 'output-error', input: { command: 'false' }, errorText: 'exit 1' }],
+    );
+
+    const joining = h.connection('c2');
+    await revived.onConnect(joining);
+    await revived.deliver(turnStart('input-req-1', 'msg-1', [], 2));
+    await revived.observe(chunks([{ type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't2' }, { type: 'text-delta', id: 't2', delta: 'three' }]), { index: 0 });
+    const resuming = v.parse(FrameSchema, JSON.parse(h.connectionFrames('c2').find((text) => text.includes('cf_agent_stream_resuming')) ?? '{}'));
+    await revived.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming.id }));
+
+    expect(replayOf(h.connectionFrames('c2'))).toEqual([
+      'start', 'R start-step', 'R tool-input-available call_0', 'R tool-output-available call_0', 'R finish-step',
+      'R start-step', 'R tool-input-available call_1', 'R tool-output-error call_1', 'R finish-step',
+      'start-step', 'text-start', 'text-delta three', 'complete',
+    ]);
+  });
+
   /** Owner report 2026-09-26, "reasoning-delta for missing reasoning part": the tab's reader throws on a delta whose
    *  part it never saw open, so every part a joining tab continues must open in what it reads, before its deltas. */
   // 2026-09-26 (two-turn.test.ts red): a done frame for another request is never stored, so the replay on ack
@@ -561,6 +661,19 @@ describe('ChatWireTransport', () => {
     const tab = h.connection('c1');
     await revived.onMessage(tab, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-1' }));
     revived.quiet();
+
+    expect(h.connectionFrames('c1').map((frame) => JSON.parse(frame))).toEqual([
+      { type: 'cf_agent_stream_pending', probeId: 'p-1' },
+      { type: 'cf_agent_stream_resume_none', reason: 'idle', probeId: 'p-1' },
+    ]);
+  });
+
+  test('a tab waiting on a turn that ends before its room opens it hears nothing resumes', async () => {
+    const h = harness();
+    const revived = h.afterEviction();
+    const tab = h.connection('c1');
+    await revived.onMessage(tab, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-1' }));
+    await revived.closeTurn();
 
     expect(h.connectionFrames('c1').map((frame) => JSON.parse(frame))).toEqual([
       { type: 'cf_agent_stream_pending', probeId: 'p-1' },

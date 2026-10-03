@@ -224,7 +224,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     history.requests.lastStep();
     const first = await composePrepareStep(pipeline, { stepNumber: 0, messages: [...admitted.messages], steps: [] });
 
-    await stream.nativeStep([call, result]);
+    await stream.nativeStep({ messages: [call, result], toolResults: [] });
 
     const second = await composePrepareStep(pipeline, { stepNumber: 1, messages: [], steps: [] });
 
@@ -232,7 +232,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     for (const word of words) await stream.nativePart({ type: 'text-delta', id: 'answer', text: word });
     await stream.nativePart({ type: 'text-end', id: 'answer' });
-    await stream.nativeStep([call, result, answer]);
+    await stream.nativeStep({ messages: [call, result, answer], toolResults: [] });
     await stream.settle();
     await history.materialize();
     await history.outputForTurn(turnId);

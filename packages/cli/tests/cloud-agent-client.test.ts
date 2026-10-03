@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
+import type { UIMessageChunk } from 'ai';
+import { ChatWireTransport, type ChatSocket } from '../../cf-backend/src/chat-transport';
 import {
   JsonArraySchema, JsonObjectSchema, parseJsonObject, hostedActorSocketPath, hostedWindowMay,
   ChatHistoryEntrySchema, restoredRows,
@@ -268,6 +270,19 @@ async function firstChatRequest(mock: MockAgentServer): Promise<ChatRequestFrame
 function responseChunk(id: string, chunk: JsonObject, done = false) {
   return { type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id, body: JSON.stringify(chunk), done };
 }
+
+function emittedTextAndCuts(events: readonly AgentClientEvent[]): string[] {
+  return events.flatMap((event) => {
+    if (event.type === 'text-delta') return [event.delta];
+
+    return event.type === 'step-cut' ? [`cut ${event.stepIndex}`] : [];
+  });
+}
+
+/** Step 1 (`one, `) as the DO restates it from the ledger in a replay. */
+const RESTATED_STEP_ONE: readonly JsonObject[] = [
+  { type: 'start-step' }, { type: 'text-start', id: 'r' }, { type: 'text-delta', id: 'r', delta: 'one, ' }, { type: 'text-end', id: 'r' }, { type: 'finish-step' },
+];
 
 describe('CloudAgentClient protocol', () => {
   test('paged history retains the same event metadata as the browser transcript', async () => {
@@ -1113,7 +1128,9 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'one, ' }));
     mock.reply(responseChunk(request.id, { type: 'finish-step' }));
-    await waitFor(() => events.find((e) => e.type === 'step-finish'), 'the first step');
+    // Step 2 is cut by the activation's end: the next activation runs it again.
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'tw' }));
+    await waitFor(() => events.filter((e) => e.type === 'text-delta').length === 2 ? true : undefined, 'the cut step');
 
     await dropAndProbe(mock);
     mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_PENDING });
@@ -1130,13 +1147,158 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
 
     expect(resumeAcks(mock).map((frame) => frame.id)).toEqual(['reopened']);
 
-    // As long as the first stream was: a count the two streams shared would swallow the replay whole.
+    // Step 1 restated from the ledger (held, so skipped), then the re-run of step 2, which replaces the cut one.
+    for (const chunk of RESTATED_STEP_ONE) {
+      mock.reply({ ...responseChunk('reopened', chunk), replay: true, restated: true });
+    }
+
+    mock.reply({ ...responseChunk('reopened', { type: 'data-kinu-step-cut', data: { stepIndex: 2 }, transient: true }), replay: true });
     mock.reply({ ...responseChunk('reopened', { type: 'text-delta', delta: 'two' }), replay: true });
     mock.reply({ ...responseChunk('reopened', { type: 'finish-step' }), replay: true });
+    mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: 'reopened', body: '', done: false, replay: true, replayComplete: true });
     mock.reply(responseChunk('reopened', { type: 'text-delta', delta: '' }, true));
 
     await expect(turn).resolves.toMatchObject({ text: 'one, two', steps: 2, hadError: false });
+    expect(emittedTextAndCuts(events)).toEqual(['one, ', 'tw', 'cut 2', 'two']);
     expect(chatRequests(mock)).toHaveLength(1);
+    await client.close();
+  });
+
+  test('a follower joining after its cut step finished receives the cut before that recorded step', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+    const turn = client.send('count to three');
+    const request = await firstChatRequest(mock);
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'one, ' }));
+    mock.reply(responseChunk(request.id, { type: 'finish-step' }));
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'tw' }));
+    await waitFor(() => events.filter((event) => event.type === 'text-delta').length === 2 ? true : undefined, 'step 2 drawn');
+    await dropAndProbe(mock);
+    const connection: ChatSocket = { id: 'rejoined', readyState: WebSocket.OPEN, send: (raw) => mock.reply(parseJsonObject(v.parse(v.string(), raw))) };
+    let joined = false;
+
+    const transport = new ChatWireTransport({
+      turnOwed: () => true,
+      steps: () => [[{ type: 'text', text: 'one, ', state: 'done' }], [{ type: 'text', text: 'two, ', state: 'done' }]],
+      broadcast: (raw, exclude) => { if (joined && !(exclude ?? []).includes(connection.id)) connection.send(raw); },
+      getConnection: (id) => joined && id === connection.id ? connection : undefined,
+      history: async () => [], admitted: async () => false,
+      send: async () => { throw new Error('the re-drive accepts no second submission'); },
+      interrupt: () => { throw new Error('the re-drive is not interrupted'); },
+      clear: async () => { throw new Error('the re-drive is not cleared'); },
+    });
+
+    await transport.openTurn({ turnId: request.id, messageId: 'answer', userTurn: true, carried: [], finishedSteps: 1 });
+    await transport.deliver({ type: 'step-cut', stepIndex: 2 });
+    await transport.observe(new ReadableStream<UIMessageChunk>({ start(controller) {
+      const chunks: UIMessageChunk[] = [
+        { type: 'start-step' }, { type: 'text-start', id: 'second' }, { type: 'text-delta', id: 'second', delta: 'two, ' },
+        { type: 'text-end', id: 'second' }, { type: 'finish-step' },
+        { type: 'start-step' }, { type: 'text-start', id: 'third' }, { type: 'text-delta', id: 'third', delta: 'thr' },
+      ];
+
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    } }), { index: 0 });
+    joined = true;
+    await transport.onConnect(connection);
+    const ack = await waitFor(() => resumeAcks(mock)[0], 'the re-drive ack');
+    await transport.onMessage(connection, JSON.stringify(ack));
+    const id = v.parse(v.string(), ack.id);
+    mock.reply(responseChunk(id, { type: 'text-delta', delta: 'ee' }));
+    mock.reply(responseChunk(id, { type: 'finish-step' }));
+    mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id, body: '', done: true });
+
+    await expect(turn).resolves.toMatchObject({ text: 'one, two, three', steps: 3 });
+    expect(emittedTextAndCuts(events)).toEqual(['one, ', 'tw', 'cut 2', 'two, ', 'thr', 'ee']);
+    await client.close();
+  });
+
+  test('a turn re-opened twice is followed by the same open client to its end, each step once', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('count to three');
+    const request = await firstChatRequest(mock);
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'one, ' }));
+    mock.reply(responseChunk(request.id, { type: 'finish-step' }));
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'tw' }));
+    await waitFor(() => events.filter((e) => e.type === 'text-delta').length === 2 ? true : undefined, 'step 2 begun');
+
+    // The second activation restates step 1, runs step 2 again whole and ends inside step 3.
+    await dropAndProbe(mock);
+    mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: 'second', turnId: request.id });
+    await waitFor(() => resumeAcks(mock).find((frame) => frame.id === 'second'), 'the ack of the second activation');
+
+    for (const chunk of RESTATED_STEP_ONE) mock.reply({ ...responseChunk('second', chunk), replay: true, restated: true });
+
+    const relayed: JsonObject[] = [
+      { type: 'data-kinu-step-cut', data: { stepIndex: 2 }, transient: true },
+      { type: 'text-delta', delta: 'two, ' }, { type: 'finish-step' }, { type: 'text-delta', delta: 'thr' },
+    ];
+
+    for (const chunk of relayed) mock.reply({ ...responseChunk('second', chunk), replay: true });
+
+    mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: 'second', body: '', done: false, replay: true, replayComplete: true });
+    await waitFor(() => events.filter((e) => e.type === 'step-finish').length === 2 ? true : undefined, 'step 2 held');
+
+    // The third restates steps 1 and 2 and runs step 3 again.
+    await dropAndProbe(mock);
+    mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: 'third', turnId: request.id });
+    await waitFor(() => resumeAcks(mock).find((frame) => frame.id === 'third'), 'the ack of the third activation');
+
+    const restatedTwo: JsonObject[] = [
+      { type: 'start-step' }, { type: 'text-start', id: 's' }, { type: 'text-delta', id: 's', delta: 'two, ' }, { type: 'text-end', id: 's' }, { type: 'finish-step' },
+    ];
+
+    for (const chunk of [...RESTATED_STEP_ONE, ...restatedTwo]) mock.reply({ ...responseChunk('third', chunk), replay: true, restated: true });
+
+    mock.reply({ ...responseChunk('third', { type: 'data-kinu-step-cut', data: { stepIndex: 3 }, transient: true }), replay: true });
+    mock.reply({ ...responseChunk('third', { type: 'text-delta', delta: 'three' }), replay: true });
+    mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: 'third', body: '', done: false, replay: true, replayComplete: true });
+    mock.reply(responseChunk('third', { type: 'finish-step' }));
+    mock.reply(responseChunk('third', { type: 'text-delta', delta: '' }, true));
+
+    await expect(turn).resolves.toMatchObject({ text: 'one, two, three', steps: 3, hadError: false });
+    expect(emittedTextAndCuts(events)).toEqual(['one, ', 'tw', 'cut 2', 'two, ', 'thr', 'cut 3', 'three']);
+    expect(chatRequests(mock)).toHaveLength(1);
+    await client.close();
+  });
+
+  test('a reconnect whose replay restates a held step skips it, and its own partial step resumes where it was', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('count to two');
+    const request = await firstChatRequest(mock);
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'one, ' }));
+    mock.reply(responseChunk(request.id, { type: 'finish-step' }));
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'tw' }));
+    await waitFor(() => events.filter((e) => e.type === 'text-delta').length === 2 ? true : undefined, 'step 2 begun');
+
+    await dropAndProbe(mock);
+    mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: request.id, turnId: request.id });
+    await waitFor(() => resumeAcks(mock).find((frame) => frame.id === request.id), 'the ack');
+
+    for (const chunk of RESTATED_STEP_ONE) {
+      mock.reply({ ...responseChunk(request.id, chunk), replay: true, restated: true });
+    }
+
+    mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: 'tw' }), replay: true });
+    mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: request.id, body: '', done: false, replay: true, replayComplete: true });
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'o' }));
+    mock.reply(responseChunk(request.id, { type: 'finish-step' }));
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: '' }, true));
+
+    await expect(turn).resolves.toMatchObject({ text: 'one, two', steps: 2, hadError: false });
+    // Nothing the terminal printed is printed again.
+    expect(events.flatMap((e) => (e.type === 'text-delta' ? [e.delta] : [])).join('')).toBe('one, two');
     await client.close();
   });
 

@@ -22,7 +22,7 @@ import {
 } from './device-connect';
 import { requireAuthConfig } from './config';
 import {
-  printToolCall, printToolResult, printEvolutionEvent, createTurnStatus, formatFailure,
+  printStepCut, printToolCall, printToolResult, printEvolutionEvent, createTurnStatus, formatFailure,
   ACCENT, DIM, MUTED, ERR, OK, WARN, type TurnStatus,
 } from './display';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -655,6 +655,10 @@ function renderClientEvent({ event, agentName, status, getHeader, setHeader }: C
     case 'text-delta':
       header();
       process.stdout.write(event.delta);
+      break;
+    case 'step-cut':
+      status.clear();
+      printStepCut();
       break;
     case 'reasoning-delta':
       break;

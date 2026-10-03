@@ -502,7 +502,7 @@ async function driveTurn(
   // fails to compile here instead of being dropped.
   const plane: Partial<Pick<Parameters<typeof runChat>[0], 'stepContext' | 'persistStep'>> = opts.durable === undefined ? {} : {
     stepContext: { base: async () => ({ messages: [...stored], changed: false, turnStart: HISTORY.length - 1 }), consume: async () => {} },
-    persistStep: async (produced: readonly ModelMessage[]) => { stored = [...HISTORY, ...produced]; },
+    persistStep: async (record) => { stored = [...HISTORY, ...record.messages]; },
   };
 
   for await (const event of runChat({

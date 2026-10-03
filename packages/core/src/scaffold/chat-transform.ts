@@ -126,6 +126,7 @@ async function* scaffoldTurn(
 
         if (!parsed.success) break;
         const inner = parsed.output;
+        inner.source = 'scaffold';
 
         if (inner.type === 'done') {
           responses.push(...inner.responseMessages);
@@ -143,11 +144,11 @@ async function* scaffoldTurn(
       case 'text_delta':
         text += ev.text;
         nativeText += ev.text;
-        yield { type: 'text-delta', delta: ev.text };
+        yield { type: 'text-delta', delta: ev.text, source: 'scaffold' };
         break;
       case 'tool_call':
         toolNames.set(ev.toolCallId, ev.name);
-        yield { type: 'tool-call', toolName: ev.name, toolCallId: ev.toolCallId, args: ev.args };
+        yield { type: 'tool-call', toolName: ev.name, toolCallId: ev.toolCallId, args: ev.args, source: 'scaffold' };
         break;
       case 'tool_result': {
         // Records the tool's returned value, not its rendering.
@@ -156,6 +157,7 @@ async function* scaffoldTurn(
           toolName: toolNames.get(ev.toolCallId) ?? 'unknown',
           toolCallId: ev.toolCallId,
           result: ev.outcome.success ? renderToolResult(ev.result) : ev.error ?? FAILURE_WITHOUT_ERROR,
+          source: 'scaffold',
           error: ev.error,
           ...ev.outcome,
         };
@@ -168,10 +170,10 @@ async function* scaffoldTurn(
 
       case 'step_finish':
         // Scaffold-authored step: no SDK response array exists, so it is empty rather than fabricated.
-        yield { type: 'step-finish', stepIndex: ev.stepIndex, responseMessages: [] };
+        yield { type: 'step-finish', stepIndex: ev.stepIndex, responseMessages: [], source: 'scaffold' };
         break;
       case 'error':
-        yield { type: 'error', message: ev.message };
+        yield { type: 'error', message: ev.message, source: 'scaffold' };
         break;
       // Native tool raw output has no chat rendering; `model_chunk` already carries it.
       case 'model_output':
@@ -184,6 +186,7 @@ async function* scaffoldTurn(
 
   yield {
     type: 'done',
+    source: 'scaffold',
     text,
     ...(settled !== undefined && settled.trim() !== '' && { answer: settled }),
     responseMessages: nativeText.trim()
@@ -195,5 +198,8 @@ async function* scaffoldTurn(
 async function* wrapDefaultChat(
   chat: AsyncIterable<ChatEvent>,
 ): AsyncGenerator<ScaffoldDefaultInferenceChunk> {
-  for await (const event of chat) yield { event };
+  for await (const event of chat) {
+    event.source = 'native';
+    yield { event };
+  }
 }
