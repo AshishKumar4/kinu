@@ -435,7 +435,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('/pc');
   });
 
-  test('renders only selectable executors when lifecycle facts are supplied', () => {
+  test('renders only configured executors when lifecycle facts are supplied', () => {
     const { rt } = createTestRuntime();
 
     const prompt = buildSystemPromptSync(rt, {
@@ -467,25 +467,25 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('Worker isolate');
   });
 
-  test('a registered-but-offline device stays visible, by name, with the way back', () => {
+  // Which machine is up is the dynamic block's: the system prompt describes the runtimes this workspace has.
+  test('a device connecting, disconnecting or erroring leaves the system prompt byte-identical', () => {
     const { rt } = createTestRuntime();
 
-    const prompt = buildSystemPromptSync(rt, {
+    const render = (device: Pick<PromptExecutorInfo, 'available' | 'active' | 'status'>) => buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        {
-          name: 'device', kind: 'device', available: false, configured: true, active: false,
-          status: 'disconnected', label: 'ashish@studio',
-        },
+        { name: 'sandbox', kind: 'sandbox', available: device.status !== 'error', configured: true, active: false, status: device.status === 'error' ? 'error' : 'idle' },
+        { name: 'device', kind: 'device', configured: true, label: 'ashish@studio', ...device },
       ],
     });
 
-    expect(prompt).toContain('currently offline');
-    expect(prompt).toContain('ashish@studio');
-    expect(prompt).toContain('asks the user to bring it back');
-    expect(prompt).toContain('kinu connect');
-    expect(prompt).not.toContain('device.***');
+    const online = render({ available: true, active: true, status: 'active' });
+
+    expect(online).toContain('**device.***');
+    expect(online).toContain('**sandbox.***');
+    expect(render({ available: false, active: false, status: 'disconnected' })).toBe(online);
+    expect(render({ available: false, active: false, status: 'error' })).toBe(online);
   });
 
   test('the online device line names no machine and no grant: the fleet is volatile', () => {
@@ -510,7 +510,7 @@ describe('buildSystemPromptSync', () => {
       expect(prompt).toContain('the runtime asks the user once');
       expect(prompt).toContain('runtime: "<nickname>"');
       expect(prompt).toContain('The runtime refuses a call that names none');
-      expect(prompt).toContain('live state at the start of this turn');
+      expect(prompt).toContain("live state in dynamic_context's Execution status");
     }
   });
 
@@ -688,16 +688,17 @@ describe('buildSystemPromptSync', () => {
     expect(surface.externalTools.map((external) => external.name)).toEqual(['good_tool', 'plain_tool']);
   });
 
-  test('prompt surface hides unavailable executors from selectable runtimes', () => {
+  test('prompt surface describes a configured executor even while it is down, and never an unconfigured one', () => {
     const surface = compilePromptSurface({
       executors: [
         { name: 'workspace', available: true, configured: true, active: true, status: 'active' },
         { name: 'device', available: false, configured: true, active: false, status: 'disconnected' },
+        { name: 'sandbox', available: false, configured: false, active: false, status: 'not_configured' },
       ],
     });
 
-    expect(surface.executors.map((exec) => exec.name)).toEqual(['device', 'workspace']);
-    expect(surface.selectableExecutors.map((exec) => exec.name)).toEqual(['workspace']);
+    expect(surface.executors.map((exec) => exec.name)).toEqual(['device', 'sandbox', 'workspace']);
+    expect(surface.configuredExecutors.map((exec) => exec.name)).toEqual(['device', 'workspace']);
   });
 
   test('model profile blocks tool mode on known non-tool models', () => {

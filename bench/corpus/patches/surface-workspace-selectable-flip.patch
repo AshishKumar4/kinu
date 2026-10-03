@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/prompting/surface.ts b/packages/core/src/prompting/surface.ts
-index a0cc1646e..994fd27c3 100644
+index bdab9da79..50c980590 100644
 --- a/packages/core/src/prompting/surface.ts
 +++ b/packages/core/src/prompting/surface.ts
-@@ -206,7 +206,7 @@ export function uniquePromptExecutors(opts: Pick<PromptSurfaceOptions, 'executor
- }
+@@ -159,7 +159,7 @@ export function uniquePromptExecutors(opts: Pick<PromptSurfaceOptions, 'executor
  
- export function executorIsSelectable(exec: PromptExecutorInfo): boolean {
--  if (exec.name === 'workspace') return exec.available !== false;
-+  if (exec.name === 'workspace') return exec.available === false;
+ /** A runtime this workspace has, reachable or not right now: the system prompt describes it, the live state says which. */
+ export function executorIsConfigured(exec: PromptExecutorInfo): boolean {
+-  if (exec.name === 'workspace') return true;
++  if (exec.name === 'workspace') return false;
  
-   if (exec.available === false) return false;
+   if (exec.status === 'not_configured') return false;
  

@@ -19,7 +19,7 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters,
 } from '../utils/prompt-sections';
-import { executorIsSelectable, type PromptBackend, type PromptExecutorInfo } from './surface';
+import { executorIsConfigured, type PromptBackend, type PromptExecutorInfo } from './surface';
 import type { PromptModelContext } from './model-profile';
 import { type TurnReason, type WorkMode } from '../types/turn';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
@@ -239,6 +239,11 @@ function renderTurnReason(turn: TurnReason): string {
 
 /** Volatile, so rendered in the dynamic-context block, never the cacheable prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
+  // A configured runtime that cannot take a call right now.
+  if (exec.available === false || exec.status === 'disconnected' || exec.status === 'error') {
+    return exec.name === 'device' ? 'offline' : 'unavailable now';
+  }
+
   if (exec.name === 'device') return exec.active || exec.status === 'active' ? 'connected' : 'available';
 
   if (exec.active || exec.status === 'active') return 'active';
@@ -492,7 +497,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
   ));
 
-  const executors = (ctx.executors ?? []).filter(executorIsSelectable);
+  const executors = (ctx.executors ?? []).filter(executorIsConfigured);
 
   if (executors.length > 0) {
     add('executors', { text: [
@@ -588,8 +593,8 @@ function executorDetails(exec: PromptExecutorInfo) {
 }
 
 function executionDelta(before: readonly PromptExecutorInfo[], after: readonly PromptExecutorInfo[]): string {
-  const previous = new Map(before.filter(executorIsSelectable).map((exec) => [exec.name, exec]));
-  const current = new Map(after.filter(executorIsSelectable).map((exec) => [exec.name, exec]));
+  const previous = new Map(before.filter(executorIsConfigured).map((exec) => [exec.name, exec]));
+  const current = new Map(after.filter(executorIsConfigured).map((exec) => [exec.name, exec]));
   const changes: string[] = [DYNAMIC_SECTION_TITLES.executors];
   const changedExecutors: PromptExecutorInfo[] = [];
 

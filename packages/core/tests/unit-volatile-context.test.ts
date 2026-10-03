@@ -79,6 +79,21 @@ test('a plain build turn states no work mode; leaving plan states build once', (
   expect(built).not.toContain('Cleared:');
 });
 
+// The system prompt describes every runtime this workspace has, so the live status names the ones that are down.
+test('the execution status names a configured runtime that is down, and leaves out one never configured', () => {
+  const block = present(renderDynamicContextBlock({ executors: [
+    { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+    { name: 'sandbox', kind: 'sandbox', available: false, configured: true, active: false, status: 'error' },
+    { name: 'device', kind: 'device', available: false, configured: true, active: false, status: 'disconnected' },
+    { name: 'gpu', kind: 'sandbox', available: false, configured: false, active: false, status: 'not_configured' },
+  ] }), 'the block');
+
+  expect(block).toContain('- workspace: active');
+  expect(block).toContain('- sandbox: unavailable now');
+  expect(block).toContain('- device: offline');
+  expect(block).not.toContain('- gpu:');
+});
+
 // The system prompt states none of these, so a new day, a model switch or a new directory moves no cached byte.
 test('date, model and working directory are live state: a new day is a delta of the runtime section alone', () => {
   const ledger = new DynamicContextLedger();
@@ -320,9 +335,9 @@ describe('renderDynamicContextBlock', () => {
     expect(text).toContain('...and 3 more, not shown');
   });
 
-  test('unselectable executors are omitted; empty state renders nothing', () => {
-    const offline: PromptExecutorInfo = { name: 'device', available: false, configured: true, active: false, status: 'disconnected' };
-    expect(renderDynamicContextBlock({ executors: [offline] })).toBeNull();
+  test('an executor never configured is omitted; empty state renders nothing', () => {
+    const absent: PromptExecutorInfo = { name: 'device', available: false, configured: false, active: false, status: 'not_configured' };
+    expect(renderDynamicContextBlock({ executors: [absent] })).toBeNull();
     expect(renderDynamicContextBlock({})).toBeNull();
     expect(renderDynamicContextBlock({ factsBlock: '  ' })).toBeNull();
   });

@@ -279,10 +279,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         }),
       },
       {
-        id: 'context-assembly/unselectable-executors-excluded',
-        asserts: 'an offline or unconfigured executor is never advertised as selectable',
+        id: 'context-assembly/unconfigured-executors-excluded',
+        asserts: 'an executor this workspace never configured is never described; an offline one still is',
         observe: (s) => s.compilePromptSurface({ executors: EXECUTORS })
-          .selectableExecutors.map((exec) => exec.name),
+          .configuredExecutors.map((exec) => exec.name),
       },
       {
         id: 'context-assembly/system-prefix',

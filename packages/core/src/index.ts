@@ -739,7 +739,6 @@ export { isWorkMode, WorkModeSchema, type TurnReason, type WorkMode } from './ty
 
 export {
   compilePromptSurface,
-  executorIsSelectable,
   turnReasonForMetadata,
   workModeForTurnMetadata,
   uniquePromptExecutors,

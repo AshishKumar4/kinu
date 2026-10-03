@@ -10,7 +10,6 @@ import { renderActiveSkillsSection, renderSkillsIndexSection } from './skills/re
 import type { ActiveSkillSet, SkillsIndex } from './skills/types';
 import {
   compilePromptSurface,
-  executorIsSelectable,
   type PromptBackend,
   type PromptExecutorInfo,
   type PromptExternalToolInfo,
@@ -32,7 +31,6 @@ import {
   EXTERNAL_TOOL_LINE,
   GENERIC_EXECUTOR_LINE,
   DEVICE_EXECUTOR_LINE,
-  OFFLINE_DEVICE_LINE,
   OPERATING_GUIDANCE,
   ROLE_SECTION,
   OUTPUT_FORMAT_SECTION,
@@ -169,13 +167,6 @@ function sandboxSizeSlots(sizes: SandboxSizes | undefined) {
   };
 }
 
-/** The user's own name for the device, else a neutral phrase ("device" reads as an API namespace). */
-function deviceDisplayName(exec: PromptExecutorInfo): string {
-  const label = exec.label?.trim();
-
-  return label === undefined || label === '' ? "your user's PC" : label;
-}
-
 function renderExecutorLine(
   exec: PromptExecutorInfo,
   render: RenderSection,
@@ -195,20 +186,14 @@ function renderExecutorLine(
   }
 }
 
-function offlineDevice(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
-  return executors.find((exec) =>
-    exec.name === 'device' && exec.configured === true && !executorIsSelectable(exec));
-}
-
 function renderExecutorSection(surface: PromptSurface, render: RenderSection, workspaceIsMachine: boolean): string {
   const tools = surface.builtinTools;
 
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
 
-  const executors = surface.selectableExecutors;
-  const deviceOffline = offlineDevice(surface.executors);
+  const executors = surface.configuredExecutors;
 
-  if (executors.length === 0 && !deviceOffline) return '';
+  if (executors.length === 0) return '';
 
   const workspace = executors.find((exec) => exec.name === 'workspace');
 
@@ -216,7 +201,6 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, wo
 
   const lines = [
     ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)).filter((line) => line !== ''),
-    ...(deviceOffline ? [render(OFFLINE_DEVICE_LINE, { deviceName: deviceDisplayName(deviceOffline) })] : []),
     ...(workspace ? [renderExecutorLine(workspace, render, surface.backend)] : []),
   ];
 
