@@ -154,6 +154,7 @@ export async function admitHostedTask(
     readonly inheritedContext?: SubordinateInheritedContext;
     readonly creationId?: string;
     readonly messageId?: string;
+    readonly idempotencyKey?: string;
   },
 ): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> {
   const admitAs = async (actor: HostedActor): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> => {
@@ -174,6 +175,8 @@ export async function admitHostedTask(
     if (input.creationId !== undefined) admission.creationId = input.creationId;
 
     if (input.messageId !== undefined) admission.messageId = input.messageId;
+
+    if (input.idempotencyKey !== undefined) admission.idempotencyKey = input.idempotencyKey;
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
 
     // No chat session means no `auto_title` effect: the first admitted message lands a stand-in title

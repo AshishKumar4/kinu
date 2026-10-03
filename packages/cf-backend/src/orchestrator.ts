@@ -936,7 +936,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   ): Promise<EnqueueTurnResult> {
     const admitted = await admitHostedTask(this.hostedSeams(), actor.reference, {
       kind: 'message', body: input.text, mode: workModeForTurnMetadata(input.metadata),
-      ...(input.idempotencyKey !== undefined && { messageId: input.idempotencyKey }),
+      // A message id says the row is open.
+      ...(input.idempotencyKey !== undefined && { idempotencyKey: input.idempotencyKey }),
     });
 
     return { status: admitted.admitted ? 'queued' : 'skipped' };

@@ -859,6 +859,34 @@ describe('subordinate event admission', () => {
     });
   });
 
+  // Review of 4028013fc, 2026-10-03: a hire's job wake was admitted again on each restart's re-delivery, and with its key
+  // passed as an owner's message id, so the turn opened on no row and the hire never read what woke it.
+  test("a queued signal's repeat and an owner's resent message each land once; neither stands for the other", () => {
+    const { sql, actor } = makeWorld();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
+
+    const wake = (now: number) => admitSubordinateTask(log, {
+      fromWorkspace: 'kinu-main', kind: 'message', body: 'Background shell job bgjob-1 completed.', mode: 'build',
+      idempotencyKey: 'background-job-wake:bgjob-1', now,
+    });
+
+    const owner = (now: number) => admitSubordinateTask(log, {
+      fromWorkspace: 'kinu-main', kind: 'message', body: 'Look at the logs.', mode: 'build', messageId: 'msg-1', now,
+    });
+
+    expect([wake(10).admitted, wake(11).admitted]).toEqual([true, false]);
+    expect([owner(12).admitted, owner(13).admitted]).toEqual([true, false]);
+
+    // The wake opens its own turn on its text: it carries no message id, which says the owner's row is already open.
+    const pending = log.pending({ variant: 'subordinate_task' });
+
+    const messageIds = pending.map((event) => (event.variant === 'subordinate_task'
+      && (event.payload_visibility === 'full' || event.payload_visibility === 'redact') ? event.payload.message_id ?? null : 'unreadable'));
+
+    expect(messageIds).toEqual([null, 'msg-1']);
+  });
+
   test('the sender is told the event id its report will cite', () => {
     const { sql, actor } = makeWorld();
     initEventsHubTables(sql);

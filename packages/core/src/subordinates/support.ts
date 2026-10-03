@@ -138,6 +138,7 @@ export function admitSubordinateTask(log: EventLog, input: {
   inheritedContext?: SubordinateInheritedContext;
   creationId?: string;
   messageId?: string;
+  idempotencyKey?: string;
   mode: WorkMode;
   now: number;
 }): PublishResult {
@@ -160,6 +161,8 @@ export function admitSubordinateTask(log: EventLog, input: {
   if (input.creationId !== undefined) Object.assign(payload, { creation_id: requiredText(input.creationId, 'creationId') });
 
   if (input.messageId !== undefined) Object.assign(payload, { message_id: requiredText(input.messageId, 'messageId') });
+
+  if (input.idempotencyKey !== undefined) Object.assign(payload, { idempotency_key: requiredText(input.idempotencyKey, 'idempotencyKey') });
 
   return log.publish({
     descriptor: {
