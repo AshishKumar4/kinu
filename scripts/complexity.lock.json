@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-03",
   "files": 2963,
-  "functions": 78839,
+  "functions": 78901,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -70,7 +70,7 @@
       "complexity": 37
     },
     {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
       "complexity": 36
     },
     {

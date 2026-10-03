@@ -1183,7 +1183,7 @@ export {
   stringifyOr, type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
-export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/markdown-frontmatter';
+export { MarkdownFrontmatterError, parseMarkdownFrontmatter, readMarkdownFrontmatter } from './utils/markdown-frontmatter';
 
 export { compareCodeUnits } from './utils/text';
 

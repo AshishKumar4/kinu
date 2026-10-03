@@ -70,12 +70,12 @@ export async function safeJson<Schema extends v.GenericSchema>(
  * a missing `content-length` reads as 0, so the declared length is only a pre-filter. On overflow the
  * stream is cancelled, not drained. A stalled body returns classified; `sink` failures propagate.
  */
-export function readBoundedStream(
+export function readBoundedStream<E>(
   request: Request,
   limit: number,
-  sink: (chunk: Uint8Array) => Promise<void> | void,
-): Promise<'ok' | 'too_large' | KinuError> {
-  return settle(Effect.gen(function* () {
+  sink: (chunk: Uint8Array) => Effect.Effect<void, E>,
+): Effect.Effect<'ok' | 'too_large' | KinuError, E> {
+  return Effect.gen(function* () {
     const declared = Number(request.headers.get('content-length'));
 
     if (Number.isFinite(declared) && declared > limit) return 'too_large';
@@ -103,34 +103,36 @@ export function readBoundedStream(
         return 'too_large';
       }
 
-      yield* Effect.promise(async () => sink(value));
+      yield* sink(value);
     }
-  }));
+  });
 }
 
 /** The whole body, bounded, or the classified reason there is not one. */
-export async function readBounded(
+export function readBounded(
   request: Request,
   limit: number,
 ): Promise<Uint8Array | 'too_large' | KinuError> {
-  const chunks: Uint8Array[] = [];
-  let total = 0;
+  return settle(Effect.gen(function* () {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
 
-  const outcome = await readBoundedStream(request, limit, (chunk) => {
-    chunks.push(chunk);
-    total += chunk.byteLength;
-  });
+    const outcome = yield* readBoundedStream(request, limit, (chunk) => Effect.sync(() => {
+      chunks.push(chunk);
+      total += chunk.byteLength;
+    }));
 
-  if (outcome !== 'ok') return outcome;
-  const bounded = new Uint8Array(total);
-  let at = 0;
+    if (outcome !== 'ok') return outcome;
+    const bounded = new Uint8Array(total);
+    let at = 0;
 
-  for (const chunk of chunks) {
-    bounded.set(chunk, at);
-    at += chunk.byteLength;
-  }
+    for (const chunk of chunks) {
+      bounded.set(chunk, at);
+      at += chunk.byteLength;
+    }
 
-  return bounded;
+    return bounded;
+  }));
 }
 
 export function escapeHtml(value: string): string {

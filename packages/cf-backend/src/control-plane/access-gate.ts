@@ -54,15 +54,9 @@ function accessTeamOrigin(raw: string | undefined): string | null {
 
   if (trimmed.length === 0) return null;
   const candidate = /^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
-  let url: URL;
 
-  try {
-    url = new URL(candidate);
-  } catch (cause) {
-    if (!(cause instanceof TypeError)) throw cause;
-
-    return null;
-  }
+  if (!URL.canParse(candidate)) return null;
+  const url = new URL(candidate);
 
   if (url.protocol !== 'https:') return null;
 

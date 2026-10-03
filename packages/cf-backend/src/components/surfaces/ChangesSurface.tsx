@@ -19,12 +19,8 @@ function changeSetOf(source: string, result: ExecutorDiffResult): ChangeSet {
   };
 }
 
-async function answered(call: () => Promise<ChangeNotesResult>): Promise<ChangeNotesResult> {
-  try {
-    return await call();
-  } catch (cause) {
-    return { ok: false, error: describeError({ cause }) };
-  }
+function answered(call: () => Promise<ChangeNotesResult>): Effect.Effect<ChangeNotesResult> {
+  return Effect.catchCause(Effect.promise(call), (failed) => Effect.succeed({ ok: false, error: describeError({ cause: Cause.squash(failed) }) }));
 }
 
 function notesStore(rpc: Rpc, source: string, current: () => ChangeSet | undefined): NotesStore {
@@ -228,26 +224,24 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
     }));
   });
 
-  const undoReviewed = async (): Promise<void> => {
+  const undoReviewed = useCallback(() => detach(Effect.gen(function* () {
     setUndoable(false);
     setFailure(null);
-    let restored: Restored;
 
-    try {
-      restored = await rpc<Restored>("restoreWorkspaceBaseline", []);
-    } catch (cause) {
-      restored = { ok: false, error: describeError({ cause }) };
-    }
+    const refusal = yield* Effect.catchCause(
+      Effect.map(Effect.promise(() => rpc<Restored>("restoreWorkspaceBaseline", [])), (restored) => (restored.ok ? null : restored.error)),
+      (failed) => Effect.succeed(describeError({ cause: Cause.squash(failed) })),
+    );
 
-    if (!restored.ok) {
-      setFailure(`Could not undo: ${restored.error}`);
+    if (refusal !== null) {
+      setFailure(`Could not undo: ${refusal}`);
 
       return;
     }
 
     setReviewed((prior) => prior && { ...prior, undone: live.current.sets });
     live.current.reload();
-  };
+  })), [rpc]);
 
   if (sets === null || shown === undefined) {
     return resource.status === "error" ? <div className="p-4"><LoadFailure what="the change-set" message={resource.message} onRetry={reload} /></div> : null;
@@ -265,7 +259,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
         <div className="min-h-0 flex-1">
           <ChangesPanel key={focus?.nonce ?? 0} file={focus?.path ?? null} sets={sets} source={shown.source}
             onSource={(next) => { picked.current = true; setSource(next); }} now={now}
-            reviewedAt={reviewedAt} onReviewed={() => detach(markReviewed())} onUndo={undoable ? () => void undoReviewed() : null}
+            reviewedAt={reviewedAt} onReviewed={() => detach(markReviewed())} onUndo={undoable ? undoReviewed : null}
             onOpenInFiles={openInFiles} />
         </div>
       </div>

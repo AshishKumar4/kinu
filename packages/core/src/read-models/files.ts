@@ -196,46 +196,48 @@ export class ChunkedUpload {
 
 /** Streams the body as whole FILE_CHUNK_BYTES chunks then one final (possibly empty) tail. A
  *  throwing `send` propagates; only the caller can abort the transfer it opened. */
-export async function pumpUploadChunks<Result>(
+export function pumpUploadChunks<Result, E>(
   request: Request,
-  send: (offset: number, chunk: Uint8Array, final: boolean) => Promise<Result>,
-): Promise<'too_large' | KinuError | { result: Result }> {
-  const pending: Uint8Array[] = [];
-  let pendingBytes = 0;
-  let offset = 0;
+  send: (offset: number, chunk: Uint8Array, final: boolean) => Effect.Effect<Result, E>,
+): Effect.Effect<'too_large' | KinuError | { result: Result }, E> {
+  return Effect.gen(function* () {
+    const pending: Uint8Array[] = [];
+    let pendingBytes = 0;
+    let offset = 0;
 
-  const take = (want: number): Uint8Array => {
-    const out = new Uint8Array(want);
-    let at = 0;
+    const take = (want: number): Uint8Array => {
+      const out = new Uint8Array(want);
+      let at = 0;
 
-    while (at < want) {
-      const part = pending[0];
-      const count = Math.min(part.byteLength, want - at);
-      out.set(part.subarray(0, count), at);
+      while (at < want) {
+        const part = pending[0];
+        const count = Math.min(part.byteLength, want - at);
+        out.set(part.subarray(0, count), at);
 
-      if (count === part.byteLength) pending.shift();
-      else pending[0] = part.subarray(count);
-      at += count;
-    }
+        if (count === part.byteLength) pending.shift();
+        else pending[0] = part.subarray(count);
+        at += count;
+      }
 
-    pendingBytes -= want;
+      pendingBytes -= want;
 
-    return out;
-  };
+      return out;
+    };
 
-  const outcome = await readBoundedStream(request, FILE_TRANSFER_MAX_BYTES, async (value) => {
-    pending.push(value);
-    pendingBytes += value.byteLength;
+    const outcome = yield* readBoundedStream(request, FILE_TRANSFER_MAX_BYTES, (value) => Effect.gen(function* () {
+      pending.push(value);
+      pendingBytes += value.byteLength;
 
-    while (pendingBytes >= FILE_CHUNK_BYTES) {
-      await send(offset, take(FILE_CHUNK_BYTES), false);
-      offset += FILE_CHUNK_BYTES;
-    }
+      while (pendingBytes >= FILE_CHUNK_BYTES) {
+        yield* send(offset, take(FILE_CHUNK_BYTES), false);
+        offset += FILE_CHUNK_BYTES;
+      }
+    }));
+
+    if (outcome !== 'ok') return outcome;
+
+    return { result: yield* send(offset, pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0), true) };
   });
-
-  if (outcome !== 'ok') return outcome;
-
-  return { result: await send(offset, pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0), true) };
 }
 
 /** One snapshot behind a chunked download, so ranges never observe a different file version. */

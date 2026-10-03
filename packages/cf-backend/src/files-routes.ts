@@ -5,7 +5,8 @@ import { Hono } from 'hono';
 import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, pumpUploadChunks, VfsRevisionSchema, type ExecutorWriteResult } from "@kinu.run/core";
 import * as v from 'valibot';
 import type { ExecutorFileChunkRead, ExecutorFileChunkWrite } from "./orchestrator";
-import { diagnostics, KinuError, toKinuError, settleLogged } from "@kinu.run/core/obs";
+import { Cause, Effect } from "effect";
+import { diagnostics, KinuError, logged, settle, toKinuError } from "@kinu.run/core/obs";
 import { err, fileResponseHeaders, json } from "@kinu.run/core";
 import type { FamilyEnv } from './api/context';
 import { LITERAL_WORKSPACE, type WorkspaceVariables } from './api/workspace';
@@ -28,7 +29,7 @@ export function filesRoutes<Bindings extends object>(
 ): Hono<FamilyEnv<Bindings, WorkspaceVariables>> {
   const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables>>();
 
-  routes.all(`${LITERAL_WORKSPACE}/files`, async (c) => {
+  routes.all(`${LITERAL_WORKSPACE}/files`, (c) => settle(Effect.gen(function* () {
     const { name, request } = c.get('workspace');
 
     if (request.method !== 'PUT' && request.method !== 'GET') return err(405, 'use PUT or GET');
@@ -40,18 +41,18 @@ export function filesRoutes<Bindings extends object>(
 
     if (!path) return err(400, 'path query parameter required');
 
-    const agent = await resolveAgent(c.env, name);
+    const agent = yield* Effect.promise(() => resolveAgent(c.env, name));
 
     if (request.method === 'PUT') {
       const expectedRevision = expectedRevisionFrom(request);
 
       return expectedRevision === null
         ? err(400, 'If-Match must encode a numeric or string revision')
-        : upload({ request, agent, executorId, path, expectedRevision });
+        : yield* upload({ request, agent, executorId, path, expectedRevision });
     }
 
-    return download(agent, executorId, path, url);
-  });
+    return yield* Effect.promise(() => download(agent, executorId, path, url));
+  })));
 
   return routes;
 }
@@ -66,16 +67,16 @@ function expectedRevisionFrom(request: Request): VfsRevision | undefined | null 
 }
 
 /** Streams chunks to the actor; the bound counts bytes pulled, not the declared length, and the actor re-checks offsets and total. */
-async function upload(transfer: {
+function upload(transfer: {
   request: Request;
   agent: FilesRouteAgent;
   executorId: string;
   path: string;
   expectedRevision: VfsRevision | undefined;
-}): Promise<Response> {
+}): Effect.Effect<Response> {
   const { request, agent, executorId, path, expectedRevision } = transfer;
 
-  if (request.body === null) return err(400, 'request body required');
+  if (request.body === null) return Effect.succeed(err(400, 'request body required'));
 
   const overLimit = () => err(
     413,
@@ -84,32 +85,30 @@ async function upload(transfer: {
 
   const transferId = crypto.randomUUID();
 
-  const abandon = async (): Promise<void> => {
-    await settleLogged('files.upload_abort_failed', { doing: 'aborting a failed chunked file upload', otherwise: 'unavailable' }, () => agent.abortExecutorFileWrite(transferId), { executorId, path });
-  };
+  const abandon = logged('files.upload_abort_failed', { doing: 'aborting a failed chunked file upload', otherwise: 'unavailable' }, () => agent.abortExecutorFileWrite(transferId), { executorId, path });
 
   let sent = 0;
 
-  try {
-    const outcome = await pumpUploadChunks(request, async (offset, chunk, final) => {
-      const written = await agent.writeExecutorFileChunk({
+  return Effect.catchCause(Effect.gen(function* () {
+    const outcome = yield* pumpUploadChunks(request, (offset, chunk, final) => Effect.gen(function* () {
+      const written = yield* Effect.promise(() => agent.writeExecutorFileChunk({
         executorId, path, transferId, offset, chunk, final, expectedRevision,
-      });
+      }));
 
-      if (!final && 'error' in written) throw new Error(written.error);
+      if (!final && 'error' in written) return yield* Effect.die(new Error(written.error));
       sent = offset + chunk.byteLength;
 
       return written;
-    });
+    }));
 
     if (outcome === 'too_large') {
-      await abandon();
+      yield* abandon;
 
       return overLimit();
     }
 
     if (outcome instanceof KinuError) {
-      await abandon();
+      yield* abandon;
       diagnostics.failure('files.upload_body_unreadable', outcome, { executorId, path });
 
       return err(400, 'the upload stopped before the whole file arrived');
@@ -127,8 +126,9 @@ async function upload(transfer: {
     if ('unsupported' in result) return json({ body: { error: result.error } }, { status: 409 });
 
     return 'error' in result ? err(400, result.error) : json({ body: result });
-  } catch (cause) {
-    await abandon();
+  }), (failed) => Effect.gen(function* () {
+    yield* abandon;
+    const cause = Cause.squash(failed);
     diagnostics.failure('files.upload_failed', toKinuError({
       doing: 'streaming an uploaded file to the workspace actor',
       cause,
@@ -136,7 +136,7 @@ async function upload(transfer: {
     }), { executorId, path, bytes: sent });
 
     return err(400, cause instanceof Error ? cause.message : 'upload failed');
-  }
+  }));
 }
 
 async function download(

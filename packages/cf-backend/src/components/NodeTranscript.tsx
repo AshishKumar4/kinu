@@ -7,7 +7,8 @@ import {
 } from "@phosphor-icons/react";
 import type { HeadStep, NodeTranscriptView } from "@kinu.run/core";
 import { shownHeadStatus, threadLiveTail, usageTotal, type TurnLiveness } from "@kinu.run/core";
-import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
+import { Cause, Effect, type Exit } from "effect";
+import { diagnostics, hold, renderThrownChain } from "@kinu.run/core/obs";
 import { ChatLiveTail, MessageView } from "@/components/MessageView";
 import {
   deltaAsMessage, stepAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
@@ -23,7 +24,7 @@ import type { ForkNode, Rpc } from "@kinu.run/core";
 
 
 interface OlderPageLoad {
-  promise: Promise<void> | null;
+  promise: Promise<Exit.Exit<void>> | null;
 }
 
 /** Shared by this panel and the run pane's node list; covers head-journal and search-node statuses. An unknown status gets the quiet dot. */
@@ -356,41 +357,38 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
     const owner: OlderPageLoad = { promise: null };
     // Install the strong action owner before a synchronous RPC fake can settle the page load.
     inFlight.current = owner;
-    owner.promise = (async () => {
-      try {
-        try {
-          const next = await rpc<NodeTranscriptView | null>('getNodeTranscript', [runId, nodeId, { cursor: below }]);
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.catchCause(Effect.gen(function* () {
+      const next = yield* Effect.promise(() => rpc<NodeTranscriptView | null>('getNodeTranscript', [runId, nodeId, { cursor: below }]));
 
-          if (walkRef.current !== at) return;
+      if (walkRef.current !== at) return;
 
-          if (!next) {
-            setWalk((prev) => ({ ...prev, loading: false, error: 'This trace could not be read.' }));
+      if (!next) {
+        setWalk((prev) => ({ ...prev, loading: false, error: 'This trace could not be read.' }));
 
-            return;
-          }
-
-          setWalk((prev) => ({
-            steps: [...next.steps.items, ...prev.steps],
-            hasMore: next.steps.status === 'more',
-            below: next.steps.status === 'more' ? next.steps.next : null,
-            loading: false,
-            error: null,
-          }));
-        } catch (cause) {
-          diagnostics.event('transcript.older_page_abandoned',
-            { subject: at, error: renderThrownChain({ cause }) });
-
-          if (walkRef.current === at) {
-            setWalk((prev) => ({ ...prev, loading: false, error: renderThrownChain({ cause }) }));
-          }
-        }
-      } catch (cause) {
-        diagnostics.event('transcript.older_page_handler_failed',
-          { subject: at, error: renderThrownChain({ cause }) });
-      } finally {
-        if (inFlight.current === owner) inFlight.current = null;
+        return;
       }
-    })();
+
+      setWalk((prev) => ({
+        steps: [...next.steps.items, ...prev.steps],
+        hasMore: next.steps.status === 'more',
+        below: next.steps.status === 'more' ? next.steps.next : null,
+        loading: false,
+        error: null,
+      }));
+    }), (failed) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
+      diagnostics.event('transcript.older_page_abandoned',
+        { subject: at, error: renderThrownChain({ cause }) });
+
+      if (walkRef.current === at) {
+        setWalk((prev) => ({ ...prev, loading: false, error: renderThrownChain({ cause }) }));
+      }
+    })), (failed) => Effect.sync(() => {
+      diagnostics.event('transcript.older_page_handler_failed',
+        { subject: at, error: renderThrownChain({ cause: Cause.squash(failed) }) });
+    })), Effect.sync(() => {
+      if (inFlight.current === owner) inFlight.current = null;
+    })));
   }, [rpc, runId, nodeId, below]);
 
   return {

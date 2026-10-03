@@ -8,7 +8,8 @@ import {
   err, ERROR_STATUS, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, fileResponseHeaders, json,
   pumpUploadChunks, retryTransientDO, safeJson, type DriveFailure, type DriveUploadTarget, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError, settleLogged } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { diagnostics, KinuError, logged, settle, toKinuError } from '@kinu.run/core/obs';
 import type { DriveAnswer, UserDO } from '../user/user-do';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 
@@ -92,13 +93,13 @@ driveRoutes.post('/api/drive/skills', async (c) => {
   return body === null ? err(400, 'expected { skill }') : answered(await object.drive_addSkill(owner, body.skill));
 });
 
-driveRoutes.put('/api/drive/skills', async (c) =>
-  upload(c.req.raw, c.get('drive'), { kind: 'skill', name: new URL(c.req.url).searchParams.get('name') }));
+driveRoutes.put('/api/drive/skills', (c) =>
+  settle(upload(c.req.raw, c.get('drive'), { kind: 'skill', name: new URL(c.req.url).searchParams.get('name') })));
 
-driveRoutes.put('/api/drive/files', async (c) => {
+driveRoutes.put('/api/drive/files', (c) => {
   const target = uploadTarget(new URL(c.req.url));
 
-  return target === null ? err(400, 'path, or folder with unpack=zip, query parameter required') : upload(c.req.raw, c.get('drive'), target);
+  return settle(target === null ? Effect.succeed(err(400, 'path, or folder with unpack=zip, query parameter required')) : upload(c.req.raw, c.get('drive'), target));
 });
 
 driveRoutes.get('/api/drive/files', async (c) => {
@@ -117,39 +118,37 @@ function uploadTarget(url: URL): DriveUploadTarget | null {
   return path === null ? null : { kind: 'file', path };
 }
 
-async function upload(request: Request, ctx: DriveContext, target: DriveUploadTarget): Promise<Response> {
-  if (request.body === null) return err(400, 'request body required');
+function upload(request: Request, ctx: DriveContext, target: DriveUploadTarget): Effect.Effect<Response> {
+  if (request.body === null) return Effect.succeed(err(400, 'request body required'));
   const transferId = crypto.randomUUID();
+  const abandon = logged('drive.upload_abort_failed', { doing: 'aborting a failed chunked Drive upload', otherwise: 'unavailable' }, () => ctx.object.drive_abortUpload(ctx.owner, transferId), { kind: target.kind });
 
-  const abandon = async (): Promise<void> => {
-    await settleLogged('drive.upload_abort_failed', { doing: 'aborting a failed chunked Drive upload', otherwise: 'unavailable' }, () => ctx.object.drive_abortUpload(ctx.owner, transferId), { kind: target.kind });
-  };
+  return Effect.catchCause(Effect.gen(function* () {
+    const outcome = yield* pumpUploadChunks(request, (offset, chunk, final) => Effect.gen(function* () {
+      const written = yield* Effect.promise(() => ctx.object.drive_writeChunk(ctx.owner, { target, transferId, offset, chunk, final }));
 
-  try {
-    const outcome = await pumpUploadChunks(request, async (offset, chunk, final) => {
-      const written = await ctx.object.drive_writeChunk(ctx.owner, { target, transferId, offset, chunk, final });
-
-      if (!final && !written.ok) throw new KinuError(written.code, written.error);
+      if (!final && !written.ok) return yield* new KinuError(written.code, written.error);
 
       return written;
-    });
+    }));
 
     if (outcome === 'too_large') {
-      await abandon();
+      yield* abandon;
 
       return err(413, `the upload exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`);
     }
 
     if (outcome instanceof KinuError) {
-      await abandon();
+      yield* abandon;
       diagnostics.failure('drive.upload_body_unreadable', outcome, { kind: target.kind });
 
       return err(400, 'the upload stopped before the whole file arrived');
     }
 
     return answered(outcome.result);
-  } catch (cause) {
-    await abandon();
+  }), (aborted) => Effect.gen(function* () {
+    yield* abandon;
+    const cause = Cause.squash(aborted);
 
     if (cause instanceof KinuError) return err(ERROR_STATUS[cause.code], cause.message);
     diagnostics.failure('drive.upload_failed', toKinuError({
@@ -159,7 +158,7 @@ async function upload(request: Request, ctx: DriveContext, target: DriveUploadTa
     }), { kind: target.kind });
 
     return err(500, cause instanceof Error ? cause.message : 'upload failed');
-  }
+  }));
 }
 
 async function download(ctx: DriveContext, path: string, asAttachment: boolean): Promise<Response> {

@@ -140,42 +140,48 @@ export class UserApiError extends Data.TaggedError('UserApiError')<{ readonly me
   }
 }
 
-async function api<Schema extends v.GenericSchema>(
+function api<Schema extends v.GenericSchema>(
   schema: Schema, method: string, path: string, body?: RequestBody,
-): Promise<v.InferOutput<Schema>> {
-  const res = await fetch(`/api/user${path}`, {
-    method,
-    headers: { 'content-type': 'application/json' },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    // Reads only: an aborted mutation may already have landed server-side, making a timeout an ambiguous retry (KINU-073).
-    signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
+): Effect.Effect<v.InferOutput<Schema>> {
+  return Effect.gen(function* () {
+    const res = yield* Effect.promise(() => fetch(`/api/user${path}`, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      // Reads only: an aborted mutation may already have landed server-side, making a timeout an ambiguous retry (KINU-073).
+      signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
+    }));
+
+    if (!res.ok) {
+      const detail = yield* Effect.promise(() => errorDetail(res));
+
+      return yield* Effect.die(new UserApiError(`${method} /api/user${path} → ${res.status} ${detail}`, res.status));
+    }
+
+    return v.parse(schema, yield* Effect.promise(() => res.json()));
   });
-
-  if (!res.ok) throw new UserApiError(`${method} /api/user${path} → ${res.status} ${await errorDetail(res)}`, res.status);
-
-  return v.parse(schema, await res.json());
 }
 
-export const getProfile = () => api(UserProfileSchema, 'GET', '/profile');
+export const getProfile = () => settle(api(UserProfileSchema, 'GET', '/profile'));
 
-export const completeOnboarding = () => api(v.object({ onboardedAt: v.number() }), 'POST', '/onboarding/complete');
+export const completeOnboarding = () => settle(api(v.object({ onboardedAt: v.number() }), 'POST', '/onboarding/complete'));
 
-export const setDisplayName = (displayName: string) => api(UserProfileSchema, 'PATCH', '/profile', { displayName });
+export const setDisplayName = (displayName: string) => settle(api(UserProfileSchema, 'PATCH', '/profile', { displayName }));
 
 /** The confirmation phrase is the account's own email, checked again server-side. */
-export const builtinAuthStatus = () => api(v.object({ enabled: v.boolean(), owner: v.boolean() }), 'GET', '/builtin-auth');
+export const builtinAuthStatus = () => settle(api(v.object({ enabled: v.boolean(), owner: v.boolean() }), 'GET', '/builtin-auth'));
 
-export const listBuiltinAccounts = () => api(v.object({
+export const listBuiltinAccounts = () => settle(api(v.object({
   accounts: v.array(v.object({ email: v.string(), role: v.picklist(['owner', 'member']), createdAt: v.number() })),
-}), 'GET', '/builtin-auth/accounts');
+}), 'GET', '/builtin-auth/accounts'));
 
 export const createBuiltinLink = (kind: 'invites' | 'resets', email: string) =>
-  api(v.object({ url: v.string(), email: v.string(), expiresAt: v.number() }), 'POST', `/builtin-auth/${kind}`, { email });
+  settle(api(v.object({ url: v.string(), email: v.string(), expiresAt: v.number() }), 'POST', `/builtin-auth/${kind}`, { email }));
 
 export const deleteAccount = (confirm: string) =>
-  api(v.object({ deleted: v.literal(true) }), 'DELETE', '/account', { confirm });
+  settle(api(v.object({ deleted: v.literal(true) }), 'DELETE', '/account', { confirm }));
 
-export const getCliSetup = () => api(CliSetupSchema, 'GET', '/cli');
+export const getCliSetup = () => settle(api(CliSetupSchema, 'GET', '/cli'));
 
 export function listWorkspaces(query: RosterQuery = {}) {
   const params = new URLSearchParams();
@@ -186,19 +192,19 @@ export function listWorkspaces(query: RosterQuery = {}) {
 
   const search = params.size === 0 ? '' : `?${params.toString()}`;
 
-  return api(RosterPageSchema, 'GET', `/workspaces${search}`);
+  return settle(api(RosterPageSchema, 'GET', `/workspaces${search}`));
 }
 
 // `purpose` is the initial mission; omitting `name` lets the server create the identity with the user's model.
 export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>
-  api(WorkspaceEntrySchema, 'POST', '/workspaces', { name, displayName, purpose });
+  settle(api(WorkspaceEntrySchema, 'POST', '/workspaces', { name, displayName, purpose }));
 
 /** Records a visit to `name`, and says whether the roster took it. A 404 is the roster no longer holding the
  *  workspace, an answer rather than a failed visit; any other failure throws. */
 export function touchWorkspace(name: string): Promise<boolean> {
   return settle(Effect.gen(function* () {
     return yield* Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => api(OkSchema, 'POST', `/workspaces/${encodeURIComponent(name)}/touch`));
+      yield* api(OkSchema, 'POST', `/workspaces/${encodeURIComponent(name)}/touch`);
 
       return true;
     }), (failed) => Effect.gen(function* () {
@@ -212,7 +218,7 @@ export function touchWorkspace(name: string): Promise<boolean> {
 }
 
 export const removeWorkspace    = (name: string) =>
-  api(OkSchema, 'DELETE', `/workspaces/${encodeURIComponent(name)}`);
+  settle(api(OkSchema, 'DELETE', `/workspaces/${encodeURIComponent(name)}`));
 
 export type UserDevice = v.InferOutput<typeof UserDeviceSchema>;
 
@@ -251,23 +257,23 @@ const UserDeviceSchema = v.object({
 
 const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string() });
 
-export const listDevices    = () => api(v.array(UserDeviceSchema), 'GET', '/devices');
+export const listDevices    = () => settle(api(v.array(UserDeviceSchema), 'GET', '/devices'));
 
 export const registerDevice = (label?: string) =>
-  api(RegisteredDeviceSchema, 'POST', '/devices', { label });
+  settle(api(RegisteredDeviceSchema, 'POST', '/devices', { label }));
 
 export const renameDevice   = (id: string, name: string) =>
-  api(OkSchema, 'PATCH', `/devices/${encodeURIComponent(id)}`, { name });
+  settle(api(OkSchema, 'PATCH', `/devices/${encodeURIComponent(id)}`, { name }));
 
 export const revokeDevice   = (id: string) =>
-  api(v.object({ ok: v.literal(true), unstoppedCommands: v.number() }), 'DELETE', `/devices/${encodeURIComponent(id)}`);
+  settle(api(v.object({ ok: v.literal(true), unstoppedCommands: v.number() }), 'DELETE', `/devices/${encodeURIComponent(id)}`));
 
 export const acknowledgeUnstoppedDevice = (id: string) =>
-  api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(id)}/unstopped`);
+  settle(api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(id)}/unstopped`));
 
 /** Owner-session only (403 otherwise). What a command may reach is decided by the machine, not a workspace binding. */
 export const setDeviceSandboxTier = (deviceId: string, tier: DeviceTier) =>
-  api(OkSchema, 'PUT', `/devices/${encodeURIComponent(deviceId)}/sandbox`, { tier });
+  settle(api(OkSchema, 'PUT', `/devices/${encodeURIComponent(deviceId)}/sandbox`, { tier }));
 
 /** Per-(workspace, device) binding: may that workspace use the machine at all. No tier: the device switch decides reach. */
 const DeviceConsentSchema = v.object({
@@ -277,19 +283,19 @@ const DeviceConsentSchema = v.object({
 
 export type DeviceConsent = v.InferOutput<typeof DeviceConsentSchema>;
 
-export const listDeviceConsents = () => api(v.array(DeviceConsentSchema), 'GET', '/devices/consents');
+export const listDeviceConsents = () => settle(api(v.array(DeviceConsentSchema), 'GET', '/devices/consents'));
 
 /** The row is deleted, so the next device call asks again instead of reading as a standing refusal. */
 export const revokeDeviceConsent = (deviceId: string, agentName: string) =>
-  api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(deviceId)}/consent?agentName=${encodeURIComponent(agentName)}`);
+  settle(api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(deviceId)}/consent?agentName=${encodeURIComponent(agentName)}`));
 
-export const listCredentials  = () => api(v.array(CredentialSummarySchema), 'GET', '/credentials');
+export const listCredentials  = () => settle(api(v.array(CredentialSummarySchema), 'GET', '/credentials'));
 
 export const setCredential    = (key: string, value: Credential) =>
-  api(OkSchema, 'POST', `/credentials/${encodeURIComponent(key)}`, value);
+  settle(api(OkSchema, 'POST', `/credentials/${encodeURIComponent(key)}`, value));
 
 export const deleteCredential = (key: string) =>
-  api(OkSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}`);
+  settle(api(OkSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}`));
 
 const DeviceFlowStartSchema = v.object({
   userCode: v.string(), deviceAuthId: v.string(), pollIntervalSec: v.number(), portalURL: v.string(),
@@ -304,11 +310,11 @@ const PollResultSchema = v.object({
   connected: v.boolean(), accountId: v.optional(v.string()), error: v.optional(v.string()),
 });
 
-export const codexStatus      = () => api(CodexStatusSchema, 'GET', '/codex');
+export const codexStatus      = () => settle(api(CodexStatusSchema, 'GET', '/codex'));
 
-export const startCodexFlow   = () => api(DeviceFlowStartSchema, 'POST', '/codex/start');
+export const startCodexFlow   = () => settle(api(DeviceFlowStartSchema, 'POST', '/codex/start'));
 
-export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll');
+export const pollCodexFlow    = () => settle(api(PollResultSchema, 'POST', '/codex/poll'));
 
 /** Where the owner reviews and limits what Kinu spends of their ChatGPT plan. */
 export const CHATGPT_USAGE_URL = 'https://chatgpt.com/settings/usage';
@@ -323,47 +329,47 @@ const ChatGptPlanSchema = v.object({
 
 export type ChatGptPlan = v.InferOutput<typeof ChatGptPlanSchema>;
 
-export const chatgptPlan = () => api(ChatGptPlanSchema, 'GET', '/chatgpt');
+export const chatgptPlan = () => settle(api(ChatGptPlanSchema, 'GET', '/chatgpt'));
 
 /** The URL is for a browser on that device: the sign-in comes back to a port there. */
-export const startChatGptSignIn = () => api(v.object({ authorizeUrl: v.string(), device: v.object({ id: v.string(), label: v.string() }) }), 'POST', '/chatgpt/sign-in');
+export const startChatGptSignIn = () => settle(api(v.object({ authorizeUrl: v.string(), device: v.object({ id: v.string(), label: v.string() }) }), 'POST', '/chatgpt/sign-in'));
 
-export const signOutChatGpt = () => api(v.object({ unconfirmed: v.nullable(v.string()) }), 'DELETE', '/chatgpt');
+export const signOutChatGpt = () => settle(api(v.object({ unconfirmed: v.nullable(v.string()) }), 'DELETE', '/chatgpt'));
 
-export const startClaudeSignIn = () => api(v.object({ url: v.string() }), 'POST', '/claude/start');
+export const startClaudeSignIn = () => settle(api(v.object({ url: v.string() }), 'POST', '/claude/start'));
 
 /** `code` is what Claude showed: the code, or the address it sent the browser to. */
-export const finishClaudeSignIn = (code: string) => api(PollResultSchema, 'POST', '/claude/finish', { code });
+export const finishClaudeSignIn = (code: string) => settle(api(PollResultSchema, 'POST', '/claude/finish', { code }));
 
 const UnrevokedGrantSchema = v.object({ key: v.string(), reasons: v.array(v.string()), recordedAt: v.number() });
 
 export type UnrevokedGrant = v.InferOutput<typeof UnrevokedGrantSchema>;
 
-export const listUnrevokedGrants = () => api(v.array(UnrevokedGrantSchema), 'GET', '/unrevoked-grants');
+export const listUnrevokedGrants = () => settle(api(v.array(UnrevokedGrantSchema), 'GET', '/unrevoked-grants'));
 
-export const dismissUnrevokedGrant = (key: string) => api(OkSchema, 'DELETE', `/unrevoked-grants/${encodeURIComponent(key)}`);
+export const dismissUnrevokedGrant = (key: string) => settle(api(OkSchema, 'DELETE', `/unrevoked-grants/${encodeURIComponent(key)}`));
 
-export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex');
+export const disconnectCodex  = () => settle(api(OkSchema, 'DELETE', '/codex'));
 
-export const getAccountUsage = (refresh = false) => api(AccountUsageSchema, 'GET', refresh ? '/usage?refresh=1' : '/usage');
+export const getAccountUsage = (refresh = false) => settle(api(AccountUsageSchema, 'GET', refresh ? '/usage?refresh=1' : '/usage'));
 
 export const getProfileCatalog = (): Promise<ProfileCatalogEnvelope> =>
-  api(ProfileCatalogEnvelopeSchema, 'GET', '/profile-catalog');
+  settle(api(ProfileCatalogEnvelopeSchema, 'GET', '/profile-catalog'));
 
 export const updateProfileCatalog = (
   catalog: ProfileCatalog,
   expectedVersion: number,
 ): Promise<ProfileCatalogEnvelope> =>
-  api(ProfileCatalogEnvelopeSchema, 'PUT', '/profile-catalog', { catalog, expectedVersion });
+  settle(api(ProfileCatalogEnvelopeSchema, 'PUT', '/profile-catalog', { catalog, expectedVersion }));
 
-export const listAvailableModels = (): Promise<ModelMenu> => api(ModelMenuSchema, 'GET', '/models');
+export const listAvailableModels = (): Promise<ModelMenu> => settle(api(ModelMenuSchema, 'GET', '/models'));
 
 const SANDBOX_SIZE_PATH = `/config/${SANDBOX_SIZE_CONFIG_KEY}`;
 
-export const getAccountSandboxSize = async (): Promise<BoxSize | null> =>
-  accountSandboxSize((await api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', SANDBOX_SIZE_PATH)).value);
+export const getAccountSandboxSize = (): Promise<BoxSize | null> =>
+  settle(Effect.map(api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', SANDBOX_SIZE_PATH), (row) => accountSandboxSize(row.value)));
 
-export const setAccountSandboxSize = (size: BoxSize) => api(OkSchema, 'PUT', SANDBOX_SIZE_PATH, { value: size });
+export const setAccountSandboxSize = (size: BoxSize) => settle(api(OkSchema, 'PUT', SANDBOX_SIZE_PATH, { value: size }));
 
 export type { ModelTestResult };
 
@@ -390,7 +396,7 @@ const ProviderCatalogEntrySchema = v.object({
 });
 
 export const listProviderCatalog = () =>
-  api(v.array(ProviderCatalogEntrySchema), 'GET', '/providers/catalog');
+  settle(api(v.array(ProviderCatalogEntrySchema), 'GET', '/providers/catalog'));
 
 export type CloudflareAccountStatus = v.InferOutput<typeof CloudflareAccountStatusSchema>;
 
@@ -400,12 +406,12 @@ const CloudflareAccountStatusSchema = v.object({
 });
 
 export const listCloudflareAccounts = () =>
-  api(CloudflareAccountStatusSchema, 'GET', '/cloudflare/accounts');
+  settle(api(CloudflareAccountStatusSchema, 'GET', '/cloudflare/accounts'));
 
 const putCloudflareSelection = (path: string, id: string | null) =>
   api(OkSchema, 'PUT', path, { id });
 
-export const selectCloudflareAccount = (id: string) => putCloudflareSelection('/cloudflare/account', id);
+export const selectCloudflareAccount = (id: string) => settle(putCloudflareSelection('/cloudflare/account', id));
 
 export type CloudflareGatewayStatus = v.InferOutput<typeof CloudflareGatewayStatusSchema>;
 
@@ -416,9 +422,9 @@ const CloudflareGatewayStatusSchema = v.object({
 });
 
 export const listCloudflareGateways = () =>
-  api(CloudflareGatewayStatusSchema, 'GET', '/cloudflare/gateways');
+  settle(api(CloudflareGatewayStatusSchema, 'GET', '/cloudflare/gateways'));
 
-export const selectCloudflareGateway = (id: string | null) => putCloudflareSelection('/cloudflare/gateway', id);
+export const selectCloudflareGateway = (id: string | null) => settle(putCloudflareSelection('/cloudflare/gateway', id));
 
 export function cloudflareReconnectPath(returnTo: string): string {
   const params = new URLSearchParams({
@@ -451,7 +457,7 @@ export const McpServerSummarySchema = v.object({
 
 export type McpServerSummary = v.InferOutput<typeof McpServerSummarySchema>;
 
-export const listMcpServers = () => api(v.array(McpServerSummarySchema), 'GET', '/mcp/servers');
+export const listMcpServers = () => settle(api(v.array(McpServerSummarySchema), 'GET', '/mcp/servers'));
 
 /** Whether the preset's OAuth app is configured, which decides sign-in vs fallback. */
 export interface McpPresetAvailability {
@@ -460,13 +466,13 @@ export interface McpPresetAvailability {
 }
 
 export const listMcpPresets = () =>
-  api(v.array(v.object({ id: v.string(), appConfigured: v.boolean() })), 'GET', '/mcp/presets');
+  settle(api(v.array(v.object({ id: v.string(), appConfigured: v.boolean() })), 'GET', '/mcp/presets'));
 
 export const addMcpServer   = (input: McpServerInput) =>
-  api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input);
+  settle(api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input));
 
 export const removeMcpServer = (id: string) =>
-  api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`);
+  settle(api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`));
 
 export interface CreateWebhookOpts {
   label: string;
@@ -486,20 +492,24 @@ interface AgentRequest<Schema extends v.GenericSchema> {
   body?: RequestBody;
 }
 
-async function agentApi<Schema extends v.GenericSchema>(
+function agentApi<Schema extends v.GenericSchema>(
   { schema, method, agentName, path, body }: AgentRequest<Schema>,
-): Promise<v.InferOutput<Schema>> {
-  const res = await fetch(`/api/workspaces/${encodeURIComponent(agentName)}${path}`, {
-    method,
-    headers: { 'content-type': 'application/json' },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+): Effect.Effect<v.InferOutput<Schema>> {
+  return Effect.gen(function* () {
+    const res = yield* Effect.promise(() => fetch(`/api/workspaces/${encodeURIComponent(agentName)}${path}`, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    }));
+
+    if (!res.ok) {
+      const detail = yield* Effect.promise(() => errorDetail(res));
+
+      return yield* Effect.die(new Error(`${method} /api/workspaces/${agentName}${path} → ${res.status} ${detail}`));
+    }
+
+    return v.parse(schema, yield* Effect.promise(() => res.json()));
   });
-
-  if (!res.ok) {
-    throw new Error(`${method} /api/workspaces/${agentName}${path} → ${res.status} ${await errorDetail(res)}`);
-  }
-
-  return v.parse(schema, await res.json());
 }
 
 const CreateWebhookResultSchema = v.object({
@@ -509,12 +519,12 @@ const CreateWebhookResultSchema = v.object({
 });
 
 export const createDurableWebhook = (agentName: string, opts: CreateWebhookOpts) =>
-  agentApi({ schema: CreateWebhookResultSchema, method: 'POST', agentName, path: '/triggers', body: opts });
+  settle(agentApi({ schema: CreateWebhookResultSchema, method: 'POST', agentName, path: '/triggers', body: opts }));
 
 export const cancelTrigger = (agentName: string, trigger_id: string) =>
-  agentApi({
+  settle(agentApi({
     schema: v.object({ ok: v.boolean(), changed: v.boolean() }),
     method: 'DELETE',
     agentName,
     path: `/triggers/${encodeURIComponent(trigger_id)}`,
-  });
+  }));

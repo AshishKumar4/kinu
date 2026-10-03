@@ -106,17 +106,10 @@ export function lazyRoute<Props extends object>(
 
   let current: LazyExoticComponent<ComponentType<Props>> | null = null;
 
-  const mint = (): LazyExoticComponent<ComponentType<Props>> => lazy(async () => {
-    try {
-      return await attempt();
-    } catch (cause) {
-      current = null;
-      throw cause;
-    }
-  });
-
   return function LazyRoute(props: Props) {
-    const Loaded = current ??= mint();
+    const Loaded = current ??= lazy(() => settle(Effect.onError(Effect.promise(attempt), () => Effect.sync(() => {
+      current = null;
+    }))));
 
     return <Loaded {...props} />;
   };

@@ -9,7 +9,7 @@ import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { MarkdownContent, CodeBlock } from "./shared";
 import {
-  FileWriteConflict, fileTextEditable, MarkdownFrontmatterError, parseMarkdownFrontmatter, putFileBytes, sandboxedHtml, textRenderOf,
+  FileWriteConflict, fileTextEditable, readMarkdownFrontmatter, putFileBytes, sandboxedHtml, textRenderOf,
   viewerKindOf, type FileText, type TextRender,
 } from "@kinu.run/core";
 
@@ -179,16 +179,9 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
 }
 
 function frontmatterAsCode(markdown: string): string {
-  let body: string;
+  const body = readMarkdownFrontmatter(markdown)?.body;
 
-  try {
-    body = parseMarkdownFrontmatter(markdown).body;
-  } catch (caught) {
-    if (caught instanceof MarkdownFrontmatterError) return markdown;
-    throw caught;
-  }
-
-  if (body.length === markdown.length) return markdown;
+  if (body === undefined || body.length === markdown.length) return markdown;
   const head = markdown.slice(0, markdown.length - body.length);
 
   return `\`\`\`yaml\n${head.slice(head.indexOf("\n") + 1, head.lastIndexOf("\n---"))}\n\`\`\`\n\n${body}`;
