@@ -3,41 +3,21 @@ import { exists as nimbusExists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
  *  and where the agent's tools reach a file. */
 
 import {
-  approveFileAccess, commandFilesOwner, gateExec, onUserRoots, reviewProgram, reviewShellCommand, sessionAt,
+  approveFileAccess, commandFilesOwner, gateExec, onUserRoots, reviewProgram, reviewShellCommand,
   STRICT_NO_CHANNEL_POLICY, type ApprovalResult, type FileAccess, type GatedExecutor, type ShellApprovalPolicy, type ShellCwd,
 } from '../safety/approval-gate';
 import { asBytes, currentBytes } from '../safety/bound-write';
 import * as v from 'valibot';
-import { answeredRefusal, CommandResultSchema } from './exec-result';
+import { answeredRefusal } from './exec-result';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
-import { ShellExecOptionsSchema, type CheckpointFiles, type Shell, type ShellExecOptions, type ShellExecResult } from '../types/primitives';
+import type { CheckpointFiles, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
+import { busyShell, callJob, shellExecOptions } from './shell-session';
 import { requireBuild } from './work-mode';
 import { refusalOf, type KinuError } from '../obs/error';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 
-function parseShellExecOptions(input: { value: unknown }): string | ShellExecOptions | undefined {
-  const text = v.safeParse(v.string(), input.value);
-
-  if (text.success) return text.output;
-  const options = v.safeParse(ShellExecOptionsSchema, input.value);
-
-  return options.success ? options.output : undefined;
-}
-
 export type ShellReach = Pick<GatedExecutor, 'filesOwner' | 'shellSession'>;
-
-function detachOf(stdinOrOptions: string | ShellExecOptions | undefined): AbortSignal | undefined {
-  return v.is(v.string(), stdinOrOptions) ? undefined : stdinOrOptions?.detach;
-}
-
-/** A shell's cwd, read ungated; a durable one outlives its process. Null: unreadable. */
-export async function shellCwd(shell: Shell): Promise<string | null> {
-  const result = await shell.exec('pwd');
-  const cwd = result.stdout.trim();
-
-  return result.refusal === undefined && result.exitCode === 0 && cwd.startsWith('/') ? cwd : null;
-}
 
 /** A refusal reads as a command that did not run: exit 1, message on stderr, its code in `refusal`. */
 export function withApprovalGatedShell(
@@ -49,29 +29,43 @@ export function withApprovalGatedShell(
 
   // 'workspace' only: gateProviderExec skips the workspace `exec` because it is gated here.
   const execute = gateExec<ShellExecResult>(
-    (command, ...rest) => shell.exec(command, parseShellExecOptions({ value: rest[0] })),
+    (command, ...rest) => shell.exec(command, shellExecOptions({ value: rest[0] })),
     (error) => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) }),
     { name: 'workspace', ...reach },
-    { policy, refusalCode: (result) => result.refusal?.reason ?? null },
+    {
+      policy,
+      refusalCode: (result) => result.refusal?.reason ?? null,
+      review: async (command, rest) => {
+        const { name, cwd } = shellExecOptions({ value: rest[0] });
+
+        return reviewShellCommand({ name: 'workspace', ...reach }, command, await session?.at(name, cwd));
+      },
+    },
   );
 
-  const run = async (command: string, stdinOrOptions?: string | ShellExecOptions): Promise<ShellExecResult> => {
-    const result = await execute(command, stdinOrOptions);
+  const run = async (command: string, options: ShellExecOptions): Promise<ShellExecResult> => {
+    const result = await execute(command, options);
 
-    if (result.refusal === undefined && detachOf(stdinOrOptions)?.aborted !== true) session?.ran(command, result.exitCode);
+    // A named call that ran leaves its shell where it ended; one that did not run moved nothing.
+    if (options.name !== undefined && result.refusal === undefined) session?.ran(options.name, result.finalCwd ?? null);
 
     return result;
   };
 
-  return {
+  const gated: Shell = {
     exec: (command, stdinOrOptions) => {
       requireBuild('Workspace shell execution');
+      const options = shellExecOptions({ value: stdinOrOptions });
 
-      return session === undefined
-        ? run(command, stdinOrOptions)
-        : session.serial(() => run(command, stdinOrOptions), detachOf(stdinOrOptions));
+      return session === undefined ? run(command, options) : session.hold(options.name, callJob(options), () => run(command, options), busyShell);
     },
   };
+
+  const cwd = shell.cwd?.bind(shell);
+
+  if (cwd !== undefined) gated.cwd = cwd;
+
+  return gated;
 }
 
 export interface FileReach {
@@ -167,22 +161,11 @@ function parseCallOptions(input: { value: unknown }): v.InferOutput<typeof CallO
 /** `runCode` is a shell command only in the shell language. */
 async function reviewCall(provider: ExecutorProvider, member: string, command: string, rest: readonly unknown[]): Promise<ApprovalResult> {
   const options = parseCallOptions({ value: rest[0] });
-  const session = provider.shellSession;
-  let at: ShellCwd | undefined;
-
-  if (session !== undefined) at = options.cwd === undefined ? await session.at() : sessionAt(session.home, options.cwd);
+  const at: ShellCwd | undefined = await provider.shellSession?.at(undefined, options.cwd);
 
   return member === 'runCode' && options.language !== 'shell'
     ? reviewProgram(command, commandFilesOwner(provider, command, at))
     : reviewShellCommand(provider, command, at);
-}
-
-function ranExitCode(result: ExecutorToolResult): number | null {
-  const parsed = v.safeParse(CommandResultSchema, result);
-
-  if (!parsed.success) return null;
-
-  return v.is(v.string(), parsed.output) ? 0 : parsed.output.execution?.exitCode ?? null;
 }
 
 /** Already-wrapped executes, so a provider shared across routers is gated once (idempotent). */
@@ -210,23 +193,10 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
       },
     );
 
-    const session = provider.shellSession;
-
-    // Nimbus keeps a shell program's `cd`s (withShellState).
-    const run = async (...args: unknown[]): Promise<ExecutorToolResult> => {
-      const result = await gated(...args);
-      const options = parseCallOptions({ value: args[1] });
-      const exitCode = name === 'runCode' && options.language === 'shell' && options.cwd === undefined ? ranExitCode(result) : null;
-
-      if (exitCode !== null) session?.ran(String(args[0]), exitCode);
-
-      return result;
-    };
-
     const execute: ExecutorTool['execute'] = (...args) => {
       requireBuild(provider.name + '.' + name);
 
-      return session === undefined ? run(...args) : session.serial(() => run(...args));
+      return gated(...args);
     };
 
     GATED_EXECUTES.add(execute);

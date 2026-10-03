@@ -5,9 +5,9 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import * as v from 'valibot';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { gateProviderExec, withApprovalGatedShell } from '../src/execution/approval';
+import { shellExecOptions } from '../src/execution/shell-session';
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
 import { createShellSession, type FilesOwner, type ShellApprovalPolicy, type ShellApprovalRequest } from '../src/safety/approval-gate';
@@ -392,7 +392,7 @@ function workspaceOverDevice() {
   workspace.mountTable(mounted);
   const asked: string[] = [];
 
-  const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots(), keepsCwd: true });
+  const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots() });
 
   const shell = withApprovalGatedShell(workspace.shell, { filesOwner: 'agent', shellSession }, {
     mode: () => 'strict',
@@ -421,16 +421,16 @@ describe('a workspace shell over the user\'s mounts', () => {
     }
   });
 
-  test('a session that went into /pc asks before deleting there, and stops asking once it is back home', async () => {
+  // The stateless shell: a `cd` lasts only its own call, in the workspace's one shell as anywhere else.
+  test('a call starts at home whatever an earlier call went into, and says so', async () => {
     const { db, shell, asked, removed } = workspaceOverDevice();
 
     try {
       expect((await shell.exec('cd /pc/proj')).exitCode).toBe(0);
-      expect((await shell.exec('rm -rf .')).exitCode).not.toBe(0);
-      expect((await shell.exec('cd ~')).exitCode).toBe(0);
-      expect((await shell.exec('mkdir -p scratch/x && rm -rf scratch')).exitCode).toBe(0);
+      const next = await shell.exec('mkdir -p scratch/x && rm -rf scratch && pwd');
 
-      expect(asked).toEqual(['rm -rf .']);
+      expect(next).toMatchObject({ exitCode: 0, stdout: `${WORKSPACE_ROOT}\n`, cwd: WORKSPACE_ROOT });
+      expect(asked).toEqual([]);
       expect(removed).toEqual([]);
     } finally {
       db.close();
@@ -453,7 +453,7 @@ function mountedWorkspaceProvider() {
     kind: 'workspace',
     capabilities: new Set(['shell']),
     filesOwner: 'agent',
-    shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'], keepsCwd: true }),
+    shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'] }),
     homeDir: async () => WORKSPACE_ROOT,
     isAvailable: () => true,
     connect: async () => {},
@@ -483,7 +483,7 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
 
     router.register({
       ...mountedWorkspaceProvider().provider,
-      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots(), keepsCwd: true }),
+      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots() }),
     });
     const run = present(router.getProvider('workspace'), 'the workspace executor').tools.runCode;
     const write = "open('/pc/laptop/notes.txt', 'w').write('x')";
@@ -551,7 +551,7 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
 
         return { stdout: '', stderr: '', exitCode: 0 };
       },
-    }, { filesOwner: 'agent', shellSession: createShellSession({ home: '/home/agents/n1', userRoots: () => ['/pc'], keepsCwd: false }) }, {
+    }, { filesOwner: 'agent', shellSession: createShellSession({ home: '/home/agents/n1', userRoots: () => ['/pc'] }) }, {
       mode: () => 'strict',
       requestApproval: async (request) => {
         asked.push(request.command);
@@ -567,106 +567,82 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
   });
 });
 
-describe('one durable shell, reached through the shell tool and through codemode', () => {
+describe('a named shell, judged from where it is', () => {
   const DENIED = { error: expect.stringContaining('Denied by the owner') };
 
-  const CwdOption = v.object({ cwd: v.string() });
-
   /**
-   * A Nimbus named shell as cf drives it: the gated shell and the executor's processes and programs all start where
-   * the last foreground `cd` left it, and `leftAt` is where an earlier process left it.
+   * Shells as a box keeps them: an unnamed call starts at home or its `cwd`, a named one where the name's last call
+   * left it; each reports where it started and, named, where it ended. `leftAt` is where earlier processes left names.
    */
-  function durableShell(leftAt = WORKSPACE_ROOT) {
+  function namedShells(leftAt: Readonly<Record<string, string>> = {}) {
     const { router, asked, policy } = askingRouter();
     const ran: string[] = [];
-    let cwd = leftAt;
-
-    const run = (command: string, at: string, keepsCd: boolean) => {
-      if (!command.startsWith('cd ')) ran.push(`${at}$ ${command}`);
-      else if (keepsCd) cwd = command === 'cd ~' ? WORKSPACE_ROOT : command.slice('cd '.length);
-    };
+    const directories = new Map(Object.entries(leftAt));
 
     const shellSession = createShellSession({
-      home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'], keepsCwd: true, stored: async () => cwd,
+      home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'], stored: async (name) => directories.get(name) ?? WORKSPACE_ROOT,
     });
 
     const shell = withApprovalGatedShell({
-      exec: async (command) => {
-        run(command, cwd, true);
+      exec: async (command, options) => {
+        const { name, cwd } = shellExecOptions({ value: options });
+        const start = cwd ?? (name === undefined ? WORKSPACE_ROOT : directories.get(name) ?? WORKSPACE_ROOT);
+        const moved = command.startsWith('cd ') ? command.slice('cd '.length) : start;
+        const end = moved === '~' ? WORKSPACE_ROOT : moved;
 
-        return { stdout: '', stderr: '', exitCode: 0 };
+        if (!command.startsWith('cd ')) ran.push(`${start}$ ${command}`);
+
+        if (name !== undefined) directories.set(name, end);
+
+        return { stdout: '', stderr: '', exitCode: 0, cwd: start, ...(name !== undefined && { finalCwd: end }) };
       },
     }, { filesOwner: 'agent', shellSession }, policy);
 
-    router.register({
-      ...mountedWorkspaceProvider().provider,
-      shellSession,
-      tools: {
-        startProcess: {
-          description: 'Start a background process',
-          execute: async (...args: unknown[]) => {
-            const options = v.safeParse(CwdOption, args[1]);
-            run(String(args[0]), options.success ? options.output.cwd : cwd, false);
-
-            return 'started';
-          },
-        },
-        runCode: {
-          description: 'Run a program',
-          execute: async (...args: unknown[]) => {
-            const options = v.safeParse(CwdOption, args[1]);
-            run(String(args[0]), options.success ? options.output.cwd : cwd, !options.success);
-
-            return 'ok';
-          },
-        },
-      },
-    });
+    router.register({ ...mountedWorkspaceProvider().provider, shellSession });
 
     return { shell, tools: present(router.getProvider('workspace'), 'the workspace executor').tools, asked, ran };
   }
 
-  test('a `cd` into the user\'s machine through the shell carries to a process or a shell program started next', async () => {
-    const { shell, tools, asked, ran } = durableShell();
+  test('a name that went into the user\'s machine is judged there until it comes back; an unnamed call starts at home', async () => {
+    const { shell, asked, ran } = namedShells();
 
-    await shell.exec('cd /pc/laptop/proj');
-    expect(await tools.startProcess?.execute('rm -rf build')).toMatchObject(DENIED);
-    expect(await tools.runCode?.execute('rm -rf build', { language: 'shell' })).toMatchObject(DENIED);
-
-    await shell.exec('cd ~');
-    expect(await tools.startProcess?.execute('rm -rf build')).toBe('started');
-
-    expect(asked.map((request) => request.command)).toEqual(['rm -rf build', 'rm -rf build']);
-    expect(ran).toEqual([`${WORKSPACE_ROOT}$ rm -rf build`]);
-  });
-
-  test('a `cd` into the user\'s machine through a shell program carries to the shell\'s next command', async () => {
-    const { shell, tools, asked, ran } = durableShell();
-
-    await tools.runCode?.execute('cd /pc/laptop/proj', { language: 'shell' });
-    expect((await shell.exec('rm -rf build')).exitCode).not.toBe(0);
-
-    await tools.runCode?.execute('cd ~', { language: 'shell' });
+    await shell.exec('cd /pc/laptop/proj', { name: 'work' });
+    expect((await shell.exec('rm -rf build', { name: 'work' })).exitCode).not.toBe(0);
     expect((await shell.exec('rm -rf build')).exitCode).toBe(0);
 
+    await shell.exec('cd ~', { name: 'work' });
+    expect((await shell.exec('rm -rf build', { name: 'work' })).exitCode).toBe(0);
+
     expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
-    expect(ran).toEqual([`${WORKSPACE_ROOT}$ rm -rf build`]);
+    expect(ran).toEqual([`${WORKSPACE_ROOT}$ rm -rf build`, `${WORKSPACE_ROOT}$ rm -rf build`]);
   });
 
-  test('a shell an earlier process left on the user\'s machine is judged from there', async () => {
-    const { shell, asked, ran } = durableShell('/pc/laptop/proj');
+  test('a call given a cwd on the user\'s machine, named or not, is judged from there', async () => {
+    const { shell, tools, asked, ran } = namedShells();
 
-    expect((await shell.exec('rm -rf build')).exitCode).not.toBe(0);
-    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect((await shell.exec('rm -rf build', { cwd: '/pc/laptop/proj' })).exitCode).not.toBe(0);
+    expect((await shell.exec('rm -rf build', { name: 'work', cwd: '/pc/laptop/proj' })).exitCode).not.toBe(0);
+    expect(await tools.startProcess?.execute('rm -rf build', { cwd: '/pc/laptop/proj' })).toMatchObject(DENIED);
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build', 'rm -rf build', 'rm -rf build']);
     expect(ran).toEqual([]);
   });
 
-  test('calls issued together are judged in turn, each from where the one before left the shell', async () => {
-    const { shell, tools, asked, ran } = durableShell();
+  test('a name an earlier process left on the user\'s machine is judged from there', async () => {
+    const { shell, asked, ran } = namedShells({ work: '/pc/laptop/proj' });
 
-    const [, started] = await Promise.all([shell.exec('cd /pc/laptop/proj'), tools.startProcess?.execute('rm -rf build')]);
+    expect((await shell.exec('rm -rf build', { name: 'work' })).exitCode).not.toBe(0);
+    expect((await shell.exec('rm -rf build', { name: 'other' })).exitCode).toBe(0);
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect(ran).toEqual([`${WORKSPACE_ROOT}$ rm -rf build`]);
+  });
 
-    expect(started).toMatchObject(DENIED);
+  test('calls on one name issued together are judged in turn, each from where the one before left it', async () => {
+    const { shell, asked, ran } = namedShells();
+
+    const [, removed] = await Promise.all([shell.exec('cd /pc/laptop/proj', { name: 'work' }), shell.exec('rm -rf build', { name: 'work' })]);
+
+    expect(removed.exitCode).not.toBe(0);
     expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
     expect(ran).toEqual([]);
   });

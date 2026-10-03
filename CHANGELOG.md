@@ -51,6 +51,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **Every shell call starts fresh.** A `cd` or `export` no longer carries into the agent's next command, and its commands no longer wait on each other: one detached command used to hold up every later `echo` of the same agent for its whole life. A call starts in its `cwd`, or the agent's home, and the answer says where. Give calls the same `name` to keep a directory and exported variables between them, in the workspace, the sandbox, on a device or in the CLI's directory; a name that a running background job holds answers at once that it is busy, and with which job. Cancelling a workspace command now stops it.
 - Test-spawned Bun children receive the preload's current scratch environment, through one helper or an explicit environment. Native no-env spawns fail the lint rule without an allowlist, and a leaked-child report names its parent and command.
 - **The runtime and devbox image move to Bun 1.4.2.** Hooks, shell entry points and GitHub workflows use the exact repo-local npm binary, not the shared global, and preflight refuses a different runtime. The first install can bootstrap with global 1.4.0. The image carries the same runtime and freshly bundled backup sync; a real saved marker survives its stop and wake. On the pinned 1.4.0, an isolated startup suite hung; the unchanged suite passes on 1.4.2.
 

@@ -151,7 +151,7 @@ test('every member of every namespace refuses with the one declared Refusal, and
   const namespaces = [
     createInlineExecutor({ ...inline, slate: refusingDouble() }),
     createNimbusWorkspaceExecutor({ box: refusingDouble(), inline }),
-    createSandboxExecutor(refusingDouble(), 'preview.test'),
+    createSandboxExecutor(refusingDouble(), { previewHostSuffix: 'preview.test' }),
     createSandboxExecutor(),
     createParentExecutor({ handle: refusingDouble() }),
     createDeviceTunnelExecutor(refusingDouble()),

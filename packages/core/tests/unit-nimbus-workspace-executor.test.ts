@@ -82,7 +82,7 @@ describe('hosted Nimbus workspace provider', () => {
   test('a transport failure never acquires a fabricated process exit', async () => {
     const box = fakeBox();
     box.exec = async (command) => ({ command, success: false, stdout: '', stderr: 'transport unavailable', exitCode: 0 });
-    const shell = await nimbusSessionShell(box).exec('work');
+    const shell = await nimbusSessionShell(box, { home: WORKSPACE_ROOT }).exec('work');
     expect(shell).toMatchObject({ exitCode: 0, refusal: { reason: 'io' } });
     expect(shell.refusal).not.toHaveProperty('execution');
   });
@@ -95,7 +95,7 @@ describe('hosted Nimbus workspace provider', () => {
       box,
       inline: {
         vfs,
-        shell: nimbusSessionShell(box),
+        shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         memory: rt.memory,
         craftStore: rt.craftStore,
         sql: rt.storage.sql,
@@ -169,7 +169,7 @@ describe('hosted Nimbus workspace provider', () => {
 
     const inline = {
       vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }),
-      shell: nimbusSessionShell(box),
+      shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
       memory: rt.memory,
       craftStore: rt.craftStore,
       sql: rt.storage.sql,
@@ -190,7 +190,7 @@ describe('hosted Nimbus workspace provider', () => {
     });
     box.runtimes = { list: async () => ({ installed: [], available: [{ name: 'bun' }] }) };
 
-    const shell = await nimbusSessionShell(box).exec('bun test broken.test.mjs');
+    const shell = await nimbusSessionShell(box, { home: WORKSPACE_ROOT }).exec('bun test broken.test.mjs');
 
     expect(shell.exitCode).toBe(127);
     expect(shell.refusal?.reason).toBe('unavailable');
@@ -204,7 +204,7 @@ describe('hosted Nimbus workspace provider', () => {
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box),
+        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
@@ -225,12 +225,12 @@ describe('hosted Nimbus workspace provider', () => {
       : { command, success: false, stdout: '', stderr: 'grep: command not found', exitCode: 127 };
     // Nothing installable: the text may not promise `nimbus install`.
 
-    const missed = await nimbusSessionShell(box).exec('grep -r thing .');
+    const missed = await nimbusSessionShell(box, { home: WORKSPACE_ROOT }).exec('grep -r thing .');
 
     expect(missed.refusal?.reason).toBe('unavailable');
     expect(missed.refusal?.error).toContain('sandbox');
 
-    const real = await nimbusSessionShell(box).exec('exit 2');
+    const real = await nimbusSessionShell(box, { home: WORKSPACE_ROOT }).exec('exit 2');
 
     expect(real.refusal).toBeUndefined();
     expect(real.exitCode).toBe(2);
@@ -244,7 +244,7 @@ describe('hosted Nimbus workspace provider', () => {
     box.runtimes = { list: async () => { throw new Error('session box catalog socket closed'); } };
 
     // A failed catalog read is stated, since "no bins known" and "could not ask" differ.
-    const missed = await nimbusSessionShell(box).exec('bun test broken.test.mjs');
+    const missed = await nimbusSessionShell(box, { home: WORKSPACE_ROOT }).exec('bun test broken.test.mjs');
 
     expect(missed.exitCode).toBe(127);
     expect(missed.refusal?.reason).toBe('unavailable');
@@ -291,7 +291,7 @@ describe('hosted Nimbus workspace provider', () => {
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box),
+        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
@@ -317,7 +317,7 @@ describe('hosted Nimbus workspace provider', () => {
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box),
+        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
@@ -337,7 +337,7 @@ describe('a workspace whose host cannot compile node programs', () => {
     return createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box),
+        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });

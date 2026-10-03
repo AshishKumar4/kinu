@@ -6,6 +6,8 @@
 
 /** The tool call's view: report issued ids, read the current owner. */
 export interface DeviceRequestChannel {
+  /** The job this invocation becomes if it outlives its window. */
+  readonly jobId: string;
   /** Synchronous: called inside the executor's exec frame, which cannot handle a rejection. */
   report(requestId: string): void;
   /** Owning job, or null while foreground. Read per exec call, never captured: detach can happen between execs. */

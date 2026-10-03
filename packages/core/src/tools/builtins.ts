@@ -29,10 +29,10 @@ import { TurnFileLedger } from '../vfs/file-ledger';
 import { TurnContextBudget } from '../context-budget';
 import { isMcpToolKey } from './mcp-naming';
 import { selectInjectableCraftedTools, type CraftedToolSource } from './crafted-executor';
-import { commandResult, CommandResultSchema, type CommandResult } from '../execution/exec-result';
+import { commandResultAt, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
 import type { ShellExecOptions } from '../types/primitives';
-import { readCallJob } from './call-job';
+import { readCallJob, type CallJob } from './call-job';
 import { createMemoryDispatcher, memoryToolInputSchema } from './memory-tool';
 import { createTasksDispatcher, TasksToolInputSchema, type RoleSwitch } from './tasks-tool';
 import type { WebSearchProvider } from '../web/index';
@@ -127,7 +127,32 @@ export function shellInputSchema(runtimes: readonly string[]) {
       description: 'Default: workspace. A user\'s machine goes by its nickname from the execution status, which is required when several are connected.',
     }).optional(),
     why: z.string().describe('Optional, for a runtime other than workspace: what it gives that the workspace shell lacks. Recorded with the outcome.').optional(),
+    cwd: z.string().describe('Where the command starts; relative paths are from your home, or from the named shell\'s directory.').optional(),
+    name: z.string().min(1).describe('A shell that keeps its directory and exported variables between the calls naming it.').optional(),
   });
+}
+
+/** What the call hands its runtime: absent keys stay absent, so a runtime reads presence. */
+function shellCallOptions(
+  args: { readonly cwd?: string | undefined; readonly name?: string | undefined },
+  signal: AbortSignal | undefined,
+  job: CallJob | undefined,
+): ShellExecOptions {
+  const options: ShellExecOptions = {};
+
+  if (signal) options.signal = signal;
+
+  if (job) {
+    options.job = job.id;
+    options.detached = job.detached;
+    options.output = job.output;
+  }
+
+  if (args.cwd !== undefined) options.cwd = args.cwd;
+
+  if (args.name !== undefined) options.name = args.name;
+
+  return options;
 }
 
 /** Log event names; constants so emitter and query spell them identically. Only refusals and handled failures. */
@@ -224,17 +249,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           throw refusal;
         }
 
-        const job = readCallJob(options);
-        const execOptions: ShellExecOptions = {};
-
-        if (signal) execOptions.signal = signal;
-
-        if (job) {
-          execOptions.detach = job.detached;
-          execOptions.output = job.output;
-        }
-
-        return clamp(commandResult(await shell.exec(args.command, execOptions)));
+        return clamp(commandResultAt(await shell.exec(args.command, shellCallOptions(args, signal, readCallJob(options)))));
       }
 
       // Past here is an escalation; every exit records it, including refusals.
@@ -263,8 +278,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         throw new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
       }
 
-      const job = readCallJob(options);
-      const context = { signal, device: nickname, job: job?.id, output: job?.output };
+      const context = { ...shellCallOptions(args, signal, readCallJob(options)), device: nickname, reportCwd: true };
       let result: CommandResult;
 
       try {
