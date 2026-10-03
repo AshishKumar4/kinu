@@ -43,8 +43,6 @@ const SnapshotSchema = v.object({ summary: SummarySchema, release: ReleaseSchema
 
 const ProjectSchema = v.object({ main: v.optional(v.string()), browser: v.optional(v.string()) });
 
-const GradedUsageSchema = v.object({ usageCountAfterGrading: v.number() });
-
 export type ReportSummary = v.InferOutput<typeof SummarySchema>;
 
 /** Count assertions, not distinct names or the report's cached top-level counters. */
@@ -153,11 +151,10 @@ async function previewAnswer(verifier: EvalVerifier, executor: 'workspace' | 'sa
   return { pass: answered.some((answer) => answer.holds), evidence: { expected, answered } };
 }
 
-async function calculator(verifier: EvalVerifier, id: string, paths: readonly string[], previousId?: string): Promise<void> {
+async function calculator(verifier: EvalVerifier, id: string, paths: readonly string[], requireInvocation = false): Promise<void> {
   await verifier.check(id, async () => {
     const tools = (await verifier.tools()).filter((tool) => tool.name === CALCULATOR);
-    const usesBeforeGrading = tools[0]?.usageCount ?? 0;
-    const previous = previousId === undefined ? null : v.parse(GradedUsageSchema, verifier.earlierCheck(previousId)?.evidence);
+    const invoked = !requireInvocation || await verifier.toolInvoked(CALCULATOR);
     const client = 'eval-report-reader';
     await verifier.writeFile(`/slates/${client}/package.json`, JSON.stringify({ main: 'server.js',
       slate: { bindings: { CALCULATE: { kind: 'tool', name: CALCULATOR } } } }));
@@ -173,10 +170,8 @@ async function calculator(verifier: EvalVerifier, id: string, paths: readonly st
         if (JSON.stringify(actual) !== JSON.stringify(summaryOf(await verifier.readFile(path)))) wrong.push(path);
       }
 
-      const usageCountAfterGrading = (await verifier.tools()).find((tool) => tool.name === CALCULATOR)?.usageCount ?? 0;
-
-      return { pass: wrong.length === 0 && tools.length === 1 && (previous === null || usesBeforeGrading > previous.usageCountAfterGrading),
-        evidence: { wrong, usesBeforeGrading, usageCountAfterGrading, previousGradedUses: previous?.usageCountAfterGrading, called: paths } };
+      return { pass: wrong.length === 0 && tools.length === 1 && invoked,
+        evidence: { wrong, requireInvocation, invoked, called: paths } };
     } finally {
       await verifier.removeSlate(client);
     }
@@ -346,7 +341,7 @@ release-review as exact task titles on the board and mark them done when the vie
           await verifier.execute('sandbox', `rm -f ${graderReport}`);
         }
       });
-      await calculator(verifier, 'agent-reused-the-report-calculator', [REPORT], 'the-report-calculator-works');
+      await calculator(verifier, 'agent-reused-the-report-calculator', [REPORT], true);
       await sameSummary(verifier, 'dashboard-summarizes-the-real-tests', REPORT);
       await sameSummary(verifier, 'dashboard-summarizes-the-rerun', RERUN);
       await sameSnapshot(verifier, 'release-review-reads-the-dashboard-and-provenance', RERUN);

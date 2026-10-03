@@ -25,7 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
-- **Freight reuse is measured across turns, not calls within one turn.** The grader records the crafted tool's public reviewed-turn counter in September and requires an increase in October. The jcnu57 case, with one September call and two October calls but `uses=2`, is accepted without weakening the independently computed manifest totals.
+- **Crafted reuse is measured in the turn that invoked the tool.** Freight and the combined journey read the public `craft_cycle.invoked` event. Deferred quality review no longer produces a false green from the preceding turn, or a false red before the current use counter advances.
 - **Connect reports a daemon that exits at startup, not a vanished pidfile.** The pidfile is created at mode 0600; its redundant later chmod no longer races the daemon unlinking it on exit.
 - **The hosted hammer reads Bun’s Actions report as well as its terminal report.** Grouped file headings and colour codes no longer hide executed files, and an exit-zero run with missing coverage keeps its complete output as red evidence.
 - **A reused helper earns credit for this turn's work.** Eval graders exclude earlier runs and swarms. A completed run or a later completed continuation of the same helper can finish its assignment; an unrelated earlier success cannot hide a failed assignment.

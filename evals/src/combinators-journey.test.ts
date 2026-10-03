@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { JsonValueSchema, packZip, type ZipEntry } from '@kinu.run/core';
 import { combinatorsJourney, summaryOf, type ReportSummary } from '../tasks/combinators-journey';
 import { EvalVerifier, type VerifierSession } from './verifier';
-import type { EvalCheck, EvalTurn, EvalTurnResult } from './task';
+import type { EvalCheck, EvalTurn } from './task';
 
 const DESK = '/home/user/combinators';
 
@@ -40,7 +40,7 @@ type Defect = 'board' | 'invented-report' | 'skipped' | 'hardcoded-calculator' |
   | 'workspace-preview' | 'sandbox-preview' | 'invisible-preview' | 'swarm' | 'old-swarm' | 'audit' | 'npm-version' | 'npm-integrity'
   | 'export-missing' | 'export-changed' | 'export-duplicate' | 'export-extra' | 'memory-code' | 'memory-coordinator' | 'escaped-preview' | 'reopened-module'
   | 'board-case' | 'relative-review' | 'scratch-after-pack' | 'agent-unused' | 'agent-used-once' | 'empty-memory' | 'memory-note' | 'renamed-export'
-  | 'cached-workspace-preview' | 'cached-sandbox-preview' | 'dot-entrypoint' | 'no-main' | 'no-package-members' | 'review-with-rerun';
+  | 'cached-workspace-preview' | 'cached-sandbox-preview' | 'dot-entrypoint' | 'no-main' | 'no-package-members' | 'review-with-rerun' | 'lagged-use';
 
 /** The fixture flattens assertions and counts statuses independently of the grader's loop. */
 function calculate(text: string, defect?: Defect) {
@@ -82,7 +82,7 @@ function desk(defect?: Defect) {
   const cached = new Map<string, ReportSummary>();
   let uses = 2;
 
-  if (defect === 'agent-unused') uses = 0;
+  if (defect === 'agent-unused' || defect === 'lagged-use') uses = 0;
   else if (defect === 'agent-used-once') uses = 6;
 
   const current = (path: string, cache: boolean) => {
@@ -142,6 +142,8 @@ function desk(defect?: Defect) {
       return Promise.resolve([...names].map(([name, type]) => ({ name, type })));
     },
     craftedTools: () => Promise.resolve([{ name: 'report_totals', description: 'Count assertions in a report', usageCount: uses }]),
+    runEvents: () => Promise.resolve([{ type: 'craft_cycle', eventIndex: 1, runId: 'this-turn', timestamp: new Date(110).toISOString(),
+      crafted: [], invoked: defect === 'agent-used-once' ? [] : ['report_totals'], reused: [], returned: 1, raised: 0, dropped: [] }]),
     memoryContent: () => Promise.resolve(defect === 'memory-note' ? 'Rhea coordinates TM-COLL-905; TM-COLL-724 is cancelled.' : ''),
     memoryFacts: () => Promise.resolve(defect === 'empty-memory' || defect === 'memory-note' ? []
       : [{ key: 'handoff.private', value: { code: 'TM-COLL-905', coordinator: 'Rhea' } }]),
@@ -170,7 +172,7 @@ function desk(defect?: Defect) {
       const { path } = v.parse(PathSchema, call.args[0]);
 
       if (call.id === 'eval-report-reader') {
-        uses += 1;
+        if (defect !== 'lagged-use') uses += 1;
 
         return Promise.resolve({ ok: true, value: calculate(defect === 'hardcoded-calculator' ? INITIAL : read(path), defect) });
       }
@@ -233,9 +235,7 @@ function desk(defect?: Defect) {
   const coordinator = defect === 'memory-coordinator' ? 'Theo' : 'Rhea';
   const replies = [`${code}, ${coordinator}`];
 
-  const useByAgent = () => session.slateOp({ op: 'call', id: 'eval-report-reader', method: 'calculate', args: [{ path: REPORT }] });
-
-  return { session, seed, exportArchive, useByAgent, replies, close: () => server.stop(true) };
+  return { session, seed, exportArchive, replies, close: () => server.stop(true) };
 }
 
 async function grade(index: number, defect?: Defect): Promise<EvalCheck[]> {
@@ -254,21 +254,10 @@ async function grade(index: number, defect?: Defect): Promise<EvalCheck[]> {
 
   try {
     await fixture.seed(turns[1] ?? turn);
-    const previous: EvalTurnResult[] = [];
-
-    if (index === 2) {
-      const prepare = turns[1]?.verify;
-
-      if (prepare === undefined) throw new Error('missing calculator turn');
-      const checks = await new EvalVerifier(fixture.session, fixture.replies, 100, []).collect(prepare);
-      previous.push({ outcome: { status: 'completed' }, checks, turnWallMs: 0, verificationWallMs: 0 });
-
-      if (defect !== 'agent-used-once') await fixture.useByAgent();
-    }
 
     if (index === 3) fixture.exportArchive();
 
-    return await new EvalVerifier(fixture.session, fixture.replies, 100, previous).collect(turn.verify);
+    return await new EvalVerifier(fixture.session, fixture.replies, 100).collect(turn.verify);
   } finally {
     registry.mockRestore();
     await fixture.close();
@@ -331,6 +320,7 @@ for (const [name, defect, turn] of [
   ['node projects without main', 'no-main', 3],
   ['only requested entry points, without package metadata', 'no-package-members', 3],
   ['the correctly checked rerun alongside the three examples', 'review-with-rerun', 1],
+  ['this-turn invocation before its counter review', 'lagged-use', 2],
 ] as const) {
   test(`accepts ${name}`, async () => {
     expect((await grade(turn, defect)).filter((check) => !check.pass)).toEqual([]);

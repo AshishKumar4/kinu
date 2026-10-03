@@ -1,11 +1,12 @@
 import * as v from 'valibot';
-import { JsonValueSchema, projectJsonValue, type JsonValue, type SubordinateInspectionRequest } from '@kinu.run/core';
+import { JsonValueSchema, projectJsonValue, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
 import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSwarmRun, WorkBoard } from './session';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { helperAddress, ROOT, type RosterHelper } from './helper-address';
 import { redact, redactJson } from './redact';
-import type { EvalCheck, EvalTurnResult } from './task';
+import type { EvalCheck } from './task';
+import { invokedInTurn } from '../tasks/crafted-reuse';
 
 /** Thrown errors are cut here in the report; a stack trace is not evidence. */
 const EVIDENCE_LIMIT = 2_000;
@@ -23,7 +24,7 @@ function lostByThePlatform(call: string, answer: { reason: string; error: string
     answer.error === `slate ${call}: ${message}` || answer.error === `slate ${call}: ${message}.`);
 }
 
-/** The artifact's own surfaces. Checks read what a person could read; never the agent's ledger. */
+/** The artifact and public inspector surfaces, including the UI's structured run events. */
 export type VerifierSession = {
   slateOp(operation: JsonValue): Promise<JsonValue>;
   readFile(path: string, options?: { allowMissing?: boolean }): Promise<string>;
@@ -31,6 +32,7 @@ export type VerifierSession = {
   writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void>;
   listFiles(dir: string): Promise<readonly PublicDirEntry[]>;
   craftedTools(): Promise<readonly PublicCraftedTool[]>;
+  runEvents(): Promise<readonly RunEvent[]>;
   memoryContent(): Promise<string>;
   memoryFacts(): Promise<readonly { key: string; value: JsonValue }[]>;
   workspaceWork(): Promise<WorkBoard>;
@@ -146,40 +148,19 @@ export class EvalVerifier {
   /** What the agent said in the chat after this turn's prompt, oldest first. */
   readonly replies: readonly string[];
   readonly #session: VerifierSession;
-  readonly #previousTurns: readonly EvalTurnResult[];
   readonly #startedAt: number;
-  readonly #previousTurns: readonly EvalTurnResult[];
   readonly #checks: EvalCheck[] = [];
   readonly #pending: Promise<void>[] = [];
 
-  constructor(session: VerifierSession, replies: readonly string[], startedAt: number, previousTurns: readonly EvalTurnResult[]) {
+  constructor(session: VerifierSession, replies: readonly string[], startedAt: number) {
     this.#session = session;
     this.replies = replies;
-    this.#previousTurns = previousTurns;
     this.#startedAt = startedAt;
-    this.#previousTurns = previousTurns;
   }
 
-  /** Prior grades belong to this trial, including observations made after a grader called a tool. */
-  earlierCheck(id: string): EvalCheck | undefined {
-    for (let index = this.#previousTurns.length - 1; index >= 0; index -= 1) {
-      const found = this.#previousTurns[index]?.checks.find((check) => check.id === id);
-
-      if (found !== undefined) return found;
-    }
-
-    return undefined;
-  }
-
-  /** Read observations from completed grades belonging to this trial. */
-  earlierCheck(id: string): EvalCheck | undefined {
-    for (let index = this.#previousTurns.length - 1; index >= 0; index -= 1) {
-      const found = this.#previousTurns[index]?.checks.find((check) => check.id === id);
-
-      if (found !== undefined) return found;
-    }
-
-    return undefined;
+  /** A current-turn invocation observation, independent of deferred quality/use review. */
+  async toolInvoked(name: string): Promise<boolean> {
+    return invokedInTurn(await this.#session.runEvents(), name, this.#startedAt);
   }
 
   /**
