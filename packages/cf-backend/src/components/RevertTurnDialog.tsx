@@ -34,7 +34,7 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
   useEffect(() => {
     let current = true;
 
-    startTransition(() => detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       // Keyed on the turn in the store: retention is per directory but the limit is global, so a filtered window loses checkpoints.
       const listing = yield* Effect.promise(async () => rpc<FileCheckpointListing>("listFileCheckpoints", [200, messageId]));
 

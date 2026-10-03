@@ -338,6 +338,8 @@ export const HOST_BOUNDARIES = new Map<string, string>([
 
 const RUNNERS: readonly string[] = ['settle', 'settleSync', 'observe', 'detach'];
 
+const DETACH_DROPS_PENDING = 'detach in a transition or action returns nothing React can track, so its pending state is dropped; return settle(…)';
+
 const DETACH_ONLY_AT_REACT = 'detach runs only where its caller never awaits: a timer, a listener, or a function a component hands out';
 
 /** A Hono app's registrations: each takes its handlers after the path. */
@@ -448,7 +450,8 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
       const caller = edgeCaller(node, file.endsWith('.tsx'));
 
       if (detachNames.has(raw.callee.name)) {
-        if (caller !== null) react.push(site);
+        if (caller === 'tracked') findings.push(`${site}: ${DETACH_DROPS_PENDING}`);
+        else if (caller !== null) react.push(site);
         else findings.push(`${site}: ${DETACH_ONLY_AT_REACT}`);
 
         return;
@@ -467,8 +470,8 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         return;
       }
 
-      // A component's own surface: its caller awaits what it returns.
-      if (caller === 'component') {
+      // A component's own surface, or React tracking the returned promise: its caller awaits what it returns.
+      if (caller === 'component' || caller === 'tracked') {
         react.push(site);
 
         return;
@@ -514,7 +517,13 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
 const HOLDERS: readonly string[] = ['waitUntil', 'keepAliveWhile', 'fiber', 'runFiber'];
 
 /** React calls these and never awaits them. */
-const REACT_CALLED: readonly string[] = ['startTransition', 'useEffect', 'useLayoutEffect', 'useKeyboard'];
+const REACT_CALLED: readonly string[] = ['useEffect', 'useLayoutEffect', 'useKeyboard'];
+
+/** React tracks the promise these callbacks return (an async transition or action): its pending state holds until it settles. */
+const REACT_TRACKED: readonly string[] = ['startTransition', 'useActionState'];
+
+/** An intrinsic element's attributes whose returned promise React tracks: a form action. */
+const TRACKED_ATTRIBUTES: readonly string[] = ['action', 'formAction'];
 
 /** Callers that call and never await: a timer's or a frame's callback, and a listener (addEventListener, on, once, subscribe). */
 const NEVER_AWAITED: ReadonlyMap<string, number> = new Map([
@@ -564,11 +573,12 @@ function neverAwaited(fn: SyntaxNode | undefined): boolean {
 }
 
 /**
- * Who calls a function a component hands out: `react` for an intrinsic element's attribute or startTransition's or an
- * effect's argument, which React calls and never awaits; `component` for another component's attribute or
- * useCallback's or useMemo's argument, which the receiving code calls and may await or read; null for anything else.
+ * Who calls a function a component hands out: `react` for an intrinsic element's handler or an effect's argument,
+ * which React calls and never awaits; `tracked` for a transition's, useActionState's or a form action's, whose
+ * returned promise React tracks; `component` for another component's attribute or useCallback's or useMemo's
+ * argument, which the receiving code calls and may await or read; null for anything else.
  */
-function reactCaller(fn: SyntaxNode | undefined): 'react' | 'component' | null {
+function reactCaller(fn: SyntaxNode | undefined): EdgeCaller | null {
   if (fn === undefined || !isFunctionLike(fn)) return null;
   const attribute = fn.parent?.raw.type === 'JSXExpressionContainer' ? fn.parent.parent : undefined;
 
@@ -576,7 +586,10 @@ function reactCaller(fn: SyntaxNode | undefined): 'react' | 'component' | null {
     const element = attribute.parent?.raw;
     const name = element?.type === 'JSXOpeningElement' && element.name.type === 'JSXIdentifier' ? element.name.name : '';
 
-    return /^[a-z]/.test(name) ? 'react' : 'component';
+    if (!/^[a-z]/.test(name)) return 'component';
+    const attributeName = attribute.raw.name.type === 'JSXIdentifier' ? attribute.raw.name.name : '';
+
+    return TRACKED_ATTRIBUTES.includes(attributeName) ? 'tracked' : 'react';
   }
 
   const call = fn.parent;
@@ -585,6 +598,8 @@ function reactCaller(fn: SyntaxNode | undefined): 'react' | 'component' | null {
   const hook = identifierCalleeName(call) ?? memberCalleeName(call) ?? '';
 
   if (REACT_CALLED.includes(hook)) return 'react';
+
+  if (REACT_TRACKED.includes(hook)) return 'tracked';
 
   return hook === 'useCallback' || hook === 'useMemo' ? 'component' : null;
 }
@@ -603,11 +618,14 @@ function heldIn(runner: SyntaxNode): SyntaxNode | undefined {
   return fn !== undefined && 'body' in fn.raw && fn.raw.body === block.raw ? fn : undefined;
 }
 
+type EdgeCaller = 'react' | 'tracked' | 'component';
+
 /**
  * Who calls the function a runner sits in: `react` for a caller that never awaits (a timer, a listener, or React's
- * positions in `.tsx`), `component` for a component's own surface (`.tsx`), or null.
+ * positions in `.tsx`), `tracked` for React tracking the returned promise, `component` for a component's own surface
+ * (`.tsx`), or null.
  */
-function edgeCaller(runner: SyntaxNode, tsx: boolean): 'react' | 'component' | null {
+function edgeCaller(runner: SyntaxNode, tsx: boolean): EdgeCaller | null {
   const fn = heldIn(runner);
 
   if (neverAwaited(fn)) return 'react';

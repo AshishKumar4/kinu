@@ -14,7 +14,7 @@ import {
   type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
   type SkillFileRefusal,
 } from "@kinu.run/core";
-import { diagnostics, showing, toKinuError, detach } from "@kinu.run/core/obs";
+import { diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip,
 } from "@/lib/drive-api";
@@ -529,7 +529,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     const drop = (): void => setTransfers((rows) => rows.filter((row) => row.id !== id));
 
     setTransfers((rows) => [...rows, { id, folder, name, size, status: "uploading", stop: () => abort.abort() }]);
-    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       yield* Effect.promise(async () => work(abort.signal));
       setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "landed" } : row));
       listing.reload();
@@ -544,7 +544,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   };
 
   const background = (work: () => Promise<void>): void => {
-    startTransition(() => detach(Effect.catchCause(Effect.promise(work), showing(setNotice))));
+    startTransition(() => settle(Effect.catchCause(Effect.promise(work), showing(setNotice))));
   };
 
   const openLive = (row: SharedRow): void => {

@@ -15,7 +15,7 @@ import { McpPresetCards } from "@/components/plugins/McpPresetCards";
 import { Choice, inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import * as v from "valibot";
-import { renderThrownChain, showing, detach } from '@kinu.run/core/obs';
+import { renderThrownChain, showing, detach, settle } from '@kinu.run/core/obs';
 
 const POLL_MS = 5000;
 
@@ -48,7 +48,7 @@ export function McpServersPanel() {
   // Presets ride the same poll so a rotated app credential re-cards without a reload.
   const refresh = useCallback((): void => {
     setErr(null);
-    startTransition(() => detach(Effect.gen(function* () {
+    startTransition(() => settle(Effect.gen(function* () {
       yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
         const rows = yield* Effect.promise(async () => listMcpServers());
         setServers(rows);

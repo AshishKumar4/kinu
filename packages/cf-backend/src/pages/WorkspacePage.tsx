@@ -792,7 +792,7 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     if (!agentId) return;
-    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       // A visit the roster did not take is a gone workspace, which the page's own missing state already shows.
       yield* Effect.promise(async () => touchWorkspace(agentId));
       reportSide("visit", null);
@@ -808,7 +808,7 @@ export default function WorkspacePage() {
     if (!t || !live || ui.mode === "plan") return;
     setBranchNotice(null);
     // Clear the draft only once the branch is accepted, and only if it was not edited meanwhile.
-    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       const result = yield* Effect.promise(async () => state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t]));
 
       if (result.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
@@ -832,7 +832,7 @@ export default function WorkspacePage() {
   const [feedbackByMessage, setFeedbackByMessage] = useState<Record<string, 'positive' | 'negative'>>({});
   useEffect(() => {
     if (state.connectionStatus !== "connected") return;
-    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       const loaded = yield* Effect.promise(async () => state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback'));
       setFeedbackByMessage(loaded);
       reportSide("feedback", null);
@@ -866,7 +866,7 @@ export default function WorkspacePage() {
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
     if (state.connectionStatus !== "connected" || live) return;
-    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       const loaded = yield* Effect.promise(async () => state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes'));
       setTakesByTurn(loaded);
       reportSide("takes", null);

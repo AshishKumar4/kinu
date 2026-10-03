@@ -24,7 +24,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import type { Rpc } from '@kinu.run/core';
 import * as v from 'valibot';
-import { showing, detach } from '@kinu.run/core/obs';
+import { showing, detach, settle } from '@kinu.run/core/obs';
 
 const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(ArchiveCursorSchema) });
 
@@ -146,7 +146,7 @@ export default function SettingsPage() {
 
   // A failed field is recorded in place rather than given a value Save could write over the stored setting.
   const loadRpcFields = useCallback((): void => {
-    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       const [mode, evolution] = yield* Effect.promise(async () => Promise.allSettled([
         rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
         rpc<EvolutionConfigView>("getEvolutionConfig", []),
@@ -737,7 +737,7 @@ function AlwaysActiveSkillsCard({
 
   // React owns the async transition so a malformed response reaches this card's visible error.
   const refresh = useCallback((): void => {
-    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       const raw = yield* Effect.promise(async () => rpc('getAlwaysActiveSkills', []));
       setNames(v.parse(SkillNamesSchema, raw).names);
     }), showing(setErr))));

@@ -10,7 +10,7 @@ import {
 } from "@/lib/user-api";
 import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode, type DeviceMode } from "@kinu.run/core";
-import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { composing } from "@/components/ui/form";
 
 /** The hub enforces the same `effectiveDeviceMode`, so this line matches what it does. */
@@ -77,7 +77,7 @@ export function DeviceRow({
           <button type="button" disabled={acknowledging}
             onClick={() => {
               setAcknowledging(true);
-              startTransition(() => detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+              startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
                 yield* Effect.promise(async () => onAcknowledge());
               }), showing((chain) => {
                 // A rejection escaping `onError` still leaves the row visibly unacknowledged.

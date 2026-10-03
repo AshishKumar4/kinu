@@ -300,7 +300,7 @@ export class Host {
   });
 });
 
-test('React calls an intrinsic element\'s handler, startTransition\'s and an effect\'s: only detach runs there; useMemo\'s is the component\'s own', () => {
+test('React calls an intrinsic element\'s handler and an effect\'s, where only detach runs; it tracks a transition\'s or action\'s returned settle', () => {
   const TSX = 'packages/fixture/src/panel.tsx';
 
   const source = `
@@ -321,6 +321,9 @@ function Panel() {
   const pending = settle(load());
   const dialog = <Dialog onConfirm={() => settle(save())} onClose={() => detach(close())} />;
   const quit = <button onClick={() => settle(save())} />;
+  const form = <form action={() => settle(save())} onSubmit={() => startTransition(() => detach(load()))} />;
+  const [state, act] = useActionState(() => settle(save()), null);
+  const pick = useCallback(() => start(() => settle(load())), []);
   return <button onClick={() => detach(save())} onBlur={(event) => { event.preventDefault(); detach(save()); }} onFocus={() => startTransition(() => settle(load()))} />;
 }
 `;
@@ -343,6 +346,7 @@ function helper() {
   const midBody = 'a runner called mid-body; the effect is run once, at the edge, as its return';
   const floats = 'a settle whose caller never awaits it (React, a timer or a listener), so a rejection would float; run the answered effect with detach';
   const only = 'detach runs only where its caller never awaits: a timer, a listener, or a function a component hands out';
+  const drops = 'detach in a transition or action returns nothing React can track, so its pending state is dropped; return settle(…)';
 
   expect(bridgeSites(new Map([[TSX, source], [FILE, plain]]))).toEqual({
     bridges: [],
@@ -350,8 +354,8 @@ function helper() {
     routes: [],
     held: [],
     react: [
-      `${FILE}:11`, `${FILE}:7`, `${FILE}:8`, `${FILE}:9`, `${TSX}:11`, `${TSX}:13`, `${TSX}:14`, `${TSX}:17`, `${TSX}:17`, `${TSX}:19`, `${TSX}:19`,
-      `${TSX}:4`, `${TSX}:5`, `${TSX}:8`,
+      `${FILE}:11`, `${FILE}:7`, `${FILE}:8`, `${FILE}:9`, `${TSX}:11`, `${TSX}:13`, `${TSX}:14`, `${TSX}:17`, `${TSX}:17`, `${TSX}:19`, `${TSX}:20`,
+      `${TSX}:22`, `${TSX}:22`, `${TSX}:22`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`,
     ],
     findings: [
       `${FILE}:10: ${floats}`,
@@ -363,7 +367,9 @@ function helper() {
       `${TSX}:15: ${only}`,
       `${TSX}:16: ${midBody}`,
       `${TSX}:18: ${floats}`,
-      `${TSX}:19: ${floats}`,
+      `${TSX}:19: ${drops}`,
+      // A transition start under another name is not recognized, so it stays a finding.
+      `${TSX}:21: a runner returned outside an exported function or public member`,
     ],
   });
 });

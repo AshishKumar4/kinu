@@ -6,7 +6,7 @@ import {
   BookOpenIcon, FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, PencilSimpleIcon, PlusIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
 import { joinDir, type DriveEntry, type MarkedSkill, type OwnedSlate, type SharedRow } from "@kinu.run/core";
-import { showing, detach, settle } from "@kinu.run/core/obs";
+import { showing, settle } from "@kinu.run/core/obs";
 import {
   addSkillArchive, addSkillFolder, addSkillText, deleteEntry, makeFolder, renameEntry, type PickedFile,
 } from "@/lib/drive-api";
@@ -47,7 +47,7 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
     if (!valid || busy) return;
     setBusy(true);
     setError(null);
-    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       yield* Effect.promise(async () => onCommit(name));
       onClose();
     }), showing((chain) => {
@@ -81,7 +81,7 @@ function ConfirmDialog({ title, body, action, onConfirm, onClose, marker }: {
   const confirm = (): void => {
     setBusy(true);
     setError(null);
-    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       yield* Effect.promise(async () => onConfirm());
       onClose();
     }), showing((chain) => {
@@ -119,7 +119,7 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
     if (busy) return;
     setBusy(true);
     setError(null);
-    startTransition(() => detach(Effect.catchCause(Effect.gen(function* () {
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       yield* Effect.promise(async () => work());
       onAdded();
       onClose();
