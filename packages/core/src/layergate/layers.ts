@@ -6,6 +6,7 @@ import type { ModelMessage } from 'ai';
 import { ExtensionHost } from '../extension';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator';
+import { TurnSteering } from '../orchestrator/turn-steering';
 import { CraftCycle } from '../orchestrator/craft-cycle';
 import type { CraftLedger } from '../craft/in-episode';
 import { TurnContextBudget } from '../context-budget';
@@ -1706,10 +1707,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           failed.recordStep({});
 
           return {
-            clean: s.snapshotCompletedTurn(clean, {
+            clean: s.snapshotCompletedTurn({ acc: clean, steering: new TurnSteering() }, {
               userMessage: 'do it', assistantResponse: 'done', turnId: 't1', sessionId: 'default', origin: 'user',
             }),
-            failed: s.snapshotCompletedTurn(failed, {
+            failed: s.snapshotCompletedTurn({ acc: failed, steering: new TurnSteering() }, {
               userMessage: 'u', assistantResponse: 'a', sessionId: 's', origin: 'programmatic',
             }),
           };

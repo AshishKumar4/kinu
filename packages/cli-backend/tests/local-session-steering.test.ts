@@ -1817,7 +1817,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
-    return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
+    return { deps: { mode: 'build', swarms: true, swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
   }
 
   test('a script searches, branches on the result, and returns its own synthesis', async () => {

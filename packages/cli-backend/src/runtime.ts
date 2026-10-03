@@ -58,7 +58,7 @@ import { agentViewMount, createSqlFiber, detectOrphanedFibers, settledWorkspaceS
 import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
-  createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV, workersAiEndpoint,
+  createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV, workersAiRoute,
   type LocalCloudSession, type LocalModelResolver, type LocalProviderCredentials,
 } from './model-resolver';
 import {
@@ -89,7 +89,7 @@ interface CLIRuntimeOptions {
   agentName?: string;
   providerCredentials?: LocalProviderCredentials;
   oauthStore?: LocalOAuthStore;
-  /** The signed-in Kinu session: the decision model's route when `llm` serves no Workers AI (`workersAiEndpoint`). */
+  /** The signed-in Kinu session: the decision model's route when `llm` serves no Workers AI (`workersAiRoute`). */
   cloud?: LocalCloudSession;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
@@ -331,11 +331,12 @@ export function createCLIRuntime(
 
   const llm = createRoutedModelLane(actor, 'reflection', modelLanes);
 
-  // At `/ai/run` beside the Workers AI endpoint a chat model would use; none, and no turn is rated.
-  const decisionEndpoint = workersAiEndpoint(config.llm, config.cloud);
+  const decisionEndpoint = workersAiRoute(config.llm, config.cloud)?.auth;
 
-  const decide = decisionEndpoint === null ? undefined : createDecisionPort({
-    run: restDecisionRun({ getAuth: async () => decisionEndpoint }),
+  // `/ai/run` beside a chat model's `/ai/v1`: only Cloudflare's API and the worker's proxy serve one. Elsewhere, and
+  // with no Workers AI route, no turn is rated.
+  const decide = !/\/ai\/v1\/?$/.test(decisionEndpoint?.baseURL ?? '') ? undefined : createDecisionPort({
+    run: restDecisionRun({ getAuth: async () => decisionEndpoint ?? null }),
     model: async () => (await ensureProfile()).decisionModel,
     report,
     refusals,

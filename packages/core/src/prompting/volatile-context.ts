@@ -32,7 +32,7 @@ import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
 import { compareSkillNames } from '../skills/discover';
-import type { ActiveRoster, DynamicApproval, MissingCapability } from '../types/dynamic-context';
+import type { ActiveRoster, DelegationChoices, DynamicApproval, MissingCapability, ShownLesson } from '../types/dynamic-context';
 import { renderCraftedToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
@@ -83,6 +83,10 @@ export interface DynamicContext {
   memoryTail?: string;
   /** Re-read per step; facts and the memory tail freeze at turn assembly. */
   recoveries?: readonly string[];
+  /** What struggling turns taught about the tools offered this step. */
+  toolLessons?: readonly ShownLesson[];
+  /** The roles and tiers the `agents` tool takes, which its schema leaves open. */
+  delegation?: DelegationChoices;
   /** Status labels only; executor doctrine lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
   /** Every machine by name, never "the device"; absent where a backend has no fleet. */
@@ -136,6 +140,7 @@ export interface DynamicContextSources {
   readonly memoryTail: string | undefined;
   /** Synchronous per-step read, so a mid-turn finding shows on the next step. */
   readonly recoveryFindings: readonly string[];
+  readonly toolLessons: readonly ShownLesson[];
   readonly executors: readonly PromptExecutorInfo[];
   readonly devices?: readonly DeviceFleetEntry[];
   readonly runningJobs: ActiveRoster<{ id: string; kind: string; label: string | null }>;
@@ -194,6 +199,8 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   if (sources.memoryTail) context.memoryTail = sources.memoryTail;
 
   if (sources.recoveryFindings.length > 0) context.recoveries = sources.recoveryFindings;
+
+  if (sources.toolLessons.length > 0) context.toolLessons = sources.toolLessons;
 
   if (sources.missingCapabilities.length > 0) {
     context.missingCapabilities = sources.missingCapabilities;
@@ -450,6 +457,8 @@ const DYNAMIC_SECTION_TITLES = {
   factsBlock: '## World model (facts you remembered)',
   memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
   recoveries: '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
+  toolLessons: '## Tool lessons (what earlier turns that struggled with these tools learned)',
+  delegation: '## Roles and tiers (what the agents tool\'s `role` and `tier` take)',
   executors: '## Execution status',
   devices: '## Your user\'s machines (the `device` runtime)',
   tasks: '## Your task list: what is still open (you keep this with the `tasks` tool)',
@@ -462,6 +471,19 @@ const DYNAMIC_SECTION_TITLES = {
 /** For a reported empty set; an unreported (`undefined`) set stays silent. */
 const NO_CRAFTED_TOOLS_YET =
   'No crafted tools exist in this workspace yet. `workspace.listTools()` returns an empty list; `workspace.createTool` adds the first.';
+
+function toolLessonsSection(lessons: readonly ShownLesson[]): RenderedSection | null {
+  return rosterSection(
+    DYNAMIC_SECTION_TITLES.toolLessons, { items: lessons, total: lessons.length }, { cap: Infinity, keyed: false },
+    (lesson) => `- ${lesson.line}`,
+  );
+}
+
+function delegationSection(choices: DelegationChoices | undefined): RenderedSection | null {
+  if (choices === undefined) return null;
+
+  return { text: `${DYNAMIC_SECTION_TITLES.delegation}\nRoles: ${choices.roles.join('; ') || 'none'}\nTiers: ${choices.tiers.join(', ')}` };
+}
 
 function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, RenderedSection> {
   const sections = new Map<keyof DynamicContext, RenderedSection>();
@@ -501,6 +523,9 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, { cap: MAX_RECOVERIES, keyed: false },
     (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
   ));
+
+  add('toolLessons', toolLessonsSection(ctx.toolLessons ?? []));
+  add('delegation', delegationSection(ctx.delegation));
 
   const executors = (ctx.executors ?? []).filter(executorIsConfigured);
 

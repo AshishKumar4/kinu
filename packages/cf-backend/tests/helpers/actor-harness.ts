@@ -65,11 +65,14 @@ const { OrchestratorAgent } = await import('../../src/orchestrator');
 
 /** The scaffold precondition, declared satisfied. The soul is not: a turn
  *  refreshes the cache `setObservedSoul` pre-fills from the workspace filesystem. */
+/** "Beta: swarms" on, so the swarm suites pin the tool as it stands; a suite turns it off by overlay. */
+const HARNESS_CATALOG: ProfileCatalog = { ...BUILTIN_PROFILE_CATALOG, betaSwarms: true };
+
 const HARNESS_PROFILE_ENVELOPE: ProfileCatalogEnvelope = {
   authority: { kind: 'local' },
   version: 0,
-  digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG),
-  catalog: BUILTIN_PROFILE_CATALOG,
+  digest: profileCatalogDigest(HARNESS_CATALOG),
+  catalog: HARNESS_CATALOG,
 };
 
 const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
@@ -395,18 +398,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     const overlay = this._catalogOverlay;
     const revision = this._providerRevision;
+    const envelope = await this.profileCatalog();
 
-    if (overlay === null) return { envelope: HARNESS_PROFILE_ENVELOPE, provider: { ...HARNESS_PROVIDER_SNAPSHOT, revision } };
+    if (overlay === null) return { envelope, provider: { ...HARNESS_PROVIDER_SNAPSHOT, revision } };
 
-    // Merged over the builtins, digest recomputed. Overlay tier models join the
-    // provider snapshot: a tier naming an unlisted model is refused before routing.
-    const catalog: ProfileCatalog = {
-      roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
-      tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
-    };
-
+    // Overlay tier models join the provider snapshot: a tier naming an unlisted model is refused before routing.
     return {
-      envelope: { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) },
+      envelope,
       provider: overlay.availableModels === undefined ? { ...HARNESS_PROVIDER_SNAPSHOT, revision } : {
         ...HARNESS_PROVIDER_SNAPSHOT,
         revision,
@@ -414,7 +412,21 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       },
     };
   }
-  /** Install roles/tiers over the builtin catalog; hosted children resolve through it. */
+  /** The installed overlay merged over the builtins, digest recomputed. */
+  protected override async profileCatalog(): Promise<ProfileCatalogEnvelope> {
+    const overlay = this._catalogOverlay;
+
+    if (overlay === null) return HARNESS_PROFILE_ENVELOPE;
+
+    const catalog: ProfileCatalog = {
+      roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
+      tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
+      betaSwarms: overlay.betaSwarms ?? true,
+    };
+
+    return { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) };
+  }
+
   /** Whether the object's timer wake is due now, as the alarm would fire it. */
   harnessTimerDue(now = Date.now()): boolean {
     const at = this.nextWakeAt(now);
@@ -428,6 +440,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     /** Merged over the builtin tiers, so `default` may be left as it is. */
     readonly tiers?: Partial<TierAssignments>;
     readonly availableModels?: readonly string[];
+    /** "Beta: swarms"; on unless the suite turns it off. */
+    readonly betaSwarms?: boolean;
   }): void {
     this._catalogOverlay = overlay;
   }
@@ -435,6 +449,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     readonly roles?: RoleCatalog;
     readonly tiers?: Partial<TierAssignments>;
     readonly availableModels?: readonly string[];
+    readonly betaSwarms?: boolean;
   } | null = null;
   /** Answer these specs as the provider catalog would; any other spec asks the real catalog. */
   harnessCatalogModels(entries: Readonly<Record<string, Omit<ModelInfo, 'id'>>>): void {
@@ -510,7 +525,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const result = await composePrepareStep(
       {
         extensions,
-        dynamic: { ledger: this.actorSession.dynamic, snapshot: () => dynamic(profile, this._preparedTools) },
+        dynamic: { ledger: this.actorSession.dynamic, snapshot: () => this.actorSession.stepContext(dynamic, profile, this._preparedTools) },
         // The destination provider a cross-provider replay is re-keyed at.
         destinationProviderId: this.promptModelContext().provider,
       },

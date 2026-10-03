@@ -9,6 +9,7 @@ import {
 import type { ActiveRoster } from '../types/dynamic-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
+import { listToolLessons, MAX_TOOL_LESSONS, shownLesson } from '../evolution/struggles';
 import { craftedToolDeclarations } from '../tools/sandbox-contract';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { SUBMIT_PLAN_TOOL } from '../tools/registry';
@@ -64,6 +65,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     factsBlock: renderFactsForTurn(stores.facts),
     memoryTail: input.memoryTail,
     recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),
+    toolLessons: listToolLessons(rt.storage.sql, rt.actor, Object.keys(input.tools), MAX_TOOL_LESSONS).map(shownLesson),
     executors: rt.executionRouter?.listExecutors() ?? [],
     // Same cached snapshot the executor row reads, so the two agree.
     devices: rt.deviceTransport?.status().devices,

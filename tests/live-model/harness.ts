@@ -145,7 +145,8 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     )),
   };
 
-  const agents: AgentsToolDeps = { mode: 'build', swarm };
+  // The live rungs measure swarms, which the eval accounts have turned on.
+  const agents: AgentsToolDeps = { mode: 'build', swarm, swarms: true };
 
   const tools = buildActorTools({
     rt,

@@ -22,7 +22,7 @@ export {
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  branchesTerminalEffect, turnRecordTerminalEffect,
+  branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
   terminalEffectKey, keyedScope, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
@@ -172,7 +172,6 @@ export {
   RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
   listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
   retractThumbs, listThumbs, satisfactionInterval, qualitySeries, renderQualitySeries, isTrivialTurn,
-  blendRealOutcomeRates, type RealOutcomeRate,
   type RatingSource, type WrongReason, type RatingVerdict, type TurnRating, type RatingQuery,
   type RecordTurnRatingInput,
 } from './evolution/ratings';
@@ -565,7 +564,7 @@ export {
 
 export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
-  parseAgentsToolInput, agentsProfileContext,
+  parseAgentsToolInput, agentsProfileContext, delegationChoices,
   AGENTS_ACTION_FIELDS, AGENTS_FIELD_TS_TYPES,
   type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
 } from './delegation/agents-tool';
@@ -920,8 +919,8 @@ export {
 
 // Variant archive over scaffold_versions/scaffold_evaluations (no parallel store).
 export {
-  listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
-  type ScaffoldArchiveEntry, type EvolutionBaseSelection,
+  listScaffoldArchive, listRejectedProposals, selectEvolutionBase, blendRealOutcomeRates,
+  type ScaffoldArchiveEntry, type EvolutionBaseSelection, type RealOutcomeRate,
   type RejectedProposal, type RejectionKind,
 } from './scaffold/archive';
 
@@ -2058,7 +2057,7 @@ export {
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
-  ProfileCatalogEnvelopeSchema,
+  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING,
 } from './profiles';
 
 export type {

@@ -126,7 +126,7 @@ function settledNodes(lines: string[]): SettledNode[] {
 }
 
 async function runShippedSwarm(swarm: AgentsSwarmDeps): Promise<SettledNode[]> {
-  const tool = createAgentsTool({ mode: 'build', swarm });
+  const tool = createAgentsTool({ mode: 'build', swarms: true, swarm });
   const execute = toolExecute<AgentsToolInput, JsonValue>(tool);
   let outcome: JsonValue = null;
 

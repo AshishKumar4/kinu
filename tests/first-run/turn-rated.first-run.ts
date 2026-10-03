@@ -43,12 +43,16 @@ describe(SUITE, () => {
       budgetMs: 4 * 60_000,
       async run({ session, budget }) {
         await session.prompt('Summarize what a changelog is for, in one line.');
+        // This reply rates the first turn, and a rating landing names `getQuality` in a `reads_changed` frame.
+        let heard = session.readsMoved(['getQuality']);
         await session.prompt('That is exactly what I needed for the release notes, thanks.');
-
         let today = (await session.quality())[0];
 
-        // The rating is detached work no event announces: each read is the wait, until it lands or the budget ends.
-        while ((today?.rated ?? 0) === 0 && !budget.aborted) today = (await session.quality())[0];
+        while ((today?.rated ?? 0) === 0 && !budget.aborted) {
+          while (session.readsMoved(['getQuality']) === heard && !budget.aborted) await aborted(AbortSignal.any([session.readsMoving, budget]));
+          heard = session.readsMoved(['getQuality']);
+          today = (await session.quality())[0];
+        }
 
         const rated = today?.rated ?? 0;
         const byModel = rated - (today?.thumbs ?? 0);
@@ -67,6 +71,13 @@ describe(SUITE, () => {
     }, observations);
   });
 });
+
+/** Settles when `signal` aborts. */
+function aborted(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+
+  return new Promise((resolve) => { signal.addEventListener('abort', () => { resolve(); }, { once: true }); });
+}
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the corpus and the
  *  defect register equal without importing the case modules. */

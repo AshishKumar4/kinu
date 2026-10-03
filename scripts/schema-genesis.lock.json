@@ -762,17 +762,6 @@
     "corroborated_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "lessons@packages/core/src/evolution/outcomes.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "turn_ids TEXT NOT NULL",
-    "text TEXT NOT NULL",
-    "source TEXT NOT NULL CHECK (source IN (${sqlCheckList(LESSON_SOURCES)}))",
-    "status TEXT NOT NULL CHECK (status IN ('provisional','corroborated'))",
-    "created_at INTEGER NOT NULL",
-    "corroborated_at INTEGER",
-    "PRIMARY KEY (actor_id, id)"
-  ],
   "mcts_search_runs@packages/core/src/mcts/search-store.ts": [
     "actor_id TEXT NOT NULL",
     "root_id TEXT NOT NULL",
@@ -848,12 +837,6 @@
     "PRIMARY KEY (actor_id, id)"
   ],
   "pattern_extractions@packages/core/src/evolution/lessons.ts": [
-    "actor_id TEXT NOT NULL",
-    "effect_key TEXT NOT NULL",
-    "answer TEXT NOT NULL",
-    "PRIMARY KEY (actor_id, effect_key)"
-  ],
-  "pattern_extractions@packages/core/src/evolution/outcomes.ts": [
     "actor_id TEXT NOT NULL",
     "effect_key TEXT NOT NULL",
     "answer TEXT NOT NULL",
@@ -1198,6 +1181,20 @@
     "result_json TEXT",
     "PRIMARY KEY (actor_id, turn_id, normalized_call_id, call_digest)"
   ],
+  "tool_lessons@packages/core/src/evolution/struggles.ts": [
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "tool TEXT NOT NULL",
+    "text TEXT NOT NULL",
+    "revision INTEGER NOT NULL",
+    "helpful INTEGER NOT NULL",
+    "harmful INTEGER NOT NULL",
+    "turn_ids TEXT NOT NULL",
+    "status TEXT NOT NULL CHECK (status IN (${sqlCheckList(['active', 'retired'])}))",
+    "created_at INTEGER NOT NULL",
+    "updated_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, id)"
+  ],
   "triggers@packages/core/src/events/hub/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -1257,6 +1254,15 @@
     "scaffold_version INTEGER",
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
+  ],
+  "turn_struggles@packages/core/src/evolution/struggles.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "errors INTEGER NOT NULL",
+    "steps INTEGER NOT NULL",
+    "struggles TEXT NOT NULL",
+    "created_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, turn_id)"
   ],
   "user_access_tokens@packages/core/src/cli/access-tokens.ts": [
     "token_hash TEXT PRIMARY KEY",

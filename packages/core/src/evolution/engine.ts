@@ -42,9 +42,13 @@ import {
 } from '../advisor/review';
 import { initLessonTables, recordLesson, corroborateLessonsForTurn, renderRecentLessons } from './lessons';
 import {
+  applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, recordTurnStruggles, scoreToolLessons,
+  StruggleLessonSchema, struggleLessonPrompt, teachingStruggle,
+} from './struggles';
+import {
   initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf, listTurnRatings, hasLowRating,
   isLowRating, isHighRating, feedbackOf, ratingQuality, thumbsRating, retractThumbs, realRatingScaffoldRates,
-  isTrivialTurn, blendRealOutcomeRates,
+  isTrivialTurn,
   type RatingVerdict, type TurnRating,
 } from './ratings';
 import type { PathologyInput } from './pathology';
@@ -72,7 +76,7 @@ import { modifyScaffold } from '../scaffold/modify';
 import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor';
 import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns';
 import {
-  listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
+  listScaffoldArchive, listRejectedProposals, selectEvolutionBase, blendRealOutcomeRates,
   type EvolutionBaseSelection, type ScaffoldArchiveEntry,
 } from '../scaffold/archive';
 import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow';
@@ -279,6 +283,7 @@ export class EvolutionEngine {
     // Created here so every backend gets the engine's ledgers without schema wiring.
     initLessonTables(rt.storage.execRaw);
     initTurnRatingTables(rt.storage.execRaw);
+    initStruggleTables(rt.storage.execRaw);
     this.agentConfig = rt.actor.config;
     initCompletedTurnTable(rt.storage.execRaw);
     this.sessionWindow = createCompletedTurnStore(rt.storage.sql, rt.actor);
@@ -548,6 +553,44 @@ export class EvolutionEngine {
         await this.extractPattern(turn, ratingQuality(rating.score), patternKey);
       }
     }
+  }
+
+  /**
+   * The `turn_lessons` terminal effect's body, apart from the turn's rating, which may wait on a reply that never
+   * comes: records its struggles and scores the lessons it was shown, then has the fast tier write one lesson about
+   * the tool it struggled with most. Each part has its tombstone, so a retry neither rescores nor asks again; a
+   * refusal throws, for the ledger to retry or park. A turn with no id has none to key them by.
+   */
+  async learnFromTurn(completed: CompletedTurn): Promise<void> {
+    if (!this.config.enabled || completed.turnId === undefined || completed.turnId === '') return;
+    const turn = { ...completed, turnId: completed.turnId };
+    const { sql } = this.rt.storage;
+    const { actor } = this.rt;
+    const recordKey = `${turn.turnId}:struggles`;
+
+    if (!effectAlreadyDone(sql, actor, TURN_REVIEW_STEP_SCOPE, recordKey)) {
+      this.commit(() => {
+        recordTurnStruggles(sql, actor, turn);
+        scoreToolLessons(sql, actor, turn);
+        recordEffectDone(sql, actor, { scope: TURN_REVIEW_STEP_SCOPE, key: recordKey });
+      });
+    }
+
+    const struggle = teachingStruggle(turn.struggles ?? []);
+    const lessonKey = `${turn.turnId}:struggle-lesson`;
+
+    if (struggle === null || effectAlreadyDone(sql, actor, TURN_REVIEW_STEP_SCOPE, lessonKey)) return;
+    const prompt = struggleLessonPrompt(turn, struggle, listToolLessons(sql, actor, [struggle.tool], MAX_TOOL_LESSONS));
+    const said = await this.reviewLlm(turn).complete(prompt);
+    const answer = v.safeParse(StruggleLessonSchema, tolerate(() => extractJsonObject(said), 'malformed-input'));
+
+    // Unusable output is not asked for again.
+    this.commit(() => {
+      if (answer.success) applyStruggleLesson(sql, actor, { turnId: turn.turnId, tool: struggle.tool, answer: answer.output });
+      recordEffectDone(sql, actor, { scope: TURN_REVIEW_STEP_SCOPE, key: lessonKey });
+    });
+
+    if (answer.success) this.emit({ type: 'reflection', message: `Lesson for \`${struggle.tool}\`: ${answer.output.text}` });
   }
 
   /**

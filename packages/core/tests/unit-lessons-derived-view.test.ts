@@ -31,7 +31,7 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
     rt.decide = async () => ({ answers: {
       satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 },
       wrong: { type: 'choice', choice: 'misunderstood' },
-    }, usage: {} });
+    }, usage: { input: 0, output: 0 } });
 
     const engine = new EvolutionEngine(rt, stores.history);
 
