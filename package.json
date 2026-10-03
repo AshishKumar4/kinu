@@ -94,6 +94,7 @@
     "infra:provision": "bun scripts/infra-provision.ts",
     "infra:teardown": "bun scripts/infra-teardown.ts",
     "evals": "bun evals/scripts/sweep.ts && bun --bun vitest run --config evals/vitest.config.ts --reporter=./evals/src/reporter.ts --reporter=json --outputFile.json=bench-artifacts/evals/results.json",
+    "evals:reactive": "KINU_REACTIVE=1 bun --bun vitest run --config evals/vitest.config.ts",
     "evals:ui": "vitest-evals serve bench-artifacts/evals/results.json",
     "evals:compare": "bun evals/scripts/compare.ts",
     "deploy:preflight": "bun scripts/deploy-preflight.ts"
