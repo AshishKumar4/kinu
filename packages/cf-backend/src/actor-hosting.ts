@@ -24,7 +24,7 @@ import {
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
-import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
+import { createCFRuntime, type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse } from './runtime';
 import type { LiveRead, TemporaryAgentPort } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
@@ -61,6 +61,8 @@ export interface WorkspaceHostSeams {
   reportModelCall(report: ModelCallReport): void;
   refusals(actor: ActorHandle): TierRefusals;
   liveReadsMoved(reads: readonly LiveRead[]): void;
+  servingMoved(): Promise<void>;
+  readonly boxUse: WorkspaceBoxUse;
   readonly modelOperations: ModelOperationSink;
   pricing(spec?: string): ModelPricing | null;
   hostedModel(actor: ActorHandle): string | undefined;
@@ -209,6 +211,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         // Built with the runtime, which lives as long as this actor stays bound.
         refusals: seams.refusals(bound.handle),
         liveReadsMoved: (reads) => { seams.liveReadsMoved(reads); },
+        servingMoved: () => seams.servingMoved(),
+        boxUse: seams.boxUse,
         slate: (operation) => seams.slate(bound.handle, operation),
         deferrals: () => seams.deferrals(),
         // The chat's authority: a self-resolved profile could differ from the turn's and make a search unreproducible.

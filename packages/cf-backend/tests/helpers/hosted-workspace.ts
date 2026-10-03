@@ -142,6 +142,9 @@ export async function hostedWorkspace(
     refusals: (actor) => tierRefusals({ sql, actor, config: actor.config, now: Date.now, settings: 'Settings > Models', changes: () => 0 }),
     currentTurn: () => null,
     liveReadsMoved: () => undefined,
+    // No box records serving here: the fixture's box exposes nothing.
+    servingMoved: () => Promise.resolve(),
+    boxUse: { used: false },
     modelOperations: () => undefined,
     pricing: () => null,
     hostedModel: () => undefined,
