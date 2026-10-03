@@ -19,7 +19,8 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters,
 } from '../utils/prompt-sections';
-import { executorIsSelectable, type PromptExecutorInfo } from './surface';
+import { executorIsSelectable, type PromptBackend, type PromptExecutorInfo } from './surface';
+import type { PromptModelContext } from './model-profile';
 import { type TurnReason, type WorkMode } from '../types/turn';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
 import {
@@ -60,7 +61,17 @@ export interface DynamicDelegate {
 }
 
 /** Callers order lists; the renderer caps them. */
+/** Facts the system prompt once ended with; here a change is a delta, not a new prompt prefix. */
+export interface RuntimeFacts {
+  readonly backend: PromptBackend;
+  readonly model: PromptModelContext;
+  readonly cwd?: string;
+  /** `currentDateForPrompt`: date-only, so it changes at most once a day. */
+  readonly date: string;
+}
+
 export interface DynamicContext {
+  runtime?: RuntimeFacts;
   /** Absent where a caller has no turn to name. */
   turn?: TurnReason;
   mode?: { readonly workMode: WorkMode; readonly planSubmission: boolean };
@@ -115,6 +126,7 @@ function flattenTaskList(
 }
 
 export interface DynamicContextSources {
+  readonly runtime?: RuntimeFacts;
   readonly turn?: TurnReason;
   readonly mode?: DynamicContext['mode'];
   readonly activeSkills?: ActiveSkillSet;
@@ -145,6 +157,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
 
   const context: DynamicContext = {
+    runtime: sources.runtime,
     turn: sources.turn,
     mode: sources.mode,
     craftedTools: sources.craftedTools,
@@ -202,6 +215,18 @@ export const DYNAMIC_CONTEXT_HEADER =
   + `"${APPENDED}" adds lines to its section's end. Execution deltas update named runtimes. Cleared means empty.`;
 
 const DYNAMIC_DELTA_HEADER = 'Kinu runtime state update, not conversation or user text.';
+
+function renderRuntimeFacts(runtime: RuntimeFacts): string {
+  const { model } = runtime;
+
+  return [
+    DYNAMIC_SECTION_TITLES.runtime,
+    `- Backend: ${runtime.backend}`,
+    ...(model.id ? [`- Model: ${model.provider ? `${model.provider}/` : ''}${model.id}`] : []),
+    ...(runtime.cwd ? [`- Working directory: ${runtime.cwd}`] : []),
+    `- Current date: ${runtime.date}`,
+  ].join('\n');
+}
 
 function renderTurnReason(turn: TurnReason): string {
   if (turn.provenance === 'chat') return 'Chat: this turn answers the conversation\'s newest message.';
@@ -407,6 +432,7 @@ function textSection(title: string, body: string): RenderedSection {
 const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
 
 const DYNAMIC_SECTION_TITLES = {
+  runtime: '## Runtime context',
   turn: '## Why this turn runs',
   mode: '## Work mode',
   skills: '## Active skills (why each is on)',
@@ -433,6 +459,8 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
   const add = (key: keyof DynamicContext, section: RenderedSection | null): void => {
     if (section !== null) sections.set(key, section);
   };
+
+  if (ctx.runtime) add('runtime', { text: renderRuntimeFacts(ctx.runtime) });
 
   if (ctx.turn) add('turn', { text: `${DYNAMIC_SECTION_TITLES.turn}\n${renderTurnReason(ctx.turn)}` });
 

@@ -1112,7 +1112,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         backend: 'cf',
         roleSection: turn.profile.profile.role,
         model: { id: turn.profile.profile.tier.model },
-        currentDate: currentDateForPrompt(),
         sectionOverrides: activePromptSectionOverrides(this.boundSql, turn.actor.handle),
         // Makes the prompt address it as a named agent of this workspace, not the workspace's own chat.
         identity: {
@@ -1183,6 +1182,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       stores: actor.stores,
       profile,
       tools,
+      runtime: { backend: 'cf', model: { id: profile.tier.model }, date: currentDateForPrompt() },
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(

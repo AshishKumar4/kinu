@@ -87,7 +87,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
         return { ...surface, selectableExecutors: surface.executors };
       },
       buildSystemPromptSync: (opts) =>
-        s.buildSystemPromptSync(opts).split('\n').filter((line) => !line.startsWith('- Model: ')).join('\n'),
+        s.buildSystemPromptSync(opts).split('\n').filter((line) => !line.startsWith('- Inspect current code')).join('\n'),
       admitAgentsMd: (candidates) => ({ admit: candidates, referenced: [] }),
     }),
   },

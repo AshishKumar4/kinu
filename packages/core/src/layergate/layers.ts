@@ -293,8 +293,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           executors: EXECUTORS,
           backend: 'cf',
           model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
-          currentDate: '2026-01-01',
-          cwd: '/workspace',
           agentsMd: { admitted: [{ path: '/AGENTS.md', content: 'Root rules.', trust: 'approved' }], referenced: [] },
           activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: 'deploy-runbook' } }] },
         }),
@@ -308,7 +306,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             // Arbitrary valid tool; the probe measures activation-reason stability.
             availableTools: ['memory'] as const,
             backend: 'cli-local' as const,
-            currentDate: '2026-01-01',
           };
 
           const byPin = s.buildSystemPromptSync({
@@ -336,7 +333,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               availableTools: ['shell', 'agents', 'memory'],
               backend: 'cf',
               model: { id, provider },
-              currentDate: '2026-01-01',
             });
 
             const start = prompt.indexOf('## Tools available this turn');

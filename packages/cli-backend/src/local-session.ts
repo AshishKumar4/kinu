@@ -91,6 +91,7 @@ import { TierIdSchema,
   renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
+  type RuntimeFacts,
   initWorkspaceSchema, initPendingSendTables, PendingSendStore,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
@@ -1714,8 +1715,6 @@ export class LocalAgentSession {
       backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
       roleSection: profile.role,
       model: { id: turnSpec },
-      cwd: this.cwd,
-      currentDate: currentDateForPrompt(),
       // Read here: the builder is the byte-stable cacheable prefix and does no I/O.
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.rt.actor),
       identity: this.promptIdentity(),
@@ -2343,6 +2342,16 @@ export class LocalAgentSession {
     return createScaffoldHistory(async () => this.actorSession.history);
   }
 
+  /** The model as the turn names it, after the same normalisation the request uses. */
+  private runtimeFacts(profile: ResolvedTurnProfile, cwd?: string): RuntimeFacts {
+    return {
+      backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
+      model: { id: this.profiles().normalizeSpec(profile.tier.model) },
+      ...(cwd !== undefined && { cwd }),
+      date: currentDateForPrompt(),
+    };
+  }
+
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
    *  wall-clock field would re-fingerprint the block every request. */
   private dynamicContextSnapshot(
@@ -2354,6 +2363,7 @@ export class LocalAgentSession {
       stores: this.stores,
       profile,
       tools,
+      runtime: this.runtimeFacts(profile, this.cwd),
       turn: turnOf.turn,
       ...(turnOf.activeSkills !== undefined && { activeSkills: turnOf.activeSkills }),
       memoryTail,
@@ -2879,6 +2889,7 @@ export class LocalAgentSession {
       stores: actor.stores,
       profile,
       tools,
+      runtime: this.runtimeFacts(profile),
       memoryTail: undefined,
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => [],

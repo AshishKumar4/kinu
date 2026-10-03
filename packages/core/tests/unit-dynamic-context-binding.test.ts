@@ -57,6 +57,7 @@ function collect(o: Fixture, over: Overrides = {}, stores: AgentStores = o.store
     rt: o.rt, stores,
     profile: over.profile ?? { workMode: 'build', allowedTools: [] },
     tools: over.tools ?? {},
+    runtime: { backend: 'cf', model: { id: 'claude-sonnet-4-7' }, date: '2026-01-01' },
     memoryTail: over.memoryTail,
     missingCapabilities: over.missingCapabilities ?? [],
     subordinateDelegates: over.subordinateDelegates,

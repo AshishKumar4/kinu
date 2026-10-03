@@ -4,7 +4,7 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from './agent-stores';
 import {
-  agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MissingCapability,
+  agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MissingCapability, type RuntimeFacts,
 } from '../prompting/volatile-context';
 import type { ActiveRoster } from '../types/dynamic-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
@@ -21,6 +21,7 @@ export interface DynamicContextInput {
   readonly stores: AgentStores;
   readonly profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>;
   readonly tools: ToolSet;
+  readonly runtime: RuntimeFacts;
   readonly turn?: TurnReason;
   readonly activeSkills?: ActiveSkillSet;
   /** Read once per turn by the caller (the only await in this plane). */
@@ -46,12 +47,13 @@ export function subordinateDelegatesOf(
   }));
 }
 
-/** Nothing clock-derived: a wall-clock field would re-fingerprint the block every step. */
+/** Nothing finer than the caller's date: a wall-clock field would re-fingerprint the block every step. */
 export function collectDynamicContext(input: DynamicContextInput): DynamicContext {
   const { rt, stores } = input;
   const { profile } = input;
 
   return agentDynamicContext({
+    runtime: input.runtime,
     ...(input.turn !== undefined && { turn: input.turn }),
     ...(input.activeSkills !== undefined && { activeSkills: input.activeSkills }),
     mode: {

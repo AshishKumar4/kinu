@@ -79,6 +79,27 @@ test('a plain build turn states no work mode; leaving plan states build once', (
   expect(built).not.toContain('Cleared:');
 });
 
+// The system prompt states none of these, so a new day, a model switch or a new directory moves no cached byte.
+test('date, model and working directory are live state: a new day is a delta of the runtime section alone', () => {
+  const ledger = new DynamicContextLedger();
+  const history: ModelMessage[] = [{ role: 'user', content: 'go' }];
+
+  const on = (date: string) => ({
+    runtime: { backend: 'cli-local', model: { id: 'claude-sonnet-4-7', provider: 'anthropic' }, cwd: '/home/user/project', date },
+    factsBlock: '- k = v',
+  } as const);
+
+  const first = messageText(present(ledger.weave(history, on('2026-10-01')).at(-2), 'woven full'));
+
+  history.push({ role: 'assistant', content: 'ok' });
+  const next = messageText(present(ledger.weave(history, on('2026-10-02')).at(-1), 'woven delta'));
+
+  expect(first).toContain('## Runtime context\n- Backend: cli-local\n- Model: anthropic/claude-sonnet-4-7\n- Working directory: /home/user/project\n- Current date: 2026-10-01');
+  expect(next).toMatch(DELTA_OPEN);
+  expect(next).toContain('- Current date: 2026-10-02');
+  expect(next).not.toContain('k = v');
+});
+
 // The block's attributes are for the ledger, read back from stored history: a delta names the state it applies to.
 test('a block carries no kind attribute: a full block has a fingerprint, a delta also its state', () => {
   const ledger = new DynamicContextLedger();
@@ -247,7 +268,6 @@ describe('byte-stable system prefix', () => {
       executors: [workspace, idleSandbox, connectedDevice],
       workMode: 'build' as const,
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
-      currentDate: '2026-01-01',
     };
 
     const chatPrefix = buildSystemPromptSync(rt, session);

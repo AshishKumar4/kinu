@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import { createScaffoldLLMStream, createScaffoldCandidateSurface, buildSystemPromptSync, currentDateForPrompt,
+import { createScaffoldLLMStream, createScaffoldCandidateSurface, buildSystemPromptSync,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
   currentOperationProfile,
   type ModelCallReport, type ModelOperationEvent, type ProfileCatalog,
@@ -155,7 +155,7 @@ for (const provider of ['openai', 'anthropic']) {
     );
     expect(model.doStreamCalls[0]?.providerOptions?.['workers-ai']).toBeUndefined();
     expect(model.doStreamCalls[0]?.prompt[0]).toEqual({ role: 'system', content: buildSystemPromptSync(rt, {
-      model: { id: spec }, currentDate: currentDateForPrompt(),
+      model: { id: spec },
     }) });
     expect(model.doStreamCalls[0]?.prompt.at(-1)).toMatchObject({ role: 'user', content: [{ type: 'text', text: 'candidate task' }] });
     expect(operations.map(event => event.phase)).toEqual(['start', 'end']);

@@ -7,7 +7,7 @@ import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { resolveModelRoute } from '../profiles/model-route';
 import { parseModelSpec } from '../providers/types';
 import { reasoningEffortOptions } from '../providers/effort';
-import { buildSystemPromptSync, currentDateForPrompt } from '../prompt';
+import { buildSystemPromptSync } from '../prompt';
 import { createScaffoldCallTool, createScaffoldDefaultInference, createScaffoldLLMStream } from '../orchestrator/scaffold-host';
 import type { ScaffoldRunControl } from '../scaffold/executor';
 import type { ScaffoldReplayContext, ScaffoldSurface } from './control';
@@ -79,7 +79,7 @@ export function createScaffoldCandidateSurface(
       const resolved = await request();
       yield* operationProfileStream(createScaffoldDefaultInference(resolved.options, {
         system: buildSystemPromptSync(binding.rt, {
-          model: { id: resolved.options.spec }, currentDate: currentDateForPrompt(),
+          model: { id: resolved.options.spec },
         }),
         history: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
       })(), resolved.context);

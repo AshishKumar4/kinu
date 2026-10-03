@@ -4254,7 +4254,6 @@ export abstract class ActorAgent extends Agent<Env> {
       backend: 'cf',
       roleSection: profile.role,
       model,
-      currentDate: currentDateForPrompt(),
       // Read here, not in the builder: the builder is the byte-stable cacheable prefix and does no I/O.
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.actorHandle()),
       identity,
@@ -4352,7 +4351,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Nothing clock-derived: a wall-clock field would re-fingerprint the block every request.
    */
   protected dynamicContextSnapshot(
-    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>, tools: ToolSet, memoryTail: string | undefined,
+    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools' | 'tier'>, tools: ToolSet, memoryTail: string | undefined,
     activeSkills: ActiveSkillSet | null = this._turnActiveSkills,
   ): DynamicContext {
     const extras = this.extraDynamicContext();
@@ -4362,6 +4361,7 @@ export abstract class ActorAgent extends Agent<Env> {
       stores: this.stores,
       profile,
       tools,
+      runtime: { backend: 'cf', model: this.promptModelContextFor(profile.tier.model), date: currentDateForPrompt() },
       turn: this.turnReason(),
       ...(activeSkills !== null && { activeSkills }),
       memoryTail,

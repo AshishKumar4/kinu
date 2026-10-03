@@ -37,6 +37,8 @@ import { createTestRuntime, createTestActors, scriptedTurnModel, type ScriptedTu
 import { makeSqlExec, conversationsFor } from './helpers';
 import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
 
+const RUNTIME = { backend: 'cf', model: { id: 'claude-sonnet-4-7' }, date: '2026-01-01' } as const;
+
 /** Type block of the `agent.*` codemode namespace as it ships; the host is never called. */
 function agentSelfTypes(): string {
   const host: AgentSelfHost = new Proxy(Object.create(null), {
@@ -775,7 +777,7 @@ describe('buildSystemPromptSync', () => {
 
   test('a Build value other than the default belongs to the ledger, not the static prefix', () => {
     const { rt } = createTestRuntime();
-    const base = { backend: 'cf' as const, model: { id: 'x' }, currentDate: '2026-01-01' };
+    const base = { backend: 'cf' as const, model: { id: 'x' } };
     expect(renderDynamicContextBlock({ mode: { workMode: 'build', planSubmission: true } }))
       .toContain('Mode: build; submit_plan: available.');
     expect(buildSystemPromptSync(rt, base)).not.toContain('Turn mode');
@@ -891,7 +893,7 @@ describe('buildSystemPromptSync', () => {
         const callableTools = toolsInWorkMode(profile.workMode, tools);
 
         for await (const event of runChat({ model, system, history, tools: callableTools,
-          dynamicContext: { ledger, snapshot: () => collectDynamicContext({ rt: subject, stores, profile, tools: callableTools, memoryTail: undefined, missingCapabilities: [] }) },
+          dynamicContext: { ledger, snapshot: () => collectDynamicContext({ rt: subject, stores, profile, tools: callableTools, runtime: RUNTIME, memoryTail: undefined, missingCapabilities: [] }) },
         })) {
           if (event.type === 'done') history.push(...event.responseMessages);
         }
@@ -927,13 +929,11 @@ describe('buildSystemPromptSync', () => {
     }
   });
 
-  test('renders the date-only current date in runtime context', () => {
+  // Date-only, so the dynamic block's runtime section changes at most once a day.
+  test('the current date is date-only, and the system prompt states no runtime facts', () => {
     const { rt } = createTestRuntime();
     expect(currentDateForPrompt(new Date('2026-06-11T17:42:03Z'))).toBe('2026-06-11');
-    const prompt = buildSystemPromptSync(rt, { backend: 'cf', currentDate: currentDateForPrompt() });
-    expect(prompt).toContain(`- Current date: ${currentDateForPrompt()}`);
-    // Date-only keeps the prompt byte-stable within a day (cache-safe).
-    expect(prompt).not.toMatch(/Current date: .*\d:\d/);
+    expect(buildSystemPromptSync(rt, { backend: 'cf', model: { id: 'claude-sonnet-4-7', provider: 'anthropic' } })).not.toContain('## Runtime context');
   });
 
   test('persistence is stated plainly and teaches compaction awareness', () => {
@@ -947,7 +947,6 @@ describe('buildSystemPromptSync', () => {
   test('per-section char budgets stay pinned (additions must be deliberate)', () => {
     // Raise a ceiling only alongside an intentional content change.
     const BUDGETS = {
-      'Runtime context': 160,
       'Operating guidance': 910,
       'Tools available this turn': 1100,
       'Execution environments': 3555,
@@ -964,7 +963,6 @@ describe('buildSystemPromptSync', () => {
     const options = {
       backend: 'cf',
       registeredExecutors: ['workspace', 'nimbus', 'sandbox', 'device'],
-      currentDate: '2026-06-11',
       model: { id: 'anthropic/claude-sonnet-4.5' },
     } satisfies SystemPromptOptions;
 
@@ -1014,7 +1012,7 @@ describe('buildSystemPromptSync', () => {
 describe('the system prompt: the core, then the workspace, then the agent', () => {
   const base: SystemPromptOptions = {
     availableTools: ['file', 'shell', 'eval', 'agents'], backend: 'cf',
-    model: { id: 'claude-sonnet-4-7', provider: 'anthropic' }, currentDate: '2026-01-01',
+    model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
   };
 
   function workspace(soul: string, title: string, doctrine: string, skill: string): SystemPromptOptions {

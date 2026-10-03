@@ -82,36 +82,19 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
    *  builder does no I/O. */
   availableSkills?: SkillsIndex;
   activeSkills?: ActiveSkillSet;
-  cwd?: string;
   /** Discovered AGENTS.md sources, root-most first, plus the ones too large to carry. */
   agentsMd?: AgentsMdSources;
-  currentDate?: string;
   /** Promoted section replacements, read by the backend once per activation; this builder does no I/O. Absent
    *  renders built-in sources, which the layergate prefix digest is locked against. */
   sectionOverrides?: PromptSectionOverrides;
 }
 
-/** Date-only, never time, so a date does not bust the prompt-cache prefix within a day. */
+/** Date-only, never time: the dynamic block's runtime section changes at most once a day. */
 export function currentDateForPrompt(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
 export const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;
-
-// No `- Turn mode:` line: it split the prompt cache between otherwise identical turns for no gain.
-function renderRuntimeContext(opts: SystemPromptOptions): string {
-  const lines: string[] = [];
-
-  if (opts.backend) lines.push(`- Backend: ${opts.backend}`);
-
-  if (opts.model?.id) lines.push(`- Model: ${opts.model.provider ? `${opts.model.provider}/` : ''}${opts.model.id}`);
-
-  if (opts.cwd) lines.push(`- Working directory: ${opts.cwd}`);
-
-  if (opts.currentDate) lines.push(`- Current date: ${opts.currentDate}`);
-
-  return lines.length ? `## Runtime context\n${lines.join('\n')}` : '';
-}
 
 function renderOperatingGuidance(surface: PromptSurface, render: RenderSection): string {
   const family = surface.model.family;
@@ -377,9 +360,6 @@ export function buildSystemPromptSync(
       render(LEAD_DELIVERY, {}),
       render(LEAD_DIRECT_EDIT, {}),
     ] : []),
-    // Last: the only volatile bytes (date, model, cwd). Prefix caching stops at the first difference, so
-    // rendering these earlier invalidates everything after them.
-    renderRuntimeContext(opts),
   ].filter(Boolean).join('\n\n');
 }
 

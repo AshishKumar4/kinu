@@ -16,7 +16,7 @@ import {
   activePromptSectionOverrides, agentsActionsFor, buildActorTools,
   buildSystemPromptSync, createFactsStore,
   createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
-  currentDateForPrompt, isBuiltinToolName, JsonObjectSchema,
+  isBuiltinToolName, JsonObjectSchema,
   projectJsonValue, failedToolOutcome, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
   WORKSPACE_RUN_ID, ConversationSearchStore,
@@ -179,7 +179,6 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       externalTools: [],
       backend: 'cli-local',
       model: { id: llm.model },
-      currentDate: currentDateForPrompt(),
       sectionOverrides: activePromptSectionOverrides(sql, rt.actor),
     }),
   };
