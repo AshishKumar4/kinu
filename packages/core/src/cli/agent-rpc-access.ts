@@ -196,6 +196,7 @@ const HOSTED_WINDOW_RPC = {
   setReasoningEffort: (args, actor) => args[1] === actor.name,
   listBackgroundJobs: (args, actor) => args[1] === actor.name,
   cancelBackgroundJob: (args, actor) => args[1] === actor.name,
+  retryBackgroundJob: (args, actor) => args[1] === actor.name,
   dismissBackgroundJob: (args, actor) => args[1] === actor.name,
   cancelCurrentWork: () => true,
   send: () => true,
