@@ -4,7 +4,7 @@ import { describe, test, expect } from "bun:test";
 import { createSandboxExecutor } from "@kinu.run/core";
 import type { KinuDevbox } from "../src/kinu-devbox";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
-import { execRecords } from "@kinu.run/devbox";
+import { DevboxError, execRecords } from "@kinu.run/devbox";
 // codemode reaches `cloudflare:workers` at load; the preload's boundary stub serves it.
 import { CodemodeLauncher, createRuntimeExecutor, KinuSandboxExecutor } from "../src/codemode-sandbox";
 import { workerContext } from "./helpers/bindings";
@@ -52,6 +52,7 @@ function fakeBox(input: {
 
       return input.streamed();
     },
+    releaseUntimed: async () => {},
     killUntimed: async (execId: string) => {
       calls.killed.push(execId);
 
@@ -111,6 +112,77 @@ describe("adaptCloudflareSandbox — command completion", () => {
     expect((await box.handle.exec("bash oom.sh", {})).exitCode).toBe(137);
   });
 
+});
+
+/**
+ * GitHub #41: a box that loses its first reply after the command ran, keeping the box's one launch per id: a
+ * repeated id answers from its launch, and an id it holds no answer for (a streamed one) is never launched again.
+ */
+function lossyBox() {
+  const ran: string[] = [];
+  const ids: string[] = [];
+  const released: string[] = [];
+  const answers = new Map<string, { stdout: string; stderr: string; exitCode: number }>();
+  const launched = new Set<string>();
+  let replies = 0;
+
+  const launch = (command: string, execId: string): void => {
+    ids.push(execId);
+
+    if (answers.has(execId)) return;
+
+    if (launched.has(execId)) throw new DevboxError('indeterminate', `untimed exec ${execId} was launched before; it was not launched again`);
+    launched.add(execId);
+    ran.push(command);
+  };
+
+  // The reply is lost on its way back, after the command ran.
+  const reply = <T>(answer: T): T => {
+    replies += 1;
+
+    if (replies === 1) throw new Error('Network connection lost.');
+
+    return answer;
+  };
+
+  const box = {
+    resolveReadiness: async () => ({ kind: 'restored' as const }),
+    execUntimed: async (command: string, opts: { execId: string }) => {
+      launch(command, opts.execId);
+      answers.set(opts.execId, answers.get(opts.execId) ?? { stdout: 'once\n', stderr: '', exitCode: 0 });
+
+      return reply(answers.get(opts.execId));
+    },
+    execUntimedStream: async (command: string, opts: { execId: string }) => {
+      launch(command, opts.execId);
+
+      return reply(pipe('once\n'));
+    },
+    killUntimed: async () => false,
+    releaseUntimed: async (execId: string) => { released.push(execId); },
+  };
+
+  return { ran, ids, released, executor: createSandboxExecutor(adaptCloudflareSandbox(Object.create(box), async () => {}, null)) };
+}
+
+describe("a lost reply never runs the command twice", () => {
+  test("a buffered command answers from its one launch", async () => {
+    const box = lossyBox();
+
+    expect(await box.executor.tools.exec.execute("echo once >> effects")).toBe("once\n");
+    expect(box.ran).toEqual(["echo once >> effects"]);
+    expect(new Set(box.ids).size).toBe(1);
+    expect(box.released).toEqual([box.ids[0]]);
+  });
+
+  test("a streamed command whose answer cannot be read again is reported as unknown, not run again", async () => {
+    const box = lossyBox();
+    const output = { write: () => {}, lost: () => {} };
+
+    expect(JSON.stringify(await box.executor.tools.exec.execute("echo once >> effects", { output }))).toContain('it was not launched again');
+    expect(box.ran).toEqual(["echo once >> effects"]);
+    expect(new Set(box.ids).size).toBe(1);
+  });
 });
 
 const encoder = new TextEncoder();
@@ -176,6 +248,7 @@ describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch
     const ready: KinuDevbox = Object.create({
       resolveReadiness: async () => ({ kind: 'restored' as const }),
       execUntimed: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
+      releaseUntimed: async () => {},
     });
  
     await expect(adaptCloudflareSandbox(ready, async () => {}, null)

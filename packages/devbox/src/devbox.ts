@@ -8,7 +8,7 @@ import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesO
 import { NativeArchives } from './native-archives';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
-import { Effect, Result } from 'effect';
+import { Deferred, Effect, Result } from 'effect';
 
 import {
   DEFAULT_DEVBOX_POLICY,
@@ -115,6 +115,10 @@ interface UntimedOptions {
   readonly env?: Readonly<Record<string, string>>;
 }
 
+function launchUnknown(execId: string): DevboxError {
+  return new DevboxError('indeterminate', `untimed exec ${execId} was launched before, and its outcome cannot be read here; it was not launched again`);
+}
+
 /** The SDK's `killCommand` (D37). */
 const KILL_TREE = `
 tree() { for c in $(cat /proc/$1/task/$1/children 2>/dev/null); do tree "$c"; done; [ -d /proc/$1 ] && echo "$1"; }
@@ -210,6 +214,8 @@ const BOOT_ID_KEY = 'devbox:boot-id';
 /** Persisted so a mid-restore object reset is survivable; a stored `restoring` phase needs recovery.
  *  Generation turnover clears the row, so a stale phase cannot admit a different container. */
 const SETTLED_KEY = 'devbox:restoration';
+
+const UNTIMED_CLAIM_PREFIX = 'devbox:untimed:';
 
 const REPLACED_COUNT_KEY = 'devbox:replaced-count';
 
@@ -1756,8 +1762,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** No deadline; the SDK's process lane lost output (D37). */
   execUntimed(command: string, options: UntimedOptions): Promise<ExecResult> {
+    const answered = this.#answers.get(options.execId);
+
+    if (answered !== undefined) return settle(Deferred.await(answered));
+
+    if (!this.#claimLaunch(options.execId)) return settle(Effect.fail(launchUnknown(options.execId)));
     const pending: UntimedExecution = { cancelled: false };
+    const answer = Deferred.makeUnsafe<ExecResult, DevboxError>();
     this.#untimed.set(options.execId, pending);
+    this.#answers.set(options.execId, answer);
 
     return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       const process = yield* this.#startUntimed(command, options, pending);
@@ -1765,10 +1778,32 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const text = new TextDecoder();
 
       return { stdout: text.decode(output.stdout), stderr: text.decode(output.stderr), exitCode: output.exitCode };
-    })).pipe(Effect.ensuring(Effect.sync(() => { this.#untimed.delete(options.execId); }))));
+    })).pipe(
+      Effect.exit,
+      Effect.tap((exit) => Deferred.done(answer, exit)),
+      Effect.flatten,
+      Effect.ensuring(Effect.sync(() => { this.#untimed.delete(options.execId); })),
+    ));
+  }
+
+  releaseUntimed(execId: string): Promise<void> {
+    return settle(attempt('io', async () => {
+      this.#answers.delete(execId);
+      this.ctx.storage.kv.delete(`${UNTIMED_CLAIM_PREFIX}${execId}`);
+    }));
+  }
+
+  #claimLaunch(execId: string): boolean {
+    const key = `${UNTIMED_CLAIM_PREFIX}${execId}`;
+
+    if (this.ctx.storage.kv.get(key) !== undefined) return false;
+    this.ctx.storage.kv.put(key, true);
+
+    return true;
   }
 
   execUntimedStream(command: string, options: UntimedOptions): Promise<ReadableStream<Uint8Array>> {
+    if (!this.#claimLaunch(options.execId)) return settle(Effect.fail(launchUnknown(options.execId)));
     const pending: UntimedExecution = { cancelled: false };
     this.#untimed.set(options.execId, pending);
     const leave = this.#arrive();
@@ -1835,6 +1870,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   readonly #untimed = new Map<string, UntimedExecution>();
+  readonly #answers = new Map<string, Deferred.Deferred<ExecResult, DevboxError>>();
 
   /** The only transition that clears a terminal refusal; keeps the `replace` stage, so a failed
    *  retry refuses again instead of destroying. Also re-runs an incomplete restoration. */

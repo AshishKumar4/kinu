@@ -75,6 +75,7 @@ function serverBox(clock: HandClock, killed: string[] = []) {
 
       return execRecords({ stdout, stderr: null, exitCode: exitCode.promise }, { exited: () => {}, cancelled: async () => {} });
     },
+    releaseUntimed: async () => {},
     // The process tree ends as the runtime ends it: the command exits on the signal.
     killUntimed: async (execId: string) => {
       const end = running.get(execId);

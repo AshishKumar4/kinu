@@ -59,6 +59,7 @@ const sandboxFor = (id: string) => ({
 
     return { stdout: '', stderr: '', exitCode: 0 };
   },
+  releaseUntimed: async () => {},
   listFiles: async () => {
     box.calls.push('listFiles');
 

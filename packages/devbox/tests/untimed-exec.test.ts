@@ -154,6 +154,28 @@ function releaseFifo(cwd: string): string {
 }
 
 // 2026-10-02: a sandbox job's output reached no one until its command ended.
+describe('one launch per id', () => {
+  test('a repeated id reads its launch\'s answer, an id with nothing kept is never launched again, and a released id is free', async () => {
+    const box = await readyBox();
+    const cwd = mkdtempSync(join(root, 'once-'));
+    const command = 'echo ran >> effects; echo done';
+    const effects = () => readFileSync(join(cwd, 'effects'), 'utf8');
+
+    const first = await box.execUntimed(command, { cwd, execId: 'once' });
+
+    expect(await box.execUntimed(command, { cwd, execId: 'once' })).toEqual(first);
+    expect(effects()).toBe('ran\n');
+
+    await collectExecRecords(await box.execUntimedStream(command, { cwd, execId: 'streamed' }), () => {});
+    await expect(box.execUntimed(command, { cwd, execId: 'streamed' })).rejects.toMatchObject({ code: 'indeterminate' });
+    expect(effects()).toBe('ran\nran\n');
+
+    await box.releaseUntimed('once');
+    await box.execUntimed(command, { cwd, execId: 'once' });
+    expect(effects()).toBe('ran\nran\nran\n');
+  });
+});
+
 describe('a streamed untimed command', () => {
   test('hands over what it printed while it still runs, and its exit code ends the stream', async () => {
     const box = await readyBox();
