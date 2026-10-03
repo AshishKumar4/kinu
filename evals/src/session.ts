@@ -404,6 +404,12 @@ export interface PublicResponseFrame {
   /** Set by the DO on every frame of a stream it REPLAYS. Carried because the
    *  accumulator needs it to stay idempotent across a resume. */
   readonly replay?: boolean;
+  /** On a replayed chunk: a step the ledger records, restated rather than
+   *  relayed, which a client that streamed it skips. A build before 2026-10-01
+   *  restates nothing. */
+  readonly restated?: boolean;
+  /** The replay's last frame: the live chunks follow. */
+  readonly replayComplete?: boolean;
 }
 
 /** What one decoded socket frame is. `other` is not an error: the DO fans
@@ -454,6 +460,8 @@ const FrameSchema = v.object({
    *  admitted here and each branch below reads the one it means. */
   error: v.optional(v.union([v.boolean(), JsonValueSchema])),
   replay: v.optional(v.boolean()),
+  restated: v.optional(v.boolean()),
+  replayComplete: v.optional(v.boolean()),
   success: v.optional(v.boolean()),
   result: v.optional(JsonValueSchema),
   turnId: v.optional(v.string()),
@@ -490,6 +498,8 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
         done: frame.output.done,
         error: frame.output.error === true,
         replay: frame.output.replay,
+        restated: frame.output.restated,
+        replayComplete: frame.output.replayComplete,
         landed: frame.output.landed,
       },
     };
@@ -612,9 +622,7 @@ export function recordPublicTurn(): PublicTurnRecorder {
         return;
       }
 
-      if (frame.body !== undefined && frame.body.trim() !== '') {
-        stream.apply(frame.body, frame.replay === true);
-      }
+      stream.apply(frame);
 
       // The done frame is the DO's verdict on WHERE the send landed. A
       // mid-turn answer opens no stream of its own — `settle` would mint a
@@ -1695,8 +1703,8 @@ export class KinuPublicSession {
 
   /**
    * Listen to exactly these helpers' rooms, by name or path. A helper's turn streams to its own window alone (`broadcastToActor`), so it
-   * is heard only on a socket opened on its path, as its window opens one. A room relays no replay: a call that started
-   * before its socket opened is not known to run.
+   * is heard only on a socket opened on its path, as its window opens one. A room opened mid-turn is replayed the turn, as every room
+   * is, so a call that started before it opened is known to run.
    */
   listen(helpers: readonly string[]): void {
     for (const [name, room] of this.rooms) {
@@ -1715,10 +1723,18 @@ export class KinuPublicSession {
   private openRoom(name: string): HelperRoom {
     const socket = this.newSocket(hostedActorSocketPath(name));
     const heard = new HeardStreams();
+    const acked = new Set<string>();
 
     this.hearing.add(heard);
     socket.addEventListener('message', (event: MessageEvent) => {
       const frame = decodeFrame(event.data);
+
+      // Told on connect and again on request, acked once as the SDK's hook acks it: until then the room keeps the turn's
+      // live chunks from this socket.
+      if (frame?.kind === 'resuming' && !acked.has(frame.id)) {
+        acked.add(frame.id);
+        socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }));
+      }
 
       // A head's broadcasts reach every socket, and the workspace's own hears them.
       if (frame?.kind !== 'response') return;

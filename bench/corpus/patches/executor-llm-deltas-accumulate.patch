@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/scaffold/executor.ts b/packages/core/src/scaffold/executor.ts
-index f182e225c..eea0580c9 100644
 --- a/packages/core/src/scaffold/executor.ts
 +++ b/packages/core/src/scaffold/executor.ts
-@@ -368,7 +368,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
-           if (chunk.type === 'native-tool-output') await pushEvent({ type: 'model_output', streamId, output: chunk.output });
+@@ -329,7 +329,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
            else {
+             chunk.source = 'scaffold';
+ 
              if (chunk.type === 'text-delta') acc += chunk.delta;
 -            await pushEvent({ type: 'model_chunk', streamId, chunk });
 +            await pushEvent({ type: 'model_chunk', streamId, chunk: chunk.type === 'text-delta' ? { ...chunk, delta: acc } : chunk });
            }
          }
- 

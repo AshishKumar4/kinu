@@ -8,7 +8,7 @@ import { decodeJsonValue, JsonValueSchema } from '@kinu.run/core';
 import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeFileSync, unlinkSync } from 'node:fs';
+import { writeFileSync, unlinkSync, rmSync } from 'node:fs';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
 import { requireBuild } from '@kinu.run/core';
@@ -116,7 +116,7 @@ async function runToCompletion(
       stderr: await Bun.file(errFile).text(),
     };
   } finally {
-    unlinkSync(tmpFile);
+    rmSync(tmpFile, { force: true });
     unlinkSync(outFile);
     unlinkSync(errFile);
   }
@@ -129,6 +129,7 @@ async function executeInSubprocess(code: string): Promise<ExecuteResult> {
   if (!bunBin) return executeInProcess(code, []);
 
   const wrapper = `
+    await Bun.file(import.meta.path).delete();
     try {
       const result = await (
         ${normalizeCode(code)}

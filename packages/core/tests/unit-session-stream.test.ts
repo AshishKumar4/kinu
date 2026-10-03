@@ -6,6 +6,7 @@ import { ActorClaimStore, initActorClaimTables } from '../src/orchestrator/actor
 import { SessionStream } from '../src/orchestrator/session-stream';
 import type { ActorProgramIdentity } from '../src/orchestrator/actor-claims';
 import { KinuError } from '../src/obs/error';
+import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test' };
 
@@ -38,7 +39,7 @@ test('a step cancelled while reasoning seals what it streamed, buffered tail inc
     await stream.nativePart({ type: 'reasoning-start', id: 'r' });
 
     for (const word of ['thinking ', 'hard ', 'about it']) await stream.nativePart({ type: 'reasoning-delta', id: 'r', text: word });
-    await stream.nativeStep([]);
+    await stream.nativeStep({ messages: [], toolResults: [] });
     expect(s.open()).toEqual([]);
     const answer = (await s.history.materialize()).messages.find(message => message.role === 'assistant');
     expect(answer).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: 'thinking hard about it' }] });
@@ -60,11 +61,116 @@ test('a streamed answer joins the working context only when it seals', async () 
 
     await stream.nativePart({ type: 'text-end', id: '0' });
     const final: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'partial' }] };
-    await stream.nativeStep([final]);
+    await stream.nativeStep({ messages: [final], toolResults: [] });
     const after = s.selected();
     expect(after.revision).toBe(before.revision + 1);
     expect(s.open()).toEqual([]);
     expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
+  } finally { s.testSql.close(); }
+});
+
+test('a failed ledger write rolls back its step, and a committed step is published only after commit', async () => {
+  const s = setup();
+
+  try {
+    initRunEventTables(s.rt.storage.execRaw);
+    const events = new RunEventRecorder(s.rt.storage.sql, s.rt.actor);
+    const { stream } = await s.turn('t1');
+    const before = s.selected();
+    await stream.nativePart({ type: 'text-start', id: '0' });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'record me' });
+    const final: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'record me' }] };
+    const heard: { inTransaction: boolean; open: readonly string[] }[] = [];
+    events.observe(() => { heard.push({ inTransaction: s.testSql.db.inTransaction, open: s.open() }); });
+    const row = () => events.emitDeferred('run-t1', { type: 'step_finish', stepIndex: 1, usage: { input: 7, output: 2 }, usd: 0.000003 });
+
+    await expect(stream.nativeStep({ messages: [final], toolResults: [] }, () => {
+      row();
+      throw new KinuError('io', 'the ledger write failed');
+    })).rejects.toThrow(KinuError);
+    expect(events.read('run-t1')).toEqual([]);
+    expect(s.selected()).toEqual(before);
+    expect(heard).toEqual([]);
+
+    await stream.nativeStep({ messages: [final], toolResults: [] }, () => row().publish);
+    expect(heard).toEqual([{ inTransaction: false, open: [] }]);
+    expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
+    expect(events.read('run-t1')).toEqual([expect.objectContaining({ type: 'step_finish', stepIndex: 1, usage: { input: 7, output: 2 }, usd: 0.000003 })]);
+  } finally { s.testSql.close(); }
+});
+
+test('recorders sharing a database publish distinct ordered rows without a stale cached index', () => {
+  const s = setup();
+
+  try {
+    initRunEventTables(s.rt.storage.execRaw);
+    const first = new RunEventRecorder(s.rt.storage.sql, s.rt.actor);
+    const second = new RunEventRecorder(s.rt.storage.sql, s.rt.actor);
+    const heard: number[] = [];
+    first.observe((event) => { heard.push(event.eventIndex); });
+    second.observe((event) => { heard.push(event.eventIndex); });
+    first.emit('run-shared', { type: 'step_finish', stepIndex: 1, usage: { input: 1, output: 1 } });
+    second.emit('run-shared', { type: 'step_finish', stepIndex: 2, usage: { input: 2, output: 2 } });
+    first.emit('run-shared', { type: 'step_finish', stepIndex: 3, usage: { input: 3, output: 3 } });
+
+    expect(heard).toEqual([0, 1, 2]);
+    expect(first.read('run-shared').map((event) => event.eventIndex)).toEqual([0, 1, 2]);
+  } finally { s.testSql.close(); }
+});
+
+test('a late native finish after a terminal seal cannot duplicate the tool row', async () => {
+  const s = setup();
+
+  try {
+    initRunEventTables(s.rt.storage.execRaw);
+    const events = new RunEventRecorder(s.rt.storage.sql, s.rt.actor);
+    const { stream } = await s.turn('t1');
+    const input = { command: 'pwd' };
+    await stream.nativePart({ type: 'tool-call', toolCallId: 'call-a', toolName: 'shell', input });
+    await stream.nativePart({ type: 'tool-result', toolCallId: 'call-a', toolName: 'shell', input, output: 'home' });
+    const tool = () => events.emitDeferred('run-t1', { type: 'tool_call_end', name: 'shell', toolCallId: 'call-a', outcome: { success: true } }).publish;
+    await stream.nativeStep({ messages: [], toolResults: [] }, () => tool());
+    await stream.settle();
+    await stream.nativeStep({ messages: [
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call-a', toolName: 'shell', input }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call-a', toolName: 'shell', output: { type: 'text', value: 'home' } }] },
+    ], toolResults: [] }, () => {
+      const tools = tool();
+      const finished = events.emitDeferred('run-t1', { type: 'step_finish', stepIndex: 1, usage: { input: 5, output: 2 } }).publish;
+
+      return () => { tools(); finished(); };
+    });
+
+    expect(events.read('run-t1').filter((event) => event.type === 'tool_call_end').map((event) => event.toolCallId)).toEqual(['call-a']);
+  } finally { s.testSql.close(); }
+});
+
+test('a program can delegate to native inference and then retain its own text and tool step', async () => {
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    const native: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'delegated answer' }] };
+    await stream.nativePart({ type: 'text-start', id: '0' });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'delegated answer' });
+    await stream.nativeStep({ messages: [native], toolResults: [] });
+
+    const own: ModelMessage = { role: 'assistant', content: [
+      { type: 'text', text: 'program follow-up' },
+      { type: 'tool-call', toolCallId: 'program-call', toolName: 'file', input: { path: '/note' } },
+    ] };
+
+    const result: ModelMessage = { role: 'tool', content: [
+      { type: 'tool-result', toolCallId: 'program-call', toolName: 'file', output: { type: 'text', value: 'saved' } },
+    ] };
+
+    await stream.observe({ type: 'text-delta', delta: 'program follow-up' });
+    await stream.observe({ type: 'tool-call', toolCallId: 'program-call', toolName: 'file', args: { path: '/note' } });
+    await stream.observe({ type: 'tool-result', toolCallId: 'program-call', toolName: 'file', success: true, result: 'saved' });
+    await stream.observe({ type: 'step-finish', stepIndex: 2, responseMessages: [native, own, result] });
+    await stream.settle();
+
+    expect((await s.history.materialize()).messages.slice(-3)).toEqual([native, own, result]);
   } finally { s.testSql.close(); }
 });
 
@@ -79,7 +185,7 @@ test('a step finishing while the turn settles seals each container once', async 
     await stream.nativePart({ type: 'text-end', id: '0' });
     const final: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'partial answer' }] };
 
-    await Promise.all([stream.nativeStep([final]), stream.settle()]);
+    await Promise.all([stream.nativeStep({ messages: [final], toolResults: [] }), stream.settle()]);
     expect(s.open()).toEqual([]);
     expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
   } finally { s.testSql.close(); }
@@ -96,7 +202,7 @@ test('a step that finishes after the turn settled keeps the settled record', asy
     await stream.settle();
     expect(s.open()).toEqual([]);
 
-    await stream.nativeStep([{ role: 'assistant', content: [{ type: 'text', text: 'partial answer' }] }]);
+    await stream.nativeStep({ messages: [{ role: 'assistant', content: [{ type: 'text', text: 'partial answer' }] }], toolResults: [] });
     expect(s.open()).toEqual([]);
     expect((await s.history.materialize()).messages.at(-1))
       .toEqual({ role: 'assistant', content: [{ type: 'text', text: 'partial' }] });
@@ -114,7 +220,7 @@ test('an admission the store refuses seals nothing of a live stream', async () =
     await expect(s.claims.admit({ runId: 'run-t2', turnId: 't2', workMode: 'build', program: BUILTIN, context: stale })).rejects.toThrow(KinuError);
     expect(s.open()).toHaveLength(1);
     await stream.nativePart({ type: 'text-end', id: '0' });
-    await stream.nativeStep([{ role: 'assistant', content: [{ type: 'text', text: 'live and done' }] }]);
+    await stream.nativeStep({ messages: [{ role: 'assistant', content: [{ type: 'text', text: 'live and done' }] }], toolResults: [] });
     expect((await s.history.materialize()).messages.at(-1)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'live and done' }] });
   } finally { s.testSql.close(); }
 });
@@ -183,7 +289,7 @@ test('a reasoning part the final message omits is sealed from the stream that wi
     await stream.nativePart({ type: 'text-start', id: '0' });
     await stream.nativePart({ type: 'text-delta', id: '0', text: 'the answer' });
     await stream.nativePart({ type: 'text-end', id: '0' });
-    await stream.nativeStep([{ role: 'assistant', content: [{ type: 'text', text: 'the answer' }] }]);
+    await stream.nativeStep({ messages: [{ role: 'assistant', content: [{ type: 'text', text: 'the answer' }] }], toolResults: [] });
 
     expect(s.open()).toEqual([]);
     const answer = (await s.history.materialize()).messages.at(-1);
@@ -203,10 +309,10 @@ test('a final message that reorders what streamed seals in the final order, with
     await stream.nativePart({ type: 'text-delta', id: '0', text: 'calling now' });
     await stream.nativePart({ type: 'text-end', id: '0' });
     await stream.nativePart({ type: 'tool-call', toolCallId: 'c1', toolName: 'read', input: { path: '/x' } });
-    await stream.nativeStep([{ role: 'assistant', content: [
+    await stream.nativeStep({ messages: [{ role: 'assistant', content: [
       { type: 'tool-call', toolCallId: 'c1', toolName: 'read', input: { path: '/x' } },
       { type: 'text', text: 'calling now' },
-    ] }]);
+    ] }], toolResults: [] });
 
     expect(s.open()).toEqual([]);
     expect((await s.history.materialize()).messages.at(-1)).toEqual({ role: 'assistant', content: [

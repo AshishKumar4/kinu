@@ -42,6 +42,8 @@ source "$ROOT/scripts/repo-runtime.sh"
 # dist/kinu/assets/ is NOT an asset dir — it is the worker bundle's
 # code-split chunk output, uploaded as worker modules. See scripts/deploy.sh.
 OUT_DIR="${1:-$ROOT/packages/cf-backend/dist/client/downloads}"
+BUN="$ROOT/node_modules/.bin/bun"
+"$BUN" "$ROOT/scripts/sign-release.ts" --check
 
 # Cloudflare's static-asset limit, per file, on both plans. A file over it
 # publishes nothing, and the assets route then answers the SPA shell in its
@@ -54,8 +56,6 @@ NATIVE_SCOPE="@opentui"
 # both over one directory and moves it into place once.
 CPYTHON_ARTIFACT="kinu-runtime-cpython.tar.gz"
 CPYTHON_PATH="node_modules/@nimbus-sh/runtime-cpython"
-
-BUN="$ROOT/node_modules/.bin/bun"
 
 # Shared with the Harbor compiled build: one authoritative external-asset set.
 runtime_packages="$("$BUN" -e 'console.log(JSON.parse(await Bun.file(process.argv[1]).text()).join("\n"))' "$ROOT/scripts/cli-runtime-packages.json")"

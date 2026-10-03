@@ -59,13 +59,34 @@ bun run deploy                    # kinu-staging, its DO namespaces, containers,
 bun run infra:provision staging   # its secrets; `wrangler secret put` needs the Worker to exist
 bun run gate:infra staging        # every resource staging declares exists and is bound
 
-bun run infra:provision           # the same for production
+bun run infra:provision production # the same for production
 bun run deploy --promote          # kinu, from the build staging verified
-bun run infra:provision
-bun run gate:infra
+bun run infra:provision production
+bun run gate:infra production
 ```
 
 `wrangler secret put` refuses on a nonexistent Worker, so on a fresh account the root secret installs only after the first deploy. That is why provisioning runs twice. The second run creates nothing new. `bun run deploy` is the only supported deploy path. Provisioning creates resources and never deploys.
+
+### Release signing
+
+A source self-host needs its own Ed25519 signing key before the first distribution build. I generate it on the build machine, from the repository root:
+
+```bash
+bun scripts/release-signing-key.ts
+```
+
+`scripts/release-signing-key.ts` writes a PKCS#8 base64 private key to `~/.config/kinu/release-signing.key` with mode `0600`. It prints the path and `RELEASE_SIGNING_PUBLIC_KEY=<64 hex characters>`, never the private key, and refuses an existing file. `KINU_RELEASE_SIGNING_KEY_FILE` chooses another path; I set it for generation and every later build. The private key belongs in a backup or build-runner secret store, never in source or Worker secrets. Staging and production use the same signed artifacts, so the key belongs to the build machine, not one deployment environment.
+
+I replace `RELEASE_SIGNING_PUBLIC_KEY` in both `packages/core/src/http/release-signing.ts` and `packages/pc-agent/src/update.js` with that printed hex value. Core's pin reaches the served installer launcher and the bundled CLI; the daemon ships its own copy. Both must name the new key.
+
+```bash
+unset KINU_RELEASE_SIGNING_PUBLIC_KEY
+bun scripts/sign-release.ts --check
+```
+
+The check signs a probe and verifies it against the source pin. I commit both pins with the deployment configuration and push the revision before the supported deploy path runs. `KINU_RELEASE_SIGNING_PUBLIC_KEY` overrides verification only in the operator's process; setting it on a builder alone does not change the pins clients ship. It is useful for distribution fixtures, not a substitute for this bootstrap. A client already installed with another key does not acquire trust in the new one through this procedure.
+
+For CI, `KINU_RELEASE_SIGNING_KEY` supplies the private key as PKCS#8 base64 and takes precedence over the configured key file. `scripts/build-cli-dist.sh` runs `sign-release.ts --check` before creating output or bundling. The final `sign-release.ts <out dir> <version> <sha>` signs the artifact checksums and verifies the signature again before writing `kinu-version.json`. Missing keys or pins and key/pin mismatches refuse the build with the bootstrap instructions. Installer, CLI and daemon verification still refuse unsigned, foreign-signed, or checksum-mismatched artifacts.
 
 ### Before you start
 

@@ -897,7 +897,7 @@ describe('a `file` failure is attributable from the durable row alone', () => {
     call: (input: FileToolTestInput) => Promise<JsonValue>, input: FileToolTestInput,
   ) {
     const events: Array<Omit<Extract<RunEvent, { type: 'tool_call_end' }>, keyof RunEventBase | 'type'>> = [];
-    const acc = new TurnAccumulator({ onToolCallEvent: (e) => events.push(e) });
+    const acc = new TurnAccumulator({ onToolCallEvent: (e) => { events.push(e); } });
     let output: JsonValue | undefined;
     const args = v.parse(JsonObjectSchema, input);
 

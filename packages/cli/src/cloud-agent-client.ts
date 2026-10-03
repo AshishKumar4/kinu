@@ -250,6 +250,8 @@ const SocketFrameSchema = v.objectWithRest({
   body: v.optional(v.string()),
   done: v.optional(v.boolean()),
   replay: v.optional(v.boolean()),
+  restated: v.optional(v.boolean()),
+  replayComplete: v.optional(v.boolean()),
   landed: v.optional(v.picklist(['mid-turn', 'turn'])),
   turnId: v.optional(v.string()),
 }, JsonValueSchema);
@@ -1018,7 +1020,7 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    if (payload.body?.trim()) active.apply(payload.body, payload.replay === true);
+    active.apply(payload);
 
     if (payload.done) {
       if (this.stoppingTurnIds.has(id)) return;

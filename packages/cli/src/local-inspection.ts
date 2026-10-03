@@ -91,7 +91,7 @@ import {
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveAgentRef } from './config';
-import { createConfiguredLocalModelResolver } from './local-model-resolver';
+import { createConfiguredLocalModelResolver, type LocalModelResolverOptions } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
 import { KinuError } from '@kinu.run/core/obs';
 
@@ -224,9 +224,9 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
 }
 
 /** Null when nothing names a model. */
-export async function readLocalNextTurnTier(name: string): Promise<ResolvedTurnProfile['tier'] | null> {
+export async function readLocalNextTurnTier(name: string, opts: LocalModelResolverOptions = {}): Promise<ResolvedTurnProfile['tier'] | null> {
   const envelope = await createProfileAuthorityReader()();
-  const { llmConfig, resolver } = createConfiguredLocalModelResolver();
+  const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
 
   return withLocalDbAsync(name, async (db) => {
     const { config } = openWorkspaceMainActor(makeSql(db));

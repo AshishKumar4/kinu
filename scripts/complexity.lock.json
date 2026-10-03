@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-03",
-  "files": 2960,
-  "functions": 73713,
+  "files": 2967,
+  "functions": 74010,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -166,14 +166,6 @@
       "complexity": 31
     },
     {
-      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
-      "complexity": 31
-    },
-    {
-      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep",
-      "complexity": 31
-    },
-    {
       "key": "packages/core/src/scaffold/chat-transform.ts#scaffoldTurn",
       "complexity": 31
     },
@@ -230,11 +222,11 @@
       "complexity": 29
     },
     {
-      "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
+      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
       "complexity": 29
     },
     {
-      "key": "packages/core/src/chat.ts#ProviderCall.consume",
+      "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
       "complexity": 29
     },
     {
@@ -243,10 +235,6 @@
     },
     {
       "key": "packages/core/src/feedback/png.ts#sanitizePng",
-      "complexity": 29
-    },
-    {
-      "key": "packages/core/src/session/transcript.ts#SessionTranscriptReader.materializeEntry",
       "complexity": 29
     },
     {
@@ -299,6 +287,10 @@
     },
     {
       "key": "packages/cli/src/config.ts#resolveLLMConfig",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/chat.ts#ProviderCall.consume",
       "complexity": 28
     },
     {

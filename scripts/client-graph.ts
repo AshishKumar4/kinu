@@ -19,8 +19,10 @@
  */
 
 import { assertMeasured } from './gate-ratchet';
-import { moduleEdges, readAliases, readWorkspace, resolveSpecifier, walkModules } from './import-graph';
-import type { Alias, ModuleEdge } from './import-graph';
+import { readAliases, readWorkspace, resolveSpecifier, walkModules } from './import-graph';
+import type { Alias } from './import-graph';
+import { moduleEdges } from './module-edges';
+import type { ModuleEdge } from './module-edges';
 import { isClientDocument, isManifest, readMatching, readRepositoryFile, readSources } from './sources';
 import { parse } from './syntax';
 import type { Parsed } from './syntax';

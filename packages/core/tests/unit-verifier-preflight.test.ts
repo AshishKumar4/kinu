@@ -36,7 +36,7 @@ function brokenShellContext(): MeasurementContext {
 }
 
 describe('a workspace that CAN run the instrument passes its preflight', () => {
-  test('a real shell answers with a RESULT line, so nothing is refused', async () => {
+  test('a real shell answers with a verifier receipt, so nothing is refused', async () => {
     expect(await preflightRatioHarness(liveContext())).toBeNull();
   });
   test('the registry routes the named kind to its own preflight', async () => {
@@ -52,7 +52,7 @@ describe('a workspace that CANNOT run the instrument says so, in the executor\'s
     const fault = present(await preflightRatioHarness(brokenShellContext()), 'the preflight fault');
     expect(fault).not.toBeNull();
     expect(fault).toContain('node _measure_probe');
-    expect(fault).toContain('printed no RESULT line');
+    expect(fault).toContain('printed no verifier receipt');
     expect(fault).toContain('exit 1');
     // The executor's own words, not a paraphrase: they name the real workspace defect.
     expect(fault).toContain('The "wasmModule" option only works in the browser');

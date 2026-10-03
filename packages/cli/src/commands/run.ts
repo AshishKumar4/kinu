@@ -11,7 +11,7 @@ import { chatCommand } from './chat';
 import { ensureLocalDaemonRunning } from './daemon';
 import { resolvePromptAttachments } from '../attachments';
 import { watchHeadlessConsents, watchTerminalConsents, type ConsentWatcher } from '../consent-watch';
-import { DIM, ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display';
+import { DIM, ERR, formatFailure, printFailure, printStepCut, printToolCall, printToolResult } from '../display';
 import { normalizeWebhookAuthMode, numberField, oneOfFlag, stringField } from '../options';
 import {
   executeLocalExecutor,
@@ -523,6 +523,9 @@ function renderRunEvent(event: AgentClientEvent): void {
     case 'text-delta':
       process.stdout.write(event.delta);
       break;
+    case 'step-cut':
+      printStepCut();
+      break;
     case 'reasoning-delta':
       break;
     case 'tool-call':
@@ -601,6 +604,8 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
       ];
     }
 
+    case 'step-cut':
+      return [{ type: 'step_cut', stepIndex: event.stepIndex }];
     case 'step-finish':
       return [];
     case 'error':

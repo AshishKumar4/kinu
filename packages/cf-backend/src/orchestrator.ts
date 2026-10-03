@@ -1564,7 +1564,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
               });
             }
 
-            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: crypto.randomUUID(), userTurn: true, carried: [] });
+            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: crypto.randomUUID(), userTurn: true, carried: [], finishedSteps: 0 });
           },
           ended: async (end) => {
             if (hostedTaskEnding(end) === 'errored') await room?.deliver({ type: 'error', message: end.errorMessage ?? end.summary });
@@ -2144,7 +2144,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
 
     return {
-      resumes: false,
+      turnOwed: () => this.currentTurnOf(reference) !== null,
+      // A hosted turn opens its room at step 0 in each activation (`drainActorAssignments`): its relay holds every step the room restates.
+      steps: () => [],
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
       history: (limit) => this.agentStores(actorId).history(limit),

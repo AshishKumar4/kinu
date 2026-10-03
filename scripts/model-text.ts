@@ -15,7 +15,7 @@
 
 import { clientEntries, runtimeModules } from './client-graph';
 import { assertMeasured } from './gate-ratchet';
-import { moduleEdges } from './import-graph';
+import { moduleEdges } from './module-edges';
 import { parseJsonc } from './jsonc';
 import { isClientDocument, isManifest, readMatching, readRepositoryFile, readSources, trackedFiles } from './sources';
 import { collapsePath, parse, walk } from './syntax';
