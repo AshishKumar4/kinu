@@ -305,14 +305,19 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
   const read = (path: string) => run(`reading ${path}`, `cat ${shellPath(path)} 2>/dev/null || true`);
 
   const publish = (key: string, sourceDir: string, excludes: readonly string[]): Effect.Effect<number, DevboxError> => Effect.gen(function* () {
-    const out = yield* run(`publishing ${key}`, streamCommand({
+    const command = streamCommand({
       sourceDir, archivePath: PACK, excludeFile: `${RT}/disk-pack/excludes.txt`, excludes, objectUrl: ports.storeObjectUrl(key), profile: DISK_STREAM,
-    }));
+    });
 
+    const result = yield* attempt('io', () => ports.exec(command), `publishing ${key}`);
+    const out = result.stdout.trim();
     const [code, size] = out.split(/\s+/);
     const bytes = Number(size);
 
-    if (code !== '0' || !Number.isSafeInteger(bytes) || bytes <= 0) return yield* Effect.fail(new DevboxError('io', `publishing ${key} failed (${code ?? '?'}): ${out.slice(-400)}`));
+    if (result.exitCode !== 0 || code !== '0' || !Number.isSafeInteger(bytes) || bytes <= 0) {
+      return yield* Effect.fail(new DevboxError('io', `publishing ${key} failed (${code ?? '?'}): ${result.stderr.trim().slice(-800) || out.slice(-400)}`));
+    }
+
     const landed = yield* attempt('io', () => ports.objectBytes(key));
 
     if (landed !== bytes) return yield* Effect.fail(new DevboxError('io', `the store holds ${String(landed)} bytes for ${key} where ${String(bytes)} were sent; nothing is recorded`));
