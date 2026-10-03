@@ -9,7 +9,7 @@ import {
 import { readDefaultTier } from './profiles';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-interface LocalModelResolverOptions {
+export interface LocalModelResolverOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
