@@ -34,6 +34,8 @@ export interface ShellSession {
   at(name: string | undefined, cwd: string | undefined): Promise<ShellCwd>;
   /** A named call ended in `cwd`; null: unknown, so the next call reads it again. */
   ran(name: string, cwd: string | null): void;
+  /** A named call cut short: its shell may have moved after it, so it is unknown until a call reports. */
+  lost(name: string): void;
   /** One call at a time per name, and a name a detached job holds answers `busy` at once; unnamed calls never wait. */
   hold<R>(name: string | undefined, job: ShellCallJob | undefined, call: () => Promise<R>, busy: (message: string) => R): Promise<R>;
 }
@@ -594,6 +596,9 @@ export function createShellSession({ home, userRoots, stored }: ShellSessionOpti
       if (cwd !== null) directories.set(name, Promise.resolve(sessionAt(home, cwd)));
       else if (stored === undefined) directories.set(name, Promise.resolve(unknown));
       else directories.delete(name);
+    },
+    lost(name) {
+      directories.set(name, Promise.resolve(unknown));
     },
     async hold(name, job, call, busy) {
       if (name === undefined) return await call();

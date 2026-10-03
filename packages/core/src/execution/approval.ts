@@ -44,7 +44,13 @@ export function withApprovalGatedShell(
   );
 
   const run = async (command: string, options: ShellExecOptions): Promise<ShellExecResult> => {
-    const result = await execute(command, options);
+    let result: ShellExecResult | undefined;
+
+    try {
+      result = await execute(command, options);
+    } finally {
+      if (options.name !== undefined && result === undefined) session?.lost(options.name);
+    }
 
     // A named call that ran leaves its shell where it ended; one that did not run moved nothing.
     if (options.name !== undefined && result.refusal === undefined) session?.ran(options.name, result.finalCwd ?? null);

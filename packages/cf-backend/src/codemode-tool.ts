@@ -7,7 +7,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool, type ToolSet } from 'ai';
-import { readDeviceRequestChannel, type ActorHandle, type AgentsToolDeps, type CodemodeSurface, type DeviceRequestChannel, type ExecutionRouter } from "@kinu.run/core";
+import { execCallArgs, readDeviceRequestChannel, type ActorHandle, type AgentsToolDeps, type CodemodeSurface, type DeviceRequestChannel, type ExecutionRouter } from "@kinu.run/core";
 import { createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
@@ -27,27 +27,6 @@ export interface CodemodeFactoryOptions {
   extraProviders?: () => CodemodeProvider[];
   onExecutorUsed?: (name: string) => void;
   reach?: ToolSurfaceNarrowing;
-}
-
-function withDeviceOwnership(args: unknown[], channel: DeviceRequestChannel | undefined): unknown[] {
-  if (!channel) return args;
-  const context = args[1];
-  // An unpredicted context shape wins over ownership reporting.
-  const parsedContext = v.safeParse(v.looseObject({}), context);
-
-  if (context !== undefined && !parsedContext.success) return args;
-
-  // A name its command holds stays held.
-  const ownership = {
-    onDeviceRequest: (requestId: string) => { channel.report(requestId); },
-    deviceRequestOwner: () => channel.owningJobId,
-    job: channel.jobId,
-    detached: channel.detached,
-  };
-
-  const merged = parsedContext.success ? { ...parsedContext.output, ...ownership } : ownership;
-
-  return [args[0], merged, ...args.slice(2)];
 }
 
 export interface CodemodeFactory {
@@ -75,7 +54,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       wrapped[name] = {
         ...entry,
         execute: async (...args) => {
-          const result = await entry.execute(...(carriesOwnership ? withDeviceOwnership(args, deviceRequests) : args));
+          const result = await entry.execute(...(carriesOwnership ? execCallArgs(args, { channel: deviceRequests }) : args));
 
           options.onExecutorUsed?.(p.name);
 

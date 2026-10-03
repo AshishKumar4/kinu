@@ -224,13 +224,12 @@ function makeFs(workspace, cwd) {
   return { fs, promises };
 }
 
-/** Node's default: a child starts in the process's own directory. */
-function makeChildProcess(workspace, cwd) {
+function makeChildProcess(workspace) {
   function exec(command, optionsOrCallback, maybeCallback) {
     const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
     const options = typeof optionsOrCallback === 'object' && optionsOrCallback !== null ? optionsOrCallback : {};
     const promise = (async () => {
-      const outcome = parseExec(await workspace.exec(String(command), { cwd: resolveAt(cwd, options.cwd === undefined ? '.' : String(options.cwd)) }));
+      const outcome = parseExec(await workspace.exec(String(command), options.cwd === undefined ? {} : { cwd: String(options.cwd) }));
       if (outcome.exitCode !== 0) {
         const error = new Error('Command failed: ' + command + '\n' + outcome.stderr);
         error.code = outcome.exitCode;
@@ -264,7 +263,7 @@ function makeChildProcess(workspace, cwd) {
 
 export function createRequire({ workspace, builtins, cwd }) {
   const { fs, promises } = makeFs(workspace, cwd);
-  const childProcess = makeChildProcess(workspace, cwd);
+  const childProcess = makeChildProcess(workspace);
   const table = {
     fs, 'fs/promises': promises, child_process: childProcess,
   };
