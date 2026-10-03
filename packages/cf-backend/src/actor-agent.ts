@@ -199,7 +199,7 @@ import {
   // Once-only lifecycle for one settled response; both backends drive this state machine.
   TerminalTransitions, initTerminalEffectTable,
   terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  turnRecordTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
+  turnRecordTerminalEffect, turnLessonsTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
   RunEndReasonSchema, WorkModeSchema,
   AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
@@ -1273,6 +1273,7 @@ export abstract class ActorAgent extends Agent<Env> {
       task_reminder: taskReminderTerminalEffect(() => this.chatLoop),
 
       turn_record: turnRecordTerminalEffect(this.orch),
+      turn_lessons: turnLessonsTerminalEffect(this.engine),
       event_drain: eventDrainTerminalEffect(this.orch),
 
       improvement_lanes: terminalEffect({

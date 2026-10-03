@@ -166,6 +166,7 @@ export function declareTerminalRoster(
       autoEvolve: facts.evolutionEnabled,
     },
   });
+  owed.push(...turnLessonsEffect(facts));
   owed.push({ name: 'event_drain', scope: messageId, lane: 'inline', input: {} });
   owed.push({
     name: 'improvement_lanes', scope: messageId, lane: 'inline',
@@ -209,6 +210,13 @@ export function declareTerminalRoster(
   owed.push(...completedBuildEffects(facts, parts, naming?.effect ?? null));
 
   return owed;
+}
+
+/** Owed whether or not a reply ever rates the turn; recorded, so a session with evolution off learns nothing. */
+function turnLessonsEffect(facts: TerminalTurnFacts): OwedEffect[] {
+  if (!facts.evolutionEnabled || facts.workMode === 'plan') return [];
+
+  return [{ name: 'turn_lessons', scope: facts.messageId, lane: 'detached', input: { turn: facts.scopedTurn } }];
 }
 
 function completedBuildEffects(

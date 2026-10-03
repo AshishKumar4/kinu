@@ -5,6 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
+import { turnLessonsTerminalEffect } from '../src/orchestrator/terminal-effects';
 import type { CompletedTurn } from '../src/evolution/types';
 import { applyStruggleLesson, listToolLessons, type Struggle } from '../src/evolution/struggles';
 import { createTestRuntime } from './helpers';
@@ -141,13 +142,28 @@ describe('a struggling turn teaches one lesson about its tool', () => {
     expect(prompts.map((prompt) => prompt.length < 20_000)).toEqual([true]);
   });
 
-  test('a deferred review keeps the struggles the turn was stored with, and learns at the exit', async () => {
-    const { lessons, evolution } = engine({ update: null, text: LESSON });
+  test('the owed effect learns from the turn its row recorded, once however often it runs', async () => {
+    const { lessons, prompts, evolution } = engine({ update: null, text: LESSON });
+    const effect = turnLessonsTerminalEffect(evolution);
+    const input = JSON.parse(JSON.stringify({ turn: turn('t-1', [REFUSED]) }));
 
-    expect(evolution.deferTurnReview(turn('t-1', [REFUSED]), null)).toBe('queued');
-    await evolution.runDeferredTurnReviews();
+    for (let run = 0; run < 2; run++) {
+      if (effect.synchronous) throw new Error('turn_lessons runs detached');
+      await effect.run(input, 'm-1');
+    }
 
-    expect(lessons().map(({ id }) => id)).toEqual(['tl-t-1']);
+    expect({ asked: prompts.length, lessons: lessons().map(({ id }) => id) }).toEqual({ asked: 1, lessons: ['tl-t-1'] });
+  });
+
+  test('a rewrite in the same words keeps its evidence, so a harmful lesson still retires', async () => {
+    const { lessons, learn, answerWith } = engine({ update: null, text: LESSON });
+
+    await learn(turn('t-1', [REFUSED]));
+    answerWith({ update: 'tl-t-1', text: LESSON });
+
+    for (const id of ['t-2', 't-3', 't-4', 't-5', 't-6']) await learn(turn(id, [REFUSED], [{ id: 'tl-t-1', revision: 1 }]));
+
+    expect(lessons()[0]).toMatchObject({ id: 'tl-t-1', revision: 1, harmful: 5, status: 'retired' });
   });
 
   test('a stall alone teaches no lesson, as no one tool owns it', async () => {

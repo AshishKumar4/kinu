@@ -211,6 +211,9 @@ export function applyStruggleLesson(sql: SqlExecutor, actor: ActorHandle, input:
 
   const target = row === undefined ? undefined : lessonOf(row);
 
+  // The same words are no rewrite: their evidence stands.
+  if (target !== undefined && target.text === text) return target.id;
+
   if (target !== undefined) {
     const turnIds = target.turnIds.includes(input.turnId) ? target.turnIds : [...target.turnIds, input.turnId];
 

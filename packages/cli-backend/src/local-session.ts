@@ -63,7 +63,7 @@ import { TierIdSchema,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial, readMission,
-  branchesTerminalEffect, turnRecordTerminalEffect,
+  branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
@@ -1958,6 +1958,7 @@ export class LocalAgentSession {
       task_reminder: taskReminderTerminalEffect(() => this.chat),
 
       turn_record: turnRecordTerminalEffect(this.actorSession.orchestrator),
+      turn_lessons: turnLessonsTerminalEffect(this.engine),
       event_drain: eventDrainTerminalEffect(this.actorSession.orchestrator),
 
       // The CLI's lanes run elsewhere (evolution on its own queue); the row keeps the roster whole.

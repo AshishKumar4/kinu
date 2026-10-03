@@ -556,10 +556,10 @@ export class EvolutionEngine {
   }
 
   /**
-   * The turn's own completion effect, apart from its rating, which may wait on a reply that never comes: records its
-   * struggles and scores the lessons it was shown, then has the fast tier write one lesson about the tool it
-   * struggled with most. Each part has its tombstone, so a retry neither rescores nor asks again. A turn with no id
-   * has none to key them by.
+   * The `turn_lessons` terminal effect's body, apart from the turn's rating, which may wait on a reply that never
+   * comes: records its struggles and scores the lessons it was shown, then has the fast tier write one lesson about
+   * the tool it struggled with most. Each part has its tombstone, so a retry neither rescores nor asks again; a
+   * refusal throws, for the ledger to retry or park. A turn with no id has none to key them by.
    */
   async learnFromTurn(completed: CompletedTurn): Promise<void> {
     if (!this.config.enabled || completed.turnId === undefined || completed.turnId === '') return;
@@ -648,8 +648,6 @@ export class EvolutionEngine {
 
     for (const row of taken.reviews) {
       try {
-        // A one-shot host learns here, at its exit; elsewhere the turn learned when it was recorded.
-        await this.learnFromTurn(row.turn);
         await this.reviewTurn(row.turn, row.followup);
       } catch (err) {
         // A governor refusal is a decision: the row goes back unchanged. Any other throw

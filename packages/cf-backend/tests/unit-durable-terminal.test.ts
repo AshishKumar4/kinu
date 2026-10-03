@@ -257,7 +257,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(owed.map((row) => row.effect_key)).toEqual([
       // No `branches` row: branches are claimed per branch id and this turn launched none. No `advisor_review`
       // row: the harness actor does not review turns.
-      'v1:turn_end_extensions:a-head', 'v1:turn_record:a-head',
+      'v1:turn_end_extensions:a-head', 'v1:turn_record:a-head', 'v1:turn_lessons:a-head',
       'v1:event_drain:a-head', 'v1:improvement_lanes:a-head',
       'v1:sleep_time:a-head', 'v1:auto_title:a-head', 'v1:auto_gepa:a-head',
     ]);

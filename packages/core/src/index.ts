@@ -22,7 +22,7 @@ export {
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  branchesTerminalEffect, turnRecordTerminalEffect,
+  branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
   terminalEffectKey, keyedScope, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
