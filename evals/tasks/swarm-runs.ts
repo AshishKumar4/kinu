@@ -25,18 +25,18 @@ function facts(swarm: PublicSwarmRun) {
 }
 
 /**
- * Whether the lead ran a swarm of `asked.preset` that completed with at least two of its nodes settled, and,
+ * Whether this turn ran a swarm, optionally of `asked.preset`, with at least two nodes settled, and,
  * when `asked.measured`, one its objective's verifier ranked: a named preset called without an objective falls
  * back to a judge ensemble (core `unmeasuredPoint`), and only a judge asks for samples. Read from the Swarms
  * pane, never from the agent's own account. A lead that does the work itself, a swarm of another shape, a judged
  * sweep where a measured search was asked for, or one whose nodes all failed fails it. Every run's facts are
  * the evidence either way.
  */
-export async function aSwarmRan(verifier: EvalVerifier, asked: { preset: string; measured?: true }): Promise<EvalCheckOutcome> {
+export async function aSwarmRan(verifier: EvalVerifier, asked: { preset?: string; measured?: true }): Promise<EvalCheckOutcome> {
   const runs = (await verifier.swarms()).map(facts);
 
   return {
-    pass: runs.some((run) => run.preset === asked.preset && run.status === 'completed' && run.settled >= 2
+    pass: runs.some((run) => (asked.preset === undefined || run.preset === asked.preset) && run.status === 'completed' && run.settled >= 2
       && (asked.measured === undefined || run.judgeSamples === null)),
     evidence: { asked, runs },
   };
