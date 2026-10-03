@@ -61,6 +61,11 @@ type JobRecoveryOutcome =
   | { readonly state: 'deferred'; readonly job: BackgroundJob }
   | { readonly state: 'none' };
 
+export interface JobRetirement {
+  readonly stopped: string[];
+  readonly refused: string[];
+}
+
 /** Each detached job is a live process tree; past the cap the detach is refused and cancelled. */
 export const MAX_CONCURRENT_DETACHED_JOBS = 8;
 
@@ -112,6 +117,10 @@ export interface BackgroundJobRunnerDeps {
   scheduleResume?: (atMs: number) => Promise<void> | void;
 }
 
+/** The workspace's half of every job runner in it. */
+export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutput'>>
+  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock'>;
+
 const SearchJobInputSchema = v.object({ task: v.string() });
 
 const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()) });
@@ -146,15 +155,18 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
   return undefined;
 }
 
-/** Wake text differs by outcome because the agent's next action does. */
-function wakeText(job: BackgroundJob): string {
+/** By outcome; `inline` carries the result to an agent without `agent.jobResult`. */
+export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent'): string {
   const generation = job.resumeAttempts > 0
     ? ` (generation ${String(job.resumeAttempts + 1)}: it was interrupted and re-driven)`
     : '';
 
   if (job.status === 'completed') {
-    return `Background ${job.kind} job ${job.id} completed${generation}. Read the full result with `
-      + `agent.jobResult('${job.id}'), then synthesize it / continue the work you backgrounded. `
+    const read = reader === 'inline'
+      ? `Its result:\n${job.result ?? '(empty)'}\n\nSynthesize it / continue`
+      : `Read the full result with agent.jobResult('${job.id}'), then synthesize it / continue`;
+
+    return `Background ${job.kind} job ${job.id} completed${generation}. ${read} the work you backgrounded. `
       + `The result says whether it is COMPLETE or PARTIAL: say which when you report it.`;
   }
 
@@ -193,6 +205,9 @@ export class BackgroundJobRunner {
   private readonly fenced = new Map<string, () => Promise<void>>();
 
   readonly output: JobOutputFeeds;
+
+  /** Foreground calls; the actor's Stop aborts them. */
+  readonly foreground = new Set<AbortController>();
 
   constructor(private readonly deps: BackgroundJobRunnerDeps) {
     this.output = new JobOutputFeeds({ clock: deps.clock ?? REAL_CLOCK, send: (frame) => { deps.jobOutput?.(frame); } });
@@ -575,9 +590,30 @@ export class BackgroundJobRunner {
 
   /** Abort, mark cancelled, and wake the agent, which was told to wait for this result. */
   async cancel(jobId: string): Promise<boolean> {
-    if (this.deps.store.get(jobId)?.status !== 'running') return false;
+    if (await this.stop(jobId) !== 'stopped') return false;
+    await this.wake(jobId);
 
-    if (this.cancelling.has(jobId)) return false;
+    return true;
+  }
+
+  /** No wake: its reader is leaving. */
+  async retire(): Promise<JobRetirement> {
+    const retirement: JobRetirement = { stopped: [], refused: [] };
+
+    for (const jobId of this.deps.store.runningIds()) {
+      const outcome = await this.stop(jobId);
+
+      if (outcome === 'stopped') retirement.stopped.push(jobId);
+      else if (outcome === 'refused') retirement.refused.push(jobId);
+    }
+
+    return retirement;
+  }
+
+  private async stop(jobId: string): Promise<'stopped' | 'refused' | 'settled'> {
+    if (this.deps.store.get(jobId)?.status !== 'running') return 'settled';
+
+    if (this.cancelling.has(jobId)) return 'refused';
     this.cancelling.add(jobId);
     let refusal: { readonly error: unknown } | undefined;
 
@@ -601,13 +637,10 @@ export class BackgroundJobRunner {
 
       if (held) await held();
 
-      return false;
+      return 'refused';
     }
 
-    if (!this.settleCancelled(jobId)) return false;
-    await this.wake(jobId);
-
-    return true;
+    return this.settleCancelled(jobId) ? 'stopped' : 'settled';
   }
 
   /**

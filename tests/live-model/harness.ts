@@ -19,7 +19,7 @@ import {
   isBuiltinToolName, JsonObjectSchema, collectDynamicContext, currentDateForPrompt, DynamicContextLedger, readMemoryTail,
   projectJsonValue, failedToolOutcome, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
-  WORKSPACE_RUN_ID, ConversationSearchStore,
+  WORKSPACE_RUN_ID, ConversationSearchStore, BackgroundJobRunner, BACKGROUNDABLE_TOOLS,
 } from '../../packages/core/src/index';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import {
@@ -148,7 +148,8 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   // The live rungs measure swarms, which the eval accounts have turned on.
   const agents: AgentsToolDeps = { mode: 'build', swarm, swarms: true };
 
-  const tools = buildActorTools({
+  // No session takes a wake here, so its calls run inline: the raw surface, over a runner nothing detaches into.
+  const { raw: tools } = buildActorTools({
     rt,
     conversations: new ConversationSearchStore(sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)),
     codemode: createNodeCodemodeToolFactory({
@@ -164,6 +165,11 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     effectClaims: { sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID, durable: () => Promise.resolve() },
     facts,
     webSearch,
+    jobs: {
+      jobRunner: new BackgroundJobRunner({ store: rt.stores.jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'undelivered' } }),
+      backgroundable: BACKGROUNDABLE_TOOLS,
+      mode: () => 'build',
+    },
   });
 
   const builtinTools = Object.keys(tools).filter(isBuiltinToolName);

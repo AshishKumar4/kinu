@@ -20,11 +20,9 @@ import type { ResolvedModelWindow } from '../context-window';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
 import type { DynamicContext } from '../prompting/volatile-context';
 import { buildToolSurface, type ReportToolDeps } from '../tools/builtins';
-import { AgentWakeQueue } from '../jobs/wake-queue';
 import { permitInPlan } from '../execution/work-mode';
-import { BackgroundJobRunner } from '../jobs/runner';
-import type { BackgroundJobRunnerDeps } from '../jobs/runner';
-import { initBackgroundJobsTable } from '../jobs/store';
+import type { BackgroundJobRunner } from '../jobs/runner';
+import { stepLoopJobs, type StepLoopJobSeat } from '../jobs/step-loop';
 import { CONFINED_BACKGROUNDABLE_TOOLS, wrapToolsForBackground } from '../jobs/background-wrap';
 import type { BackgroundPolicy } from '../jobs/threshold';
 import { readProposalCode } from '../execution/code-fence';
@@ -177,6 +175,7 @@ export interface HostedNodeSeat {
   readonly conversations: ConversationRecall;
   /** The window a turn on `spec` is admitted against, from the backend's catalog; null is the caller's own model. */
   readonly windowOf: (spec: string | null) => Promise<ResolvedModelWindow>;
+  readonly jobs: StepLoopJobSeat;
 }
 
 export interface NodeLoopDeps {
@@ -191,6 +190,7 @@ export interface NodeLoopDeps {
     => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   conversations: ConversationRecall;
+  jobs: StepLoopJobSeat;
   model: LanguageModel;
   window: ResolvedModelWindow;
   logger: Logger;
@@ -422,27 +422,16 @@ async function runNodeLoop(
     produced: [],
   };
 
-  // In-process counterpart of the actor's durable queue, behind the same `AgentInbox` seam.
-  const wakes = new AgentWakeQueue();
-  // Reconciled here: nothing guarantees this actor's jobs table was opened before.
-  initBackgroundJobsTable(deps.actor.runtime.storage.execRaw);
-
-  const runnerDeps: BackgroundJobRunnerDeps = {
-    store: deps.actor.stores.jobs,
-    fiber: deps.actor.runtime.schedule.fiber.bind(deps.actor.runtime.schedule),
-    inbox: wakes,
+  const { runner: jobRunner, next, detach } = stepLoopJobs({
+    actor: deps.actor,
+    seat: deps.jobs,
+    policy: deps.backgroundPolicy,
     logActivity: (event, detail) => {
       deps.logger.event('swarm.node_job', {
         nodeId: spec.headInput.id, job: event, detail: detail ?? '',
       });
     },
-    // No `eventLog`/`scheduleDrain`/`resume`: a node is abandoned with its run, so there is no later
-    // activation to deliver to.
-  };
-
-  // An absent policy must be an absent key: the runner reads presence to pick the default.
-  if (deps.backgroundPolicy !== undefined) runnerDeps.policy = deps.backgroundPolicy;
-  const jobRunner = new BackgroundJobRunner(runnerDeps);
+  });
 
   // A null arbiter is the only spelling of "no branch can be granted here".
   const tools = buildNodeToolSet({
@@ -483,11 +472,7 @@ async function runNodeLoop(
     },
     reportMessages: (messages) => { scratch.produced = messages; },
     // A reported node is finished; an unreported one waits while a job runs or a wake is queued.
-    resume: async () => {
-      if (scratch.reported !== null) return null;
-
-      return wakes.next(() => jobRunner.inFlight > 0);
-    },
+    resume: async () => (scratch.reported === null ? next() : null),
   };
 
   // Absent seams must be absent keys: `runHeadInference` reads presence.
@@ -512,6 +497,7 @@ async function runNodeLoop(
   } finally {
     // Cancel this runner's jobs: their results have no reader left.
     jobRunner.cancelRunning();
+    detach();
   }
 }
 
@@ -658,6 +644,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
     profile: seat.profile,
     dynamic: seat.dynamic,
     conversations: seat.conversations,
+    jobs: seat.jobs,
     model: deps.model,
     logger: deps.logger,
     // Real time unless the run handed a clock (D19).

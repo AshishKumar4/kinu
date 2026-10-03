@@ -43,6 +43,7 @@ function fakeJobRunner(
     policy,
     thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold, clock }),
     output: new JobOutputFeeds({ clock: clock ?? REAL_CLOCK, send: () => {} }),
+    foreground: new Set<AbortController>(),
   };
 }
 

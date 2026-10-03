@@ -3,12 +3,14 @@
  * Defends: the device copy of the shell contract drifting from the local host shell. Driven through `handle`.
  */
 
+import { present } from '../../test-utils/src/present';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
 import { join } from 'node:path';
@@ -637,6 +639,40 @@ describe('pc-agent command cancellation', () => {
       .toEqual({ requestId: rpcId(260), cancelled: 'terminated' });
   });
 
+  // 2026-10-02: a drop's sweep ran while another socket's command was being started and removed the record its
+  // supervisor was about to be spawned into.
+  test("a sweep while a command is being started leaves its record to the start, and the command runs", async () => {
+    const held = heldMkfifo(scratchDir('pc-agent-sweep-starting'));
+    const ws = recorder();
+    const id = rpcId(270);
+
+    handle({ id, method: 'exec', params: ['echo started'] }, ws.socket);
+    await held.reached;
+    await pcAgent.inFlight.terminateUnanswered();
+    held.release();
+
+    expect(await ws.answerTo(id)).toMatchObject({ result: { stdout: 'started\n', exitCode: 0 } });
+    acknowledge(rpcId(271), id, ws.socket);
+    await ws.answerTo(rpcId(271));
+  });
+
+  test('a command whose socket dropped while it was being started is stopped once it has started', async () => {
+    const held = heldMkfifo(scratchDir('pc-agent-sweep-own-start'));
+    const ws = recorder();
+    let readyState: number = WebSocket.OPEN;
+    const socket = { ...ws.socket, get readyState() { return readyState; } };
+    const id = rpcId(272);
+
+    handle({ id, method: 'exec', params: ['sleep 60'] }, socket);
+    await held.reached;
+    readyState = WebSocket.CLOSED;
+    await pcAgent.inFlight.terminateUnanswered();
+    held.release();
+
+    // Stopped as the drop's sweep stops one already running: its process group killed, not left to sleep out its minute.
+    expect(await ws.answerTo(id)).toMatchObject({ result: { exitCode: 137 } });
+  });
+
   test('a dropped socket terminates a command that still has no terminal result', async () => {
     const dir = scratchDir('pc-agent-disconnect');
     const waiting = commandWithDescendant(dir, 'waiting');
@@ -655,6 +691,30 @@ describe('pc-agent command cancellation', () => {
       .toEqual({ requestId: rpcId(250), cancelled: 'terminated' });
   });
 });
+
+/**
+ * `mkfifo` as the daemon finds it on PATH, held where a start calls it: `reached` settles once one has, and `release`
+ * lets it make the FIFO. PATH leads to it only until it is reached.
+ */
+function heldMkfifo(dir: string) {
+  const bin = join(dir, 'bin');
+  const reached = join(dir, 'reached');
+  const released = join(dir, 'released');
+  mkdirSync(bin);
+  execFileSync('mkfifo', [reached]);
+  execFileSync('mkfifo', [released]);
+  writeFileSync(join(bin, 'mkfifo'), [
+    '#!/bin/sh', `echo reached > "${reached}"`, `read go < "${released}"`, `exec "${present(Bun.which('mkfifo'), 'mkfifo')}" "$@"`, '',
+  ].join('\n'), { mode: 0o755 });
+
+  const path = present(process.env.PATH, 'PATH');
+  process.env.PATH = `${bin}:${path}`;
+
+  return {
+    reached: readFile(reached, 'utf8').finally(() => { process.env.PATH = path; }),
+    release: () => { writeFileSync(released, 'go\n'); },
+  };
+}
 
 /** Lets the command held on `gate` finish; throws (ENXIO) rather than waits when nothing reads the gate. */
 function release(gate: string): void {

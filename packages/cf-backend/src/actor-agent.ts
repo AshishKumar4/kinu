@@ -12,7 +12,7 @@ import {
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
-  type BackgroundJobRunnerDeps,
+  type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
@@ -121,8 +121,7 @@ import {
   BackgroundJobRunner, type InvocationSurface,
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
-  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
-  readDeviceRequestChannel, type DeviceRequestChannel,
+  BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
@@ -315,6 +314,12 @@ interface AsyncTaskOwner {
 /** Only RPC methods rpc-surface.ts declares reachable; any other is a compile error. */
 type UserHubClient = Pick<UserDO, UserDoRpcMethod>;
 
+/** One actor's half of its job runner. */
+type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
+  'store' | 'policy' | 'fiber' | 'inbox' | 'eventLog' | 'scheduleDrain' | 'resume' | 'harvest' | 'scheduleResume'> & {
+  readonly notifySettled?: (job: BackgroundJob) => void;
+};
+
 /** The agents SDK treats this close code as terminal (`isTerminalCloseEvent`), so a
  * client whose authority is gone stops reconnecting. */
 const WEBSOCKET_POLICY_CLOSE = 1008;
@@ -453,9 +458,6 @@ function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
 function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsToolAction[] {
   return agentsActionsFor({ swarm: {}, swarms, team: deps.team, peers: deps.peers });
 }
-
-/** The codemode tool whose script keeps issuing device execs even after its call has detached. */
-const CODEMODE_TOOL_TOOL = 'eval' satisfies BuiltinToolName;
 
 /**
  * Ledgers that can owe work with no instant and nothing else to watch it. A running background job is not one: its
@@ -2291,7 +2293,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
   /** Debounces the last-active-executor write to one SQL upsert per executor per turn. */
   protected _executorsUsedThisTurn = new Set<string>();
-  protected _cachedTools: ToolSet | null = null;
+  protected _cachedTools: ActorToolsets | null = null;
   protected _cachedToolsKey = "";
   // Cached against the content hash of UserDO's MCP descriptor surface, so closures rebuild
   // exactly when the durable rows differ from what this activation last served.
@@ -2589,7 +2591,7 @@ export abstract class ActorAgent extends Agent<Env> {
   // and the programmatic-turn wake. Owns the cancel-controller map.
   private _jobRunner: BackgroundJobRunner | null = null;
   protected get jobRunner(): BackgroundJobRunner {
-    this._jobRunner ??= new BackgroundJobRunner({
+    this._jobRunner ??= this.actorJobRunner(null, {
       store: this.jobs,
       // Foreground half depends on the surface (30s for chat). Wake half never varies: DO alarms deliver
       // wakes with nobody connected, so spawn-shaped work detaches on unwatched turns too.
@@ -2598,24 +2600,10 @@ export abstract class ActorAgent extends Agent<Env> {
       inbox: this.orch.inbox,
       eventLog: this.eventLog,
       scheduleDrain: () => this.orch.scheduleDrain(),
-      logActivity: (event, detail) => this.logActivity(event, detail),
-      clock: REAL_CLOCK,
-      jobOutput: (frame) => { this.broadcastToActor(null, JSON.stringify(frame)); },
-      // Transfer by request id, never by turn: only the detaching call's device work changes hands,
-      // so parallel foreground commands stay reachable by Stop.
-      onDetached: (jobId, requestIds) => {
-        this.detachOwned(() => this.servingMoved());
-
-        return this.transferDeviceRequests(jobId, requestIds);
-      },
-      // Throws when the device cannot confirm the cancel; runner calls this before any state change,
-      // so a refused cancel leaves the job running and retryable.
-      onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
       // Notify the owner (email on the orchestrator; skips silently when pieces are absent).
-      onSettled: (job) => {
+      notifySettled: (job) => {
         const notice = backgroundJobNotice(job);
         this.notifyOwner(notice.subject, notice.body);
-        this.detachOwned(() => this.servingMoved());
       },
       // Evict-resume (B6): re-drive from the durable checkpoint. Side-effecting kinds (eval / run)
       // decline and fall back to the eviction failure.
@@ -2627,9 +2615,68 @@ export abstract class ActorAgent extends Agent<Env> {
       // Arms the actor's single terminal-retry row (soonest-wins); its tick re-enters the job sweep,
       // since the fork reconcile runs at most once per activation and a deferred job outlives that.
       scheduleResume: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
-    } satisfies BackgroundJobRunnerDeps);
+    });
 
     return this._jobRunner;
+  }
+
+  /** The clock job runners detach on. */
+  protected jobClock(): Clock {
+    return REAL_CLOCK;
+  }
+
+  private _jobAuthorities: WorkspaceJobAuthorities | null = null;
+
+  protected get jobAuthorities(): WorkspaceJobAuthorities {
+    this._jobAuthorities ??= new WorkspaceJobAuthorities({
+      root: () => ({ kind: 'root', actorId: this.actorHandle().actorId, store: this.jobs, runner: this.jobRunner }),
+      revive: (actorId) => this.reviveJobAuthority(actorId),
+    });
+
+    return this._jobAuthorities;
+  }
+
+  protected reviveJobAuthority(_actorId: string): JobAuthority | null {
+    return null;
+  }
+
+  /** Re-drives a recovered job fiber. */
+  protected workspaceJobs(): FiberLaneTransports['jobs'] {
+    return this.jobAuthorities;
+  }
+
+  /** Every actor's runner here, the root's and each hire's; `owner` addresses its sockets (null: the root's). */
+  protected actorJobRunner(owner: string | null, actor: ActorJobSeams): BackgroundJobRunner {
+    const { notifySettled, ...own } = actor;
+
+    return new BackgroundJobRunner({
+      ...own,
+      ...this.workspaceJobPorts(owner),
+      logActivity: (event, detail) => this.logActivity(event, detail),
+      onSettled: (job) => {
+        notifySettled?.(job);
+        this.detachOwned(() => this.servingMoved());
+      },
+    } satisfies BackgroundJobRunnerDeps);
+  }
+
+  /** The workspace's half of every runner here; output goes to the owner's sockets. */
+  protected workspaceJobPorts(owner: string | null): WorkspaceJobPorts {
+    return {
+      clock: this.jobClock(),
+      jobOutput: (frame) => { this.broadcastToActor(owner, JSON.stringify(frame)); },
+      // Transfer by request id, never by turn: only the detaching call's device work changes hands,
+      // so parallel foreground commands stay reachable by Stop.
+      onDetached: (jobId, requestIds) => {
+        this.detachOwned(() => this.servingMoved());
+
+        return this.transferDeviceRequests(jobId, requestIds);
+      },
+      // Throws when the device cannot confirm the cancel; runner calls this before any state change,
+      // so a refused cancel leaves the job running and retryable.
+      onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
+      onSettled: () => { this.detachOwned(() => this.servingMoved()); },
+    };
   }
 
   /**
@@ -2679,9 +2726,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (holders !== null) await recordServingJobs(this.jobs, holders);
   }
-  /** Controllers for foreground long tools; once detached, BackgroundJobRunner owns cancellation. */
-  protected readonly _activeToolControllers = new Set<AbortController>();
-
   protected get config(): AgentConfigStore {
     return this.stores.config;
   }
@@ -3280,8 +3324,6 @@ export abstract class ActorAgent extends Agent<Env> {
         workspace: this.workspaceName(),
         webSearch: this.ownedModelServices.getWebSearchProvider(),
         agents: () => this.getAgentsToolDeps(mode),
-        // Read per provider call: a detach can change the owning channel mid-call.
-        deviceRequests: () => this._activeDeviceRequests ?? undefined,
         // Narrowed by the same set as the native surface, so the sandbox cannot bypass a role.
         extraProviders: () => narrowing.narrowProviders(this.turnCodemodeProviders()),
         // Drives the UI's default executor; one upsert per executor per turn (reset in beforeTurn).
@@ -3531,7 +3573,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return await cancelCurrentWork({
       cancelChats: () => { this.chatLoop.stop(); },
-      activeToolControllers: this._activeToolControllers,
+      activeToolControllers: this.jobRunner.foreground,
       broadcast: (payload) => { this.broadcastToActor(null, payload); },
       stopDeviceCommands: turnId === null ? undefined : async () => {
         try {
@@ -3684,11 +3726,11 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   getTools(): ToolSet {
-    // Chat view: raw surface + auto-background wrap (#173) + operation profile. Eval side-streams use
-    // getRawTools() so they never detach a job. Also starts the turn clock for activity lines.
+    // Chat view: the turn surface (#173) + operation profile; side-streams use getRawTools(). Starts the turn clock.
     this._turnT0 = performance.now();
+    this.actorHandle();
 
-    const tools = this.wrapToolsForBackground(this.getRawTools());
+    const tools = this.actorToolsets(this.turnWorkMode()).turn;
     const operation = this.operationProfile();
 
     return operation ? withOperationProfile(tools, operation) : tools;
@@ -3702,6 +3744,11 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
+    return this.actorToolsets(mode, claimScope).raw;
+  }
+
+  /** One build per mode: the turn surface, and the raw one. */
+  protected actorToolsets(mode: WorkMode, claimScope?: string): ActorToolsets {
     const actorDeps = this.actorToolDeps();
     const profileKey = actorActiveTools(actorDeps).join(',');
     // Key includes crafted_tools quality (score filtering depends on recency) and the actor profile,
@@ -3749,25 +3796,27 @@ export abstract class ActorAgent extends Agent<Env> {
         vectorStore: this.rt.vectorStore,
         facts: this.facts,
         webSearch: this.ownedModelServices.getWebSearchProvider(),
+        jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() },
       };
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
 
       if (mode === 'plan' && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
-      const tools = buildActorTools(builtinDeps);
+      const toolsets = buildActorTools(builtinDeps);
 
       // One Anthropic cache breakpoint on the last tool caches the whole tool surface;
       // inert for non-Anthropic providers.
-      markLastToolForAnthropicCache(tools, this.config.getCacheRetention());
+      markLastToolForAnthropicCache(toolsets.raw, this.config.getCacheRetention());
+      markLastToolForAnthropicCache(toolsets.turn, this.config.getCacheRetention());
 
       if (claimScope === undefined) {
-        this._cachedTools = tools;
+        this._cachedTools = toolsets;
         this._cachedToolsKey = cacheKey;
       }
 
-      this.logActivity("gettools_end", `rebuilt: ${Object.keys(tools).length} tools`);
+      this.logActivity("gettools_end", `rebuilt: ${Object.keys(toolsets.turn).length} tools`);
 
-      return tools;
+      return toolsets;
     } catch (err) {
       diagnostics.failure('tool.surface_build_failed', toKinuError({
         doing: 'assembling the turn tool surface',
@@ -4225,7 +4274,7 @@ export abstract class ActorAgent extends Agent<Env> {
     });
 
     const workMode = profile.workMode;
-    const modeTools = workMode === requestedWorkMode ? input.tools : this.getRawToolsForWorkMode(workMode);
+    const modeTools = workMode === requestedWorkMode ? input.tools : this.actorToolsets(workMode).turn;
     const allowedTools = new Set(profile.allowedTools);
     const toolAllowed = (name: string): boolean => allowedTools.has(name);
     const promptActiveTools = activeTools.filter(toolAllowed);
@@ -4466,53 +4515,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return parsed.success ? parsed.output : undefined;
   }
 
-  /** Only the named set detaches (30s threshold, per-call gates); a confined surface names its own,
-   *  which keeps containment structural. The tracking hook keeps foreground cancellation working. */
-  private wrapToolsForBackground(raw: ToolSet): ToolSet {
-    return wrapToolsForBackground(this.publishDeviceRequestChannel(raw), {
-      jobRunner: this.jobRunner,
-      backgroundable: BACKGROUNDABLE_TOOLS,
-      mode: () => this.turnWorkMode(),
-      trackController: (controller) => {
-        this._activeToolControllers.add(controller);
-
-        return () => this._activeToolControllers.delete(controller);
-      },
-    });
-  }
-
-  /** Channel the running `eval` call was armed with, or null outside one. */
-  private _activeDeviceRequests: DeviceRequestChannel | null = null;
-
-  /**
-   * Per-invocation channel carrying the owning job into device execs, even after detach; not a
-   * constructor arg since codemode namespaces are built once per DO. Applied inside the background
-   * wrap; restored (not cleared) on exit. The raw surface must stay unwrapped for eval side-streams.
-   */
-  private publishDeviceRequestChannel(raw: ToolSet): ToolSet {
-    const entry = raw[CODEMODE_TOOL_TOOL];
-    const exec = entry?.execute;
-
-    if (entry === undefined || exec === undefined) return raw;
-
-    return {
-      ...raw,
-      [CODEMODE_TOOL_TOOL]: {
-        ...entry,
-        execute: async (input, options) => {
-          const outer = this._activeDeviceRequests;
-          this._activeDeviceRequests = readDeviceRequestChannel({ toolOptions: options }) ?? null;
-
-          try {
-            return await exec(input, options);
-          } finally {
-            this._activeDeviceRequests = outer;
-          }
-        },
-      },
-    };
-  }
-
   /**
    * The live turn's profile, else one resolved now for durable work without a chat turn.
    * MODEL_ROUTE_POLICY is read against this; resolving a model any other way bypasses routing.
@@ -4613,7 +4615,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Built fresh per recovery rather than captured at interruption time. */
   private get fiberLanes(): FiberLaneTransports {
     return {
-      jobs: this.jobRunner,
+      jobs: this.workspaceJobs(),
       runDueSessionEvolution: () => this.orch.runDueSessionEvolution(),
       armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
       deliverSignal: (signal) => this.orch.inbox.send(signal),

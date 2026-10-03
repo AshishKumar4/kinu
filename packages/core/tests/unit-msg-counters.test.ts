@@ -117,7 +117,7 @@ function makeTeam(delivery: SubordinateDelivery) {
     recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName }),
     spawn: async () => ({ name: rosterEntry.name, displayName: 'Researcher' }),
     status: async () => ({ roster: [rosterEntry] }),
-    dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
+    dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),
     assign: recordHandoff('assign'),
     message: recordHandoff('message'),
   };

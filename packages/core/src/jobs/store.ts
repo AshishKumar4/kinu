@@ -283,6 +283,19 @@ export class BackgroundJobStore {
     }
   }
 
+  ownerInWorkspace(id: string): string | null {
+    this.actor.assertCurrent();
+
+    return this.sql<{ actor_id: string }>`SELECT actor_id FROM background_jobs WHERE id=${id} LIMIT 1`[0]?.actor_id ?? null;
+  }
+
+  runningOwnersInWorkspace(): string[] {
+    this.actor.assertCurrent();
+
+    return this.sql<{ actor_id: string }>`SELECT DISTINCT actor_id FROM background_jobs WHERE status='running'`
+      .map((row) => row.actor_id);
+  }
+
   /** Workspace-wide running count for the concurrent-detach cap; per-actor would multiply the machine ceiling. */
   countRunningInWorkspace(): number {
     this.actor.assertCurrent();

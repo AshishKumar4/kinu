@@ -643,10 +643,10 @@ export {
 // An actor surface is buildBuiltinTools plus `agents`; see delegation/actor-tools.ts.
 export {
   buildActorTools, PEER_REPLY_TOPIC,
-  type ActorToolsetDeps,
+  type ActorToolsetDeps, type ActorToolsets,
   type AgentsToolDeps, type AgentsSwarmDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
-  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
+  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff, type SubordinateDismissal,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './delegation/actor-tools';
@@ -1579,7 +1579,8 @@ export {
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
-  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel,
+  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
+  WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,
   JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, lastOutputLines, jobName, shortJobId, type JobName,
   type JobOutputFrame, type JobOutputTail,
 } from './jobs/index';
@@ -1696,7 +1697,7 @@ export {
 } from './orchestrator/background-tools';
 
 export {
-  wrapToolsForBackground, CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool,
+  CONFINED_BACKGROUNDABLE_TOOLS, type ActorJobs, type BackgroundableTool,
 } from './jobs/background-wrap';
 
 export {

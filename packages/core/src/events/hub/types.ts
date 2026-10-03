@@ -159,6 +159,7 @@ export interface SubordinateTaskPayload {
   kinu_mode: WorkMode;
   creation_id?: string;
   message_id?: string;
+  idempotency_key?: string;
 }
 
 /** One declaration read by the event schema, `report` tool, codemode and dispatcher. */

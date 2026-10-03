@@ -24,7 +24,31 @@ export const HIRE_DURABLE_MODEL = 'hire-root-durable';
 /** The catalog's default tier: not what the child runs on (the workspace pin), but every tier slot must be offered by `/v1/models`. */
 export const HIRE_CHILD_MODEL = 'hire-child';
 
-export type ChildScript = 'answer' | 'throw' | 'park' | 'nest' | 'nest-park' | 'nest-progress' | 'chain';
+/** `job`: a durable hire whose brief starts a shell command that outlives its call's window. */
+export type ChildScript = 'answer' | 'throw' | 'park' | 'nest' | 'nest-park' | 'nest-progress' | 'chain' | 'job';
+
+export const JOB_MISSION = 'HIRE-JOB-BRIEF';
+
+/** What the job's command prints as it ends. */
+export const JOB_OUTPUT = 'JOB-OUTPUT-77';
+
+/** The job's command ends once this file exists: in the workspace's home, which every agent's shell shares. */
+export const JOB_GATE = '/home/main/hire-job-gate';
+
+/** The command the hire's brief runs: a dev server's shape, held until the gate opens. */
+export const JOB_COMMAND = `while [ ! -e ${JOB_GATE} ]; do sleep 0.1; done; echo ${JOB_OUTPUT}`;
+
+/** The hire's answer once told its command became a job. */
+export const JOB_STARTED = 'JOB-STARTED';
+
+/** The hire's answer to a wake about its job. */
+export const JOB_NOTED = 'JOB-NOTED';
+
+export interface JobRow {
+  readonly actorId: string;
+  readonly id: string;
+  readonly status: string;
+}
 
 export interface LogRow {
   readonly actorId: string;
