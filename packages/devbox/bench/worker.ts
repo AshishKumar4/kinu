@@ -141,8 +141,6 @@ const pendingBytes: ByteTally = {};
 
 let pendingCount = 0;
 
-let inFlight: Promise<void> | undefined;
-
 let flushEnv: BenchEnv | undefined;
 
 function countOp(name: OpName): void {
@@ -166,14 +164,14 @@ function servedBytes(object: R2ObjectBody): number {
   return range.length ?? object.size - (range.offset ?? 0);
 }
 
-/** Push the tally to the counter object, coalesced to one write in flight.
+/** Push the tally to the counter object.
  *
  *  The proxy entrypoint and the fetch handler have no guarantee of sharing an
  *  isolate, so module state alone reads short from the other side and the
- *  counter object is what joins them. */
+ *  counter object is what joins them. Each caller awaits only its own push: a
+ *  cancelled request's push never settles, and in the D68 soak every later
+ *  store request that awaited one hung. */
 async function flushOps(env: BenchEnv): Promise<void> {
-  if (inFlight !== undefined) await inFlight;
-
   if (pendingCount === 0) return;
   const batch = { ...pending } satisfies OpTally;
   const bytes = { ...pendingBytes } satisfies ByteTally;
@@ -182,17 +180,7 @@ async function flushOps(env: BenchEnv): Promise<void> {
 
   for (const cls of BYTE_CLASSES) delete pendingBytes[cls];
   pendingCount = 0;
-
-  const run = (async () => {
-    try {
-      await env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops')).bump(batch, bytes);
-    } finally {
-      inFlight = undefined;
-    }
-  })();
-
-  inFlight = run;
-  await run;
+  await env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops')).bump(batch, bytes);
 }
 
 /** Push once the batch is large enough. Called after each counted call, and
