@@ -1147,6 +1147,36 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     expect(screen.frame()).not.toContain('compiled 120 modules');
   });
 
+  // Main's queue (b), 2026-10-03: the hub listed the workspace's jobs alone, never a hire's.
+  test("each hire's running jobs are listed under that hire, and its row opens the hire's conversation", async () => {
+    const builder: SubordinateChild = {
+      name: 'builder', displayName: 'Builder', nameOrigin: 'user', role: 'builder',
+      actorReference: { actorId: 'actor-builder', workspaceId: 'ws', parentActorId: 'actor-main' },
+      birth: null, deleteRequested: false, origin: 'agent', status: 'working', currentTask: 'serve the preview', createdAt: 1,
+      dismissedAt: null, lifetime: 'durable', taskEventId: null,
+    };
+
+    const asked: (string | undefined)[] = [];
+
+    const main = fakeClient({
+      name: 'checkout',
+      listJobs: async (_limit, actor) => {
+        asked.push(actor);
+
+        return actor === 'builder' ? [{ id: 'bgjob-9c2d10aa77ee', kind: 'shell', status: 'serving', label: 'sandbox: node server.js' }] : [];
+      },
+      inspectSubordinate: async (request) => (request.view === 'children'
+        ? { view: 'children', path: request.path, page: { status: 'end', items: [builder] } }
+        : missingSubordinateHistory(request.path)),
+    });
+
+    const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor("the hire's job in the hub", () => screen.frame().includes('sandbox: node server.js'));
+    expect(screen.frame()).toContain('sandbox: node server.js · Builder · 9c2d10aa · serving');
+    expect(asked).toContain('builder');
+  });
+
   // 2026-10-02: a row showing a cut tail read as the whole output.
   test('a running job whose output was dropped shows the bytes dropped before its last line, and where a frame drops more', async () => {
     const main = fakeClient({

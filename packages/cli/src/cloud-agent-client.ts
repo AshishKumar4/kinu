@@ -771,8 +771,9 @@ export class CloudAgentClient implements AgentClient {
     }));
   }
 
-  async listJobs(limit = 20): Promise<AgentJobSummary[]> {
-    const args: JsonValue[] = this.subordinateName === null ? [limit] : [limit, this.subordinateName];
+  async listJobs(limit = 20, actor?: string): Promise<AgentJobSummary[]> {
+    const owner = actor ?? this.subordinateName;
+    const args: JsonValue[] = owner === null ? [limit] : [limit, owner];
     const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), args);
 
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status, label: job.label ?? null, ...(job.output !== undefined && { output: job.output }) }));

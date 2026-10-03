@@ -486,8 +486,8 @@ export class LocalAgentClient implements AgentClient {
     }));
   }
 
-  async listJobs(limit = 20): Promise<AgentJobSummary[]> {
-    const jobs = await this.session.listBackgroundJobs(limit);
+  async listJobs(limit = 20, actor?: string): Promise<AgentJobSummary[]> {
+    const jobs = await this.session.listBackgroundJobs(limit, actor);
 
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status, label: job.label, ...(job.output !== undefined && { output: job.output }) }));
   }
