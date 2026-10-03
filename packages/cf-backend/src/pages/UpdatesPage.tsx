@@ -14,24 +14,25 @@ import {
 import * as v from "valibot";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { StepRow } from "@/components/deploy/DeployStepRow";
-import { showRejection } from "@/hooks/use-async-resource";
 
 const RUN_POLL_MS = 2000;
 
-async function read<Schema extends v.GenericSchema>(
+function read<Schema extends v.GenericSchema>(
   schema: Schema,
   path: string,
   init: RequestInit = {},
-): Promise<v.InferOutput<Schema>> {
-  const response = await fetch(path, init);
+): Effect.Effect<v.InferOutput<Schema>> {
+  return Effect.gen(function* () {
+    const response = yield* Effect.promise(() => fetch(path, init));
 
-  if (!response.ok) {
-    const said = v.safeParse(v.object({ error: v.string() }), await response.json());
+    if (!response.ok) {
+      const said = v.safeParse(v.object({ error: v.string() }), yield* Effect.promise(() => response.json()));
 
-    throw new Error(said.success ? said.output.error : `${path} answered HTTP ${String(response.status)}`);
-  }
+      return yield* Effect.die(new Error(said.success ? said.output.error : `${path} answered HTTP ${String(response.status)}`));
+    }
 
-  return v.parse(schema, await response.json());
+    return v.parse(schema, yield* Effect.promise(() => response.json()));
+  });
 }
 
 function Build({ label, build }: { label: string; build: UpdateBuild | null }) {
@@ -63,9 +64,9 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     const failed = showing((chain) => { if (mounted) setErr(chain); });
 
     detach(Effect.all([
-      Effect.catchCause(Effect.map(Effect.promise(() => read(UpdateOfferSchema, "/api/updates")), (held) => { if (mounted) setOffer(held); }), failed),
+      Effect.catchCause(Effect.map(read(UpdateOfferSchema, "/api/updates"), (held) => { if (mounted) setOffer(held); }), failed),
       // `apply` answers before the first step runs, so a page opened mid-update reads the ledger.
-      Effect.catchCause(Effect.map(Effect.promise(() => read(DeploySnapshotSchema, "/api/updates/run")), (held) => {
+      Effect.catchCause(Effect.map(read(DeploySnapshotSchema, "/api/updates/run"), (held) => {
         if (mounted && held.steps.length > 0) setRun(held);
       }), failed),
     ], { concurrency: 'unbounded' }));
@@ -80,15 +81,11 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     let mounted = true;
 
     // A mid-run read failure is the Worker being replaced; its cause shows beside the restart notice.
-    const timer = setInterval(() => {
-      read(DeploySnapshotSchema, "/api/updates/run")
-        .then((held) => {
-          if (!mounted) return;
-          setRestarting(null);
-          setRun(held);
-        })
-        .catch(showRejection(setRestarting, () => mounted));
-    }, RUN_POLL_MS);
+    const timer = setInterval(() => detach(Effect.catchCause(Effect.map(read(DeploySnapshotSchema, "/api/updates/run"), (held) => {
+      if (!mounted) return;
+      setRestarting(null);
+      setRun(held);
+    }), showing((chain) => { if (mounted) setRestarting(chain); }))), RUN_POLL_MS);
 
     return () => {
       mounted = false;
@@ -100,7 +97,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
     setBusy(true);
     setErr(null);
 
-    detach(Effect.ensuring(Effect.catchCause(Effect.map(Effect.promise(() => read(DeploySnapshotSchema, "/api/updates/apply", { method: "POST" })), setRun), showing(setErr)), Effect.sync(() => setBusy(false))));
+    detach(Effect.ensuring(Effect.catchCause(Effect.map(read(DeploySnapshotSchema, "/api/updates/apply", { method: "POST" }), setRun), showing(setErr)), Effect.sync(() => setBusy(false))));
   }, []);
 
   return (

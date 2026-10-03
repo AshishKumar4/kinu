@@ -27,7 +27,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { ChatGptConnect, ChatGptPlanUsage } from "@/components/account/ChatGptConnect";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import { renderThrownChain, showing, detach } from '@kinu.run/core/obs';
+import { showing, detach } from '@kinu.run/core/obs';
 import {
   CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
 } from '@kinu.run/core';
@@ -358,25 +358,21 @@ function CodexConnect({ onChanged }: { onChanged: () => void }) {
         setFlow(null);
       };
 
-      pollRef.current = setInterval(() => detach(Effect.promise(async () => {
-        try {
-          const result = await pollCodexFlow();
+      // A failed poll request is shown, and polling goes on.
+      pollRef.current = setInterval(() => detach(Effect.catchCause(Effect.gen(function* () {
+        const result = yield* Effect.promise(() => pollCodexFlow());
 
-          if (result.connected) {
-            stopPolling();
-            onChanged();
-          } else if (result.error) {
-            // A reported error (expired/denied/no flow) is terminal; pending returns { connected: false }.
-            stopPolling();
-            setError(result.error);
-          } else {
-            setError(null);
-          }
-        } catch (e) {
-          // The poll request itself failed: show it but keep polling.
-          setError(renderThrownChain({ cause: e }));
+        if (result.connected) {
+          stopPolling();
+          onChanged();
+        } else if (result.error) {
+          // A reported error (expired/denied/no flow) is terminal; pending returns { connected: false }.
+          stopPolling();
+          setError(result.error);
+        } else {
+          setError(null);
         }
-      })), Math.max(3, f.pollIntervalSec) * 1000);
+      }), showing(setError))), Math.max(3, f.pollIntervalSec) * 1000);
     }), showing(setError));
   })), [onChanged]);
 
@@ -418,21 +414,24 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const run = async (step: () => Promise<void>) => {
+  const run = (step: Effect.Effect<void>) => Effect.suspend(() => {
     setBusy(true);
     setError(null);
 
-    try { await step(); } catch (e) { setError(renderThrownChain({ cause: e })); } finally { setBusy(false); }
-  };
+    return Effect.ensuring(Effect.catchCause(step, showing(setError)), Effect.sync(() => setBusy(false)));
+  });
 
-  const start = () => run(async () => { setAuthorizeUrl((await startClaudeSignIn()).url); setCode(''); });
+  const start = () => run(Effect.gen(function* () {
+    setAuthorizeUrl((yield* Effect.promise(() => startClaudeSignIn())).url);
+    setCode('');
+  }));
 
-  const finish = () => run(async () => {
-    const result = await finishClaudeSignIn(code.trim());
+  const finish = () => run(Effect.gen(function* () {
+    const result = yield* Effect.promise(() => finishClaudeSignIn(code.trim()));
 
     if (result.connected) onChanged();
     else setError(result.error ?? 'Claude did not connect.');
-  });
+  }));
 
   return (
     <div className="space-y-3">
@@ -440,11 +439,11 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
         Signing in with a Claude subscription runs Kinu on your own Claude plan. Anthropic&apos;s terms limit subscription use to its own apps, so you connect at your own risk.
       </p>
       {authorizeUrl === null ? (
-        <FilledButton onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}>Sign in with Claude</FilledButton>
+        <FilledButton onClick={() => detach(start())} disabled={busy}>Sign in with Claude</FilledButton>
       ) : (
         <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
           hint="The code Claude shows, or the address your browser ended on if the page did not load.">
-          <form className="flex flex-wrap gap-2" onSubmit={(event) => detach(Effect.promise(async () => { event.preventDefault(); await finish(); }))}>
+          <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); detach(finish()); }}>
             <input
               value={code}
               onChange={(e) => setCode(e.target.value)}

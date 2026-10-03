@@ -2,7 +2,7 @@
  * Needs you, Now, Journal. Queue rows deep-link to where each decision is made, so nothing is
  * decided twice; `listPendingActions` is host-owned and never a slate data source.
  */
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
@@ -23,7 +23,7 @@ import { HelperRow, isClosedTree, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView } from "./changelog-entries";
 import type { SurfaceKind } from "@kinu.run/core";
-import { renderThrownChain, detach } from "@kinu.run/core/obs";
+import { renderThrownChain, detach, settle } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
 import { FileBody } from "./changes/ChangesPanel";
 
@@ -466,20 +466,20 @@ export class ParkedDecisionFlow {
     });
   };
 
-  readonly decide = async (decision: ParkedDecision, ids: readonly string[]): Promise<void> => {
-    if (this.#snapshot.busy || ids.length === 0) return;
+  decide(decision: ParkedDecision, ids: readonly string[]): Promise<void> {
+    if (this.#snapshot.busy || ids.length === 0) return Promise.resolve();
     this.#set({ busy: true, error: null, decided: null });
 
-    try {
-      await this.#deps.decide([...ids], decision);
+    return settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.#deps.decide([...ids], decision));
       // The empty set, never null: null selects everything.
       this.#set({ busy: false, selected: new Set(), error: null, decided: decision });
       this.#deps.onDecided();
-    } catch (cause) {
+    }), (failed) => Effect.sync(() => {
       // The answer never landed, so the selection stands.
-      this.#set({ busy: false, error: `Could not record the decision: ${renderThrownChain({ cause })}` });
-    }
-  };
+      this.#set({ busy: false, error: `Could not record the decision: ${renderThrownChain({ cause: Cause.squash(failed) })}` });
+    })));
+  }
 
   #set(partial: Partial<ParkedQueueSnapshot>): void {
     this.#snapshot = { ...this.#snapshot, ...partial };

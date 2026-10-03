@@ -12,7 +12,8 @@ import { useElementSize } from "@/hooks/use-element-size";
 import { useTheme } from "@/hooks/use-theme";
 import { PreviewChrome } from "@/components/PreviewFrame";
 import { SlateInlineContext, SlatePreviews } from "./context";
-import { showRejection } from "@/hooks/use-async-resource";
+import { Effect } from "effect";
+import { detach, showing } from "@kinu.run/core/obs";
 
 
 const SlatePreviewSchema = v.strictObject({
@@ -153,7 +154,7 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
     setRefusal(null);
     setHeight(null);
 
-    void rpc<SlateCallResult>("previewSlate", [id]).then((result) => {
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => rpc<SlateCallResult>("previewSlate", [id])), (result) => {
       if (!live) return;
 
       if (!result.ok) {
@@ -175,7 +176,7 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
       if (display === 'inline') setHeight(slateInlineHeight(parsed.output.inline.height));
 
       onReady?.();
-    }).catch(showRejection(setRefusal, () => live));
+    }), showing((chain) => { if (live) setRefusal(chain); })));
 
     return () => { live = false; };
   }, [id, rpc, display, reloadKey, onReady]);
