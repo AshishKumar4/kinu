@@ -1062,7 +1062,7 @@ export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates,
-  subordinateAgentName, headAgentName,
+  actorHomeName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
   type AgentIdentity, type HomeRootVfs, type RootMoveVfs, type SlatesMoveVfs, type TmpConfiner,
 } from './vfs/agent-home';

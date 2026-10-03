@@ -3,12 +3,11 @@ import {
   ActorSession, EventLog, EvolutionEngine, WorkspaceActorDirectory,
   BUILTIN_PROFILE_CATALOG, actorReferenceOf, createAgentStores, profileCatalogDigest,
   collectDynamicContext, createActorHost, defaultLoopOrigin, explorationActorKey,
-  facetHomeReleaser, headAgentName, resolveAgentTurnProfile,
+  facetHomeReleaser, resolveAgentTurnProfile,
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedNodeSeat,
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs,
   type SqlExec, type SqlValue, type WriteObserver,
-  DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT,
-} from '@kinu.run/core';
+  DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
 import { ConversationSearchStore, bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import { resolveModelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
@@ -80,7 +79,7 @@ export function headSeatFactory(
       name: explorationActorKey(input.id), creationId: input.id, origin: 'swarm', lifetime: 'task',
     });
 
-    const agentName = headAgentName(binding.storageKey);
+    const agentName = actorHomeName({ origin: 'swarm', storageKey: binding.storageKey });
     writes?.set(binding.reference.actorId, observer);
     const actor = await host.acquire(binding.reference);
 

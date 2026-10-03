@@ -17,7 +17,7 @@ import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'no
 import { constants as osConstants } from 'node:os';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
+  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, actorHomeName, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL, WORKSPACE_ROOT, WORKSPACE_SOUL_DDL,
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
@@ -30,9 +30,7 @@ import {
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
   type AgentStores, type ChildContextResolver, type ContextTree,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
-  type WorkspaceActor,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS, unsandboxedCommandEnvironment,
-  isSubordinateOrigin,
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -215,15 +213,7 @@ function adaptMemory(store: MemoryStore, vfs: VFS & Required<Pick<VFS, 'readRang
   };
 }
 
-/** Heads, nodes and branches are named by storage key: roster names are not
- *  unique across expansions. */
-function actorFacetName(record: WorkspaceActor): string {
-  if (record.origin === 'system') return MAIN_AGENT;
 
-  if (isSubordinateOrigin(record.origin)) return subordinateAgentName(record.name);
-
-  return headAgentName(record.storageKey);
-}
 
 /** A lock held longer than this is a hung opener, and the write fails naming the lock. */
 const SHARED_WRITE_WAIT_MS = 30_000;
@@ -462,7 +452,7 @@ export function createCLIRuntime(
       return { vfs: fileVfs, artifactDirectory };
     }
 
-    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: storage.sql }))(), () => target.assertCurrent())(actorFacetName(record));
+    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: storage.sql }))(), () => target.assertCurrent())(actorHomeName(record));
 
     if (home.isolation !== 'private-home') throw new KinuError('io', 'actor home provisioner returned a shared plane');
     const plane = await workspace.asAgent(home);
@@ -678,7 +668,7 @@ async function buildCLIHeadRuntime(
 
   if (opts.actorBinding.origin !== 'swarm') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
-  const physicalName = headAgentName(actor.storageKey);
+  const physicalName = actorHomeName({ origin: opts.actorBinding.origin, storageKey: actor.storageKey });
 
   const stores = createAgentStores(() => sql, () => actor, (write) => parent.storage.transactionSync(write), async () => {
     if (!parent.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');

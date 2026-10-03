@@ -52,7 +52,7 @@ import { TierIdSchema,
   EvolutionEngine,
   readMemoryTail,
   agentsActionsFor,
-  facetHomeProvisioner, facetHomeReleaser, headAgentName, explorationActorKey,
+  facetHomeProvisioner, facetHomeReleaser, actorHomeName, explorationActorKey,
   type HeadSeat, type HostedNodeSeat, type NodeIdentity, type ModelPricing,
   type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
   type HeadInput,
@@ -2515,7 +2515,7 @@ export class LocalAgentSession {
         : () => async (node) => {
           const actor = registerLocalNode(this.rt.actor, node);
 
-          return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(headAgentName(actor.storageKey));
+          return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(actorHomeName({ origin: 'swarm', storageKey: actor.storageKey }));
         },
       // Wired from the same runtime as the host, so the uid and filesystem cannot come from different workspaces.
       runtimeForNodeWorkspace: nodeRuntime === undefined
@@ -2816,7 +2816,7 @@ export class LocalAgentSession {
         this.loopOrigins.delete(binding.reference.actorId);
         this.actorWrites.delete(binding.reference.actorId);
         await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
-          const agentName = headAgentName(binding.storageKey);
+          const agentName = actorHomeName(binding);
 
           if (this.rt.cwd) cleanupFacetCwdScratch(this.rt.cwd, agentName);
           else if (this.rt.nodeHome) await facetHomeReleaser(this.rt.nodeHome())(agentName);
