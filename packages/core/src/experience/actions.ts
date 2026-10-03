@@ -10,7 +10,7 @@ import {
 } from './types';
 import { findPublishable, listPublishable } from './publishable';
 import { stageImport } from './imports';
-import { readScaffoldVersion } from '../scaffold/shadow';
+import { readScaffoldVersion } from '../scaffold/versions';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { renderThrownChain, settle } from '../obs/index';
@@ -144,7 +144,7 @@ export function runExperienceAction(
             status: 'provisional',
             payload: entry.payload,
             note: entry.kind === 'scaffold'
-              ? 'Staged provisionally: once this turn is accepted it is PROPOSED as a pending scaffold version here, and it has to win this workspace\'s own shadow trial before it ever runs.'
+              ? 'Staged provisionally: once this turn is accepted it is PROPOSED as a pending scaffold version here, and it runs only once the owner promotes it.'
               : 'Staged provisionally: it becomes part of this workspace once this turn is accepted.',
           };
         }

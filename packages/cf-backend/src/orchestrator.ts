@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { codemodeSurface, storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { codemodeSurface, runOnExecutor, storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -18,7 +18,7 @@ import {
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
-  activePromptSectionOverrides,
+  artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, assignedTurnFraming, buildActorTools, BACKGROUNDABLE_TOOLS,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
@@ -105,20 +105,18 @@ import {
   type SlateBindingCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
-  applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
-  previewScaffoldLive, runScaffoldGepaOptimization,
-  advancePromptSectionLane,
+  applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
+  previewScaffoldLive, runOptimization,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
-  type GepaOptimizationResult, type ScaffoldDecisionResult,
-  type ScaffoldVersionView, type ShadowStatus,
-  getPendingScaffold,
-  readScaffoldVersion, readShadowVerdict, type ShadowVerdict,
+  type ProposerOutcome, type ScaffoldDecisionResult,
+  type ScaffoldVersionView, type EvolutionStatus,
+  readScaffoldVersion,
   type RunEvent, type RunEventQuery, type StoredRunEvent,
-  AGENT_CONFIG_KEYS,
+
   listProposedTasks, updateProposedTaskStatus,
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore,
@@ -139,18 +137,17 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
-  readMission, summarizeSoul, writeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
+  readMission, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore, deviceFileCheckpoints,
-  CommandResultSchema,
   type CheckpointAvailability, type FileCheckpointListing, type FileCheckpointReads,
   type FileRestorePlan, type FileRestoreResult,
   runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type SleepTimeUpdate, type SleepTimeWindow,
-  effectAlreadyDone, recordEffectDone, oncePerTick,
+  effectAlreadyDone, recordEffectDone,
   // Core owns the ingress gates; this actor owns the transports in front of them
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
@@ -234,7 +231,7 @@ import {
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect } from 'effect';
-import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, refusing, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusing, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { ownerContainer, type CodexContainer } from "./egress/codex-egress-route";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
@@ -258,7 +255,7 @@ import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
 import {
-  terminalEffect, keyedScope, declareTerminalRoster, owesShadowTrial, isDefinitiveTerminalFailure,
+  terminalEffect, declareTerminalRoster, isDefinitiveTerminalFailure,
   branchesTerminalEffect,
   type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnFacts,
   type TerminalTurnParts,
@@ -277,10 +274,6 @@ const LeasedRowSchema = v.object({ id: v.string() });
 
 /** Tombstone scope marking a turn's sleep-time window consumed, by an update or a definitive failure. */
 const SLEEP_TIME_PROCESSED = 'sleep_time';
-
-/** Tombstone scope for the prompt-section lane: separate from the GEPA pass so
- *  replaying the tick does not rotate the section twice. */
-const PROMPT_SECTION_LANE = 'prompt_section_lane';
 
 /** Millisecond instants in `actor_config`. `settledAt` present means an unprocessed
  *  completed turn awaits a run; `closedAt` is when the last client connection closed. */
@@ -929,6 +922,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       reportModelCall: (report) => { this.reportModelCall(report); },
       refusals: (actor) => this.refusalNoticesFor(actor),
       liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
+      servingMoved: () => this.servingMoved(),
+      boxUse: this.boxUse,
       modelOperations: this.modelOperations,
       pricing: (spec) => this.modelCatalog.pricing(spec),
       hostedModel: (actor) => this.hostedModelOf(actor),
@@ -1141,7 +1136,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         backend: 'cf',
         roleSection: turn.profile.profile.role,
         model: { id: turn.profile.profile.tier.model },
-        sectionOverrides: activePromptSectionOverrides(this.boundSql, turn.actor.handle),
+        sectionOverrides: artifactOverrides(currentArtifacts(this.boundSql, turn.actor.handle)).sections,
         // Makes the prompt address it as a named agent of this workspace, not the workspace's own chat.
         identity: {
           ...(await this.promptIdentity()),
@@ -1912,9 +1907,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
-        // Replay-eval rollout runs the live scaffold with the real LLM and tool bridges.
-        // Promotion-gate evidence runs on the cadence lane so rollouts don't block the chat queue.
-        ...this.shadowTrialPorts,
       });
       this._engine.onEvent((event) => {
         if (event.type !== 'changelog_digest') return;
@@ -2349,16 +2341,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       evolutionEnabled: this._turnEvolutionEnabled,
     };
 
-    // Keyed on the turn, not rolled: `queueTurnShadowTrial` re-reads the pending version,
-    // so a replay would otherwise score this turn against a candidate not under trial then.
-    const sampledVersion = owesShadowTrial(facts) ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
-
-    return declareTerminalRoster(facts, this.rosterParts(input, sampledVersion, readMission(this.boundSql)));
+    return declareTerminalRoster(facts, this.rosterParts(input, readMission(this.boundSql)));
   }
 
-  private rosterParts(
-    input: OwedTerminalEffectsInput, sampledVersion: number | null, mission: string | null,
-  ): TerminalTurnParts {
+  private rosterParts(input: OwedTerminalEffectsInput, mission: string | null): TerminalTurnParts {
     const parts: TerminalTurnParts = {
       // Over the row the transcript is about to persist, so a cut turn's announcement replays from it.
       turnEndExtensions: true,
@@ -2377,15 +2363,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The genesis turn owes the naming: the create stored a stand-in title, and no
       // other turn replaces one.
       autoTitle: { mission, standIn: input.event === WORKSPACE_CREATED_EVENT },
-      autoGepa: true,
-      shadowTrial: sampledVersion === null ? undefined : {
-        pendingVersion: sampledVersion,
-        // Bounded at declaration: an oversized recorded input fails its SQLite insert partway through
-        // a claimed sequence, leaving a prefix recovery reads as the whole roster.
-        trialContext: projectJsonValue({
-          value: trimTrialContext([...input.trialContext]),
-        }),
-      },
     };
 
     return parts;
@@ -2469,17 +2446,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           if (unreachable !== null) return { status: 'owed', detail: unreachable };
           await this.applyAutoTitle(subject, standIn === true);
-
-          return { status: 'completed' };
-        },
-      }),
-
-      auto_gepa: terminalEffect({
-        input: v.object({}),
-        // Awaited so eviction cannot cancel the model work without a pending row. The cadence is a
-        // durable turn count, so a replay either runs the owed run or does nothing.
-        run: async (_input, scope) => {
-          await this.maybeRunAutoGepa(keyedScope(scope));
 
           return { status: 'completed' };
         },
@@ -3695,22 +3661,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return scaffoldRunReport(await runScaffoldOnce(this.scaffoldControl, task, opts));
   }
 
-  async getShadowStatus(): Promise<ShadowStatus> {
-    return getShadowStatus(this.boundSql, this.rt.actor);
+  async getEvolutionStatus(): Promise<EvolutionStatus> {
+    return getEvolutionStatus(this.boundSql, this.rt.actor);
   }
 
-  /** `auto` acts on decidePromotion only when its decision != 'continue'; others force the action. */
+  /** The owner's decision on the pending scaffold proposal. */
   @callable()
-  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
+  async applyScaffoldDecision(mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
     return applyScaffoldDecision(this.scaffoldControl, mode);
-  }
-
-  /** Reads `scaffold_evaluations`, regressions first. */
-  @callable()
-  async getShadowVerdict(version?: number): Promise<ShadowVerdict> {
-    const pendingVersion = version ?? getPendingScaffold(this.boundSql, this.rt.actor)?.version ?? null;
-
-    return readShadowVerdict(this.boundSql, this.rt.actor, pendingVersion);
   }
 
   /**
@@ -3869,14 +3827,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listScaffoldVersions(this.boundSql, this.rt.actor, limit);
   }
 
-  /** GEPA optimisation pass; see `runScaffoldGepaOptimization` in evolution/control.ts for cost. */
+  /** One search of the proposer on `target` (default the scaffold); see `runOptimization` in evolution/control.ts. */
   @callable()
-  async runScaffoldGepaOptimization(opts?: {
-    maxIterations?: number;
-    evalSize?: number;
-    maxMetricCalls?: number;
-  }): Promise<GepaOptimizationResult> {
-    return runScaffoldGepaOptimization(this.scaffoldControl, opts);
+  async runOptimization(target?: string): Promise<ProposerOutcome> {
+    return runOptimization(this.scaffoldControl, target);
   }
 
   @callable()
@@ -4933,7 +4887,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       pendingActions: this.pendingActions(),
       pendingConsents,
       activePlan,
-      scaffoldAutoApply: this.config.getAutoPromoteScaffold(),
       slates: listing.slates.map((slate) => ({
         id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null, bindings: slate.bindings.length,
       })),
@@ -5049,48 +5002,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await new Promise<KinuError | null>((resolve) => { this.overviewSettlers.push(resolve); });
   }
 
-  @callable() async executeInExecutor(executorId: string, command: string, device?: string) {
-    const provider = this.rt.executionRouter?.getProvider(executorId);
+  @callable() executeInExecutor(executorId: string, command: string, device?: string) {
+    return settle(Effect.gen({ self: this }, function* () {
+      const router = this.rt.executionRouter;
 
-    if (!provider) return { error: `Executor "${executorId}" not found`,
-      refusal: refusalOf(new KinuError('missing', `Executor "${executorId}" not found`)) };
+      if (!router) return { error: 'no execution router' };
+      const run = yield* Effect.promise(() => runOnExecutor(router, executorId, command, device));
 
-    if (!provider.isAvailable()) return { error: `Executor "${executorId}" is not available`,
-      refusal: refusalOf(new KinuError('unavailable', `Executor "${executorId}" is not available`)) };
+      if (run.kind === 'refused') return { error: run.error, refusal: run.refusal };
 
-    const execTool = provider.tools.exec;
+      const output = run.kind === 'ran'
+        ? { stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode, ...(run.refusal && { refusal: run.refusal }) }
+        : { stdout: '', stderr: run.error, exitCode: 1, refusal: run.refusal };
 
-    if (!execTool) return { error: `Executor "${executorId}" has no exec tool`,
-      refusal: refusalOf(new KinuError('unsupported', `Executor "${executorId}" has no exec tool`)) };
+      this.recordExecutorOutput(executorId, command, run.kind === 'ran' ? output : { stdout: null, stderr: run.error, exitCode: 1 });
+      // The UI terminal renders only from broadcasts, so a failure is broadcast too.
+      this.broadcast(JSON.stringify({ type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now() }));
 
-    // Device rides as tool context read by readDeviceSelection (docs/EXECUTION-LAYER-SPEC.md
-    // "The user's account is a fleet"); with none, the call keeps the unnamed default.
-    return settle(Effect.matchCauseEffect(Effect.promise(async () => v.parse(CommandResultSchema, device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device }))), {
-      onSuccess: (result) => Effect.sync(() => {
-        const output = v.is(v.string(), result)
-          ? { stdout: result, stderr: '', exitCode: 0 }
-          : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
-
-        this.recordExecutorOutput(executorId, command, output);
-
-        this.broadcast(JSON.stringify({
-          type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now(),
-        }));
-
-        return output;
-      }),
-      onFailure: (failed) => Effect.sync(() => {
-        const refusal = refusalOf(toKinuError({ doing: 'execute on ' + executorId, cause: Cause.squash(failed), otherwise: 'io' }));
-        const errMsg = refusal.error;
-        this.recordExecutorOutput(executorId, command, { stdout: null, stderr: errMsg, exitCode: 1 });
-        // Broadcast errors too: the UI terminal renders only from broadcasts. (STABILITY-AUDIT §B4.)
-        this.broadcast(JSON.stringify({
-          type: 'executor-output', executor: executorId, command, stdout: '',
-          stderr: errMsg, exitCode: 1, refusal, timestamp: Date.now(),
-        }));
-
-        return { error: errMsg, exitCode: 1, refusal };
-      }),
+      return run.kind === 'ran' ? output : { error: run.error, exitCode: 1, refusal: run.refusal };
     }));
   }
 
@@ -5383,7 +5312,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const ownerUserId = this.getOwnerUserId();
 
       if (!ownerUserId) return yield* new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
-      yield* Effect.promise(async () => writeSoul(this.boundSql, text, (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content)));
+      yield* Effect.promise(() => writeWorkspaceSoul(this.hostedWorkspace().bundle, text));
       // The next turn re-reads the soul from its row.
       this._cachedSoulText = null;
 
@@ -5620,65 +5549,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Auto-GEPA tick, once per completed turn. Counts completed non-plan turns from durable
-   * `turn_end` rows (survives eviction); runs when the cadence is due and no pending is mid-shadow.
-   */
-  protected async maybeRunAutoGepa(
-    /** Stable tick identity keying the prompt-section lane so a replay finds it advanced.
-     * Absent when no durable obligation backs the call; then nothing is keyed. */
-    tick?: string,
-  ): Promise<void> {
-    const everyN = this.config.getAutoGepaEveryNTurns();
 
-    if (everyN <= 0) return;
-
-    // An absent key is indistinguishable from an old disable; pin the default and record it.
-    if (this.config.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns) == null) {
-      this.config.setAutoGepaEveryNTurns(everyN);
-      void this.sql`INSERT INTO evolution_events (actor_id, type, message, created_at)
-        VALUES (${this.actorHandle().actorId}, 'reflection', ${
-          `Auto-GEPA enabled by the autonomous default (every ${everyN} turns of new traces). ` +
-          `A disable set before autonomy defaults flipped on was stored as "unset" and is ` +
-          `superseded by this default: run setAutoGepa(0) to disable again.`
-        }, ${Date.now()})`;
-    }
-
-    // One cadence pass at a time per activation; concurrent passes would race proposals.
-    // Per-tick tombstones cannot separate an interrupted run from this activation's live one.
-    if (this._gepaTickRunning) return;
-    const recent = listGepaRuns(this.boundSql, this.actorHandle(), 1)[0];
-
-    // A `running` row is an interrupted pass that is owed, not a cadence watermark.
-    if (recent?.status !== 'running') {
-      const sinceTs = recent ? new Date(recent.startedAt).toISOString() : null;
-
-      if (this.eventRecorder.completedWorkTurns(sinceTs) < everyN) return;
-    }
-
-    // Prompt sections are the only automatic lane: the chat turn does not run `scaffold/agent.js`.
-    // Scaffold GEPA runs only via the manual `runScaffoldGepaOptimization` RPC.
-    const lane = tick === undefined ? undefined : `${this.name}:${tick}`;
-    this._gepaTickRunning = true;
-
-    try {
-      await oncePerTick(this.boundSql, this.actorHandle(), { scope: PROMPT_SECTION_LANE, tick: lane, workspace: this.name },
-        () => this.advancePromptSections());
-    } finally {
-      this._gepaTickRunning = false;
-    }
-  }
-
-  /** Cadence pass live in this activation; eviction clears it and the durable `running` row remains. */
-  private _gepaTickRunning = false;
-
-  /** Advance the evolved-prompt-section loop one step; policy lives in core's `advancePromptSectionLane`. */
-  protected async advancePromptSections(): Promise<void> {
-    // Awaited so the cadence effect holds its row open; a detached lane could be cancelled by eviction.
-    // Failure is absorbed: the lane is opportunistic and the next cadence tick retries it.
-    await settleLogged('prompt_section.lane_failed', { doing: 'advancing the prompt-section evolution lane', otherwise: 'unavailable' }, async () => { await advancePromptSectionLane(this.scaffoldControl); }, { workspace: this.name });
-  }
-
-  /**
    * Open one refinement; returns the durable request at `requested` — the refiner runs
    * on the off-turn cadence pass. The nudge is detached; eviction only costs an unfinished step.
    */

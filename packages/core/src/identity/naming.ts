@@ -200,7 +200,7 @@ export interface WorkspaceTitleState {
   displayName: string | null;
   nameOrigin: NameOrigin | null;
   mission: string;
-  /** Shown title is a new actor's stand-in, so the model's name may replace it. Never stored; the caller knows it from context. */
+  /** The caller knows the shown title is a new actor's stand-in (a genesis turn); else it counts only while it is still the mission's own. */
   standIn?: boolean;
 }
 
@@ -274,21 +274,23 @@ export async function titleActorFromMessage(
     displayName,
     nameOrigin: config.getNameOrigin(),
     mission: message,
-    standIn: displayName === workspaceTitleFromMission(message.trim()),
   }, effects);
 
   return titled !== null;
 }
 
-/** Null means leave the title alone. A placeholder gets the deterministic stand-in first; a stand-in gets only the model's name. */
+/**
+ * Null means leave the title alone. A placeholder gets the deterministic stand-in first; a stand-in (the title still
+ * the mission's own) gets only the model's name.
+ */
 export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePlan | null {
   if (!autoTitleMayReplace(state.nameOrigin)) return null;
 
   if (isPlaceholderMission(state.mission)) return null;
   const placeholder = isPlaceholderWorkspaceTitle(state.displayName, state.slug);
-
-  if (!placeholder && state.standIn !== true) return null;
   const mission = state.mission.trim();
+
+  if (!placeholder && state.standIn !== true && state.displayName?.trim() !== workspaceTitleFromMission(mission)) return null;
 
   return { provisional: placeholder ? workspaceTitleFromMission(mission) || null : null, mission };
 }

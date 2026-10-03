@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
   BackgroundJobStore,
+  runOnExecutor,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOLS,
   EventLog,
@@ -13,7 +14,7 @@ import {
   type AlarmScheduler,
   openWorkspaceMainActor,
   WorkspaceActorDirectory,
-  createAgentConfigStore,
+  createAgentConfigStore, getCurrentScaffoldVersion,
   type ActorHandle,
   type SqlExecutor,
   type WorkspaceActor,
@@ -79,14 +80,15 @@ import {
   type AccountSpend,
   MEMORY_PATH,
   WORKSPACE_ROOT,
+  readMission,
   searchMemoryChunks,
   type MemorySearchResult,
 } from '@kinu.run/core';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { tolerate, tolerateAsync, settle, settleSync } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, schemaGenesisOf, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
-  resolverModelPlane,
+  makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
+  openWorkspaceCLI, resolverModelPlane,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveAgentRef } from './config';
@@ -125,6 +127,8 @@ export interface LocalExecResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  /** Set when the executor refused or failed before producing output. */
+  error?: string;
 }
 
 export interface LocalAgentInfoSnapshot {
@@ -613,19 +617,25 @@ export function cancelLocalJob(name: string, id: string): Promise<{ ok: boolean 
   }));
 }
 
+/** The addressed workspace's registered executor, as on the cloud. */
 export function executeLocalExecutor(name: string, executorId: string, command: string): Promise<LocalExecResult> {
   return settle(Effect.gen(function* () {
     yield* ensureLocalAgent(name);
-    const normalized = executorId.toLowerCase();
+    const dbPath = agentDbPath(name);
+    const db = new Database(dbPath);
 
-    if (!['workspace', 'device', 'local', 'your-pc'].includes(normalized)) {
-      return yield* Effect.die(new Error(`Executor "${executorId}" is not available for local agents.`));
-    }
+    return yield* Effect.ensuring(Effect.gen(function* () {
+      const { rt } = yield* Effect.promise(() => openWorkspaceCLI(db, dbPath, { llm: null, cwd: resolveAgentRef(name)?.cwd ?? null }));
+      const router = rt.executionRouter;
 
-    // createHostShell owns group kill on abort and settles when the command exits, not when a grandchild closes the pipe.
-    const result = yield* Effect.promise(async () => createHostShell(process.cwd()).exec(command));
+      const run = router
+        ? yield* Effect.promise(() => runOnExecutor(router, executorId, command))
+        : { kind: 'refused' as const, error: `Workspace "${name}" has no execution router` };
 
-    return { executor: executorId, command, ...result };
+      return run.kind === 'ran'
+        ? { executor: executorId, command, stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode }
+        : { executor: executorId, command, stdout: '', stderr: '', exitCode: 1, error: run.error };
+    }), Effect.sync(() => { db.close(); }));
   }));
 }
 
@@ -729,17 +739,6 @@ function countOf(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): numb
   return all<{ c: number }>(db, sql, ...params).at(0)?.c ?? 0;
 }
 
-function currentScaffoldVersion(db: SqliteDb, actorId: string): number {
-  const current = all<{ version: number }>(
-    db,
-    `SELECT version FROM scaffold_versions
-     WHERE actor_id = ? AND status = 'current' ORDER BY version DESC LIMIT 1`,
-    actorId,
-  ).at(0);
-
-  return current?.version ?? 0;
-}
-
 function tableExists(db: SqliteDb, name: string): boolean {
   return coreTableExists(makeSql(db), name);
 }
@@ -828,18 +827,18 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
 
     if (!row) return null;
 
+    const current = () => directory?.retained(actorId)
+      ? Effect.void
+      : Effect.die(new Error(`actor ${actorId} is no longer retained in this workspace`));
+
     const config = tableExists(db, 'actor_config')
-      ? createAgentConfigStore(makeSql(db), actorId, () => settleSync(directory?.retained(actorId)
-        ? Effect.void
-        : Effect.die(new Error(`actor ${actorId} is no longer retained in this workspace`))))
+      ? createAgentConfigStore(makeSql(db), actorId, () => settleSync(current()))
       : null;
 
     return {
       name: row.name,
       purpose: '',
-      scaffoldVersion: tableExists(db, 'scaffold_versions')
-        ? currentScaffoldVersion(db, actorId)
-        : 0,
+      scaffoldVersion: tableExists(db, 'scaffold_versions') ? getCurrentScaffoldVersion(makeSql(db), { actorId, assertCurrent: () => settleSync(current()) }) ?? 0 : 0,
       searchNodeCount: tableExists(db, 'search_nodes')
         ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId)
         : 0,
@@ -864,19 +863,14 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
       db, `SELECT name, created_at FROM workspace_identity LIMIT 1`).at(0)
     : null;
 
-  // From the identity row, not SOUL.md: opening the workspace filesystem writes. `writeSoul` keeps it current (identity/soul.ts).
-  const mission = hasIdentity
-    ? all<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`).at(0)?.mission?.trim() ?? null
-    : null;
+  // Off the soul's row, not SOUL.md: opening the workspace filesystem writes.
+  const mission = readMission(makeSql(db));
 
   return {
     name: identity?.name ?? null,
     purpose: mission ?? '',
     createdAt: identity?.created_at ?? null,
-    // The live version, not MAX(version), which would include a pending proposal.
-    scaffoldVersion: actor && tableExists(db, 'scaffold_versions')
-      ? currentScaffoldVersion(db, actor.actorId)
-      : 0,
+    scaffoldVersion: actor && tableExists(db, 'scaffold_versions') ? getCurrentScaffoldVersion(makeSql(db), actor) ?? 0 : 0,
     searchNodeCount: actor && tableExists(db, 'search_nodes')
       ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actor.actorId)
       : 0,

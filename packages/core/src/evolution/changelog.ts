@@ -12,13 +12,11 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { FactsStore } from '../memory/facts';
 import { listScaffoldArchive, type ScaffoldStatus } from '../scaffold/archive';
-import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/shadow';
+import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/versions';
 import { rollbackScaffold } from '../scaffold/rollback';
 import { listGepaRuns } from './gepa/persistence';
-import {
-  applyPromptSectionDecision, getPendingPromptSection,
-  listPromptSectionVersions,
-} from '../prompting/section-store';
+import { artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
+import { parseTrialVerdict } from './trial-rules';
 import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
   createRefinementStore,
@@ -35,7 +33,7 @@ const ScaffoldRunEventSchema = v.object({
 });
 
 export const CHANGELOG_ENTRY_KINDS = [
-  'scaffold', 'tool', 'fact', 'gepa', 'ratings', 'prompt_section', 'refinement',
+  'scaffold', 'tool', 'fact', 'gepa', 'ratings', 'artifact', 'refinement',
 ] as const;
 
 export type ChangelogEntryKind = (typeof CHANGELOG_ENTRY_KINDS)[number];
@@ -44,8 +42,8 @@ export type ChangelogRevertAction =
   | { type: 'scaffold_rollback'; target: string }
   | { type: 'fact_forget'; target: string }
   | { type: 'fact_forget_many'; targets: string[] }
-  /** `<sectionId>:<version>`; versions are numbered per section. */
-  | { type: 'prompt_section_rollback'; target: string };
+  /** `<artifactId>@<version>`; versions are numbered per artifact. */
+  | { type: 'artifact_revert'; target: string };
 
 export interface ChangelogEntry {
   /** Derived from the source ledger row; safe for revert-by-id. */
@@ -54,7 +52,7 @@ export interface ChangelogEntry {
   /** Epoch ms; drives ordering and the unseen count. */
   at: number;
   summary: string;
-  /** Evidence numbers: shadow win-rate, EMA score, counts. */
+  /** Evidence numbers: the trial's interval, the judge's counts. */
   evidence: string;
   /** Only when a real revert path exists and the change is still in effect. */
   revert?: ChangelogRevertAction;
@@ -134,11 +132,7 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
   const changedAt = scaffoldStatusChangeAt(sql, actor);
 
   return archive.map((e) => {
-    const record = e.trials > 0
-      ? `shadow ${e.wins}W-${e.losses}L-${e.ties}T${e.winRate != null ? ` · win-rate ${pct(e.winRate)}` : ''}`
-      : 'shadow untried';
-
-    const trial = e.status === 'pending' ? ' (shadow trial in progress)' : '';
+    const trial = e.status === 'pending' ? ' (waiting for your decision)' : '';
 
     // Re-derived from the stamped cell id; no label store.
     const targeting = e.pathology !== null
@@ -147,14 +141,12 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
 
     const revertable = e.status === 'current' || e.status === 'pending';
 
-    const won = e.status === 'current' && e.trials > 0 ? ` (won ${e.wins} of ${e.trials} trial runs)` : '';
-
     const entry: ChangelogEntry = {
       id: `scaffold:v${e.version}:${e.status}`,
       kind: 'scaffold',
       at: Math.max(e.writtenAt, changedAt.get(e.version) ?? 0),
-      summary: `${SCAFFOLD_SUMMARY[e.status]}${won}`,
-      evidence: `${SCAFFOLD_VERB[e.status]} v${e.version}${trial}: ${e.rationale} · ${record}${targeting}`,
+      summary: SCAFFOLD_SUMMARY[e.status],
+      evidence: `${SCAFFOLD_VERB[e.status]} v${e.version}${trial}: ${e.rationale}${targeting}`,
       scaffoldVersion: e.version,
     };
 
@@ -288,44 +280,40 @@ function gepaEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): Chang
     }));
 }
 
-const SECTION_VERB: Record<ScaffoldStatus, string> = {
-  current: 'Promoted',
-  pending: 'Proposed',
-  rolled_back: 'Rolled back',
-  historical: 'Superseded',
-};
-
-const SECTION_SUMMARY: Record<ScaffoldStatus, string> = {
+const ARTIFACT_SUMMARY: Record<ArtifactStatus, string> = {
   current: 'I reworded my own',
-  pending: 'I am testing new wording for my',
+  candidate: 'I have new wording waiting for a trial of my',
+  trial: 'I am trialling new wording for my',
   rolled_back: 'I reverted new wording for my',
   historical: 'I replaced earlier wording for my',
 };
 
-/** Evidence leads with the byte trade, since sections are read every turn. */
-function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  return listPromptSectionVersions(sql, actor, limit).map((row) => {
-    const bytes = Buffer.byteLength(row.source, 'utf8');
-    const delta = bytes - row.incumbentBytes;
-    const size = `${delta >= 0 ? '+' : ''}${String(delta)} bytes (${String(row.incumbentBytes)} -> ${String(bytes)})`;
+/** One entry per version: its turns and judge numbers, and once decided, the trial's arms and interval. */
+function artifactEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  const verdicts = new Map(sql<{ artifact_id: string; version: number; verdict: string | null }>`
+    SELECT artifact_id, version, verdict FROM artifact_trials WHERE actor_id = ${actor.actorId} AND verdict IS NOT NULL`
+    .map((row) => [`${row.artifact_id}@${String(row.version)}`, row.verdict === null ? null : parseTrialVerdict(row.verdict)]));
 
-    const trial = row.wins + row.losses + row.ties > 0
-      ? `shadow ${String(row.wins)}W-${String(row.losses)}L-${String(row.ties)}T`
-      : 'shadow untried';
+  return listArtifactVersions(sql, actor).slice(0, limit).map((row) => {
+    const key = `${row.artifactId}@${String(row.version)}`;
+    const verdict = verdicts.get(key);
+    const judged = row.evidence === null ? '' : ` · ${String(row.evidence.turns.length)} turns (${row.evidence.reason})`;
+
+    const trial = verdict === undefined || verdict === null ? '' : ` · trial ${verdict.decision}: ${verdict.why}, satisfaction `
+      + `${verdict.satisfaction.diff.toFixed(2)} [${verdict.satisfaction.lo.toFixed(2)}, ${verdict.satisfaction.hi.toFixed(2)}] over `
+      + `${String(verdict.segments.candidate)}/${String(verdict.segments.incumbent)} segments, corrected `
+      + `${verdict.corrected.candidate.toFixed(2)} vs ${verdict.corrected.incumbent.toFixed(2)}`;
 
     const entry: ChangelogEntry = {
-      id: `prompt_section:${row.sectionId}:v${String(row.version)}:${row.status}`,
-      kind: 'prompt_section',
+      id: `artifact:${key}:${row.status}`,
+      kind: 'artifact',
       at: row.decidedAt ?? row.writtenAt,
-      summary: `${SECTION_SUMMARY[row.status]} ${row.sectionId} guidance`,
-      evidence:
-        `${SECTION_VERB[row.status]} ${row.sectionId} v${String(row.version)}: ${row.rationale} · ${size} · ${trial}`,
+      summary: `${ARTIFACT_SUMMARY[row.status]} ${row.artifactId}`,
+      evidence: `v${String(row.version)}: ${row.rationale}${judged}${trial}`,
     };
 
-    // Rolled-back and historical rows are not in the prompt; nothing to revert.
-    if (row.status === 'current' || row.status === 'pending') {
-      entry.revert = { type: 'prompt_section_rollback', target: `${row.sectionId}:${String(row.version)}` };
-    }
+    // Only a version a turn can still read has something to undo.
+    if (row.status === 'current' || row.status === 'candidate' || row.status === 'trial') entry.revert = { type: 'artifact_revert', target: key };
 
     return entry;
   });
@@ -354,7 +342,7 @@ const REFINEMENT_DISPOSITION_PROSE = {
 
 /**
  * An aggregate card per refinement; children carry the reverts through each
- * artifact's own path (`fact_forget`, `prompt_section_rollback`).
+ * artifact's own path (`fact_forget`, `artifact_revert`).
  */
 function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
   return createRefinementStore(sql, actor).list(limit).map((request) => {
@@ -397,7 +385,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
       }
 
       if (route.disposition === 'pending_trials' && route.kind === 'prompt_section') {
-        item.revert = { type: 'prompt_section_rollback', target: route.target };
+        item.revert = { type: 'artifact_revert', target: route.target };
       }
 
       return item;
@@ -486,7 +474,7 @@ export function buildChangelog(
     ...scaffoldEntries(sql, actor),
     ...toolEntries(sql, limit),
     ...gepaEntries(sql, actor, limit),
-    ...promptSectionEntries(sql, actor, limit),
+    ...artifactEntries(sql, actor, limit),
     ...refinementEntries(sql, actor, limit),
   ].filter((e) => opts.since === undefined || e.at > opts.since);
 
@@ -574,54 +562,25 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
   return { ok: true, detail: `rolled back to v${prev.version}` };
 }
 
-/**
- * Pending: discarded via the decision machinery. Promoted: falls back to the
- * superseded version, or to the bundled template when none (the row is the source).
- */
-function revertPromptSection(
-  sql: SqlExecutor,
-  actor: ActorHandle,
-  sectionId: string,
-  version: number,
-): ChangelogRevertResult {
-  const row = sql<{ status: string }>`
-    SELECT status FROM prompt_section_versions
-    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
-      AND version = ${version} LIMIT 1`[0];
+/** A candidate or trial is discarded; a promoted version falls back to the one it replaced, or to the bundled text. */
+function revertArtifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId: string, version: number): ChangelogRevertResult {
+  const row = artifactVersion(sql, actor, artifactId, version);
 
-  if (!row) return { ok: false, error: `prompt section ${sectionId} v${String(version)} not found` };
+  if (row === null) return { ok: false, error: `${artifactId} v${String(version)} not found` };
 
-  if (row.status === 'pending') {
-    const pending = getPendingPromptSection(sql, actor, sectionId);
-
-    if (!pending || pending.version !== version) {
-      return { ok: false, error: `${sectionId} v${String(version)} is no longer the pending under trial` };
-    }
-
-    applyPromptSectionDecision(sql, actor, pending, 'rollback');
-
-    return { ok: true, detail: `discarded pending ${sectionId} v${String(version)}` };
+  if (row.status === 'rolled_back' || row.status === 'historical') {
+    return { ok: false, error: `${artifactId} v${String(version)} is already ${row.status}: nothing to revert` };
   }
 
-  if (row.status !== 'current') {
-    return { ok: false, error: `${sectionId} v${String(version)} is already ${row.status}: nothing to revert` };
+  if (row.status === 'trial') {
+    void sql`UPDATE artifact_trials SET status = 'reverted', decided_at = ${Date.now()}
+      WHERE actor_id = ${actor.actorId} AND artifact_id = ${artifactId} AND version = ${version} AND status = 'running'`;
   }
 
-  const prev = sql<{ version: number }>`
-    SELECT version FROM prompt_section_versions
-    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
-      AND version < ${version} AND status = 'historical'
-    ORDER BY version DESC LIMIT 1`[0];
-
-  void sql`UPDATE prompt_section_versions SET status = 'rolled_back'
-    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${version}`;
+  revertArtifact(sql, actor, artifactId, version);
   markStoreChanged(sql);
 
-  if (!prev) return { ok: true, detail: `${sectionId} is back on its built-in wording` };
-  void sql`UPDATE prompt_section_versions SET status = 'current'
-    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${prev.version}`;
-
-  return { ok: true, detail: `rolled ${sectionId} back to v${String(prev.version)}` };
+  return { ok: true, detail: row.status === 'current' && row.parent === null ? `${artifactId} is back on its built-in wording` : `reverted ${artifactId} v${String(version)}` };
 }
 
 export function executeChangelogRevert(
@@ -637,22 +596,18 @@ function changelogRevert(ctx: ChangelogRevertContext, action: ChangelogRevertAct
       case 'scaffold_rollback': {
         const version = Number(action.target);
 
-        if (!Number.isInteger(version) || version <= 0) {
-          return { ok: false, error: `invalid scaffold version: ${action.target}` };
-        }
+        if (!Number.isInteger(version) || version <= 0) return { ok: false, error: `invalid scaffold version: ${action.target}` };
 
-        return yield* Effect.promise(async () => revertScaffoldVersion(ctx.rt, version, ctx.events));
+        return yield* Effect.promise(() => revertScaffoldVersion(ctx.rt, version, ctx.events));
       }
 
-      case 'prompt_section_rollback': {
-        const [sectionId, raw] = action.target.split(':');
-        const version = Number(raw);
+      case 'artifact_revert': {
+        const at = action.target.lastIndexOf('@');
+        const version = Number(action.target.slice(at + 1));
 
-        if (!sectionId || !Number.isInteger(version) || version <= 0) {
-          return { ok: false, error: `invalid prompt-section target: ${action.target}` };
-        }
+        if (at <= 0 || !Number.isInteger(version) || version <= 0) return { ok: false, error: `invalid artifact target: ${action.target}` };
 
-        return yield* Effect.promise(async () => revertPromptSection(ctx.rt.storage.sql, ctx.rt.actor, sectionId, version));
+        return revertArtifactVersion(ctx.rt.storage.sql, ctx.rt.actor, action.target.slice(0, at), version);
       }
 
       case 'fact_forget': {

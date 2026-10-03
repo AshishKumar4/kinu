@@ -19,6 +19,7 @@ import {
   ProfileCatalogEnvelopeSchema,
   type LLMProviderConfig,
   type ModelInfo,
+  type OpenAICompatCredential,
   type ProfileCatalogEnvelope,
   shellQuote,
 } from '@kinu.run/core';
@@ -29,7 +30,6 @@ import {
   createFileOAuthStore,
   ensureSecretDir,
   kinuHome,
-  openAiCompatHeaders,
   stripProvider,
   withConfigLock,
   writeSecretFile,
@@ -806,9 +806,26 @@ export function resolveProviderCredentials(): LocalProviderCredentials {
     openaiApiKey: process.env.OPENAI_API_KEY ?? file.providers?.openai?.apiKey,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? file.providers?.anthropic?.apiKey,
     openrouterApiKey: process.env.OPENROUTER_API_KEY ?? file.providers?.openrouter?.apiKey,
-    openaiCompat: file.providers?.openaiCompat,
+    openaiCompat: file.providers?.openaiCompat === undefined ? undefined
+      : Object.fromEntries(Object.entries(file.providers.openaiCompat).map(([name, compat]) => [name, compatCredential(compat)])),
     apiKeyAccounts: localApiKeyAccounts(file),
   };
+}
+
+/** The config's two header bags as core's one credential: the key's Authorization over `headers`, `extraHeaders` over both. */
+function compatCredential(compat: v.InferOutput<typeof OpenAiCompatConfigSchema>): OpenAICompatCredential {
+  const base = Object.entries(compat.headers ?? {}).filter(([name]) => compat.apiKey === undefined || name.toLowerCase() !== 'authorization');
+
+  return {
+    kind: 'openai-compat',
+    baseURL: compat.baseURL,
+    ...(compat.apiKey !== undefined && { apiKey: compat.apiKey }),
+    extraHeaders: { ...Object.fromEntries(base), ...compat.extraHeaders },
+  };
+}
+
+function compatHeaders(compat: v.InferOutput<typeof OpenAiCompatConfigSchema>) {
+  return credentialToHeaders('openai-compat.default', compatCredential(compat));
 }
 
 export const API_KEY_PROVIDERS = { openai: 'openai.bearer', anthropic: 'anthropic.bearer', openrouter: 'openrouter.bearer' } as const;
@@ -885,7 +902,7 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
     return {
       name: 'openai-compat',
       baseURL: compat.baseURL,
-      headers: openAiCompatHeaders(compat),
+      headers: compatHeaders(compat),
       model: stripProvider(providerModel, 'openai-compat'),
     };
   }
@@ -902,7 +919,7 @@ export function firstOpenAiCompatModel(): Promise<string | null> {
     let first: ModelInfo | undefined;
 
     yield* Effect.catchCause(Effect.gen(function* () {
-      [first] = yield* Effect.promise(async () => discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: openAiCompatHeaders(compat) }));
+      [first] = yield* Effect.promise(() => discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: compatHeaders(compat) }));
     }), (failed) => Effect.gen(function* () {
       const cause = Cause.squash(failed);
 

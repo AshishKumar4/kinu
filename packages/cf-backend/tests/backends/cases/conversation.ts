@@ -79,8 +79,6 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
       const before = contextRows(sql, actor);
       let checks = 0;
 
-      // Passes at the transaction's start, refuses at the selection, after the fork has written its rows. Counted
-      // as it runs, so a fence built and never yielded is a check that did not happen.
       const idle = () => Effect.suspend(() => {
         checks += 1;
 
@@ -94,12 +92,10 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
     },
   },
   {
-    title: 'a scaffold optimisation with no labelled turns is refused before any model runs',
-    covers: ['runScaffoldGepaOptimization'],
+    title: 'an optimisation with no low-rated turns has nothing to learn from, and no model runs',
+    covers: ['runOptimization'],
     async run({ surface }) {
-      expect(await surface.runScaffoldGepaOptimization({ maxIterations: 1 })).toEqual({
-        ok: false, error: 'no outcome-labeled turns yet: chat with the agent first',
-      });
+      expect(await surface.runOptimization()).toEqual({ kind: 'idle' });
     },
   },
 ];

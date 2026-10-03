@@ -54,6 +54,11 @@ export interface CodemodeSurface {
   readonly native: ToolSet;
   /** Read per execute so a tool crafted mid-turn is callable on the next `eval`; compiled in the program. */
   readonly craftedTools: () => readonly CraftedToolSource[];
+  /**
+   * The turn's MCP and extension tools, read per execute: callable as `tools.<name>` only through `eval`, never a
+   * native definition, so the tools prefix stays the same in every workspace. The dynamic block declares them.
+   */
+  readonly external: () => ToolSet;
   readonly providers: ExecutorProviderSurface[];
 }
 
@@ -62,11 +67,12 @@ export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 
 /** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */
 export function codemodeSurface(
-  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'executionRouter'>, native: ToolSet,
+  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'executionRouter'>, native: ToolSet, external: () => ToolSet = () => ({}),
 ): CodemodeSurface {
   return {
     native,
     craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
+    external: () => withCheckedInputs(external()),
     providers: rt.executionRouter?.getProviders() ?? [],
   };
 }
@@ -74,6 +80,8 @@ export function codemodeSurface(
 export interface BuiltinToolDeps {
   workMode?: WorkMode;
   rt: AgentRuntime;
+  /** The turn's MCP and extension tools, which `eval` reaches (`CodemodeSurface.external`). */
+  external?: () => ToolSet;
   /** Ready `eval` for a confined surface (head, swarm node); actors set `codemode` on `buildActorTools` instead. */
   prebuiltCodemodeTool?: unknown;
   /** Hybrid memory search when present; null declares no semantic index (results report lexical-only). */
@@ -112,7 +120,7 @@ export interface ReportToolDeps {
 const PlanEditsInputSchema = z.object({ edits: z.array(PlanEditSchema).min(1) });
 
 /** Device nicknames are not in the enum, so it stays advisory: any string passes, and an unknown one is a device. */
-function shellInputSchema(runtimes: readonly string[]) {
+export function shellInputSchema(runtimes: readonly string[]) {
   return z.object({
     command: z.string(),
     runtime: z.string().meta({
@@ -384,7 +392,7 @@ export function installCodemode(
   deps: BuiltinToolDeps,
 ): void {
   const { rt } = deps;
-  const built = build(codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface)));
+  const built = build(codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external));
   const clamp = { files: rt.storage, producer: 'eval' as const, images: true as const };
   surface.eval = withCheckedInput('eval', withClampedToolResult(
     built,

@@ -1,7 +1,9 @@
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   credentialToHeaders,
+  type OpenAICompatCredential,
   normalizeModelMenu,
   createChatGptProvider,
   accountDeps,
@@ -48,8 +50,8 @@ import type { LLM } from '@kinu.run/core';
 import { OPENCODE_PROVIDER_ID, createOpenCodeProvider } from './opencode-provider';
 import { isOAuthLoginKey, type LocalOAuthStore } from './oauth-store';
 import * as v from 'valibot';
-import { Cause, Effect } from 'effect';
-import { diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 
 const proxiedCredentialsSchema = v.object({
   credentials: v.optional(v.array(v.object({
@@ -59,18 +61,11 @@ const proxiedCredentialsSchema = v.object({
   })), []),
 });
 
-interface LocalOpenAICompatCredential {
-  baseURL: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
-  extraHeaders?: Record<string, string>;
-}
-
 export interface LocalProviderCredentials {
   openaiApiKey?: string;
   anthropicApiKey?: string;
   openrouterApiKey?: string;
-  openaiCompat?: Record<string, LocalOpenAICompatCredential>;
+  openaiCompat?: Record<string, OpenAICompatCredential>;
   apiKeyAccounts?: Readonly<Record<string, string>>;
 }
 
@@ -208,12 +203,16 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const cloud = opts.cloud;
   const defaultSpec = defaultSpecForEndpoint(localEndpoint);
   const gateway = workersAiRoute(localEndpoint, cloud)?.gateway ?? null;
-  const menu = cloud ? createCloudModelMenu(cloud, opts.fetch) : null;
+
+  const menu = cloud ? perCloudSession(cloudMenus, cloud, opts.fetch, () => cloudListing<CloudMenu>(
+    () => settle(readCloudModelMenu(cloud, opts.fetch)),
+    (reason) => ({ entries: [], failures: new Map(CLOUD_PROVIDERS.map((provider) => [provider, `Could not reach your Kinu account to list its models (${reason}).`])) }),
+  )) : null;
 
   const cloudProvider = (id: CloudProxyProviderId, label: string, unavailableReason: string, defaultModel?: string): ModelProvider => {
     if (!cloud || !menu) return createSignedOutCloudProvider(id, label);
 
-    return createCloudProxyProvider({ id, label, cloud, menu, defaultModel, unavailableReason, fetch: opts.fetch });
+    return createCloudProxyProvider({ id, label, cloud, menu: () => menu.read(), defaultModel, unavailableReason, fetch: opts.fetch });
   };
 
   const registry = createModelRegistry({
@@ -249,7 +248,10 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   // Web-UI-connected providers resolve through the worker's proxy. A local
   // credential always wins: offline use and explicit override.
-  const proxied = cloud ? perCloudSession(proxyCredentialSources, cloud, opts.fetch, () => createProxyCredentialSource(cloud, opts.fetch)) : null;
+  const proxied = cloud ? perCloudSession(proxyCredentialSources, cloud, opts.fetch, () => cloudListing<ProxiedCredentials>(
+    () => settle(readProxyCredentialListing(cloud, opts.fetch)),
+    (reason) => ({ byKey: new Map(), error: `Could not reach your Kinu account to list connected providers (${reason}).` }),
+  )) : null;
 
   const credentialReads: Pick<ProviderDeps, 'getAuth' | 'hasCredential' | 'listCredentialKeys'> = {
     getAuth(key, authOpts) {
@@ -257,7 +259,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         const local = yield* Effect.promise(() => authStore.get(key, authOpts));
 
         if (local) return local;
-        const remote = proxied ? (yield* proxied.load()).byKey.get(key) : undefined;
+        const remote = proxied ? (yield* Effect.promise(() => proxied.read())).byKey.get(key) : undefined;
 
         if (remote?.failure !== undefined) return yield* Effect.die(new Error(remote.failure));
 
@@ -270,7 +272,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
         // A credential the proxy never fronts: the local answer is complete.
         if (isProxyDeniedCredentialKey(key) || !proxied) return false;
-        const remote = yield* proxied.load();
+        const remote = yield* Effect.promise(() => proxied.read());
         const listed = remote.byKey.get(key);
 
         // Connected but unreadable is that provider's failure, never an absence.
@@ -288,7 +290,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       return settle(Effect.gen(function* () {
         const keys = new Set(authStore.keys());
 
-        for (const key of proxied ? (yield* proxied.load()).byKey.keys() : []) keys.add(key);
+        for (const key of proxied ? (yield* Effect.promise(() => proxied.read())).byKey.keys() : []) keys.add(key);
 
         return [...keys];
       }));
@@ -323,7 +325,11 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     listProviders() {
       return registry.listProviders(own);
     },
+    // The provider sweep: what the account serves is asked again, so a sweep after an invalidation is never stale.
     listModels() {
+      menu?.refresh();
+      proxied?.refresh();
+
       return registry.listAllModels(own);
     },
     modelInfo(specOrNull) {
@@ -399,112 +405,109 @@ function createGatewayBackedProvider(opts: {
   };
 }
 
-const CLOUD_MENU_TTL_MS = 60_000;
-
-interface CloudMenu {
-  entries: AgentModelEntry[];
-  /** Per-provider listing failure, reported verbatim instead of a canned hint. */
-  failures: Map<string, string>;
+/**
+ * One account listing the cloud serves this machine, per session: its model menu or its connected credentials.
+ * Read within 60 s it is served as it stands, so a call does not fetch; `refresh` makes the next read fetch, which the
+ * provider sweep does, so an invalidated listing never repeats a stale one. A fetch joins one in flight. A failed fetch
+ * serves the last good answer, else an explicit failure carrying its reason.
+ */
+interface CloudListing<T> {
+  read(): Promise<T>;
+  refresh(): void;
 }
 
-const EMPTY_CLOUD_MENU: CloudMenu = { entries: [], failures: new Map() };
+const CLOUD_LISTING_TTL_MS = 60_000;
 
-/** Server-driven model menu (GET /api/cli/models). Failures list as empty;
- *  explicit specs still resolve through the proxy. */
-function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch): () => Promise<CloudMenu> {
-  const baseFetch = fetchImpl ?? fetch;
-  let cached: { at: number; menu: CloudMenu } | null = null;
+function cloudListing<T>(fetchValue: () => Promise<T>, failed: (reason: string) => T): CloudListing<T> {
+  let good: { at: number; value: T } | null = null;
+  let stale = false;
+  let inFlight: Promise<T> | null = null;
 
-  return async () => {
-    if (cached && Date.now() - cached.at < CLOUD_MENU_TTL_MS) return cached.menu;
+  const fetchNow = async (): Promise<T> => {
+    const [fetched] = await Promise.allSettled([fetchValue()]);
 
-    try {
-      const res = await baseFetch(`${cloud.origin.replace(/\/+$/, '')}/api/cli/models`, {
-        headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
-      });
+    if (fetched.status === 'fulfilled') {
+      good = { at: Date.now(), value: fetched.value };
+      stale = false;
 
-      if (!res.ok) return EMPTY_CLOUD_MENU;
-      const source = normalizeModelMenu({ payload: await res.json() });
-
-      const menu: CloudMenu = {
-        entries: source.models,
-        failures: new Map(source.failures.map(({ provider, reason }) => [provider, reason])),
-      };
-
-      cached = { at: Date.now(), menu };
-
-      return menu;
-    } catch (error) {
-      diagnostics.event('model_resolver.cloud_menu_fallback', { error: renderThrownChain({ cause: error }) });
-
-      return EMPTY_CLOUD_MENU;
+      return fetched.value;
     }
+
+    // Said where it is read: the menu's provider reasons, the credential listing's error.
+    return good?.value ?? failed(renderThrownChain({ cause: fetched.reason }));
   };
+
+  return {
+    read() {
+      if (good !== null && !stale && Date.now() - good.at < CLOUD_LISTING_TTL_MS) return Promise.resolve(good.value);
+
+      inFlight ??= fetchNow().finally(() => { inFlight = null; });
+
+      return inFlight;
+    },
+    refresh() { stale = true; },
+  };
+}
+
+interface CloudMenu {
+  readonly entries: readonly AgentModelEntry[];
+  readonly failures: ReadonlyMap<string, string>;
+}
+
+const CLOUD_PROVIDERS = ['workers-ai', 'my-gateway'] as const;
+
+/** Shared across resolvers so one listing serves every conversation. */
+const cloudMenus: PerCloudSession<CloudListing<CloudMenu>> = new Map();
+
+function readCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch): Effect.Effect<CloudMenu> {
+  const baseFetch = fetchImpl ?? fetch;
+
+  return Effect.gen(function* () {
+    const res = yield* Effect.promise(() => baseFetch(`${cloud.origin.replace(/\/+$/, '')}/api/cli/models`, {
+      headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
+    }));
+
+    if (!res.ok) return yield* Effect.die(new Error(`the Kinu model menu returned HTTP ${String(res.status)}`));
+    const source = normalizeModelMenu({ payload: yield* Effect.promise(() => res.json()) });
+
+    return { entries: source.models, failures: new Map(source.failures.map(({ provider, reason }) => [provider, reason])) };
+  });
 }
 
 interface ProxiedCredentials {
   byKey: Map<string, { baseURL?: string; failure?: string }>;
-  /** Set only until a listing succeeds; afterwards a failure serves the last
-   *  good answer rather than forgetting providers over a network blip. */
+  /** Set only until a listing succeeds; afterwards a failure serves the last good answer. */
   error: string | null;
 }
 
-const PROXIED_CREDENTIALS_TTL_MS = 60_000;
-
-interface ProxyCredentialSource {
-  load(): Effect.Effect<ProxiedCredentials>;
-}
 
 /** Shared across resolvers so one listing serves every conversation. */
-const proxyCredentialSources: PerCloudSession<ProxyCredentialSource> = new Map();
+const proxyCredentialSources: PerCloudSession<CloudListing<ProxiedCredentials>> = new Map();
 
-function createProxyCredentialSource(
-  cloud: LocalCloudSession,
-  fetchImpl?: typeof fetch,
-): ProxyCredentialSource {
+function readProxyCredentialListing(cloud: LocalCloudSession, fetchImpl?: typeof fetch): Effect.Effect<ProxiedCredentials> {
   const baseFetch = fetchImpl ?? fetch;
-  let cached: { at: number; value: ProxiedCredentials } | null = null;
 
-  const load = (): Effect.Effect<ProxiedCredentials> => Effect.suspend(() => {
-    const fresh = cached;
-
-    if (fresh && Date.now() - fresh.at < PROXIED_CREDENTIALS_TTL_MS) return Effect.succeed(fresh.value);
-
-    return Effect.catchCause(Effect.gen(function* () {
-      const res = yield* Effect.promise(() => baseFetch(providerProxyCredentialsURL(cloud.origin), {
-        headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
-      }));
-
-      // A rejected session is a real answer; serving the last listing would advertise providers that 401.
-      if (res.status === 401 || res.status === 403) {
-        const value: ProxiedCredentials = { byKey: new Map(), error: null };
-        cached = { at: Date.now(), value };
-
-        return value;
-      }
-
-      if (!res.ok) return yield* Effect.die(new Error(`the Kinu provider proxy returned HTTP ${res.status}`));
-      const body = v.parse(proxiedCredentialsSchema, yield* Effect.promise(() => res.json()));
-      const byKey = new Map<string, { baseURL?: string; failure?: string }>();
-
-      for (const { key, baseURL, failure } of body.credentials) {
-        if (!key) continue;
-
-        if (failure !== undefined) byKey.set(key, { failure });
-        else byKey.set(key, baseURL ? { baseURL } : {});
-      }
-
-      const value: ProxiedCredentials = { byKey, error: null };
-      cached = { at: Date.now(), value };
-
-      return value;
-    }), (failed) => Effect.sync((): ProxiedCredentials => cached?.value ?? {
-      byKey: new Map(),
-      error: `Could not reach your Kinu account to list connected providers (${renderThrownChain({ cause: Cause.squash(failed) })}).`,
+  return Effect.gen(function* () {
+    const res = yield* Effect.promise(() => baseFetch(providerProxyCredentialsURL(cloud.origin), {
+      headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
     }));
-  });
 
-  return { load };
+    // A rejected session is a real answer; serving the last listing would advertise providers that 401.
+    if (res.status === 401 || res.status === 403) return { byKey: new Map(), error: null };
+
+    if (!res.ok) return yield* Effect.die(new Error(`the Kinu provider proxy returned HTTP ${String(res.status)}`));
+    const body = v.parse(proxiedCredentialsSchema, yield* Effect.promise(() => res.json()));
+    const byKey = new Map<string, { baseURL?: string; failure?: string }>();
+
+    for (const { key, baseURL, failure } of body.credentials) {
+      if (!key) continue;
+
+      if (failure !== undefined) byKey.set(key, { failure });
+      else byKey.set(key, baseURL ? { baseURL } : {});
+    }
+
+    return { byKey, error: null };
+  });
 }
 
 /** The model id is the proxy wire id (`@cf/…` or `{author}/{model}`), so specs
@@ -542,16 +545,14 @@ function createCloudProxyProvider(opts: {
           reasoningEfforts: entry.reasoningEfforts,
         }));
     },
+    // A relay: the worker's transport spends the call's retry allowance, so the header must reach it unspent.
     createModel(modelId, deps): LanguageModel {
-      return createChatModel({
-        kind: 'openai-compat',
+      return createOpenAICompatible({
         name: opts.id,
         baseURL,
         headers: { Authorization: `Bearer ${opts.cloud.token}`, [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
-        modelId,
-        fetch: opts.fetch,
-        onWait: deps.onProviderWait,
-      });
+        ...(opts.fetch !== undefined && { fetch: opts.fetch }),
+      }).chatModel(modelId);
     },
   };
 }
@@ -672,7 +673,7 @@ function buildAuthStore(
   }
 
   for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {
-    store.set(`openai-compat.${name}`, { headers: openAiCompatHeaders(compat), baseURL: compat.baseURL });
+    store.set(`openai-compat.${name}`, { headers: credentialToHeaders(`openai-compat.${name}`, compat), baseURL: compat.baseURL });
   }
 
   return {
@@ -692,11 +693,3 @@ function buildAuthStore(
   };
 }
 
-/** Core's openai-compat order (`credentialToHeaders`): the key's Authorization, then the extra headers over it. */
-export function openAiCompatHeaders(compat: LocalOpenAICompatCredential) {
-  const headers = { ...compat.headers };
-
-  if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
-
-  return { ...headers, ...compat.extraHeaders };
-}

@@ -197,7 +197,6 @@ function setup(model: LanguageModel, profileAuthority: CliProfileSource = async 
     mcpServers: {},
     noAutoEvolve: true,
     transcript: { transcriptDir: join(home, 'sessions') },
-    naming: { generate: async () => JSON.stringify({ title: 'Named By Test' }) },
     surface: 'interactive',
   });
 
@@ -232,7 +231,6 @@ function openPersistentClient(
     mcpServers: {},
     noAutoEvolve: true,
     transcript: transcriptOptions,
-    naming: { generate: async () => JSON.stringify({ title: 'Named By Test' }) },
     surface: 'interactive',
   });
 }

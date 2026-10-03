@@ -12,7 +12,6 @@ import {
   compilePromptSurface,
   type PromptBackend,
   type PromptExecutorInfo,
-  type PromptExternalToolInfo,
   type PromptSurface,
   type PromptSurfaceOptions,
 } from './prompting/surface';
@@ -28,7 +27,6 @@ import {
   CODE_EXECUTION_SECTION,
   DELEGATION_SECTION,
   EXECUTORS_SECTION,
-  EXTERNAL_TOOL_LINE,
   GENERIC_EXECUTOR_LINE,
   DEVICE_EXECUTOR_LINE,
   OPERATING_GUIDANCE,
@@ -63,7 +61,6 @@ export type { TurnReason, WorkMode } from './types/turn';
 export type {
   PromptBackend,
   PromptExecutorInfo,
-  PromptExternalToolInfo,
   PromptIdentity,
 } from './prompting/surface';
 
@@ -134,20 +131,11 @@ function renderBuiltinToolLine(name: BuiltinToolName, render: RenderSection): st
   return render(BUILTIN_TOOL_LINE, { name, example: spec.example });
 }
 
-function renderExternalToolLine(tool: PromptExternalToolInfo, render: RenderSection): string {
-  const source = tool.source === 'mcp' ? 'MCP' : tool.source ?? 'external';
-  const description = tool.description ? `: ${tool.description}` : '';
-
-  return render(EXTERNAL_TOOL_LINE, { name: tool.name, source, description });
-}
-
 function renderToolsSection(surface: PromptSurface, render: RenderSection): string {
   return render(TOOLS_SECTION, {
     builtins: surface.builtinTools.length === 0
       ? '(none)'
       : surface.builtinTools.map((name) => renderBuiltinToolLine(name, render)).join('\n'),
-    hasExternal: surface.externalTools.length > 0,
-    externalLines: surface.externalTools.map((tool) => renderExternalToolLine(tool, render)).join('\n'),
   });
 }
 

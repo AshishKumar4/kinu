@@ -15,6 +15,8 @@ describe('local additional-agent creation', () => {
       import { Database } from 'bun:sqlite';
       import { createCliAgent, createLocalPeerAgent } from './packages/cli/src/agent-create.ts';
       import { agentDbPath } from './packages/cli/src/config.ts';
+      import { makeSql } from './packages/cli-backend/src/index.ts';
+      import { readMission } from './packages/core/src/index.ts';
       await createCliAgent({
         name: 'workspace-root', displayName: 'Workspace root', nameOrigin: 'auto',
         purpose: 'Help the user with the work they assign.', mode: 'local',
@@ -24,7 +26,7 @@ describe('local additional-agent creation', () => {
         cwd: ${JSON.stringify(PROJECT)}, workspaceId: 'placeholder-workspace',
       });
       const db = new Database(agentDbPath(created.name), { readonly: true });
-      console.log(db.query('SELECT mission FROM workspace_identity LIMIT 1').get().mission);
+      console.log(readMission(makeSql(db)));
       db.close();
     `;
 

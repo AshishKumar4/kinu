@@ -80,6 +80,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/approval', description: 'Show or set when shell commands need your approval', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
   { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls', run: instructionsCommand },
   { name: '/always', description: 'Choose skills that are always active', usage: '/always <name...|none>', requires: 'localControls', run: alwaysCommand },
+  { name: '/trials', description: 'Turn live trials of evolved edits on or off for this agent', usage: '/trials [on|off]', run: trialsCommand },
   { name: '/advisor', description: 'Turn the advisor on or off, or set what it reports. On, it adds one model call per turn', usage: '/advisor [on|off|severity <nit|concern|blocker>]', run: advisorCommand },
   { name: '/exit', description: 'Leave the chat', aliases: ['/quit'], run: exitCommand },
   { name: '/cancel', description: 'Close the open overlay', hidden: true, run: cancelCommand },
@@ -803,6 +804,20 @@ async function advisorCommand({ client, rest }: SlashContext): Promise<SlashOutc
     text: config.advisorEnabled
       ? `Advisor: on. Minimum severity ${config.advisorMinSeverity}. It adds one model call per turn.`
       : `Advisor: off. Minimum severity ${config.advisorMinSeverity}. /advisor on adds one model call per turn.`,
+  };
+}
+
+async function trialsCommand({ client, rest }: SlashContext): Promise<SlashOutcome> {
+  const [sub, ...extra] = rest.filter((token) => token).map((token) => token.toLowerCase());
+
+  if (extra.length > 0 || (sub !== undefined && sub !== 'on' && sub !== 'off')) return { kind: 'text', text: 'Usage: /trials [on|off]' };
+  const config = sub === undefined ? await client.getEvolutionConfig() : await client.setEvolutionConfig({ liveTrials: sub === 'on' });
+
+  return {
+    kind: 'text',
+    text: config.liveTrials
+      ? 'Live trials: on. A waiting edit runs against the current text on half of this agent\'s cache segments until the ratings decide.'
+      : 'Live trials: off. Edits that pass the pre-live tests wait in the changelog. /trials on runs them.',
   };
 }
 

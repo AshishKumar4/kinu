@@ -6,7 +6,7 @@ import type { LanguageModel, ToolSet } from 'ai';
 import {
   type HeadRuntime, type HeadGrounding, type HeadInput, type HeadSeat,
   type WebSearchProvider, type CodemodeProvider,
-  type HeadMergeModelBinder, type ResolvedTurnProfile,
+  type RouteModelBinder, type ResolvedTurnProfile,
   type PublishHeadStream,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
   type HostedActor, type WriteObserver,
@@ -25,7 +25,7 @@ export interface CLIHeadRuntimeDeps {
   model: () => LanguageModel;
   /** Profile the merge's `judge` route resolves against; read per merge. */
   profile: () => Promise<ResolvedTurnProfile>;
-  bindMergeModel: HeadMergeModelBinder;
+  bindMergeModel: RouteModelBinder;
   /** Per-head model spec resolver. Absent or unresolvable falls back to `model`:
    *  one fork's bad spec should not fail the whole split. */
   resolveModel?: (spec: string) => LanguageModel;

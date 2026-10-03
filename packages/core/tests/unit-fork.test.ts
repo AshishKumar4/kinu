@@ -32,8 +32,6 @@ async function plane(ws: TestWorkspace) {
   return (await ws.bundle.session()).vfs.as(CRED_SESSION_USER);
 }
 
-/** Ids of everything the fork authored, so assertions need not spell the marker's generated id. */
-const inherited = (ids: readonly string[]): string[] => ids.filter((id) => !id.startsWith('fork-marker-'));
 
 describe('a workspace fork', () => {
   test('an unrelated hire cannot inherit access through a reused source uid', async () => {
@@ -119,7 +117,7 @@ describe('a workspace fork', () => {
     // A fork reports the public chain it carried: two entries, not the source's three.
     expect(result.messagesCopied).toBe(2);
     const chain = await readChain(tgt);
-    expect(inherited(chain.ids)).toEqual(['m1', 'm2']);
+    expect(chain.ids).toEqual(['m1', 'm2']);
     expect(chain.text.slice(0, 2)).toEqual(['hi', 'hello']);
     expect(await readSoul(tgt.vfs)).toBe('help with testing');
   });
@@ -154,7 +152,7 @@ describe('a workspace fork', () => {
 
     await forkInto(src, tgt, { untilMessageId: 'm2' });
 
-    expect(inherited((await readChain(tgt)).ids)).toEqual(['m1', 'm2']);
+    expect((await readChain(tgt)).ids).toEqual(['m1', 'm2']);
   });
 
   test('restores the working context the cut entry recorded, not the live one', async () => {
@@ -170,7 +168,7 @@ describe('a workspace fork', () => {
     await forkInto(src, tgt, { untilMessageId: 'm3' });
 
     // The public chain keeps the pruned turn; the model's context does not.
-    expect(inherited((await readChain(tgt)).ids)).toEqual(['m1', 'm2', 'm3']);
+    expect((await readChain(tgt)).ids).toEqual(['m1', 'm2', 'm3']);
     const working = await readWorkingContext(tgt, TARGET_ARTIFACTS);
     expect(working.entryIds).toEqual(['m1', 'm3']);
     expect(working.messages).toEqual([
@@ -197,7 +195,7 @@ describe('a workspace fork', () => {
 
     await forkInto(src, tgt, { untilMessageId: 'm2' });
 
-    expect(inherited((await readChain(tgt)).ids)).toEqual(['m1', 'm2']);
+    expect((await readChain(tgt)).ids).toEqual(['m1', 'm2']);
     const working = await readWorkingContext(tgt, TARGET_ARTIFACTS);
     expect(working.entryIds).toEqual(['m1', 'call', 'result', 'm2']);
     expect(working.messages).toEqual(before.messages);
@@ -284,32 +282,9 @@ describe('a workspace fork', () => {
     await forkInto(src, tgt, { untilMessageId: 'm2' });
 
     expect(tgt.sql<{ table: string; rowid: number }>`PRAGMA foreign_key_check`).toEqual([]);
-    expect(inherited((await readChain(tgt)).ids)).toEqual(['m1', 'm2']);
+    expect((await readChain(tgt)).ids).toEqual(['m1', 'm2']);
   });
 
-  test('the fork marker is a public entry just after the cut, readable as a message', async () => {
-    const src = fresh();
-    const tgt = fresh();
-    await seedForkTarget(tgt);
-    const chat = await seedForkSource(src, { workspaceName: 'alpha' });
-    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
-    await chat.say({ id: 'm2', role: 'assistant', text: 'hi back' });
-
-    await forkInto(src, tgt, { untilMessageId: 'm2', now: 5000 });
-
-    const chain = await readChain(tgt);
-    const markerId = chain.ids[chain.ids.length - 1];
-    expect(markerId?.startsWith('fork-marker-')).toBe(true);
-
-    const marker = tgt.sql<{ position: number; role: string }>`
-      SELECT position, role FROM conversation_entries WHERE id = ${markerId ?? ''}`[0];
-
-    expect(marker).toEqual({ position: 2, role: 'system' });
-    expect(chain.text[chain.text.length - 1]).toContain('forked from workspace');
-    expect(chain.text[chain.text.length - 1]).toContain('alpha');
-    // The marker is a node of the chain, not a member of the working context.
-    expect((await readWorkingContext(tgt, TARGET_ARTIFACTS)).entryIds).not.toContain(markerId);
-  });
 
   test('copies crafted_tools verbatim but not their earned quality', async () => {
     const src = fresh();
@@ -489,7 +464,7 @@ describe('a workspace fork', () => {
       workspaceId: 'C-ID', workspaceName: 'agent-C', artifactDirectory: TARGET_ARTIFACTS, now: 7000,
     }, { untilMessageId: 'b4', artifactDirectory: TARGET_ARTIFACTS });
 
-    expect(inherited((await readChain(c)).ids)).toEqual(['a1', 'a2', 'b3', 'b4']);
+    expect((await readChain(c)).ids).toEqual(['a1', 'a2', 'b3', 'b4']);
     const lineage = readForkLineage(c.sql);
     expect(lineage?.sourceWorkspaceId).toBe('B-ID');
     expect(lineage?.sourceWorkspaceName).toBe('agent-B');

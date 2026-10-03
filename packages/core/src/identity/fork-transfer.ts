@@ -694,7 +694,8 @@ export class ForkTransferReceiver {
     return Effect.gen({ self: this }, function* () {
       if (frame.kind === 'soul') {
         yield* this.filesPhase(staged);
-        this.writer.stageSoul((yield* Effect.promise(() => this.files.publishSoul(frame.bytes))).mission);
+        yield* Effect.promise(() => this.files.publishSoul(frame.bytes));
+        this.writer.stageSoul();
 
         return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
       }

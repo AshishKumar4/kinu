@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import { INITIAL_SCAFFOLD_SOURCE, defaultLoopOrigin, seedActorLoop } from '../src/scaffold/bootstrap';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { getCurrentScaffoldVersion } from '../src/scaffold/shadow';
+import { getCurrentScaffoldVersion } from '../src/scaffold/versions';
 
 import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/identity/workspace-actors';

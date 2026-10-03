@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { PlanReview } from "@kinu.run/core";
 import type { ChatMode } from "@/components/Composer";
 
-/** At the live edge, save 'pinned' rather than an offset so new messages do not strand the reader. */
+/** At the live edge, 'pinned' follows new messages; offsets exclude the unloaded history prefix. */
 export type ConversationScroll = number | "pinned";
 
 interface ConversationUiEntry {

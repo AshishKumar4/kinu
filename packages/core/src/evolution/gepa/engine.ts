@@ -77,7 +77,7 @@ export function runGepa<I = unknown, E = unknown>(
 
       return yield* proposal(() => proposeMutation(
         { parent, minibatch, rollout, reflectionLm: config.reflectionLm },
-        'scaffold source',
+        config.artifactDescription ?? 'scaffold source',
       ), (m): Proposed => ({ source: m.source, operator: 'mutate', parentSource: parent.source }), 'mutate_failed');
     });
 
@@ -89,7 +89,7 @@ export function runGepa<I = unknown, E = unknown>(
 
       return proposal(() => proposeMerge({
         pair, evalSet: config.evalSet, reflectionLm: config.reflectionLm,
-        artifactDescription: 'scaffold source',
+        artifactDescription: config.artifactDescription ?? 'scaffold source',
       }), (merged): Proposed => {
         mergeInvocations++;
 

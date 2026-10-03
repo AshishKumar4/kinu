@@ -271,8 +271,8 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
       if (mode === 'cloud' && !cloudReady) return yield* Effect.die(new Error('Cloud workspaces need a signed-in account. Run kinu auth, then try again.'));
 
       if (mode === 'local' && !localReady) return yield* Effect.die(new Error('Local workspaces need a model provider. Run kinu provider connect <provider>, or switch to cloud.'));
-      // Cloud naming is server-side; only local agents need a generated identity.
-      const identity = mode === 'local' ? (yield* Effect.promise(async () => suggestAgentIdentityFromMission(mission, opts))) : undefined;
+      // Cloud naming is server-side; a local agent's slug and stand-in title are picked here.
+      const identity = mode === 'local' ? suggestAgentIdentityFromMission(mission) : undefined;
 
       const created = yield* Effect.promise(async () => createCliAgent({
         ...opts,
@@ -728,7 +728,7 @@ function createDefaultOnboarding(
       const mode: AgentMode = location === 'cloud' || location === 'local' ? location : defaultCreateMode();
 
       const identity = mode === 'local'
-        ? await suggestAgentIdentityFromMission(input.mission, opts)
+        ? suggestAgentIdentityFromMission(input.mission)
         : null;
 
       const created = await createCliAgent({

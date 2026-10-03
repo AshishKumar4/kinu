@@ -9,10 +9,10 @@ import { renderChangelogText } from '../src/tui/index';
 import {
   buildChangelog, countUnseenChangelog, listUnseenChangelog,
   executeChangelogRevert, revertChangelogEntryById,
-  initScaffoldTables, initShadowTables, initTurnRatingTables,
+  initScaffoldTables, initTurnRatingTables,
   initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
   startGepaRun, finishGepaRun,
-  recordTurnRating, recordShadowEvaluation, type RecordTurnRatingInput,
+  recordTurnRating, type RecordTurnRatingInput,
   modifyScaffold, applyPromotionDecision, getPendingScaffold,
   EvolutionEngine,
   type AgentRuntime, type EvolutionEvent,
@@ -33,7 +33,6 @@ function setup() {
   const { rt, stores } = createTestRuntime();
   const execRaw = rt.storage.execRaw;
   initScaffoldTables(execRaw);
-  initShadowTables(execRaw);
   initTurnRatingTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
@@ -60,25 +59,15 @@ function rate(rt: AgentRuntime, input: Partial<RecordTurnRatingInput> & Pick<Rec
 }
 
 describe('buildChangelog — every kind from the seeded ledgers', () => {
-  test('scaffold proposal entry carries the shadow record as evidence', async () => {
+  test('a scaffold proposal entry waits for the owner\'s decision', async () => {
     const { rt } = setup();
     const version = await seedScaffoldPending(rt);
-    recordShadowEvaluation(rt.storage.sql, rt.actor, {
-      pendingVersion: version, task: 'task A',
-      judgeResult: { winner: 'pending', rationale: 'clearer', currentScore: 0.4, pendingScore: 0.8 },
-    });
-    recordShadowEvaluation(rt.storage.sql, rt.actor, {
-      pendingVersion: version, task: 'task B',
-      judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.7, pendingScore: 0.5 },
-    });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor);
     const scaffold = present(entries.find((e) => e.kind === 'scaffold'), 'the scaffold entry');
     expect(scaffold.summary).toBe('I am testing an improvement to how I work');
     expect(scaffold.evidence).toContain(`Proposed scaffold v${version}`);
-    expect(scaffold.evidence).toContain('shadow trial in progress');
-    expect(scaffold.evidence).toContain('1W-1L-0T');
-    expect(scaffold.evidence).toContain('win-rate 50%');
+    expect(scaffold.evidence).toContain('waiting for your decision');
     expect(scaffold.revert).toEqual({ type: 'scaffold_rollback', target: String(version) });
     expect(scaffold.scaffoldVersion).toBe(version);
     // The v0 bootstrap is not a self-change.
@@ -331,13 +320,6 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('humanizes scaffold promotion without losing raw detail', async () => {
     const { rt } = setup();
     const version = await seedScaffoldPending(rt);
-
-    for (const [index, winner] of (['pending', 'pending', 'pending', 'current'] as const).entries()) {
-      recordShadowEvaluation(rt.storage.sql, rt.actor, {
-        pendingVersion: version, task: `trial-${index}`,
-        judgeResult: { winner, rationale: 'evidence', currentScore: 0.5, pendingScore: 0.8 },
-      });
-    }
 
     const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
 
@@ -838,7 +820,6 @@ describe('renderChangelogText + revert guards', () => {
     for (const target of ['0', '-1', 'abc', '1.5', '']) {
       const result = await executeChangelogRevert(ctx, { type: 'scaffold_rollback', target });
       expect(result.ok).toBe(false);
-      expect(result.error).toContain('invalid scaffold version');
     }
   });
 

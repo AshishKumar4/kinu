@@ -30,10 +30,8 @@ export interface SetModelDeps {
 }
 
 export interface EvolutionConfigView {
-  autoPromoteScaffold: boolean;
-  gepaEvalBudget: number;
-  shadowSampleRate: number;
-  scaffoldExploreShare: number;
+  /** Waiting edits run as live trials on the main agent; off by default. */
+  liveTrials: boolean;
   advisorEnabled: boolean;
   /** Lowest severity that reaches the conversation; below it a note becomes a Changelog row. */
   advisorMinSeverity: AdvisorSeverity;
@@ -155,10 +153,7 @@ export function setAlwaysActiveSkills(config: AgentConfigStore, names: JsonValue
 
 export function getEvolutionConfig(config: AgentConfigStore): EvolutionConfigView {
   return {
-    autoPromoteScaffold: config.getAutoPromoteScaffold(),
-    gepaEvalBudget: config.getGepaEvalBudget(),
-    shadowSampleRate: config.getShadowSampleRate(),
-    scaffoldExploreShare: config.getScaffoldExploreShare(),
+    liveTrials: config.getLiveTrials(),
     advisorEnabled: config.getAdvisorEnabled(),
     advisorMinSeverity: config.getAdvisorMinSeverity(),
   };
@@ -169,13 +164,7 @@ export function setEvolutionConfig(
   config: AgentConfigStore,
   view: Partial<EvolutionConfigView>,
 ): EvolutionConfigView {
-  if (view.autoPromoteScaffold !== undefined) config.setAutoPromoteScaffold(view.autoPromoteScaffold);
-
-  if (view.gepaEvalBudget !== undefined) config.setGepaEvalBudget(view.gepaEvalBudget);
-
-  if (view.shadowSampleRate !== undefined) config.setShadowSampleRate(view.shadowSampleRate);
-
-  if (view.scaffoldExploreShare !== undefined) config.setScaffoldExploreShare(view.scaffoldExploreShare);
+  if (view.liveTrials !== undefined) config.setLiveTrials(view.liveTrials);
 
   if (view.advisorEnabled !== undefined) config.setAdvisorEnabled(view.advisorEnabled);
 

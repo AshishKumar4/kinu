@@ -7,9 +7,8 @@ import {
   initAlternateTakesTable, recordBranchTakeSet, latestAlternateTakeSet, recordTakePick,
   buildTakeContinuationPrompt,
 } from '../src/mcts/takes';
-import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
 import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
-import { listTurnRatings, realRatingScaffoldRates } from '../src/evolution/ratings';
+import { listTurnRatings } from '../src/evolution/ratings';
 
 /** Production schema: the eval split reconstructs evidence from the message and run-event ledgers. */
 function setup() {
@@ -108,17 +107,3 @@ describe('recordTakePick — the preference signal', () => {
   });
 });
 
-describe('the take_pick signal feeds R3’s routes for free', () => {
-  test('GEPA eval split and scaffold priors consume the pick row', async () => {
-    const { sql, actor, history, transcript } = setup();
-    const { set, alt } = await capturedSet(sql, actor, history);
-    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt, scaffoldVersion: 5 });
-
-    const split = await buildOutcomeEvalSplit(sql, actor, transcript, 4);
-    expect(split.train).toHaveLength(1);
-    expect(split.train[0].expected).toMatchObject({ outcome: 'corrected', followup: 'alternative approach' });
-
-    const rates = realRatingScaffoldRates(sql, actor);
-    expect(rates.get(5)).toEqual({ accepted: 0, negative: 1 });
-  });
-});

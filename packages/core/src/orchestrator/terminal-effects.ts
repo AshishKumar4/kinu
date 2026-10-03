@@ -6,7 +6,6 @@
  */
 import { Data, Result } from 'effect';
 import * as v from 'valibot';
-import { modelMessageSchema, type ModelMessage } from 'ai';
 
 import { parseJsonValue, JsonValueSchema, type JsonValue } from '../utils/json';
 import {
@@ -32,12 +31,6 @@ import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/remind
 /** The picklist is {@link RUN_END_REASONS}, so a stored row cannot carry an unknown word. */
 export const RunEndReasonSchema = v.picklist(RUN_END_REASONS);
 
-/** Narrowed by the AI SDK's own `modelMessageSchema`, not a hand-written copy. */
-const ModelMessagesSchema: v.GenericSchema<ModelMessage[]> = v.array(
-  v.custom<ModelMessage>((value) => modelMessageSchema.safeParse(value).success),
-);
-
-
 /** Recorded rather than re-read: a fresh actor defaults to `conversation`. */
 const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
   v.literal('conversation'), v.literal('independent_task'),
@@ -47,7 +40,7 @@ const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
 const TERMINAL_EFFECT_KEY_VERSION = 'v1';
 
 /** An empty scope is not an identity: such a sequence runs unledgered and its bodies key nothing. */
-export function keyedScope(scope: string): string | undefined {
+function keyedScope(scope: string): string | undefined {
   return scope === '' ? undefined : scope;
 }
 
@@ -65,8 +58,8 @@ export function isDefinitiveTerminalFailure(code: ErrorCode): boolean {
 
 /** The owner reads an abandoned effect in the Activity log, by what it was doing. */
 const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {
-  sleep_time: 'memory compression', auto_title: 'naming the chat', auto_gepa: 'prompt tuning',
-  shadow_trial: 'the shadow trial', improvement_lanes: 'self-improvement', turn_record: 'recording the turn',
+  sleep_time: 'memory compression', auto_title: 'naming the chat',
+  improvement_lanes: 'self-improvement', turn_record: 'recording the turn',
   turn_lessons: 'learning from the turn\'s struggles',
 };
 
@@ -90,11 +83,13 @@ const TERMINAL_EFFECT_NAMES = [
   'turn_lessons',
   // Detached: the review is a model call the next turn must not wait on; a replay finds its note already recorded.
   'advisor_review',
-  // Its own row: a full queue is a legitimate refusal, and the lanes' model calls must not wait on it.
-  'shadow_trial',
-  'sleep_time', 'auto_title', 'auto_gepa',
+  'sleep_time', 'auto_title',
   'parent_report',
+  // Retired (docs/EVOLUTION-REDESIGN.md §6): no turn owes them, and a row an older build wrote completes unrun.
+  'shadow_trial', 'auto_gepa',
 ] as const;
+
+const RETIRED_TERMINAL_EFFECTS: ReadonlySet<TerminalEffectName> = new Set(['shadow_trial', 'auto_gepa']);
 
 export type TerminalEffectName = (typeof TERMINAL_EFFECT_NAMES)[number];
 
@@ -134,6 +129,8 @@ export function terminalEffect<I>(spec: {
     ? { synchronous: true, run: (raw, scope) => spec.runSync(v.parse(spec.input, raw), scope) }
     : { synchronous: false, run: async (raw, scope) => await spec.run(v.parse(spec.input, raw), scope) };
 }
+
+const RETIRED_EFFECT = terminalEffect({ input: v.unknown(), runSync: () => ({ status: 'completed', detail: 'the effect is retired' }) });
 
 /** `announcementOnDisk` is the backend's durable answer; a queued turn is only RAM until it says yes. */
 export interface OwedTurnQueue {
@@ -310,35 +307,6 @@ export function eventDrainTerminalEffect(
       await orch.drainPendingEvents({ rethrow: true });
 
       return { status: 'completed' };
-    },
-  });
-}
-
-/** Its own row: a full queue stays owed; `not_sampled` discharges the obligation. */
-export function shadowTrialTerminalEffect(
-  engine: Pick<EvolutionEngine, 'queueShadowTrial'>,
-): TerminalEffect {
-  return terminalEffect({
-    input: v.object({
-      turn: JsonValueSchema, trialContext: JsonValueSchema, pendingVersion: v.number(),
-    }),
-    runSync: ({ turn, trialContext, pendingVersion }, scope) => {
-      const trialScope = keyedScope(scope);
-
-      const queued = engine.queueShadowTrial(
-        v.parse(CompletedTurnSchema, turn), v.parse(ModelMessagesSchema, trialContext),
-        trialScope === undefined
-          ? { pendingVersion }
-          : { pendingVersion, id: `trial-${trialScope}` },
-      );
-
-      if (queued === 'queue_full' || queued === 'failed') {
-        return { status: 'owed', detail: `the shadow trial for this turn is ${queued}` };
-      }
-
-      return queued === 'queued'
-        ? { status: 'completed' }
-        : { status: 'completed', detail: `no trial to queue: ${queued}` };
     },
   });
 }
@@ -661,7 +629,7 @@ export class TerminalEffectLedger {
       return { kind: 'blocked', name: null, reason: `unknown effect "${rawName}"` };
     }
 
-    const effect = this.deps.effects[parsed.output];
+    const effect = RETIRED_TERMINAL_EFFECTS.has(parsed.output) ? RETIRED_EFFECT : this.deps.effects[parsed.output];
 
     if (effect === undefined) {
       return {

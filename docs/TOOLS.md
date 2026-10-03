@@ -509,9 +509,8 @@ it through the workspace RPC `experienceAction`, which calls core
 to it.
 
 `publish` needs real uses plus an injection score for crafted tools,
-corroborated lessons, confident facts, or a live scaffold with a passing
-`decidePromotion`, `DEFAULT_SHADOW_CONFIG.minTrials` graded turns, and no
-misevolution veto.
+corroborated lessons, confident facts, or a scaffold the owner promoted here
+that has since served 10 rated turns with no misevolution veto.
 
 `import` runs the misevolution gate, records vetoes, and stages survivors in
 `imported_experience`. Only `EvolutionEngine.reviewTurn` promotes entries on

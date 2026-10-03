@@ -40,8 +40,7 @@ import { DrainScheduler } from '../orchestrator/drain-scheduler';
 import { formatApproval, gateExec, reviewCommand } from '../safety/approval-gate';
 import { argumentDigest } from '../safety/argument-digest';
 import { checkMisevolution } from '../safety/misevolution';
-import { decidePromotion } from '../scaffold/shadow';
-import { selectEvolutionBase } from '../scaffold/archive';
+import { drawArm, trialDecision } from '../evolution/trial-rules';
 import { hybridSearch } from '../memory/hybrid-search';
 import { reciprocalRankFusion } from '../memory/vector-store';
 import { delegationFeatures, renderDelegationFeatures } from '../evolution/delegation-features';
@@ -110,8 +109,8 @@ export interface PipelineSubjects {
   readonly argumentDigest: typeof argumentDigest;
 
   readonly checkMisevolution: typeof checkMisevolution;
-  readonly decidePromotion: typeof decidePromotion;
-  readonly selectEvolutionBase: typeof selectEvolutionBase;
+  readonly trialDecision: typeof trialDecision;
+  readonly drawArm: typeof drawArm;
 
   readonly hybridSearch: typeof hybridSearch;
   readonly reciprocalRankFusion: typeof reciprocalRankFusion;
@@ -187,8 +186,8 @@ export const SUBJECT_SOURCE = {
   argumentDigest: 'safety/argument-digest.ts',
 
   checkMisevolution: 'safety/misevolution.ts',
-  decidePromotion: 'scaffold/shadow.ts',
-  selectEvolutionBase: 'scaffold/archive.ts',
+  trialDecision: 'evolution/trial-rules.ts',
+  drawArm: 'evolution/trial-rules.ts',
 
   hybridSearch: 'memory/hybrid-search.ts',
   reciprocalRankFusion: 'memory/vector-store.ts',
@@ -263,8 +262,8 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     argumentDigest,
 
     checkMisevolution,
-    decidePromotion,
-    selectEvolutionBase,
+    trialDecision,
+    drawArm,
 
     hybridSearch,
     reciprocalRankFusion,

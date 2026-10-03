@@ -14,7 +14,7 @@ import { nowMs, today } from '../utils/date';
 import { scaffoldRefusal } from './safety-patterns';
 import { checkMisevolution, recordMisevolutionVeto } from '../safety/misevolution';
 import { parsePathologyTag } from '../evolution/pathology';
-import { getCurrentScaffoldVersion, readScaffoldVersion } from './shadow';
+import { getCurrentScaffoldVersion, readScaffoldVersion } from './versions';
 import type { ModifyResult } from '../types/scaffold';
 
 export type { ModifyResult } from '../types/scaffold';

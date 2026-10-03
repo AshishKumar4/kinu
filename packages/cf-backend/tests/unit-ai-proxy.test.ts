@@ -326,6 +326,30 @@ describe('AI proxy model → upstream selection', () => {
     expect(message).not.toContain('never-replayed');
   });
 
+  test('the REST route spends the caller\'s retry allowance and carries its cancel', async () => {
+    const { env } = setupEnv({ token: 'cf-user-token' });
+    const signals: Array<AbortSignal | null | undefined> = [];
+    let sent = 0;
+
+    globalThis.fetch = asFetchFunction(async (_input, init) => {
+      sent++;
+      signals.push(init?.signal);
+
+      return new Response('limited', { status: 429, headers: { 'retry-after': '0' } });
+    });
+
+    for (const retries of [0, 1]) {
+      sent = 0;
+      const cancel = new AbortController();
+      const request = chatRequest(SESSION_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }, { 'x-kinu-retries': String(retries) });
+      await aiProxy(new Request(request, { signal: cancel.signal }), env);
+
+      expect(sent).toBe(retries + 1);
+      cancel.abort();
+      expect(signals.at(-1)?.aborted).toBe(true);
+    }
+  });
+
   test('{author}/{model} ids ride the AI Gateway credential with cf-aig-gateway-id', async () => {
     const { env } = setupEnv({ gatewayId: 'prod-gw', token: 'cf-user-token' });
     const captured = captureUpstream(() => completionResponse('openai/gpt-4.1'));

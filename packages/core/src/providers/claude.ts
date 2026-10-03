@@ -4,9 +4,10 @@ import { APICallError, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { listAnthropicModels, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_FAST_MODEL, ANTHROPIC_MAX_BREAKPOINTS } from './anthropic';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
-import { unlessRevoked } from './oauth-token-error';
+
 import { quotaWindowText, withCallAccount } from './quota';
-import { withRateLimitRetry } from './rate-limit-retry';
+import { transportControls, withRateLimitRetry, type TransportControls } from './rate-limit-retry';
+import { authenticatedSend } from './authenticated-send';
 import type { AuthResolution, ModelProvider, ProviderDeps } from './types';
 import { accountOf } from '../credentials/accounts';
 import { Effect } from 'effect';
@@ -376,16 +377,13 @@ interface ClaudeCall {
   readonly version: ClaudeCodeVersion;
   readonly sessionId: string;
   readonly refusingSpentUsage: (paid: string) => typeof fetch;
+  readonly authenticated: (call: ClaudeCall, request: SdkRequest, auth: AuthResolution) => ReturnType<typeof authenticatedSend>;
 }
 
 interface SdkRequest {
   readonly body: SdkBody;
   readonly betas: readonly string[];
-  readonly signal: AbortSignal | null;
-}
-
-function resolveLogin(deps: ProviderDeps, rejected: AuthResolution | null): Effect.Effect<AuthResolution | 'revoked' | null> {
-  return unlessRevoked(() => deps.getAuth(CLAUDE_CRED_KEY, rejected === null ? undefined : { rejected: rejected.headers }));
+  readonly controls: TransportControls;
 }
 
 function deadLogin(call: ClaudeCall, reason: string): Response {
@@ -456,13 +454,14 @@ function sendClaudeCode(call: ClaudeCall, request: SdkRequest, auth: AuthResolut
 
     const sent = yield* Effect.promise(() => retrying(CLAUDE_MESSAGES_URL, {
       method: 'POST',
-      headers,
+      headers: { ...headers, ...request.controls.headers },
       body: attestedBody,
-      signal: request.signal,
+      signal: request.controls.signal,
     }));
 
     return withCallAccount(sent, 'claude', paid);
   });
+
 }
 
 function sendAtAcceptedVersion(call: ClaudeCall, request: SdkRequest, auth: AuthResolution): Effect.Effect<Response, KinuError> {
@@ -477,9 +476,7 @@ function sendAtAcceptedVersion(call: ClaudeCall, request: SdkRequest, auth: Auth
 
 function claudeCall(call: ClaudeCall, init: RequestInit): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
-    const login = yield* resolveLogin(call.deps, null);
-
-    if (login === 'revoked') return deadLogin(call, 'the Claude login\'s refresh token was revoked');
+    const login = yield* Effect.promise(() => call.deps.getAuth(CLAUDE_CRED_KEY));
 
     if (login === null) {
       diagnostics.failure('credential.claude_absent', new KinuError('missing', 'no Claude login; the call was refused before it left'), { model: call.modelId });
@@ -495,18 +492,14 @@ function claudeCall(call: ClaudeCall, init: RequestInit): Effect.Effect<Response
     const request: SdkRequest = {
       body,
       betas: (copyHeaders(init.headers).get('anthropic-beta') ?? '').split(','),
-      signal: init.signal ?? null,
+      controls: transportControls(init),
     };
 
-    const first = yield* sendAtAcceptedVersion(call, request, login);
+    const answer = yield* Effect.promise(() => call.authenticated(call, request, login));
 
-    if (first.status !== 401) return yield* withLocalToolNames(first);
-    const refreshed = yield* resolveLogin(call.deps, login);
+    if (answer.kind === 'answered') return yield* withLocalToolNames(answer.response);
 
-    if (refreshed === 'revoked' || refreshed === null) return deadLogin(call, 'the Claude login was refused and could not be refreshed');
-    const second = yield* sendAtAcceptedVersion(call, request, refreshed);
-
-    return second.status === 401 ? deadLogin(call, 'api.anthropic.com refused the refreshed Claude login') : yield* withLocalToolNames(second);
+    return deadLogin(call, answer.kind === 'refused' ? `api.anthropic.com: ${answer.reason}` : 'the Claude login is gone');
   });
 }
 
@@ -530,6 +523,10 @@ export function createClaudeProvider(): ModelProvider {
 
           const call: ClaudeCall = {
             deps, modelId, version, sessionId: claudeSessionId(deps.sessionAffinity),
+            authenticated: (context, request, auth) => authenticatedSend({
+              key: CLAUDE_CRED_KEY, auth, getAuth: deps.getAuth,
+              send: (next) => settle(sendAtAcceptedVersion(context, request, next)),
+            }),
             refusingSpentUsage: (paid) => asFetchFunction((input, init) => settle(Effect.gen(function* () {
               const response = yield* Effect.promise(() => transport(input, init));
               const reached = yield* Effect.promise(() => usageLimitReached(call, response, paid));

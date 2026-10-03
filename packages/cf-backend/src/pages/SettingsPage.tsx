@@ -9,7 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
-  WORKSPACE_ARCHIVE_EXTENSION, formatScoreInterval,
+  WORKSPACE_ARCHIVE_EXTENSION,
   type ApprovalGrant, type ArchiveCursor, type ArchivePage, type EvolutionConfigView,
   type JsonValue, type InstructionSourceRow, type InstructionSourceView,
   type Page, type SeekCursor,
@@ -28,20 +28,16 @@ import { showing, detach, settle } from '@kinu.run/core/obs';
 
 const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(ArchiveCursorSchema) });
 
-const ScoreIntervalSchema = v.object({ mean: v.number(), lo: v.number(), hi: v.number(), n: v.number() });
 
 const GepaRunSchema = v.object({
   runId: v.string(), target: v.string(), status: v.picklist(['running', 'completed', 'aborted']),
   stopReason: v.nullable(v.string()), iterations: v.number(), metricCalls: v.number(), startedAt: v.number(),
 });
 
-const GepaOptimizationResultSchema = v.object({
-  ok: v.boolean(), error: v.optional(v.string()), proposed: v.optional(v.boolean()),
-  pendingVersion: v.nullable(v.optional(v.number())), skipReason: v.optional(v.string()),
-  bestScore: v.optional(ScoreIntervalSchema), seedScore: v.optional(ScoreIntervalSchema),
-  selection: v.optional(v.object({ heldOutNegatives: v.number(), guards: v.number() })),
-  selectionWarning: v.optional(v.string()),
-});
+const ProposerOutcomeSchema = v.variant('kind', [
+  v.object({ kind: v.literal('idle') }),
+  v.object({ kind: v.literal('searched'), artifactId: v.string(), version: v.nullable(v.number()), detail: v.string() }),
+]);
 
 const SkillNamesSchema = v.object({ names: v.array(v.string()) });
 
@@ -661,29 +657,14 @@ function GepaOptimizationCard({
 
   const run = useCallback(() => detach(Effect.gen(function* () {
     setRunning(true);
-    setMsg('Testing candidate scaffolds against recent tasks. This can take a few minutes.');
+    setMsg('Searching for a better agent loop. This can take a few minutes.');
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      // No evalSize override: a budget smaller than the configured one cannot resolve a winner.
-      const r = v.parse(GepaOptimizationResultSchema,
-        yield* Effect.promise(async () => rpc('runScaffoldGepaOptimization', [{ maxIterations: 4 }])));
+      const r = v.parse(ProposerOutcomeSchema, yield* Effect.promise(() => rpc('runOptimization', [])));
 
-      const scores = r.bestScore && r.seedScore
-        ? `best ${formatScoreInterval(r.bestScore)} vs seed ${formatScoreInterval(r.seedScore)}`
-        : '';
-
-      const scoredOn = r.selection
-        ? ` Scored on ${r.selection.heldOutNegatives} unseen failure(s) + ${r.selection.guards} accepted guard(s).`
-        : '';
-
-      const caveat = r.selectionWarning ? ` Caveat: ${r.selectionWarning}.` : '';
-
-      if (!r.ok) setMsg(`The run failed: ${r.error}`);
-      else if (r.proposed) {
-        setMsg(`Proposed scaffold v${r.pendingVersion} (${scores}). After shadow evaluation, promote it under Agent → Evolution.${scoredOn}${caveat}`);
-      } else {
-        setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; ${scores}).${scoredOn}${caveat}`);
-      }
+      if (r.kind === 'idle') setMsg('No low-rated turns in the last 14 days to learn from.');
+      else if (r.version !== null) setMsg(`Proposed scaffold v${r.version} (${r.detail}). Promote it under Agent → Evolution.`);
+      else setMsg(`No edit passed: ${r.detail}.`);
 
       reload();
     }), showing((chain) => {
@@ -696,8 +677,8 @@ function GepaOptimizationCard({
   return (
     <Card title="Scaffold self-tuning" icon={SparkleIcon}>
       <p className="p-meta p-text-3">
-        Tests candidate agent loops against recent tasks and may propose a better one for shadow
-        evaluation. Each run makes several model calls.
+        Searches for a better agent loop, judged against your recent low-rated and satisfied turns without
+        running it, and may propose one for you to promote. Each run makes several model calls.
       </p>
       <button
         type="button"

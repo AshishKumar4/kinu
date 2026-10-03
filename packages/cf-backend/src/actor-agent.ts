@@ -57,12 +57,12 @@ import {
 
 import {
   EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference, createDbCodemodeProvider,
-  type EvolutionConfig, type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
+  type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
   initActorClaimTables, ActorClaimStore, initPendingSendTables, PendingSendStore,
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory, type ScaffoldCandidateBinding,
-  queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
+  createJsonJudge, type ScaffoldControl,
   refinementPass, type RefinementDeps,
   type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
   type AdvisorRecoverySnapshot,
@@ -73,7 +73,7 @@ import {
   browserSessions,
   buildSystemPromptSync,
   type PromptIdentity,
-  activePromptSectionOverrides,
+  turnArtifactBodies, artifactOverrides, currentArtifacts, withToolText, type TurnOpening,
   currentDateForPrompt,
   turnReasonForMetadata,
   workModeForTurnMetadata, authoredTurnMetadata,
@@ -162,12 +162,11 @@ import {
   reasoningEffortOptions,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, createAgentConfigStore, type PinnedProfile,
-  type ResolveAgentTurnProfileInput,
+  resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
-  resolveModelRoute, completeOnRoute, tierRefusals, type TierRefusals, type ModelRouteResolution,
+  resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
@@ -179,7 +178,7 @@ import {
 } from "@kinu.run/core";
 import {
   bindAgentSql, createCFRuntime, isCFRuntime, MODEL_SETTINGS,
-  type CFRuntime, type CFRuntimeHooks,
+  type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse,
 } from "./runtime";
 import {
   hostNodeSeat, nodeCodemodeTool, hostedSubordinateRuntime,
@@ -199,7 +198,7 @@ import {
   // Once-only lifecycle for one settled response; both backends drive this state machine.
   TerminalTransitions, initTerminalEffectTable,
   terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  turnRecordTerminalEffect, turnLessonsTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
+  turnRecordTerminalEffect, turnLessonsTerminalEffect, eventDrainTerminalEffect,
   RunEndReasonSchema, WorkModeSchema,
   AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
@@ -261,7 +260,7 @@ interface TurnReads {
   readonly choices: TierChoices;
 }
 
-type TierChoices = Pick<ResolveAgentTurnProfileInput, 'activeRoleId' | 'explicitTier' | 'workspaceModel' | 'explicitEffort' | 'inheritedEffort'>;
+type TierChoices = ReturnType<typeof ownProfileChoices>;
 
 interface TurnAssemblyInput {
   readonly history: readonly ModelMessage[];
@@ -289,6 +288,8 @@ interface ComposedTurn {
   readonly model: LanguageModel;
   /** The invocable surface: task-plan and operation-profile wrapped. */
   readonly tools: ToolSet;
+  /** MCP and extension tools; only `eval` reaches them. */
+  readonly externalTools: ToolSet;
   readonly activeTools: string[];
   /** The exact active subset, for admission counting and the dynamic ledger. */
   readonly activeToolSurface: ToolSet;
@@ -662,15 +663,6 @@ export abstract class ActorAgent extends Agent<Env> {
   protected extraCodemodeProviders(): CodemodeProvider[] { return []; }
 
   protected abstract get engine(): EvolutionEngine;
-
-  /** Wired here rather than per subclass: a facet that queues trials without a runner stalls on its
-   *  first proposal. */
-  protected get shadowTrialPorts(): Pick<EvolutionConfig, 'shadowTrialQueue' | 'shadowTrialRunner'> {
-    return {
-      shadowTrialQueue: (turn, opts) => queueTurnShadowTrial(this.scaffoldControl, turn, opts),
-      shadowTrialRunner: () => runQueuedShadowTrials(this.scaffoldControl),
-    };
-  }
 
   protected abstract notifyOwner(subject: string, body: string): void;
 
@@ -1311,8 +1303,6 @@ export abstract class ActorAgent extends Agent<Env> {
           return { status: 'completed' };
         },
       }),
-
-      shadow_trial: shadowTrialTerminalEffect(this.engine),
     };
   }
 
@@ -1797,7 +1787,7 @@ export abstract class ActorAgent extends Agent<Env> {
         transport: this.chatTransport,
         mintAnswerId: () => this.mintAnswerId(),
         ports: {
-          prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+          prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
           composeRequest: () => this.composeNextRequest(),
           owedTerminalEffects: (input) => this.owedTerminalEffects(input),
           answerMetadata: (turnId, texts) => this.answerMetadata(turnId, texts),
@@ -2122,17 +2112,13 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  /**
-   * This actor's ports and models for core's scaffold control plane (evolution/control.ts).
-   * On the substrate because the shadow trial queue fills for every actor, facets included.
-   */
+  /** This actor's ports and models for core's scaffold control plane (evolution/control.ts). */
   protected get scaffoldControl(): ScaffoldControl {
     return {
       rt: this.rt,
       events: this.eventRecorder,
       sql: this.boundSql,
       history: this.stores.history,
-      config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         ...this.scaffoldCandidateModel(),
         tools: () => this.getRawToolsForWorkMode(this.turnWorkMode(), callScope),
@@ -2664,6 +2650,8 @@ export abstract class ActorAgent extends Agent<Env> {
       + unconfirmed.map((o) => `${o.requestId} (${o.detail ?? 'no detail'})`).join('; '));
   }
 
+  protected readonly boxUse: WorkspaceBoxUse = { used: false };
+
   /**
    * Records which running job's command holds each exposed sandbox port when that can move (a port exposed or
    * withdrawn, a job detached or settled), so a listing reads a row and never the box. Only a box this activation
@@ -2749,6 +2737,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
   /** Built in beforeTurn; read by the per-step dynamic context. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
+  private _turnExternalTools: ToolSet = {};
   /** Instruction trust (KINU-N028): one store over actor SQL, scoped to this workspace so a forked
    *  or copied root starts unapproved. */
   private _instructionApprovals: InstructionApprovalStore | null = null;
@@ -2915,6 +2904,7 @@ export abstract class ActorAgent extends Agent<Env> {
         modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         servingMoved: () => this.servingMoved(),
+        boxUse: this.boxUse,
         resolveProfile: () => this.routingProfile(),
         currentTurn: (reference) => this.currentTurnOf(reference),
         refusals: this.tierRefusals,
@@ -3636,22 +3626,9 @@ export abstract class ActorAgent extends Agent<Env> {
     const route = resolveModelRoute('fast', await this.routingProfile());
 
     return suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
-      llm: (resolution) => ({
-        async *stream() { yield ''; },
-        complete: async (text) => {
-          const { model, providerOptions } = this.modelForResolution(resolution);
-          // No output cap: reasoning models spend budget thinking and a cap starves the JSON.
-          const request: GenerateRequest = { model, system, prompt: text };
-
-          if (providerOptions) request.providerOptions = providerOptions;
-
-          // Billed before the caller parses the answer.
-          return (await generateReported(request, {
-            spend: { source: 'fast', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-            spec: resolution.model,
-          })).text;
-        },
-      }),
+      llm: (resolution) => routedLlm((serving) => this.modelForResolution(serving), resolution, {
+        report: (report) => this.reportModelCall(report), operations: this.modelOperations,
+      }, system),
       credentialOf: (spec) => this.ownedModelServices.credentialFor(spec),
       refusals: this.tierRefusals,
     }, prompt), mission);
@@ -3753,6 +3730,7 @@ export abstract class ActorAgent extends Agent<Env> {
         },
         // The sandbox declares the finished native surface, so core builds it last over all other tools.
         codemode: (surface) => this.getCodemodeToolFactory(mode, profileKey).toolFor(surface),
+        external: () => this._turnExternalTools,
         // Lives on the accumulator so the cached toolset keeps a stable reference and resets per turn.
         contextBudget: this.acc.context,
         // Same ownership: rides the accumulator so the cached toolset sees the turn's ledger.
@@ -3994,8 +3972,15 @@ export abstract class ActorAgent extends Agent<Env> {
   private _turnItem: ChatTurnInput | null = null;
 
   /** The ChatSession's `prepareTurn` port; the loop has already opened the run row and lease. */
-  protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
+  protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     this._turnItem = item;
+    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it.
+
+    const artifacts = turnArtifactBodies(this.rt.storage.sql, this.actorHandle(), {
+      ...opening, main: this.actorHandle().parentActorId === null,
+    });
+
+    this._turnArtifacts = artifactOverrides(artifacts.bodies);
 
     // Clear the previous turn's profile before anything reads a mode: `turnWorkMode()` prefers the
     // bound profile, and the tool build below is the first reader.
@@ -4003,7 +3988,9 @@ export abstract class ActorAgent extends Agent<Env> {
     // The chat view, not the raw surface: a slow `run` must detach into a background job whose
     // settle wakes a turn, and that wrap lives here.
     const body = item.metadata ?? {};
-    const { tools, reads } = await this.turnToolsAndReads(body);
+    const surface = await this.turnToolsAndReads(body);
+    const tools = withToolText(surface.tools, this._turnArtifacts.tools);
+    const { reads } = surface;
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(body);
     this._turnContinuity = readTurnContinuity(body);
@@ -4036,11 +4023,21 @@ export abstract class ActorAgent extends Agent<Env> {
       sessionKey: this.name,
       contextWindow: assembled.window.contextWindow,
       historyLength: assembled.rawMessages.length,
+      trial: artifacts.trial,
     };
   }
 
+  /** The turn's evolved text; between turns, the promoted text. */
+  private _turnArtifacts: ReturnType<typeof artifactOverrides> | null = null;
+
+  private turnArtifacts(): ReturnType<typeof artifactOverrides> {
+    return this._turnArtifacts ?? artifactOverrides(currentArtifacts(this.rt.storage.sql, this.actorHandle()));
+  }
+
   private async composeNextRequest(): Promise<ComposedRequest> {
-    const { tools, reads } = await this.turnToolsAndReads({});
+    const surface = await this.turnToolsAndReads({});
+    const tools = withToolText(surface.tools, this.turnArtifacts().tools);
+    const { reads } = surface;
     const { messages: history } = await this.stores.history.materialize();
 
     const composed = await this.composeTurn({
@@ -4172,10 +4169,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** What picks the turn's tier and model: the role, the request's tier, then the actor's own pins. */
   private tierChoices(profileInputs: ProfileAuthorityInputs, body: JsonObject): TierChoices {
-    const ownChoices = ownProfileChoices(this.config, profileInputs);
-
-    // Request tier, then the tier pinned at hire, then the role's own default.
-    return { activeRoleId: this.activeRoleLabel(), ...ownChoices, explicitTier: readTurnTier(body) ?? ownChoices.explicitTier };
+    return ownProfileChoices(this.config, profileInputs, undefined, { explicitTier: readTurnTier(body) ?? undefined });
   }
 
   /** Effect-free: a measure between turns uses it. */
@@ -4247,17 +4241,12 @@ export abstract class ActorAgent extends Agent<Env> {
       ? [SUBMIT_PLAN_TOOL]
       : [];
 
-    const effectiveActiveTools = [
-      ...promptActiveTools,
-      ...planToolNames,
-      ...mcpToolNames.filter(toolAllowed),
-      ...extensionToolNames.filter(toolAllowed),
-    ];
+    const effectiveActiveTools = [...promptActiveTools, ...planToolNames];
 
-    const effectiveTools: ToolSet = Object.fromEntries(
+    const externalTools: ToolSet = toolAllowed('eval') ? Object.fromEntries(
       [...Object.entries(mcpTools), ...Object.entries(extensionTools)]
         .filter(([name]) => toolAllowed(name)),
-    );
+    ) : {};
 
     // AGENTS.md is turn-scoped state, so it rides the beforeTurn system override, not the cached
     // base prompt.
@@ -4279,13 +4268,11 @@ export abstract class ActorAgent extends Agent<Env> {
       availableTools: promptActiveTools,
       agentsActions: resolvedAgentActions,
       temporaryAsk: turnActorDeps.team?.temporary !== undefined,
-      externalTools: mcpToolNames.filter(toolAllowed)
-        .map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
       roleSection: profile.role,
       model,
       // Read here, not in the builder: the builder is the byte-stable cacheable prefix and does no I/O.
-      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.actorHandle()),
+      sectionOverrides: this.turnArtifacts().sections,
       identity,
     };
 
@@ -4308,7 +4295,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const memoryTail = await readMemoryTail(this.rt.memory);
     const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
 
-    const submittedTools = { ...modeTools, ...effectiveTools };
+    const submittedTools = modeTools;
     const providers = this.providerRegistry();
     // Normalise via the serving registry first: `parseModelSpec` throws on a bare model id and
     // parses a bare `@cf/…` to an unknown provider. One parse serves admission and reasoning effort.
@@ -4326,7 +4313,7 @@ export abstract class ActorAgent extends Agent<Env> {
     );
 
     const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(input.item) });
-    const tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan), operation);
+    const tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, modeTools), taskPlan), operation);
 
     const reasoningOptions = reasoningEffortOptions(
       profile.tier.reasoningEffort,
@@ -4334,7 +4321,7 @@ export abstract class ActorAgent extends Agent<Env> {
     );
 
     return {
-      profile, profileInputs, system: systemOverride, model: languageModel, tools, activeTools: effectiveActiveTools, activeToolSurface,
+      profile, profileInputs, system: systemOverride, model: languageModel, tools, externalTools, activeTools: effectiveActiveTools, activeToolSurface,
       rawMessages, instructions, activated: invoked ? activatedSkillsBlock(invoked) : null, window, memoryTail, countInputTokens,
       reasoningOptions, promptModel: model, activeSkills: activeSetForPrompt ?? null, operation,
     };
@@ -4351,6 +4338,7 @@ export abstract class ActorAgent extends Agent<Env> {
     }
 
     this._turnOperation = composed.operation;
+    this._turnExternalTools = composed.externalTools;
     this.orch.restrictTurnWorkMode(composed.profile.workMode);
     this.recordSystemPromptHash(composed.system);
     this._turnDurableLength = composed.rawMessages.length;
@@ -4391,6 +4379,7 @@ export abstract class ActorAgent extends Agent<Env> {
       stores: this.stores,
       profile,
       tools,
+      externalTools: this._turnExternalTools,
       runtime: { backend: 'cf', model: this.promptModelContextFor(profile.tier.model), date: currentDateForPrompt() },
       turn: this.turnReason(),
       ...(activeSkills !== null && { activeSkills }),
@@ -4485,14 +4474,17 @@ export abstract class ActorAgent extends Agent<Env> {
   protected async routingProfile(availableTools: readonly string[] = [], preparedMode?: WorkMode): Promise<ResolvedTurnProfile> {
     return resolveRoutingProfile({
       actor: this.actorHandle(),
-      resolve: async () => resolveAgentTurnProfile({
-        ...(await this.profileInputs()),
-        activeRoleId: this.activeRoleLabel(),
-        workMode: preparedMode ?? await this.preparedWorkMode(),
-        availableTools,
-        activeSkills: [],
-        explicitTier: this.config.getAssignedTier() ?? undefined,
-      }),
+      resolve: async () => {
+        const inputs = await this.profileInputs();
+
+        return resolveAgentTurnProfile({
+          ...inputs,
+          ...ownProfileChoices(this.config, inputs),
+          workMode: preparedMode ?? await this.preparedWorkMode(),
+          availableTools,
+          activeSkills: [],
+        });
+      },
     });
   }
   /**
@@ -4507,21 +4499,14 @@ export abstract class ActorAgent extends Agent<Env> {
     readonly explicitTier?: string | undefined;
   }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
     const inputs = await this.profileInputs();
-    const config = input.actor.config;
 
     return {
-      profile: await resolveAgentTurnProfile({
+      profile: resolveAgentTurnProfile({
         ...inputs,
-        activeRoleId: config.getRoleSelection(),
+        ...ownProfileChoices(input.actor.config, inputs, this.ancestorProfiles(input.actor), { explicitTier: input.explicitTier }),
         workMode: input.workMode,
         availableTools: [...input.availableTools],
         activeSkills: [],
-        explicitTier: input.explicitTier ?? config.getAssignedTier() ?? undefined,
-        workspaceModel: this.config.getModel(),
-        // Set by its own pane.
-        actorModel: config.getModel(),
-        explicitEffort: config.getReasoningEffort(),
-        inheritedEffort: parentReasoningEffort(inputs, this.ancestorProfiles(input.actor)),
       }),
       inputs,
     };
@@ -4529,16 +4514,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Ancestors' own pins, nearest first, up to the root. */
   private ancestorProfiles(actor: ActorHandle): PinnedProfile[] {
-    const root = this.actorHandle().actorId;
-    const ancestors: PinnedProfile[] = [];
+    return ancestorPins(actor.parentActorId, { actorId: this.actorHandle().actorId, pins: this.config }, (id) => {
+      const parent = this.actorHost().describe(id);
 
-    for (let id = actor.parentActorId; id !== null && id !== root; id = this.actorHost().describe(id)?.parentActorId ?? null) {
-      ancestors.push(createAgentConfigStore(this.boundSql, id, actor.assertCurrent));
-    }
-
-    ancestors.push(this.config);
-
-    return ancestors;
+      return parent === null ? null : { parentActorId: parent.parentActorId, pins: createAgentConfigStore(this.boundSql, id, actor.assertCurrent) };
+    });
   }
 
   /**

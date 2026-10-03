@@ -25,7 +25,7 @@ import {
   type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
   withMountTable, adaptMemory, sharedDriveMount, SHARED_DRIVE_UNBOUND,
-  withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant,
+  withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant, createInheritedApprovalPolicy,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, localContextTree, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
@@ -55,7 +55,7 @@ import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS, directoryFileReach } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
-import { agentViewMount, createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
+import { agentViewMount, createSqlFiber, detectOrphanedFibers, readSoul, settledWorkspaceSoul } from '@kinu.run/core';
 import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
@@ -382,12 +382,23 @@ export function createCLIRuntime(
     let approvalDeferrals: DeferredApprovalChannel | null = null;
     let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
 
-    const approvalPolicy: ShellApprovalPolicy = {
+    const ownerPolicy: ShellApprovalPolicy = {
       mode: () => agentConfig.getShellApprovalMode(),
       granted: (grant) => holdsGrant(agentConfig.getShellApprovalGrants(), grant),
       requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
       get deferrals() { return approvalDeferrals ?? undefined; },
     };
+
+    const approvalPolicy: ShellApprovalPolicy = config.facet === undefined
+      ? ownerPolicy
+      : createInheritedApprovalPolicy({
+        fetchRoot: async () => {
+          const root = openLocalRootActor(sql).config;
+
+          return { mode: root.getShellApprovalMode(), grants: root.getShellApprovalGrants() };
+        },
+        ownGrants: () => agentConfig.getShellApprovalGrants(),
+      });
 
     const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
 
@@ -550,9 +561,10 @@ export function createCLIRuntime(
 export function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLIRuntime, facet: string): Promise<CLIRuntime> {
   return settle(Effect.gen(function* () {
     requireLocalActorWorkspace(workspace.actor, actor.actor);
+    const ownerSoul = (): Promise<string | null> => workspace.ownerSoul?.() ?? readSoul(workspace.agentStateVfs ?? workspace.storage.vfs);
 
     if (workspace.cwd && actor.cwd === workspace.cwd) {
-      return Object.assign(actor, { checkpoints: workspace.checkpoints, nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell });
+      return Object.assign(actor, { checkpoints: workspace.checkpoints, nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell, ownerSoul });
     }
 
     const { nodeHome, nodeRuntime } = workspace;
@@ -564,7 +576,7 @@ export function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLIRuntim
     return Object.assign(actor, {
       storage: { ...actor.storage, vfs: plane.storage.vfs, home: plane.storage.home }, toolFiles: plane.toolFiles, memory: workspace.memory, craftStore: workspace.craftStore,
       executionRouter: plane.executionRouter, shell: plane.shell, checkpoints: workspace.checkpoints, cwd: workspace.cwd ?? null,
-      nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell,
+      nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell, ownerSoul,
     });
   }));
 }

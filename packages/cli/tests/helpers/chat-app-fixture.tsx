@@ -19,10 +19,7 @@ import type { TuiAgentSource } from '../../src/tui/tui-shell';
 import { createMemoryTuiPreferenceStore } from './tui-preferences';
 
 const EVOLUTION: EvolutionConfigView = {
-  autoPromoteScaffold: false,
-  gepaEvalBudget: 0,
-  shadowSampleRate: 0,
-  scaffoldExploreShare: 0,
+  liveTrials: false,
   advisorEnabled: false,
   advisorMinSeverity: 'concern',
 };

@@ -60,16 +60,6 @@ export interface ForkStagedCounts {
  * The fork write: `begin`, a `stage` per batch, then `publish`; the target is not a fork until publish.
  * Stage order is foreign-key order (messages, entries, parts, context) since no transaction spans a hosted transfer.
  */
-/** The one system-role message a fork lands on its cut point. */
-interface ForkMarker {
-  readonly actorId: string;
-  readonly markerId: string;
-  /** Just after the cut: the marker is the fork's newest entry. */
-  readonly position: number;
-  readonly text: string;
-  readonly recordedAt: number;
-}
-
 export class ForkTargetWriter {
   private readonly now: number;
   /** Transfer state, read back from the target since frames arrive on several DO activations ({@link ForkStagingState}). */
@@ -234,9 +224,8 @@ export class ForkTargetWriter {
     this.staging.count({ contextMembers: rows.length });
   }
 
-  /** SOUL.md landed through its protected write, which returned the mission it carries. */
-  stageSoul(mission: string): void {
-    this.staging.mission(mission);
+  /** SOUL.md landed through its protected write; the mission is read off it, never copied. */
+  stageSoul(): void {
     this.staging.addFile(SOUL_PATH);
   }
 
@@ -290,8 +279,6 @@ export class ForkTargetWriter {
         `;
       }
 
-      void this.target`UPDATE workspace_identity SET mission = ${staged.mission}`;
-
       // The search index keyed on old rows is stale (equal counts evade its rowid watermark); invalidate it.
       invalidateConversationSearchIndex(this.target);
 
@@ -315,54 +302,12 @@ export class ForkTargetWriter {
         WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
       `;
 
-      // Fork marker: a system entry just after the cut; a chat entry only, deliberately not a context member.
-      const syntheticText =
-        `You were forked from workspace "${head.source.workspaceName}" at message ${head.cut.messageId} on `
-        + `${new Date(this.now).toISOString()}. The conversation above happened before the fork. Your files are a copy `
-        + `of that workspace's files as they were when the fork was made, so they can hold work from after that message. `
-        + `Your current tool set and memory are authoritative; ignore any tools or context `
-        + `referenced before the fork that you don't see in your active tool list.`;
-
-      const markerId = `fork-marker-${this.opts.workspaceId.slice(0, 8)}-${this.now}`;
-      this.writeForkMarker({
-        actorId, markerId, position: cut + 1, text: syntheticText, recordedAt: forkPointMs + 1,
-      });
-
       // Staged files are the fork's now. The transfer row stays to answer re-delivered frames until the next `begin`.
       this.staging.dropFiles();
       this.staging.markPublished();
 
       return forkResultOf(head, staged.staged);
     }));
-  }
-
-  /** The marker as canonical rows, written via SQL because publication is synchronous;
-     *  its text is small enough to be an inline payload. */
-  private writeForkMarker(marker: ForkMarker): void {
-    const { actorId, markerId, position, text, recordedAt } = marker;
-
-    const content = JSON.stringify([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text } }]);
-    void this.target`
-      INSERT INTO session_messages
-      (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id,
-       envelope_json, sealed_at, content_json, content_path, content_digest)
-      VALUES (${actorId}, ${markerId}, ${'system'}, ${'string'}, ${'edit'}, ${null}, ${null}, ${null},
-              ${'{}'}, ${recordedAt}, ${content}, ${null}, ${null})
-    `;
-
-    void this.target`
-      INSERT INTO conversation_entries
-      (actor_id, session_id, id, position, role, turn_id, run_id,
-       metadata_json, metadata_path, metadata_digest, recorded_at, context_id, context_revision)
-      VALUES (${actorId}, ${CHAT_SESSION_ID}, ${markerId}, ${position}, ${'system'}, ${null}, ${null},
-              ${null}, ${null}, ${null}, ${recordedAt}, ${null}, ${null})
-    `;
-
-    void this.target`
-      INSERT INTO conversation_entry_parts
-      (actor_id, session_id, entry_id, position, message_id, part_no, text_start, text_length)
-      VALUES (${actorId}, ${CHAT_SESSION_ID}, ${markerId}, ${0}, ${markerId}, ${0}, ${null}, ${null})
-    `;
   }
 
   /** The fork's own context, created once and read back (membership and publication may run on different

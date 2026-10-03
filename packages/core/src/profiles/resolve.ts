@@ -2,8 +2,8 @@
 // provider no longer lists runs on the account default, then Kinu's; an unlisted pin is an error.
 
 import { Effect } from 'effect';
-import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
+import { KinuError, settleSync } from '../obs/index';
 
 import { isWorkMode, type WorkMode } from '../types/turn';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
@@ -448,15 +448,41 @@ export function parentReasoningEffort(authority: ProfileAuthorityInputs, ancesto
   return inherited;
 }
 
+/** A hosted actor's ancestors' pins, nearest first, ending at the root's; `parentOf` reads one registered actor. */
+export function ancestorPins(
+  parentActorId: string | null,
+  root: { readonly actorId: string; readonly pins: PinnedProfile },
+  parentOf: (actorId: string) => { readonly parentActorId: string | null; readonly pins: PinnedProfile } | null,
+): PinnedProfile[] {
+  return settleSync(Effect.suspend(() => {
+    const ancestors: PinnedProfile[] = [];
+
+    for (let id = parentActorId; id !== null && id !== root.actorId;) {
+      const parent = parentOf(id);
+
+      if (parent === null) return Effect.fail(new KinuError('missing', `the hosted actor's parent ${id} is not registered`));
+      ancestors.push(parent.pins);
+      id = parent.parentActorId;
+    }
+
+    return Effect.succeed([...ancestors, root.pins]);
+  }));
+}
+
 export function ownProfileChoices(
   config: PinnedProfile,
   authority: ProfileAuthorityInputs,
   ancestors?: readonly PinnedProfile[],
-): Pick<ResolveTurnProfileInput, 'explicitTier' | 'workspaceModel' | 'explicitEffort' | 'inheritedEffort'> {
+  request: Pick<ResolveTurnProfileInput, 'explicitTier' | 'explicitEffort'> = {},
+): Pick<ResolveAgentTurnProfileInput, 'activeRoleId' | 'explicitTier' | 'workspaceModel' | 'actorModel' | 'explicitEffort' | 'inheritedEffort'> {
+  const root = ancestors?.at(-1);
+
   return {
-    explicitTier: config.getAssignedTier() ?? undefined,
-    workspaceModel: config.getModel(),
-    explicitEffort: config.getReasoningEffort(),
+    activeRoleId: config.getRoleSelection(),
+    explicitTier: request.explicitTier ?? config.getAssignedTier() ?? undefined,
+    workspaceModel: root === undefined ? config.getModel() : root.getModel(),
+    actorModel: root === undefined ? null : config.getModel(),
+    explicitEffort: request.explicitEffort ?? config.getReasoningEffort(),
     inheritedEffort: ancestors === undefined ? null : parentReasoningEffort(authority, ancestors),
   };
 }

@@ -292,7 +292,7 @@ export const DECLARED = byFile([
       'a peer reply, the msg tool\'s answer to the model'],
     ['packages/core/src/events/ingress/triggers.ts', ['cancelTrigger'],
       'cancelTrigger\'s answer over RPC, HTTP and the CLI schema'],
-    ['packages/core/src/evolution/changelog.ts', ['revertScaffoldVersion', 'revertPromptSection', 'executeChangelogRevert', 'changelogRevert', 'revertChangelogEntryById'],
+    ['packages/core/src/evolution/changelog.ts', ['revertScaffoldVersion', 'revertArtifactVersion', 'executeChangelogRevert', 'changelogRevert', 'revertChangelogEntryById'],
       'the changelog revert answer over RPC to the UI and the CLI'],
     ['packages/core/src/evolution/control.ts', ['applyScaffoldDecision', 'ScaffoldDecisionResult', 'gepaPass', 'output'],
       'scaffold decision and GEPA run answers over RPC to the UI and the CLI'],

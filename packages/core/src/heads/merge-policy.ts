@@ -1,36 +1,28 @@
 /**
  * What model merges a set of heads, at what effort, and whose spend it is: one policy for both backends.
- * The route, effort and `judge` spend label are one decision; the backend only binds a routed
- * (spec, effort) pair to a client ({@link HeadMergeModelBinder}).
+ * The route, effort and `judge` spend label are one decision, walked down the deep tier's chain like
+ * every fixed-tier call; the backend only binds a routed (spec, effort) pair to a client.
  */
 
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
-import type { LanguageModel } from 'ai';
-import type { ProviderOptions } from '../providers/effort';
-import { generateJson } from '../providers/structured';
+import * as v from 'valibot';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
+import { generateReported, type GenerateRequest } from '../providers/model-invocation';
 import { resolveModelRoute, type ModelRouteResolution } from '../profiles/model-route';
+import { onRoute, routeRetryOptions, type RouteModelBinder } from '../profiles/model-lane';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import type { ModelCallSink, ModelOperationSink } from '../events/model-call';
-import { MergeOutputSchema, type MergeOutput } from './merge-schema';
+import { MergeOutputSchema } from './merge-schema';
 import type { MergeLLMFn } from './controller';
 
 /** One literal feeds both the route lookup and the spend label, so they cannot drift apart. */
 const HEAD_MERGE_SOURCE = 'judge';
 
-/** Absent options mean this provider family has no reasoning knob. */
-export interface HeadMergeModelBinding {
-  readonly model: LanguageModel;
-  readonly providerOptions?: ProviderOptions;
-}
-
-/** Takes the whole resolution, so the effort cannot come from anywhere else. */
-export type HeadMergeModelBinder = (route: ModelRouteResolution) => HeadMergeModelBinding;
-
 export interface HeadMergePolicyDeps {
   /** A thunk, asked per merge, so a moved deep tier takes effect without a new runtime. */
   readonly profile: () => Promise<ResolvedTurnProfile>;
-  readonly bindMergeModel: HeadMergeModelBinder;
+  readonly bindMergeModel: RouteModelBinder;
   /** Required: merge spend is counted nowhere else (`summarizeCost` sums only heads). */
   readonly reportModelCall: ModelCallSink;
   /** Rides beside the cost sink so a cost cannot be reported for an unopened operation. */
@@ -48,28 +40,22 @@ function resolveHeadMergeRoute(profile: ResolvedTurnProfile): Effect.Effect<Mode
   });
 }
 
-/** Routed model, the tier's own effort, `judge` spend; `generateJson` keeps the JSON-only instruction, report-before-parse and the operation frame together. */
+/** Billed as the serving entry before its reply is parsed: a reply that fails the schema was paid for, and is no refusal to hand over on. */
 export function headMergeLLM(deps: HeadMergePolicyDeps): MergeLLMFn {
-  return (prompt) => {
-    return settle(Effect.gen(function* () {
-      const { model, providerOptions } = deps.bindMergeModel(
-        yield* resolveHeadMergeRoute(yield* Effect.promise(async () => deps.profile())),
-      );
+  return (prompt) => settle(Effect.gen(function* () {
+    const profile = yield* Effect.promise(() => deps.profile());
+    const route = yield* resolveHeadMergeRoute(profile);
 
-      const options: Parameters<typeof generateJson<MergeOutput>>[0] = {
-        model,
-        schema: MergeOutputSchema,
-        prompt,
-        spend: {
-          source: HEAD_MERGE_SOURCE,
-          report: deps.reportModelCall,
-          operations: deps.operations,
-        },
-      };
+    const text = yield* Effect.promise(() => onRoute(route, {}, async (serving) => {
+      const { model, providerOptions } = deps.bindMergeModel(serving);
+      const request: GenerateRequest = { model, prompt: `${prompt}\n\n${jsonObjectOnlyInstruction()}`, ...routeRetryOptions(serving) };
 
-      if (providerOptions) options.providerOptions = providerOptions;
+      if (providerOptions !== undefined) request.providerOptions = providerOptions;
+      const spend = { source: HEAD_MERGE_SOURCE, report: deps.reportModelCall, operations: deps.operations } as const;
 
-      return yield* Effect.promise(async () => generateJson(options));
+      return (await generateReported(request, { spend, spec: serving.model }, 'generate_json')).text;
     }));
-  };
+
+    return v.parse(MergeOutputSchema, extractJsonObject(text));
+  }));
 }

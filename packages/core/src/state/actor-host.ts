@@ -24,7 +24,7 @@ import type { AgentSignal, SendOutcome } from '../types/signals';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
-import { readVersionedScaffoldSource } from '../scaffold/shadow';
+import { readVersionedScaffoldSource } from '../scaffold/versions';
 import { sha256Hex } from '../safety/argument-digest';
 import { attempt, diagnostics, flight, settle, settleSync, toKinuError, type AgentTracing } from '../obs/index';
 

@@ -54,13 +54,15 @@ import {
   type PublishableCandidate,
   CLAUDE_CRED_KEY,
   CODEX_CRED_KEY,
-  OAuthTokenError,
   baseCredentialKey,
   claudeCodeFrom,
   createClaudeOAuthClient,
   createCodexOAuthClient,
   startClaudeSignIn,
   subscriptionIssuer,
+  rotateLogin,
+  usableLogin,
+  type LoginRenewal,
   type SubscriptionIssuer,
   decodeCodexAccountId,
   tokensToCredential,
@@ -532,9 +534,6 @@ export interface CredentialSummary {
   key: string;
   kind: 'bearer' | 'oauth' | 'openai-compat';
 }
-
-/** What one OAuth refresh established; see `UserDO.refreshOAuthCredential`. */
-type OAuthRefresh = OAuthCredential | 'revoked' | { readonly failed: KinuError };
 
 interface HeldLogin {
   readonly cred: OAuthCredential;
@@ -4049,18 +4048,16 @@ export class UserDO extends Agent<Env> {
       const refused = opts?.rejected !== undefined && refusedLogin(credentialToHeaders(storedKey, cred), opts.rejected);
 
       if (issuer !== null && cred.kind === 'oauth') {
-        if (!cred.refreshToken) return null;
+        const login = cred;
+        const held = { cred: login, revision: stored.revision };
 
-        if (refused || issuer.expiring(cred)) {
-          const login = cred;
-          const refreshed = yield* this.refreshSubscriptionLogin(storedKey, { cred: login, revision: stored.revision }, issuer);
+        const usable = yield* Effect.promise(() => usableLogin({
+          issuer, credential: login, refused,
+          renew: () => settle(this.refreshSubscriptionLogin(storedKey, held, issuer)),
+        }));
 
-          if (refreshed === 'revoked') return null;
-
-          // A failed refresh keeps the old creds: the call may still succeed, else its 401
-          // signals that re-auth is needed.
-          if (!('failed' in refreshed)) cred = refreshed;
-        }
+        if (usable === null) return null;
+        cred = usable;
       }
 
       if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
@@ -4227,46 +4224,32 @@ export class UserDO extends Agent<Env> {
     held: HeldLogin,
     rotate: () => Promise<OAuthCredential>,
     onRevoked: (revision: number) => Effect.Effect<void, KinuError>,
-  ): Effect.Effect<OAuthRefresh, KinuError> {
+  ): Effect.Effect<LoginRenewal, KinuError> {
     return this.refreshing({ key, held, rotate, onRevoked });
   }
 
   private readonly refreshing = flight((login: RefreshingLogin) => this.rotateOAuthCredential(login), { key: (login) => login.key });
 
-  private rotateOAuthCredential({ key, held, rotate, onRevoked }: RefreshingLogin): Effect.Effect<OAuthRefresh, KinuError> {
+  private rotateOAuthCredential({ key, held, rotate, onRevoked }: RefreshingLogin): Effect.Effect<LoginRenewal, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      // Replaced since this caller read it: the held refresh token may be spent. Writes fence on that revision.
       if (this.credentialRevision(key) !== held.revision) {
         const current = yield* this.readCredential(key);
 
         return current?.kind === 'oauth' ? current : 'revoked' as const;
       }
 
-      const doing = REFRESH_DOING.get(baseCredentialKey(key)) ?? `refreshing ${key}`;
-      const rotation = yield* Effect.result(Effect.tryPromise({ try: rotate, catch: (err) => ({ err }) }));
+      const rotated = yield* Effect.promise(() => rotateLogin(key, REFRESH_DOING.get(baseCredentialKey(key)) ?? `refreshing ${key}`, rotate));
 
-      if (Result.isFailure(rotation)) {
-        const { err } = rotation.failure;
+      if (rotated === 'revoked') yield* onRevoked(held.revision);
 
-        if (err instanceof OAuthTokenError && err.revoked) {
-          diagnostics.failure('credential.refresh_revoked', toKinuError({ doing, cause: err, otherwise: 'denied' }), { credentialKey: key });
-          yield* onRevoked(held.revision);
+      if (rotated === 'revoked' || 'failed' in rotated) return rotated;
 
-          return 'revoked' as const;
-        }
-
-        const failure = toKinuError({ doing, cause: err, otherwise: 'unavailable' });
-        diagnostics.failure('credential.refresh_failed', failure, { credentialKey: key });
-
-        return { failed: failure };
-      }
-
-      return yield* this.commitRefreshedCredential(key, rotation.success, held.revision);
+      return yield* this.commitRefreshedCredential(key, rotated, held.revision);
     });
   }
 
   /** The token still serves management APIs after a rejected refresh; only the refresh token is stripped. */
-  private refreshCloudflareInternal(held: HeldLogin): Effect.Effect<OAuthRefresh, KinuError> {
+  private refreshCloudflareInternal(held: HeldLogin): Effect.Effect<LoginRenewal, KinuError> {
     return this.refreshOAuthCredential(
       CLOUDFLARE_OAUTH_CRED_KEY,
       held,
@@ -4280,7 +4263,7 @@ export class UserDO extends Agent<Env> {
   }
 
   /** A rejected refresh deletes only that login's row, so its connect CTA resurfaces. */
-  private refreshSubscriptionLogin(key: string, held: HeldLogin, issuer: SubscriptionIssuer): Effect.Effect<OAuthRefresh, KinuError> {
+  private refreshSubscriptionLogin(key: string, held: HeldLogin, issuer: SubscriptionIssuer): Effect.Effect<LoginRenewal, KinuError> {
     return this.refreshOAuthCredential(
       key,
       held,

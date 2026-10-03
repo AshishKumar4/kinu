@@ -1,15 +1,16 @@
 // Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
 import { createOpenAI } from '@ai-sdk/openai';
 import { APICallError, wrapLanguageModel, type LanguageModel } from 'ai';
-import type { AuthRequest, AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
+import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
+import { authenticatedSend } from './authenticated-send';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { authCacheKey, cloneModelInfos, positiveInteger, StaleModelList, statelessResponses } from './util';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
-import { unlessRevoked } from './oauth-token-error';
+
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { classify, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
@@ -136,83 +137,65 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
       });
 
       const customFetch = asFetchFunction((input, init) => settle(Effect.gen(function* () {
-          // A dead login (resolver refusal, or 401 after forced refresh) gets the remedy on a 401 the SDK carries.
-          const resolveAuth = (refresh?: AuthRequest): Effect.Effect<AuthResolution | 'revoked' | null> => unlessRevoked(() => deps.getAuth(CODEX_CRED_KEY, refresh));
+        // A refused renewal keeps the SDK's 401 remedy.
+        const refusedLoginResponse = (): Response => {
+          diagnostics.failure(
+            'provider.codex_dead_login',
+            new KinuError('denied', 'the stored ChatGPT login was refused by chatgpt.com'),
+            { model: modelId },
+          );
 
-          const refusedLoginResponse = (): Response => {
-            diagnostics.failure(
-              'provider.codex_dead_login',
-              new KinuError('denied', 'the stored ChatGPT login was refused by chatgpt.com'),
-              { model: modelId },
-            );
+          return new Response(JSON.stringify({ error: { message: CODEX_DEAD_LOGIN } }), {
+            status: 401, headers: { 'Content-Type': 'application/json' },
+          });
+        };
 
-            return new Response(
-              JSON.stringify({ error: { message: CODEX_DEAD_LOGIN } }),
-              { status: 401, headers: { 'Content-Type': 'application/json' } },
-            );
-          };
+        const requestInit = normalizeCodexResponsesRequest(init);
 
-          const auth = yield* resolveAuth();
+        const send = (auth: AuthResolution): Promise<Response> => {
+          const merged = copyHeaders(init?.headers);
 
-          if (auth === 'revoked') return refusedLoginResponse();
+          for (const [name, value] of Object.entries(auth.headers)) merged.set(name, value);
 
-          if (!auth) {
-            diagnostics.failure(
-              'credential.codex_absent',
-              new KinuError('missing', 'no Codex credentials; the model call was refused before it left'),
-              { model: modelId },
-            );
+          return retrying(auth.credentialKey ?? CODEX_CRED_KEY)(input, { ...requestInit, headers: merged });
+        };
 
-            return new Response(
-              JSON.stringify({ error: { message: 'ChatGPT credentials are not configured for this account.' } }),
-              { status: 401, headers: { 'Content-Type': 'application/json' } },
-            );
-          }
+        const answer = yield* Effect.promise(() => authenticatedSend({ key: CODEX_CRED_KEY, getAuth: deps.getAuth, send }));
 
-          const requestInit = normalizeCodexResponsesRequest(init);
+        if (answer.kind === 'refused') return refusedLoginResponse();
 
-          const paid = auth.credentialKey ?? CODEX_CRED_KEY;
+        if (answer.kind === 'absent') {
+          diagnostics.failure(
+            'credential.codex_absent',
+            new KinuError('missing', 'no Codex credentials; the model call was refused before it left'),
+            { model: modelId },
+          );
 
-          const send = (headers: Record<string, string>): Effect.Effect<Response> => Effect.promise(() => {
-            const merged = copyHeaders(init?.headers);
+          return new Response(JSON.stringify({ error: { message: 'ChatGPT credentials are not configured for this account.' } }), {
+            status: 401, headers: { 'Content-Type': 'application/json' },
+          });
+        }
 
-            for (const [name, value] of Object.entries(headers)) merged.set(name, value);
+        const res = answer.response;
 
-            return retrying(paid)(input, { ...requestInit, headers: merged });
+        if (networkRefused(res)) {
+          const refused = new KinuError('unavailable', NETWORK_REFUSED);
+
+          diagnostics.failure('provider.codex_network_refused', refused, { model: modelId });
+
+          const failure = new APICallError({
+            message: `Codex is unreachable from here: ${NETWORK_REFUSED}. Pick another model, or run Codex from the Kinu CLI.`,
+            url: input instanceof Request ? input.url : input.toString(),
+            requestBodyValues: undefined,
+            statusCode: 503,
+            isRetryable: false,
+            cause: refused,
           });
 
-          let res = yield* send(auth.headers);
+          return yield* Effect.die(failure);
+        }
 
-          if (res.status === 401) {
-            const refreshed = yield* resolveAuth({ rejected: auth.headers });
-
-            if (refreshed === 'revoked') return refusedLoginResponse();
-
-            if (refreshed) {
-              res = yield* send(refreshed.headers);
-            }
-          }
-
-          if (networkRefused(res)) {
-            const refused = new KinuError('unavailable', NETWORK_REFUSED);
-
-            diagnostics.failure('provider.codex_network_refused', refused, { model: modelId });
-
-            return yield* Effect.die(new APICallError({
-              message: `Codex is unreachable from here: ${NETWORK_REFUSED}. Pick another model, or run Codex from the Kinu CLI.`,
-              url: input instanceof Request ? input.url : input.toString(),
-              requestBodyValues: undefined,
-              statusCode: 503,
-              isRetryable: false,
-              cause: refused,
-            }));
-          }
-
-          if (res.status === 401) {
-            return refusedLoginResponse();
-          }
-
-          return withCallAccount(res, 'codex', paid);
+        return withCallAccount(res, 'codex', answer.auth.credentialKey ?? CODEX_CRED_KEY);
       })));
 
       const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });

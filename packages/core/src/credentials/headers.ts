@@ -38,7 +38,7 @@ function headersOf(key: string, cred: Credential): Effect.Effect<CredentialHeade
 
   // baseURL is applied at provider construction.
   if (cred.kind === 'openai-compat') {
-    return Effect.succeed({ Authorization: `Bearer ${cred.apiKey}`, ...cred.extraHeaders });
+    return Effect.succeed({ ...(cred.apiKey !== undefined && { Authorization: `Bearer ${cred.apiKey}` }), ...cred.extraHeaders });
   }
 
   if (cred.kind === 'oauth') {

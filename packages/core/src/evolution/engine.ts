@@ -9,8 +9,6 @@
  * 3 Lifetime: craft consolidation.
  */
 
-import type { ShadowTrialPlan, ShadowTrialQueueOutcome } from './types';
-import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { parseJsonValue } from '../utils/json';
 
@@ -25,7 +23,7 @@ import type {
   EvolutionConfig,
 } from './types';
 import { DEFAULT_EVOLUTION_CONFIG } from './types';
-import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../providers/structured';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { Cause, Effect } from 'effect';
 import { settle, tolerate, settleLogged } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
@@ -43,16 +41,15 @@ import {
 } from '../advisor/review';
 import { initLessonTables, recordLesson, corroborateLessonsForTurn, renderRecentLessons } from './lessons';
 import {
-  applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, recordTurnStruggles, scoreToolLessons,
-  StruggleLessonSchema, struggleLessonPrompt, teachingStruggle,
+  applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, owesTurnLessons, recordTurnStruggles,
+  scoreToolLessons, StruggleLessonSchema, struggleLessonPrompt, teachingStruggle,
 } from './struggles';
 import {
-  initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf, listTurnRatings, hasLowRating,
-  isLowRating, isHighRating, feedbackOf, ratingQuality, thumbsRating, retractThumbs, realRatingScaffoldRates,
+  initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf, hasLowRating,
+  isLowRating, isHighRating, feedbackOf, ratingQuality, thumbsRating, retractThumbs,
   isTrivialTurn,
   type RatingVerdict, type TurnRating,
 } from './ratings';
-import type { PathologyInput } from './pathology';
 import type { DecisionPort } from '../providers/decision-model';
 import {
   bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
@@ -66,21 +63,9 @@ import { initRefinementTables } from './refinement';
 import { MissionBudgetExhausted } from '../mission-budget';
 import { buildChangelog } from './changelog';
 import { DELEGATION_RUBRIC, delegationFeatures, renderDelegationFeatures } from './delegation-features';
-import { renderScaffoldHandbook } from './scaffold-handbook';
-import {
-  clusterPathologies, labelPathologyClusters, renderPathologyBlock,
-  describePathology, parsePathologyTag, PATHOLOGY_TAG_EXAMPLE,
-  type PathologyCluster,
-} from './pathology';
-
-import { modifyScaffold } from '../scaffold/modify';
-import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor';
-import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns';
-import {
-  listScaffoldArchive, listRejectedProposals, selectEvolutionBase, blendRealOutcomeRates,
-  type EvolutionBaseSelection, type ScaffoldArchiveEntry,
-} from '../scaffold/archive';
-import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow';
+import { getCurrentScaffoldVersion } from '../scaffold/versions';
+import { advanceTrial, runningTrial, startTrial } from './trials';
+import { runProposer } from './proposer';
 
 const GeneralizedToolSchema = v.object({
   name: v.optional(v.string()),
@@ -92,85 +77,6 @@ import type { SessionHistory } from '../session/history';
 import type { AgentConfigStore } from '../config/store';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
 
-/** The version a proposal branches from and the variants it may cite. */
-export interface ProposalArchiveContext {
-  base: EvolutionBaseSelection;
-  entries: ReadonlyArray<ScaffoldArchiveEntry>;
-  realRates?: ReadonlyMap<number, { accepted: number; negative: number }>;
-  /** Why each refused version was refused, so a proposal can see what already failed. */
-  rejections?: ReadonlyMap<number, string>;
-}
-
-function renderArchiveBlock(archive: ProposalArchiveContext): string {
-  const lines = archive.entries.slice(0, 8).map((e) => {
-    const lineage = e.parentVersion != null ? `parent v${e.parentVersion}` : 'root';
-    const record = e.trials > 0 ? `${e.wins}-${e.losses}-${e.ties} W-L-T` : 'untried';
-    const real = archive.realRates?.get(e.version);
-
-    const realNote = real && real.accepted + real.negative > 0
-      ? `, real ${real.accepted} accepted/${real.negative} negative`
-      : '';
-
-    const targeted = e.pathology !== null ? `, for ${e.pathology}` : '';
-    const rejection = archive.rejections?.get(e.version);
-    const why = rejection ? `\n    refused: ${rejection}` : '';
-
-    return `  v${e.version} [${e.status}, ${lineage}, ${record}${realNote}${targeted}]: ${e.rationale.slice(0, 80)}${why}`;
-  });
-
-  const baseNote = archive.base.mode === 'explore'
-    ? `You are branching from ARCHIVED v${archive.base.version} (a stepping stone, not the live current): its code is shown above.`
-    : `You are branching from the live current v${archive.base.version}.`;
-
-  return (
-    `Scaffold archive (your prior variants: lineage + shadow record):\n` +
-    `${lines.join('\n')}\n` +
-    `${baseNote} You may take ideas from any archived variant; cite its version when you do.\n\n`
-  );
-}
-
-/**
- * The scaffold-proposal prompt, documenting the real sandbox contract
- * (scaffold/executor.ts): host interaction goes only through the `host.*` bridge,
- * and both `run(rt, task)` parameters receive the task string. When pathologies are
- * mined, the proposal must name the one it targets; with none, the requirement is absent.
- */
-export function buildScaffoldProposalPrompt(
-  baseScaffold: string,
-  reflection: string,
-  archive?: ProposalArchiveContext,
-  pathologies: ReadonlyArray<PathologyCluster> = [],
-): string {
-  return (
-    `${renderScaffoldHandbook(baseScaffold)}\n` +
-    `Current agent scaffold (your agentic loop: it runs inside a sandboxed worker):\n` +
-    `\`\`\`js\n${baseScaffold}\n\`\`\`\n\n` +
-    (archive ? renderArchiveBlock(archive) : '') +
-    (pathologies.length > 0 ? renderPathologyBlock(pathologies) : '') +
-    `Based on these session patterns:\n${evidenceWindow(reflection, EVIDENCE_BUDGETS.reflection)}\n\n` +
-    `Propose an improved scaffold. The scaffold MUST:\n` +
-    `1. Export exactly \`async function* run(rt, task)\`. There is NO host runtime object in the ` +
-    `sandbox: BOTH parameters receive the task STRING; read the task from either, e.g. ` +
-    `\`const prompt = task;\`. Neither parameter carries members to reach through.\n` +
-    `2. Reach the host ONLY through the global \`host\` bridge:\n` +
-    `\`\`\`ts\n${SCAFFOLD_HOST_TYPES}\n\`\`\`\n` +
-    `\`await host.defaultInference()\` runs the standard inference loop: build on it or replace it ` +
-    `with your own strategy via host.llmStream / host.callTool.\n` +
-    `3. Stream text to the user by yielding { type: 'chunk', data: '<text>' }.\n` +
-    `4. NOT use ${SCAFFOLD_FORBIDDEN_DESCRIPTION}. Also never reference raw network globals ` +
-    `(fetch/WebSocket: use host.callTool for I/O), the scaffold version files/tables, ` +
-    `promotion/rollout config keys, or shell-approval/consent settings: any of these is a hard ` +
-    `misevolution veto.\n` +
-    `5. Be a self-contained agentic loop.\n` +
-    (pathologies.length > 0
-      ? `6. Name the failure pathology it targets, as a tag line in the code: ` +
-        `\`${PATHOLOGY_TAG_EXAMPLE}\`, using one of the ids listed above. The archive is ` +
-        `read by pathology: a version that names none cannot be compared with the ones ` +
-        `that do, and cannot show whether that failure ever went away.\n`
-      : '') +
-    `\nReturn ONLY the JavaScript code, no explanation.`
-  );
-}
 
 /** Bounded because the lesson reaches every later turn once corroborated. */
 const TURN_REFLECTION_MAX_CHARS = 240;
@@ -231,18 +137,6 @@ function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'args'>): boolean 
   if (call.name === 'memory') return call.args.action === 'search' || call.args.action === 'recall';
 
   return call.name === 'fact' && call.args.action === 'recall';
-}
-
-/** A low rating as a pathology cell reads it; the very dissatisfied are its `frustrated`. */
-function pathologyInput(rating: TurnRating): PathologyInput {
-  return {
-    turnId: rating.turnId,
-    outcome: rating.score < 1.5 ? 'frustrated' : 'corrected',
-    userMessage: rating.request,
-    assistantResponse: rating.answer,
-    followup: rating.followup,
-    scaffoldVersion: rating.scaffoldVersion,
-  };
 }
 
 export class EvolutionEngine {
@@ -563,7 +457,7 @@ export class EvolutionEngine {
    * refusal throws, for the ledger to retry or park. A turn with no id has none to key them by.
    */
   async learnFromTurn(completed: CompletedTurn): Promise<void> {
-    if (!this.config.enabled || completed.turnId === undefined || completed.turnId === '') return;
+    if (!this.config.enabled || completed.turnId === undefined || completed.turnId === '' || !owesTurnLessons(completed)) return;
     const turn = { ...completed, turnId: completed.turnId };
     const { sql } = this.rt.storage;
     const { actor } = this.rt;
@@ -759,7 +653,7 @@ export class EvolutionEngine {
     const windowsClosed = this.agentConfig.countClosedTurnWindow();
 
     if (session.turns.length >= 3 && this.sessionWarrantsReflection(session)) {
-      await this.onSessionReflection(session, windowsClosed);
+      await this.onSessionReflection(session);
     }
 
     if (windowsClosed % this.config.lifetimeEvolutionInterval === 0) {
@@ -771,33 +665,27 @@ export class EvolutionEngine {
   }
 
   /**
-     * Record a completed turn as shadow evidence: one row, no inference. `plan` is
-     * the caller's sampling decision (`shadowTrialPlan`), so a replay records the same trial.
+     * The cadence lane's evolution pass: a look at the live trial, then a waiting candidate's trial when the owner
+     * has trials on, then, with no trial running, one proposer search if a trigger holds. Never rejects: each step's
+     * rows are durable, so a failure is said and the next pass resumes.
      */
-  queueShadowTrial(
-    turn: CompletedTurn, context: readonly ModelMessage[], plan: ShadowTrialPlan,
-  ): ShadowTrialQueueOutcome {
-    if (!this.config.enabled) return 'not_sampled';
+  runDueEvolution(): Promise<void> {
+    if (!this.recordsTurns || this.rt.actor.parentActorId !== null) return Promise.resolve();
+    const { sql } = this.rt.storage;
+    const { actor } = this.rt;
 
-    return this.config.shadowTrialQueue?.({
-      task: turn.userMessage,
-      currentOutput: turn.assistantResponse,
-      context,
-    }, plan) ?? 'not_sampled';
-  }
+    return settleLogged('evolution.proposer_failed', { doing: 'run the evolution pass', otherwise: 'unavailable' }, async () => {
+      advanceTrial(sql, actor);
 
-  /**
-     * Run queued trials for the pending scaffold. Due whenever a capable host asks,
-     * not on the session window: `maybeEvolveScaffold` refuses to propose while one is
-     * pending, so gating it there would stall the loop. Absorbs its own failures.
-     * Gated on `enabled`; the queue is durable for the next enabled host.
-     */
-  async runDueShadowTrials(): Promise<void> {
-    const runner = this.config.shadowTrialRunner;
+      if (this.agentConfig.getLiveTrials()) startTrial(sql, actor);
 
-    if (!this.config.enabled || !runner) return;
+      if (runningTrial(sql, actor) !== null || this.rt.decide === undefined) return;
+      const outcome = await runProposer({ rt: this.rt, decide: this.rt.decide, reflect: this.rt.judgeModel ?? this.rt.llm, now: Date.now() });
 
-    await settleLogged('evolution.shadow_trial_drain_failed', { doing: 'drain the due shadow trials', otherwise: 'unavailable' }, async () => { await runner(); });
+      if (outcome.kind === 'searched') {
+        this.emit({ type: 'reflection', message: `Proposer searched ${outcome.artifactId}: ${outcome.detail}` });
+      }
+    });
   }
 
   private emitChangelogDigest(since: number): void {
@@ -825,7 +713,7 @@ export class EvolutionEngine {
 
   /** Self-scored prose enters corroborated lessons only when a recorded outcome
      *  already backs the window; otherwise it stays provisional. */
-  private async onSessionReflection(session: CompletedSession, windowsClosed: number): Promise<void> {
+  private async onSessionReflection(session: CompletedSession): Promise<void> {
     // Input is the ledger's corroborated lessons, not a memory file's contents.
     const recentLessons = renderRecentLessons(this.rt.storage.sql, this.rt.actor, 5);
 
@@ -848,100 +736,6 @@ export class EvolutionEngine {
     });
 
     this.emit({ type: 'reflection', message: `Session reflection${corroborated ? '' : ' [provisional]'}: ${reflection.slice(0, 100)}...` });
-
-    if (windowsClosed >= 3) {
-      await this.maybeEvolveScaffold(reflection);
-    }
-  }
-
-  /** Only an archived stepping stone needs the versioned-backup read (v0 has no backup). */
-  private async readBaseScaffold(base: EvolutionBaseSelection | null, currentScaffold: string): Promise<string | null> {
-    if (base === null) return null;
-
-    if (base.mode === 'current') return currentScaffold;
-
-    return readScaffoldVersion(this.rt, base.version);
-  }
-
-  /** A rejected proposal is a returned value, so nothing here is wrapped in a catch
-     *  that would also swallow real faults. */
-  private async maybeEvolveScaffold(reflection: string): Promise<void> {
-    const scaffoldExists = await this.rt.identity.scaffold.exists();
-
-    if (!scaffoldExists) return;
-
-    // One proposal in flight at a time; consecutive windows would orphan pending versions.
-    const pending = this.rt.storage.sql<{ version: number }>`
-      SELECT version FROM scaffold_versions
-      WHERE actor_id = ${this.rt.actor.actorId} AND status = 'pending' LIMIT 1
-    `;
-
-    if (pending.length > 0) {
-      this.emit({
-        type: 'scaffold_proposed',
-        message: `Skipped: scaffold v${pending[0].version} is still pending shadow evaluation`,
-      });
-
-      return;
-    }
-
-    const currentScaffold = await this.rt.identity.scaffold.read();
-
-    if (!currentScaffold || currentScaffold.length < 50) return;
-
-    // DGM archive branching (scaffold/archive.ts selectEvolutionBase), weighted by
-    // shadow record and real turn outcomes, aggregated over descendant lineage.
-    const archive = listScaffoldArchive(this.rt.storage.sql, this.rt.actor, 12);
-    const realRates = realRatingScaffoldRates(this.rt.storage.sql, this.rt.actor);
-
-    const base = selectEvolutionBase(blendRealOutcomeRates(archive, realRates), {
-      exploreShare: this.agentConfig.getScaffoldExploreShare(),
-    });
-
-    const baseCode = await this.readBaseScaffold(base, currentScaffold);
-
-    // Cells are deterministic (evolution/pathology.ts); the model only phrases titles.
-    const pathologies = await labelPathologyClusters(this.fastLlm, clusterPathologies(
-      listTurnRatings(this.rt.storage.sql, this.rt.actor, { limit: 60, low: true }).map(pathologyInput),
-    ));
-
-    const rejections = new Map(
-      listRejectedProposals(this.rt.storage.sql, this.rt.actor, 12)
-        .flatMap((r) => (r.version === null ? [] : [[r.version, r.reason] as const])),
-    );
-
-    const proposed = await this.rt.llm.complete(
-      buildScaffoldProposalPrompt(
-        baseCode ?? currentScaffold,
-        reflection,
-        base && baseCode ? { base, entries: archive, realRates, rejections } : undefined,
-        pathologies,
-      ),
-    );
-
-    if (!proposed.includes('async function* run')) return;
-
-    const code = stripMarkdownFences(proposed);
-
-    const branchNote = base && baseCode
-      ? `branched from v${base.version}${base.mode === 'explore' ? ' (archive stepping stone)' : ''}`
-      : 'branched from the live scaffold';
-
-    const rationale = `Session reflection, ${branchNote}: ${reflection.slice(0, 100)}`;
-
-    const result = await modifyScaffold(
-      this.rt, rationale, code,
-      base && baseCode ? { baseVersion: base.version } : undefined,
-    );
-
-    if (!result.ok) return;
-    // The same parse modifyScaffold stamped the row with, so event and row agree.
-    const targeted = parsePathologyTag(code);
-    this.emit({
-      type: 'scaffold_proposed',
-      message: `Scaffold evolved to v${result.version} (${branchNote}): ${reflection.slice(0, 60)}` +
-        (targeted ? `: targets ${describePathology(targeted)}` : ''),
-    });
   }
 
   /** Lifetime cycle, automatic every N windows. */
