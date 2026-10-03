@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
   BackgroundJobStore,
+  runOnExecutor,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOLS,
   EventLog,
@@ -84,8 +85,8 @@ import {
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { classify, tolerateAsync } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, schemaGenesisOf, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
-  resolverModelPlane,
+  makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
+  openWorkspaceCLI, resolverModelPlane,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveAgentRef } from './config';
@@ -124,6 +125,8 @@ export interface LocalExecResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  /** Set when the executor refused or failed before producing output. */
+  error?: string;
 }
 
 export interface LocalAgentInfoSnapshot {
@@ -618,18 +621,25 @@ export async function cancelLocalJob(name: string, id: string): Promise<{ ok: bo
   });
 }
 
+/** The addressed workspace's own registered executor runs the command, as the cloud's executeInExecutor does. */
 export async function executeLocalExecutor(name: string, executorId: string, command: string): Promise<LocalExecResult> {
   ensureLocalAgent(name);
-  const normalized = executorId.toLowerCase();
+  const dbPath = agentDbPath(name);
+  const db = new Database(dbPath);
 
-  if (!['workspace', 'device', 'local', 'your-pc'].includes(normalized)) {
-    throw new Error(`Executor "${executorId}" is not available for local agents.`);
+  try {
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: null, cwd: resolveAgentRef(name)?.cwd ?? null });
+
+    const run = rt.executionRouter
+      ? await runOnExecutor(rt.executionRouter, executorId, command)
+      : { kind: 'refused' as const, error: `Workspace "${name}" has no execution router` };
+
+    return run.kind === 'ran'
+      ? { executor: executorId, command, stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode }
+      : { executor: executorId, command, stdout: '', stderr: '', exitCode: 1, error: run.error };
+  } finally {
+    db.close();
   }
-
-  // createHostShell owns group kill on abort and settles when the command exits, not when a grandchild closes the pipe.
-  const result = await createHostShell(process.cwd()).exec(command);
-
-  return { executor: executorId, command, ...result };
 }
 
 export async function markLocalBackgroundJobsCancelled(name: string): Promise<string[]> {

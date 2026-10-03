@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { codemodeSurface, storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { codemodeSurface, runOnExecutor, storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -143,7 +143,6 @@ import {
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore, deviceFileCheckpoints,
-  CommandResultSchema,
   type CheckpointAvailability, type FileCheckpointListing, type FileCheckpointReads,
   type FileRestorePlan, type FileRestoreResult,
   runSleepTimeCompute, applySleepTimeUpdate,
@@ -5053,47 +5052,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable() async executeInExecutor(executorId: string, command: string, device?: string) {
-    const provider = this.rt.executionRouter?.getProvider(executorId);
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    const run = await runOnExecutor(this.rt.executionRouter, executorId, command, device);
 
-    if (!provider) return { error: `Executor "${executorId}" not found`,
-      refusal: refusalOf(new KinuError('missing', `Executor "${executorId}" not found`)) };
+    if (run.kind === 'refused') return { error: run.error, refusal: run.refusal };
 
-    if (!provider.isAvailable()) return { error: `Executor "${executorId}" is not available`,
-      refusal: refusalOf(new KinuError('unavailable', `Executor "${executorId}" is not available`)) };
+    const output = run.kind === 'ran'
+      ? { stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode, ...(run.refusal && { refusal: run.refusal }) }
+      : { stdout: '', stderr: run.error, exitCode: 1, refusal: run.refusal };
 
-    const execTool = provider.tools.exec;
+    this.recordExecutorOutput(executorId, command, run.kind === 'ran' ? output : { stdout: null, stderr: run.error, exitCode: 1 });
+    // The UI terminal renders only from broadcasts, so a failure is broadcast too.
+    this.broadcast(JSON.stringify({ type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now() }));
 
-    if (!execTool) return { error: `Executor "${executorId}" has no exec tool`,
-      refusal: refusalOf(new KinuError('unsupported', `Executor "${executorId}" has no exec tool`)) };
-
-    // Device rides as tool context read by readDeviceSelection (docs/EXECUTION-LAYER-SPEC.md
-    // "The user's account is a fleet"); with none, the call keeps the unnamed default.
-    try {
-      const result = v.parse(CommandResultSchema, device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device }));
-
-      const output = v.is(v.string(), result)
-        ? { stdout: result, stderr: '', exitCode: 0 }
-        : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
-
-      this.recordExecutorOutput(executorId, command, output);
-
-      this.broadcast(JSON.stringify({
-        type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now(),
-      }));
-
-      return output;
-    } catch (err) {
-      const refusal = refusalOf(toKinuError({ doing: 'execute on ' + executorId, cause: err, otherwise: 'io' }));
-      const errMsg = refusal.error;
-      this.recordExecutorOutput(executorId, command, { stdout: null, stderr: errMsg, exitCode: 1 });
-      // Broadcast errors too: the UI terminal renders only from broadcasts. (STABILITY-AUDIT §B4.)
-      this.broadcast(JSON.stringify({
-        type: 'executor-output', executor: executorId, command, stdout: '',
-        stderr: errMsg, exitCode: 1, refusal, timestamp: Date.now(),
-      }));
-
-      return { error: errMsg, exitCode: 1, refusal };
-    }
+    return run.kind === 'ran' ? output : { error: run.error, exitCode: 1, refusal: run.refusal };
   }
 
   /** Directory listing read off each executor's own raw handle, in that environment's paths. */

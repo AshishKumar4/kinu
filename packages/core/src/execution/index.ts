@@ -31,7 +31,7 @@ export {
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
 } from './escalation';
 
-export { DefaultExecutionRouter } from './router';
+export { DefaultExecutionRouter, runOnExecutor, type ExecutorRun } from './router';
 
 export { withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach } from './approval';
 

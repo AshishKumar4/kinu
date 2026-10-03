@@ -990,7 +990,7 @@ export { periodicCraftConsolidation } from './craft/consolidation';
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict';
 
 export {
-  DefaultExecutionRouter,
+  DefaultExecutionRouter, runOnExecutor, type ExecutorRun,
   withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach,
   createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending, sandboxSizeLabel,
   WORKSPACE_BACKUP_DIR,
