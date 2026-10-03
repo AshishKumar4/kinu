@@ -6,6 +6,8 @@ import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 
 
 import { SPILL_DIRS, type ActorHandle, type SqlExecutor } from '@kinu.run/core';
+import { settle } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
 import type { ArchiveIndexStore, ArchiveRange } from './manifest';
 import * as v from 'valibot';
@@ -30,22 +32,21 @@ export interface VfsTranscriptStore extends TranscriptStore {
 export function createVfsTranscriptStore(getVfs: () => VFS): VfsTranscriptStore {
   return {
     citablePath: compactionTranscriptPath,
-    write: async (relativePath, content) => {
+    write: (relativePath, content) => settle(Effect.gen(function* () {
       const vfs = getVfs();
       const dir = relativePath.slice(0, relativePath.lastIndexOf('/'));
 
-      try {
-        await vfs.mkdir(dir, { recursive: true });
-      } catch (err) {
+      yield* Effect.catchCause(Effect.promise(async () => vfs.mkdir(dir, { recursive: true })), (failed) => {
+        const err = Cause.squash(failed);
         const msg = err instanceof Error ? err.message.toLowerCase() : '';
 
-        if (!msg.includes('exist')) throw err;
-      }
+        return msg.includes('exist') ? Effect.void : Effect.failCause(failed);
+      });
 
-      await writeText(vfs, relativePath, content);
+      yield* Effect.promise(() => writeText(vfs, relativePath, content));
 
       return { absolutePath: relativePath };
-    },
+    })),
   };
 }
 

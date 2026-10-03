@@ -10,7 +10,7 @@ import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool } from 'ai';
 import type { ActorHandle, AgentsToolDeps, CodemodeSurface, DeviceRequestChannel, ExecutionRouter } from "@kinu.run/core";
 import { createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
-import { KinuError, settleSync } from '@kinu.run/core/obs';
+import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
 } from "./codemode-sandbox";
@@ -89,34 +89,34 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
   return {
     async callTool(surface, name, input) {
-      const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async () => {
+      const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, () => settle(Effect.gen({ self: this }, function* () {
         const functions = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.native));
         const entry = Object.hasOwn(functions, name) ? functions[name] : undefined;
 
         if (entry !== undefined) {
-          if (options.reach !== undefined && !options.reach.allowsTool(name)) throw new KinuError('denied', `${name} is not within this actor's reach right now`);
+          if (options.reach !== undefined && !options.reach.allowsTool(name)) return yield* new KinuError('denied', `${name} is not within this actor's reach right now`);
 
-          return entry.execute(input);
+          return yield* Effect.promise(async () => entry.execute(input));
         }
 
         if (name === 'eval' || (options.reach !== undefined && !options.reach.allowsTool(name) && !options.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
-          throw new KinuError('denied', `${name} is not within this actor's reach right now`);
+          return yield* new KinuError('denied', `${name} is not within this actor's reach right now`);
         }
 
         if (!surface.craftedTools().some((tool) => tool.name === name)) {
-          throw new KinuError('missing', `tools has no member ${name}`);
+          return yield* new KinuError('missing', `tools has no member ${name}`);
         }
 
         const execute = this.toolFor(surface).execute;
 
-        if (execute === undefined) throw new KinuError('unavailable', 'The codemode executor is not callable');
+        if (execute === undefined) return yield* new KinuError('unavailable', 'The codemode executor is not callable');
 
-        const result = v.parse(v.object({ result: v.optional(JsonValueSchema) }), await execute({
+        const result = v.parse(v.object({ result: v.optional(JsonValueSchema) }), yield* Effect.promise(async () => execute({
           code: `return await tools[${JSON.stringify(name)}](${JSON.stringify(input)});`,
-        }, { toolCallId: `slate-${crypto.randomUUID()}`, messages: [] }));
+        }, { toolCallId: `slate-${crypto.randomUUID()}`, messages: [] })));
 
         return result.result;
-      });
+      })));
 
       return call(input);
     },

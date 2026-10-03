@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { CodemodeProvider } from '../tools/sandbox-contract';
 import type { ReportToolDeps } from '../tools/builtins';
 import { dispatchReport, ReportHandoffFields, ReportToolInputSchema } from '../tools/report-tool';
-import { refusedInput } from '../obs/index';
+import { Effect } from 'effect';
+import { refusedInput, settle } from '../obs/index';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS, SUBORDINATE_REPORT_STATUSES,
 } from '../events/hub/types';
@@ -44,21 +45,17 @@ export function createReportCodemodeProvider(deps: () => ReportToolDeps): Codemo
       send: {
         planAllowed: true,
         description: 'Report progress, completion, or a blocker to the workspace orchestrator.',
-        execute: (...args: unknown[]) => branchableToolCall(async () => {
+        execute: (...args: unknown[]) => branchableToolCall(() => settle(Effect.gen(function* () {
           const handoff = HandoffSchema.safeParse(args[2]);
 
-          if (!handoff.success) {
-            throw refusedInput('report.send(status, content, handoff)', handoff.error);
-          }
+          if (!handoff.success) return yield* refusedInput('report.send(status, content, handoff)', handoff.error);
 
           const input = ReportToolInputSchema.safeParse({ ...handoff.data, status: args[0], content: args[1] });
 
-          if (!input.success) {
-            throw refusedInput('report.send(status, content)', input.error);
-          }
+          if (!input.success) return yield* refusedInput('report.send(status, content)', input.error);
 
-          return await dispatchReport(deps(), input.data);
-        }),
+          return yield* Effect.promise(() => dispatchReport(deps(), input.data));
+        }))),
       },
     },
   };

@@ -127,21 +127,23 @@ export async function connectMcpServers(
     descriptors,
     refused,
     diagnostics: connectionDiagnostics,
-    async call(serverName, toolName, args, callSignal) {
-      const client = clients.get(serverName);
+    call(serverName, toolName, args, callSignal) {
+      return settle(Effect.gen(function* () {
+        const client = clients.get(serverName);
 
-      if (!client) throw new Error(`Unknown MCP server: ${serverName}`);
-      const timeout = callTimeoutByServer.get(serverName) ?? NO_TIMER_DEADLINE_MS;
+        if (!client) return yield* Effect.die(new Error(`Unknown MCP server: ${serverName}`));
+        const timeout = callTimeoutByServer.get(serverName) ?? NO_TIMER_DEADLINE_MS;
 
-      const res = await client.callTool(
-        { name: toolName, arguments: v.parse(JsonObjectSchema, args ?? {}) },
-        undefined,
-        { timeout, signal: callSignal },
-      );
+        const res = yield* Effect.promise(() => client.callTool(
+          { name: toolName, arguments: v.parse(JsonObjectSchema, args ?? {}) },
+          undefined,
+          { timeout, signal: callSignal },
+        ));
 
-      if (res.isError === true) throw new McpToolError(decodeJsonValue({ value: res }));
+        if (res.isError === true) return yield* Effect.die(new McpToolError(decodeJsonValue({ value: res })));
 
-      return formatMcpResult(res);
+        return formatMcpResult(res);
+      }));
     },
     close() {
       return settle(Effect.gen(function* () {

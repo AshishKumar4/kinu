@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import type { Context, Env as HonoEnv, MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
 import {
@@ -84,18 +84,17 @@ export function beneath<E extends HonoEnv>(prefix: string, handler: MiddlewareHa
 
 /** No root secret answers 503 naming it. */
 export function ownerGate<E extends FamilyEnv<OwnerCapabilityEnv, { owner: UserCaller }>>(): MiddlewareHandler<E> {
-  return async (c, next) => {
-    let owner: UserCaller;
+  return (c, next) => settle(Effect.gen(function* () {
+    const read = yield* Effect.catchCause(Effect.map(Effect.promise(() => ownerCaller(c.env)), (owner) => ({ owner })), (failed) => {
+      const cause = Cause.squash(failed);
 
-    try { owner = await ownerCaller(c.env); }
-    catch (cause) {
-      if (cause instanceof OwnerCapabilityUnavailableError) return err(503, cause.message);
-      throw cause;
-    }
+      return cause instanceof OwnerCapabilityUnavailableError ? Effect.succeed({ refused: err(503, cause.message) }) : Effect.failCause(failed);
+    });
 
-    c.set('owner', owner);
-    await next();
-  };
+    if ('refused' in read) return read.refused;
+    c.set('owner', read.owner);
+    yield* Effect.promise(() => next());
+  }));
 }
 
 /** Every router's `onError`: the chain goes to `http.request_failed` by route pattern; the client gets its class. */

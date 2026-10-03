@@ -210,6 +210,7 @@
         "@kinu.run/core": "workspace:*",
         "@nimbus-sh/core": "0.14.0",
         "ai": "6.0.214",
+        "effect": "4.0.0-rc.117",
         "valibot": "^1.4.1",
       },
       "devDependencies": {
