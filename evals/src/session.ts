@@ -962,6 +962,8 @@ const HistorySchema = v.array(v.object({
 
 /** One durable message, as the web pane's seed carries it. */
 export interface PublicMessage {
+  /** Absent on a row the transcript keeps no id for. */
+  readonly id?: string;
   readonly role: string;
   /** What it says: an answer's final text, never the narration its steps streamed before it. */
   readonly text: string;
@@ -1139,9 +1141,7 @@ export async function openPublicSession(input: PublicSessionInput): Promise<Kinu
       // (workspace-create.ts's renderSoulMarkdown over the same display name),
       // and it lands before the first prompt — so every turn still runs under
       // the case's real mission and only the unrequested first turn is gone.
-      await session.setSoul(renderSoulMarkdown({
-        name: SESSION_DISPLAY_NAME, mission: input.purpose,
-      }));
+      await session.setMission(input.purpose);
     }
 
     await session.pinModel(input.llm.model);
@@ -1468,6 +1468,11 @@ export class KinuPublicSession {
       this.rpc('setSoul', [markdown]));
   }
 
+  /** The mission, written as creation writes it. */
+  setMission(mission: string): Promise<void> {
+    return this.setSoul(renderSoulMarkdown({ name: SESSION_DISPLAY_NAME, mission }));
+  }
+
   /** Start a turn and hand back its id and its promise. The promise resolves
    *  when the run that ANSWERS the prompt closes — the prompt's own turn, or
    *  the run it spliced into when the done frame answers `mid-turn`. */
@@ -1775,6 +1780,16 @@ export class KinuPublicSession {
     return v.parse(ToolDescriptionsSchema, answer).crafted;
   }
 
+  /** The agent's own learning setting, as Settings and `--no-auto-evolve` set it (`setEvolutionConfig`). */
+  async setLearning(on: boolean): Promise<void> {
+    await this.boundary(`setEvolutionConfig on ${this.input.origin}/${this.workspace}`, () => this.rpc('setEvolutionConfig', [{ learning: on }]));
+  }
+
+  /** A thumb on one answer, as the web pane gives it (`setTurnFeedback`). */
+  async rate(messageId: string, feedback: 'positive' | 'negative'): Promise<void> {
+    await this.boundary(`setTurnFeedback on ${this.input.origin}/${this.workspace}`, () => this.rpc('setTurnFeedback', [messageId, feedback]));
+  }
+
   /** Satisfaction per day as the Quality tab reads it (`getQuality`): rated turns, by thumbs or the decision model. */
   async quality(days = 1): Promise<readonly QualityDay[]> {
     return v.parse(v.array(QualityDaySchema), await this.boundary(
@@ -2023,7 +2038,9 @@ export class KinuPublicSession {
     return rows.map((row) => {
       const spliceStep = v.safeParse(v.number(), row.metadata?.[STEER_STEP_METADATA_KEY]);
 
-      const message: PublicMessage = { role: row.role, text: rowText({ role: row.role, parts: row.parts ?? [] }) };
+      const message: PublicMessage = {
+        ...(row.id !== undefined && { id: row.id }), role: row.role, text: rowText({ role: row.role, parts: row.parts ?? [] }),
+      };
 
       // SAFETY: `v.number()` above already proved the metadata value is a
       // number — the splice step is a field the row either carries or lacks.

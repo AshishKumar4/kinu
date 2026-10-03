@@ -19,6 +19,9 @@ export type EvalArm = { readonly id: string; apply(session: KinuPublicSession): 
 
 export const ARMS = [
   { id: 'product', apply: () => Promise.resolve() },
+  // docs/EVOLUTION-REDESIGN.md §8: the reactive run's two arms.
+  { id: 'learning-on', apply: (session) => session.setLearning(true) },
+  { id: 'learning-off', apply: (session) => session.setLearning(false) },
 ] as const satisfies readonly EvalArm[];
 
 /** The deployment and the browser-plane identity, refused before any trial when either is missing. */
