@@ -11,7 +11,7 @@ import type { StoredValue } from '../../src/storage';
 import { TOOLS_STAMP } from '../../src/tools';
 import { shellSyntaxError } from "./container-shell";
 import * as v from 'valibot';
-import type { ExecResult } from '../../src/contracts';
+import type { ExecResult, GatewayBindings } from '../../src/contracts';
 
 /** Models `@cloudflare/sandbox` errors: `code` is a getter on an unexported `SandboxError` class,
  *  not an own property; a plain-field stand-in would pass checks the shipped SDK fails. */
@@ -365,6 +365,8 @@ export class FakeSandbox {
   readonly getFaults: Error[] = [];
   readonly killFaults: Error[] = [];
   readonly stampFaults: (Error | undefined)[] = [];
+  /** Thrown by the next reads of the boot-id file, as an exec the container drops. */
+  readonly bootReadFaults: Error[] = [];
   startGate: Gate | undefined;
   /** Parks the container's own admission probe, `start()`, awaited before a generation is captured.
    *  Distinct from `startGate` (the process start): two different calls and windows. */
@@ -552,7 +554,13 @@ export class FakeSandbox {
   /** The box's own programs and probes, answered from this container's state with the bytes bash
    *  writes; the session path hands them back as the container server does. Null for any other. */
   async #execBoxProgram(command: string): Promise<ExecResult | null> {
-    if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
+    if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') {
+      const fault = this.bootReadFaults.shift();
+
+      if (fault !== undefined) throw fault;
+
+      return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
+    }
 
     if (command === 'cat /proc/mounts') return { stdout: this.#procMounts(), stderr: '', exitCode: 0 };
 
@@ -1077,6 +1085,17 @@ export interface BoxStateParts {
   readonly blockConcurrencyWhile: <T>(closure: () => Promise<T>) => Promise<T>;
 }
 
+/** The Worker's exports as a box reaches them: its two gateways, and nothing of the host Worker it is
+ *  compiled with (another package's tests use this harness, under that package's own exports). */
+function gatewayExports(): BoxState['exports'] {
+  const gateways: GatewayBindings = {
+    DevboxStoreGateway: () => ({ fetch: async () => unreached('store gateway network'), connect: () => unreached('store gateway TCP') }),
+    DevboxOutbound: () => ({ fetch: async () => unreached('outbound network'), connect: () => unreached('outbound TCP') }),
+  };
+
+  return new Proxy(Object.create(null), { get: (_target, key) => (key === 'DevboxStoreGateway' || key === 'DevboxOutbound' ? gateways[key] : undefined) });
+}
+
 /** The whole `DurableObjectState`: the SDK `Sandbox` constructor takes the full handle.
  *  Only the members the class reads are supplied; every other one refuses by name. */
 export function boxState(parts: BoxStateParts): BoxState {
@@ -1085,10 +1104,7 @@ export function boxState(parts: BoxStateParts): BoxState {
     storage: parts.storage,
     container: parts.container === undefined ? undefined : containerHandle(parts.container),
     blockConcurrencyWhile: parts.blockConcurrencyWhile,
-    exports: {
-      DevboxStoreGateway: () => ({ fetch: async () => unreached('store gateway network'), connect: () => unreached('store gateway TCP') }),
-      DevboxOutbound: () => ({ fetch: async () => unreached('outbound network'), connect: () => unreached('outbound TCP') }),
-    },
+    exports: gatewayExports(),
     props: {},
     waitUntil: () => unreached('state.waitUntil'),
     get facets(): DurableObjectFacets { return unreached('state.facets'); },

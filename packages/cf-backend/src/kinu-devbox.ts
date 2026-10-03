@@ -12,8 +12,7 @@ import { getAgentByName } from "agents";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { sandboxIdForWorkspace } from '@kinu.run/core';
 import type { OrchestratorAgent } from "./orchestrator";
-import { restoreNotices, SANDBOX_LIFECYCLE_ENVELOPE_VERSION } from "./sandbox-lifecycle";
-import type { SandboxLifecycleIncident } from "./sandbox-lifecycle";
+import { lifecycleIncident, restoreNotices } from "./sandbox-lifecycle";
 import {
   CONTAINER_EVENT_HOST,
   type KinuEgressParams,
@@ -106,20 +105,7 @@ export class KinuDevbox extends Devbox<Env> {
     const root = await this.#rootAgent();
 
     if (root === null) return 'rejected';
-
-    // Restated field by field: the root's schema is closed, so an added Devbox field must not ride along.
-    const report: SandboxLifecycleIncident = {
-      version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
-      incidentId: incident.incidentId,
-      stage: incident.stage,
-      reason: incident.reason,
-      attempts: attempt,
-    };
-
-    if (incident.processId !== undefined) report.processId = incident.processId;
-
-    if (incident.port !== undefined) report.port = incident.port;
-    const result = await root.acceptSandboxLifecycleIncident(report);
+    const result = await root.acceptSandboxLifecycleIncident(lifecycleIncident(incident, attempt));
 
     return result.status;
   }

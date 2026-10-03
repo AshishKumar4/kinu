@@ -420,7 +420,8 @@ describe('the start hook owns restoration', () => {
     await activation;
     await box.devboxHeartbeat();
     expect((await box.devboxState()).ready).toBe(false);
-    expect(await box.resolveReadiness()).toEqual({ kind: 'repair', incomplete: 'port 3000 never answered' });
+    expect({ readiness: await box.resolveReadiness(), unready: (await box.devboxState()).unready })
+      .toEqual({ readiness: { kind: 'repair' }, unready: 'port 3000 never answered' });
     expect(stamps(container)).toBe(1);
     await box.devboxStartup();
     expect(stamps(container)).toBe(1);

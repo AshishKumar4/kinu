@@ -15,11 +15,12 @@ import {
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
 import { joinHarnessFibers } from './helpers/agents-sdk';
-import {
-  SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
-} from '../src/sandbox-lifecycle';
+import { lifecycleIncident } from '../src/sandbox-lifecycle';
 // Relative path, not `@kinu.run/devbox`: the barrel reaches `cloudflare:workers`, which does not exist under bun.
 import { INCIDENT_STAGES } from '../../devbox/src/lifecycle';
+
+/** The envelope version the box's restatement sends. */
+const ENVELOPE_VERSION = lifecycleIncident({ incidentId: 'version', stage: 'attach', reason: '', processId: undefined, port: undefined, at: 0 }, 1).version;
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
 
@@ -357,7 +358,7 @@ describe('a fiber nobody defined a recovery for', () => {
 
 describe('a sandbox lifecycle failure', () => {
   const incident = {
-    version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
+    version: ENVELOPE_VERSION,
     incidentId: 'inc-1',
     stage: 'checkpoint' as const,
     reason: 'mksquashfs exited 1',
@@ -402,7 +403,7 @@ describe('a sandbox lifecycle failure', () => {
     const { agent } = harness;
 
     await agent.acceptSandboxLifecycleIncident({
-      version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
+      version: ENVELOPE_VERSION,
       incidentId: 'inc-2',
       stage: 'attach',
       reason: 'archive size 0 did not match the declared 918_224',
@@ -440,7 +441,7 @@ describe('a sandbox lifecycle failure', () => {
 
     for (const stage of INCIDENT_STAGES) {
       const answer = await agent.acceptSandboxLifecycleIncident({
-        version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
+        version: ENVELOPE_VERSION,
         incidentId: `inc-${stage}`, stage, reason: 'measured failure', attempts: 1,
       });
 
@@ -458,7 +459,7 @@ describe('a sandbox lifecycle failure', () => {
     const { agent } = orchestratorHarness();
 
     const answer = await agent.acceptSandboxLifecycleIncident({
-      version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
+      version: ENVELOPE_VERSION,
       incidentId: 'inc-4', stage: 'defrost', reason: 'measured failure', attempts: 1,
     });
 

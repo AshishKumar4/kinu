@@ -71,7 +71,7 @@ function memoryBucket(objects: Map<string, Uint8Array>): R2Bucket {
     get: async (key: string) => {
       const bytes = objects.get(key);
 
-      return bytes === undefined ? null : { key, size: bytes.byteLength, body: new Response(bytes).body };
+      return bytes === undefined ? null : { key, size: bytes.byteLength, body: new Response(bytes.slice()).body };
     },
     // R2 refuses a delete of no keys or of more than 1,000 (10027), and lists 1,000 at a time.
     delete: async (keys: string | string[]) => {

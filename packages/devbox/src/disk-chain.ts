@@ -533,8 +533,8 @@ export interface DiskChainHost {
 }
 
 export function recoveryNotice(restoredTo: number, excludes: readonly string[]): string {
-  return `the workspace was restored from its backup to ${new Date(restoredTo).toISOString()}: its snapshot was lost, expired or older than the backup. `
-    + `The backup never holds ${excludes.join(', ')}; rebuild those (for example \`npm install\`) before relying on them.`;
+  return `The workspace was restored from its backup to ${new Date(restoredTo).toISOString()}: its snapshot was lost, expired or older than the backup. `
+    + `The backup never holds ${excludes.join(', ')}; rebuild those (for example \`bun install\`) before relying on them.`;
 }
 
 /** Applies an overlay upper to a plain tree on the same filesystem. */

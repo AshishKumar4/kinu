@@ -741,7 +741,7 @@ export function createCheckpointLane(): CheckpointLane {
 
 /** A runtime list, not a bare type union: the receiving host validates stages against it,
  *  so producer and consumer share this one list or incidents get rejected unseen. */
-export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port', 'quiesce', 'rest'] as const;
+export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port', 'quiesce', 'rest', 'recovered'] as const;
 
 export type IncidentStage = (typeof INCIDENT_STAGES)[number];
 

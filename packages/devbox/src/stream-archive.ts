@@ -18,7 +18,7 @@ export interface StreamProfile {
 export const DISK_STREAM: StreamProfile = { partBytes: 16 * MIB, partsInFlight: 16, windowBytes: 512 * MIB };
 
 /** Publishes the archive as it grows (D57), past the mount (D15). Exits: 1 the store, 2 usage, 3 the
- *  store's account of the object, 4 mksquashfs failed, 5 mksquashfs claimed success with no archive. */
+ *  store's account of the object, 4 mksquashfs failed, 5 no archive. */
 const STREAM_SCRIPT = `// devbox-stream-v1
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -71,8 +71,8 @@ function read(number, size) {
   return bytes;
 }
 
-// mksquashfs writes in order and returns once, to the superblock at 0: a part is final once the file grows
-// past it, so the first uploads last. Stored parts are punched out of the disk, which holds only the window.
+// mksquashfs writes in order, then once to the superblock at 0: a part is final once the file grows past
+// it, so the first uploads last. Stored parts are punched out of the disk.
 const child = spawn(archiver[0], archiver.slice(1), { stdio: ['ignore', 'ignore', 'pipe'] });
 let archiverWords = '';
 child.stderr.on('data', (chunk) => { archiverWords += chunk; });

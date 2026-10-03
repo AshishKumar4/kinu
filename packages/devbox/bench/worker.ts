@@ -936,6 +936,9 @@ const DriverBodySchema = v.object({
   purge: v.optional(v.boolean()),
   prefix: v.optional(v.string()),
   whole: v.optional(v.boolean()),
+  processId: v.optional(v.string()),
+  port: v.optional(v.number()),
+  kill: v.optional(v.boolean()),
 });
 
 type DriverBody = v.InferOutput<typeof DriverBodySchema>;
@@ -990,11 +993,12 @@ interface InstrumentRequest {
   readonly started: number;
   readonly url: URL;
   readonly counter: DurableObjectStub<BenchOpCounter>;
+  readonly input: DriverBody;
 }
 
 /** Diagnostic reads share the instrument route boundary. */
 async function serveInstrumentRoutes(
-  { route, env, strategy, box, name, started, url, counter }: InstrumentRequest,
+  { route, env, strategy, box, name, started, url, counter, input }: InstrumentRequest,
 ): Promise<Response | null> {
   switch (route) {
     case 'POST /evict': {
@@ -1066,7 +1070,24 @@ async function serveInstrumentRoutes(
     return json({ payload: { ok: true, strategy, box: name, incidents, ms: Date.now() - started } });
   }
 
-  return null;
+  return await serveProcessRoutes(route, box, input, started);
+}
+
+async function serveProcessRoutes(route: string, box: BenchStub, input: DriverBody, started: number): Promise<Response | null> {
+  if (route === 'POST /supervise') {
+    const { processId } = await box.startSupervised(input.command ?? 'true');
+    const exposed = input.port === undefined ? null : await box.exposePort(input.port, { hostname: 'bench.invalid' });
+
+    return json({ payload: { ok: true, processId, exposed: exposed?.port ?? null, ms: Date.now() - started } });
+  }
+
+  if (route !== 'POST /process') return null;
+  const id = input.processId ?? '';
+
+  if (input.kill === true) await box.killProcess(id);
+  const found = await box.getProcess(id);
+
+  return json({ payload: { ok: true, status: found?.status ?? null, ms: Date.now() - started } });
 }
 
 export default {
@@ -1113,7 +1134,7 @@ export default {
       const route = `${request.method} ${url.pathname}`;
 
       const aside = await serveInstrumentRoutes({
-        route, env, strategy, box, name, started, url, counter,
+        route, env, strategy, box, name, started, url, counter, input,
       });
 
       if (aside !== null) return aside;

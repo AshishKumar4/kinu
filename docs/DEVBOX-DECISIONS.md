@@ -3598,6 +3598,73 @@ and 4.8 s with the notice, the recovered box woken in 0.56 and 0.62 s; all
 exact. Every Worker, application, bucket and snapshot tag of the run was
 deleted, the golden's with the product's registry client.
 
+D67. What a box in `repair` is missing reaches the agent through the
+incident inbox and nothing else, and a recovery is told as a recovery
+(2026-10-03). The admission no longer carries `incomplete`: the adapter
+accepted `repair` and dropped it, `exec()` discarded `ensureReady()`'s
+answer, and nothing in core or the host read it, so the comment that a
+caller "learns from the call itself" was false. `devboxState().unready`
+still names what is missing.
+
+Proved through the agent's own path
+(`cf-backend/tests/unit-sandbox-repair-notice.test.ts`): its commands go
+through the sandbox executor and `adaptCloudflareSandbox` to a Devbox on the
+container harness, and the box's incidents go through KinuDevbox's
+restatement (now one function, `lifecycleIncident`) to a real workspace's
+`acceptSandboxLifecycleIncident`, whose inbox turns are counted. A service
+that does not restart, on a snapshot wake and on a lost-snapshot recovery:
+the agent's first command, the one that woke the box, ran with the
+restoration already settled in `repair`; its files were exact; exactly one
+inbox notice named the service ("(process p1)") with the container's cause.
+
+The test found one defect, fixed red first
+(`bench-artifacts/repair/recovery-notice-red.log`): the recovery notice was
+filed as an `attach` incident, so the agent was told "The workspace container
+failed at the attach stage ... sandbox tools are refused until an attach
+succeeds" about a recovery that had succeeded. It is its own stage now,
+`recovered`, told as what it is: the time the workspace came back to, the
+folders to rebuild (`bun install`, not `npm install`), and that every tool
+works.
+
+A failed final boot stamp changes nothing a user or agent can see
+(`tests/stamp-repair.test.ts`). The early stamp writes this container's id
+to the file and the row before the attach; the final step only re-reads it,
+so its failure leaves the identity whole. The box settles in `repair` with
+"the boot id stamp failed", and that is all: no incident (there is nothing
+to act on), operations admitted, saves commit (no replacement is seen), the
+heartbeat starts nothing. Nothing retries it but `attachNow()`, which no host
+calls, so `ready` stays false until the next restoration; no host reads
+`ready`. A pid from an earlier boot is fenced by the kernel's boot id each
+process record carries, not by this stamp: on the real image, a record from
+another boot naming a live pid reads lost and a stop never signals it
+(`tests/processes-image.test.ts`).
+
+Live (run `sbs10030449nrps`, image `e7444653…` on the trixie golden, two
+Medium boxes, a service on port 8123 that cannot come back after its
+`.serve` file is removed before the rest):
+
+| | box 1 | box 2 |
+|---|---|---|
+| wake from the snapshot | 6.6 s, `repair`: "port 8123 never answered", 1 notice, exact | 6.8 s, the same |
+| lost snapshot, the first command is the wake | 8.8 s, lazy over 3 layers, exact, `repair`, 2 notices in all | 9.2 s, the same |
+| the recovered box woken | 6.8 s, "recovery made plain", exact | 6.9 s, the same |
+| the kernel's boot id | changed at every wake | changed at every wake |
+| the restarted service, read and stopped | `failed`, nothing signalled | `failed`, nothing signalled |
+
+The wakes take 6 s more than D64's because the box waits out the port's
+probe window before it settles in `repair`. The kernel's boot id changing at
+every wake is what makes every process record a snapshot restores read as
+another boot.
+
+One fact the run measured, for the record: `/tmp` is on the rootfs, so a
+snapshot carries `/tmp/devbox-boot-id`. After a snapshot wake the file holds
+the previous container's id, and the box treats the woken container as the
+one it stamped. Nothing is wrong today: a rest deletes the settled row before
+the snapshot, so a wake restores in full. But the stamp now names a
+snapshot's lineage, not a container: a replacement started from the same
+snapshot without the box's start would not be seen. Not observed; the
+kernel's boot id would see it.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
