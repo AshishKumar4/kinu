@@ -24,7 +24,7 @@ import {
   type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
   withMountTable, adaptMemory, sharedDriveMount, SHARED_DRIVE_UNBOUND,
-  withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant,
+  withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant, createInheritedApprovalPolicy,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, localContextTree, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
@@ -382,12 +382,25 @@ export function createCLIRuntime(
   let approvalDeferrals: DeferredApprovalChannel | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
 
-  const approvalPolicy: ShellApprovalPolicy = {
+  const ownerPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
     granted: (grant) => holdsGrant(agentConfig.getShellApprovalGrants(), grant),
     requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
     get deferrals() { return approvalDeferrals ?? undefined; },
   };
+
+  // As on the cloud: grants are written on the root's rows, so a child inherits the root's answers
+  // intersected with its own narrowing, and cannot remember or ask for wider reach.
+  const approvalPolicy: ShellApprovalPolicy = config.facet === undefined
+    ? ownerPolicy
+    : createInheritedApprovalPolicy({
+      fetchRoot: async () => {
+        const root = openLocalRootActor(sql).config;
+
+        return { mode: root.getShellApprovalMode(), grants: root.getShellApprovalGrants() };
+      },
+      ownGrants: () => agentConfig.getShellApprovalGrants(),
+    });
 
   const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
 
