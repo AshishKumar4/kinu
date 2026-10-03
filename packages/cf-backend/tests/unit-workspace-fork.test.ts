@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { writeSoul, writeWorkspaceSoul } from '@kinu.run/core';
+import { writeWorkspaceSoul } from '@kinu.run/core';
 import {
   deliverCloudFork, type CloudForkRegistry, type CloudForkSource, type CloudForkTarget,
 } from '../src/user/workspace-fork';
@@ -13,7 +13,7 @@ async function source(): Promise<CloudForkSource> {
   const ws = createTestWorkspace();
   // The conversation store is actor-private: seed the source under the actor the fork reads as.
   const actor = createTestActor(ws.sql, ws.execRaw, 'SRC', 'source');
-  await writeSoul(ws.sql, 'p', (content) => writeWorkspaceSoul(ws.bundle, content));
+  await writeWorkspaceSoul(ws.bundle, 'p');
   await new ForkConversation(ws, SOURCE_ARTIFACTS).say({ id: 'm1', role: 'user', text: 'hello' });
 
   return {

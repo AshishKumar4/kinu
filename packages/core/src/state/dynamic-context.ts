@@ -10,7 +10,7 @@ import type { ActiveRoster } from '../types/dynamic-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
 import { listToolLessons, MAX_TOOL_LESSONS, shownLesson } from '../evolution/struggles';
-import { craftedToolDeclarations } from '../tools/sandbox-contract';
+import { craftedToolDeclarations, externalToolDeclarations } from '../tools/sandbox-contract';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { ActiveSkillSet } from '../skills/types';
@@ -22,6 +22,8 @@ export interface DynamicContextInput {
   readonly stores: AgentStores;
   readonly profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>;
   readonly tools: ToolSet;
+  /** The turn's MCP and extension tools, which only `eval` reaches. */
+  readonly externalTools?: ToolSet;
   readonly runtime: RuntimeFacts;
   readonly turn?: TurnReason;
   readonly activeSkills?: ActiveSkillSet;
@@ -62,6 +64,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
       planSubmission: profile.allowedTools.includes(SUBMIT_PLAN_TOOL) && input.tools[SUBMIT_PLAN_TOOL] !== undefined,
     },
     craftedTools: craftedToolDeclarations(input.tools, profile),
+    externalTools: externalToolDeclarations(input.tools, input.externalTools ?? {}, profile),
     factsBlock: renderFactsForTurn(stores.facts),
     memoryTail: input.memoryTail,
     recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),

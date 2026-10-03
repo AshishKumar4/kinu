@@ -11,7 +11,6 @@ import { seedTranscriptEntry, present, testActorHandle } from '@kinu.run/test-ut
 import {
   createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers';
-import { writeSoul } from '../src/identity/soul';
 import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -280,7 +279,7 @@ describe('agent status', () => {
     await seedTranscript(chatStore(w).history, [{ id: 'm1', role: 'user', content: 'hi' }]);
 
     // The row, not a file the main agent may have swapped, answers the owner's soul and mission.
-    await writeSoul(sql, '# Mine\n\n## Mission\n\nread the room and update it', (content) => writeWorkspaceSoul(bundle, content));
+    await writeWorkspaceSoul(bundle, '# Mine\n\n## Mission\n\nread the room and update it');
 
     try {
       await writeText(vfs, 'SOUL.md', 'forged');

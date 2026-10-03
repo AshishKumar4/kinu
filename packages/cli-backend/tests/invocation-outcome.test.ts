@@ -26,7 +26,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
   });
 
   const tool = createNodeCodemodeToolFactory({ extraProviders: providers })({
-    native: {}, craftedTools: () => [], providers: [],
+    native: {}, external: () => ({}), craftedTools: () => [], providers: [],
   });
 
   const accumulator = new TurnAccumulator();

@@ -2,7 +2,7 @@
 
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { ToolSet } from 'ai';
+import { asSchema, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { JsonObjectSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
@@ -46,18 +46,49 @@ export function withCraftedToolDeclarations<Tool extends ToolSet[string]>(
   return Object.assign(entry, { craftedDeclarations: read });
 }
 
-export function craftedToolDeclarations(
-  tools: ToolSet,
-  profile: { readonly workMode: WorkMode; readonly allowedTools: readonly string[] },
-): readonly CraftedDeclaration[] {
+type DeclaringProfile = { readonly workMode: WorkMode; readonly allowedTools: readonly string[] };
+
+/** The turn's `eval`, when this profile may run it in this work mode. */
+function runnableSandbox(tools: ToolSet, profile: DeclaringProfile): ToolSet[string] | undefined {
   const sandbox = tools[SANDBOX_TOOL];
 
   if (!sandbox || !profile.allowedTools.includes(SANDBOX_TOOL)
-    || workModeRefusal(profile.workMode, hasPlanPermission(sandbox), SANDBOX_TOOL) !== null
-    || !('craftedDeclarations' in sandbox)) return [];
+    || workModeRefusal(profile.workMode, hasPlanPermission(sandbox), SANDBOX_TOOL) !== null) return undefined;
+
+  return sandbox;
+}
+
+export function craftedToolDeclarations(tools: ToolSet, profile: DeclaringProfile): readonly CraftedDeclaration[] {
+  const sandbox = runnableSandbox(tools, profile);
+
+  if (!sandbox || !('craftedDeclarations' in sandbox)) return [];
   const read = v.parse(v.function(), sandbox.craftedDeclarations);
 
   return v.parse(v.array(v.object({ name: v.string(), description: v.string() })), read());
+}
+
+export interface ExternalToolDeclaration {
+  readonly name: string;
+  readonly description: string;
+  /** The input's JSON Schema, compact; absent when the tool's schema cannot be printed. */
+  readonly inputSchema?: string;
+}
+
+/** The MCP and extension tools `eval` reaches this turn; none when the turn cannot run `eval`. */
+export function externalToolDeclarations(
+  tools: ToolSet, external: ToolSet, profile: DeclaringProfile,
+): readonly ExternalToolDeclaration[] {
+  if (runnableSandbox(tools, profile) === undefined) return [];
+
+  return Object.entries(external)
+    .filter(([name, entry]) => profile.allowedTools.includes(name)
+      && workModeRefusal(profile.workMode, hasPlanPermission(entry), name) === null)
+    .map(([name, entry]) => {
+      const schema = v.safeParse(JsonObjectSchema, asSchema(entry.inputSchema).jsonSchema);
+      const description = (entry.description ?? name).replace(/\s+/gu, ' ').trim().replace(/\.$/u, '');
+
+      return schema.success ? { name, description, inputSchema: JSON.stringify(schema.output) } : { name, description };
+    });
 }
 
 /** The `tools.*` declaration of crafted tools; each native tool is declared by its own schema. */

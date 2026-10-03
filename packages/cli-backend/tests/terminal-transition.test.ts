@@ -92,7 +92,9 @@ describe('a workspace born with its mission as a stand-in title', () => {
   test('its first turn names it through the session, once, as the cloud genesis turn does', async () => {
     const { db, rt } = workspace();
     const mission = 'Audit the OAuth callback flow';
-    void rt.storage.sql`UPDATE workspace_identity SET mission = ${mission}`;
+    // The mission is the soul's own section, as `kinu create` seeds it.
+    void rt.storage.sql`INSERT INTO workspace_soul (id, markdown) VALUES (1, ${`# Kinu\n\n## Mission\n\n${mission}\n`})
+      ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown`;
     rt.actor.config.setDisplayNameOrigin(mission, 'auto');
     expect(readMission(rt.storage.sql)).toBe(mission);
     const { model, state } = scriptedModel('found two issues');

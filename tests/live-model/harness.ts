@@ -189,7 +189,6 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
         // No child substrate here: the prompt must not advertise a rung the
         // action would refuse.
         temporaryAsk: false,
-        externalTools: [],
         backend,
         model: { id: llm.model },
         sectionOverrides: artifactOverrides(currentArtifacts(sql, rt.actor)).sections,

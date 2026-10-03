@@ -228,7 +228,6 @@ describe('buildSystemPromptSync', () => {
 
     const opts = {
       availableTools: ['shell', 'memory'] as const,
-      externalTools: [{ name: 'tool_docs_search', source: 'mcp' as const, description: 'Search docs.' }],
       registeredExecutors,
     };
 
@@ -250,7 +249,6 @@ describe('buildSystemPromptSync', () => {
       expect(kimi).not.toContain(BUILTIN_TOOL_SPECS[name].summary);
     }
 
-    expect(kimi).toContain('**tool_docs_search** (MCP): Search docs.');
     expect(kimi).toContain('Call the tools listed here');
   });
 
@@ -658,34 +656,6 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('**eval**');
     expect(prompt).not.toContain('agent.schedule');
     expect(prompt).not.toContain('## Delegation');
-  });
-
-  test('renders external tools separately from built-in tools', () => {
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      availableTools: ['memory'],
-      externalTools: [
-        { name: 'tool_docs_search', source: 'mcp', description: 'Search project documentation.' },
-        'custom_export',
-      ],
-      registeredExecutors: [],
-    });
-
-    expect(prompt).toContain('**memory**');
-    expect(prompt).not.toContain('**web**');
-    expect(prompt).toContain('External tools');
-    expect(prompt).toContain('**tool_docs_search** (MCP): Search project documentation.');
-    expect(prompt).toContain('**custom_export** (external)');
-  });
-
-  test('prompt surface skips malformed external tool entries instead of throwing', () => {
-    const externalTools = JSON.parse(
-      '[{"name":"good_tool","source":"mcp"},{"bogus":true},{"name":"  "},"plain_tool"]',
-    );
-
-    const surface = compilePromptSurface({ externalTools });
-    expect(surface.externalTools.map((external) => external.name)).toEqual(['good_tool', 'plain_tool']);
   });
 
   test('prompt surface describes a configured executor even while it is down, and never an unconfigured one', () => {

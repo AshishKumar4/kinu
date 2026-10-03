@@ -1,4 +1,3 @@
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * LocalAgentHost: the local daemon's durable-agent substrate. One SQLite file per root; every actor
  * beneath it is a `workspace_actors` row there, with its own runtime objects from one {@link ActorHost}.
@@ -38,15 +37,12 @@ import {
   actorHomeName,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
-  renderSoulMarkdown,
   mintSubordinateName,
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
   facetHomeReleaser,
   readMission,
-  readSoul,
   recoverSubordinateLifecycles,
-  SOUL_PATH,
   temporaryRunSettles,
   terminalTaskReport,
   taskAnswerIsLater,
@@ -1316,16 +1312,6 @@ export class LocalAgentHost {
       const descriptor = subordinateDescriptorSource(config).read();
 
       if (!descriptor) throw new Error(`subordinate "${input.name}" has no readable descriptor after creation`);
-      // SOUL belongs to the agent: with a bound cwd `storage.vfs` is the user's project.
-      const actorFiles = rt.agentStateVfs ?? rt.storage.vfs;
-
-      if (!(await readSoul(actorFiles))) await writeText(actorFiles, SOUL_PATH, [
-          renderSoulMarkdown({ name: descriptor.displayName, mission: input.mission }),
-          '',
-          '## Role',
-          '',
-          `Role: ${descriptor.role}${descriptor.tier ? ` (tier ${descriptor.tier})` : ''}`,
-        ].join('\n'));
       const ws: LocalHostedAgent = { rt, openConfig: this.childOpenConfig(parent, binding) };
 
       if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;

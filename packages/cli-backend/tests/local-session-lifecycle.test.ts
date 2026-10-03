@@ -831,7 +831,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         listBackgroundJobs: async () => [],
         ...agentSelfRest,
       })],
-    })({ native: {}, craftedTools: () => [], providers: [] });
+    })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
@@ -857,7 +857,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         ...agentSelfRest,
         armCompactNow: () => { arms++; },
       })],
-    })({ native: {}, craftedTools: () => [], providers: [] });
+    })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: 'return await agent.compactNow();',
