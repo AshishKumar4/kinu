@@ -440,7 +440,7 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
         const accountId = context.inputs.accountId;
         const script = context.inputs.instanceName;
         const session = yield* openAssetSession(context, manifest, script);
-        const carried = yield* Effect.promise(() => carryArtifact(context, manifest, session));
+        const carried = yield* carryArtifact(context, manifest, session);
         const exists = yield* Effect.promise(async () => scriptExists(context.transport, accountId, script));
         const metadata = yield* Effect.promise(async () => versionMetadata(context, manifest, carried.token, exists));
 
@@ -684,11 +684,40 @@ interface CarriedRelease {
 }
 
 /** `scripts/build-worker-release.ts` orders assets before modules to lower the peak; either order installs. */
-async function carryArtifact(
+function carryArtifact(
   context: DeployContext,
   manifest: ReleaseManifest,
   session: AssetSession,
-): Promise<CarriedRelease> {
+): Effect.Effect<CarriedRelease> {
+  return Effect.gen(function* () {
+    const walked = yield* Effect.promise(() => walkArtifact(context, manifest, session));
+
+    if (walked.misencoded !== null) return yield* Effect.die(new Error(walked.misencoded));
+
+    if (walked.uploaded !== session.wanted.size) {
+      return yield* Effect.die(new Error(`Cloudflare asked for ${String(session.wanted.size)} asset(s) and the release artifact carries ${String(walked.uploaded)}`));
+    }
+
+    if (walked.modules.length !== manifest.worker.modules.length) {
+      return yield* Effect.die(new Error(`the release artifact carries ${String(walked.modules.length)} of the ${String(manifest.worker.modules.length)} module(s) the manifest names`));
+    }
+
+    context.note(`${walked.uploaded} asset(s) uploaded, ${walked.modules.length} module(s) held for the version.`);
+
+    return { token: walked.token, modules: walked.modules, bytes: walked.moduleBytes };
+  });
+}
+
+interface WalkedArtifact {
+  readonly token: string;
+  readonly modules: UploadPart[];
+  readonly moduleBytes: number;
+  readonly uploaded: number;
+  /** The member whose base64 came out a different length than its size promised; the walk stopped there. */
+  readonly misencoded: string | null;
+}
+
+async function walkArtifact(context: DeployContext, manifest: ReleaseManifest, session: AssetSession): Promise<WalkedArtifact> {
   const held = context.artifact.held;
   const prefix = `${manifest.worker.modulesPath}/`;
   const named = new Set(manifest.worker.modules);
@@ -729,7 +758,11 @@ async function carryArtifact(
       batchBytes = 0;
     }
 
-    const body = await base64Member(member, held);
+    const { encoded: body, at } = await base64Member(member, held);
+
+    if (at !== body.length) {
+      return { token, modules, moduleBytes, uploaded, misencoded: `${member.path} is ${String(member.size)} bytes and encoded to ${String(at)}` };
+    }
 
     batch.push({ name: hash, filename: hash, contentType: contentTypeOf(member.path), body });
     batchBytes += body.length;
@@ -741,17 +774,7 @@ async function carryArtifact(
     held.release(batchBytes);
   }
 
-  if (uploaded !== session.wanted.size) {
-    throw new Error(`Cloudflare asked for ${String(session.wanted.size)} asset(s) and the release artifact carries ${String(uploaded)}`);
-  }
-
-  if (modules.length !== manifest.worker.modules.length) {
-    throw new Error(`the release artifact carries ${String(modules.length)} of the ${String(manifest.worker.modules.length)} module(s) the manifest names`);
-  }
-
-  context.note(`${uploaded} asset(s) uploaded, ${modules.length} module(s) held for the version.`);
-
-  return { token, modules, bytes: moduleBytes };
+  return { token, modules, moduleBytes, uploaded, misencoded: null };
 }
 
 /** Charges and releases only the transport's copy; the parts belong to the caller. */
@@ -774,8 +797,8 @@ async function sendAssets(
   return answer.jwt ?? token;
 }
 
-// Streams into the body; `btoa` over a whole member would hold three copies of it.
-async function base64Member(member: ArtifactMember, held: HeldBytes): Promise<Uint8Array<ArrayBuffer>> {
+// Streams into the body; `btoa` over a whole member would hold three copies of it. `at` is how far it wrote.
+async function base64Member(member: ArtifactMember, held: HeldBytes): Promise<{ readonly encoded: Uint8Array<ArrayBuffer>; readonly at: number }> {
   const encoded = new Uint8Array(Math.ceil(member.size / 3) * 4);
   const carry = new Uint8Array(3);
   let carried = 0;
@@ -809,9 +832,7 @@ async function base64Member(member: ArtifactMember, held: HeldBytes): Promise<Ui
 
   if (carried > 0) at = writeBase64(encoded, at, carry.subarray(0, carried));
 
-  if (at !== encoded.length) throw new Error(`${member.path} is ${String(member.size)} bytes and encoded to ${String(at)}`);
-
-  return encoded;
+  return { encoded, at };
 }
 
 function writeBase64(out: Uint8Array, at: number, bytes: Uint8Array): number {

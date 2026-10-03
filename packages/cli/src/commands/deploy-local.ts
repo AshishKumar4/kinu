@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path';
 import {
   HealthAnswerSchema, LOCAL_PORT, LocalConfigSchema, fetchReleaseArtifact, fetchReleaseManifest, localLayout, releaseDir,
   renderLocalConfig, renderWorkerdConfig, unhostedBindings, workerdDirectories,
-  type LocalConfig, type LocalLayout,
+  type LocalConfig, type LocalLayout, type TarArtifact,
 } from '@kinu.run/core/deploy';
 import { tolerate, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -65,7 +65,7 @@ export function localDoor(action: string | undefined, opts: { origin?: string; p
       return yield* Effect.die(new Error('Usage: kinu deploy local [start|stop|status]'));
     }
 
-    if (action === undefined) yield* Effect.promise(async () => install(opts));
+    if (action === undefined) yield* install(opts);
 
     const started = yield* startLocalInstance();
 
@@ -76,30 +76,58 @@ export function localDoor(action: string | undefined, opts: { origin?: string; p
 }
 
 /** A release directory is written once; an update is a new directory plus a `current` swap. */
-async function install(opts: { origin?: string; port?: string }): Promise<void> {
-  const trimmedOrigin = opts.origin?.trim();
-  const origin = trimmedOrigin === undefined || trimmedOrigin === '' ? 'https://kinu.run' : trimmedOrigin;
-  const port = readPort(opts.port);
-  const layout = layoutOf();
+function install(opts: { origin?: string; port?: string }): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const trimmedOrigin = opts.origin?.trim();
+    const origin = trimmedOrigin === undefined || trimmedOrigin === '' ? 'https://kinu.run' : trimmedOrigin;
+    const port = yield* readPort(opts.port);
+    const layout = layoutOf();
 
-  ensureAgentHome();
-  console.log('');
-  console.log(`${DIM('Reading')} ${ACCENT(origin)}`);
+    ensureAgentHome();
+    console.log('');
+    console.log(`${DIM('Reading')} ${ACCENT(origin)}`);
 
-  const manifest = await fetchReleaseManifest(origin);
-  const artifact = await fetchReleaseArtifact(manifest, origin);
-  const dir = releaseDir(layout, manifest.version);
+    const manifest = yield* Effect.promise(() => fetchReleaseManifest(origin));
+    const artifact = yield* Effect.promise(() => fetchReleaseArtifact(manifest, origin));
+    const dir = releaseDir(layout, manifest.version);
 
-  // workerd refuses to start when a disk service's directory is absent.
-  for (const path of [layout.releases, layout.state, layout.bin, dir]) mkdirSync(path, { recursive: true });
+    // workerd refuses to start when a disk service's directory is absent.
+    for (const path of [layout.releases, layout.state, layout.bin, dir]) mkdirSync(path, { recursive: true });
 
-  for (const relative of workerdDirectories(manifest)) {
-    mkdirSync(join(layout.root, relative), { recursive: true });
-  }
+    for (const relative of workerdDirectories(manifest)) {
+      mkdirSync(join(layout.root, relative), { recursive: true });
+    }
 
-  // Member by member, through the Cloudflare door's reader, so a release never sits in memory whole
-  // (docs/SELF-DEPLOY.md § What the artifact weighs).
-  const wanted = new Set(manifest.files.map((file) => file.path));
+    // Member by member, through the Cloudflare door's reader, so a release never sits in memory whole
+    // (docs/SELF-DEPLOY.md § What the artifact weighs).
+    const wanted = new Set(manifest.files.map((file) => file.path));
+    const laid = yield* Effect.promise(() => layMembers(artifact, wanted, dir));
+    const absent = [...wanted].filter((path) => !laid.has(path));
+
+    if (absent.length > 0) {
+      return yield* Effect.die(new Error(`the release artifact carries no ${absent[0] ?? ''}`
+        + (absent.length > 1 ? ` (and ${String(absent.length - 1)} more the manifest names)` : '')));
+    }
+
+    // `rmSync` makes a repeat install of the same tree idempotent.
+    rmSync(layout.current, { force: true, recursive: false });
+    symlinkSync(dir, layout.current, 'dir');
+
+    writeFileSync(layout.capnp, renderWorkerdConfig({ manifest, version: manifest.version, port }));
+    writeFileSync(layout.config, renderLocalConfig({ version: manifest.version, port, at: new Date() }));
+
+    const without = unhostedBindings(manifest);
+
+    console.log(`${OK('✓')} Kinu ${ACCENT(manifest.version)} installed in ${DIM(layout.root)}`);
+
+    if (without.length > 0) {
+      console.log(`${DIM('Not available locally:')} ${DIM(without.join(', '))}`);
+    }
+  });
+}
+
+/** Writes each wanted member under `dir`; answers the paths it laid. */
+async function layMembers(artifact: TarArtifact, wanted: ReadonlySet<string>, dir: string): Promise<Set<string>> {
   const laid = new Set<string>();
 
   for await (const member of artifact.members()) {
@@ -120,27 +148,7 @@ async function install(opts: { origin?: string; port?: string }): Promise<void> 
     laid.add(member.path);
   }
 
-  const absent = [...wanted].filter((path) => !laid.has(path));
-
-  if (absent.length > 0) {
-    throw new Error(`the release artifact carries no ${absent[0] ?? ''}`
-      + (absent.length > 1 ? ` (and ${String(absent.length - 1)} more the manifest names)` : ''));
-  }
-
-  // `rmSync` makes a repeat install of the same tree idempotent.
-  rmSync(layout.current, { force: true, recursive: false });
-  symlinkSync(dir, layout.current, 'dir');
-
-  writeFileSync(layout.capnp, renderWorkerdConfig({ manifest, version: manifest.version, port }));
-  writeFileSync(layout.config, renderLocalConfig({ version: manifest.version, port, at: new Date() }));
-
-  const without = unhostedBindings(manifest);
-
-  console.log(`${OK('✓')} Kinu ${ACCENT(manifest.version)} installed in ${DIM(layout.root)}`);
-
-  if (without.length > 0) {
-    console.log(`${DIM('Not available locally:')} ${DIM(without.join(', '))}`);
-  }
+  return laid;
 }
 
 /** The address is returned only once the child lives and `/api/health` answered: another process's address
@@ -286,16 +294,16 @@ function localConfig(): Effect.Effect<LocalConfig> {
   });
 }
 
-function readPort(given: string | undefined): number {
-  if (given === undefined) return LOCAL_PORT;
+function readPort(given: string | undefined): Effect.Effect<number> {
+  if (given === undefined) return Effect.succeed(LOCAL_PORT);
   const port = Number.parseInt(given, 10);
 
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`${given} is not a port.`);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return Effect.die(new Error(`${given} is not a port.`));
 
   // Port 3000 is reserved for this repository's own dev server (AGENTS.md).
-  if (port === 3000) throw new Error('Port 3000 is reserved. Pick another port.');
+  if (port === 3000) return Effect.die(new Error('Port 3000 is reserved. Pick another port.'));
 
-  return port;
+  return Effect.succeed(port);
 }
 
 /** Older installs left pid-only files, so the start time is a separate second line. */

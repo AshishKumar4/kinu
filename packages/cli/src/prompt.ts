@@ -2,7 +2,7 @@
  * Prompt input via blocking canonical-mode reads on the terminal fd; never readline or raw mode: macOS kqueue cannot
  * poll /dev/tty, so under `kinu setup </dev/tty` keys never arrive. No terminal raises NonInteractiveError.
  */
-import { Data, Effect } from 'effect';
+import { Cause, Data, Effect } from 'effect';
 import { settleSync, settle } from '@kinu.run/core/obs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -20,26 +20,28 @@ interface TerminalInput {
   close: () => void;
 }
 
-function openTerminal(): TerminalInput | null {
-  try {
+function openTerminal(): Effect.Effect<TerminalInput | null> {
+  return Effect.catchCause(Effect.sync((): TerminalInput => {
     const fd = openSync('/dev/tty', 'r');
 
     return { fd, close: () => closeSync(fd) };
-  } catch (error) {
-    // ENXIO: no controlling terminal; ENOENT: node missing. Anything else is real.
-    if (!(error instanceof Error && 'code' in error && (error.code === 'ENXIO' || error.code === 'ENOENT'))) throw error;
+  }), (failed) => {
+    const error = Cause.squash(failed);
 
-    return process.stdin.isTTY ? { fd: 0, close: () => {} } : null;
-  }
+    // ENXIO: no controlling terminal; ENOENT: node missing. Anything else is real.
+    if (!(error instanceof Error && 'code' in error && (error.code === 'ENXIO' || error.code === 'ENOENT'))) return Effect.failCause(failed);
+
+    return Effect.succeed(process.stdin.isTTY ? { fd: 0, close: () => {} } : null);
+  });
 }
 
 export function canPrompt(): boolean {
-  const tty = openTerminal();
+  return settleSync(Effect.map(openTerminal(), (tty) => {
+    if (!tty) return false;
+    tty.close();
 
-  if (!tty) return false;
-  tty.close();
-
-  return true;
+    return true;
+  }));
 }
 
 /** opentui cannot reopen /dev/tty; refuse instead of a frozen screen. */
@@ -77,7 +79,7 @@ function readLineFromTerminal(fd: number): string | null {
 
 export function ask(label: string, fallback = ''): Promise<string> {
   return settle(Effect.gen(function* () {
-    const tty = openTerminal();
+    const tty = yield* openTerminal();
 
     if (!tty) return yield* Effect.die(new NonInteractiveError());
 
@@ -110,7 +112,7 @@ const SECRET_READ = `stty -echo 2>/dev/null; trap 'stty echo 2>/dev/null' EXIT; 
 
 export function askSecret(label: string, fallback = ''): Promise<string> {
   return settle(Effect.gen(function* () {
-    const tty = openTerminal();
+    const tty = yield* openTerminal();
 
     if (!tty) return yield* Effect.die(new NonInteractiveError());
 
@@ -135,7 +137,7 @@ export function askSecret(label: string, fallback = ''): Promise<string> {
 export function skippableOnEnter<T>(label: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | null> {
   return settle(Effect.gen(function* () {
     const controller = new AbortController();
-    const tty = openTerminal();
+    const tty = yield* openTerminal();
 
     if (!tty) return yield* Effect.promise(async () => work(controller.signal));
     process.stdout.write(`${DIM(`${label} Enter skips.`)}\n`);

@@ -4,7 +4,7 @@
  * `debugCommand` alone walks, redacts, pages and renders.
  */
 
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { appendFileSync } from 'node:fs';
 import { writeSecretFile } from '@kinu.run/cli-backend';
 import { renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
@@ -205,46 +205,45 @@ const RecordCellSummarySchema: v.GenericSchema<RecordCellSummary> = v.object({
 
 /** Implemented once per backend; names the width a full debug bundle needs. */
 interface DebugSource {
-  identity(): Promise<JsonObject>;
-  messages(limit: number): Promise<JsonObject[]>;
-  runs(limit: number): Promise<DebugRun[]>;
-  runEvents(runId: string, since: number, limit: number): Promise<DebugRunEvent[]>;
-  headRuns(limit: number): Promise<DebugHeadRun[]>;
-  mctsSearchRuns(limit: number): Promise<DebugMctsSearchRun[]>;
-  mctsNodes(): Promise<RawMctsNode[]>;
-  backgroundJobs(limit: number): Promise<DebugBackgroundJob[]>;
-  changelog(limit: number): Promise<DebugChangelogView>;
-  scaffoldVersions(limit: number): Promise<JsonObject[]>;
-  gepaRuns(limit: number): Promise<JsonObject[]>;
-  triggers(): Promise<JsonValue>;
-  toolDescriptions(): Promise<JsonValue>;
-  facts(limit: number): Promise<JsonObject[]>;
-  memoryContent(): Promise<string>;
+  identity(): Effect.Effect<JsonObject>;
+  messages(limit: number): Effect.Effect<JsonObject[]>;
+  runs(limit: number): Effect.Effect<DebugRun[]>;
+  runEvents(runId: string, since: number, limit: number): Effect.Effect<DebugRunEvent[]>;
+  headRuns(limit: number): Effect.Effect<DebugHeadRun[]>;
+  mctsSearchRuns(limit: number): Effect.Effect<DebugMctsSearchRun[]>;
+  mctsNodes(): Effect.Effect<RawMctsNode[]>;
+  backgroundJobs(limit: number): Effect.Effect<DebugBackgroundJob[]>;
+  changelog(limit: number): Effect.Effect<DebugChangelogView>;
+  scaffoldVersions(limit: number): Effect.Effect<JsonObject[]>;
+  gepaRuns(limit: number): Effect.Effect<JsonObject[]>;
+  triggers(): Effect.Effect<JsonValue>;
+  toolDescriptions(): Effect.Effect<JsonValue>;
+  facts(limit: number): Effect.Effect<JsonObject[]>;
+  memoryContent(): Effect.Effect<string>;
   /**
    * Records store, walked as a grid; a cell is read a page at a time because its
    * population is provably unbounded (`ArchiveAdmission.lean —
    * separated_cells_are_unboundedly_large`).
    */
-  recordObjectives(limit: number): Promise<RecordObjectiveSummary[]>;
-  recordCells(handle: RecordObjectiveHandle, limit: number): Promise<RecordCellSummary[]>;
+  recordObjectives(limit: number): Effect.Effect<RecordObjectiveSummary[]>;
+  recordCells(handle: RecordObjectiveHandle, limit: number): Effect.Effect<RecordCellSummary[]>;
   recordOccupants(
     handle: RecordCellHandle, cursor: SeekCursor | null, limit: number,
-  ): Promise<Page<ExplorationRecord>>;
+  ): Effect.Effect<Page<ExplorationRecord>>;
   /** Cloud-only; local sources return null and the section is omitted rather than faked. */
-  activitySnapshot(): Promise<JsonObject | null>;
-  turnRequests(turnId: string, actor: string | undefined): Promise<TurnRequestIndexRecord | null>;
-  turnRequest(turnId: string, at: { epoch: number; revision: number; from: number; actor?: string }): Promise<TurnRequestPageRecord>;
+  activitySnapshot(): Effect.Effect<JsonObject | null>;
+  turnRequests(turnId: string, actor: string | undefined): Effect.Effect<TurnRequestIndexRecord | null>;
+  turnRequest(turnId: string, at: { epoch: number; revision: number; from: number; actor?: string }): Effect.Effect<TurnRequestPageRecord>;
 }
 
 function cloudDebugSource(cloudName: string, auth: { origin: string; token: string }): DebugSource {
   const rpc = <T>(method: AgentRpcMethod, schema: v.GenericSchema<T>, args: JsonValue[] = []) =>
-    callAgentRpc({ origin: auth.origin, token: auth.token, name: cloudName, method, schema, args });
+    Effect.promise(() => callAgentRpc({ origin: auth.origin, token: auth.token, name: cloudName, method, schema, args }));
 
   return {
-    identity: () => rpc('getWorkspaceSnapshot', WorkspaceSnapshotSchema).then((snapshot) => snapshot.status),
-    messages: (limit) => rpc('getChatHistoryPage', v.object({ items: JsonRowsSchema }), [{ limit }])
-      .then((page) => page.items),
-    runs: (limit) => rpc('listRuns', pageSchema(DebugRunSchema), [{ limit }]).then((page) => [...page.items]),
+    identity: () => Effect.map(rpc('getWorkspaceSnapshot', WorkspaceSnapshotSchema), (snapshot) => snapshot.status),
+    messages: (limit) => Effect.map(rpc('getChatHistoryPage', v.object({ items: JsonRowsSchema }), [{ limit }]), (page) => page.items),
+    runs: (limit) => Effect.map(rpc('listRuns', pageSchema(DebugRunSchema), [{ limit }]), (page) => [...page.items]),
     runEvents: (runId, since, limit) => rpc('getRunEvents', v.array(DebugRunEventSchema), [runId, { since, limit }]),
     headRuns: (limit) => rpc('getHeadRuns', v.array(DebugHeadRunSchema), [limit]),
     mctsSearchRuns: (limit) => rpc('getMctsSearchRuns', v.array(DebugMctsSearchRunSchema), [limit]),
@@ -258,13 +257,11 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
     facts: (limit) => rpc('getFacts', JsonRowsSchema, [limit]),
     memoryContent: () => rpc('getMemoryContent', v.string()),
     recordObjectives: (limit) =>
-      rpc('listRecordObjectives', pageSchema(RecordObjectiveSummarySchema), [{ limit }])
-        .then((page) => [...page.items]),
+      Effect.map(rpc('listRecordObjectives', pageSchema(RecordObjectiveSummarySchema), [{ limit }]), (page) => [...page.items]),
     // Built field by field: `SeekCursor` has no index signature and the handles cross a JSON boundary.
     recordCells: (handle, limit) =>
-      rpc('listRecordCells', pageSchema(RecordCellSummarySchema),
-        [{ objectiveId: handle.objectiveId, floorDigest: handle.floorDigest, limit }])
-        .then((page) => [...page.items]),
+      Effect.map(rpc('listRecordCells', pageSchema(RecordCellSummarySchema),
+        [{ objectiveId: handle.objectiveId, floorDigest: handle.floorDigest, limit }]), (page) => [...page.items]),
     recordOccupants: (handle, cursor, limit) => {
       const request: JsonObject = {
         objectiveId: handle.objectiveId, floorDigest: handle.floorDigest,
@@ -284,32 +281,31 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
 
 function localDebugSource(localName: string): DebugSource {
   return {
-    identity: async () => parseLocal(JsonObjectSchema, { value: getLocalAgentInfo(localName) }),
-    messages: async (limit) => parseLocal(JsonRowsSchema, { value: await getLocalChatHistory(localName, limit) }),
-    runs: async (limit) => parseLocal(v.array(DebugRunSchema), { value: listLocalRuns(localName, limit) }),
-    runEvents: async (runId, since, limit) => parseLocal(
+    identity: () => Effect.sync(() => parseLocal(JsonObjectSchema, { value: getLocalAgentInfo(localName) })),
+    messages: (limit) => Effect.map(Effect.promise(() => getLocalChatHistory(localName, limit)), (value) => parseLocal(JsonRowsSchema, { value })),
+    runs: (limit) => Effect.sync(() => parseLocal(v.array(DebugRunSchema), { value: listLocalRuns(localName, limit) })),
+    runEvents: (runId, since, limit) => Effect.sync(() => parseLocal(
       v.array(DebugRunEventSchema), { value: listLocalRunEvents(localName, runId, { since, limit }) },
-    ),
-    headRuns: async (limit) => parseLocal(v.array(DebugHeadRunSchema), { value: listLocalHeads(localName, limit) }),
-    mctsSearchRuns: async (limit) => parseLocal(
+    )),
+    headRuns: (limit) => Effect.sync(() => parseLocal(v.array(DebugHeadRunSchema), { value: listLocalHeads(localName, limit) })),
+    mctsSearchRuns: (limit) => Effect.sync(() => parseLocal(
       v.array(DebugMctsSearchRunSchema), { value: listLocalMctsSearchRuns(localName, limit) },
-    ),
-    mctsNodes: async () => parseLocal(v.array(RawMctsNodeSchema), { value: listLocalMcts(localName) }),
-    backgroundJobs: async (limit) => parseLocal(v.array(DebugBackgroundJobSchema), { value: listLocalJobs(localName, limit) }),
-    changelog: async (limit) => parseLocal(DebugChangelogViewSchema, { value: getLocalChangelog(localName, limit) }),
-    scaffoldVersions: async (limit) => parseLocal(JsonRowsSchema, { value: getLocalScaffoldVersions(localName, limit) }),
-    gepaRuns: async (limit) => parseLocal(JsonRowsSchema, { value: listLocalGepaRuns(localName, limit) }),
-    triggers: async () => decodeJsonValue({ value: listLocalTriggers(localName) }),
-    toolDescriptions: async () => decodeJsonValue({ value: getLocalToolSurface(localName) }),
-    facts: async (limit) => parseLocal(JsonRowsSchema, { value: getLocalFacts(localName, limit) }),
-    memoryContent: async () => readLocalMemory(localName),
-    recordObjectives: async (limit) => listLocalRecordObjectives(localName, limit),
-    recordCells: async (handle, limit) => listLocalRecordCells(localName, handle, limit),
-    recordOccupants: async (handle, cursor, limit) =>
-      readLocalRecordCell(localName, handle, cursor, limit),
-    activitySnapshot: async () => null,
-    turnRequests: async () => null,
-    turnRequest: () => Promise.reject(new Error('a local agent has no turn-request reader; read its .kinu/context/requests')),
+    )),
+    mctsNodes: () => Effect.sync(() => parseLocal(v.array(RawMctsNodeSchema), { value: listLocalMcts(localName) })),
+    backgroundJobs: (limit) => Effect.sync(() => parseLocal(v.array(DebugBackgroundJobSchema), { value: listLocalJobs(localName, limit) })),
+    changelog: (limit) => Effect.sync(() => parseLocal(DebugChangelogViewSchema, { value: getLocalChangelog(localName, limit) })),
+    scaffoldVersions: (limit) => Effect.sync(() => parseLocal(JsonRowsSchema, { value: getLocalScaffoldVersions(localName, limit) })),
+    gepaRuns: (limit) => Effect.sync(() => parseLocal(JsonRowsSchema, { value: listLocalGepaRuns(localName, limit) })),
+    triggers: () => Effect.sync(() => decodeJsonValue({ value: listLocalTriggers(localName) })),
+    toolDescriptions: () => Effect.sync(() => decodeJsonValue({ value: getLocalToolSurface(localName) })),
+    facts: (limit) => Effect.sync(() => parseLocal(JsonRowsSchema, { value: getLocalFacts(localName, limit) })),
+    memoryContent: () => Effect.sync(() => readLocalMemory(localName)),
+    recordObjectives: (limit) => Effect.sync(() => listLocalRecordObjectives(localName, limit)),
+    recordCells: (handle, limit) => Effect.sync(() => listLocalRecordCells(localName, handle, limit)),
+    recordOccupants: (handle, cursor, limit) => Effect.sync(() => readLocalRecordCell(localName, handle, cursor, limit)),
+    activitySnapshot: () => Effect.succeed(null),
+    turnRequests: () => Effect.succeed(null),
+    turnRequest: () => Effect.die(new Error('a local agent has no turn-request reader; read its .kinu/context/requests')),
   };
 }
 
@@ -496,26 +492,28 @@ const DEFAULT_RECORD_PAGE = 200;
  * Unrelated to `INHERITED_CONTEXT_CAP` despite the same value. */
 const RECORD_PAGE_CAP = 50;
 
-async function writeCellOccupants(
+function writeCellOccupants(
   handle: RecordCellHandle,
   source: DebugSource,
   writer: BundleWriter,
-  safe: <T>(section: string, work: Promise<T>, fallback: T) => Promise<T>,
-): Promise<void> {
-  let cursor: SeekCursor | null = null;
+  safe: <T>(section: string, work: Effect.Effect<T>, fallback: T) => Effect.Effect<T>,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    let cursor: SeekCursor | null = null;
 
-  for (let page = 0; page < RECORD_PAGE_CAP; page += 1) {
-    const occupants: Page<ExplorationRecord> = await safe(
-      'record_occupants',
-      source.recordOccupants(handle, cursor, DEFAULT_RECORD_PAGE),
-      { status: 'end', items: [] },
-    );
+    for (let page = 0; page < RECORD_PAGE_CAP; page += 1) {
+      const occupants: Page<ExplorationRecord> = yield* safe(
+        'record_occupants',
+        source.recordOccupants(handle, cursor, DEFAULT_RECORD_PAGE),
+        { status: 'end', items: [] },
+      );
 
-    for (const row of occupants.items) writer.write(explorationRecordRecord(row));
+      for (const row of occupants.items) writer.write(explorationRecordRecord(row));
 
-    if (occupants.status === 'end') return;
-    cursor = occupants.next;
-  }
+      if (occupants.status === 'end') return;
+      cursor = occupants.next;
+    }
+  });
 }
 
 function writeTurnRequests(
@@ -523,7 +521,7 @@ function writeTurnRequests(
   ask: { readonly turnId: string; readonly actor: string | undefined; readonly outPath: string; readonly json: boolean },
 ): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
-    const index = yield* Effect.promise(async () => source.turnRequests(ask.turnId, ask.actor));
+    const index = yield* source.turnRequests(ask.turnId, ask.actor);
 
     if (index === null) {
       return yield* Effect.die(new Error('turn requests are read from cloud workspaces; a local agent keeps them under its home\'s .kinu/context/requests'));
@@ -542,9 +540,9 @@ function writeTurnRequests(
         while (from !== null) {
           const at = from;
 
-          const page: TurnRequestPageRecord = yield* Effect.promise(async () => source.turnRequest(ask.turnId, {
+          const page: TurnRequestPageRecord = yield* source.turnRequest(ask.turnId, {
             epoch: request.epoch, revision: request.revision, from: at, ...(ask.actor !== undefined && { actor: ask.actor }),
-          }));
+          });
 
           writer.write({ t: 'turn_request', ...page });
 
@@ -589,7 +587,7 @@ export function debugCommand(name: string, opts: DebugOpts = {}): Promise<void> 
       ? cloudDebugSource(target.cloudName, requireAuthConfig())
       : localDebugSource(target.localName);
 
-    if (opts.turn === undefined) return yield* Effect.promise(() => writeDebugBundle(target, source, opts));
+    if (opts.turn === undefined) return yield* writeDebugBundle(target, source, opts);
 
     return yield* writeTurnRequests(source, {
       turnId: opts.turn, actor: opts.actor, outPath: opts.out ?? `${target.name}.turn-${opts.turn}.jsonl`, json: opts.json === true,
@@ -597,157 +595,155 @@ export function debugCommand(name: string, opts: DebugOpts = {}): Promise<void> 
   }));
 }
 
-async function writeDebugBundle(target: DebugTarget, source: DebugSource, opts: DebugOpts): Promise<void> {
-  const outPath = opts.out ?? `${target.name}.debug.jsonl`;
-  const runLimit = opts.runs ? parsePositiveInt(opts.runs, 'runs') : DEFAULT_RUNS;
-  const sectionLimit = opts.limit ? parsePositiveInt(opts.limit, 'limit') : 100;
+function writeDebugBundle(target: DebugTarget, source: DebugSource, opts: DebugOpts): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const outPath = opts.out ?? `${target.name}.debug.jsonl`;
+    const runLimit = opts.runs ? parsePositiveInt(opts.runs, 'runs') : DEFAULT_RUNS;
+    const sectionLimit = opts.limit ? parsePositiveInt(opts.limit, 'limit') : 100;
 
-  const writer = fileWriter(outPath);
+    const writer = fileWriter(outPath);
 
-  const summary: DebugSummary = {
-    identity: {}, messageCount: 0, runs: [], headRuns: [], mctsSearches: [],
-    backgroundJobs: [], changelogUnseen: 0, scaffoldVersionCount: 0, gepaRunCount: 0,
-    recordObjectives: [],
-    factCount: 0, errors: [], sectionFailures: [],
-  };
+    const summary: DebugSummary = {
+      identity: {}, messageCount: 0, runs: [], headRuns: [], mctsSearches: [],
+      backgroundJobs: [], changelogUnseen: 0, scaffoldVersionCount: 0, gepaRunCount: 0,
+      recordObjectives: [],
+      factCount: 0, errors: [], sectionFailures: [],
+    };
 
-  /** An unreadable section is a finding, never an empty section. */
-  const safe = async <T>(section: string, p: Promise<T>, fallback: T): Promise<T> => {
-    try {
-      return await p;
-    } catch (caught) {
-      const message = renderThrownChain({ cause: caught });
+    /** An unreadable section is a finding, never an empty section. */
+    const safe = <T>(section: string, work: Effect.Effect<T>, fallback: T): Effect.Effect<T> => Effect.catchCause(work, (failed) => Effect.sync(() => {
+      const message = renderThrownChain({ cause: Cause.squash(failed) });
       summary.sectionFailures.push({ section, message });
       writer.write({ t: 'section_error', section, error: message });
 
       return fallback;
+    }));
+
+    yield* Effect.ensuring(Effect.gen(function* () {
+        const identity = yield* safe('identity', source.identity(), {});
+        summary.identity = identity;
+        writer.write({ t: 'identity', workspace: target.name, mode: target.mode, ...identity });
+
+        const messages = yield* safe('messages', source.messages(sectionLimit), []);
+        summary.messageCount = messages.length;
+
+        for (const m of messages) writer.write({ t: 'message', ...m });
+
+        // Paged per run via `since`, so a large run never sits fully in memory.
+        const runs = yield* safe('runs', source.runs(runLimit), []);
+
+        for (const run of runs) {
+          writer.write({ t: 'shell', ...run });
+          const events: DebugRunEvent[] = [];
+          let since = 0;
+
+          for (;;) {
+            const page = yield* safe('run_events', source.runEvents(run.runId, since, DEFAULT_EVENT_PAGE), []);
+
+            if (page.length === 0) break;
+
+            for (const e of page) writer.write(runEventRecord(e));
+            events.push(...page);
+
+            if (page.length < DEFAULT_EVENT_PAGE) break;
+            since = page[page.length - 1].eventIndex + 1;
+          }
+
+          const stats = summarizeRun(run.runId, events);
+          summary.runs.push(stats);
+
+          for (const message of stats.errors) summary.errors.push({ runId: run.runId, message });
+        }
+
+        const headRuns = yield* safe('head_runs', source.headRuns(runLimit), []);
+        summary.headRuns = headRuns;
+
+        for (const run of headRuns) writer.write({ t: 'head_run', ...run });
+
+        const [mctsSearches, mctsNodes] = yield* Effect.all([
+          safe('mcts_search_runs', source.mctsSearchRuns(runLimit), []),
+          safe('mcts_nodes', source.mctsNodes(), []),
+        ], { concurrency: 'unbounded' });
+
+        for (const s of mctsSearches) writer.write({ t: 'mcts_search_run', ...s });
+
+        for (const n of mctsNodes) writer.write({ t: 'mcts_node', ...n });
+        summary.mctsSearches = summarizeMctsSearches(mctsNodes, mctsSearches);
+
+        // Values are raw in the objective's unit, which travels with them. Occupants are paged: a cell has no bound.
+        summary.recordObjectives = yield* safe('record_objectives', source.recordObjectives(sectionLimit), []);
+
+        for (const objective of summary.recordObjectives) {
+          writer.write(recordObjectiveRecord(objective));
+
+          const objectiveHandle = {
+            objectiveId: objective.objectiveId, floorDigest: objective.floorDigest,
+          };
+
+          const cells = yield* safe('record_cells', source.recordCells(objectiveHandle, sectionLimit), []);
+
+          for (const cell of cells) {
+            writer.write({
+              t: 'record_cell', objectiveId: objective.objectiveId,
+              floorDigest: objective.floorDigest, descriptor: cell.descriptor,
+              occupants: cell.occupants, elite: cell.elite?.artifactDigest ?? null,
+            });
+            yield* writeCellOccupants({ ...objectiveHandle, descriptor: cell.descriptor }, source, writer, safe);
+          }
+        }
+
+        const jobs = yield* safe('background_jobs', source.backgroundJobs(sectionLimit), []);
+        summary.backgroundJobs = jobs;
+
+        for (const j of jobs) writer.write({ t: 'background_job', ...j });
+
+        const changelog = yield* safe('changelog', source.changelog(sectionLimit), { entries: [], unseenCount: 0, seenAt: 0 });
+        summary.changelogUnseen = changelog.unseenCount;
+
+        for (const entry of changelog.entries) writer.write({ t: 'changelog_entry', ...entry });
+
+        const scaffoldVersions = yield* safe('scaffold_versions', source.scaffoldVersions(sectionLimit), []);
+        summary.scaffoldVersionCount = scaffoldVersions.length;
+
+        for (const version of scaffoldVersions) writer.write({ t: 'scaffold_version', ...version });
+
+        const gepaRuns = yield* safe('gepa_runs', source.gepaRuns(sectionLimit), []);
+        summary.gepaRunCount = gepaRuns.length;
+
+        for (const g of gepaRuns) writer.write({ t: 'gepa_run', ...g });
+
+        const triggers = yield* safe('triggers', source.triggers(), null);
+
+        if (triggers) writer.write({ t: 'triggers', ...asRecord({ value: triggers }, 'value') });
+
+        const tools = yield* safe('tools', source.toolDescriptions(), null);
+
+        if (tools) writer.write({ t: 'tools', ...asRecord({ value: tools }, 'value') });
+
+        const facts = yield* safe('facts', source.facts(sectionLimit), []);
+        summary.factCount = facts.length;
+
+        for (const f of facts) writer.write({ t: 'fact', ...f });
+
+        const memory = yield* safe('memory', source.memoryContent(), '');
+
+        if (memory) writer.write({ t: 'memory', content: memory });
+
+        const activity = yield* safe('activity_snapshot', source.activitySnapshot(), null);
+
+        if (activity) writer.write({ t: 'activity_snapshot', ...activity });
+
+        writer.write({ t: 'end', workspace: target.name, mode: target.mode, generatedAt: Date.now() });
+    }), Effect.sync(() => {
+      writer.close();
+    }));
+
+    if (opts.json) {
+      printJsonSummary(summary, outPath);
+    } else {
+      printHumanSummary(target.name, target.mode, summary, outPath);
     }
-  };
-
-  try {
-    const identity = await safe('identity', source.identity(), {});
-    summary.identity = identity;
-    writer.write({ t: 'identity', workspace: target.name, mode: target.mode, ...identity });
-
-    const messages = await safe('messages', source.messages(sectionLimit), []);
-    summary.messageCount = messages.length;
-
-    for (const m of messages) writer.write({ t: 'message', ...m });
-
-    // Paged per run via `since`, so a large run never sits fully in memory.
-    const runs = await safe('runs', source.runs(runLimit), []);
-
-    for (const run of runs) {
-      writer.write({ t: 'shell', ...run });
-      const events: DebugRunEvent[] = [];
-      let since = 0;
-
-      for (;;) {
-        const page = await safe('run_events', source.runEvents(run.runId, since, DEFAULT_EVENT_PAGE), []);
-
-        if (page.length === 0) break;
-
-        for (const e of page) writer.write(runEventRecord(e));
-        events.push(...page);
-
-        if (page.length < DEFAULT_EVENT_PAGE) break;
-        since = page[page.length - 1].eventIndex + 1;
-      }
-
-      const stats = summarizeRun(run.runId, events);
-      summary.runs.push(stats);
-
-      for (const message of stats.errors) summary.errors.push({ runId: run.runId, message });
-    }
-
-    const headRuns = await safe('head_runs', source.headRuns(runLimit), []);
-    summary.headRuns = headRuns;
-
-    for (const run of headRuns) writer.write({ t: 'head_run', ...run });
-
-    const [mctsSearches, mctsNodes] = await Promise.all([
-      safe('mcts_search_runs', source.mctsSearchRuns(runLimit), []),
-      safe('mcts_nodes', source.mctsNodes(), []),
-    ]);
-
-    for (const s of mctsSearches) writer.write({ t: 'mcts_search_run', ...s });
-
-    for (const n of mctsNodes) writer.write({ t: 'mcts_node', ...n });
-    summary.mctsSearches = summarizeMctsSearches(mctsNodes, mctsSearches);
-
-    // Values are raw in the objective's unit, which travels with them. Occupants are paged: a cell has no bound.
-    summary.recordObjectives = await safe('record_objectives', source.recordObjectives(sectionLimit), []);
-
-    for (const objective of summary.recordObjectives) {
-      writer.write(recordObjectiveRecord(objective));
-
-      const objectiveHandle = {
-        objectiveId: objective.objectiveId, floorDigest: objective.floorDigest,
-      };
-
-      const cells = await safe('record_cells', source.recordCells(objectiveHandle, sectionLimit), []);
-
-      for (const cell of cells) {
-        writer.write({
-          t: 'record_cell', objectiveId: objective.objectiveId,
-          floorDigest: objective.floorDigest, descriptor: cell.descriptor,
-          occupants: cell.occupants, elite: cell.elite?.artifactDigest ?? null,
-        });
-        await writeCellOccupants({ ...objectiveHandle, descriptor: cell.descriptor }, source, writer, safe);
-      }
-    }
-
-    const jobs = await safe('background_jobs', source.backgroundJobs(sectionLimit), []);
-    summary.backgroundJobs = jobs;
-
-    for (const j of jobs) writer.write({ t: 'background_job', ...j });
-
-    const changelog = await safe('changelog', source.changelog(sectionLimit), { entries: [], unseenCount: 0, seenAt: 0 });
-    summary.changelogUnseen = changelog.unseenCount;
-
-    for (const entry of changelog.entries) writer.write({ t: 'changelog_entry', ...entry });
-
-    const scaffoldVersions = await safe('scaffold_versions', source.scaffoldVersions(sectionLimit), []);
-    summary.scaffoldVersionCount = scaffoldVersions.length;
-
-    for (const version of scaffoldVersions) writer.write({ t: 'scaffold_version', ...version });
-
-    const gepaRuns = await safe('gepa_runs', source.gepaRuns(sectionLimit), []);
-    summary.gepaRunCount = gepaRuns.length;
-
-    for (const g of gepaRuns) writer.write({ t: 'gepa_run', ...g });
-
-    const triggers = await safe('triggers', source.triggers(), null);
-
-    if (triggers) writer.write({ t: 'triggers', ...asRecord({ value: triggers }, 'value') });
-
-    const tools = await safe('tools', source.toolDescriptions(), null);
-
-    if (tools) writer.write({ t: 'tools', ...asRecord({ value: tools }, 'value') });
-
-    const facts = await safe('facts', source.facts(sectionLimit), []);
-    summary.factCount = facts.length;
-
-    for (const f of facts) writer.write({ t: 'fact', ...f });
-
-    const memory = await safe('memory', source.memoryContent(), '');
-
-    if (memory) writer.write({ t: 'memory', content: memory });
-
-    const activity = await safe('activity_snapshot', source.activitySnapshot(), null);
-
-    if (activity) writer.write({ t: 'activity_snapshot', ...activity });
-
-    writer.write({ t: 'end', workspace: target.name, mode: target.mode, generatedAt: Date.now() });
-  } finally {
-    writer.close();
-  }
-
-  if (opts.json) {
-    printJsonSummary(summary, outPath);
-  } else {
-    printHumanSummary(target.name, target.mode, summary, outPath);
-  }
+  });
 }
 
 /** Negative/NaN inputs (clock skew, malformed row) render as "0s". */

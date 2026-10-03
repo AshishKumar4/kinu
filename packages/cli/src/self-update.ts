@@ -227,20 +227,23 @@ function processAlive(pid: number): boolean {
   }, 'esrch') === true;
 }
 
-async function verifiedStagedBuild(served: string): Promise<string | null> {
-  const next = stagedDirFor(served);
+function verifiedStagedBuild(served: string): Effect.Effect<string | null> {
+  return Effect.gen(function* () {
+    const next = stagedDirFor(served);
 
-  if (!existsSync(join(next, 'cli.js'))) return null;
+    if (!existsSync(join(next, 'cli.js'))) return null;
 
-  try {
-    if (isSameBuild(await stagedVersion(next), served)) return next;
-  } catch (cause) {
-    if (!(cause instanceof KinuError)) throw cause;
-  }
+    // A staged build that cannot report its version is discarded like a stale one.
+    const same = yield* Effect.catchCause(
+      Effect.map(Effect.promise(() => stagedVersion(next)), (version) => isSameBuild(version, served)),
+      (failed) => (Cause.squash(failed) instanceof KinuError ? Effect.succeed(false) : Effect.failCause(failed)),
+    );
 
-  rmSync(next, { recursive: true, force: true });
+    if (same) return next;
+    rmSync(next, { recursive: true, force: true });
 
-  return null;
+    return null;
+  });
 }
 
 function sweepStagedBuilds(keep: string | null): void {
@@ -266,7 +269,7 @@ export function refreshCliTree(origin: string, served: string, seams: RefreshSea
       const installed = yield* installedBuild();
 
       if (installed !== null && isSameBuild(installed, served)) return;
-      const staged = yield* Effect.promise(async () => verifiedStagedBuild(served));
+      const staged = yield* verifiedStagedBuild(served);
       sweepStagedBuilds(staged);
       adoptStagedBuild(staged ?? (yield* stageServedBuild(origin, served, seams)));
     }), Effect.sync(() => {
