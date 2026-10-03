@@ -54,7 +54,7 @@ const TOOLS_STAMP_COMMAND = `cat ${TOOLS_STAMP} 2>/dev/null || true`;
 
 const REBUILDING = 'the base snapshot is being rebuilt (about 30 s); the box starts when it is ready';
 
-/** A roll of the base is a new base. */
+/** Recorded with each golden: the base it was built on. */
 const BASE_COMMAND = 'echo "$(cat /etc/debian_version) $(node --version 2>/dev/null) $(sha256sum /var/lib/dpkg/status | cut -c1-16)"';
 
 const VERIFY_COMMAND = 'set -e; for t in bun git tmux tini s3fs fuse-overlayfs mksquashfs unsquashfs zstd curl python3 flock devbox-squashfuse '
@@ -123,15 +123,15 @@ function build(ports: GoldenPorts, before: GoldenState): Effect.Effect<Pick<Gold
   });
 
   return Effect.gen(function* () {
-    yield* attempt('io', () => ports.start({ image: GOLDEN_BASE }), 'starting the base image');
-    const base = yield* run('reading the base', BASE_COMMAND);
     const current = before.current;
 
-    if (current !== undefined && current.tools === ports.tools && current.base === base && ports.now() - current.takenAt < GOLDEN_REFRESH_MS) {
-      yield* attempt('io', () => ports.destroy());
-
+    // A base roll needs no rebuild: a snapshot keeps its base (D65).
+    if (current !== undefined && current.tools === ports.tools && ports.now() - current.takenAt < GOLDEN_REFRESH_MS) {
       return { current, previous: before.previous };
     }
+
+    yield* attempt('io', () => ports.start({ image: GOLDEN_BASE }), 'starting the base image');
+    const base = yield* run('reading the base', BASE_COMMAND);
 
     yield* ports.pipe(toolsKey(ports.tools), ARCHIVE);
     yield* run('installing the tools', toolsInstallCommand(ARCHIVE, ports.tools));

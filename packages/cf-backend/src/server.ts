@@ -45,6 +45,7 @@ import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { api } from "./api/app";
 import { beneath, rawParam, rawPath, routeError, type ApiVariables, type FamilyEnv } from "./api/context";
+import { keepDevboxGolden } from './devbox-golden';
 
 const RELEASE_ARTIFACT_PATH = `/downloads/:artifact{${RELEASE_ARTIFACT_NAME}}`;
 
@@ -209,6 +210,7 @@ export default {
   // Synthetic monitoring cron; a failed run must not take the schedule down.
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
     installAnalyticsDiagnostics(env);
+    ctx.waitUntil(keepDevboxGolden(env.KinuDevbox));
     ctx.waitUntil((async () => {
       try {
         const monitor = env.MonitorDO.get(env.MonitorDO.idFromName(MONITOR_SINGLETON));

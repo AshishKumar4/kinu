@@ -3560,9 +3560,13 @@ re-pins runs `devbox-tools.ts publish <bucket>` for each environment.
 The golden object, one object of the box's class (`devbox-golden`), starts
 the base, pipes the tarball in from the store, installs it with apt over the
 local repository (no network), checks the tools and FUSE, and snapshots.
-It rebuilds when the pinned tools or the base move (the base's Debian
-version, node and dpkg status, so a platform roll is a rebuild), and at 25
-days, when it also restores the previous golden so both stay alive. A box
+It rebuilds when the pinned tools move, and at 25 days, when it also
+restores the previous golden so both stay alive. A platform roll of the
+base is not a rebuild: a snapshot keeps the base it was taken on, and the
+next refresh takes the new one. The Worker's 15-minute cron asks the golden
+object (the owner's choice, 2026-10-03: no deploy step, route or secret);
+with nothing to do it answers without starting a container, and the first
+box of a new deployment that finds no golden asks for the build. A box
 starts from its own snapshot, else the golden. A golden of other tools still
 serves; the box then installs the pinned tarball inside its start gate. A
 golden the platform refuses is reported lost and the next is used. With no

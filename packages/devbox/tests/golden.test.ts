@@ -11,7 +11,6 @@ class Platform {
   readonly calls: string[] = [];
   readonly told: [string, GoldenAnswer][] = [];
   builds = 0;
-  base = '13.6 v24.20.0 aaaa';
   failInstall: string | undefined;
   clock = 1_000 * DAY;
   #taken = 0;
@@ -23,7 +22,7 @@ class Platform {
       write: (state) => { this.state = state; },
       start: async (from) => { this.calls.push('image' in from ? `start ${from.image}` : `start ${from.snapshot}`); },
       exec: async (command) => {
-        if (command.includes('debian_version')) return { stdout: this.base, stderr: '', exitCode: 0 };
+        if (command.includes('debian_version')) return { stdout: '13.6 v24.20.0 aaaa', stderr: '', exitCode: 0 };
 
         if (command.includes('apt-get')) {
           this.calls.push('install');
@@ -94,17 +93,17 @@ test('a golden of other tools still serves while one of the pinned tools is buil
   expect({ served, builds: platform.builds, waiting: platform.state.waiting }).toEqual({ served: { kind: 'ready', id: 'golden-1', tools: 'tools-1' }, builds: 1, waiting: [] });
 });
 
-test('a build finds nothing to do while the tools, the base and the age all hold, and rebuilds when the base rolls', async () => {
+// The 15-minute cron asks for a build; one that has nothing to do must cost no container (D66).
+test('a build that finds the pinned tools current and young starts no container, and a new pin rebuilds', async () => {
   const platform = new Platform();
   await settle(buildGolden(platform.ports(), false));
   platform.calls.length = 0;
   await settle(buildGolden(platform.ports(), false));
   const held = [...platform.calls];
-  platform.base = '13.7 v24.21.0 bbbb';
-  await settle(buildGolden(platform.ports(), false));
+  await settle(buildGolden(platform.ports('tools-3'), false));
 
   expect({ held, current: platform.state.current?.id, previous: platform.state.previous?.id }).toEqual({
-    held: [`start ${GOLDEN_BASE}`, 'destroy'], current: 'golden-2', previous: 'golden-1',
+    held: [], current: 'golden-2', previous: 'golden-1',
   });
 });
 
