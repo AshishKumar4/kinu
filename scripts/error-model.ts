@@ -120,6 +120,38 @@ export const DECLARED = byFile([
     reason: 'agent-utils sits below core and holds no runner: a leaf utility throws and catches as plain async code, '
       + 'and core brings each failure in with `attempt`',
   }] as const),
+  ['packages/compaction/src/codec.ts', {
+    mechanisms: ['throw', 'catch'],
+    reason: 'the `Codec` @better-compact/core calls: an invalid handle is thrown, the library\'s codec contract, and a value '
+      + 'that will not stringify degrades to its rendered failure, as the library measures every turn',
+  }],
+  ['packages/compaction/src/extension.ts', {
+    mechanisms: ['throw', 'catch'],
+    within: ['complete'],
+    reason: 'the `Summarizer` @better-compact/core calls: a failed summary answers null, as the library\'s contract asks, and '
+      + 'only a cancelled turn\'s abort is rethrown',
+  }],
+  ['packages/cf-backend/src/egress/codex-egress-route.ts', {
+    mechanisms: ['throw'],
+    within: ['codexContainerFetch'],
+    reason: 'a `fetch` the AI SDK calls: its caller learns an abort or a refused route as the fetch\'s rejection, the fetch protocol',
+  }],
+  ['packages/core/src/orchestrator/scaffold-host.ts', {
+    mechanisms: ['throw', 'catch'],
+    within: ['streamScaffoldChat'],
+    reason: 'an async generator: its consumer receives the stream\'s failure from next(), the iterator protocol, after the '
+      + 'operation records it',
+  }],
+  ['packages/cli/src/commands/export-import.ts', {
+    mechanisms: ['throw'],
+    within: ['localArchivePages'],
+    reason: 'an async generator: the archive writer learns an unreadable page from next(), the iterator protocol',
+  }],
+  ['packages/core/src/deploy/artifact.ts', {
+    mechanisms: ['throw'],
+    within: ['chunks', 'members', 'octal'],
+    reason: 'the release artifact\'s async iterators: a reader learns a truncated or refused tar from next(), the iterator protocol',
+  }],
   ['packages/test-utils/src/mossaic.ts', {
     mechanisms: ['throw'],
     within: ['fakeMossaic'],

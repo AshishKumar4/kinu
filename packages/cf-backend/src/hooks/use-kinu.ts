@@ -10,7 +10,7 @@ import {
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import { explorationForkTree } from "@kinu.run/core";
+import { explorationForkTree, stringifyOr } from "@kinu.run/core";
 import type {
   MemoryEntry,
   ForkNode,
@@ -2091,8 +2091,7 @@ function errorMessage({ cause }: { cause: unknown }): string {
 
   if (text.success && text.output.trim()) return text.output;
 
-  try { return JSON.stringify(cause) || "unknown error"; }
-  catch (error) { return `unrenderable error: ${renderThrownChain({ cause: error })}`; }
+  return stringifyOr({ value: cause }, (reason) => `unrenderable error: ${reason}`) ?? "unknown error";
 }
 
 function formatNaturalList(values: readonly string[]): string {

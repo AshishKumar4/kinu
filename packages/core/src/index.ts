@@ -1180,7 +1180,7 @@ export {
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema,
   parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, jsonResultOrVoid, projectJsonValue, nonEmptyString,
-  type JsonPrimitive, type JsonObject, type JsonValue,
+  stringifyOr, type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
 export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/markdown-frontmatter';

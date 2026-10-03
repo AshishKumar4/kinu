@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { classify, renderThrownChain, settleSync } from '../obs/index';
 
@@ -183,6 +183,17 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
 }
 
 /** A valibot failure as one line, `path: message` per issue. */
+/** `JSON.stringify`, or what `failed` makes of the reason a value will not stringify (a cycle, a BigInt). */
+export function stringifyOr(
+  input: { readonly value: unknown; readonly replacer?: <Value>(key: string, value: Value) => Value | string },
+  failed: (reason: string) => string,
+): string | undefined {
+  return settleSync(Effect.catchCause(
+    Effect.sync((): string | undefined => JSON.stringify(input.value, input.replacer)),
+    (cause) => Effect.sync(() => failed(renderThrownChain({ cause: Cause.squash(cause) }))),
+  ));
+}
+
 export function renderIssues(issues: readonly v.BaseIssue<unknown>[]): string {
   return issues
     .map((issue) => {

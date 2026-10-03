@@ -10,6 +10,7 @@ import type {
   ExecutorProvider,
   JsonValue,
 } from '@kinu.run/core';
+import { stringifyOr } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
@@ -181,8 +182,5 @@ function formatLogArg(input: { value: unknown }): string {
 
   if (text.success) return text.output;
 
-  try { return JSON.stringify(input.value) ?? String(input.value); }
-  catch (error) {
-    return `unserializable tool input: ${renderThrownChain({ cause: error })}`;
-  }
+  return stringifyOr(input, (reason) => `unserializable tool input: ${reason}`) ?? String(input.value);
 }

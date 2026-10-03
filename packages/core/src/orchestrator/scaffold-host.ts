@@ -9,10 +9,10 @@ import { evidenceWindow } from '../utils/evidence-window';
 import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
 import { addUsage, type Usage } from '../usage';
 import type { CallAccount } from '../providers/quota';
-import { decodeJsonValue } from '../utils/json';
+import { decodeJsonValue, stringifyOr } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
 import { nanoid } from '../utils/nanoid';
-import { renderThrownChain, KinuError } from '../obs/index';
+import { KinuError } from '../obs/index';
 import { assertScaffoldActive, type ScaffoldRunControl, type ScaffoldToolOutput } from '../scaffold/executor';
 import type {
   ScaffoldHistoryEntry,
@@ -166,12 +166,8 @@ function renderMessage(message: ModelMessage): string {
 }
 
 function safeJson(input: { value: unknown }): string {
-  try {
-    return JSON.stringify(input.value) ?? 'null';
-  } catch (error) {
-    // `String()` on a cyclic object carries nothing; the reason replaces it.
-    return `unserializable host history part: ${renderThrownChain({ cause: error })}`;
-  }
+  // `String()` on a cyclic object carries nothing; the reason replaces it.
+  return stringifyOr(input, (reason) => `unserializable host history part: ${reason}`) ?? 'null';
 }
 
 /** `host.history`: read-only and budgeted by construction; every query is clamped. */
