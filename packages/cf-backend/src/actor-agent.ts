@@ -178,7 +178,7 @@ import {
 } from "@kinu.run/core";
 import {
   bindAgentSql, createCFRuntime, isCFRuntime, MODEL_SETTINGS,
-  type CFRuntime, type CFRuntimeHooks,
+  type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse,
 } from "./runtime";
 import {
   hostNodeSeat, nodeCodemodeTool, hostedSubordinateRuntime,
@@ -2717,6 +2717,8 @@ export abstract class ActorAgent extends Agent<Env> {
       + unconfirmed.map((o) => `${o.requestId} (${o.detail ?? 'no detail'})`).join('; '));
   }
 
+  protected readonly boxUse: WorkspaceBoxUse = { used: false };
+
   /**
    * Records which running job's command holds each exposed sandbox port when that can move (a port exposed or
    * withdrawn, a job detached or settled), so a listing reads a row and never the box. Only a box this activation
@@ -2968,6 +2970,7 @@ export abstract class ActorAgent extends Agent<Env> {
         modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         servingMoved: () => this.servingMoved(),
+        boxUse: this.boxUse,
         resolveProfile: () => this.routingProfile(),
         currentTurn: (reference) => this.currentTurnOf(reference),
         refusals: this.tierRefusals,

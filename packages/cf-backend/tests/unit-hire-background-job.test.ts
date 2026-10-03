@@ -6,7 +6,7 @@
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { actorConnectionTag, JOB_OUTPUT_EVENT, JobOutputFrameSchema } from '@kinu.run/core';
+import { actorConnectionTag, JOB_OUTPUT_EVENT, JOB_STAMP_ENV, JobOutputFrameSchema } from '@kinu.run/core';
 import { execRecords } from '@kinu.run/devbox';
 import { handClock, present, type HandClock } from '@kinu.run/test-utils';
 import { catalogTurn, driveUntil, gatewayWorkspace, wakeForDelegatedTask } from './helpers/actor-harness';
@@ -21,16 +21,32 @@ const SERVING = 'serving on :3000\n';
 /** How long `node server.js` serves before it exits, on the job clock: past the 30 s window. */
 const SERVES_MS = 60_000;
 
-/** The box: `node server.js` prints its line at once and exits SERVES_MS on, or at the kill that ends it first. */
+/** The box's exposed port while `node server.js` serves, held by the command the job's stamp names. */
+const SERVED_PORT = 3000;
+
+/** A command's options as the lane hands them to the box: the job's stamp rides in its environment. */
+interface BoxExec {
+  readonly execId: string;
+  readonly env?: Readonly<Record<string, string>>;
+}
+
+/**
+ * The box: `node server.js` prints its line at once and exits SERVES_MS on, or at the kill that ends it first. While it
+ * runs it listens on SERVED_PORT, which the box exposes and names its listener by the stamp the command ran under.
+ */
 function serverBox(clock: HandClock, killed: string[] = []) {
   const running = new Map<string, (exitCode: number) => void>();
+  const stamps = new Map<string, string | null>();
 
-  const serve = (execId: string, exit: (exitCode: number) => void): void => {
+  const serve = ({ execId, env }: BoxExec, exit: (exitCode: number) => void): void => {
     const once = (exitCode: number): void => {
+      stamps.delete(execId);
+
       if (running.delete(execId)) exit(exitCode);
     };
 
     running.set(execId, once);
+    stamps.set(execId, env?.[JOB_STAMP_ENV] ?? null);
     clock.after(SERVES_MS, () => { once(0); });
   };
 
@@ -38,19 +54,19 @@ function serverBox(clock: HandClock, killed: string[] = []) {
     resolveReadiness: async () => ({ kind: 'restored' as const }),
     configureEgress: async () => {},
     restoreStatus: async () => ({ restoring: false, refused: undefined }),
-    getExposedPorts: async () => [],
-    portListeners: async () => [],
+    getExposedPorts: async (hostname: string) => (stamps.size === 0 ? [] : [{ port: SERVED_PORT, name: undefined, url: `https://${String(SERVED_PORT)}-box-token.${hostname}` }]),
+    portListeners: async () => [...stamps.values()].map((stamp) => ({ port: SERVED_PORT, pid: 1, stamp, command: 'node server.js' })),
     // Whole, as the runtime answers a call that streams nothing.
-    execUntimed: (_command: string, { execId }: { readonly execId: string }) => new Promise((resolve) => {
-      serve(execId, (exitCode) => { resolve({ stdout: SERVING, stderr: '', exitCode }); });
+    execUntimed: (_command: string, exec: BoxExec) => new Promise((resolve) => {
+      serve(exec, (exitCode) => { resolve({ stdout: SERVING, stderr: '', exitCode }); });
     }),
-    execUntimedStream: async (_command: string, { execId }: { readonly execId: string }) => {
+    execUntimedStream: async (_command: string, exec: BoxExec) => {
       const exitCode = Promise.withResolvers<number>();
 
       const stdout = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new TextEncoder().encode(SERVING));
-          serve(execId, (code) => {
+          serve(exec, (code) => {
             controller.close();
             exitCode.resolve(code);
           });
@@ -81,7 +97,8 @@ const toolAnswers = (run: RecordedGatewayRun): string[] => requestOf(run).messag
 
 /**
  * An agent the owner added, asked to start the server, its call run up to the moment its model reads the answer back.
- * The clock's first wait is the call's window, armed ahead of the box reaching the command; fired, the call outruns it.
+ * The clock's first wait is the call's window, armed ahead of the box reaching the command, and its second the server's
+ * life on the box; fired once the server runs, the window lets the call outrun it.
  */
 async function hiredServer() {
   const clock = handClock(Date.now());
@@ -95,7 +112,9 @@ async function hiredServer() {
       : chatCompletion(run, 'The server is running in the background.');
   });
 
-  const workspace = gatewayWorkspace(gateway, { container: true, box: () => serverBox(clock), jobClock: clock });
+  // One box, whichever agent's runtime asks for it, as one workspace has; its preview host named from the start.
+  const box = serverBox(clock);
+  const workspace = gatewayWorkspace(gateway, { container: true, box: () => box, jobClock: clock, previewHostSuffix: 'preview.test' });
   // The owner's egress vault is read before a sandbox command runs.
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
   // An agent added takes the workspace's purpose, so the workspace has one first.
@@ -125,7 +144,7 @@ async function hiredServer() {
 
   expect(clock.armed()).toBe(0);
   await wakeForDelegatedTask(workspace, route.actorId, START);
-  await clock.whenArmed(1);
+  await clock.whenArmed(2);
   clock.tick();
 
   const answered = () => gateway.runs.find((run) => toolAnswers(run).length > 0);
@@ -142,7 +161,8 @@ test("a hired agent's command that outruns its window becomes the hire's own job
   const { clock, workspace, name, heard, woken, job, told } = await hiredServer();
 
   expect(told).toContain('backgrounded');
-  expect(job).toMatchObject({ kind: 'shell', status: 'running' });
+  // Its server holds the box's port, though the workspace's own chat never touched the box (review of 4028013fc).
+  expect(job).toMatchObject({ kind: 'shell', status: 'serving' });
   const jobId = present(job, "the hire's job").id;
   expect(told).toContain(jobId);
   // The hire's, not the workspace's.
@@ -181,7 +201,7 @@ test("the owner's Stop ends a call still in its foreground, on the box too", asy
     ? toolCallCompletion(run, { tool: 'shell', args: { command: 'node server.js', runtime: 'sandbox' } }, 'call_server')
     : chatCompletion(run, 'Stopped.')));
 
-  const workspace = gatewayWorkspace(gateway, { container: true, box: () => serverBox(clock, killed), jobClock: clock });
+  const workspace = gatewayWorkspace(gateway, { container: true, box: () => serverBox(clock, killed), jobClock: clock, previewHostSuffix: 'preview.test' });
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
   const turn = catalogTurn(workspace.agent, START);
 

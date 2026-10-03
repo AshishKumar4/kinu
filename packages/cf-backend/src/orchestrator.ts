@@ -909,6 +909,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       reportModelCall: (report) => { this.reportModelCall(report); },
       refusals: (actor) => this.refusalNoticesFor(actor),
       liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
+      servingMoved: () => this.servingMoved(),
+      boxUse: this.boxUse,
       modelOperations: this.modelOperations,
       pricing: (spec) => this.modelCatalog.pricing(spec),
       hostedModel: (actor) => this.hostedModelOf(actor),

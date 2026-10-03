@@ -219,6 +219,11 @@ export function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
   return 'vectorStore' in runtime;
 }
 
+/** One box per workspace, whichever agent runs in it. */
+export interface WorkspaceBoxUse {
+  used: boolean;
+}
+
 export interface CFRuntimeHooks {
   /** Read at exec time, as resolving during construction re-enters the runtime getter. Undefined (head,
      *  subordinate): no queue, so 'strict' refuses. */
@@ -227,7 +232,8 @@ export interface CFRuntimeHooks {
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
   /** A sandbox port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
-  servingMoved?: () => Promise<void>;
+  servingMoved: () => Promise<void>;
+  readonly boxUse: WorkspaceBoxUse;
   /** Where non-turn model seams (judge, fast tier, reflection, embedder) report cost; turn spend arrives
      *  as `step_finish`. */
   reportModelCall: ModelCallSink;
@@ -397,7 +403,6 @@ export function createCFRuntime(
   const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
   let sandboxHandle: SandboxHandle | null = null;
-  let sandboxUsed = false;
 
   if (env.KinuDevbox) {
     try {
@@ -406,7 +411,7 @@ export function createCFRuntime(
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
       // the container has no network, so it fails closed. Only the owning workspace configures.
       const handle = adaptCloudflareSandbox(sdk, async () => {
-        sandboxUsed = true;
+        hooks.boxUse.used = true;
         const userId = actor.ownerUserId();
 
         if (!userId) return;
@@ -428,7 +433,7 @@ export function createCFRuntime(
       env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
       async () => {
         hooks.liveReadsMoved?.(['getExposedPorts']);
-        await hooks.servingMoved?.();
+        await hooks.servingMoved();
       });
 
       sandboxHandle = handle;
@@ -565,7 +570,7 @@ export function createCFRuntime(
     sandboxPortHolders: () => {
       const handle = sandboxHandle;
 
-      if (handle === null || !sandboxUsed || previewSuffix === undefined) return null;
+      if (handle === null || !hooks.boxUse.used || previewSuffix === undefined) return null;
 
       return {
         exposedPorts: async () => (await handle.getExposedPorts(previewSuffix)).map((row) => row.port),
