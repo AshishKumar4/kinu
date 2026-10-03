@@ -397,6 +397,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect((await root.exec('ls /')).stdout.split(/\s+/)).toContain('shared');
   });
 
+  // A name keys a durable shell within its agent: another agent's same name is another shell, an unnamed call none.
   test('a named durable shell keeps its own cwd, and siblings do not see it', async () => {
     const actor = actorObject();
     const shellState = new Map<string, JsonValue>();
@@ -418,11 +419,14 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const alpha = workspace.box('subordinate:alpha');
     const beta = workspace.box('head:beta');
-    expect(await alpha.exec('cd /home/main/alpha')).toMatchObject({ exitCode: 0 });
-    expect(await alpha.exec('pwd')).toMatchObject({ stdout: '/home/main/alpha\n' });
-    expect(await beta.exec('pwd')).toMatchObject({ stdout: '/home/main\n' });
-    // The box is a view: one got again by name finds the same shell.
-    expect(await workspace.box('subordinate:alpha').exec('pwd')).toMatchObject({ stdout: '/home/main/alpha\n' });
+    const work = { name: 'work' };
+    expect(await alpha.exec('cd /home/main/alpha', work)).toMatchObject({ exitCode: 0 });
+    expect(await alpha.exec('pwd', work)).toMatchObject({ stdout: '/home/main/alpha\n' });
+    expect(await alpha.shellCwd?.('work')).toBe('/home/main/alpha');
+    expect(await beta.exec('pwd', work)).toMatchObject({ stdout: '/home/main\n' });
+    expect(await alpha.exec('pwd', { cwd: '/home/main' })).toMatchObject({ stdout: '/home/main\n' });
+    // The box is a view: one got again by scope finds the same shell.
+    expect(await workspace.box('subordinate:alpha').exec('pwd', work)).toMatchObject({ stdout: '/home/main/alpha\n' });
   });
 
   test('the workspace never reads a session binding out of env', async () => {

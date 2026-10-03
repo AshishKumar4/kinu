@@ -18,10 +18,10 @@ import type { JsonValue } from '../utils/json';
  * Turn a shell's exit-127 "command not found" into a refusal naming the real exits (sandbox, `nimbus install`).
  * `cataloged` is per call: installed runtimes re-register bins mid-session.
  */
-export async function workspaceCommandNotFound(
-  outcome: { stdout: string; stderr: string; exitCode: number; refusal?: Refusal },
+export async function workspaceCommandNotFound<O extends { stdout: string; stderr: string; exitCode: number; refusal?: Refusal }>(
+  outcome: O,
   cataloged: (bin: string) => boolean | { readonly unreadable: KinuError } | Promise<boolean | { readonly unreadable: KinuError }>,
-): Promise<typeof outcome> {
+): Promise<O> {
   if (outcome.refusal !== undefined || outcome.exitCode !== 127) return outcome;
 
   const missing = /^\s*([^\s:]+): command not found$/m.exec(outcome.stderr)?.[1];

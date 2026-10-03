@@ -721,8 +721,7 @@ export class LocalAgentSession {
       root: () => ({ kind: 'root', actorId: this.rt.actor.actorId, store: this.jobs, runner: this.jobRunner }),
       revive: (actorId) => this.endedLoopJobs(actorId),
     });
-    // Scaffold cold-start heal (DO onStart parity): without scaffold/agent.js,
-    // engine.maybeEvolveScaffold silently disables scaffold evolution. Idempotent; tracked for end().
+    // Scaffold cold-start heal (DO onStart parity): the proposer edits scaffold/agent.js, so it must exist. Idempotent; tracked for end().
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
     // The next turn awaits this before admitting input. A one-shot session opens with its first message in hand, so it

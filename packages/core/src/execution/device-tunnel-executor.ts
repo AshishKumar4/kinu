@@ -12,7 +12,7 @@ import { vfsErrorFromText } from '../vfs/errno';
 import { syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { commandResult, uncheckpointedSentence, type CommandResult } from './exec-result';
+import { commandResult, commandResultAt, uncheckpointedSentence, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { settle } from '../obs/effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
@@ -28,8 +28,9 @@ import {
   isDeviceNotConnectedError, isDeviceUnknownMethodError, isSandboxUnavailableError,
   nextDeviceRequestId,
 } from './device-tunnel';
-import { readDeviceOwnershipContext, readExecOutput, readExecSignal } from './signal';
-import { approveFileAccess, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { readDeviceOwnershipContext } from './signal';
+import { callJob, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
+import { approveFileAccess, createShellSession, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { asBytes } from '../safety/bound-write';
 import { RESERVED_REFERENCE_ROOTS } from '../vfs/mounts';
 import {
@@ -212,7 +213,11 @@ export function createDeviceTunnelExecutor(
   /** Path-scope for the file view; omit only where the transport is already scoped. */
   consent: DeviceFileConsent = ALWAYS_CONSENTED,
   policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
+  /** Where this agent's named shells keep their state on each machine; without it a name is refused. */
+  shells?: MachineShells,
 ): ExecutorProvider {
+  // One call at a time per machine and name, and a name a detached job holds answers at once.
+  const names = createShellSession({ home: '~', userRoots: () => [] });
   const rpc: DeviceTransport['rpc'] = (method, params, opts) => transport.rpc(method, params, opts);
 
   // Connected, registered-but-offline, or none. The row carries the machine's name and grant state.
@@ -370,36 +375,46 @@ export function createDeviceTunnelExecutor(
           return refusalOf(new KinuError('bad_input', 'device exec: command must be a string'));
         }
 
-        const signal = readExecSignal({ context: args[1] });
+        const options = shellExecOptions({ value: args[1] });
+        const { signal, output } = options;
         // Undefined lets the hub resolve a one-machine account; several live machines refuse there.
         const deviceName = readDeviceSelection({ context: args[1] });
         const device = resolveForCall(transport, deviceName);
 
         if (device.kind === 'refusal') return device.refusal;
         const deviceId = device.deviceId;
-        // Minted before sending, so a cancel or detach can name the process group.
-        const requestId = nextDeviceRequestId();
-        const ownership = readDeviceOwnershipContext({ context: args[1] });
-        ownership.report?.(requestId);
-        // Read per call: a detached scope owns this command from the insert.
-        const backgroundJobId = ownership.owner?.() ?? null;
-        const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
-        const output = readExecOutput({ context: args[1] });
 
-        if (deviceId !== undefined) execOpts.deviceId = deviceId;
+        if (options.name !== undefined && shells === undefined) {
+          return refusalOf(new KinuError('unsupported', 'device exec: this runtime keeps no named shells'));
+        }
 
-        if (output !== undefined) execOpts.output = output;
-
-        if (backgroundJobId !== null) execOpts.backgroundJobId = backgroundJobId;
+        // A device starts a command in its home, wherever that is on the machine.
+        const call = machineShellCall(command, options, { home: '~', scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
+        const held = options.name === undefined ? undefined : `${deviceId ?? ''}\u0000${options.name}`;
 
         return settle(Effect.tryPromise({
-          try: async () => commandResult(v.parse(DeviceExecResultSchema, await raceAbort(
-            // No transport deadline: abort, turn cancellation and tunnel liveness still bound it.
-            () => rpc('exec', [command], execOpts),
-            signal,
-            EXEC_NOT_STARTED,
-            () => settle(terminateDeviceExec(rpc, requestId, deviceId)),
-          ))),
+          try: () => names.hold(held, callJob(options), async () => {
+            const requestId = nextDeviceRequestId();
+            const ownership = readDeviceOwnershipContext({ context: args[1] });
+            ownership.report?.(requestId);
+            const backgroundJobId = ownership.owner?.() ?? null;
+            const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
+
+            if (deviceId !== undefined) execOpts.deviceId = deviceId;
+
+            if (output !== undefined) execOpts.output = call.output(output);
+
+            if (backgroundJobId !== null) execOpts.backgroundJobId = backgroundJobId;
+
+            const result = await raceAbort(
+              () => rpc('exec', [call.command], execOpts), signal, EXEC_NOT_STARTED,
+              () => settle(terminateDeviceExec(rpc, requestId, deviceId)),
+            );
+
+            const settled = call.settle(v.parse(DeviceExecResultSchema, result));
+
+            return reportsCwd({ context: args[1] }) ? commandResultAt(settled) : commandResult(settled);
+          }, (message) => refusalOf(new KinuError('unavailable', message))),
           catch: (cause) => ({ cause }),
         }).pipe(Effect.catch((failed) => {
           if (isAbortError(failed.cause)) return Effect.die(failed.cause);

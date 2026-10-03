@@ -4,7 +4,6 @@ import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnTest } from '@kinu.run/test-utils';
 
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import { devboxFailure } from '../src/errors';
@@ -28,7 +27,8 @@ class TestBox extends Devbox<unknown> {
 
 /** The runtime's `exec`, as a local process with its output on pipes. */
 const localExec: Container['exec'] = async (argv, options) => {
-  const child = spawnTest(argv, { cwd: options?.cwd, stdout: 'pipe', stderr: 'pipe' });
+  // devbox depends on no workspace package, so it passes the scratch environment itself.
+  const child = Bun.spawn(argv, { cwd: options?.cwd, env: process.env, stdout: 'pipe', stderr: 'pipe' });
   const exitCode = child.exited;
 
   return {

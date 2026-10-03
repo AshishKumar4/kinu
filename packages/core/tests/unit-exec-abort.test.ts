@@ -128,7 +128,7 @@ describe('remote executor exec abort', () => {
       return promise;
     });
 
-    const provider = createSandboxExecutor(handle, 'preview.example.com');
+    const provider = createSandboxExecutor(handle, { previewHostSuffix: 'preview.example.com' });
     const controller = new AbortController();
 
     const pending = provider.tools.exec.execute('sleep 9999', { signal: controller.signal });
@@ -143,7 +143,7 @@ describe('remote executor exec abort', () => {
 
   test('a pre-aborted sandbox signal starts no container process at all', async () => {
     const { handle, seen } = sandboxHandleThatHonours(async () => ({ exitCode: 0 }));
-    const provider = createSandboxExecutor(handle, 'preview.example.com');
+    const provider = createSandboxExecutor(handle, { previewHostSuffix: 'preview.example.com' });
     const controller = new AbortController();
     controller.abort();
 
@@ -164,7 +164,7 @@ describe('remote executor exec abort', () => {
       throw new Error('Network connection lost.');
     });
 
-    const provider = createSandboxExecutor(handle, 'preview.example.com');
+    const provider = createSandboxExecutor(handle, { previewHostSuffix: 'preview.example.com' });
 
     await expect(provider.tools.exec.execute('ls', { signal: controller.signal }))
       .rejects.toMatchObject({ name: 'AbortError' });
@@ -376,7 +376,7 @@ describe('remote executor exec abort', () => {
     const { rt } = createTestRuntime();
 
     const provider = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
     });
 
     const controller = new AbortController();

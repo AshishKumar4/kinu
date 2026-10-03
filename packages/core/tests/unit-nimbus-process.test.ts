@@ -32,7 +32,7 @@ function workspaceOver(box: NimbusSandboxHandle, runtimeCatalog?: boolean) {
 
   return createNimbusWorkspaceExecutor({
     box, runtimeCatalog,
-    inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+    inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
   });
 }
 

@@ -5,7 +5,7 @@ import { getCurrentScaffoldVersion } from '../scaffold/versions';
 import { readSessionTranscript, type SessionTranscriptReader } from '../session/transcript';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
-import { ownerMissionOf, soulReadsSql } from '../identity/soul';
+import { missionOf, soulReadsSql } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
 import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
 import type { CraftStore } from '../types/agent-runtime';
@@ -62,7 +62,7 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
   const { sql, actor } = deps;
   actor.assertCurrent();
   const reads = soulReadsSql(sql);
-  const purpose = ownerMissionOf(reads) ?? '';
+  const purpose = missionOf(reads.soul) ?? '';
 
   const identity = sql<{ name: string; created_at: number }>`
     SELECT name, created_at FROM workspace_identity LIMIT 1`;

@@ -24,6 +24,8 @@ export interface ExecOutcome {
   readonly exitCode?: number;
   readonly refusal?: Refusal;
   readonly uncheckpointed?: Uncheckpointed;
+  /** Where the command started. */
+  readonly cwd?: string;
 }
 
 const STDOUT_LABEL = '--- stdout ---';
@@ -58,6 +60,15 @@ export function commandResult(result: ExecOutcome): CommandResult {
   const output = formatExecResult(result);
 
   return (result.exitCode ?? 0) === 0 ? output : { reason: 'io', error: output, execution: { exitCode: result.exitCode ?? 0 } };
+}
+
+/** As the shell tool answers the model: a command that ran says first where it started. Programs read `commandResult`. */
+export function commandResultAt(result: ExecOutcome): CommandResult {
+  const answer = commandResult(result);
+
+  if (result.cwd === undefined || result.refusal !== undefined) return answer;
+
+  return v.is(v.string(), answer) ? `cwd: ${result.cwd}\n${answer}` : { ...answer, error: `cwd: ${result.cwd}\n${answer.error}` };
 }
 
 export function exposedPortText(url: string, port: number, route: PreviewRouteCheck): string {

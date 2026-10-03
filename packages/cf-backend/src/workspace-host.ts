@@ -7,7 +7,7 @@
 import { Effect } from 'effect';
 import { createWorkspace, workspaceBoxFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle } from '@kinu.run/core/workspace';
-import { jsonResultOrVoid } from '@kinu.run/core';
+import { jsonResultOrVoid, sha256Hex } from '@kinu.run/core';
 import type {
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, PreviewRouteCheck, WorkspacePreviewUrl,
 } from '@kinu.run/core';
@@ -117,8 +117,8 @@ export interface WorkspaceTerminal {
 
 export interface HostedWorkspace {
   readonly bundle: WorkspaceBundle;
-  /** A stateless view: the named shell's cwd and exported variables live in the runtime, keyed by `shellId`. */
-  box(shellId: string): NimbusSandboxHandle;
+  /** One agent's view: a named call runs in the runtime's named shell, keyed by `scope` and the name. */
+  box(scope: string): NimbusSandboxHandle;
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
      *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. The envelope
      *  is a hosted process's own data: Nimbus's dispatcher is the one place that refuses an op it does not serve. */
@@ -323,8 +323,8 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     bundle,
     supervisorOp: async (envelope) => (await runtime()).supervisorOp(envelope),
     session: async (scope) => (await runtime()).session(scope),
-    box: (shellId) => workspaceBox({
-      runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
+    box: (scope) => workspaceBox({
+      runtime, ports: portRegistry, ctx: deps.ctx, files, scope, previewUrl: deps.previewUrl, previewGates,
       mountTable: (plane, cred) => bundle.mountTable(plane, cred),
       expose: (port) => settle(exposedPort({ runtime, previewUrl: deps.previewUrl, previewGates }, port)),
     }),
@@ -438,12 +438,16 @@ class ObservedPortRegistry extends PortRegistry {
   }
 }
 
+const NAMED_SHELL_STATE_PREFIX = 'nimbus_programmatic_shell:';
+
+const NamedShellStateSchema = v.object({ cwd: v.pipe(v.string(), v.startsWith('/')) });
+
 interface WorkspaceBoxDeps {
   runtime: () => Promise<HostedRuntime>;
   ports: PortRegistry;
   ctx: DurableObjectState;
   files: NimbusSandboxHandle['files'];
-  shellId: string;
+  scope: string;
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   previewGates(port: number, handle: string): Promise<PreviewGates>;
   mountTable: NonNullable<NimbusSandboxHandle['mountTable']>;
@@ -471,18 +475,27 @@ function exposedPort(deps: Pick<WorkspaceBoxDeps, 'runtime' | 'previewUrl' | 'pr
 }
 
 function workspaceBox(deps: WorkspaceBoxDeps): NimbusSandboxHandle {
-  const { runtime, shellId } = deps;
+  const { runtime, scope } = deps;
+  const shellId = (name: string): string => `agent:${sha256Hex(`${scope}\u0000${name}`)}`;
+
+  const named = <O extends { readonly name?: string }>(options: O | undefined) => {
+    if (options?.name === undefined) return options;
+    const { name, ...rest } = options;
+
+    return { ...rest, shellId: shellId(name) };
+  };
 
   return {
     ready: async () => { await (await runtime()).ready(); },
-    // Each actor's work runs in its own named durable shell.
-    exec: async (command, options): Promise<NimbusExecResult> =>
-      await (await runtime()).exec(command, { ...options, shellId }),
-    execStream: async (command, options) => await (await runtime()).execStream(command, { ...options, shellId }),
-    startProcess: async (command, options): Promise<NimbusStartResult> =>
-      await (await runtime()).startProcess(command, { ...options, shellId }),
-    runCode: async (code, options): Promise<NimbusExecResult> =>
-      await (await runtime()).runCode(code, { ...options, shellId }),
+    exec: async (command, options): Promise<NimbusExecResult> => await (await runtime()).exec(command, named(options)),
+    execStream: async (command, options) => await (await runtime()).execStream(command, named(options)),
+    startProcess: async (command, options): Promise<NimbusStartResult> => await (await runtime()).startProcess(command, named(options)),
+    runCode: async (code, options): Promise<NimbusExecResult> => await (await runtime()).runCode(code, named(options)),
+    shellCwd: async (name) => {
+      const saved = v.safeParse(NamedShellStateSchema, await deps.ctx.storage.get(`${NAMED_SHELL_STATE_PREFIX}${shellId(name)}`));
+
+      return saved.success ? saved.output.cwd : null;
+    },
     files: deps.files,
     runtimes: {
       ensure: async (specs, options) => await jsonResultOrVoid((await runtime()).ensureRuntimes(Array.isArray(specs) ? [...specs] : [specs], options)),

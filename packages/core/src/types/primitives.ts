@@ -147,19 +147,33 @@ const WritableSchema = v.object({ write: v.function(), lost: v.function() });
 
 export const OutputSinkSchema = v.custom<OutputSink>((value) => v.is(WritableSchema, value));
 
+/** A tool call that may outrun its window: once `detached` fires, it is job `id`'s. */
+export interface ShellCallJob {
+  readonly id: string;
+  readonly detached: AbortSignal;
+}
+
 export interface ShellExecOptions {
   stdin?: string;
   signal?: AbortSignal;
-  /** The caller stopped waiting: later commands run, and this one keeps no `cd`. */
-  detach?: AbortSignal;
+  /** The call's job id, and the signal that fires when the call outruns its window: a name it holds stays held. */
+  job?: string;
+  detached?: AbortSignal;
   output?: OutputSink;
+  /** Where the command starts: absolute, or under the named shell's directory (the home for none). */
+  cwd?: string;
+  /** A named shell keeps its directory and exported environment between calls; an unnamed call keeps nothing. */
+  name?: string;
 }
 
 export const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
   stdin: v.optional(v.string()),
   signal: v.optional(v.instance(AbortSignal)),
-  detach: v.optional(v.instance(AbortSignal)),
+  job: v.optional(v.string()),
+  detached: v.optional(v.instance(AbortSignal)),
   output: v.optional(OutputSinkSchema),
+  cwd: v.optional(v.string()),
+  name: v.optional(v.string()),
 }));
 
 export interface ShellExecResult {
@@ -168,8 +182,14 @@ export interface ShellExecResult {
   exitCode: number;
   /** The command never ran. */
   refusal?: Refusal;
+  /** Where it started. */
+  cwd?: string;
+  /** A named shell's directory when it ended; absent: unknown. */
+  finalCwd?: string;
 }
 
 export interface Shell {
   exec(command: string, stdinOrOptions?: string | ShellExecOptions): Promise<ShellExecResult>;
+  /** A named shell's directory as an earlier call left it; null: unreadable. */
+  cwd?(name: string): Promise<string | null>;
 }

@@ -25,7 +25,7 @@ import {
   type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
   withMountTable, adaptMemory, sharedDriveMount, SHARED_DRIVE_UNBOUND,
-  withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant, createInheritedApprovalPolicy,
+  withApprovalGatedShell, withApprovalGatedFiles, createShellSession, createBashShell, holdsGrant, createInheritedApprovalPolicy,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, localContextTree, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
@@ -51,6 +51,7 @@ import { MemoryStore } from '@kinu.run/agent-utils';
 import { CraftStore } from '@kinu.run/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
+import { kinuHome } from './home';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS, directoryFileReach } from './host-mount';
@@ -408,12 +409,14 @@ export function createCLIRuntime(
 
     const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
       withCheckpointedShell(
-        createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)),
+        createBashShell(createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)), {
+          home: cwd, scope: facet === undefined ? agentName : `${agentName}/${facet}`, stateDirectory: join(kinuHome(), 'shells'),
+        }),
         checkpoints,
         cwd,
       ),
-      // The host shell serves no mount table: `/pc` there is the machine's own path.
-      { filesOwner },
+      // The host shell serves no mount table.
+      { filesOwner, shellSession: createShellSession({ home: cwd, userRoots: () => [] }) },
       approvalPolicy,
     );
 
@@ -422,7 +425,7 @@ export function createCLIRuntime(
       : withApprovalGatedShell(workspace.shell, {
         filesOwner,
         shellSession: createShellSession({
-          home: WORKSPACE_ROOT, userRoots: () => agentVfs.userRoots(), keepsCwd: true, stored: () => shellCwd(workspace.shell),
+          home: WORKSPACE_ROOT, userRoots: () => agentVfs.userRoots(), stored: async (name) => await workspace.shell.cwd?.(name) ?? null,
         }),
       }, approvalPolicy);
 

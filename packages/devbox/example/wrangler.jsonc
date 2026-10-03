@@ -19,7 +19,7 @@
     {
       "class_name": "ExampleBox",
       "scheduling_policy": "durable_object",
-      "images": { "devbox": { "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:518fa86da51054c0c58d590689ecf46ae2a3b64e43f4dbd43a5d18fe2f70f535" } }
+      "images": { "devbox": { "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:5828ea6a974fcac3b20d0aac43e1936cacf958c7a9cc623dfa55b57b34c529c3" } }
     }
   ],
   "r2_buckets": [{ "binding": "WORKSPACES", "bucket_name": "kinu-devbox-example" }]

@@ -219,6 +219,7 @@ export const DECLARED = byFile([
     ['packages/core/src/state/store-reset.ts', ['StoragePredatesResetError']],
     ['packages/core/src/tools/db-codemode.ts', ['AppBatchError']],
     ['packages/core/src/types/file-edits.ts', ['FileRefusalError']],
+
   ] as const).map(([file, classes]) => [file, {
     mechanisms: ['error-class'],
     within: classes,

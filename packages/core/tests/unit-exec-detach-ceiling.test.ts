@@ -285,7 +285,7 @@ describe("a detached workspace command and the agent's next one", () => {
   // eval-order-book-1-n99f4k, staging f75f06932, 2026-10-01: a `find /` outran the window and was detached, yet every
   // later `ls`, `pwd` and `echo hello` waited behind it in the agent's shell session, outran the window in turn, and
   // the eight such jobs filled the cap.
-  test('the next command runs at once, and the detached one keeps none of its cd', async () => {
+  test('the next command runs at once, and starts at home whatever the detached one did', async () => {
     const { runner, store, bodies } = wholeChainRunner();
     const serving = Promise.withResolvers<ShellExecResult>();
 
@@ -294,7 +294,7 @@ describe("a detached workspace command and the agent's next one", () => {
       exec: async (command) => (command.includes('serve') ? serving.promise : { stdout: `ran ${command}\n`, stderr: '', exitCode: 0 }),
     };
 
-    const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => [], keepsCwd: true, stored: async () => WORKSPACE_ROOT });
+    const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => [] });
     const { rt } = createTestRuntime();
     const shell = withApprovalGatedShell(workspaceShell, { filesOwner: 'agent', shellSession });
 
@@ -314,7 +314,39 @@ describe("a detached workspace command and the agent's next one", () => {
     serving.resolve({ stdout: 'stopped\n', stderr: '', exitCode: 0 });
     await Promise.all(bodies);
     expect(store.get(isBackgroundHandle(detached) ? detached.jobId : '')?.result).toContain('stopped');
-    expect((await shellSession.at()).cwd).toBe(WORKSPACE_ROOT);
+    expect((await shellSession.at(undefined, undefined)).cwd).toBe(WORKSPACE_ROOT);
+  });
+
+  // The stateless shell: a name keeps a directory, one call at a time; a job holding it answers the next at once.
+  test('a name its detached command holds answers the next call busy, naming the job, until the command ends', async () => {
+    const { runner, store, bodies } = wholeChainRunner();
+    const serving = Promise.withResolvers<ShellExecResult>();
+
+    const namedShell: Shell = {
+      exec: async (command) => (command.includes('serve') ? serving.promise : { stdout: `ran ${command}\n`, stderr: '', exitCode: 0 }),
+    };
+
+    const { rt } = createTestRuntime();
+    const shell = withApprovalGatedShell(namedShell, { filesOwner: 'agent', shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => [] }) });
+
+    const wrapped = wrapToolsForBackground(
+      buildBuiltinTools({ rt: { ...rt, shell }, conversations: conversationsFor(rt) }),
+      { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
+    );
+
+    const run = toolExecute<{ command: string; name?: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
+    const detached = await run({ command: 'serve', name: 'site' });
+    const jobId = isBackgroundHandle(detached) ? detached.jobId : '';
+
+    expect(store.get(jobId)?.status).toBe('running');
+    await expect(run({ command: 'echo again', name: 'site' })).rejects.toThrow(`shell site is busy with job ${jobId} since `);
+    // Another name, and no name, are not behind it.
+    expect(await run({ command: 'echo other', name: 'docs' })).toEqual(expect.stringContaining('ran echo other'));
+    expect(await run({ command: 'echo none' })).toEqual(expect.stringContaining('ran echo none'));
+
+    serving.resolve({ stdout: 'stopped\n', stderr: '', exitCode: 0 });
+    await Promise.all(bodies);
+    expect(await run({ command: 'echo again', name: 'site' })).toEqual(expect.stringContaining('ran echo again'));
   });
 });
 
@@ -347,7 +379,7 @@ describe('a sandbox command a job takes', () => {
     };
 
     const router = new DefaultExecutionRouter();
-    router.register(createSandboxExecutor(handle, 'preview.example.com'));
+    router.register(createSandboxExecutor(handle, { previewHostSuffix: 'preview.example.com' }));
     const { rt } = createTestRuntime();
 
     const wrapped = wrapToolsForBackground(
@@ -409,7 +441,7 @@ describe('a sandbox command a job takes', () => {
     };
 
     const router = new DefaultExecutionRouter();
-    router.register(createSandboxExecutor(handle, 'preview.example.com'));
+    router.register(createSandboxExecutor(handle, { previewHostSuffix: 'preview.example.com' }));
     const { rt } = createTestRuntime();
 
     const wrapped = wrapToolsForBackground(
@@ -481,7 +513,7 @@ async function detachedBuild(clock: ReturnType<typeof handClock>) {
   };
 
   const router = new DefaultExecutionRouter();
-  router.register(createSandboxExecutor(handle, 'preview.example.com'));
+  router.register(createSandboxExecutor(handle, { previewHostSuffix: 'preview.example.com' }));
   const { rt } = createTestRuntime();
 
   const wrapped = wrapToolsForBackground(
@@ -703,7 +735,7 @@ describe("a running job's output", () => {
     };
 
     const router = new DefaultExecutionRouter();
-    router.register(createSandboxExecutor(handle, 'preview.example.com'));
+    router.register(createSandboxExecutor(handle, { previewHostSuffix: 'preview.example.com' }));
     const { rt } = createTestRuntime();
 
     const wrapped = wrapToolsForBackground(
