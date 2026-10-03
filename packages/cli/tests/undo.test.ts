@@ -36,7 +36,7 @@ function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
     showRefinement: async () => ({ ok: false as const, error: 'not in this fixture' }),
     requestRefinement: async () => ({ id: 'refine-test', trigger: 'explicit' as const, scope: 'workspace' as const, stage: 'refused' as const, turnIds: [], routes: [], detail: 'no outcome-labeled turns yet', createdAt: 0 }),
     revertChangelogEntry: async () => ({ ok: false }), readMemory: async () => '',
-    searchNodes: async () => [], listJobs: async () => [], latestTakes: async () => null,
+    searchNodes: async () => [], listJobs: async () => [], cancelJob: async () => ({ ok: false }), latestTakes: async () => null,
     pickTake: async () => { throw new Error('not used'); },
     getModelSpec: async () => null, setModel: async (spec) => ({ spec }),
     setRole: async (role) => ({ role }),

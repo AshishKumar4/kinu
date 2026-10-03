@@ -608,18 +608,10 @@ export function listLocalJobs(name: string, limit = 20): BackgroundJob[] {
   return readMainActorTable(name, 'background_jobs', [], (sql, actor) => new BackgroundJobStore(sql, actor).list(limit));
 }
 
-export async function cancelLocalJob(name: string, id: string): Promise<{ ok: boolean }> {
-  return withLocalWritableDb(name, (db) => {
-    if (!tableExists(db, 'background_jobs')) return { ok: false };
-    const sql = makeSql(db);
-    const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
-    const before = store.get(id);
-
-    if (!before || before.status !== 'running') return { ok: false };
-    store.cancel(id, before.epoch, Date.now());
-
-    return { ok: true };
-  });
+/** Whichever actor owns it. */
+export function localJobRunning(name: string, id: string): boolean {
+  return readMainActorTable(name, 'background_jobs', false, (sql) => sql<{ status: string }>`
+    SELECT status FROM background_jobs WHERE id = ${id}`.some((row) => row.status === 'running'));
 }
 
 /** The addressed workspace's own registered executor runs the command, as the cloud's executeInExecutor does. */
@@ -641,27 +633,6 @@ export async function executeLocalExecutor(name: string, executorId: string, com
   } finally {
     db.close();
   }
-}
-
-export async function markLocalBackgroundJobsCancelled(name: string): Promise<string[]> {
-  return withLocalWritableDb(name, (db) => {
-    if (!tableExists(db, 'background_jobs')) return [];
-    // Through the store: the registry is actor-private and `cancel` is epoch-fenced; a blanket UPDATE would cancel other actors' jobs.
-    const sql = makeSql(db);
-    const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
-    const cancelled: string[] = [];
-    const now = Date.now();
-
-    for (const id of store.runningIds()) {
-      const job = store.get(id);
-
-      if (!job || job.status !== 'running') continue;
-      store.cancel(id, job.epoch, now);
-      cancelled.push(id);
-    }
-
-    return cancelled.reverse();
-  });
 }
 
 function openLocalDb(name: string): SqliteDb {

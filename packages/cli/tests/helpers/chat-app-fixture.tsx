@@ -141,6 +141,7 @@ export function fakeClient(options: FakeClientOptions) {
     readMemory: async () => '',
     searchNodes: async () => [],
     listJobs: options.listJobs ?? (async () => []),
+    cancelJob: async () => ({ ok: false }),
     latestTakes: async () => null,
     pickTake: async () => { throw new Error('no takes'); },
     getModelSpec: async () => 'openai/gpt-5.5',

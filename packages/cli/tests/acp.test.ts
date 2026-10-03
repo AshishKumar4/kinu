@@ -112,6 +112,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     readMemory: async () => '',
     searchNodes: async () => [],
     listJobs: async () => [],
+    cancelJob: async () => ({ ok: false }),
     latestTakes: async () => null,
     pickTake: async () => { throw new Error('no takes'); },
     getModelSpec: async () => null,

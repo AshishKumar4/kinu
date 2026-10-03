@@ -4,7 +4,8 @@ import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type ProposerOutcome } from '@kinu.run/core';
-import { KinuError } from '@kinu.run/core/obs';
+import { attempt, KinuError, settle } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import {
   DriverLeaseHold,
   OS_LEASE_PROCESS,
@@ -29,7 +30,7 @@ import {
   resolveProviderCredentials,
 } from './config';
 import { renameLocalAgent } from './agent-create';
-import { inspectLocalSubordinate, readLocalWorkspaceWork } from './local-inspection';
+import { inspectLocalSubordinate, localJobRunning, readLocalWorkspaceWork } from './local-inspection';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
 import {
@@ -117,6 +118,23 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
   });
 
   return client;
+}
+
+/** Only the process running a job can end it, so another live driver's job is refused, naming that process. */
+export function cancelLocalJob(name: string, id: string, daemonPid: number | null): Promise<{ ok: boolean }> {
+  return settle(Effect.gen(function* () {
+    if (daemonPid !== null && localJobRunning(name, id)) {
+      return yield* Effect.fail(new KinuError('unavailable', `${id} may be running in the local daemon (pid ${String(daemonPid)}); \`kinu daemon stop\` ends it`));
+    }
+
+    const client = yield* Effect.promise(() => openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true }));
+
+    return yield* attempt({ doing: `cancelling job ${id}`, otherwise: 'unavailable' }, async () => {
+      await client.connect();
+
+      return await client.cancelJob(id);
+    }).pipe(Effect.ensuring(Effect.promise(() => client.close())));
+  }));
 }
 
 /** Core's proposer, the same one the cloud backend drives: one search on `target` (default the scaffold). */
@@ -472,6 +490,10 @@ export class LocalAgentClient implements AgentClient {
     const jobs = await this.session.listBackgroundJobs(limit);
 
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status, label: job.label, ...(job.output !== undefined && { output: job.output }) }));
+  }
+
+  cancelJob(jobId: string): Promise<{ ok: boolean }> {
+    return this.session.cancelBackgroundJob(jobId);
   }
 
   async getModelSpec(): Promise<string | null> {
