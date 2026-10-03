@@ -205,14 +205,8 @@
     "packages/devbox/src/sync-main.ts#catch": 1,
     "packages/devbox/src/sync.ts#catch": 6,
     "packages/devbox/src/sync.ts#throw": 13,
-    "packages/test-utils/src/eval-identity.ts#catch": 2,
-    "packages/test-utils/src/eval-identity.ts#throw": 1,
     "packages/test-utils/src/llm.ts#throw": 1,
     "packages/test-utils/src/runtime.ts#throw": 1,
-    "packages/test-utils/src/scratch.ts#catch": 2,
-    "packages/test-utils/src/scratch.ts#throw": 1,
-    "packages/test-utils/src/slate-viewer.ts#catch": 1,
-    "packages/test-utils/src/workspace-resolution.ts#catch": 1,
-    "packages/test-utils/src/workspace-resolution.ts#throw": 2
+    "packages/test-utils/src/slate-viewer.ts#catch": 1
   }
 }

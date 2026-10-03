@@ -10,8 +10,8 @@ import { listAvailableModels, type AvailableModelsEnv } from './available-models
 import { json } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { JsonObjectSchema, USER_AI_PROXY_PATH, parseJsonObject } from '@kinu.run/core';
-import { Cause, Effect } from 'effect';
-import { classify, settle, tolerate } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { settle, tolerate, tolerated } from '@kinu.run/core/obs';
 import { beneath } from '../api/context';
 import { inferenceProxyGate, type CliEnv } from '../cli/routes';
 import * as v from 'valibot';
@@ -74,13 +74,9 @@ function proxyChatCompletion<Id>(
   return Effect.gen(function* () {
     const body = yield* Effect.promise(() => request.text());
 
-    const routed = yield* Effect.catchCause(Effect.sync(() => v.parse(ChatCompletionRouteSchema, v.parse(JsonObjectSchema, JSON.parse(body))).model), (failed) => {
-      const error = Cause.squash(failed);
+    const routed = yield* tolerated(Effect.sync(() => v.parse(ChatCompletionRouteSchema, v.parse(JsonObjectSchema, JSON.parse(body))).model), 'malformed-input');
 
-      return classify({ cause: error }) === 'malformed-input' ? Effect.succeed(null) : Effect.die(error);
-    });
-
-    if (routed === null) return errorResponse(400, 'Body must be JSON with a non-empty model.');
+    if (routed === undefined) return errorResponse(400, 'Body must be JSON with a non-empty model.');
     const model = routed;
 
     const workersAI = model.startsWith('@cf/');
