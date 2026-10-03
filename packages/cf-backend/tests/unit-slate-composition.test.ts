@@ -19,7 +19,7 @@ import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 import { SlateId } from '@agent-core/core/slates';
 import { slateDirectory } from '@kinu.run/core/slates';
 import type { SqlDatabase, SqlRow, SqlValue as VendorSqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { toolExecute } from '@kinu.run/test-utils';
+import { present, toolExecute } from '@kinu.run/test-utils';
 
 /** The credential is the child's provisioned identity, looked up (hiring provisioned it), never allocated here. */
 async function childCaller(db: Database, agentName: string, actorName: string): Promise<SlateCaller> {
@@ -49,7 +49,7 @@ async function childCaller(db: Database, agentName: string, actorName: string): 
   return { path: [{ name: actorName }], cred: agentCred(identity), workMode: 'build' };
 }
 
-test('native MCP protocol failures reject while namespace responses retain their envelope', async () => {
+test('an MCP tool called through eval answers its data whole, fails on a protocol failure, and obeys the allowlist', async () => {
   resetRecordedMcp();
   const ownerUserId = '0123456789abcdef0123456789abcdef';
   const workspace = 'native-mcp';
@@ -70,26 +70,19 @@ test('native MCP protocol failures reject while namespace responses retain their
 
     const turn = await chatSessionTurns(actor.agent).prepare({ messages: [{ role: 'user', content: 'Read the issue.' }] });
 
-    const native = turn.tools.mcp_github_read_issue;
-
-    if (native === undefined) throw new Error('the native MCP tool was not admitted');
-    const invoke = toolExecute<Record<string, never>, JsonValue>(native);
+    // Only `eval` reaches an MCP tool: no native definition carries it.
+    expect(turn.activeTools).not.toContain('mcp_github_read_issue');
+    const run = toolExecute<{ code: string }, JsonValue>(present(turn.tools.eval, 'eval'));
+    // Distinct programs: an identical `eval` within one turn replays its first answer from the durable claim.
+    const call = (attempt: number) => ({ code: `const attempt = ${attempt};\nreturn await tools["mcp_github_read_issue"]({});` });
     const data = { isError: false, content: [{ type: 'text', text: '{"error":"data"}' }], structuredContent: { isError: true, reason: 'data-only' }, reason: 'denied', error: 'historical incident' } satisfies Parameters<typeof seedMcpAnswer>[0];
     seedMcpAnswer(data);
-    expect(await invoke({})).toEqual(data);
+    expect(await run(call(1))).toMatchObject({ result: data });
     const protocolFailure = { isError: true, content: [{ type: 'text', text: 'remote execution failed' }], structuredContent: { reason: 'remote-code', error: 'remote evidence' } } satisfies Parameters<typeof seedMcpAnswer>[0];
     seedMcpAnswer(protocolFailure);
-    const failed = invoke({});
-    await expect(failed).rejects.toThrow('remote execution failed');
-    await expect(failed).rejects.toThrow('remote evidence');
-    await expect(failed).rejects.not.toHaveProperty('execution');
-    seedMcpAnswer(protocolFailure);
-    const namespace = nativeToolFunctions({ mcp_github_read_issue: native });
-    expect(await namespace.mcp_github_read_issue?.execute({})).toEqual({
-      success: false, reason: null, error: expect.stringContaining('remote execution failed'),
-    });
+    await expect(run(call(2))).rejects.toThrow('remote execution failed');
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
-    await expect(invoke({})).rejects.toThrow('not in the allowed_tools list');
+    await expect(run(call(3))).rejects.toThrow('not in the allowed_tools list');
   } finally { user.close(); resetRecordedMcp(); }
 });
 

@@ -138,7 +138,7 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
-  readMission, summarizeSoul, writeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
+  readMission, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
@@ -5380,7 +5380,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const ownerUserId = this.getOwnerUserId();
 
     if (!ownerUserId) throw new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
-    await writeSoul(this.boundSql, text, (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content));
+    await writeWorkspaceSoul(this.hostedWorkspace().bundle, text);
     // The next turn re-reads the soul from its row.
     this._cachedSoulText = null;
 

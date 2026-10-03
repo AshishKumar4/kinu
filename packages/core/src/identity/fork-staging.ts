@@ -11,7 +11,6 @@ import type { ForkStagedCounts } from './fork-writer';
 export interface ForkStaging {
   /** Declared by the `begin` frame; null until then, so a publication without a head is impossible. */
   head: ForkSnapshotHead | null;
-  mission: string;
   staged: ForkStagedCounts;
   transferId: string | null;
   expectedSeq: number;
@@ -30,7 +29,6 @@ interface ForkStagingRow {
   head_source_name: string;
   head_cut_message_id: string;
   head_cut_created_at: number;
-  mission: string;
   staged_agent_config: number;
   staged_crafted_tools: number;
   staged_memory_chunks: number;
@@ -66,7 +64,7 @@ export class ForkStagingState {
   read(): ForkStaging | null {
     const row = this.sql<ForkStagingRow>`
       SELECT head_declared, head_source_id, head_source_name,
-             head_cut_message_id, head_cut_created_at, mission,
+             head_cut_message_id, head_cut_created_at,
              staged_agent_config, staged_crafted_tools, staged_memory_chunks,
              staged_session_messages,
              staged_conversation_entries, staged_conversation_entry_parts, staged_context_members,
@@ -86,7 +84,6 @@ export class ForkStagingState {
         source: { workspaceId: row.head_source_id, workspaceName: row.head_source_name },
         cut: { messageId: row.head_cut_message_id, createdAtMs: row.head_cut_created_at },
       },
-      mission: row.mission,
       staged: {
         agentConfig: row.staged_agent_config,
         craftedTools: row.staged_crafted_tools,
@@ -160,11 +157,6 @@ export class ForkStagingState {
       staged_conversation_entry_parts = staged_conversation_entry_parts + ${delta.conversationEntryParts ?? 0},
       staged_context_members          = staged_context_members          + ${delta.contextMembers ?? 0}
       WHERE id = 1`;
-  }
-
-  /** The mission SOUL carried, taken while its bytes were in hand. */
-  mission(mission: string): void {
-    void this.sql`UPDATE fork_transfer SET mission = ${mission} WHERE id = 1`;
   }
 
   /** The transfer landed. The row outlives publication to answer a frame re-delivered after a lost reply. */

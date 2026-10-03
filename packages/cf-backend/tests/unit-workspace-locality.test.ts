@@ -148,7 +148,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       event TEXT NOT NULL, detail TEXT, elapsed_ms INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (actor_id, id))`);
     initWorkspaceActorTable((ddl: string) => { actor.database.exec(ddl); });
-    actor.database.run(`INSERT INTO workspace_identity (id, name, mission) VALUES ('w', 'Atlas', 'Help with testing.')`);
+    actor.database.run(`INSERT INTO workspace_identity (id, name) VALUES ('w', 'Atlas')`);
 
     return () => createHostedWorkspace({
       tasks: HELD_NIMBUS_TASKS,
@@ -255,7 +255,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const restarted = open();
 
-    expect(await settledWorkspaceSoul(restarted.bundle)).toBe(renderSoulMarkdown({ name: 'Atlas', mission: 'Help with testing.' }));
+    expect(await settledWorkspaceSoul(restarted.bundle)).toBe(renderSoulMarkdown({ name: 'Atlas' }));
     expect(await readText(restarted.bundle.vfs, 'SOUL.md.unverified')).toBe('an old soul of mine');
     expect(await soulFile(restarted)).toMatchObject({ uid: 0, mode: 0o444 });
     expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
@@ -282,7 +282,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     actor.database.run('DELETE FROM workspace_soul');
 
     const restarted = open();
-    const birth = renderSoulMarkdown({ name: 'Atlas', mission: 'Help with testing.' });
+    const birth = renderSoulMarkdown({ name: 'Atlas' });
 
     expect(await settledWorkspaceSoul(restarted.bundle)).toBe(birth);
     expect(await soulFile(restarted)).toMatchObject({ text: birth, uid: 0, mode: 0o444 });

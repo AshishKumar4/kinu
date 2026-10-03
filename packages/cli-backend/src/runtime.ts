@@ -54,7 +54,7 @@ import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS, directoryFileReach } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
-import { agentViewMount, createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
+import { agentViewMount, createSqlFiber, detectOrphanedFibers, readSoul, settledWorkspaceSoul } from '@kinu.run/core';
 import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
@@ -547,9 +547,11 @@ export function createCLIRuntime(
  */
 export async function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLIRuntime, facet: string): Promise<CLIRuntime> {
   requireLocalActorWorkspace(workspace.actor, actor.actor);
+  // A hire is framed with the workspace's soul, as on the cloud; it has none of its own.
+  const ownerSoul = (): Promise<string | null> => workspace.ownerSoul?.() ?? readSoul(workspace.agentStateVfs ?? workspace.storage.vfs);
 
   if (workspace.cwd && actor.cwd === workspace.cwd) {
-    return Object.assign(actor, { checkpoints: workspace.checkpoints, nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell });
+    return Object.assign(actor, { checkpoints: workspace.checkpoints, nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell, ownerSoul });
   }
 
   if (!workspace.nodeHome || !workspace.nodeRuntime) throw new KinuError('missing', 'The workspace has no actor file-plane owner.');
@@ -559,7 +561,7 @@ export async function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLI
   return Object.assign(actor, {
     storage: { ...actor.storage, vfs: plane.storage.vfs, home: plane.storage.home }, toolFiles: plane.toolFiles, memory: workspace.memory, craftStore: workspace.craftStore,
     executionRouter: plane.executionRouter, shell: plane.shell, checkpoints: workspace.checkpoints, cwd: workspace.cwd ?? null,
-    nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell,
+    nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell, ownerSoul,
   });
 }
 

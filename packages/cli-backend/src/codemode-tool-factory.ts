@@ -16,7 +16,7 @@ import {
   decodeJsonValue, explainSandboxError, nativeToolFunctions,
   renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram,
+  codemodeFunction, withCodemodeProgram, currentWorkMode, toolsInWorkMode,
 } from '@kinu.run/core';
 import { tool } from 'ai';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
@@ -94,7 +94,9 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
 
-          for (const [name, entry] of Object.entries({ ...nativeBindings, ...craftedFailureFunctions(crafted) })) {
+          const external = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.external()));
+
+          for (const [name, entry] of Object.entries({ ...external, ...nativeBindings, ...craftedFailureFunctions(crafted) })) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 

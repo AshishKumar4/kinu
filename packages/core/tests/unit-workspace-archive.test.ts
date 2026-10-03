@@ -23,7 +23,6 @@ import {
 } from '../src/index';
 import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql } from './helpers';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { writeSoul } from '../src/identity/soul';
 import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
@@ -264,7 +263,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
 
   test('a restore carries the owner\'s soul, not a file swapped since the seal', async () => {
     const source = await seeded();
-    await writeSoul(source.sql, OWNER_TEXT, (content) => writeWorkspaceSoul(source.bundle, content));
+    await writeWorkspaceSoul(source.bundle, OWNER_TEXT);
     // A mid-turn swap (the file's bytes, not the row): the restore must still read the row.
     const kernel = (await source.bundle.session()).vfs.as(CRED_KERNEL);
     kernel.unlink('/home/main/SOUL.md');

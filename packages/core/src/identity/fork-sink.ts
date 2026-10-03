@@ -10,8 +10,8 @@ export interface ForkFileSink {
    * naming chunks the target holds neither staged nor stored writes nothing and lists them in `want`.
    */
   importPage(dst: string, page: VfsExportPage): Promise<{ want: string[]; done: boolean }>;
-  /** SOUL.md's bytes, written as the owner writes them; the mission they carry. */
-  publishSoul(bytes: Uint8Array): Promise<{ mission: string }>;
+  /** SOUL.md's bytes, written as the owner writes them. */
+  publishSoul(bytes: Uint8Array): Promise<void>;
   /** Recursive; a missing path is not an error. */
   remove(paths: readonly string[]): Promise<void>;
 }
