@@ -49,7 +49,8 @@ function insertV0Row(rt: AgentRuntime): void {
   markStoreChanged(rt.storage.sql);
 }
 
-export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
+/** The one writer of an actor's first loop: `initialSource` at birth (a custom one when the creator names it), else the bundled loop. */
+export async function bootstrapScaffold(rt: AgentRuntime, initialSource: string = INITIAL_SCAFFOLD_SOURCE): Promise<void> {
   initScaffoldTables(rt.storage.execRaw);
   const sql = rt.storage.sql;
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
@@ -60,9 +61,9 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   const liveExists = await exists(vfs, path);
 
   if (current === null && !liveExists) {
-    await writeText(vfs, versionedPath(0), INITIAL_SCAFFOLD_SOURCE);
+    await writeText(vfs, versionedPath(0), initialSource);
     insertV0Row(rt);
-    await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
+    await rt.identity.scaffold.write(initialSource);
 
     return;
   }

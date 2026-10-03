@@ -4,9 +4,9 @@ import { APICallError, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { listAnthropicModels, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_FAST_MODEL, ANTHROPIC_MAX_BREAKPOINTS } from './anthropic';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
-import { OAuthTokenError } from './oauth-token-error';
 import { quotaWindowText, withCallAccount } from './quota';
 import { transportControls, withRateLimitRetry, type TransportControls } from './rate-limit-retry';
+import { authenticatedSend } from './authenticated-send';
 import type { AuthResolution, ModelProvider, ProviderDeps } from './types';
 import { accountOf } from '../credentials/accounts';
 import { Effect } from 'effect';
@@ -381,15 +381,6 @@ interface SdkRequest {
   readonly controls: TransportControls;
 }
 
-async function resolveLogin(deps: ProviderDeps, rejected: AuthResolution | null): Promise<AuthResolution | 'revoked' | null> {
-  try {
-    return await deps.getAuth(CLAUDE_CRED_KEY, rejected === null ? undefined : { rejected: rejected.headers });
-  } catch (cause) {
-    if (cause instanceof OAuthTokenError && cause.revoked) return 'revoked';
-    throw cause;
-  }
-}
-
 function deadLogin(call: ClaudeCall, reason: string): Response {
   diagnostics.failure('provider.claude_login_refused', new KinuError('denied', reason), { model: call.modelId });
 
@@ -482,9 +473,7 @@ async function sendAtAcceptedVersion(call: ClaudeCall, request: SdkRequest, auth
 }
 
 async function claudeCall(call: ClaudeCall, init: RequestInit): Promise<Response> {
-  const login = await resolveLogin(call.deps, null);
-
-  if (login === 'revoked') return deadLogin(call, 'the Claude login\'s refresh token was revoked');
+  const login = await call.deps.getAuth(CLAUDE_CRED_KEY);
 
   if (login === null) {
     diagnostics.failure('credential.claude_absent', new KinuError('missing', 'no Claude login; the call was refused before it left'), { model: call.modelId });
@@ -503,15 +492,13 @@ async function claudeCall(call: ClaudeCall, init: RequestInit): Promise<Response
     controls: transportControls(init),
   };
 
-  const first = await sendAtAcceptedVersion(call, request, login);
+  const answer = await authenticatedSend({
+    key: CLAUDE_CRED_KEY, auth: login, getAuth: call.deps.getAuth, send: (auth) => sendAtAcceptedVersion(call, request, auth),
+  });
 
-  if (first.status !== 401) return withLocalToolNames(first);
-  const refreshed = await resolveLogin(call.deps, login);
+  if (answer.kind === 'answered') return withLocalToolNames(answer.response);
 
-  if (refreshed === 'revoked' || refreshed === null) return deadLogin(call, 'the Claude login was refused and could not be refreshed');
-  const second = await sendAtAcceptedVersion(call, request, refreshed);
-
-  return second.status === 401 ? deadLogin(call, 'api.anthropic.com refused the refreshed Claude login') : withLocalToolNames(second);
+  return deadLogin(call, answer.kind === 'refused' ? `api.anthropic.com: ${answer.reason}` : 'the Claude login is gone');
 }
 
 export function createClaudeProvider(): ModelProvider {

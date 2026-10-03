@@ -7,6 +7,8 @@ import {
 } from '../src/identity/soul';
 import { initAllTables } from '../src/state/workspace-schema';
 import { createWorkspace } from '../src/workspace-birth';
+import { bootstrapScaffold } from '../src/scaffold/bootstrap';
+import { getCurrentScaffoldVersion, readScaffoldVersion } from '../src/scaffold/versions';
 import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers';
 import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 
@@ -104,6 +106,21 @@ describe('workspace birth', () => {
 
     expect(await readText(rt.storage.vfs, 'scaffold/agent.js')).toContain('async');
     expect(await readText(rt.storage.vfs, 'memory/MEMORY.md')).toContain('Atlas');
+  });
+
+  test('a custom first loop is born as v0 through the one writer: source, pointer and live view agree, and a reopen keeps them', async () => {
+    const custom = 'async function* run(rt, task) { yield { type: "chunk", data: "custom" }; }';
+    const rt = await createWorkspace(new Database(':memory:'), { name: 'atlas', purpose: 'Help.', llm: TEST_LLM, scaffold: custom });
+
+    const agree = async () => ({
+      pointer: getCurrentScaffoldVersion(rt.storage.sql, rt.actor),
+      source: await readScaffoldVersion(rt, 0),
+      live: await rt.identity.scaffold.read(),
+    });
+
+    expect(await agree()).toEqual({ pointer: 0, source: custom, live: custom });
+    await bootstrapScaffold(rt);
+    expect(await agree()).toEqual({ pointer: 0, source: custom, live: custom });
   });
 
   /** `name` is the address and `title` is the name; a workspace is born untitled. */

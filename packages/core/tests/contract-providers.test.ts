@@ -335,45 +335,6 @@ describe('Codex provider contract', () => {
     expect(mock.requests[1].headers['authorization']).toBe('Bearer refreshed');
   });
 
-  test('a refresh the resolver refuses up front surfaces as the dead login, by name', async () => {
-    // The local store's refresh hit invalid_grant and throws from getAuth before any request; the answer is the
-    // reconnect remedy.
-    let wireCalls = 0;
-
-    const deps: ModelCallDeps = {
-      env: {},
-      sessionAffinity: 'kinu-test',
-      fetch: asFetchFunction(async () => {
-        wireCalls += 1;
-
-        return new Response(JSON.stringify({ detail: 'Unauthorized' }), { status: 401 });
-      }),
-      async getAuth(key) {
-        if (key !== CODEX_CRED_KEY) return null;
-        throw new OAuthTokenError('codex', 'invalid_grant', 'Codex token refresh failed: 400 invalid_grant');
-      },
-      async hasCredential() { return true; },
-    };
-
-    const model = createCodexProvider().createModel('gpt-5.5', deps);
-
-    let failure = '';
-
-    try {
-      await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
-    } catch (rejection) {
-      const surface = v.safeParse(CodexFailureSurfaceSchema, rejection);
-      failure = surface.success
-        ? `${surface.output.message ?? ''}\n${surface.output.responseBody ?? ''}`
-        : String(rejection);
-    }
-
-    expect(failure).toContain('Your ChatGPT login is no longer valid');
-    // The opaque chain the resolver threw must not survive to the surface.
-    expect(failure).not.toContain('Codex token refresh failed');
-    expect(wireCalls).toBe(0);
-  });
-
   test('a 401 that survives the forced refresh names the reconnection remedy', async () => {
     const deps = makeDeps({
       [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-dead' } },

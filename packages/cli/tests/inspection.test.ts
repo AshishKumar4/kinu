@@ -138,6 +138,25 @@ describe("CLI inspection commands", () => {
     expect(executors.stdout).toContain("native_binary");
   });
 
+  test("kinu executors <name> workspace runs in the addressed workspace, never the invoking directory", async () => {
+    const home = scratchDir("cli-executor-exec");
+    await createLocalAgent(home, "localtest");
+    const invokedFrom = newProjectDir();
+
+    const run = (command: string) => runToExit([process.execPath, cliBin, "executors", "localtest", "workspace", command], {
+      cwd: invokedFrom, env: { ...process.env, KINU_HOME: home },
+    });
+
+    const wrote = await run("echo addressed > marker.txt && pwd");
+    expect(wrote.exitCode).toBe(0);
+    expect(wrote.stdout).not.toContain(invokedFrom);
+    expect(existsSync(join(invokedFrom, "marker.txt"))).toBe(false);
+
+    const read = await run("cat marker.txt");
+    expect(read.exitCode).toBe(0);
+    expect(read.stdout).toContain("addressed");
+  });
+
   test("kinu model normalizes specs through the provider resolver", async () => {
     const home = scratchDir("cli-model");
     await createLocalAgent(home, "localtest");

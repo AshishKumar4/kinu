@@ -968,6 +968,59 @@ describe('LocalAgentHost', () => {
     }
   });
 
+  test("a hire's shell answers to its root's standing approval mode, never its own", async () => {
+    const brief = 'Check the env file.';
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let afterTool = '';
+    let asked = false;
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doGenerate: async () => textAnswer('acknowledged', usage),
+      doStream: async (options) => {
+        const prompt = JSON.stringify(options.prompt);
+
+        if (prompt.includes(brief) && !asked && (options.tools ?? []).some((tool) => tool.name === 'shell')) {
+          asked = true;
+
+          return {
+            stream: new ReadableStream<LanguageModelV2StreamPart>({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({ type: 'tool-call', toolCallId: 'call_env', toolName: 'shell', input: JSON.stringify({ command: 'cat .env' }) });
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+                controller.close();
+              },
+            }),
+          };
+        }
+
+        if (asked && prompt.includes('"tool-result"')) afterTool = prompt;
+
+        return { stream: textStream('ok', usage) };
+      },
+    });
+
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const { host, runtimes } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+
+    try {
+      const team = await host.team('root');
+      await team.create({ name: 'auditor', role: 'researcher', mission: 'Watch the ledger.' });
+      // A secret read is a warn: the hire's own default (strict) runs it; the root's deny_all refuses it.
+      present(runtimes.get('root'), 'the root runtime').actor.config.setShellApprovalMode('deny_all');
+      const turned = awaitTurns(host, 'root/auditor', 1);
+      await team.assign({ name: 'auditor', task: brief, mode: 'build' });
+      await turned;
+
+      expect(afterTool).toContain('deny_all');
+    } finally {
+      await host.close();
+    }
+  });
+
   test('a hire runs at the effort its parent runs at', async () => {
     // Before, a local hire resolved only its own setting and ran at the default whatever `/effort` the owner set.
     const { state, project } = makeRoots();
