@@ -179,13 +179,9 @@ function serveMultipart({ request, url, bucket, name, root }: StoreCall, key: st
     }
 
     if (request.method === 'POST' && !query.has('partNumber')) {
-      const text = yield* attempt('invalid-input', () => request.text());
-      const parts: R2UploadedPart[] = [];
+      const parts = completedParts(yield* attempt('invalid-input', () => request.text()));
 
-      for (const [, number, etag = ''] of text.matchAll(/<Part>\s*<PartNumber>(\d+)<\/PartNumber>\s*<ETag>"?([^<"]+)"?<\/ETag>\s*<\/Part>/g)) {
-        parts.push({ partNumber: Number(number), etag });
-      }
-
+      if (parts === undefined) return refused(request, 400, 'MalformedXML', 'every part needs its PartNumber and ETag');
       const done = yield* attempt('io', () => upload.complete(parts), `completing the upload of ${key}`);
 
       return xml(`<CompleteMultipartUploadResult ${NS}><Bucket>${escapeXml(name)}</Bucket><Key>${escapeXml(key)}</Key>`
@@ -200,6 +196,21 @@ function serveMultipart({ request, url, bucket, name, root }: StoreCall, key: st
 
     return refused(request, 501, 'NotImplemented', `this store serves no ${request.method} ?${[...query.keys()].join('&')}`);
   });
+}
+
+/** S3 does not order a part's elements (the AWS SDKs send ETag first). */
+function completedParts(text: string): R2UploadedPart[] | undefined {
+  const parts: R2UploadedPart[] = [];
+
+  for (const [, part = ''] of text.matchAll(/<Part>([\s\S]*?)<\/Part>/g)) {
+    const number = /<PartNumber>\s*(\d+)\s*<\/PartNumber>/.exec(part)?.[1];
+    const etag = /<ETag>\s*"?([^<"]+?)"?\s*<\/ETag>/.exec(part)?.[1];
+
+    if (number === undefined || etag === undefined) return undefined;
+    parts.push({ partNumber: Number(number), etag });
+  }
+
+  return parts.length === 0 ? undefined : parts;
 }
 
 function serveObject({ request, bucket, root }: StoreCall, key: string): Effect.Effect<Response, DevboxError> {
