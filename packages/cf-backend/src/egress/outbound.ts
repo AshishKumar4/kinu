@@ -1,6 +1,7 @@
 /** HTTP and HTTPS leave the native container through Worker entrypoints. Raw sockets stay
  *  disabled; configuration props come only from the owning Durable Object. */
 
+import { Cause, Effect } from 'effect';
 import { getAgentByName } from 'agents';
 import * as v from 'valibot';
 import { Hono } from 'hono';
@@ -22,8 +23,7 @@ import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run
 import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
 import { kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 import {
-  classifyErrorCode, diagnostics, renderThrownChain, toKinuError, tolerateAsync, KinuError,
-  type Refusal,
+  classifyErrorCode, diagnostics, renderThrownChain, toKinuError, tolerateAsync, KinuError, type Refusal, settle,
 } from '@kinu.run/core/obs';
 
 /** `.internal` resolves nowhere publicly, so a lapse in interception fails to connect rather than leaking activity. */
@@ -88,43 +88,46 @@ export const containerEventResolver = (env: Env): ContainerEventResolver =>
   );
 
 /** Catch-all for every host except the event channel. Only a request that carries a placeholder pays for substitution. */
-export async function handleContainerEgress<Id>(
+export function handleContainerEgress<Id>(
   request: Request,
   env: ContainerEgressEnv<Id>,
   params: KinuEgressParams | undefined,
 ): Promise<Response> {
-  if (!params) {
-    // Unconfigured: refuse, since forwarding cannot tell a placeholder from a secret.
-    return refusal(503, 'Egress interception is not configured for this container yet.');
-  }
+  return settle(Effect.gen(function* () {
+    if (!params) {
+      // Unconfigured: refuse, since forwarding cannot tell a placeholder from a secret.
+      return refusal(503, 'Egress interception is not configured for this container yet.');
+    }
 
-  const url = new URL(request.url);
-  // Judged before the vault call: a private destination is refused regardless.
-  const destination = refusedHostname(url.hostname);
+    const url = new URL(request.url);
+    // Judged before the vault call: a private destination is refused regardless.
+    const destination = refusedHostname(url.hostname);
 
-  if (destination !== null) return destinationRefusal(url.hostname, destination);
+    if (destination !== null) return destinationRefusal(url.hostname, destination);
 
-  const facts: EgressRequestFacts = {
-    host: url.hostname,
-    url: request.url,
-    headers: [...request.headers],
-  };
+    const facts: EgressRequestFacts = {
+      host: url.hostname,
+      url: request.url,
+      headers: [...request.headers],
+    };
 
-  // Use the stub, never copy it: `Object.assign` of a JSRPC stub yields `{}` (methods live behind a Proxy).
-  const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(params.ownerUserId));
-  let resolved: EgressInjectionResult;
+    // Use the stub, never copy it: `Object.assign` of a JSRPC stub yields `{}` (methods live behind a Proxy).
+    const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(params.ownerUserId));
+    const bindings = params.bindings;
 
-  try {
-    resolved = await vault.resolveEgressInjection(
-      await ownerCaller(env), facts, params.bindings,
-    );
-  } catch (cause) {
-    return authorityFailure({ cause, host: url.hostname });
-  }
+    const resolved = yield* Effect.matchCause(Effect.promise(async (): Promise<EgressInjectionResult> => vault.resolveEgressInjection(
+      await ownerCaller(env), facts, bindings,
+    )), {
+      onSuccess: (answer) => ({ answer }),
+      onFailure: (failed) => ({ refused: authorityFailure({ cause: Cause.squash(failed), host: url.hostname }) }),
+    });
 
-  if (resolved.kind === 'refuse') return refusal(resolved.status, resolved.reason);
+    if ('refused' in resolved) return resolved.refused;
 
-  return forwardUpstream(request, url, resolved.substitutions);
+    if (resolved.answer.kind === 'refuse') return refusal(resolved.answer.status, resolved.answer.reason);
+
+    return yield* forwardUpstream(request, url, resolved.answer.substitutions);
+  }));
 }
 
 /** One classifier refuses at three seams (container hop, `web.fetch`, codemode loopback); one event shape keeps them comparable. */
@@ -139,47 +142,49 @@ function destinationRefusal(host: string, payload: Refusal): Response {
  * One construction site for the outgoing request, so the `User-Agent` policy applies exactly once. Every redirect is
  * `manual` (except caller `error`): the runtime's follower never re-enters this handler, so each hop must come back to be judged.
  */
-async function forwardUpstream(
+function forwardUpstream(
   request: Request,
   url: URL,
   substitutions: readonly EgressInjection[],
-): Promise<Response> {
-  const injected: ScrubReplacement[] = substitutions.map(
-    (s) => ({ find: s.secret, replaceWith: s.placeholder }),
-  );
+): Effect.Effect<Response> {
+  return Effect.gen(function* () {
+    const injected: ScrubReplacement[] = substitutions.map(
+      (s) => ({ find: s.secret, replaceWith: s.placeholder }),
+    );
 
-  const reveal: ScrubReplacement[] = substitutions.map(
-    (s) => ({ find: s.placeholder, replaceWith: s.secret }),
-  );
+    const reveal: ScrubReplacement[] = substitutions.map(
+      (s) => ({ find: s.placeholder, replaceWith: s.secret }),
+    );
 
-  const headers = new Headers();
+    const headers = new Headers();
 
-  for (const [name, value] of request.headers) headers.set(name, scrubText(value, reveal));
-  headers.set('user-agent', kinuUserAgent(request.headers.get('user-agent')));
-  const target = scrubText(url.toString(), reveal);
+    for (const [name, value] of request.headers) headers.set(name, scrubText(value, reveal));
+    headers.set('user-agent', kinuUserAgent(request.headers.get('user-agent')));
+    const target = scrubText(url.toString(), reveal);
 
-  let upstream: Response;
-
-  try {
-    upstream = await fetch(reoriginateRequest(request, target, {
+    const sent = yield* Effect.matchCause(Effect.promise(() => fetch(reoriginateRequest(request, target, {
       headers,
       redirect: request.redirect === 'error' ? 'error' : 'manual',
-    }));
-  } catch (cause) {
-    return upstreamFailure({ cause, host: url.hostname, injected });
-  }
+    }))), {
+      onSuccess: (upstream) => ({ upstream }),
+      onFailure: (failed) => ({ refused: upstreamFailure({ cause: Cause.squash(failed), host: url.hostname, injected }) }),
+    });
 
-  if (substitutions.length === 0) return upstream;
+    if ('refused' in sent) return sent.refused;
+    const upstream = sent.upstream;
 
-  // Scrubbed with the same pairs reversed, so an upstream echo of the request cannot become an oracle for the secret.
-  const responseHeaders = new Headers();
+    if (substitutions.length === 0) return upstream;
 
-  for (const [name, value] of upstream.headers) responseHeaders.set(name, scrubText(value, injected));
+    // Scrubbed with the same pairs reversed, so an upstream echo of the request cannot become an oracle for the secret.
+    const responseHeaders = new Headers();
 
-  return new Response(
-    upstream.body === null ? null : upstream.body.pipeThrough(createScrubStream(injected)),
-    { status: upstream.status, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders },
-  );
+    for (const [name, value] of upstream.headers) responseHeaders.set(name, scrubText(value, injected));
+
+    return new Response(
+      upstream.body === null ? null : upstream.body.pipeThrough(createScrubStream(injected)),
+      { status: upstream.status, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders },
+    );
+  });
 }
 
 /**
@@ -232,7 +237,7 @@ eventHost.use('*', async (c, next) => {
   await next();
 });
 
-eventHost.post(CONTAINER_EVENT_PATH, async (c) => acceptContainerEvent(c.req.raw, c.env.resolveAgent, c.get('params')));
+eventHost.post(CONTAINER_EVENT_PATH, (c) => settle(acceptContainerEvent(c.req.raw, c.env.resolveAgent, c.get('params'))));
 
 eventHost.post('*', async () => refusal(404, `The only route on ${CONTAINER_EVENT_HOST} is POST ${CONTAINER_EVENT_PATH}.`));
 
@@ -252,46 +257,54 @@ export async function handleContainerEvent(
  * Addressed by `ctx.params.workspaceName`, never the request, so a container cannot post into another workspace.
  * Awaited, not deferred: `waitUntil` is a no-op in a DO; on eviction mid-write the container retries.
  */
-async function acceptContainerEvent(
+function acceptContainerEvent(
   request: Request,
   resolveAgent: ContainerEventResolver,
   params: KinuEgressParams,
-): Promise<Response> {
-  const body = v.safeParse(JsonValueSchema, await tolerateAsync(() => request.json(), 'malformed-input'));
+): Effect.Effect<Response> {
+  return Effect.gen(function* () {
+    const body = v.safeParse(JsonValueSchema, yield* Effect.promise(() => tolerateAsync(() => request.json(), 'malformed-input')));
 
-  if (!body.success) return refusal(400, 'Body is not JSON.');
+    if (!body.success) return refusal(400, 'Body is not JSON.');
 
-  // Used, not copied (see `handleContainerEgress`). Classified because a throw here gives the container an empty reply;
-  // 503 says the event was not recorded and retry recovers.
-  let result: ContainerEventResult;
+    // Used, not copied (see `handleContainerEgress`). Classified because a throw here gives the container an empty reply;
+    // 503 says the event was not recorded and retry recovers.
+    const delivered = yield* Effect.matchCause(Effect.promise(async (): Promise<ContainerEventResult> => {
+      const agent = await resolveAgent(params.workspaceName);
 
-  try {
-    const agent = await resolveAgent(params.workspaceName);
+      return agent.acceptContainerEvent(body.output);
+    }), {
+      onSuccess: (result) => ({ result }),
+      onFailure: (failed) => {
+        const error = toKinuError({
+          doing: 'delivering a container event to its workspace object',
+          cause: Cause.squash(failed),
+          otherwise: 'unavailable',
+        });
 
-    result = await agent.acceptContainerEvent(body.output);
-  } catch (cause) {
-    const error = toKinuError({
-      doing: 'delivering a container event to its workspace object',
-      cause,
-      otherwise: 'unavailable',
+        diagnostics.failure('egress.event_channel_unreachable', error, {
+          workspace: params.workspaceName,
+        });
+
+        return {
+          refused: refusal(
+            error.code === 'timeout' ? 504 : 503,
+            `Kinu could not record this event (${error.code}); it was not accepted, so send it again.`,
+          ),
+        };
+      },
     });
 
-    diagnostics.failure('egress.event_channel_unreachable', error, {
-      workspace: params.workspaceName,
-    });
+    if ('refused' in delivered) return delivered.refused;
+    const result = delivered.result;
 
-    return refusal(
-      error.code === 'timeout' ? 504 : 503,
-      `Kinu could not record this event (${error.code}); it was not accepted, so send it again.`,
+    if (result.status === 'rejected') return refusal(result.http_status, result.reason);
+
+    return Response.json(
+      { accepted: true, event_id: result.event_id, admitted: result.admitted },
+      { status: 202 },
     );
-  }
-
-  if (result.status === 'rejected') return refusal(result.http_status, result.reason);
-
-  return Response.json(
-    { accepted: true, event_id: result.event_id, admitted: result.admitted },
-    { status: 202 },
-  );
+  });
 }
 
 /** Plain text, no secret, no placeholder it did not already hold. */
