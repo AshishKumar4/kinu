@@ -199,7 +199,7 @@ function makeTeam() {
       dismiss: async (input) => {
         recordCall(calls, 'dismiss', { input });
 
-        return { ok: true, name: input.name, historyKept: input.keepHistory ?? false };
+        return { ok: true, name: input.name, historyKept: input.keepHistory ?? false, stoppedJobs: [] };
       },
     } satisfies TeamToolDeps,
   };
@@ -360,7 +360,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(await member(ns, 'msg').execute({ event_id: 'pe1', message: 'here you go' })).toEqual({ ok: true });
     expect(await member(ns, 'list').execute()).toEqual({ subordinates: [rosterEntry], peers: [{ name: 'scout', displayName: 'Scout' }] });
     expect(await member(ns, 'dismiss').execute({ agent: 'researcher' }))
-      .toEqual({ ok: true, name: 'researcher', historyKept: true });
+      .toEqual({ ok: true, name: 'researcher', historyKept: true, stoppedJobs: [] });
 
     expect(team.calls.map((c) => c.action)).toEqual(['spawn', 'assign', 'message', 'dismiss']);
     expect(peers.calls.map((c) => c.action)).toEqual(['reply']);

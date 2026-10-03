@@ -2277,7 +2277,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
     assign: async () => handoff,
     status: async () => ({ lastActivity: null, recentSteps: [] }),
     message: async () => handoff,
-    dismiss: async () => undefined,
+    dismiss: async () => ({ stoppedJobs: [] }),
     rename: async () => undefined,
   };
 

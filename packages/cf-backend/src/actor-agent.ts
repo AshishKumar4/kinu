@@ -12,7 +12,7 @@ import {
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
-  type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts,
+  type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
@@ -2622,9 +2622,24 @@ export abstract class ActorAgent extends Agent<Env> {
     return REAL_CLOCK;
   }
 
+  private _jobAuthorities: WorkspaceJobAuthorities | null = null;
+
+  protected get jobAuthorities(): WorkspaceJobAuthorities {
+    this._jobAuthorities ??= new WorkspaceJobAuthorities({
+      root: () => ({ kind: 'root', actorId: this.actorHandle().actorId, store: this.jobs, runner: this.jobRunner }),
+      revive: (actorId) => this.reviveJobAuthority(actorId),
+    });
+
+    return this._jobAuthorities;
+  }
+
+  protected reviveJobAuthority(_actorId: string): JobAuthority | null {
+    return null;
+  }
+
   /** Re-drives a recovered job fiber. */
   protected workspaceJobs(): FiberLaneTransports['jobs'] {
-    return this.jobRunner;
+    return this.jobAuthorities;
   }
 
   /** Every actor's runner here, the root's and each hire's; `owner` addresses its sockets (null: the root's). */

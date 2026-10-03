@@ -290,7 +290,7 @@ describe("a seated head's long call becomes its own job, and the settle wakes it
         const seat = await seats.seat('head-detach', 'swarm');
 
         // The workspace's clock, which the call's window and the build run on.
-        return { ...seat, release: async () => {}, jobs: { jobOutput: (frame) => { frames.push(frame); }, clock } };
+        return { ...seat, release: async () => {}, jobs: { ...seat.jobs, ports: { jobOutput: (frame) => { frames.push(frame); }, clock } } };
       },
       model: async () => ({ model, spec: null }),
       codemodeTool: () => build,

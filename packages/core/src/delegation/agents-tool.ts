@@ -132,6 +132,10 @@ export interface SubordinateHandoff {
   phase: SubordinatePhase;
 }
 
+export interface SubordinateDismissal {
+  readonly stoppedJobs: readonly string[];
+}
+
 export interface TeamToolDeps {
   /** The same bounded parent conversation handed to an exploration head. */
   inheritedContext?(): Promise<SerializedMessage[]>;
@@ -193,6 +197,7 @@ export interface TeamToolDeps {
     requestedBy?: 'orchestrator' | 'user';
   }): Promise<{
     ok: true; name: string; historyKept: boolean;
+    stoppedJobs: readonly string[];
   }>;
   /**
    * The `lifetime:'task'` half of `hire`: starts one child and returns; the child retires once it answers.

@@ -131,7 +131,7 @@ function searchableDeps(opts: {
       knows: async () => true,
       status: async () => ({}),
       message: recordHandoff('send'),
-      dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
+      dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),
     },
     budget: opts.budget,
   };

@@ -213,7 +213,7 @@ function fixture(over: {
       const seat = await seats.hostNode(node);
       nodeActorId = seat.actor.handle.actorId;
 
-      return { ...seat, jobs: { jobOutput: (frame) => { frames.push(frame); } } };
+      return { ...seat, jobs: { ...seat.jobs, ports: { jobOutput: (frame) => { frames.push(frame); } } } };
     },
     model: over.model, journal,
     logger,

@@ -21,8 +21,8 @@ import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
 import type { DynamicContext } from '../prompting/volatile-context';
 import { buildToolSurface, type ReportToolDeps } from '../tools/builtins';
 import { permitInPlan } from '../execution/work-mode';
-import type { BackgroundJobRunner, WorkspaceJobPorts } from '../jobs/runner';
-import { stepLoopJobs } from '../jobs/step-loop';
+import type { BackgroundJobRunner } from '../jobs/runner';
+import { stepLoopJobs, type StepLoopJobSeat } from '../jobs/step-loop';
 import { CONFINED_BACKGROUNDABLE_TOOLS, wrapToolsForBackground } from '../jobs/background-wrap';
 import type { BackgroundPolicy } from '../jobs/threshold';
 import { readProposalCode } from '../execution/code-fence';
@@ -175,7 +175,7 @@ export interface HostedNodeSeat {
   readonly conversations: ConversationRecall;
   /** The window a turn on `spec` is admitted against, from the backend's catalog; null is the caller's own model. */
   readonly windowOf: (spec: string | null) => Promise<ResolvedModelWindow>;
-  readonly jobs: WorkspaceJobPorts;
+  readonly jobs: StepLoopJobSeat;
 }
 
 export interface NodeLoopDeps {
@@ -190,7 +190,7 @@ export interface NodeLoopDeps {
     => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   conversations: ConversationRecall;
-  jobs: WorkspaceJobPorts;
+  jobs: StepLoopJobSeat;
   model: LanguageModel;
   window: ResolvedModelWindow;
   logger: Logger;
@@ -422,9 +422,9 @@ async function runNodeLoop(
     produced: [],
   };
 
-  const { runner: jobRunner, next } = stepLoopJobs({
+  const { runner: jobRunner, next, detach } = stepLoopJobs({
     actor: deps.actor,
-    ports: deps.jobs,
+    seat: deps.jobs,
     policy: deps.backgroundPolicy,
     logActivity: (event, detail) => {
       deps.logger.event('swarm.node_job', {
@@ -497,6 +497,7 @@ async function runNodeLoop(
   } finally {
     // Cancel this runner's jobs: their results have no reader left.
     jobRunner.cancelRunning();
+    detach();
   }
 }
 

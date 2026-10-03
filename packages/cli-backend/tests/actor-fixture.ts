@@ -116,7 +116,8 @@ export function headSeatFactory(
         approvals: () => ({ items: [], total: 0 }),
       }),
       windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
-      jobs: { jobOutput: () => {} },
+      // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
+      jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
       release: async () => {
         host.release(binding.reference);
         writes?.delete(binding.reference.actorId);
@@ -215,7 +216,8 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
     // No catalog in a fixture: every spec is admitted against the static table.
     windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
     window: resolveModelWindow('', null),
-    jobs: { jobOutput: () => {} },
+    // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
+    jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
   } satisfies Omit<HeadSeat, 'release'> & Pick<HeadInferenceDeps, 'window'>;
 }
 

@@ -61,6 +61,11 @@ type JobRecoveryOutcome =
   | { readonly state: 'deferred'; readonly job: BackgroundJob }
   | { readonly state: 'none' };
 
+export interface JobRetirement {
+  readonly stopped: string[];
+  readonly refused: string[];
+}
+
 /** Each detached job is a live process tree; past the cap the detach is refused and cancelled. */
 export const MAX_CONCURRENT_DETACHED_JOBS = 8;
 
@@ -585,9 +590,30 @@ export class BackgroundJobRunner {
 
   /** Abort, mark cancelled, and wake the agent, which was told to wait for this result. */
   async cancel(jobId: string): Promise<boolean> {
-    if (this.deps.store.get(jobId)?.status !== 'running') return false;
+    if (await this.stop(jobId) !== 'stopped') return false;
+    await this.wake(jobId);
 
-    if (this.cancelling.has(jobId)) return false;
+    return true;
+  }
+
+  /** No wake: its reader is leaving. */
+  async retire(): Promise<JobRetirement> {
+    const retirement: JobRetirement = { stopped: [], refused: [] };
+
+    for (const jobId of this.deps.store.runningIds()) {
+      const outcome = await this.stop(jobId);
+
+      if (outcome === 'stopped') retirement.stopped.push(jobId);
+      else if (outcome === 'refused') retirement.refused.push(jobId);
+    }
+
+    return retirement;
+  }
+
+  private async stop(jobId: string): Promise<'stopped' | 'refused' | 'settled'> {
+    if (this.deps.store.get(jobId)?.status !== 'running') return 'settled';
+
+    if (this.cancelling.has(jobId)) return 'refused';
     this.cancelling.add(jobId);
     let refusal: { readonly error: unknown } | undefined;
 
@@ -611,13 +637,10 @@ export class BackgroundJobRunner {
 
       if (held) await held();
 
-      return false;
+      return 'refused';
     }
 
-    if (!this.settleCancelled(jobId)) return false;
-    await this.wake(jobId);
-
-    return true;
+    return this.settleCancelled(jobId) ? 'stopped' : 'settled';
   }
 
   /**

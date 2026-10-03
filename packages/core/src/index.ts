@@ -687,7 +687,7 @@ export {
   type ActorToolsetDeps, type ActorToolsets,
   type AgentsToolDeps, type AgentsSwarmDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
-  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
+  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff, type SubordinateDismissal,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './delegation/actor-tools';
@@ -1617,6 +1617,7 @@ export {
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
+  WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,
   JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, lastOutputLines, jobName, shortJobId, type JobName,
   type JobOutputFrame, type JobOutputTail,
 } from './jobs/index';

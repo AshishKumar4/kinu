@@ -17,6 +17,7 @@ import type { WorkMode } from '../types/turn';
 import type { AgentConfigStore } from '../config/store';
 import type { RoleId, TierId } from '../profiles/catalog';
 import type {
+  SubordinateDismissal,
   SubordinateHandoff,
   SubordinateRosterEntry,
   TeamToolDeps,
@@ -277,7 +278,7 @@ export interface SubordinateRuntime {
   /** Called with `user` for an owner rename, which makes `planWorkspaceTitle`'s refusal durable. */
   rename(name: string, displayName: string, nameOrigin: NameOrigin): Promise<void>;
   /** Without `interrupt`, retirement waits for the turn to settle. */
-  dismiss(name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference): Promise<void>;
+  dismiss(name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference): Promise<SubordinateDismissal>;
 }
 
 /** Same default as `AgentConfigStore.getRoleSelection`. */
@@ -557,18 +558,19 @@ export function createTeamToolDeps(deps: {
 
       if (keepHistory) deps.roster.dismiss(input.name, deps.now());
       else deps.roster.requestDeletion(input.name, reference, deps.now());
+      let dismissal: SubordinateDismissal;
 
       if (keepHistory) {
-        try { await deps.runtime.dismiss(input.name, { keepHistory: true, interrupt: true }, reference); }
+        try { dismissal = await deps.runtime.dismiss(input.name, { keepHistory: true, interrupt: true }, reference); }
         catch (cause) { rollback({ cause }, () => deps.roster.restore(before), 'retained subordinate dismissal'); }
       } else {
-        await deps.runtime.dismiss(input.name, { keepHistory: false, interrupt: true }, reference);
+        dismissal = await deps.runtime.dismiss(input.name, { keepHistory: false, interrupt: true }, reference);
         deps.roster.removeActor(input.name, reference);
       }
 
       deps.rosterMoved();
 
-      return { ok: true, name: input.name, historyKept: keepHistory };
+      return { ok: true, name: input.name, historyKept: keepHistory, stoppedJobs: dismissal.stoppedJobs };
     },
   };
 

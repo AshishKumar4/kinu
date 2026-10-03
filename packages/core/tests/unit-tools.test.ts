@@ -137,7 +137,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       knows: async () => true,
       status: async () => ({}),
       message: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
-      dismiss: async () => ({ ok: true as const, name: 's', historyKept: false }),
+      dismiss: async () => ({ ok: true as const, name: 's', historyKept: false, stoppedJobs: [] }),
     };
 
     const stubPeers = {

@@ -394,6 +394,8 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
         directory.apply(directory.main(), [], { action: 'retire', name, reference });
         directory.apply(directory.main(), [], { action: 'release', name, reference });
       }
+
+      return { stoppedJobs: [] };
     },
   };
 
@@ -753,7 +755,11 @@ describe('team action routing', () => {
       async status() { return { lastActivity: null, recentSteps: [] }; },
       async message(name) { return observe('message', name); },
       async rename(name) { observed.push({ operation: 'rename', roster: roster.get(name) }); },
-      async dismiss(name) { observed.push({ operation: 'dismiss', roster: roster.get(name) }); },
+      async dismiss(name) {
+        observed.push({ operation: 'dismiss', roster: roster.get(name) });
+
+        return { stoppedJobs: [] };
+      },
     };
 
     const team = createTeamToolDeps({
@@ -819,7 +825,7 @@ describe('team action routing', () => {
     await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' });
 
     expect(await h.team.dismiss({ name: 'researcher-a1b2c3' }))
-      .toEqual({ ok: true, name: 'researcher-a1b2c3', historyKept: true });
+      .toEqual({ ok: true, name: 'researcher-a1b2c3', historyKept: true, stoppedJobs: [] });
     // keepHistory=true skips the orchestrator's deleteSubAgent storage wipe.
     expect(h.calls.at(-1)).toBe('dismiss:researcher-a1b2c3:true');
   });

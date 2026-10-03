@@ -227,7 +227,7 @@ function makeTeam(
     dismiss: async (input) => {
       calls.push({ action: 'dismiss', input });
 
-      return { ok: true, name: input.name, historyKept: input.keepHistory ?? false };
+      return { ok: true, name: input.name, historyKept: input.keepHistory ?? false, stoppedJobs: [] };
     },
     ...overrides,
   };
@@ -758,10 +758,10 @@ describe('agents tool — subordinate actions', () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
     expect(await t.execute({ action: 'dismiss', agent: 'researcher' }))
-      .toEqual({ ok: true, name: 'researcher', historyKept: true });
+      .toEqual({ ok: true, name: 'researcher', historyKept: true, stoppedJobs: [] });
     expect(calls[0].input).toEqual({ name: 'researcher', keepHistory: true });
     expect(await t.execute({ action: 'dismiss', agent: 'researcher', keep_history: false }))
-      .toEqual({ ok: true, name: 'researcher', historyKept: false });
+      .toEqual({ ok: true, name: 'researcher', historyKept: false, stoppedJobs: [] });
     expect(calls[1].input).toEqual({ name: 'researcher', keepHistory: false });
   });
 

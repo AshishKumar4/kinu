@@ -39,6 +39,7 @@ import { TierIdSchema,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type TaskListStore,
+  WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
@@ -407,6 +408,8 @@ export class LocalAgentSession {
   private readonly jobs: BackgroundJobStore;
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
+  /** Every job operation in this session reaches the runner over the job's rows: the root's, or a node's or head's. */
+  private readonly jobAuthorities: WorkspaceJobAuthorities;
   private readonly clock: Clock;
   /** Durable swarm checkpoint, so an interrupted swarm resumes instead of losing its budget. */
   private readonly mctsSearchStore: MctsSearchStore;
@@ -718,6 +721,10 @@ export class LocalAgentSession {
       // Arms the session's one terminal-retry timer, which sweeps due jobs before replaying owed effects.
       scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
     } satisfies BackgroundJobRunnerDeps);
+    this.jobAuthorities = new WorkspaceJobAuthorities({
+      root: () => ({ kind: 'root', actorId: this.rt.actor.actorId, store: this.jobs, runner: this.jobRunner }),
+      revive: (actorId) => this.endedLoopJobs(actorId),
+    });
     // Scaffold cold-start heal (DO onStart parity): without scaffold/agent.js,
     // engine.maybeEvolveScaffold silently disables scaffold evolution. Idempotent; tracked for end().
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
@@ -1408,7 +1415,7 @@ export class LocalAgentSession {
     });
 
     for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
-      if (orphan.name.startsWith('bg:')) await this.jobRunner.recover(orphan.snapshot);
+      if (orphan.name.startsWith('bg:')) await this.jobAuthorities.recover(orphan.snapshot);
       void this.rt.storage.sql`DELETE FROM fibers
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
     }
@@ -1420,7 +1427,8 @@ export class LocalAgentSession {
       runEvents: this.eventRecorder,
       liveRuns: () => this.chat.drivenRuns(),
       resume: jobRedriveResumeGate({
-        recoverOrphans: () => this.jobRunner.recoverOrphans(),
+        // Every actor's: a node's or head's loop died with this process too.
+        recoverOrphans: () => this.jobAuthorities.recoverOrphans(),
         inputOf: (jobId) => this.jobs.getInput(jobId),
         rootsForTask: (task) => resumableForkRoots(
           { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
@@ -1564,6 +1572,11 @@ export class LocalAgentSession {
    */
   flushEvents(): Promise<void> {
     return this.chat.flushEvents();
+  }
+
+  /** This agent is leaving: its running jobs stop without a wake. */
+  retireJobs(): Promise<JobRetirement> {
+    return this.jobRunner.retire();
   }
 
   async settleBackgroundWork(): Promise<void> {
@@ -2807,6 +2820,27 @@ export class LocalAgentSession {
     };
   }
 
+  /** The session's own job seams: a node's or head's output reaches the same listeners its chat's does. */
+  private loopJobPorts(): WorkspaceJobPorts {
+    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null };
+  }
+
+  /** A swarm actor no loop holds: its loop ended, with this process or before it, so its rows settle and wake nobody. */
+  private endedLoopJobs(actorId: string): JobAuthority | null {
+    // Only the local root owns the actor directory; a hire's session runs no loop of its own here.
+    if (this.rt.actor.parentActorId !== null) return null;
+    const record = localActorDirectory(this.rt.actor).directory.retained(actorId);
+
+    if (record === null || record.origin !== 'swarm' || record.retiringAt !== null || record.deletedAt !== null) return null;
+
+    return endedStepLoopJobs({
+      actorId,
+      store: this.actorHost.bindStores(actorReferenceOf(record)).stores.jobs,
+      ports: this.loopJobPorts(),
+      fiber: (name, fn) => this.trackFiber(name, fn),
+    });
+  }
+
   /** One run actor's seat, for a head or a swarm node; `declare` runs before the host builds it. */
   private async seatRunActor(creationId: string, declare: (actorId: string) => void): Promise<{
     readonly binding: LocalActorBinding;
@@ -2828,8 +2862,7 @@ export class LocalAgentSession {
         dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
         windowOf: (spec) => (spec === null ? this.modelCatalog.resolved() : this.modelCatalog.windowFor(spec)),
         conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
-        // The session's own job seams: a node's output reaches the same listeners its chat's does.
-        jobs: { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null },
+        jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
       },
     };
   }

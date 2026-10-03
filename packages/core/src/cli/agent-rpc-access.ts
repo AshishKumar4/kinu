@@ -202,6 +202,8 @@ const HOSTED_WINDOW_RPC = {
   setActorModel: (args, actor) => args[0] === actor.name,
   setReasoningEffort: (args, actor) => args[1] === actor.name,
   listBackgroundJobs: (args, actor) => args[1] === actor.name,
+  cancelBackgroundJob: (args, actor) => args[1] === actor.name,
+  dismissBackgroundJob: (args, actor) => args[1] === actor.name,
   cancelCurrentWork: () => true,
   send: () => true,
   listPendingConsents: () => true,
