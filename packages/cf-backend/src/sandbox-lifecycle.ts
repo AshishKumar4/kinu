@@ -6,7 +6,7 @@
  */
 
 import * as v from 'valibot';
-import type { IncidentStage, RestoreClockPhase } from '@kinu.run/devbox';
+import type { DevboxIncident, IncidentStage, RestoreClockPhase } from '@kinu.run/devbox';
 // Pure subpath: the barrel loads `cloudflare:workers`, which exists only under workerd.
 import { INCIDENT_REASON_MAX_CHARS } from '@kinu.run/devbox/incidents';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
@@ -57,7 +57,7 @@ const SANDBOX_LIFECYCLE_STAGES = STAGE_KEYS;
 export type SandboxLifecycleStage = IncidentStage;
 
 /** Required `attempts` cannot be derived here, so older envelopes are refused, never defaulted. */
-export const SANDBOX_LIFECYCLE_ENVELOPE_VERSION = 2;
+const SANDBOX_LIFECYCLE_ENVELOPE_VERSION = 2;
 
 const SandboxLifecycleIncidentSchema = v.strictObject({
   version: v.literal(SANDBOX_LIFECYCLE_ENVELOPE_VERSION),
@@ -137,6 +137,19 @@ export interface SandboxLifecycleDeps {
   /** Required: an absent instrument looks exactly like a quiet fleet. */
   readonly recordRecovery: (row: Omit<RecoveryRowInput, 'workspace'>) => void;
   readonly logActivity?: (event: string, detail?: string) => void;
+}
+
+/** A box's incident restated field by field: the workspace's schema is closed. */
+export function lifecycleIncident(incident: DevboxIncident, attempts: number): SandboxLifecycleIncident {
+  const report: SandboxLifecycleIncident = {
+    version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION, incidentId: incident.incidentId, stage: incident.stage, reason: incident.reason, attempts,
+  };
+
+  if (incident.processId !== undefined) report.processId = incident.processId;
+
+  if (incident.port !== undefined) report.port = incident.port;
+
+  return report;
 }
 
 /** `body` crossed a DO RPC boundary; this is its parse boundary. `rejected` is a caller bug, not transient. */
@@ -258,7 +271,7 @@ function incidentWhere(incident: SandboxLifecycleIncident): string {
 }
 
 function incidentText(incident: SandboxLifecycleIncident): string {
-  // Not a failure: the container would rest, and asks first (devbox D59).
+  // Not failures: a rest that asks first (devbox D59), a recovery (D67).
   if (incident.stage === 'rest') return `${incident.reason}\n${STAGE_CONSEQUENCE.rest}\n\nAsk id: ${incident.incidentId}`;
 
   if (incident.stage === 'recovered') return `${incident.reason}\n${STAGE_CONSEQUENCE.recovered}\n\nNotice id: ${incident.incidentId}`;

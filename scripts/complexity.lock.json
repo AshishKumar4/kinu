@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-03",
-  "files": 2979,
-  "functions": 74824,
+  "files": 2960,
+  "functions": 73713,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -74,10 +74,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
-      "complexity": 37
-    },
-    {
       "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 37
     },
@@ -106,19 +102,11 @@
       "complexity": 34
     },
     {
-      "key": "packages/devbox/tests/support/delta-shell.ts#DeltaShell.line",
-      "complexity": 34
-    },
-    {
       "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
       "complexity": 34
     },
     {
       "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput",
-      "complexity": 33
-    },
-    {
-      "key": "packages/devbox/src/chunked-delta.ts#planDeltaPublication",
       "complexity": 33
     },
     {
@@ -135,10 +123,6 @@
     },
     {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
-      "complexity": 32
-    },
-    {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>attachChainOnce",
       "complexity": 32
     },
     {
@@ -198,14 +182,6 @@
       "complexity": 31
     },
     {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>commitChain",
-      "complexity": 31
-    },
-    {
-      "key": "packages/devbox/tests/snapshot-chain.test.ts#shellLabel",
-      "complexity": 31
-    },
-    {
       "key": "tests/first-run/exploration.first-run.ts#describe>liveTest>run",
       "complexity": 31
     },
@@ -227,10 +203,6 @@
     },
     {
       "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
-      "complexity": 30
-    },
-    {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>checkpoint",
       "complexity": 30
     },
     {
@@ -358,15 +330,7 @@
       "complexity": 28
     },
     {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>stageChunkedDelta",
-      "complexity": 28
-    },
-    {
       "key": "scripts/agents-fields.ts#collectReads>walkExcept",
-      "complexity": 28
-    },
-    {
-      "key": "scripts/bench-devbox-block-attach.ts#measureLarge",
       "complexity": 28
     },
     {

@@ -1,11 +1,30 @@
 /** A store mount's S3 requests, answered from the Worker's own R2 binding: no key pair exists (D41).
- *  S3Mount runs `s3fs` in the guest with the shim's placeholder password and routes each mount's
- *  host here, as 0.12.9's R2 mount did; the SDK's `S3Gateway` would sign them for R2's S3 API. */
+ *  S3Mount's `s3fs` holds a placeholder password and each mount's host routes here. */
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { S3GatewayBinding, S3MountRequest } from '@cloudflare/sandbox';
 import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
-import { storeRouteHost } from './snapshot-chain';
+
+/** The box's prefix in the store: S3Mount admits a second mount of a binding only at the same prefix. */
+export function chainStoreRoot(boxPrefix: string): string {
+  return `${boxPrefix}/backups`;
+}
+
+/** Where the container sees the store, through S3Mount. */
+export const STORE_MOUNT = '/backups';
+
+/** The host S3Mount gives a route: `routeHost` in @cloudflare/sandbox 1.0.0 (index.mjs:1520). */
+export function storeRouteHost(routeId: string): string {
+  return `s3-${routeId}.sandbox.internal`;
+}
+
+/** The route the container's publisher PUTs through; S3Mount names its own routes at random. */
+export const STORE_PUBLISH_ROUTE = 'devbox-publish';
+
+/** The gateway roots each route at this box's prefix, so the URL names the key under it (D46). */
+export function storeObjectUrl(root: string, bucket: string, key: string): string {
+  return `http://${storeRouteHost(STORE_PUBLISH_ROUTE)}/${encodeURIComponent(bucket)}/${key.slice(root.length + 1).split('/').map(encodeURIComponent).join('/')}`;
+}
 
 export type StoreGatewayProps = Parameters<S3GatewayBinding>[0]['props'];
 
@@ -28,9 +47,8 @@ interface StoreCall {
   readonly root: string;
 }
 
-/** A path under the root: no leading `/`, no empty, `.` or `..` segment, once percent-decoded. The
- *  root is prefixed literally, so no path reaches outside it; one that reads as if it could is refused.
- *  A trailing `/` names a directory object. */
+/** Under the root once percent-decoded: no leading `/`, no empty, `.` or `..` segment. A trailing
+ *  `/` names a directory object. */
 function isPlainPath(path: string): boolean {
   if (path === '') return true;
 
@@ -161,13 +179,9 @@ function serveMultipart({ request, url, bucket, name, root }: StoreCall, key: st
     }
 
     if (request.method === 'POST' && !query.has('partNumber')) {
-      const text = yield* attempt('invalid-input', () => request.text());
-      const parts: R2UploadedPart[] = [];
+      const parts = completedParts(yield* attempt('invalid-input', () => request.text()));
 
-      for (const [, number, etag = ''] of text.matchAll(/<Part>\s*<PartNumber>(\d+)<\/PartNumber>\s*<ETag>"?([^<"]+)"?<\/ETag>\s*<\/Part>/g)) {
-        parts.push({ partNumber: Number(number), etag });
-      }
-
+      if (parts === undefined) return refused(request, 400, 'MalformedXML', 'every part needs its PartNumber and ETag');
       const done = yield* attempt('io', () => upload.complete(parts), `completing the upload of ${key}`);
 
       return xml(`<CompleteMultipartUploadResult ${NS}><Bucket>${escapeXml(name)}</Bucket><Key>${escapeXml(key)}</Key>`
@@ -182,6 +196,21 @@ function serveMultipart({ request, url, bucket, name, root }: StoreCall, key: st
 
     return refused(request, 501, 'NotImplemented', `this store serves no ${request.method} ?${[...query.keys()].join('&')}`);
   });
+}
+
+/** S3 does not order a part's elements (the AWS SDKs send ETag first). */
+function completedParts(text: string): R2UploadedPart[] | undefined {
+  const parts: R2UploadedPart[] = [];
+
+  for (const [, part = ''] of text.matchAll(/<Part>([\s\S]*?)<\/Part>/g)) {
+    const number = /<PartNumber>\s*(\d+)\s*<\/PartNumber>/.exec(part)?.[1];
+    const etag = /<ETag>\s*"?([^<"]+?)"?\s*<\/ETag>/.exec(part)?.[1];
+
+    if (number === undefined || etag === undefined) return undefined;
+    parts.push({ partNumber: Number(number), etag });
+  }
+
+  return parts.length === 0 ? undefined : parts;
 }
 
 function serveObject({ request, bucket, root }: StoreCall, key: string): Effect.Effect<Response, DevboxError> {
@@ -232,9 +261,8 @@ function serveObject({ request, bucket, root }: StoreCall, key: string): Effect.
   });
 }
 
-/** Holds each route to the bucket and access S3Mount recorded for it, rooted at the box's prefix
- *  Devbox set on it: a key the guest names is a path under that root (D46), as 0.12.9's Worker
- *  rooted its mount, so it reaches no other binding and no other box's keys. */
+/** Holds each route to its recorded bucket and access, rooted at the box's prefix: a key the guest
+ *  names is a path under that root (D46), so it reaches no other binding or box. */
 export function serveStore(request: Request, props: StoreGatewayProps, bucketOf: (name: string) => R2Bucket | undefined): Effect.Effect<Response, DevboxError> {
   return Effect.gen(function* () {
     if (props.mode === 'deny') return refused(request, 403, 'AccessDenied', 'this store route has been revoked');

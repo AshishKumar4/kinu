@@ -1271,3 +1271,35 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     expect(settled).toBe(true);
   });
 });
+
+describe('a box whose attach was abandoned', () => {
+  test('tells callers to ask again until its replacement restores, with or without an object reset between', async () => {
+    // The soak (D68): a container killed during a recovery overran the start budget, and every
+    // operation in the 30 s before the armed replacement was refused as terminal.
+    for (const reset of [false, true]) {
+      const harnessed = harness(TightBox);
+      const { container, state } = harnessed;
+      let box = harnessed.box;
+      const slow = gate();
+      container.stampGate = slow;
+      const attempt = box.devboxStartup();
+      await slow.reached;
+      box.clock.advance(TIGHT_POLICY.attachBudgetMs);
+      await expect(attempt).rejects.toThrow('[abandoned -> replace]');
+      slow.release();
+      container.stampGate = undefined;
+
+      if (reset) {
+        box = new TightBox(state, {});
+        container.owner = box;
+      }
+
+      // Before the armed replacement runs, a caller is told to ask again, not that the box is dead.
+      await expect(box.exec('true')).rejects.toThrow('this devbox is not ready: [abandoned -> replace]');
+      await box.devboxStartup();
+      expect(container.destroys).toBe(1);
+      expect((await box.exec('true')).exitCode).toBe(0);
+      await box.destroy();
+    }
+  });
+});

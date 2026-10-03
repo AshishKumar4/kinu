@@ -25,8 +25,7 @@ const PREVIEWS_UNPUBLISHABLE =
 const DEVBOX_FAILURE_CODES: Readonly<Record<DevboxErrorCode, ErrorCode>> = {
   io: 'io', configuration: 'unavailable', 'invalid-input': 'bad_input', 'not-ready': 'unavailable',
   cancelled: 'cancelled', missing: 'missing', file: 'io', process: 'io',
-  'start-overrun': 'timeout', 'start-interrupted': 'unavailable', 'container-changed': 'unavailable',
-  'layer-unreadable': 'io', 'chain-advanced': 'io', 'delta-namespace': 'io', 'mount-marker': 'unsupported',
+  'start-overrun': 'timeout', 'start-interrupted': 'unavailable', 'chain-advanced': 'io', 'mount-marker': 'unsupported',
   refused: 'unavailable',
 };
 
