@@ -8,6 +8,11 @@ import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesO
 import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
 import { STORE_MOUNT, chainStoreRoot, storeObjectUrl } from './store-gateway';
 import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
+import {
+  GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeObject, refreshTools,
+  type GoldenAnswer, type GoldenPorts,
+} from './golden';
+import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import { Effect, Result } from 'effect';
@@ -227,6 +232,14 @@ const INCIDENT_CALLBACK = 'devboxIncidents';
 /** Rows a destroyed box neither keeps nor arms. */
 const CONTAINER_CALLBACKS: readonly string[] = [STARTUP_CALLBACK, HEARTBEAT_CALLBACK, CHECKPOINT_CALLBACK];
 
+const GOLDEN_BUILD_CALLBACK = 'golden-build';
+
+const GOLDEN_REFRESH_CALLBACK = 'golden-refresh';
+
+const GOLDEN_KEY = 'devbox:golden';
+
+type StartSource = { readonly kind: 'image' } | { readonly kind: 'own' | 'golden'; readonly id: string };
+
 /** A classified recovery obligation; executed outside the restore block. */
 const RECOVERY_ACTION_KEY = 'devbox:recovery-action';
 
@@ -309,7 +322,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   readonly #gateways: GatewayBindings;
   #storage: DevboxStorage | undefined;
 
-  #startedFromSnapshot = false;
+  #started: StartSource = { kind: 'image' };
+  #awaitingGolden: string | undefined;
   #sweeping: Promise<void> | undefined;
   #gateRestore: Flight | undefined;
   /** Fences every write below: an abandoned startup continuation keeps running, and must
@@ -396,8 +410,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (this.#adoptionPending) await this.#startContainer();
   }
 
-  /** Turnover needs a container answer that refutes the stamped boot id; absent rows prove nothing
-   *  (`#settle` sets memory before writing). Not timed: a clock here would overwrite the restore's row. */
+  /** Turnover needs a container answer that refutes the stamped boot id; absent rows prove nothing. */
   async #adoptOrTurnOver(): Promise<void> {
     const generation = this.#generation;
     this.#adoptionPending = false;
@@ -431,6 +444,99 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** D55: 55 of 59 snapshot wakes answered within 3.1 s, 4 took 30 to 53 s. */
+  /** The golden builder, and the boxes it tells (D65). */
+  protected get peers(): BoxPeers | undefined {
+    return undefined;
+  }
+
+  protected get toolsPin(): string {
+    return artifact.tools.sha256;
+  }
+
+  /** `lost`: a golden the platform refused the asking box. */
+  goldenFor(box: string, lost?: string): Promise<GoldenAnswer> {
+    return settle(goldenFor(this.#goldenPorts(), box, lost));
+  }
+
+  /** Returns once the golden for the pinned tools is verified. */
+  ensureGolden(): Promise<string> {
+    return settle(this.#buildGolden(false).pipe(Effect.map(state => state.current?.id ?? '')));
+  }
+
+  devboxGolden(keepAlive: boolean): Promise<void> {
+    return settle(this.#buildGolden(keepAlive).pipe(Effect.asVoid));
+  }
+
+  #buildGolden(keepAlive: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      const state = yield* buildGolden(this.#goldenPorts(), keepAlive);
+      const next = state.current === undefined ? undefined : state.current.takenAt + GOLDEN_REFRESH_MS - Date.now();
+
+      if (next !== undefined) yield* attempt('io', () => this.armAlarm(GOLDEN_REFRESH_CALLBACK, Math.max(0, next / 1000)));
+
+      return state;
+    });
+  }
+
+  #refreshTools(): Effect.Effect<void, DevboxError> {
+    if (this.peers === undefined) return Effect.void;
+
+    return refreshTools({ pin: this.toolsPin, exec: (command) => this.#rawExec(command, DEVBOX_RUNTIME_DIR), pipe: (key, path) => this.#pipeObject(key, path) });
+  }
+
+  #pipeObject(key: string, path: string): Effect.Effect<void, DevboxError> {
+    return pipeObject({ get: async (wanted) => await this.store?.bucket.get(wanted) ?? null, container: this.#container() }, key, path);
+  }
+
+  #goldenPorts(): GoldenPorts {
+    const container = () => this.#container();
+
+    return {
+      tools: this.toolsPin,
+      read: () => {
+        const held = v.safeParse(GoldenStateSchema, this.ctx.storage.kv.get(GOLDEN_KEY));
+
+        return held.success ? held.output : { waiting: [] };
+      },
+      write: (state) => { this.ctx.storage.kv.put(GOLDEN_KEY, state); },
+      start: async (from) => {
+        if (container().running) await this.#destroyGoldenContainer();
+        const options = { instance: instanceOf(this.defaultSize), enableInternet: false, entrypoint: ['sleep', 'infinity'] };
+        container().start('image' in from ? { ...options, image: from.image } : { ...options, containerSnapshot: { id: from.snapshot } });
+        await firstExec(container(), AbortSignal.timeout(120_000));
+      },
+      exec: async (command) => {
+        const output = await (await container().exec(['/bin/bash', '-c', command])).output();
+
+        return { stdout: new TextDecoder().decode(output.stdout), stderr: new TextDecoder().decode(output.stderr), exitCode: output.exitCode };
+      },
+      pipe: (key, path) => this.#pipeObject(key, path),
+      snapshot: async (name) => (await container().snapshotContainer({ name })).id,
+      destroy: () => this.#destroyGoldenContainer(),
+      build: () => this.armAlarm(GOLDEN_BUILD_CALLBACK, 0),
+      tell: async (box, answer) => { await this.peers?.box(box).goldenReady(answer); },
+      now: () => Date.now(),
+    };
+  }
+
+  async #destroyGoldenContainer(): Promise<void> {
+    if (this.#container().running) await this.#container().destroy();
+    await this.#awaitContainerStopped();
+  }
+
+  async goldenReady(answer: GoldenAnswer): Promise<void> {
+    if (this.#awaitingGolden === undefined) return;
+
+    if (answer.kind === 'pending') {
+      this.#awaitingGolden = answer.reason;
+
+      return;
+    }
+
+    this.#awaitingGolden = undefined;
+    await this.devboxStartup();
+  }
+
   /** A Containers token (D65); without one, dead snapshots wait. */
   protected get registryToken(): string | undefined {
     return undefined;
@@ -549,26 +655,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     });
   }
 
-  async #startNative(inputs: StartInputs): Promise<void> {
+  async #startNative(inputs: StartInputs, source: StartSource | undefined): Promise<void> {
     if (this.#closed) throw new DevboxError("io", DESTROYED_START);
     const container = this.#container();
     const generation = this.#generation;
     // No await separates teardown admission from the platform start. Native exec never starts one.
     const wasRunning = container.running;
 
-    if (!wasRunning) {
+    if (!wasRunning && source !== undefined) {
       // D50: the one start boundary.
       this.ctx.storage.kv.put(RUNNING_SIZE_KEY, inputs.size);
-      this.#startFrom(container, inputs, this.#wakeSnapshot());
+      this.#startFrom(container, inputs, source);
 
       // A snapshot's `/run` may still hold the S3Mount marker of the mount it was taken under.
-      if (!this.#startedFromSnapshot) this.#routes().started();
+      if (source.kind === 'image') this.#routes().started();
     }
 
     const cancel = new AbortController();
 
     const run = (async () => {
-      await this.#admit(container, cancel.signal, inputs);
+      if (!await this.#admit(container, cancel.signal, inputs)) return;
 
       if (!this.#owns(generation) || this.#closed) return;
       await this.configureContainer(wasRunning && (this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'));
@@ -591,39 +697,71 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const held = v.safeParse(SnapshotRecord, this.ctx.storage.kv.get(SNAPSHOT_KEY));
     const chain = v.safeParse(DiskChainStateSchema, this.ctx.storage.kv.get(DISK_STATE_KEY));
 
-    if (!held.success || held.output.image !== this.containerImage || Date.now() - (held.output.rootTakenAt ?? held.output.takenAt) > SNAPSHOT_LIFE_MS) return undefined;
+    if (!held.success || held.output.image !== this.#base() || Date.now() - (held.output.rootTakenAt ?? held.output.takenAt) > SNAPSHOT_LIFE_MS) return undefined;
 
     return chain.success && chain.output.rev > held.output.chainRev ? undefined : held.output.id;
   }
 
-  #startFrom(container: Container, inputs: StartInputs, snapshot: string | undefined): void {
-    this.#startedFromSnapshot = snapshot !== undefined;
-    this.ctx.storage.kv.put(WOKE_FROM_KEY, snapshot ?? '');
-    container.start({
-      ...(snapshot === undefined ? { image: inputs.image } : { containerSnapshot: { id: snapshot } }),
-      instance: instanceOf(inputs.size), enableInternet: this.enableInternet,
-    });
+  #base(): string {
+    return this.peers === undefined ? this.containerImage ?? '' : GOLDEN_BASE;
+  }
+
+  /** Its own snapshot, else the golden (or the image, with no builder), else wait to be told (D65). */
+  async #startSource(lost?: string): Promise<StartSource | { readonly kind: 'pending'; readonly reason: string }> {
+    const own = lost === undefined ? this.#wakeSnapshot() : undefined;
+
+    if (own !== undefined) return { kind: 'own', id: own };
+
+    if (this.peers === undefined) return { kind: 'image' };
+    const answer = await this.peers.golden().goldenFor(this.ctx.id.toString(), lost);
+
+    return answer.kind === 'ready' ? { kind: 'golden', id: answer.id } : answer;
+  }
+
+  #startFrom(container: Container, inputs: StartInputs, source: StartSource): void {
+    this.#started = source;
+    this.#awaitingGolden = undefined;
+    this.ctx.storage.kv.put(WOKE_FROM_KEY, source.kind === 'own' ? source.id : '');
+    const from = source.kind === 'image' ? { image: inputs.image } : { containerSnapshot: { id: source.id } };
+    const entrypoint = this.peers === undefined ? undefined : GOLDEN_ENTRYPOINT;
+
+    container.start({ ...from, entrypoint, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
   }
 
   /** A snapshot start that fails or misses the cutover falls back to the image and the chain. */
-  async #admit(container: Container, signal: AbortSignal, inputs: StartInputs): Promise<void> {
-    if (this.#startedFromSnapshot) {
+  async #admit(container: Container, signal: AbortSignal, inputs: StartInputs): Promise<boolean> {
+    if (this.#started.kind !== 'image') {
       // Cleared once settled: a later abort killed the image's container (D64).
       const cutover = new AbortController();
       const timer = setTimeout(() => { cutover.abort(new DevboxError('io', 'the snapshot start was not admitted within the cutover')); }, this.snapshotWakeCutoverMs);
       const [woke] = await Promise.allSettled([firstExec(container, AbortSignal.any([signal, cutover.signal]))]);
       clearTimeout(timer);
 
-      if (woke.status === 'fulfilled') return;
-      this.#trace('startup.snapshot.cutover', { reason: describe({ cause: woke.reason }) });
+      if (woke.status === 'fulfilled') return true;
+      this.#trace('startup.snapshot.cutover', { from: this.#started.kind, reason: describe({ cause: woke.reason }) });
+      const golden = this.#started.kind === 'golden' ? this.#started.id : undefined;
       await container.destroy();
       await this.#awaitContainerStopped();
-      this.#supersede(SNAPSHOT_KEY);
-      unawaited(this.#sweepSnapshots(), 'sweeping dead snapshots');
-      this.#startFrom(container, inputs, undefined);
+
+      if (golden === undefined) {
+        this.#supersede(SNAPSHOT_KEY);
+        unawaited(this.#sweepSnapshots(), 'sweeping dead snapshots');
+      }
+
+      const next = await this.#startSource(golden);
+
+      if (next.kind === 'pending') {
+        this.#awaitingGolden = next.reason;
+
+        return false;
+      }
+
+      this.#startFrom(container, inputs, next);
     }
 
     await firstExec(container, signal);
+
+    return true;
   }
 
   #supersede(key: string): void {
@@ -795,8 +933,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
 
-  /** A container/stored boot-id mismatch is the only reliable replacement signal; the platform
-   *  swaps instances silently. Fence every read, count and write: stale ones corrupt the successor. */
+  /** A boot-id mismatch is the only replacement signal: fence every read, count and write. */
   async #stampBootId(generation: number): Promise<void> {
     // Count replacements here: every restoration passes through this method, whatever drove it.
     // Counting only in the heartbeat misses replacements handled by startup or readiness paths.
@@ -1089,7 +1226,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#trace('startup.admit.enter', { generation, running: !startsContainer });
 
     try {
-      await this.#startNative(inputs);
+      const source = startsContainer ? await this.#startSource() : undefined;
+
+      if (source?.kind === 'pending') {
+        this.#awaitingGolden = source.reason;
+        this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: false, awaitingGolden: source.reason });
+
+        return;
+      }
+
+      await this.#startNative(inputs, source);
+
+      if (this.#awaitingGolden !== undefined) return;
 
       this.#refused = undefined;
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
@@ -1105,8 +1253,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (this.#owns(generation)) {
         const failure = classifyRecovery({ cause });
 
-        // Classified first, as the ladder does: a start that fails the same way every time (an
-        // S3Mount marker this box cannot route, D40) is refused once, not re-armed each second (D47).
+        // A start that fails the same way every time is refused once, not re-armed each second (D47).
         if (isTerminalRecovery(failure)) {
           const refusal = `[${failure} -> refuse] ${reason}`;
           this.#adoptionPending = false;
@@ -1384,8 +1531,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     + 'refusing to treat the identity as gone', );
   }
 
-  /** Every durable process and port spec is required: a port is exposed only after its listener
-   *  answers, none if a process failed; each failure is still recorded and the phase continues. */
+  /** A port is exposed only once its listener answers; each failure is recorded and the phase continues. */
   async #restartWorkloads(generation: number, steps: RestoreSteps): Promise<readonly string[]> {
     const [processes, ports] = await Promise.all([this.#procSpecs(), this.#portSpecs()]);
     const plan = restartPlan(processes, ports);
@@ -1626,6 +1772,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#trace('readiness.enter', { generation: this.#generation, running: wasRunning, phase: this.#restoration.phase });
 
     if (!wasRunning) await this.#startContainer();
+
+    if (this.#awaitingGolden !== undefined && this.ctx.container?.running !== true) return { kind: 'pending', reason: this.#awaitingGolden };
     await this.#resolveAdoption();
 
     // Native allocation can report running before restoration starts.
@@ -1972,7 +2120,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (parent === undefined) this.#supersede(SNAPSHOT_KEY);
     this.ctx.storage.kv.put(SNAPSHOT_KEY, {
-      id: snapshot.id, image: this.containerImage ?? '', chainRev: chain.success ? chain.output.rev : 0, takenAt,
+      id: snapshot.id, image: this.#base(), chainRev: chain.success ? chain.output.rev : 0, takenAt,
       lineage: parent === undefined ? [] : [...parent.lineage, parent.id], rootTakenAt: parent === undefined ? takenAt : parent.rootTakenAt ?? parent.takenAt,
     });
   }
@@ -2133,8 +2281,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** Runs on the port's claim, not gated on readiness: the token must be mintable before the
-   *  exposure it names; minting and removing the same row share the claim so URL and manifest agree. */
+  /** On the port's claim, not readiness: the token must exist before the exposure it names. */
   async #portToken(port: number, name?: string): Promise<{ urlToken: string }> {
     const key = `${PORT_SPEC_PREFIX}${port}`;
     const existing = await this.ctx.storage.get<PortExposureSpec>(key);
@@ -2360,6 +2507,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       case HEARTBEAT_CALLBACK: await this.devboxHeartbeat(); break;
       case CHECKPOINT_CALLBACK: await this.devboxCheckpoint(); break;
       case INCIDENT_CALLBACK: await this.devboxIncidents(); break;
+      case GOLDEN_BUILD_CALLBACK: await this.devboxGolden(false); break;
+      case GOLDEN_REFRESH_CALLBACK: await this.devboxGolden(true); break;
       default: throw new DevboxError("io", `unknown devbox alarm: ${callback}`);
     }
   }
@@ -2429,8 +2578,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           return beat;
         }
 
-        // Replacement check runs only on a settled restoration: the stamp is a restoration's last step,
-        // so mid-wake the row and fresh instance always mismatch; an in-flight attempt owns its identity.
+        // Only a settled restoration: mid-wake the row and a fresh instance always mismatch.
         if (await this.#containerWasReplaced({ bootId: observed })) {
           this.#invalidateGeneration();
           await this.#tick({ running: true, ping: 'ok', armedNext: true, replaced: true });
@@ -2644,7 +2792,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
 
     return new DiskChainStorage(this.diskChain(this.#diskChainPorts(store)), {
-      fromSnapshot: () => this.#startedFromSnapshot,
+      prepare: () => this.#refreshTools(),
+      fromSnapshot: () => this.#started.kind === 'own',
       recovered: async (restoredTo) => { await this.#record('attach', recoveryNotice(restoredTo, this.archiveExcludes)); },
       discard: async () => {
         this.ctx.storage.kv.delete(DISK_STATE_KEY);
@@ -3047,4 +3196,9 @@ function parsedOrNull<S extends v.GenericSchema>(schema: S, value: StoredValue):
   const parsed = v.safeParse(schema, value);
 
   return parsed.success ? parsed.output : null;
+}
+
+export interface BoxPeers {
+  readonly golden: () => { goldenFor(box: string, lost?: string): Promise<GoldenAnswer> };
+  readonly box: (id: string) => { goldenReady(answer: GoldenAnswer): Promise<void> };
 }

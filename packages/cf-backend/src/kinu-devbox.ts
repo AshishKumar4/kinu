@@ -4,7 +4,7 @@
   */
 
 import {
-  Devbox, type DevboxState,
+  Devbox, GOLDEN_NAME, type BoxPeers, type DevboxState,
   type DevboxIncident, type DevboxStore, type OutboundPolicy,
   type IncidentDisposition, type RestoreClockPhase,
 } from "@kinu.run/devbox";
@@ -60,6 +60,12 @@ export class KinuDevbox extends Devbox<Env> {
   protected override get namespaceBinding(): string { return 'KinuDevbox'; }
 
   protected override get registryToken(): string | undefined { return this.env.DEVBOX_REGISTRY_TOKEN; }
+
+  protected override get peers(): BoxPeers {
+    const boxes = this.env.KinuDevbox;
+
+    return { golden: () => boxes.getByName(GOLDEN_NAME), box: (id) => boxes.get(boxes.idFromString(id)) };
+  }
 
   protected override get previewName(): string {
     const workspaceName = this.ctx.storage.kv.get<string>(WORKSPACE_NAME_KEY);

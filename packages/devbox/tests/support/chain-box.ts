@@ -51,8 +51,8 @@ function modelChain(ports: DiskChainPorts): DiskChain {
 /** In-memory bucket over the objects the container's store mount writes; `head` and `delete`
  *  answer as the R2 binding does, so the shipped `layerIntegrityFailure` runs unchanged. */
 function memoryBucket(objects: Map<string, Uint8Array>): R2Bucket {
-  // SAFETY: constructed against the R2Bucket contract. The chain reaches the
-  // three members below and nothing else — `mountBucket` is what exposes the
+  // SAFETY: constructed against the R2Bucket contract. The box reaches the
+  // four members below and nothing else — `mountBucket` is what exposes the
   // prefix to the container, and the archive travels through that mount — so
   // the rest of the surface is unreachable from this fixture's box.
   return Object.create({
@@ -67,6 +67,11 @@ function memoryBucket(objects: Map<string, Uint8Array>): R2Bucket {
         version: createHash('sha256').update(bytes).digest('hex'),
         checksums: { sha256: await crypto.subtle.digest('SHA-256', bytes.slice()) },
       };
+    },
+    get: async (key: string) => {
+      const bytes = objects.get(key);
+
+      return bytes === undefined ? null : { key, size: bytes.byteLength, body: new Response(bytes).body };
     },
     // R2 refuses a delete of no keys or of more than 1,000 (10027), and lists 1,000 at a time.
     delete: async (keys: string | string[]) => {

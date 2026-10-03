@@ -8,6 +8,7 @@ export { Devbox };
 import { createHash } from 'node:crypto';
 
 import type { StoredValue } from '../../src/storage';
+import { TOOLS_STAMP } from '../../src/tools';
 import { shellSyntaxError } from "./container-shell";
 import * as v from 'valibot';
 import type { ExecResult } from '../../src/contracts';
@@ -397,6 +398,12 @@ export class FakeSandbox {
   #snapshotsTaken = 0;
   /** What each snapshot holds: the container's disk as it was when it was taken. */
   readonly #snapshotDisks = new Map<string, { readonly files: Map<string, string>; readonly binaryFiles: Map<string, Uint8Array>; readonly directories: Set<string> }>();
+  /** A snapshot taken elsewhere (the golden), holding `files`. */
+  addSnapshot(id: string, files: ReadonlyMap<string, string>): void {
+    this.snapshots.set(id, 'ok');
+    this.#snapshotDisks.set(id, { files: new Map(files), binaryFiles: new Map(), directories: new Set() });
+  }
+
   /** Thrown by the next `snapshotContainer`, as a refused snapshot is. */
   snapshotFault: Error | undefined;
   readonly files = new Map<string, string>();
@@ -548,6 +555,19 @@ export class FakeSandbox {
     if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
 
     if (command === 'cat /proc/mounts') return { stdout: this.#procMounts(), stderr: '', exitCode: 0 };
+
+    if (command.startsWith(`cat ${TOOLS_STAMP}`)) return { stdout: this.files.get(TOOLS_STAMP) ?? '', stderr: '', exitCode: 0 };
+
+    // The tools install: the archive must have arrived, and the stamp names what it installed.
+    if (command.includes(`> ${TOOLS_STAMP}`)) {
+      this.sequence.push('exec:tools-install');
+      const archive = /tar -C \/ -xzf '([^']+)'/.exec(command)?.[1] ?? '';
+
+      if (!this.binaryFiles.has(archive)) return { stdout: 'no archive', stderr: '', exitCode: 2 };
+      this.files.set(TOOLS_STAMP, /printf %s '([^']+)' > /.exec(command)?.[1] ?? '');
+
+      return { stdout: 'installMs=1 changed=1', stderr: '', exitCode: 0 };
+    }
 
     const probed = /^mountpoint -q (\S+)$/.exec(command)?.[1];
 
@@ -881,6 +901,22 @@ export class FakeSandbox {
     await this.#admitNative(options);
 
     if (this.nativeExec !== undefined && (args[0] === "bash" || args[3] === "kill-tree" || args[3] === "port-listeners")) return this.nativeExec(args, options);
+
+    // `cat > <path>` fed on stdin: the bytes land in the file once the writer closes.
+    if (options.stdin === 'pipe' && args[0] === '/bin/sh') {
+      const target = /^cat > '([^']+)'$/.exec(args[2] ?? '')?.[1] ?? '';
+      const chunks: Uint8Array[] = [];
+      const closed = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
+
+      const stdin = new WritableStream<Uint8Array>({
+        write: (chunk) => { chunks.push(chunk); },
+        close: () => { this.binaryFiles.set(target, Buffer.concat(chunks)); closed.resolve({ stdout: '', stderr: '', exitCode: 0 }); },
+      });
+
+      this.sequence.push(`exec:stdin ${target}`);
+
+      return { ...processResult(closed.promise, this.#pid++), stdin };
+    }
 
     if (args[0] === '/usr/local/bin/sandbox-shim') {
       this.shimCalls.push(args.slice(1, 3).join(' '));

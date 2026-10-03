@@ -3545,6 +3545,59 @@ rules a `subject` points from the referrer to its subject and does not keep
 the subject, so only the time series can say whether the registry's
 collection spares an untagged parent.
 
+D66. A box starts from a golden snapshot of `cloudflare/debian-trixie`
+with the pinned tools, and its tools reach it as one tarball (2026-10-03,
+the owner's design of D55, built). The image keeps only what a container
+needs from us; everything a box runs is in the tools tarball, which the
+Dockerfile's `tools` stage builds (`scripts/devbox-tools.ts build`) and
+upstream.json pins by sha256: an offline apt repository of the closure of
+the 15 Debian packages a box needs, taken from snapshot.debian.org on
+2026-10-02, and our four binaries (bun, block lower, squashfuse, the shim).
+Two builds with no cache made the same tarball (`75164f17…`, 100.8 MB). The
+deploy refuses a store bucket that lacks it, by name; the developer who
+re-pins runs `devbox-tools.ts publish <bucket>` for each environment.
+
+The golden object, one object of the box's class (`devbox-golden`), starts
+the base, pipes the tarball in from the store, installs it with apt over the
+local repository (no network), checks the tools and FUSE, and snapshots.
+It rebuilds when the pinned tools or the base move (the base's Debian
+version, node and dpkg status, so a platform roll is a rebuild), and at 25
+days, when it also restores the previous golden so both stay alive. A box
+starts from its own snapshot, else the golden. A golden of other tools still
+serves; the box then installs the pinned tarball inside its start gate. A
+golden the platform refuses is reported lost and the next is used. With no
+golden at all, the box does not start a container and does not install in
+its gate: its readiness is pending with the reason, the golden object
+records it, and when a build verifies, the golden object tells each waiting
+box once to start; a failed build's words become each waiting box's reason.
+The box arms no clock for it. `tini` is the container's init, from the
+tarball.
+
+Measured on Medium, the `durable_object` policy, internet off
+(`bench-artifacts/storage-designs/`, runs `g5510022003debs`,
+`g5510022009rfr`; n=5 each, all checked: FUSE, the block lower, bun 1.4.2,
+`Files`):
+
+| | in the gate | with the pipe from R2 |
+|---|---|---|
+| fresh install of everything | 12.2 to 26.0 s (median 13.2) | 14.9 to 31.2 s |
+| refresh, nothing changed | 1.42 to 1.64 s, 0 packages | the box compares the stamp first and does nothing |
+| refresh, one .deb and bun changed | 1.46 to 1.64 s (apt 236 to 306 ms) | 3.5 to 5.0 s |
+
+The fresh install does not fit the 25 s gate every time, so it never runs in
+one: only the golden object installs from scratch, outside every box's
+gate. Plain `dpkg -i` cannot do it: the managed base is 13.6 against 13.7
+packages, and pre-dependencies need ordering, which apt over a local
+repository gives.
+
+Live (run `sbs10030035ngld`, the bench fixture of this tree, two Medium
+boxes): the golden built in 20.4 s; each box started from it (`debian 13.6`,
+tools `75164f17`, bun 1.4.2, tini as pid 1), then D64's steps: a wake from
+its snapshot in 0.40 and 0.61 s, a lost snapshot recovered lazily in 4.7
+and 4.8 s with the notice, the recovered box woken in 0.56 and 0.62 s; all
+exact. Every Worker, application, bucket and snapshot tag of the run was
+deleted, the golden's with the product's registry client.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

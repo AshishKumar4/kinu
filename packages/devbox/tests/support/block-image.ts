@@ -10,6 +10,14 @@ export function buildBlockImage(image: string): void {
   if (result.status !== 0) throw new Error(result.stdout + result.stderr);
 }
 
+/** The `tools` stage's tarball, written to `destination/tools.tgz` (D65). */
+export function buildToolsArchive(destination: string): void {
+  const result = spawnSync('docker', ['build', '--network=host', '--target', 'tools', '--output', `type=local,dest=${destination}`, join(import.meta.dir, '../../block-lower')],
+    { encoding: 'utf8' });
+
+  if (result.status !== 0) throw new Error(result.stdout + result.stderr);
+}
+
 export function copyBlockProbe(image: string, destination: string): void {
   const result = spawnSync('docker', ['run', '--rm', '--network=none', '--entrypoint', '/bin/cat', image, '/usr/local/bin/devbox-block-lower'],
     { maxBuffer: 16 * 1024 * 1024 });

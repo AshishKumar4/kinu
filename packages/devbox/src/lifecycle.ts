@@ -367,8 +367,7 @@ export function isTerminalRecovery(failure: RecoveryClass): boolean {
   return failure === 'exhausted' || failure === 'permanent';
 }
 
-/** A stale owner retries without advancing: a failure on a gone identity says nothing of its successor.
- *  Abandoned work enters at `replace`, since its only cancellation is the container's death. */
+/** A stale owner retries without advancing; abandoned work enters at `replace`. */
 export function recoveryStep(input: RecoveryInput): RecoveryDecision {
   if (!input.owned) return { action: 'inert', stage: input.stage };
   const { stage } = input;

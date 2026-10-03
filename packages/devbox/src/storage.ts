@@ -30,8 +30,7 @@ export interface CheckpointOutcome {
 }
 
 export interface DevboxStorage {
-  /** Must be idempotent on an attached container: the start hook can fire more than once per start.
-   *  Throws only when stored state exists but cannot be served; an empty workspace is worse. */
+  /** Idempotent: the start hook can fire twice. Throws only when stored state cannot be served. */
   attach(): Promise<AttachOutcome>;
   /** Does not throw for an ordinary failure, including a refused failure stamp: recording is
    *  best effort, the classification stays the operation's own. */

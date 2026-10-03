@@ -504,10 +504,11 @@ export class DiskChainStorage implements DevboxStorage {
   }
 
   attach(): Promise<AttachOutcome> {
-    const { fromSnapshot, recovered } = this.#host;
+    const { prepare, fromSnapshot, recovered } = this.#host;
     const chain = this.#chain;
 
     return settle(Effect.gen(function* () {
+      yield* prepare();
       const attached = yield* chain.attach(fromSnapshot());
       const restoredTo = attached.recoveredTo;
 
@@ -525,6 +526,7 @@ export class DiskChainStorage implements DevboxStorage {
 }
 
 export interface DiskChainHost {
+  readonly prepare: () => Effect.Effect<void, DevboxError>;
   readonly fromSnapshot: () => boolean;
   readonly recovered: (restoredTo: number) => Promise<void>;
   readonly discard: () => Promise<void>;

@@ -108,8 +108,7 @@ export class Processes {
       })));
 
       if (Result.isFailure(launched)) {
-        // Refused, or lost after the spawn: the claim says which, and records a launch that never
-        // ran, so neither a retry nor a kill adopts it as live. Unreadable, the next one decides.
+        // The claim records a launch that never ran, so neither a retry nor a kill adopts it.
         const decided = yield* Effect.result(this.#unlaunched(dir));
 
         return yield* Effect.fail(Result.isSuccess(decided) ? launched.failure : new DevboxError(launched.failure.code,

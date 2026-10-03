@@ -50,6 +50,8 @@ import {
   BoxSizeSchema,
   Devbox,
   describeThrown,
+  GOLDEN_NAME,
+  type BoxPeers,
   type BoxSize,
   type CheckpointKind,
   type CheckpointOutcome,
@@ -563,6 +565,13 @@ class BenchBox extends Devbox<BenchEnv> {
     return this.env.DEVBOX_REGISTRY_TOKEN;
   }
 
+  protected override get peers(): BoxPeers | undefined {
+    const boxes = this.env.SnapshotChainBox;
+
+    // Named as the router names every box, so `/golden?box=devbox-golden` reaches the same object.
+    return boxes === undefined ? undefined : { golden: () => boxes.get(boxes.idFromName(`${BENCH_ARM}:${GOLDEN_NAME}`)), box: (id) => boxes.get(boxes.idFromString(id)) };
+  }
+
   protected override get archiveExcludes(): readonly string[] {
     return this.env.BENCH_EXCLUDES === 'none' ? [] : super.archiveExcludes;
   }
@@ -754,6 +763,10 @@ class BenchBox extends Devbox<BenchEnv> {
   /** Its container runs on (D40). */
   evictForBench(): void {
     this.ctx.abort('bench eviction');
+  }
+
+  forgetGoldenForBench(): boolean {
+    return this.ctx.storage.kv.delete('devbox:golden');
   }
 
   /** A lost or expired snapshot, as the platform answers one (D64). */
@@ -988,6 +1001,20 @@ async function serveInstrumentRoutes(
       const [evicted] = await Promise.allSettled([box.evictForBench()]);
 
       return json({ payload: { ok: evicted.status === 'rejected', strategy, box: name, ms: Date.now() - started } });
+    }
+
+    // The golden object of this run's boxes (D65): built and verified, or forgotten as if the
+    // platform had lost every golden it held.
+    case 'POST /golden': {
+      const id = await box.ensureGolden();
+
+      return json({ payload: { ok: id !== '', id, strategy, box: name, ms: Date.now() - started } });
+    }
+
+    case 'POST /golden-forget': {
+      await box.forgetGoldenForBench();
+
+      return json({ payload: { ok: true, strategy, box: name, ms: Date.now() - started } });
     }
 
     case 'POST /lose-snapshot': {

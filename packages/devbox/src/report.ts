@@ -44,8 +44,7 @@ export interface SupervisedProcessRow {
 export interface DevboxReport {
   readonly durable: boolean;
   readonly running: boolean;
-  /** `repair` still admits operations: only the agent can fix a failed service, so `exec` stays open.
-   *  `unattached` is terminal until an explicit repair; poll this, not a stale attach record. */
+  /** `repair` admits operations, so the agent can fix a failed service; `unattached` is terminal. */
   readonly restoration: Restoration['phase'];
   /** Every supervised process back, every exposed port's listener answering and re-exposed.
    *  Equals `restoration === 'attached'`; a half-restored box is `repair`, never ready. */
