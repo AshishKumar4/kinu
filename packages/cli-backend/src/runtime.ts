@@ -661,7 +661,7 @@ export function buildLocalActorRuntime(
 
       if (writeObserver) opts.writeObserver = writeObserver;
 
-      return yield* Effect.promise(async () => buildCLIHeadRuntime(opts));
+      return yield* buildCLIHeadRuntime(opts);
     }
 
     return yield* new KinuError('denied', `A ${binding.origin} actor's runtime is not built by this workspace's own session.`);
@@ -674,7 +674,7 @@ export function buildLocalActorRuntime(
  * craft store; its own home, router and actor-keyed rows stay private. See open-38
  * for the one-workspace-store constraint.
  */
-async function buildCLIHeadRuntime(
+function buildCLIHeadRuntime(
   opts: {
     parentRuntime: CLIRuntime; actorBinding: LocalActorBinding;
     /** The handle whoever bound this actor issued; re-binding would keep
@@ -683,128 +683,132 @@ async function buildCLIHeadRuntime(
     /** Watches writes to the parent workspace so the split can name changed files. */
     writeObserver?: WriteObserver;
   },
-): Promise<AgentRuntime> {
-  const { parentRuntime: parent } = opts;
-  const sql = parent.storage.sql;
+): Effect.Effect<AgentRuntime, KinuError> {
+  return Effect.gen(function* () {
+    const { parentRuntime: parent } = opts;
+    const sql = parent.storage.sql;
 
-  if (opts.actorBinding.origin !== 'swarm') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
-  const actor = opts.actor;
-  const physicalName = headAgentName(actor.storageKey);
+    if (opts.actorBinding.origin !== 'swarm') return yield* new KinuError('denied', 'The head runtime requires a registered head actor.');
+    const actor = opts.actor;
+    const physicalName = headAgentName(actor.storageKey);
 
-  const stores = createAgentStores(() => sql, () => actor, (write) => parent.storage.transactionSync(write), async () => {
-    if (!parent.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
+    const stores = createAgentStores(() => sql, () => actor, (write) => parent.storage.transactionSync(write), async () => {
+      if (!parent.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
 
-    return parent.filesForActor(actor);
-  });
+      return parent.filesForActor(actor);
+    });
 
-  const agentStateVfs = parent.agentStateVfs ?? parent.storage.vfs;
-  const cwdPlane = parent.cwd ? createCwdPlaneVFS(parent.cwd, parent.checkpoints) : null;
+    const agentStateVfs = parent.agentStateVfs ?? parent.storage.vfs;
+    const cwdPlane = parent.cwd ? createCwdPlaneVFS(parent.cwd, parent.checkpoints) : null;
 
-  const writeObserver = opts.writeObserver;
+    const writeObserver = opts.writeObserver;
 
-  const vfs = cwdPlane !== null && writeObserver !== undefined
-    ? observeWrites(cwdPlane, writeObserver)
-    : cwdPlane ?? agentStateVfs;
+    const vfs = cwdPlane !== null && writeObserver !== undefined
+      ? observeWrites(cwdPlane, writeObserver)
+      : cwdPlane ?? agentStateVfs;
 
-  // A head over a shared directory runs the parent's gated, checkpointed shell.
-  const parentShell = parent.shell;
+    // A head over a shared directory runs the parent's gated, checkpointed shell.
+    const parentShell = parent.shell;
 
-  if (!parentShell) throw new KinuError('missing', 'The forked workspace has no shell for its head to run in.');
+    if (!parentShell) return yield* new KinuError('missing', 'The forked workspace has no shell for its head to run in.');
 
-  const shell = parent.cwd && parent.facetShell
-    ? parent.facetShell(physicalName)
-    : parentShell;
+    const shell = parent.cwd && parent.facetShell
+      ? parent.facetShell(physicalName)
+      : parentShell;
 
-  const executionRouter = new DefaultExecutionRouter();
+    const executionRouter = new DefaultExecutionRouter();
 
-  const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs: withApprovalGatedFiles(vfs, 'workspace', directoryFileReach(parent.cwd ?? null, null), parent.approvalPolicy), files: vfs, home: parent.storage.home,
-    memory: parent.memory, craftStore: parent.craftStore, shell, sql,
-    // The same machine the parent's shell runs on.
-    filesOwner: parent.cwd ? 'user' : 'agent',
-    toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
-  };
-
-  executionRouter.register(createInlineExecutor(inlineOptions));
-
-  const parentVfs = parent.storage.vfs;
-
-  const parentHandle: ParentWorkspaceHandle = {
-    read: (path) => answerParentRpc(path, async () => parentVfs.readFile(path)),
-    write: (input: ParentRpcWrite) => answerParentRpc(input.path, async () => {
-      if (input.kind === 'file') await parentVfs.writeFile(input.path, input.data);
-      else await parentVfs.mkdir(input.path, { recursive: input.recursive });
-
-      return null;
-    }),
-    list: (path) => answerParentRpc(path, async () => parentVfs.readdir(path)),
-    stat: (path, options) => answerParentRpc(path, async () => parentVfs.stat(path, options)),
-    delete: (path) => answerParentRpc(path, async () => {
-      await parentVfs.unlink(path);
-
-      return null;
-    }),
-    exec: (command) => answerParentRpc('', async () => {
-      if (!parent.shell) throw new Error('the parent workspace has no shell');
-
-      return parent.shell.exec(command);
-    }),
-  };
-
-  const parentFiles = createParentWorkspaceVfs(parentHandle);
-  executionRouter.register(createParentExecutor({
-    handle: parentHandle,
-    vfs: opts.writeObserver ? observeWrites(parentFiles, opts.writeObserver) : parentFiles,
-    workspaceName: actor.name,
-  }));
-
-  // `/context` is this head's own history, not the parent's.
-  const agentVfs = withMountTable(vfs, [
-    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
-    skillsMount((): VFS => agentVfs),
-    ...(cwdPlane === null ? [] : [agentViewMount(agentStateVfs, dirname(actorScaffoldPath(opts.actorBinding)))]),
-    contextMount({
-      actorId: actor.actorId,
-      own: ownContextTree(actor, stores),
-    }),
-  ]);
-
-  const checkpoints = parent.checkpoints;
-
-  const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
-    transactionSync: (write) => parent.storage.transactionSync(write),
-    // The agent-state plane is shared, so the path alone separates actors'
-    // programs; with the default, the parent would execute its head's source.
-    scaffoldPath: actorScaffoldPath(opts.actorBinding),
-    actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, home: parent.storage.home, agentStateVfs,
-    toolFiles: withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(parent.cwd ?? null, agentVfs), parent.approvalPolicy),
-    workspaceIsMachine: parent.workspaceIsMachine,
-    llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
-    memory: parent.memory, craftStore: parent.craftStore,
-    executionRouter, shell,
-  };
-
-  if (checkpoints) runtimeOptions.checkpoints = checkpoints;
-  const parentProfile = parent.ensureProfile;
-  const parentModelForRoute = parent.modelForRoute;
-
-  if (parentProfile && parentModelForRoute) {
-    runtimeOptions.modelLanes = {
-      resolveProfile: parentProfile,
-      llm: parentModelForRoute,
-      ...(parent.credentialOf !== undefined && { credentialOf: parent.credentialOf }),
-      refusals: parent.refusals,
+    const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
+      vfs: withApprovalGatedFiles(vfs, 'workspace', directoryFileReach(parent.cwd ?? null, null), parent.approvalPolicy), files: vfs, home: parent.storage.home,
+      memory: parent.memory, craftStore: parent.craftStore, shell, sql,
+      // The same machine the parent's shell runs on.
+      filesOwner: parent.cwd ? 'user' : 'agent',
+      toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
     };
-  }
 
-  const runtime = buildRuntime(runtimeOptions);
+    executionRouter.register(createInlineExecutor(inlineOptions));
 
-  if (parent.cwd) return runtime;
+    const parentVfs = parent.storage.vfs;
 
-  if (!parent.nodeHome || !parent.nodeRuntime) throw new KinuError('missing', 'The head has no canonical workspace file-plane owner.');
-  const home = await facetHomeProvisioner(parent.nodeHome(), () => requireLocalActorWorkspace(parent.actor, actor))(physicalName);
+    const parentHandle: ParentWorkspaceHandle = {
+      read: (path) => answerParentRpc(path, async () => parentVfs.readFile(path)),
+      write: (input: ParentRpcWrite) => answerParentRpc(input.path, async () => {
+        if (input.kind === 'file') await parentVfs.writeFile(input.path, input.data);
+        else await parentVfs.mkdir(input.path, { recursive: input.recursive });
 
-  return parent.nodeRuntime(home, actor, runtime, opts.writeObserver);
+        return null;
+      }),
+      list: (path) => answerParentRpc(path, async () => parentVfs.readdir(path)),
+      stat: (path, options) => answerParentRpc(path, async () => parentVfs.stat(path, options)),
+      delete: (path) => answerParentRpc(path, async () => {
+        await parentVfs.unlink(path);
+
+        return null;
+      }),
+      exec: (command) => answerParentRpc('', async () => {
+        if (!parent.shell) throw new Error('the parent workspace has no shell');
+
+        return parent.shell.exec(command);
+      }),
+    };
+
+    const parentFiles = createParentWorkspaceVfs(parentHandle);
+    executionRouter.register(createParentExecutor({
+      handle: parentHandle,
+      vfs: opts.writeObserver ? observeWrites(parentFiles, opts.writeObserver) : parentFiles,
+      workspaceName: actor.name,
+    }));
+
+    // `/context` is this head's own history, not the parent's.
+    const agentVfs = withMountTable(vfs, [
+      sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
+      skillsMount((): VFS => agentVfs),
+      ...(cwdPlane === null ? [] : [agentViewMount(agentStateVfs, dirname(actorScaffoldPath(opts.actorBinding)))]),
+      contextMount({
+        actorId: actor.actorId,
+        own: ownContextTree(actor, stores),
+      }),
+    ]);
+
+    const checkpoints = parent.checkpoints;
+
+    const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
+      transactionSync: (write) => parent.storage.transactionSync(write),
+      // The agent-state plane is shared, so the path alone separates actors'
+      // programs; with the default, the parent would execute its head's source.
+      scaffoldPath: actorScaffoldPath(opts.actorBinding),
+      actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, home: parent.storage.home, agentStateVfs,
+      toolFiles: withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(parent.cwd ?? null, agentVfs), parent.approvalPolicy),
+      workspaceIsMachine: parent.workspaceIsMachine,
+      llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
+      memory: parent.memory, craftStore: parent.craftStore,
+      executionRouter, shell,
+    };
+
+    if (checkpoints) runtimeOptions.checkpoints = checkpoints;
+    const parentProfile = parent.ensureProfile;
+    const parentModelForRoute = parent.modelForRoute;
+
+    if (parentProfile && parentModelForRoute) {
+      runtimeOptions.modelLanes = {
+        resolveProfile: parentProfile,
+        llm: parentModelForRoute,
+        ...(parent.credentialOf !== undefined && { credentialOf: parent.credentialOf }),
+        refusals: parent.refusals,
+      };
+    }
+
+    const runtime = buildRuntime(runtimeOptions);
+
+    if (parent.cwd) return runtime;
+
+    const { nodeHome, nodeRuntime } = parent;
+
+    if (!nodeHome || !nodeRuntime) return yield* new KinuError('missing', 'The head has no canonical workspace file-plane owner.');
+    const home = yield* Effect.promise(async () => facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(parent.actor, actor))(physicalName));
+
+    return yield* Effect.promise(async () => nodeRuntime(home, actor, runtime, opts.writeObserver));
+  });
 }
 
 /** A pipe holds at most one buffer (64KB) of unread output at exit; generous

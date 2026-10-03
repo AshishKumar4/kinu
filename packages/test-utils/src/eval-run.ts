@@ -3,7 +3,8 @@
  * until the harness asserts the outcome was measured, not merely configured. The observation union
  * follows pi's vitest-evals collector.
  */
-import { Result } from 'effect';
+import { Cause, Effect, Result, type Exit } from 'effect';
+import { hold, settle } from '@kinu.run/core/obs';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -155,7 +156,7 @@ export interface EpisodeEvidence {
 export const EVIDENCE_GRACE_MS = 60_000;
 
 /** The evidence boundary starts before session opening; missing sessions leave unavailable channels, not empty data. */
-export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, T>(
+export function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, T>(
   open: () => Promise<Reader>,
   options: {
     readonly transcripts: string; readonly taskId: string; readonly modelCalls: 'expected' | 'none';
@@ -169,58 +170,36 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   },
   operation: (reader: Reader, collect: () => Promise<EpisodeEvidence>, budget: AbortSignal) => Promise<T>,
 ): Promise<T> {
-  const dir = join(options.transcripts, options.taskId);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  let reader: Reader;
+  return settle(Effect.gen(function* () {
+    const dir = join(options.transcripts, options.taskId);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const reader = yield* Effect.catchCause(Effect.promise(open), (failed) => openFailed(dir, options.taskId, failed));
 
-  try {
-    reader = await open();
-  } catch (error) {
-    const failure = error instanceof Error ? error : new Error(String(error));
-    recordUnmeasuredEpisode();
+    const budget = new AbortController();
+    const reading = new AbortController();
 
-    try {
-      writeFileSync(join(dir, 'failure.json'), JSON.stringify({
-        taskId: options.taskId, phase: 'open', name: failure.name, message: failure.message,
-      }), { mode: 0o600 });
-      writeFileSync(join(dir, 'collection.json'), JSON.stringify(
-        ['events', 'history', 'spend'].map((channel) => ({ channel, status: 'unavailable', reason: 'session opening failed' })),
-      ), { mode: 0o600 });
-    } catch (retentionError) {
-      throw new AggregateError([failure, retentionError], failure.message, { cause: retentionError });
-    }
+    /** One collection channel, abandoned at the read's end; a late answer is dropped, never an unhandled rejection. */
+    const readChannel = <Value>(name: string, read: Promise<Value>): Promise<Value> => Promise.race([
+      read,
+      new Promise<never>((_resolve, reject) => {
+        const abandon = (): void => {
+          reject(new Error(`${options.taskId}: the ${name} channel had not answered `
+            + `${String(EVIDENCE_GRACE_MS)} ms after the evidence read began`));
+        };
 
-    throw failure;
-  }
+        if (reading.signal.aborted) abandon();
+        else reading.signal.addEventListener('abort', abandon, { once: true });
+      }),
+    ]);
 
-  const budget = new AbortController();
-  const reading = new AbortController();
-
-  /** One collection channel, abandoned at the read's end; a late answer is dropped, never an unhandled rejection. */
-  const readChannel = <Value>(name: string, read: Promise<Value>): Promise<Value> => Promise.race([
-    read,
-    new Promise<never>((_resolve, reject) => {
-      const abandon = (): void => {
-        reject(new Error(`${options.taskId}: the ${name} channel had not answered `
-          + `${String(EVIDENCE_GRACE_MS)} ms after the evidence read began`));
-      };
-
-      if (reading.signal.aborted) abandon();
-      else reading.signal.addEventListener('abort', abandon, { once: true });
-    }),
-  ]);
-
-  let collection: Promise<EpisodeEvidence> | null = null;
-
-  const collect = (): Promise<EpisodeEvidence> => {
-    collection ??= (async () => {
+    const collecting = (): Effect.Effect<EpisodeEvidence> => Effect.gen(function* () {
       const disarmReading = options.clock.after(EVIDENCE_GRACE_MS, () => { reading.abort(); });
 
-      const [events, history, spend] = await Promise.allSettled([
+      const [events, history, spend] = yield* Effect.promise(() => Promise.allSettled([
         readChannel('events', reader.runEvents()),
         readChannel('history', reader.history()),
         readChannel('spend', reader.spend()),
-      ]);
+      ]));
 
       disarmReading();
 
@@ -264,64 +243,94 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
 
       writeFileSync(join(dir, 'collection.json'), JSON.stringify(status, null, 2), { mode: 0o600 });
 
-      if (errors.length > 0) throw new AggregateError(errors, errors.map((error) => error.message).join('; '));
+      if (errors.length > 0) return yield* Effect.die(new AggregateError(errors, errors.map((error) => error.message).join('; ')));
 
       if (events.status !== 'fulfilled' || history.status !== 'fulfilled' || spend.status !== 'fulfilled') {
-        throw new Error('Incomplete evidence collection');
+        return yield* Effect.die(new Error('Incomplete evidence collection'));
       }
 
       return { events: events.value, history: history.value, spend: spend.value };
-    })();
+    });
 
-    return collection;
-  };
+    // One collection, joined by the operation and by this boundary; each reader answers its failure.
+    let collection: Promise<Exit.Exit<EpisodeEvidence>> | null = null;
 
-  let result: Result.Result<T, Error>;
-  /** Settles with the spend when the budget runs out; a value, so the race has no unread rejection. */
-  const spent = Promise.withResolvers<{ readonly spent: Error }>();
+    const collected = (): Effect.Effect<EpisodeEvidence> => Effect.suspend(() => {
+      collection ??= hold(collecting());
+      const held = collection;
 
-  const disarm = options.budgetMs === undefined ? null : options.clock.after(options.budgetMs, () => {
-    const reason = new Error(`${options.taskId}: the episode budget of ${String(options.budgetMs)} ms was spent before the operation ended`);
-    budget.abort(reason);
-    spent.resolve({ spent: reason });
-  });
+      return Effect.flatten(Effect.promise(() => held));
+    });
 
-  try {
-    const raced = await Promise.race([
-      operation(reader, collect, budget.signal).then((value) => ({ value })),
+    /** Settles with the spend when the budget runs out; a value, so the race has no unread rejection. */
+    const spent = Promise.withResolvers<{ readonly spent: Error }>();
+
+    const disarm = options.budgetMs === undefined ? null : options.clock.after(options.budgetMs, () => {
+      const reason = new Error(`${options.taskId}: the episode budget of ${String(options.budgetMs)} ms was spent before the operation ended`);
+      budget.abort(reason);
+      spent.resolve({ spent: reason });
+    });
+
+    const raced = Effect.flatMap(Effect.promise(() => Promise.race([
+      operation(reader, () => settle(collected()), budget.signal).then((value) => ({ value })),
       spent.promise,
-    ]);
+    ])), (outcome) => 'spent' in outcome ? Effect.die(outcome.spent) : Effect.succeed(outcome.value));
 
-    if ('spent' in raced) throw raced.spent;
-    result = Result.succeed(raced.value);
-  } catch (error) {
+    const result = yield* Effect.ensuring(Effect.catchCause(
+      Effect.map(raced, (value): Result.Result<T, Error> => Result.succeed(value)),
+      (failed) => Effect.sync((): Result.Result<T, Error> => {
+        const error = Cause.squash(failed);
+        const failure = error instanceof Error ? error : new Error(String(error));
+        writeFileSync(join(dir, 'failure.json'), JSON.stringify({
+          name: failure.name, message: failure.message, ...(budget.signal.aborted && { phase: 'budget' }),
+        }), { mode: 0o600 });
+
+        return Result.fail(failure);
+      }),
+    ), Effect.sync(() => {
+      if (disarm !== null) disarm();
+    }));
+
+    const evidence = yield* Effect.catchCause(collected(), (failed) => {
+      const error = Cause.squash(failed);
+
+      return Effect.die(Result.isFailure(result) ? new AggregateError([result.failure, error], result.failure.message, { cause: error }) : error);
+    });
+
+    if (Result.isSuccess(result)) return result.success;
+
+    if (result.failure !== budget.signal.reason) return yield* Effect.die(result.failure);
+
+    const spentOn = new Error(`${result.failure.message}: ${ledgerTail(evidence.events)}`, { cause: result.failure });
+
+    writeFileSync(join(dir, 'failure.json'), JSON.stringify({ name: spentOn.name, message: spentOn.message, phase: 'budget' }), { mode: 0o600 });
+
+    return yield* Effect.die(spentOn);
+  }));
+}
+
+/** A session that would not open: its channels are recorded unavailable, and the opening's failure is the run's. */
+function openFailed(dir: string, taskId: string, failed: Cause.Cause<unknown>): Effect.Effect<never> {
+  return Effect.suspend(() => {
+    const error = Cause.squash(failed);
     const failure = error instanceof Error ? error : new Error(String(error));
-    result = Result.fail(failure);
-    writeFileSync(join(dir, 'failure.json'), JSON.stringify({
-      name: failure.name, message: failure.message, ...(budget.signal.aborted && { phase: 'budget' }),
-    }), { mode: 0o600 });
-  } finally {
-    if (disarm !== null) disarm();
-  }
+    recordUnmeasuredEpisode();
 
-  let evidence: EpisodeEvidence;
+    const retained = Effect.catchCause(Effect.sync(() => {
+      writeFileSync(join(dir, 'failure.json'), JSON.stringify({
+        taskId, phase: 'open', name: failure.name, message: failure.message,
+      }), { mode: 0o600 });
+      writeFileSync(join(dir, 'collection.json'), JSON.stringify(
+        ['events', 'history', 'spend'].map((channel) => ({ channel, status: 'unavailable', reason: 'session opening failed' })),
+      ), { mode: 0o600 });
+    }), (unwritten) => {
+      const retentionError = Cause.squash(unwritten);
 
-  try {
-    evidence = await collect();
-  } catch (error) {
-    if (Result.isFailure(result)) throw new AggregateError([result.failure, error], result.failure.message, { cause: error });
-    throw error;
-  }
+      return Effect.die(new AggregateError([failure, retentionError], failure.message, { cause: retentionError }));
+    });
 
-  if (Result.isSuccess(result)) return result.success;
-
-  if (result.failure !== budget.signal.reason) throw result.failure;
-
-  const spentOn = new Error(`${result.failure.message}: ${ledgerTail(evidence.events)}`, { cause: result.failure });
-
-  writeFileSync(join(dir, 'failure.json'), JSON.stringify({ name: spentOn.name, message: spentOn.message, phase: 'budget' }), { mode: 0o600 });
-
-  throw spentOn;
+    return Effect.andThen(retained, Effect.die(failure));
+  });
 }
 
 /** What a run was last doing, off its own ledger: what a case the budget ended waited on. */
