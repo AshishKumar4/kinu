@@ -1,12 +1,13 @@
-diff --git a/packages/core/src/prompt.ts b/packages/core/src/prompt.ts
---- a/packages/core/src/prompt.ts
-+++ b/packages/core/src/prompt.ts
-@@ -200,7 +200,7 @@
+diff --git a/packages/core/src/prompting/surface.ts b/packages/core/src/prompting/surface.ts
+index bdab9da79..6c74a6157 100644
+--- a/packages/core/src/prompting/surface.ts
++++ b/packages/core/src/prompting/surface.ts
+@@ -163,7 +163,7 @@ export function executorIsConfigured(exec: PromptExecutorInfo): boolean {
  
- function offlineDevice(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
-   return executors.find((exec) =>
--    exec.name === 'device' && exec.configured === true && !executorIsSelectable(exec));
-+    exec.name === 'device' && exec.configured === true && executorIsSelectable(exec));
+   if (exec.status === 'not_configured') return false;
+ 
+-  return exec.available === true || exec.configured === true || exec.active === true;
++  return exec.available === true || exec.active === true;
  }
  
- function renderExecutorSection(surface: PromptSurface, render: RenderSection, workspaceIsMachine: boolean): string {
+ function uniqueBuiltinTools(tools: readonly BuiltinToolName[] | undefined): BuiltinToolName[] {

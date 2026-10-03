@@ -279,10 +279,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         }),
       },
       {
-        id: 'context-assembly/unselectable-executors-excluded',
-        asserts: 'an offline or unconfigured executor is never advertised as selectable',
+        id: 'context-assembly/unconfigured-executors-excluded',
+        asserts: 'an executor this workspace never configured is never described; an offline one still is',
         observe: (s) => s.compilePromptSurface({ executors: EXECUTORS })
-          .selectableExecutors.map((exec) => exec.name),
+          .configuredExecutors.map((exec) => exec.name),
       },
       {
         id: 'context-assembly/system-prefix',
@@ -293,8 +293,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           executors: EXECUTORS,
           backend: 'cf',
           model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
-          currentDate: '2026-01-01',
-          cwd: '/workspace',
           agentsMd: { admitted: [{ path: '/AGENTS.md', content: 'Root rules.', trust: 'approved' }], referenced: [] },
           activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: 'deploy-runbook' } }] },
         }),
@@ -308,7 +306,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             // Arbitrary valid tool; the probe measures activation-reason stability.
             availableTools: ['memory'] as const,
             backend: 'cli-local' as const,
-            currentDate: '2026-01-01',
           };
 
           const byPin = s.buildSystemPromptSync({
@@ -336,7 +333,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               availableTools: ['shell', 'agents', 'memory'],
               backend: 'cf',
               model: { id, provider },
-              currentDate: '2026-01-01',
             });
 
             const start = prompt.indexOf('## Tools available this turn');
@@ -378,7 +374,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'context-assembly/skill-activation-precedence',
-        asserts: 'explicit beats always-active, and non-invocable skills stay off',
+        asserts: 'a pin outlasts an explicit /name of the same skill, and non-invocable skills stay off',
         observe: (s) => s.resolveActiveSkills({
           available: [SKILL, PINNED_SKILL],
           explicit: ['house-style'],

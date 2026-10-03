@@ -19,7 +19,8 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters,
 } from '../utils/prompt-sections';
-import { executorIsSelectable, type PromptExecutorInfo } from './surface';
+import { executorIsConfigured, type PromptBackend, type PromptExecutorInfo } from './surface';
+import type { PromptModelContext } from './model-profile';
 import { type TurnReason, type WorkMode } from '../types/turn';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
 import {
@@ -60,7 +61,17 @@ export interface DynamicDelegate {
 }
 
 /** Callers order lists; the renderer caps them. */
+/** Facts the system prompt once ended with; here a change is a delta, not a new prompt prefix. */
+export interface RuntimeFacts {
+  readonly backend: PromptBackend;
+  readonly model: PromptModelContext;
+  readonly cwd?: string | undefined;
+  /** `currentDateForPrompt`: date-only, so it changes at most once a day. */
+  readonly date: string;
+}
+
 export interface DynamicContext {
+  runtime?: RuntimeFacts;
   /** Absent where a caller has no turn to name. */
   turn?: TurnReason;
   mode?: { readonly workMode: WorkMode; readonly planSubmission: boolean };
@@ -115,6 +126,7 @@ function flattenTaskList(
 }
 
 export interface DynamicContextSources {
+  readonly runtime?: RuntimeFacts;
   readonly turn?: TurnReason;
   readonly mode?: DynamicContext['mode'];
   readonly activeSkills?: ActiveSkillSet;
@@ -145,6 +157,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
 
   const context: DynamicContext = {
+    runtime: sources.runtime,
     turn: sources.turn,
     mode: sources.mode,
     craftedTools: sources.craftedTools,
@@ -203,6 +216,18 @@ export const DYNAMIC_CONTEXT_HEADER =
 
 const DYNAMIC_DELTA_HEADER = 'Kinu runtime state update, not conversation or user text.';
 
+function renderRuntimeFacts(runtime: RuntimeFacts): string {
+  const { model } = runtime;
+
+  return [
+    DYNAMIC_SECTION_TITLES.runtime,
+    `- Backend: ${runtime.backend}`,
+    ...(model.id ? [`- Model: ${model.provider ? `${model.provider}/` : ''}${model.id}`] : []),
+    ...(runtime.cwd ? [`- Working directory: ${runtime.cwd}`] : []),
+    `- Current date: ${runtime.date}`,
+  ].join('\n');
+}
+
 function renderTurnReason(turn: TurnReason): string {
   if (turn.provenance === 'chat') return 'Chat: this turn answers the conversation\'s newest message.';
 
@@ -214,6 +239,16 @@ function renderTurnReason(turn: TurnReason): string {
 
 /** Volatile, so rendered in the dynamic-context block, never the cacheable prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
+  // Up, but unreachable until the owner consents: the device executor's 'idle' with no grant (device-tunnel-executor.ts).
+  if (exec.granted === false && exec.status === 'idle') {
+    return 'connected, no grant yet for this workspace: the first call asks the owner once';
+  }
+
+  // A configured runtime that cannot take a call right now.
+  if (exec.available === false || exec.status === 'disconnected' || exec.status === 'error') {
+    return exec.name === 'device' ? 'offline' : 'unavailable now';
+  }
+
   if (exec.name === 'device') return exec.active || exec.status === 'active' ? 'connected' : 'available';
 
   if (exec.active || exec.status === 'active') return 'active';
@@ -407,6 +442,7 @@ function textSection(title: string, body: string): RenderedSection {
 const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
 
 const DYNAMIC_SECTION_TITLES = {
+  runtime: '## Runtime context',
   turn: '## Why this turn runs',
   mode: '## Work mode',
   skills: '## Active skills (why each is on)',
@@ -434,9 +470,11 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     if (section !== null) sections.set(key, section);
   };
 
+  if (ctx.runtime) add('runtime', { text: renderRuntimeFacts(ctx.runtime) });
+
   if (ctx.turn) add('turn', { text: `${DYNAMIC_SECTION_TITLES.turn}\n${renderTurnReason(ctx.turn)}` });
 
-  if (ctx.mode) add('mode', { text: renderWorkMode(ctx.mode) });
+  if (ctx.mode && !isPlainBuild(ctx.mode)) add('mode', { text: renderWorkMode(ctx.mode) });
 
   add('skills', rosterSection(
     DYNAMIC_SECTION_TITLES.skills, { items: ctx.skills ?? [], total: (ctx.skills ?? []).length },
@@ -464,7 +502,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
   ));
 
-  const executors = (ctx.executors ?? []).filter(executorIsSelectable);
+  const executors = (ctx.executors ?? []).filter(executorIsConfigured);
 
   if (executors.length > 0) {
     add('executors', { text: [
@@ -538,7 +576,7 @@ function dynamicBody(sections: readonly string[], header = DYNAMIC_CONTEXT_HEADE
 function dynamicBlock(body: string, established: { readonly kind: 'full' } | { readonly kind: 'delta'; readonly state: string }): string {
   const state = established.kind === 'delta' ? ` state="${established.state}"` : '';
 
-  return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}" kind="${established.kind}"${state}>\n${body}\n</dynamic_context>`;
+  return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}"${state}>\n${body}\n</dynamic_context>`;
 }
 
 function fullBody(sections: ReadonlyMap<keyof DynamicContext, RenderedSection>): string | null {
@@ -560,8 +598,8 @@ function executorDetails(exec: PromptExecutorInfo) {
 }
 
 function executionDelta(before: readonly PromptExecutorInfo[], after: readonly PromptExecutorInfo[]): string {
-  const previous = new Map(before.filter(executorIsSelectable).map((exec) => [exec.name, exec]));
-  const current = new Map(after.filter(executorIsSelectable).map((exec) => [exec.name, exec]));
+  const previous = new Map(before.filter(executorIsConfigured).map((exec) => [exec.name, exec]));
+  const current = new Map(after.filter(executorIsConfigured).map((exec) => [exec.name, exec]));
   const changes: string[] = [DYNAMIC_SECTION_TITLES.executors];
   const changedExecutors: PromptExecutorInfo[] = [];
 
@@ -638,10 +676,19 @@ function deltaSections(previous: ToldSections, current: ToldSections): string[] 
   }
 
   for (const key of previous.sections.keys()) {
-    if (!current.sections.has(key)) changed.push(`${DYNAMIC_SECTION_TITLES[key]}\nCleared: no current entries.`);
+    if (current.sections.has(key)) continue;
+
+    changed.push(key === 'mode' ? renderWorkMode(PLAIN_BUILD) : `${DYNAMIC_SECTION_TITLES[key]}\nCleared: no current entries.`);
   }
 
   return changed;
+}
+
+/** The static doctrine's default: stated only when a turn leaves another mode for it. */
+const PLAIN_BUILD = { workMode: 'build', planSubmission: false } as const satisfies NonNullable<DynamicContext['mode']>;
+
+function isPlainBuild(mode: NonNullable<DynamicContext['mode']>): boolean {
+  return mode.workMode === PLAIN_BUILD.workMode && mode.planSubmission === PLAIN_BUILD.planSubmission;
 }
 
 function renderWorkMode(mode: NonNullable<DynamicContext['mode']>): string {
@@ -698,15 +745,16 @@ export interface DynamicBlockBirth {
  *  measured, as glm-5.3 read the task list back 10/10 at every share up to 20 row deltas (6.5 full blocks). */
 const KEYFRAME_SHARE = 6;
 
-const BLOCK_TAG = new RegExp(`^${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="([^"]*)" kind="(full|delta)"(?: state="([^"]*)")?>`, 'u');
+/** A delta also names the state it applies to. */
+const BLOCK_TAG = new RegExp(`^${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="([^"]*)"(?: state="([^"]*)")?>`, 'u');
 
 function blockTag(text: string): { readonly kind: 'full' | 'delta'; readonly state: string } | null {
   const match = BLOCK_TAG.exec(text);
 
   if (match === null) return null;
-  const [, fingerprint = '', kind, state = ''] = match;
+  const [, fingerprint = '', state] = match;
 
-  return kind === 'full' ? { kind, state: fingerprint } : { kind: 'delta', state };
+  return state === undefined ? { kind: 'full', state: fingerprint } : { kind: 'delta', state };
 }
 
 /** The copy that goes out once no unapproved file is left, so the earlier ones read as withdrawn. */

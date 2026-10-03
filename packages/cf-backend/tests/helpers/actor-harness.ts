@@ -116,11 +116,13 @@ export class HarnessDynamicWorkers {
     }
   }
 
-  #admit(key: string): () => void {
+  /** Null when the platform refuses the call. */
+  #admit(key: string): (() => void) | null {
     if (!this.inFlight.has(key) && this.inFlight.size + this.hidden >= 10) {
       this.refused += 1;
       this.#check();
-      throw new Error('Dynamic worker concurrency limit exceeded: each request may have up to 10 concurrent dynamic worker invocations. Wait for one to finish before starting another.');
+
+      return null;
     }
 
     this.inFlight.set(key, (this.inFlight.get(key) ?? 0) + 1);
@@ -139,6 +141,12 @@ export class HarnessDynamicWorkers {
   counted(key: string, isolate: AgentFacetCalls): AgentFacetCalls {
     return agentCallsThrough((call) => Effect.promise(async () => {
       const release = this.#admit(key);
+
+      if (release === null) {
+        // The refusal comes back over the RPC, a round trip later.
+        await new Promise<void>((resolve) => { setImmediate(resolve); });
+        throw new Error('Dynamic worker concurrency limit exceeded: each request may have up to 10 concurrent dynamic worker invocations. Wait for one to finish before starting another.');
+      }
 
       this.calls.push(key);
 

@@ -58,7 +58,7 @@ import { TierIdSchema,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
-  resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills,
+  resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolSetBySkills,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
@@ -91,6 +91,7 @@ import { TierIdSchema,
   renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
+  type RuntimeFacts,
   initWorkspaceSchema, initPendingSendTables, PendingSendStore,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
@@ -1714,8 +1715,6 @@ export class LocalAgentSession {
       backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
       roleSection: profile.role,
       model: { id: turnSpec },
-      cwd: this.cwd,
-      currentDate: currentDateForPrompt(),
       // Read here: the builder is the byte-stable cacheable prefix and does no I/O.
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.rt.actor),
       identity: this.promptIdentity(),
@@ -1725,13 +1724,15 @@ export class LocalAgentSession {
 
     if (availableSkills.lines.length > 0) systemPromptOptions.availableSkills = availableSkills;
 
-    if (activeSkills) systemPromptOptions.activeSkills = activeSkills;
+    const { pinned, invoked } = splitTurnSkills(activeSkills);
+
+    if (pinned) systemPromptOptions.activeSkills = pinned;
 
     if (soul) systemPromptOptions.soulOverride = soul;
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     // Why the turn runs and the unapproved instruction files ride the dynamic-context ledger, out of the cached
     // prefix: provenance flips when a background job lands.
-    const instructions = renderUnverifiedInstructions(activeSkills ? { agentsMd, activeSkills } : { agentsMd });
+    const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
     const cache = this.cacheIdentity(turnSpec);
     // Normalized spelling: `parseModelSpec` refuses a bare tier id without a slash.
     const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, parseModelSpec(turnSpec).provider);
@@ -1792,6 +1793,7 @@ export class LocalAgentSession {
         extensions: [this.compactionExtension],
         dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools, { turn, activeSkills }),
         instructions,
+        activated: invoked ? activatedSkillsBlock(invoked) : null,
         scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       },
       profile,
@@ -2235,6 +2237,7 @@ export class LocalAgentSession {
       config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         rt: this.rt,
+        compose: () => this.composeNextRequest(),
         profile: () => this.routingProfile([...Object.keys(this.tools), ...codemodeCapabilitiesFor(this.codemodeProviders('build'))]),
         bindModel: spec => this.modelResolver?.resolveModel(spec, this.conversation()) ?? this.defaultModel('scaffold model lane'),
         modelContext: spec => this.modelCatalog.contextFor(spec),
@@ -2343,6 +2346,16 @@ export class LocalAgentSession {
     return createScaffoldHistory(async () => this.actorSession.history);
   }
 
+  /** The model as the turn names it, after the same normalisation the request uses. */
+  private runtimeFacts(profile: ResolvedTurnProfile, cwd?: string): RuntimeFacts {
+    return {
+      backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
+      model: { id: this.profiles().normalizeSpec(profile.tier.model) },
+      cwd,
+      date: currentDateForPrompt(),
+    };
+  }
+
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
    *  wall-clock field would re-fingerprint the block every request. */
   private dynamicContextSnapshot(
@@ -2354,6 +2367,7 @@ export class LocalAgentSession {
       stores: this.stores,
       profile,
       tools,
+      runtime: this.runtimeFacts(profile, this.cwd),
       turn: turnOf.turn,
       ...(turnOf.activeSkills !== undefined && { activeSkills: turnOf.activeSkills }),
       memoryTail,
@@ -2879,6 +2893,7 @@ export class LocalAgentSession {
       stores: actor.stores,
       profile,
       tools,
+      runtime: this.runtimeFacts(profile),
       memoryTail: undefined,
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => [],

@@ -7,7 +7,8 @@ import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { resolveModelRoute } from '../profiles/model-route';
 import { parseModelSpec } from '../providers/types';
 import { reasoningEffortOptions } from '../providers/effort';
-import { buildSystemPromptSync, currentDateForPrompt } from '../prompt';
+import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
+import type { ComposedRequest } from '../orchestrator/chat-session';
 import { createScaffoldCallTool, createScaffoldDefaultInference, createScaffoldLLMStream } from '../orchestrator/scaffold-host';
 import type { ScaffoldRunControl } from '../scaffold/executor';
 import type { ScaffoldReplayContext, ScaffoldSurface } from './control';
@@ -24,6 +25,8 @@ export interface ScaffoldCandidateBinding extends ScaffoldRunControl {
   readonly spend: ModelCallSpend;
   readonly callScope?: string;
   readonly history: ScaffoldSurface['history'];
+  /** The live turn's own request assembly (`composeRequest`): the default call frames its request with it. */
+  readonly compose: () => Promise<ComposedRequest>;
 }
 
 function candidateTools(binding: ScaffoldCandidateBinding, context: OperationProfile): ToolSet {
@@ -32,6 +35,11 @@ function candidateTools(binding: ScaffoldCandidateBinding, context: OperationPro
   return withOperationProfile(Object.fromEntries(
     Object.entries(runOperationProfile(context, binding.tools)).filter(([name]) => allowed.has(name)),
   ), context);
+}
+
+/** The call runs on the scaffold route's model, not the turn's, and says so. */
+function onModel(context: DynamicContext, spec: string): DynamicContext {
+  return context.runtime === undefined ? context : { ...context, runtime: { ...context.runtime, model: { id: spec } } };
 }
 
 export function createScaffoldCandidateSurface(
@@ -75,13 +83,20 @@ export function createScaffoldCandidateSurface(
       const resolved = await request();
       yield* operationProfileStream(createScaffoldLLMStream(resolved.options)(call), resolved.context);
     },
+    // The live turn's system prompt and dynamic block, so a candidate is compared with what a turn really sends.
     defaultInference: async function* () {
       const resolved = await request();
+      const { execution, profile } = await binding.compose();
+      const tools = resolved.options.tools();
+
       yield* operationProfileStream(createScaffoldDefaultInference(resolved.options, {
-        system: buildSystemPromptSync(binding.rt, {
-          model: { id: resolved.options.spec }, currentDate: currentDateForPrompt(),
-        }),
+        system: execution.chat.system,
         history: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
+        dynamicContext: {
+          ledger: new DynamicContextLedger(),
+          snapshot: () => onModel(execution.dynamic(profile, tools), resolved.options.spec),
+          instructions: execution.instructions,
+        },
       })(), resolved.context);
     },
   };

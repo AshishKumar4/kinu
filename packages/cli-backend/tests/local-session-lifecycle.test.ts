@@ -2,7 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
 import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
-import { initWorkspaceSchema, JobOutputFrameSchema } from '@kinu.run/core';
+import { initWorkspaceSchema, JobOutputFrameSchema, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -910,8 +910,34 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const activation = users.findIndex((text) => text.includes('- focused: explicit /focused'));
 
     expect(activation).toBeGreaterThanOrEqual(0);
-    expect(users.at(-1)).toContain('remember this');
-    expect(users.slice(activation + 1).every((text) => text.includes('remember this'))).toBe(true);
+    expect(users.slice(activation + 1)).toHaveLength(2);
+    expect(users[activation + 1]).toContain('Focus on memory only.');
+    expect(users.at(-1)).toBe('/focused remember this');
+  });
+
+  // A body in the system prompt rewrote the cached prefix on the turn it arrived and again on the next. The skill
+  // restricts no tool: a restriction changes the tool list, and with it the prompt's tool sections, by design.
+  test('a /skill turn carries the approved body before its request, leaves the system prompt alone, and the next turn drops it', async () => {
+    const prompts: PromptMessage[][] = [];
+    const { rt, session } = setup('ok', historyCapturingModel('ok', (messages) => { prompts.push(messages); }));
+    const path = workspaceSkillPath('tidy');
+    await rt.storage.vfs.mkdir(`${WORKSPACE_SKILLS_DIR}/tidy`, { recursive: true });
+    await writeText(rt.storage.vfs, path, '---\nname: tidy\ndescription: keep notes tidy\n---\nSort the notes first.\n');
+    const reviewed = present(await session.readInstructionApproval(path), 'the tidy skill');
+    expect((await session.approveInstruction(path, reviewed.digest)).ok).toBe(true);
+
+    for (const text of ['plain first', '/tidy sort these', 'plain after']) await session.send(text, { id: crypto.randomUUID() });
+
+    const system = (prompt: PromptMessage[] | undefined) => present(prompt, 'a request').filter((message) => message.role === 'system').map(messageText);
+    const users = (prompt: PromptMessage[] | undefined) => present(prompt, 'a request').filter((message) => message.role === 'user').map(messageText);
+    const [plain, tidy, after] = [prompts[0], prompts[1], prompts.at(-1)];
+
+    expect(system(tidy)).toEqual(system(plain));
+    expect(system(after)).toEqual(system(plain));
+    expect(users(tidy).at(-1)).toBe('/tidy sort these');
+    expect(users(tidy).at(-2)).toContain('### tidy (explicit /tidy)\n\nSort the notes first.');
+    expect(users(after).join('\n')).not.toContain('Sort the notes first.');
+    await session.end();
   });
 
   test('approval refuses bytes changed after the owner reviewed them', async () => {

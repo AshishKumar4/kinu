@@ -10,7 +10,6 @@ import { renderActiveSkillsSection, renderSkillsIndexSection } from './skills/re
 import type { ActiveSkillSet, SkillsIndex } from './skills/types';
 import {
   compilePromptSurface,
-  executorIsSelectable,
   type PromptBackend,
   type PromptExecutorInfo,
   type PromptExternalToolInfo,
@@ -32,7 +31,6 @@ import {
   EXTERNAL_TOOL_LINE,
   GENERIC_EXECUTOR_LINE,
   DEVICE_EXECUTOR_LINE,
-  OFFLINE_DEVICE_LINE,
   OPERATING_GUIDANCE,
   ROLE_SECTION,
   OUTPUT_FORMAT_SECTION,
@@ -82,36 +80,19 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
    *  builder does no I/O. */
   availableSkills?: SkillsIndex;
   activeSkills?: ActiveSkillSet;
-  cwd?: string;
   /** Discovered AGENTS.md sources, root-most first, plus the ones too large to carry. */
   agentsMd?: AgentsMdSources;
-  currentDate?: string;
   /** Promoted section replacements, read by the backend once per activation; this builder does no I/O. Absent
    *  renders built-in sources, which the layergate prefix digest is locked against. */
   sectionOverrides?: PromptSectionOverrides;
 }
 
-/** Date-only, never time, so a date does not bust the prompt-cache prefix within a day. */
+/** Date-only, never time: the dynamic block's runtime section changes at most once a day. */
 export function currentDateForPrompt(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
 export const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;
-
-// No `- Turn mode:` line: it split the prompt cache between otherwise identical turns for no gain.
-function renderRuntimeContext(opts: SystemPromptOptions): string {
-  const lines: string[] = [];
-
-  if (opts.backend) lines.push(`- Backend: ${opts.backend}`);
-
-  if (opts.model?.id) lines.push(`- Model: ${opts.model.provider ? `${opts.model.provider}/` : ''}${opts.model.id}`);
-
-  if (opts.cwd) lines.push(`- Working directory: ${opts.cwd}`);
-
-  if (opts.currentDate) lines.push(`- Current date: ${opts.currentDate}`);
-
-  return lines.length ? `## Runtime context\n${lines.join('\n')}` : '';
-}
 
 function renderOperatingGuidance(surface: PromptSurface, render: RenderSection): string {
   const family = surface.model.family;
@@ -186,13 +167,6 @@ function sandboxSizeSlots(sizes: SandboxSizes | undefined) {
   };
 }
 
-/** The user's own name for the device, else a neutral phrase ("device" reads as an API namespace). */
-function deviceDisplayName(exec: PromptExecutorInfo): string {
-  const label = exec.label?.trim();
-
-  return label === undefined || label === '' ? "your user's PC" : label;
-}
-
 function renderExecutorLine(
   exec: PromptExecutorInfo,
   render: RenderSection,
@@ -212,20 +186,14 @@ function renderExecutorLine(
   }
 }
 
-function offlineDevice(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
-  return executors.find((exec) =>
-    exec.name === 'device' && exec.configured === true && !executorIsSelectable(exec));
-}
-
 function renderExecutorSection(surface: PromptSurface, render: RenderSection, workspaceIsMachine: boolean): string {
   const tools = surface.builtinTools;
 
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
 
-  const executors = surface.selectableExecutors;
-  const deviceOffline = offlineDevice(surface.executors);
+  const executors = surface.configuredExecutors;
 
-  if (executors.length === 0 && !deviceOffline) return '';
+  if (executors.length === 0) return '';
 
   const workspace = executors.find((exec) => exec.name === 'workspace');
 
@@ -233,7 +201,6 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, wo
 
   const lines = [
     ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)).filter((line) => line !== ''),
-    ...(deviceOffline ? [render(OFFLINE_DEVICE_LINE, { deviceName: deviceDisplayName(deviceOffline) })] : []),
     ...(workspace ? [renderExecutorLine(workspace, render, surface.backend)] : []),
   ];
 
@@ -312,7 +279,7 @@ function hasUnverifiedInstructions(opts: SystemPromptOptions): boolean {
 
 export interface UnverifiedInstructions {
   readonly agentsMd?: AgentsMdSources;
-  readonly activeSkills?: ActiveSkillSet;
+  readonly activeSkills?: ActiveSkillSet | undefined;
 }
 
 export const WORKSPACE_INSTRUCTIONS_HEADER =
@@ -348,10 +315,9 @@ export function buildSystemPromptSync(
   const render = sectionRenderer(opts.sectionOverrides);
   const lead = rt.actor.parentActorId === null && surface.agentsActions.includes('hire');
 
+  // Prefix caching stops at the first differing byte: the core every workspace shares, then the lead doctrine
+  // every workspace's own agent shares, then this workspace, then this agent.
   return [
-    readSoulForPrompt(opts.soulOverride),
-    renderAgentNames(surface, render),
-    renderRoleSection(surface, render),
     renderOperatingGuidance(surface, render),
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
     renderExecutorSection(surface, render, rt.workspaceIsMachine),
@@ -366,6 +332,7 @@ export function buildSystemPromptSync(
       render(LEAD_DELIVERY, {}),
       render(LEAD_DIRECT_EDIT, {}),
     ] : []),
+    readSoulForPrompt(opts.soulOverride),
     // System placement carries only owner-approved (by digest) and built-in instructions; the rest ride the
     // unapproved-instructions block (prompting/volatile-context.ts).
     opts.agentsMd ? renderAgentsMdSection(opts.agentsMd, 'system') : '',
@@ -375,9 +342,8 @@ export function buildSystemPromptSync(
       : '',
     // Above the content it governs so the content cannot displace it.
     hasUnverifiedInstructions(opts) ? render(WORKSPACE_INSTRUCTIONS_SECTION, {}) : '',
-    // Last: the only volatile bytes (date, model, cwd). Prefix caching stops at the first difference, so
-    // rendering these earlier invalidates everything after them.
-    renderRuntimeContext(opts),
+    renderAgentNames(surface, render),
+    renderRoleSection(surface, render),
   ].filter(Boolean).join('\n\n');
 }
 

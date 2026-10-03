@@ -1006,7 +1006,19 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     expect(system).toContain('Root: prefer bun.');
     expect(system).toContain('App: run lint before commit.');
     expect(system.indexOf('Root: prefer bun.')).toBeLessThan(system.indexOf('App: run lint before commit.'));
-    expect(system).toContain(`Working directory: ${nested}`);
+    await session.end();
+  });
+
+  test('the working directory rides the dynamic block, not the system prompt', async () => {
+    const root = scratchDir('local-session-cwd');
+    let prompt: PromptMessage[] = [];
+    const { session } = setup('ok', historyCapturingModel('ok', (messages) => { prompt = messages; }), { cwd: root });
+
+    await session.send('hello', { id: crypto.randomUUID() });
+    const system = prompt.filter((message) => message.role === 'system').map(messageText).join('\n');
+
+    expect(present(prompt.map(messageText).find(isDynamicBlock), 'the dynamic block')).toContain(`- Working directory: ${root}`);
+    expect(system).not.toContain('Working directory');
     await session.end();
   });
 
@@ -1069,8 +1081,11 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     expect(sealed).toBeGreaterThan(-1);
     expect(first[sealed + 1]).toContain('- focused: explicit /focused');
     expect(first.at(-1)).toContain('remember this');
-    // The next request opens with the whole first one, its copy of the instructions included.
-    expect(second.slice(0, first.length)).toEqual(first);
+    // The next request opens with the whole first one, its copy of the instructions included, but the skill body the
+    // first turn's `/focused` carried for that turn alone.
+    const kept = first.filter((text) => !text.includes('Focus on memory only.'));
+    expect(kept).toHaveLength(first.length - 1);
+    expect(second.slice(0, kept.length)).toEqual(kept);
     expect(second.filter(isWorkspaceInstructions)).toHaveLength(1);
     await session.end();
   });

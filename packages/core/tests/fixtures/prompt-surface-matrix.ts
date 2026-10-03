@@ -88,8 +88,6 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       backend: 'cf',
       temporaryAsk: true,
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
-      currentDate: '2026-01-01',
-      cwd: '/workspace',
       // Both trust tiers: the approved file keeps system placement; the other rides a user message.
       agentsMd: {
         admitted: [
@@ -112,7 +110,6 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       backend: 'cli-local',
       temporaryAsk: true,
       model: { id: 'gpt-5-codex', provider: 'openai' },
-      currentDate: '2026-01-01',
     },
   },
   {
@@ -121,7 +118,6 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       availableTools: ['shell', 'memory'],
       backend: 'cf',
       model: { id: 'kimi-k3-instruct', provider: 'moonshot' },
-      currentDate: '2026-01-01',
     },
   },
   {
@@ -130,7 +126,6 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       availableTools: ['shell', 'memory'],
       backend: 'cf',
       model: { id: 'gpt-5-codex', provider: 'openai' },
-      currentDate: '2026-01-01',
     },
   },
   {
@@ -139,7 +134,6 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       availableTools: ['shell', 'memory'],
       backend: 'cf',
       model: { id: 'gemini-3-pro', provider: 'google' },
-      currentDate: '2026-01-01',
     },
   },
   {
