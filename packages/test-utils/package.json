@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./turn-model": "./src/turn-model.ts",
     "./parity-normalizer": "./src/parity-normalizer.ts",
+    "./clef-binding-answer": "./src/clef-binding-answer.ts",
     "./mossaic": "./src/mossaic.ts",
     "./hand-clock": "./src/hand-clock.ts",
     "./vfs": "./src/vfs.ts"
