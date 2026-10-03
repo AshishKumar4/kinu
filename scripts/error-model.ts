@@ -115,6 +115,11 @@ export const DECLARED = byFile([
     reason: 'session events reach the frontend listener in order, synchronously when it answers synchronously; a promise '
       + 'chain keeps that order (settle\'s hops would reorder events), and a listener\'s failure is reported, never the loop\'s end',
   }],
+  ...['packages/agent-utils/src/core/utils.ts', 'packages/agent-utils/src/memory/store.ts', 'packages/agent-utils/src/vfs/addressing.ts'].map(file => [file, {
+    mechanisms: ['throw', 'catch'],
+    reason: 'agent-utils sits below core and holds no runner: a leaf utility throws and catches as plain async code, '
+      + 'and core brings each failure in with `attempt`',
+  }] as const),
   ['packages/test-utils/src/mossaic.ts', {
     mechanisms: ['throw'],
     within: ['fakeMossaic'],

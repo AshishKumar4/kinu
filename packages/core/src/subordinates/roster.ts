@@ -3,7 +3,7 @@
  * Durable and task-lifetime helpers share the table, distinguished by `lifetime`.
  */
 
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import type { SqlExec, SqlExecRow } from '../types/primitives';
@@ -62,17 +62,15 @@ const StoredRosterEntrySchema = v.object({
   deleteRequested: v.pipe(v.union([v.literal(0), v.literal(1)]), v.transform((value) => value === 1)),
 });
 
-function parseStoredRosterRow(row: SqlExecRow): SubordinateRosterEntry {
-  try {
+function parseStoredRosterRow(row: SqlExecRow): Effect.Effect<SubordinateRosterEntry, KinuError> {
+  return Effect.catchCause(Effect.sync(() => {
     const stored = v.parse(StoredRosterEntrySchema, row);
 
     return v.parse(SubordinateRosterEntrySchema, {
       ...stored, actorReference: stored.actorReference === null ? null : parseJsonValue(stored.actorReference),
       birth: stored.birth === null ? null : parseJsonValue(stored.birth),
     });
-  } catch (cause) {
-    throw new KinuError('io', 'Stored subordinate roster data is malformed.', { cause });
-  }
+  }), (failed) => Effect.fail(new KinuError('io', 'Stored subordinate roster data is malformed.', { cause: Cause.squash(failed) })));
 }
 
 /** What a roster write stores; `origin` is read from the actor, never written here. */
@@ -194,14 +192,16 @@ export class SubordinateRosterStore {
   }
 
   /** This parent's rows in roster order, narrowed by `condition` (empty for all). */
-  private orderedRows(condition: string): SubordinateRosterEntry[] {
-    this.actor.assertCurrent();
+  private orderedRows(condition: string): Effect.Effect<SubordinateRosterEntry[], KinuError> {
+    return Effect.suspend(() => {
+      this.actor.assertCurrent();
 
-    return this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
-       WHERE actor_id = ? ${condition} ORDER BY created_at, name`,
-      this.actorId,
-    ).toArray().map(parseStoredRosterRow);
+      return Effect.forEach(this.sql.exec(
+        `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
+         WHERE actor_id = ? ${condition} ORDER BY created_at, name`,
+        this.actorId,
+      ).toArray(), parseStoredRosterRow);
+    });
   }
 
   private anyRow(condition: string): boolean {
@@ -214,7 +214,7 @@ export class SubordinateRosterStore {
   }
 
   pendingBirths(): SubordinateRosterEntry[] {
-    return this.orderedRows('AND birth_request IS NOT NULL');
+    return settleSync(this.orderedRows('AND birth_request IS NOT NULL'));
   }
 
   hasPendingBirths(): boolean {
@@ -252,7 +252,7 @@ export class SubordinateRosterStore {
   }
 
   pendingDeletions(): SubordinateRosterEntry[] {
-    return this.orderedRows('AND delete_requested = 1');
+    return settleSync(this.orderedRows('AND delete_requested = 1'));
   }
 
   hasPendingDeletions(): boolean {
@@ -265,14 +265,20 @@ export class SubordinateRosterStore {
   }
 
   get(name: string): SubordinateRosterEntry | null {
-    this.actor.assertCurrent();
+    return settleSync(this.row(name));
+  }
 
-    const rows = this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? AND name = ?`,
-      this.actorId, name,
-    ).toArray();
+  private row(name: string): Effect.Effect<SubordinateRosterEntry | null, KinuError> {
+    return Effect.suspend(() => {
+      this.actor.assertCurrent();
 
-    return rows.length === 0 ? null : parseStoredRosterRow(rows[0]);
+      const rows = this.sql.exec(
+        `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? AND name = ?`,
+        this.actorId, name,
+      ).toArray();
+
+      return rows.length === 0 ? Effect.succeed(null) : parseStoredRosterRow(rows[0]);
+    });
   }
 
   requireExisting(name: string): SubordinateRosterEntry {
@@ -296,11 +302,11 @@ export class SubordinateRosterStore {
   }
 
   list(): SubordinateRosterEntry[] {
-    return this.orderedRows(`AND status != 'dismissed'`);
+    return settleSync(this.orderedRows(`AND status != 'dismissed'`));
   }
 
   listAll(): SubordinateRosterEntry[] {
-    return this.orderedRows('');
+    return settleSync(this.orderedRows(''));
   }
 
   /** Owner history includes archived children without reopening them. */
@@ -309,7 +315,7 @@ export class SubordinateRosterStore {
       this.actor.assertCurrent();
       const limit = boundedInt(request.limit, 50, 1, 200);
       const after = request.cursor?.after;
-      const anchor = after === undefined ? null : this.get(after);
+      const anchor = after === undefined ? null : yield* this.row(after);
 
       if (after !== undefined && anchor === null) return yield* Effect.die(new StaleCursorError('subordinate roster', after));
 
@@ -319,7 +325,7 @@ export class SubordinateRosterStore {
             ORDER BY created_at, name LIMIT ?`, this.actorId, anchor.createdAt, anchor.createdAt, anchor.name, limit + 1)
         : this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? ORDER BY created_at, name LIMIT ?`, this.actorId, limit + 1);
 
-      return seekPage(rows.toArray().map(parseStoredRosterRow), limit, (row) => row.name);
+      return seekPage(yield* Effect.forEach(rows.toArray(), parseStoredRosterRow), limit, (row) => row.name);
     }));
   }
 
