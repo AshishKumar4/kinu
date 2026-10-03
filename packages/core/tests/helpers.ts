@@ -9,8 +9,10 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 
 import {
-  createInlineMemory, createInlineWorkspace, sqlStorageOver, wrapDatabase,
+  createInlineWorkspace, sqlStorageOver, wrapDatabase,
 } from '../src/identity/inline-primitives';
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
+import { adaptMemory } from '../src/memory/vector-sync';
 import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 import { createWorkspaceForkSource } from '../src/vfs/workspace-planes';
 import type { ForkFileSource } from '../src/identity/fork';
@@ -112,9 +114,12 @@ export function createWorkspaceBundle(db: Database) {
   return createInlineWorkspace(db);
 }
 
-/** The same inline Memory the local CLI builds, over the shared `memory_chunks` DDL. */
+/** The Memory every backend builds: MemoryStore through the one adapter, FTS5 alone. */
 export function createMemoryMemory(db: Database, vfs: VFS & Required<Pick<VFS, 'readRange'>>): Memory {
-  return createInlineMemory(db, vfs);
+  const store = new MemoryStore(vfs, wrapDatabase(db).sql);
+  store.ensureSchema();
+
+  return adaptMemory(store, vfs);
 }
 
 export function createMockLLM(responses: Record<string, string> = {}): LLM {

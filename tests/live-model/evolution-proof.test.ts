@@ -24,8 +24,8 @@ import * as v from 'valibot';
 import {
   collectStepText,
   EvolutionEngine,
-  readMemoryTail,
-  renderDynamicContextBlock,
+  recordTurnRating,
+  thumbsRating,
   type LLMProviderConfig,
   type CompletedTurn,
   type ToolCallRecord,
@@ -117,18 +117,13 @@ interface ChatTurn {
 async function chatTurn(turn: ChatTurn): Promise<TurnResult> {
   const { model, rt, sessionId, surface, userMessage } = turn;
   const start = Date.now();
-  const memoryTail = await readMemoryTail(rt.memory);
-  // The PRODUCTION projection, from the production tool surface. A hand-assembled
-  // option set — no `agentsActions`, no `workMode`, no `sectionOverrides`, and
-  // `soulOverride` which the CLI turn path does not pass — over a ToolSet that
-  // cannot contain `agents` gives the model a prompt the product never sends, with
-  // the delegation ladder (prompt.ts:236) absent from every turn this proof
-  // measures.
-  const system = surface.systemPrompt();
+  // The PRODUCTION frame, from the production tool surface: its system prompt, and the dynamic block (runtime facts
+  // and the memory tail) woven before the request by the step pipeline's ledger. A hand-assembled option set gives
+  // the model a prompt the product never sends.
+  const { system, messages } = await surface.request([{ role: 'user', content: userMessage }]);
   // The wrapper forwards the call unchanged; it only reads the tool list and the
   // system message the provider actually receives.
   const recorder = recordRequestSurface(model);
-  const dynamicContext = renderDynamicContextBlock({ memoryTail });
 
   const reuseMode: ReuseMode =
     /\b(?:must\s+)?use eval\b/i.test(userMessage) ? 'instructed' : 'autonomous';
@@ -138,10 +133,7 @@ async function chatTurn(turn: ChatTurn): Promise<TurnResult> {
   const result = await generateText({
     model: recorder.model,
     system,
-    messages: [
-      ...(dynamicContext ? [{ role: 'user' as const, content: dynamicContext }] : []),
-      { role: 'user' as const, content: userMessage },
-    ],
+    messages,
     tools: surface.tools,
     stopWhen: stepCountIs(500),
     onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
@@ -397,6 +389,11 @@ const DIJKSTRA_ANSWER_2 = shortestDistance(GRAPH_2);
 
 const CIPHER_ANSWER = atbash(CIPHER.ciphertext);
 
+/** A turn whose answer the proof checked, rated as the user would: a thumbs-up. */
+function rateAsChecked(rt: CLIRuntime, turnId: string, request: string, answer: string): void {
+  recordTurnRating(rt.storage.sql, rt.actor, { ...thumbsRating('positive'), turnId, source: 'thumbs', request, answer });
+}
+
 describe('Evolution Proof', () => {
   let rt: CLIRuntime;
   let target: LocalTarget;
@@ -462,6 +459,7 @@ describe('Evolution Proof', () => {
     expect(result.request.toolsOffered).toEqual(Object.keys(surface.tools).sort());
     expect(result.request.agentsOffered).toBe(true);
     expect(result.request.agentsIndexed).toBe(true);
+    expect(result.request.runtimeFacts).toBe(true);
     session1Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -478,13 +476,16 @@ describe('Evolution Proof', () => {
     expect(answered).toBe(RSA_ANSWER_1);
 
     // Fire evolution — should extract pattern from successful tool usage
+    // The proof checked the answer above, so it rates the turn as the user would: a thumb.
+    rateAsChecked(rt, 'proof-rsa', RSA_CHALLENGE_1, result.text);
     await engine.reviewTurn({
+      turnId: 'proof-rsa',
       userMessage: RSA_CHALLENGE_1,
       assistantResponse: result.text,
       toolCalls: result.toolCalls,
       steps: result.steps,
       durationMs: result.durationMs,
-      feedback: 'positive',
+      feedback: null,
       hadError: false,
     }, null);
   }, 0);
@@ -503,13 +504,16 @@ describe('Evolution Proof', () => {
     console.log(`    Answered ${String(answered)}, expected ${String(DIJKSTRA_ANSWER_1)}`);
     expect(answered).toBe(DIJKSTRA_ANSWER_1);
 
+    // The proof checked the answer above, so it rates the turn as the user would: a thumb.
+    rateAsChecked(rt, 'proof-dijkstra', DIJKSTRA_CHALLENGE_1, result.text);
     await engine.reviewTurn({
+      turnId: 'proof-dijkstra',
       userMessage: DIJKSTRA_CHALLENGE_1,
       assistantResponse: result.text,
       toolCalls: result.toolCalls,
       steps: result.steps,
       durationMs: result.durationMs,
-      feedback: 'positive',
+      feedback: null,
       hadError: false,
     }, null);
   }, 0);
@@ -531,13 +535,16 @@ describe('Evolution Proof', () => {
     console.log(`    Expected plaintext ${JSON.stringify(CIPHER_ANSWER)}`);
     expect(letterKey(result.text)).toContain(CIPHER_ANSWER.replaceAll(' ', ''));
 
+    // The proof checked the answer above, so it rates the turn as the user would: a thumb.
+    rateAsChecked(rt, 'proof-cipher', CIPHER_CHALLENGE, result.text);
     await engine.reviewTurn({
+      turnId: 'proof-cipher',
       userMessage: CIPHER_CHALLENGE,
       assistantResponse: result.text,
       toolCalls: result.toolCalls,
       steps: result.steps,
       durationMs: result.durationMs,
-      feedback: 'positive',
+      feedback: null,
       hadError: false,
     }, null);
 
@@ -572,20 +579,16 @@ describe('Evolution Proof', () => {
 
   liveTest('evolution artifacts exist after session 1', async () => {
     // THE DENOMINATOR, first, because every claim below is about what the
-    // GRADED turns produced. Nothing here grades a turn conversationally — a
-    // proof drives challenges, never a follow-up — so the verdict comes from the
-    // execution channel, which grades exactly the turns that ran tools and
-    // leaves the rest ungraded (evolution/engine.ts:364-376). Asserted against
-    // that set rather than against 3, so a challenge the model happened to
-    // answer in prose does not read as evolution declining to fire.
-    const outcomes = rt.storage.sql<{ outcome: string; source: string }>`
-      SELECT outcome, source FROM turn_outcomes`;
+    // RATED turns produced. A proof drives challenges and never replies, so it
+    // rates each turn whose answer it checked with a thumb (`rateAsChecked`);
+    // a pattern is extracted only from a turn rated high that ran tools.
+    const ratings = rt.storage.sql<{ score: number; source: string }>`
+      SELECT score, source FROM turn_ratings`;
 
-    const accepted = outcomes.filter(o => o.outcome === 'accepted');
     const turnsThatRanTools = session1Results.filter(r => r.toolCalls.length > 0).length;
-    console.log(`    Graded turns: ${outcomes.map(o => `${o.outcome}/${o.source}`).join(', ')}`);
+    console.log(`    Rated turns: ${ratings.map(r => `${r.score}/${r.source}`).join(', ')}`);
     expect(turnsThatRanTools).toBeGreaterThan(0);
-    expect(accepted.length).toBe(turnsThatRanTools);
+    expect(ratings).toEqual(session1Results.map(() => ({ score: 5, source: 'thumbs' })));
 
     // WHAT THE RUN RECORDED, as content rather than as a size.
     //

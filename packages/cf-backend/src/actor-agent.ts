@@ -77,7 +77,7 @@ import {
   turnReasonForMetadata,
   workModeForTurnMetadata, authoredTurnMetadata,
   renderUnverifiedInstructions,
-  observeSystemPromptHash, steerSkillsBlock,
+  observeSystemPromptHash, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -116,7 +116,7 @@ import {
   nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   CHAT_SESSION_ID, type SessionTranscript,
   type SqlExecutor,
-  agentsActionsFor,
+  agentsActionsFor, betaSwarms,
   // Background-job system (#173: auto-background past the surface threshold)
   BackgroundJobRunner, type InvocationSurface,
   invocationBackgroundPolicy,
@@ -170,7 +170,7 @@ import {
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
-  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
+  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsForInvocation, withTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount,
   type AgentInbox,
@@ -198,7 +198,7 @@ import {
   // Once-only lifecycle for one settled response; both backends drive this state machine.
   TerminalTransitions, initTerminalEffectTable,
   terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  turnRecordTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
+  turnRecordTerminalEffect, turnLessonsTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
   RunEndReasonSchema, WorkModeSchema,
   AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
@@ -295,6 +295,8 @@ interface ComposedTurn {
   readonly rawMessages: readonly ModelMessage[];
   /** The unapproved instruction files as one message, null for none. */
   readonly instructions: string | null;
+  /** The input's `/name` activations, spliced before it for this turn only. */
+  readonly activated: string | null;
   readonly activeSkills: ActiveSkillSet | null;
   readonly operation: OperationProfile;
   /** Window for admission, compaction and pruning; records whether figures are the
@@ -454,8 +456,8 @@ function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
 }
 
 /** The `agents` actions this actor profile supports, gated by the same rule as the tool's enum. */
-function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
-  return agentsActionsFor({ swarm: {}, team: deps.team, peers: deps.peers });
+function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsToolAction[] {
+  return agentsActionsFor({ swarm: {}, swarms, team: deps.team, peers: deps.peers });
 }
 
 /**
@@ -1275,6 +1277,7 @@ export abstract class ActorAgent extends Agent<Env> {
       task_reminder: taskReminderTerminalEffect(() => this.chatLoop),
 
       turn_record: turnRecordTerminalEffect(this.orch),
+      turn_lessons: turnLessonsTerminalEffect(this.engine),
       event_drain: eventDrainTerminalEffect(this.orch),
 
       improvement_lanes: terminalEffect({
@@ -2176,9 +2179,10 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  private scaffoldCandidateModel(): Pick<ScaffoldCandidateBinding, 'rt' | 'profile' | 'bindModel' | 'modelContext'> {
+  private scaffoldCandidateModel(): Pick<ScaffoldCandidateBinding, 'rt' | 'profile' | 'bindModel' | 'modelContext' | 'compose'> {
     return {
       rt: this.rt,
+      compose: () => this.composeNextRequest(),
       profile: async () => {
         const mode = await this.preparedWorkMode();
 
@@ -2767,6 +2771,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const deps: AgentsToolDeps = {
       mode: workMode,
       swarm,
+      swarms: this._accountSwarms === true,
       budget: this.budget,
     };
 
@@ -3309,7 +3314,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // different namespaces.
     const profile = this.operationProfile()?.profile;
     const narrowing = narrowToolSurface(profile?.allowedTools);
-    const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${profile?.digest ?? ''}`;
+    const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${profile?.digest ?? ''}:${String(this._accountSwarms)}`;
 
     if (!this._codemodeFactories.has(key)) {
       this._codemodeFactories.set(key, createCodemodeToolFactory({
@@ -3385,13 +3390,17 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** `record` lets core emit the `profile_resolution` run event; this backend only picks where it goes. */
   protected async profileInputs(): Promise<ProfileAuthorityInputs> {
-    const { stub, caller } = await this.userHub();
-
     return loadProfileAuthorityInputs({
-      envelope: () => stub.getWorkspaceProfileCatalog(caller),
+      envelope: () => this.profileCatalog(),
       provider: () => this.ownedModelServices.profileProviderSnapshot(),
       record: (event) => this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event),
     });
+  }
+
+  protected async profileCatalog(): Promise<ProfileCatalogEnvelope> {
+    const { stub, caller } = await this.userHub();
+
+    return stub.getWorkspaceProfileCatalog(caller);
   }
 
   protected resolvedTurnProfile(): ResolvedTurnProfile | null {
@@ -3712,6 +3721,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The owner changed what decides a tier's model or credential: a parked refusal may answer differently. */
   protected async modelSettingsChanged(): Promise<void> {
     this.modelSettingsChanges += 1;
+    this._accountSwarms = null;
     this.invalidateModelCaches();
     await this.terminal.releaseParked();
   }
@@ -3757,7 +3767,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const profileKey = actorActiveTools(actorDeps).join(',');
     // Key includes crafted_tools quality (score filtering depends on recency) and the actor profile,
     // so an owner chat never reuses an assigned turn's upward-reporting surface.
-    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}`;
+    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}`;
 
     // Only the chat surface is cached; a scoped rollout's surface is built once per rollout.
     if (claimScope === undefined && this._cachedTools && cacheKey === this._cachedToolsKey) {
@@ -3829,6 +3839,31 @@ export abstract class ActorAgent extends Agent<Env> {
       }), { mode });
       throw err;
     }
+  }
+
+  /** "Beta: swarms" as the toolset is built; null until read and after a catalog write. */
+  private _accountSwarms: boolean | null = null;
+
+  protected async readAccountSwarms(): Promise<boolean> {
+    this._accountSwarms ??= await this.currentAccountSwarms();
+
+    return this._accountSwarms;
+  }
+
+  protected async currentAccountSwarms(): Promise<boolean> {
+    this._accountSwarms = betaSwarms((await this.profileCatalog()).catalog);
+
+    return this._accountSwarms;
+  }
+
+  private async turnToolsAndReads(body: JsonObject): Promise<{ tools: ToolSet; reads: TurnReads }> {
+    const built = await this.readAccountSwarms();
+    const tools = this.getTools();
+    const reads = await this.readTurnInputs(tools, body);
+
+    this._accountSwarms = betaSwarms(reads.profileInputs.envelope.catalog);
+
+    return { tools: this._accountSwarms === built ? tools : this.getTools(), reads };
   }
 
   /** Built lazily once per DO lifetime; heads need the owner for UserDO auth, so undefined without one. */
@@ -4011,9 +4046,8 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnOperation = null;
     // The chat view, not the raw surface: a slow `run` must detach into a background job whose
     // settle wakes a turn, and that wrap lives here.
-    const tools = this.getTools();
     const body = item.metadata ?? {};
-    const reads = await this.readTurnInputs(tools, body);
+    const { tools, reads } = await this.turnToolsAndReads(body);
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(body);
     this._turnContinuity = readTurnContinuity(body);
@@ -4050,8 +4084,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   private async composeNextRequest(): Promise<ComposedRequest> {
-    const tools = this.getTools();
-    const reads = await this.readTurnInputs(tools, {});
+    const { tools, reads } = await this.turnToolsAndReads({});
     const { messages: history } = await this.stores.history.materialize();
 
     const composed = await this.composeTurn({
@@ -4109,6 +4142,7 @@ export abstract class ActorAgent extends Agent<Env> {
       extensions: this.extensions.list(),
       dynamic: (profile, turnTools) => this.dynamicContextSnapshot(profile, turnTools, composed.memoryTail, composed.activeSkills),
       instructions: composed.instructions,
+      activated: composed.activated,
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
     };
   }
@@ -4220,6 +4254,7 @@ export abstract class ActorAgent extends Agent<Env> {
     });
 
     if (activeSetForPrompt) activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
+    const { pinned, invoked } = splitTurnSkills(activeSetForPrompt);
 
     const mcpToolNames = Object.keys(mcpTools);
 
@@ -4229,7 +4264,7 @@ export abstract class ActorAgent extends Agent<Env> {
     );
 
     const extensionToolNames = Object.keys(extensionTools);
-    const availableAgentActions = actorAgentsActions(turnActorDeps);
+    const availableAgentActions = actorAgentsActions(turnActorDeps, this._accountSwarms === true);
     // `agent` / `llm` are reachable only inside `eval`, so they must be listed here or
     // the role intersection drops them; derived from providers wired for this mode.
     const turnCodemodeProviders = this.turnCodemodeProviders();
@@ -4303,7 +4338,6 @@ export abstract class ActorAgent extends Agent<Env> {
       backend: 'cf',
       roleSection: profile.role,
       model,
-      currentDate: currentDateForPrompt(),
       // Read here, not in the builder: the builder is the byte-stable cacheable prefix and does no I/O.
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.actorHandle()),
       identity,
@@ -4311,7 +4345,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (availableSkills.lines.length > 0) promptOptions.availableSkills = availableSkills;
 
-    if (activeSetForPrompt) promptOptions.activeSkills = activeSetForPrompt;
+    if (pinned) promptOptions.activeSkills = pinned;
     promptOptions.agentsMd = agentsMd;
     const systemOverride = buildSystemPromptSync(this.rt, promptOptions);
 
@@ -4326,7 +4360,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // The reflection loop assumes the model sees its latest MEMORY.md lessons in-turn; read once
     // here since it is the one dynamic-context input needing an await.
     const memoryTail = await readMemoryTail(this.rt.memory);
-    const instructions = renderUnverifiedInstructions(activeSetForPrompt ? { agentsMd, activeSkills: activeSetForPrompt } : { agentsMd });
+    const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
 
     const submittedTools = { ...modeTools, ...effectiveTools };
     const providers = this.providerRegistry();
@@ -4355,7 +4389,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return {
       profile, profileInputs, system: systemOverride, model: languageModel, tools, activeTools: effectiveActiveTools, activeToolSurface,
-      rawMessages, instructions, window, memoryTail, countInputTokens,
+      rawMessages, instructions, activated: invoked ? activatedSkillsBlock(invoked) : null, window, memoryTail, countInputTokens,
       reasoningOptions, promptModel: model, activeSkills: activeSetForPrompt ?? null, operation,
     };
   }
@@ -4401,7 +4435,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Nothing clock-derived: a wall-clock field would re-fingerprint the block every request.
    */
   protected dynamicContextSnapshot(
-    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>, tools: ToolSet, memoryTail: string | undefined,
+    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools' | 'tier'>, tools: ToolSet, memoryTail: string | undefined,
     activeSkills: ActiveSkillSet | null = this._turnActiveSkills,
   ): DynamicContext {
     const extras = this.extraDynamicContext();
@@ -4411,6 +4445,7 @@ export abstract class ActorAgent extends Agent<Env> {
       stores: this.stores,
       profile,
       tools,
+      runtime: { backend: 'cf', model: this.promptModelContextFor(profile.tier.model), date: currentDateForPrompt() },
       turn: this.turnReason(),
       ...(activeSkills !== null && { activeSkills }),
       memoryTail,
@@ -4752,13 +4787,15 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Re-drive an evicted background job from its checkpoint (B6) over the raw surface, so a
    *  re-drive can't detach a second job. Legacy `fork` and 'think' rows map to the search path. */
-  protected resumeBackgroundJob(
+  protected async resumeBackgroundJob(
     kind: string,
     input: JsonValue,
     mode: WorkMode,
     signal: AbortSignal,
   ): Promise<JsonValue | undefined> {
-    return resumeBackgroundJob({
+    await this.currentAccountSwarms();
+
+    return await resumeBackgroundJob({
       rawTools: (resumeMode) => this.getRawToolsForWorkMode(resumeMode),
       kind, input, mode, signal,
     });

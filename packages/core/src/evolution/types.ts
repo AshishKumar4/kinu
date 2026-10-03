@@ -4,6 +4,7 @@ import type { Usage } from '../usage';
 import type { JsonObject, JsonValue } from '../utils/json';
 import type { MissionGovernor } from '../mission-budget';
 import type { ToolOutcome } from '../tools/outcome';
+import type { Struggle } from './struggles';
 
 export interface ToolCallRecord {
   toolCallId?: string;
@@ -35,6 +36,10 @@ export interface CompletedTurn {
   /** Mission labels stamped when the turn ended. Carried by the turn because a deferred
      *  review may run with no active scope. Absent = ungoverned; a review must never invent one. */
   missionLabels?: readonly string[];
+  /** Where the turn fought its tools, from its steering detector; absent on turns recorded before. */
+  struggles?: readonly Struggle[];
+  /** The tool lessons its steps listed, at the revision each saw; only these does the turn score. */
+  shownLessons?: readonly { readonly id: string; readonly revision: number }[];
 }
 
 export interface CompletedSession {
@@ -45,7 +50,7 @@ export interface CompletedSession {
 }
 
 export interface EvolutionEvent {
-  type: 'reflection' | 'craft_discovered' | 'scaffold_proposed' | 'consolidation' | 'turn_complete' | 'replay_eval' | 'changelog_digest' | 'experience_import' | 'advisor_note';
+  type: 'reflection' | 'craft_discovered' | 'scaffold_proposed' | 'consolidation' | 'turn_complete' | 'changelog_digest' | 'experience_import' | 'advisor_note';
   message: string;
   data?: unknown;
 }
@@ -81,8 +86,6 @@ export interface EvolutionConfig {
      *  inside a Durable Object; other backends must supply a real transaction. */
   transaction?: (body: () => void) => void;
   lifetimeEvolutionInterval: number;
-  /** Re-run a task against the current config. Absent = periodic replay eval is skipped. */
-  replayTaskRunner?: (task: string) => Promise<string>;
   shadowTrialQueue?: (turn: ShadowTrialTurn, plan: ShadowTrialPlan) => ShadowTrialQueueOutcome;
   /** Absent = this host runs no trials; the durable queue lets another host run them. */
   shadowTrialRunner?: () => Promise<ShadowTrialDrain>;

@@ -994,7 +994,6 @@ describe('LocalAgentHost', () => {
         failures: [],
       }),
       modelInfo: async () => null,
-      judgeCandidates: async () => [],
       getAuth: async () => null,
       credentialFor: async () => null,
       countInputTokens: async () => ({ kind: 'unsupported', provider: 'fake', reason: 'no endpoint behind the fake' }),
@@ -1242,7 +1241,7 @@ describe('LocalAgentHost', () => {
     expect(requests[0]).not.toContain(note);
     expect(requests.some((prompt) => prompt.includes(note))).toBe(true);
     expect((await userMessages(dbPath, actorId)).some((message) => message.includes(note))).toBe(true);
-    expect(evolutionRows(dbPath, actorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
+    expect(evolutionRows(dbPath, actorId)).toEqual({ window: 0, ratings: [], lessons: [] });
     const db = new Database(dbPath, { readonly: true });
 
     try {
@@ -1303,7 +1302,7 @@ describe('LocalAgentHost', () => {
     await asking.host.close();
     const askActorId = childActorId(askDb, asked);
     expect(actorLifecycle(askDb, askActorId)).toBe('retained');
-    expect(evolutionRows(askDb, askActorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
+    expect(evolutionRows(askDb, askActorId)).toEqual({ window: 0, ratings: [], lessons: [] });
     expect(askChild.reflections()).toBe(0);
 
     const hire = makeRoots();
@@ -1327,7 +1326,7 @@ describe('LocalAgentHost', () => {
     await hiring.host.close();
 
     // Matches cf, where a subordinate runs `runHeadInference` and never reaches `recordTurn`.
-    expect(evolutionRows(hireDb, childActorId(hireDb, hired.name))).toEqual({ window: 0, outcomes: [], lessons: [] });
+    expect(evolutionRows(hireDb, childActorId(hireDb, hired.name))).toEqual({ window: 0, ratings: [], lessons: [] });
     expect(hireChild.reflections()).toBe(0);
   });
 
@@ -1357,7 +1356,7 @@ describe('LocalAgentHost', () => {
     await host.close();
     expect(report).toMatchObject({ status: 'completed', errorMessage: undefined });
     expect(reviews).toEqual([false]);
-    expect(evolutionRows(dbPath, seat.actor.handle.actorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
+    expect(evolutionRows(dbPath, seat.actor.handle.actorId)).toEqual({ window: 0, ratings: [], lessons: [] });
   });
 
   /** A progress note sets the durable relay's "spoke this turn" bit, which must not suppress the terminal answer. */
@@ -2068,8 +2067,8 @@ function evolutionRows(dbPath: string, actorId: string) {
   try {
     return {
       window: db.query<{ c: number }, [string]>('SELECT COUNT(*) AS c FROM completed_turns WHERE actor_id = ?').get(actorId)?.c ?? 0,
-      outcomes: db.query<{ outcome: string; source: string }, [string]>(
-        'SELECT outcome, source FROM turn_outcomes WHERE actor_id = ? ORDER BY created_at',
+      ratings: db.query<{ score: number; source: string }, [string]>(
+        'SELECT score, source FROM turn_ratings WHERE actor_id = ? ORDER BY created_at',
       ).all(actorId),
       lessons: db.query<{ source: string; status: string }, [string]>(
         'SELECT source, status FROM lessons WHERE actor_id = ? ORDER BY created_at',

@@ -11,7 +11,6 @@ export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 /** What a read-only token must not reach is 'interactive' on every transport, never approximated as a read. */
 export const AGENT_RPC_ACCESS = {
   getAgentStatus: 'workspace.read',
-  getAlignmentConvergence: 'workspace.read',
   getChatHistoryPage: 'workspace.read',
   getExecutors: 'workspace.read',
   getGepaRun: 'workspace.read',
@@ -25,8 +24,7 @@ export const AGENT_RPC_ACCESS = {
   getMctsSearchRuns: 'workspace.read',
   getMctsTree: 'workspace.read',
   getMemoryContent: 'workspace.read',
-  getOutcomeCalibration: 'workspace.read',
-  getOutcomeEnsemble: 'workspace.read',
+  getQuality: 'workspace.read',
   getRunTimeline: 'workspace.read',
   getSearchTree: 'workspace.read',
   getActivePlanReview: 'workspace.read',
@@ -47,7 +45,6 @@ export const AGENT_RPC_ACCESS = {
   listRecordObjectives: 'workspace.read',
   readRecordCell: 'workspace.read',
   listTriggers: 'workspace.read',
-  sampleOutcomeLabeling: 'workspace.read',
   searchMemoryHybrid: 'workspace.read',
 
   cancelCurrentWork: 'workspace.exec',
@@ -113,7 +110,6 @@ export const AGENT_RPC_ACCESS = {
   getExposedPorts: 'interactive',
   getFacts: 'interactive',
   getEvolutionConfig: 'interactive',
-  getReplayEvals: 'interactive',
   // Raw unredacted event payloads; a workspace.read token gets only the read models.
   getRunEvents: 'interactive',
   getTurnRequests: 'interactive',
@@ -137,7 +133,6 @@ export const AGENT_RPC_ACCESS = {
   readExecutorFile: 'interactive',
   renameExecutorFile: 'interactive',
   deleteExecutorFile: 'interactive',
-  recordOutcomeLabeling: 'interactive',
   resetWorkspaceBaseline: 'interactive',
   restoreWorkspaceBaseline: 'interactive',
   getChangeNotes: 'interactive',
@@ -148,7 +143,6 @@ export const AGENT_RPC_ACCESS = {
   retryBackgroundJob: 'interactive',
   revertChangelogEntry: 'interactive',
   revokeShellApprovalGrants: 'interactive',
-  runOutcomeEnsemble: 'interactive',
   runScaffoldGepaOptimization: 'interactive',
   setAlwaysActiveSkills: 'interactive',
   setCurriculumTaskStatus: 'interactive',

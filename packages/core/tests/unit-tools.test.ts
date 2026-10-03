@@ -160,7 +160,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         codemode: nodeCodemodeBuilder,
       facts: stubFacts,
       webSearch: stubWebSearch,
-      agents: { mode: 'build', team: stubTeam, peers: stubPeers },
+      agents: { mode: 'build', swarms: true, team: stubTeam, peers: stubPeers },
       report: stubReport,
       // Wired over the same SQL the backends use, not a stand-in that records nothing.
       effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },

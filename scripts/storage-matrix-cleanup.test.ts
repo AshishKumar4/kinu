@@ -1,5 +1,5 @@
 import { scratchDir } from '../packages/test-utils/src/scratch';
-import { present } from '@kinu.run/test-utils';
+import { spawnTest, present } from '@kinu.run/test-utils'
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, writeFileSync } from 'node:fs';
 
@@ -271,7 +271,7 @@ describe('a fresh driver finishes what a killed one started', () => {
 async function holdRun(root: string, runId: string): Promise<() => Promise<void>> {
   const cleanup = join(import.meta.dir, 'fixtures/storage-matrix/cleanup.ts');
 
-  const child = Bun.spawn([process.execPath, '-e', `
+  const child = spawnTest([process.execPath, '-e', `
     const { createManifest, writeManifest } = await import(${JSON.stringify(cleanup)});
     writeManifest(${JSON.stringify(root)}, createManifest(${JSON.stringify(runId)}, [
       { kind: 'worker', name: 'worker-of-the-running-bench' },

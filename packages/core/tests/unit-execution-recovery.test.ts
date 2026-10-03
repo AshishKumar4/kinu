@@ -15,8 +15,8 @@ import {
   type RecoveryFinding,
 } from '../src/evolution/recovery';
 import {
-  corroborateLessonsForTurn, initTurnOutcomeTables, listLessons,
-} from '../src/evolution/outcomes';
+  corroborateLessonsForTurn, initLessonTables, listLessons,
+} from '../src/evolution/lessons';
 import { composePrepareStep } from '../src/prompting/prepare-step';
 import {
   DynamicContextLedger, agentDynamicContext, renderDynamicContextBlock,
@@ -45,7 +45,7 @@ function ledgerDb() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initTurnOutcomeTables(execRaw);
+  initLessonTables(execRaw);
   const actors = createTestActors(sql, execRaw);
 
   return { sql, db, actor: actors.main, sibling: (name: string) => actors.sibling(name) };
@@ -183,6 +183,7 @@ describe('the loop, through the production seams', () => {
       factsBlock: undefined,
       memoryTail: undefined,
       recoveryFindings: injectable,
+      toolLessons: [],
       executors: [],
       runningJobs: { items: [], total: 0 },
       openTasks: { items: [], total: 0 },
@@ -215,6 +216,7 @@ describe('the loop, through the production seams', () => {
           factsBlock: undefined,
           memoryTail: undefined,
           recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),
+          toolLessons: [],
           executors: [],
           runningJobs: { items: [], total: 0 },
           openTasks: { items: [], total: 0 },

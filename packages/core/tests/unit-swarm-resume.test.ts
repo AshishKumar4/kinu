@@ -759,7 +759,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const notified: string[] = [];
 
     const deps: AgentsToolDeps = {
-      mode: 'build',
+      mode: 'build', swarms: true,
       swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
       budget: governor,
     };
@@ -913,7 +913,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const { fiber, settled } = inlineFiber();
 
     const agents = createAgentsTool({
-      mode: 'build', swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
+      mode: 'build', swarms: true, swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
     });
 
     const runner = new BackgroundJobRunner({
@@ -1026,7 +1026,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
 
     // A second host: an eviction is what destroys the first one's admitted turns.
     const agents = createAgentsTool({
-      mode: 'build', swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
+      mode: 'build', swarms: true, swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
     });
 
     const runner = new BackgroundJobRunner({

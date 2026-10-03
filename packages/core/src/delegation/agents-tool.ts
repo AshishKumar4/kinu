@@ -42,7 +42,7 @@ import {
   type SwarmPreset,
 } from '../strategy/swarm';
 import {
-  TIER_IDS, TierIdSchema, tierIdsOf,
+  TierIdSchema, tierIdsOf,
   effectiveRoleCatalog,
   resolveTurnProfile,
   type ProfileAuthorityInputs, type ProfileProvenance,
@@ -59,6 +59,8 @@ import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from '../s
 import type { HostedNodeSeat, NodeCodemode } from '../strategy/node-agent';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { WorkMode } from '../types/turn';
+import { SWARMS_BETA_SETTING } from '../types/profile';
+import type { DelegationChoices } from '../types/dynamic-context';
 import { nanoid } from '../utils/nanoid';
 import {
   diagnostics, KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, type TurnTrace,
@@ -311,8 +313,10 @@ export interface AgentsToolDeps {
   /** Trusted, host-owned turn mode; never in the model schema, so a child cannot opt out of a Plan
    *  turn's mutation bar. */
   mode: WorkMode;
-  /** The exploration substrate; its presence puts `swarm` in this actor's enum. */
+  /** The exploration substrate; with `swarms` it puts `swarm` in this actor's enum. */
   swarm?: AgentsSwarmDeps;
+  /** The account's `SWARMS_BETA_SETTING` the toolset was built under: off withholds the substrate. */
+  swarms: boolean;
   team?: TeamToolDeps;
   /** Cross-workspace peer messaging, orchestrator only. Never subordinates: `hire scope=workspace`
    *  mints a fresh tree root and would escape the depth cap. */
@@ -333,12 +337,12 @@ interface UnifiedRosterResult {
 
 /** Actions this deps set supports: the one gate shared by the tool schema, the prompt's Delegation
  *  section and `agents.*` codemode. Presence-typed so prompt assembly need not build the substrate. */
-export function agentsActionsFor(deps: { swarm?: object; team?: object; peers?: object }): AgentsToolAction[] {
+export function agentsActionsFor(deps: { swarm?: object; swarms: boolean; team?: object; peers?: object }): AgentsToolAction[] {
   const converse = deps.team !== undefined || deps.peers !== undefined;
 
   const present = {
     // A search needs exactly the exploration substrate, so it has no deps group of its own.
-    swarm: deps.swarm !== undefined,
+    swarm: deps.swarm !== undefined && deps.swarms,
     hire: converse,
     msg: converse,
     list: converse,
@@ -348,8 +352,14 @@ export function agentsActionsFor(deps: { swarm?: object; team?: object; peers?: 
   return AGENTS_TOOL_ACTIONS.filter((action) => present[action]);
 }
 
+/** The deps with the substrate withheld while the account's swarms are off, so every rendering omits `swarm`. */
+function offered(deps: AgentsToolDeps): AgentsToolDeps {
+  return deps.swarms ? deps : { ...deps, swarm: undefined };
+}
+
 /** The spec's notes an actor's wiring can act on: a description never promises an unwired action. */
-export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
+export function renderAgentsToolDescription(wired: AgentsToolDeps): string {
+  const deps = offered(wired);
   const converse = deps.team !== undefined || deps.peers !== undefined;
 
   const notes = [
@@ -1076,11 +1086,10 @@ type SchemaPropertiesFor<Action extends AgentsToolAction> =
 
 type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
 
-/** The roles this actor may name, `id: description`; empty with no catalog. */
-function roleSummaries(deps: AgentsToolDeps): string {
-  const ctx = deps.profile?.();
-
-  if (!ctx) return '';
+/** The roles and tiers this actor's `role` and `tier` take, for its step context: in the schema they would make each
+ *  account's tool bytes its own. Null with no catalog. */
+export function delegationChoices(ctx: AgentsProfileContext | null): DelegationChoices | null {
+  if (!ctx) return null;
   const roles = effectiveRoleCatalog(ctx.envelope.catalog);
   const callerSpawns = roles[ctx.roleId]?.spawns;
 
@@ -1092,16 +1101,10 @@ function roleSummaries(deps: AgentsToolDeps): string {
     return callerSpawns.includes(id);
   };
 
-  return Object.entries(roles)
-    .filter(([id]) => allowed(id))
-    .map(([id, role]) => `${id}: ${role.description}`)
-    .join('; ');
-}
-
-function tierIds(deps: AgentsToolDeps): TierId[] {
-  const ctx = deps.profile?.();
-
-  return ctx ? tierIdsOf(ctx.envelope.catalog) : [...TIER_IDS];
+  return {
+    roles: Object.entries(roles).filter(([id]) => allowed(id)).map(([id, role]) => `${id}: ${role.description}`),
+    tiers: tierIdsOf(ctx.envelope.catalog),
+  };
 }
 
 /** Registered instruments with their `spec` keys, from `VERIFIER_KIND_DOC`, so the schema matches `swarmValidity`. */
@@ -1116,11 +1119,12 @@ function roleProperties(deps: AgentsToolDeps): Pick<SchemaPropertiesFor<'swarm'>
     ...(deps.swarm ? ['for swarm, the one every node runs under (default: yours)'] : []),
   ].join('; ');
 
-  const roles = roleSummaries(deps);
-
   return {
-    role: { type: 'string', maxLength: 64, description: `Catalog role id: ${uses}.${roles ? ` Roles: ${roles}.` : ''}` },
-    tier: { type: 'string', enum: tierIds(deps), description: 'Inference tier; default: the role\'s. A lifetime:"task" hire refuses it.' },
+    role: { type: 'string', maxLength: 64, description: `Catalog role id: ${uses}. Your step context lists the roles.` },
+    tier: {
+      type: 'string',
+      description: 'Inference tier id, one your step context lists; default: the role\'s. A lifetime:"task" hire refuses it.',
+    },
   };
 }
 
@@ -1239,9 +1243,21 @@ function requestedTopic(input: AgentsToolInput): { topic: string } {
     : { topic };
 }
 
+/** The refusal of a `swarm` the account's beta withholds; null when the beta is not what stops it. */
+function withheldBeta(wired: AgentsToolDeps, action: AgentsToolInput['action']): string | null {
+  if (action !== 'swarm' || wired.swarm === undefined || wired.swarms) return null;
+
+  return `swarm is a beta this account has not turned on: "${SWARMS_BETA_SETTING}" in Settings, Beta`;
+}
+
 /** Whether this actor may run the action now: unwired is `unsupported`, a durable roster change under
- *  Plan is `denied`. `hire` is decided in its arm, since Plan permits a `task` hire. */
-function actionAdmission(actions: readonly AgentsToolInput['action'][], mode: WorkMode, action: AgentsToolInput['action']): Refusal | null {
+ *  Plan is `denied`, as is an action the account's beta withholds. `hire` is decided in its arm, since Plan
+ *  permits a `task` hire. */
+function actionAdmission(
+  actions: readonly AgentsToolInput['action'][], mode: WorkMode, action: AgentsToolInput['action'], beta: string | null,
+): Refusal | null {
+  if (beta !== null) return { reason: 'denied', error: beta };
+
   if (!actions.includes(action)) {
     return { reason: 'unsupported', error: `action "${action}" is not available here. Available: ${actions.join(', ')}` };
   }
@@ -1514,7 +1530,8 @@ export async function dispatchAgentsAction(
   input: AgentsToolInput,
   toolOptions?: AgentsToolCallOptions,
 ): Promise<object> {
-  const actions = agentsActionsFor(deps);
+  // A withheld swarm is refused at admission, so its arm never reads the substrate.
+  const actions = agentsActionsFor(offered(deps));
   const mode = inWorkMode(deps.mode, currentWorkMode);
   const team = deps.team;
   const peers = deps.peers;
@@ -1527,7 +1544,7 @@ export async function dispatchAgentsAction(
   };
 
   // An action this actor does not wire: `unsupported` (obs/error.ts), classified so it counts as refused.
-  const admission = actionAdmission(actions, mode, input.action);
+  const admission = actionAdmission(actions, mode, input.action, withheldBeta(deps, input.action));
 
   if (admission) throw new KinuError(admission.reason, admission.error);
 
@@ -1668,7 +1685,8 @@ function nestingRoom(delegation: DelegationBudget): string {
 
 const DELEGATING_ACTIONS: readonly AgentsToolAction[] = ['swarm', 'hire', 'msg'];
 
-export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
+export function createAgentsTool(wired: AgentsToolDeps): ToolSet[string] {
+  const deps = offered(wired);
   const actions = agentsActionsFor(deps);
   const team = deps.team;
 
@@ -1698,13 +1716,13 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
 
       const trace = toolOptions?.trace;
 
-      if (trace === undefined || !DELEGATING_ACTIONS.includes(parsed.action)) return dispatchAgentsAction(deps, parsed, toolOptions);
+      if (trace === undefined || !DELEGATING_ACTIONS.includes(parsed.action)) return dispatchAgentsAction(wired, parsed, toolOptions);
 
       const timer = trace.begin('turn.delegation');
       const action = parsed.action;
       const stamp = (span: ScopedSpan): void => { span.setAttribute('kinu.delegation.action', action); };
 
-      return endWhenSettled(dispatchAgentsAction(deps, parsed, toolOptions), timer, {
+      return endWhenSettled(dispatchAgentsAction(wired, parsed, toolOptions), timer, {
         stamp,
         failed: (span) => { stamp(span); span.fail(new KinuError('io', 'the delegation failed')); },
       });

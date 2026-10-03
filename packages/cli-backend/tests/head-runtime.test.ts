@@ -9,14 +9,13 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture, MergeOutputSchema,
-  MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions, explorationActorKey, headAgentName, defaultLoopOrigin,
+  MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions, explorationActorKey, defaultLoopOrigin,
   initWorkspaceSchema, RunEventRecorder, startBranchHead, workspaceSpend, createAgentStores, BackgroundJobRunner,
   CONFINED_BACKGROUNDABLE_TOOLS,
   type ReasoningEffort,
   type HeadInput, type WebSearchProvider, type JsonObject, type WriteObserver,
   type ModelCallReport, type ModelOperationEvent,
-  type HeadStreamFrame, type ExecutionRouter, type AgentRuntime,
-} from '@kinu.run/core';
+  type HeadStreamFrame, type ExecutionRouter, type AgentRuntime, actorHomeName } from '@kinu.run/core';
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
   mergePolicyProfile, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, createTestActorsOver,
@@ -681,7 +680,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
     };
 
     const runtime = createCLIHeadRuntime(headDeps(
-      scratchProbeModel(barrier(2, () => {}), (id) => `/home/${headAgentName(key(id))}/note.txt`),
+      scratchProbeModel(barrier(2, () => {}), (id) => `/home/${actorHomeName({ origin: 'swarm', storageKey: key(id) })}/note.txt`),
       { journal: () => journal, parentRuntime: parent },
     ));
 

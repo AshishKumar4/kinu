@@ -52,19 +52,19 @@ import { TierIdSchema,
   createTimerTrigger, cancelTrigger, fireDueTriggers,
   EvolutionEngine,
   readMemoryTail,
-  agentsActionsFor,
-  facetHomeProvisioner, facetHomeReleaser, headAgentName, explorationActorKey,
+  agentsActionsFor, betaSwarms, type ProfileCatalog,
+  facetHomeProvisioner, facetHomeReleaser, actorHomeName, explorationActorKey,
   type HeadSeat, type HostedNodeSeat, type NodeIdentity, type ModelPricing,
   type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
-  resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills,
+  resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolSetBySkills,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial, readMission,
-  branchesTerminalEffect, turnRecordTerminalEffect,
+  branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
@@ -92,11 +92,12 @@ import { TierIdSchema,
   renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
+  type RuntimeFacts,
   initWorkspaceSchema, initPendingSendTables, PendingSendStore,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldCaptureText, runScaffoldGepaOptimization,
+  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldGepaOptimization,
   queueTurnShadowTrial, runQueuedShadowTrials,
   type GepaOptimizationResult, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
@@ -225,7 +226,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
-    replayTaskRunner: (task) => input.session().runReplayTask(task),
     shadowTrialQueue: (turn, opts) => input.session().queueShadowTrial(turn, opts),
     // A resolved gate swaps the live scaffold, so model-bound state is dropped.
     shadowTrialRunner: () => input.session().runShadowTrials(),
@@ -377,6 +377,8 @@ export class LocalAgentSession {
   private cachedModelSpec: string | null = null;
   private tools: ToolSet = {};
   private readonly toolSets: Partial<Record<WorkMode, ActorToolsets>> = {};
+  /** The account's "Beta: swarms" the tool sets are built under; a turn whose catalog moved it rebuilds them. */
+  private accountSwarms = false;
   private readonly engine: EvolutionEngine;
   private readonly actorSession: ActorSession;
   private readonly chat: ChatSession;
@@ -1477,13 +1479,16 @@ export class LocalAgentSession {
 
   /** Re-drive an interrupted background job through core's shared resume gate over the raw surface,
    *  so it cannot detach a second job. Legacy `fork`/'think' rows map onto search. */
-  private resumeBackgroundJob(
+  private async resumeBackgroundJob(
     kind: string,
     input: { value: unknown },
     mode: WorkMode,
     signal: AbortSignal,
   ) {
-    return resumeBackgroundJob({
+    // A re-drive can come before any turn: the setting is read first, as a turn reads it.
+    this.followAccountSwarms((await this.profiles().envelope()).catalog);
+
+    return await resumeBackgroundJob({
       rawTools: (resumeMode) => {
         this.ensureModelState();
         const surface = this.toolSets[resumeMode];
@@ -1647,6 +1652,9 @@ export class LocalAgentSession {
 
   private async resolveTurnProfile(item: TurnAsked): Promise<ResolvedLocalTurn> {
     const profileInputs = await this.profiles().inputs();
+
+    this.followAccountSwarms(profileInputs.envelope.catalog);
+
     const activeRoleId = this.getActiveRoleId();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     const { available: availableSkills, activeSkills } = await this.resolveTurnSkills(item.text, roleSkills);
@@ -1713,7 +1721,7 @@ export class LocalAgentSession {
     const memoryTail = await readMemoryTail(this.rt.memory);
 
     // Re-statted each turn; only files fitting the model window are read, each classified by owner approval.
-    const agentsMd = discoverAgentsMd(this.cwd, this.modelCatalog.window(), this.instructionTrust);
+    const agentsMd = await discoverAgentsMd(this.cwd, this.modelCatalog.window(), this.instructionTrust);
 
     // agentStateVfs is the identity tree when it differs; a missing SOUL.md renders the default.
     const soul = await currentSoul(this.rt);
@@ -1728,8 +1736,6 @@ export class LocalAgentSession {
       backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
       roleSection: profile.role,
       model: { id: turnSpec },
-      cwd: this.cwd,
-      currentDate: currentDateForPrompt(),
       // Read here: the builder is the byte-stable cacheable prefix and does no I/O.
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.rt.actor),
       identity: this.promptIdentity(),
@@ -1739,13 +1745,15 @@ export class LocalAgentSession {
 
     if (availableSkills.lines.length > 0) systemPromptOptions.availableSkills = availableSkills;
 
-    if (activeSkills) systemPromptOptions.activeSkills = activeSkills;
+    const { pinned, invoked } = splitTurnSkills(activeSkills);
+
+    if (pinned) systemPromptOptions.activeSkills = pinned;
 
     if (soul) systemPromptOptions.soulOverride = soul;
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     // Why the turn runs and the unapproved instruction files ride the dynamic-context ledger, out of the cached
     // prefix: provenance flips when a background job lands.
-    const instructions = renderUnverifiedInstructions(activeSkills ? { agentsMd, activeSkills } : { agentsMd });
+    const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
     const cache = this.cacheIdentity(turnSpec);
     // Normalized spelling: `parseModelSpec` refuses a bare tier id without a slash.
     const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, parseModelSpec(turnSpec).provider);
@@ -1806,6 +1814,7 @@ export class LocalAgentSession {
         extensions: [this.compactionExtension],
         dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools, { turn, activeSkills }),
         instructions,
+        activated: invoked ? activatedSkillsBlock(invoked) : null,
         scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       },
       profile,
@@ -1964,6 +1973,7 @@ export class LocalAgentSession {
       task_reminder: taskReminderTerminalEffect(() => this.chat),
 
       turn_record: turnRecordTerminalEffect(this.actorSession.orchestrator),
+      turn_lessons: turnLessonsTerminalEffect(this.engine),
       event_drain: eventDrainTerminalEffect(this.actorSession.orchestrator),
 
       // The CLI's lanes run elsewhere (evolution on its own queue); the row keeps the roster whole.
@@ -2249,6 +2259,7 @@ export class LocalAgentSession {
       config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         rt: this.rt,
+        compose: () => this.composeNextRequest(),
         profile: () => this.routingProfile([...Object.keys(this.tools), ...codemodeCapabilitiesFor(this.codemodeProviders('build'))]),
         bindModel: spec => this.modelResolver?.resolveModel(spec, this.conversation()) ?? this.defaultModel('scaffold model lane'),
         modelContext: spec => this.modelCatalog.contextFor(spec),
@@ -2357,9 +2368,14 @@ export class LocalAgentSession {
     return createScaffoldHistory(async () => this.actorSession.history);
   }
 
-  /** Replay-eval re-run: the live scaffold, as cf runs it (core's `runScaffoldCaptureText`). */
-  runReplayTask(task: string): Promise<string> {
-    return runScaffoldCaptureText(this.scaffoldControl, task);
+  /** The model as the turn names it, after the same normalisation the request uses. */
+  private runtimeFacts(profile: ResolvedTurnProfile, cwd?: string): RuntimeFacts {
+    return {
+      backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
+      model: { id: this.profiles().normalizeSpec(profile.tier.model) },
+      cwd,
+      date: currentDateForPrompt(),
+    };
   }
 
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
@@ -2373,6 +2389,7 @@ export class LocalAgentSession {
       stores: this.stores,
       profile,
       tools,
+      runtime: this.runtimeFacts(profile, this.cwd),
       turn: turnOf.turn,
       ...(turnOf.activeSkills !== undefined && { activeSkills: turnOf.activeSkills }),
       memoryTail,
@@ -2520,7 +2537,7 @@ export class LocalAgentSession {
         : () => async (node) => {
           const actor = registerLocalNode(this.rt.actor, node);
 
-          return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(headAgentName(actor.storageKey));
+          return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(actorHomeName({ origin: 'swarm', storageKey: actor.storageKey }));
         },
       // Wired from the same runtime as the host, so the uid and filesystem cannot come from different workspaces.
       runtimeForNodeWorkspace: nodeRuntime === undefined
@@ -2590,7 +2607,7 @@ export class LocalAgentSession {
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {
     const swarm = this.buildAgentsSwarmDeps();
-    const base: AgentsToolDeps = { mode, swarm, budget: this.budget };
+    const base: AgentsToolDeps = { mode, swarm, swarms: this.accountSwarms, budget: this.budget };
     base.profile = () => agentsProfileContext(this.actorSession.profile, this.actorSession.profileInputs);
 
     if (this.teamDeps) base.team = this.teamDeps;
@@ -2811,7 +2828,7 @@ export class LocalAgentSession {
         this.loopOrigins.delete(binding.reference.actorId);
         this.actorWrites.delete(binding.reference.actorId);
         await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
-          const agentName = headAgentName(binding.storageKey);
+          const agentName = actorHomeName(binding);
 
           if (this.rt.cwd) cleanupFacetCwdScratch(this.rt.cwd, agentName);
           else if (this.rt.nodeHome) await facetHomeReleaser(this.rt.nodeHome())(agentName);
@@ -2910,6 +2927,7 @@ export class LocalAgentSession {
       stores: actor.stores,
       profile,
       tools,
+      runtime: this.runtimeFacts(profile),
       memoryTail: undefined,
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => [],
@@ -2919,7 +2937,18 @@ export class LocalAgentSession {
 
   private rebuildModelBoundState(model: LanguageModel): void {
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(() => model));
+    this.buildToolSets();
+  }
 
+  /** Rebuilds the tool sets when the account's catalog moved "Beta: swarms"; unbuilt, they are built with it. */
+  private followAccountSwarms(catalog: ProfileCatalog): void {
+    if (betaSwarms(catalog) === this.accountSwarms) return;
+    this.accountSwarms = !this.accountSwarms;
+
+    if (this.toolSets.build !== undefined) this.buildToolSets();
+  }
+
+  private buildToolSets(): void {
     for (const mode of ['build', 'plan'] as const) {
       this.toolSets[mode] = buildActorTools(this.actorToolsetDeps(
         mode,

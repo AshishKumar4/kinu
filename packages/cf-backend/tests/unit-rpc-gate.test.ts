@@ -227,18 +227,9 @@ describe('a connect ticket names its workspace', () => {
   });
 });
 
-describe('outcome calibration and judging rows', () => {
-  test('the calibration flow is reachable at the class each step needs', () => {
-    expect(AGENT_RPC_ACCESS.getOutcomeCalibration).toBe('workspace.read');
-    expect(AGENT_RPC_ACCESS.sampleOutcomeLabeling).toBe('workspace.read');
-    expect(AGENT_RPC_ACCESS.recordOutcomeLabeling).toBe('interactive');
-    expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame('recordOutcomeLabeling'))).not.toBeNull();
-  });
-
-  test('reading the judge panel is a read; running it is not', () => {
-    // It spends the owner's model budget and writes verdicts, so it sits with the mutations.
-    expect(AGENT_RPC_ACCESS.getOutcomeEnsemble).toBe('workspace.read');
-    expect(AGENT_RPC_ACCESS.runOutcomeEnsemble).toBe('interactive');
-    expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame('runOutcomeEnsemble'))).not.toBeNull();
+describe('the quality series', () => {
+  test('is a read', () => {
+    expect(AGENT_RPC_ACCESS.getQuality).toBe('workspace.read');
+    expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame('getQuality'))).toBeNull();
   });
 });

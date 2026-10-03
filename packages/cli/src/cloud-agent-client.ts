@@ -1,6 +1,7 @@
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   ADVISOR_SEVERITIES,
+  CHANGELOG_ENTRY_KINDS,
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
   PlanReviewSchema,
@@ -124,7 +125,7 @@ const ChangelogRevertActionSchema = v.variant('type', [
 
 const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() => v.object({
   id: v.string(),
-  kind: v.picklist(['scaffold', 'tool', 'fact', 'gepa', 'replay', 'outcomes']),
+  kind: v.picklist(CHANGELOG_ENTRY_KINDS),
   at: v.number(),
   summary: v.string(),
   evidence: v.string(),

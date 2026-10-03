@@ -3,17 +3,12 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
-import { Effect } from 'effect';
 import { synthesizeToolFallback } from './utils/evidence-window';
-import { KinuError, settleSync } from './obs/index';
 import type { LLM } from './types/primitives';
 import type { ModelCallSpend } from './events/model-call';
 import { generateReported, streamTextReported } from './providers/model-invocation';
-import { parseModelSpec, type ProviderWaitInfo } from './providers/types';
+import type { ProviderWaitInfo } from './providers/types';
 import { withRateLimitRetry } from './providers/rate-limit-retry';
-import {
-  reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE, type InferenceStage,
-} from './providers/effort';
 
 export interface LLMProviderConfig {
   name: string;
@@ -43,46 +38,6 @@ export function createVercelAILLM(config: LLMProviderConfig, spend: ModelCallSpe
   };
 }
 
-/**
- * A completion-only `LLM` over one resolved model, for offline raters (judges, classifiers); the reasoning knob
- * follows the spec's provider. `stream` throws so a wrong-seam caller fails loudly rather than getting empty text.
- */
-export function createCompletionLLM(opts: {
-  model: LanguageModel;
-  spec: string;
-  stage: InferenceStage;
-  /** Where this model's calls are reported, and as whose spend; only the caller knows the label. */
-  spend: ModelCallSpend;
-}): LLM {
-  const providerOptions = reasoningEffortOptions(
-    REASONING_EFFORT_FOR_STAGE[opts.stage],
-    parseModelSpec(opts.spec).provider,
-  );
-
-  return {
-    stream() {
-      return settleSync(Effect.fail(new KinuError('unsupported', `createCompletionLLM(${opts.spec}) has no streaming path`)));
-    },
-    // `spec` is what the catalog prices; the row keeps the `modelId` the provider says served it beside it.
-    complete: async (prompt) => (await generateReported(
-      { model: opts.model, prompt, providerOptions },
-      { spend: opts.spend, spec: opts.spec },
-    )).text.trim(),
-  };
-}
-
-/** Counted in characters because the `LLM` interface returns text, not usage. */
-export interface LLMUsage {
-  calls: number;
-  promptChars: number;
-  responseChars: number;
-}
-
-export interface MeteredLLM {
-  llm: LLM;
-  usage: LLMUsage;
-}
-
 /** A blunt chars-per-token average, used only to estimate. */
 export const CHARS_PER_TOKEN = 4;
 
@@ -101,26 +56,6 @@ export function admissionBytes(tokens: number): number {
 
 export function estimateUsdCost(tokens: number): number {
   return (tokens / 1000) * BLENDED_USD_PER_1K_TOKENS;
-}
-
-/** An `LLM` that counts what goes through it; `usage` is the live counter, read after the pass. */
-export function meterLLM(llm: LLM): MeteredLLM {
-  const usage: LLMUsage = { calls: 0, promptChars: 0, responseChars: 0 };
-
-  return {
-    usage,
-    llm: {
-      stream: (opts) => llm.stream(opts),
-      async complete(prompt) {
-        usage.calls++;
-        usage.promptChars += prompt.length;
-        const text = await llm.complete(prompt);
-        usage.responseChars += text.length;
-
-        return text;
-      },
-    },
-  };
 }
 
 /**

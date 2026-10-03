@@ -48,8 +48,8 @@ function linesFor(logger: { emitted: readonly RecordedLog[] }, event: string): r
   return logger.emitted.filter((line) => line.event === event);
 }
 
-function agentsTool(deps: Omit<AgentsToolDeps, 'mode'>) {
-  const entry = createAgentsTool({ mode: 'build', ...deps });
+function agentsTool(deps: Omit<AgentsToolDeps, 'mode' | 'swarms'>) {
+  const entry = createAgentsTool({ mode: 'build', swarms: true, ...deps });
 
   return toolExecute<AgentsToolInput, ToolResult>(entry);
 }

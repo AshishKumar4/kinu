@@ -1,5 +1,6 @@
 import * as v from 'valibot';
 import type { ReasoningEffort } from '../providers/reasoning-effort';
+import type { DecisionModel } from '../providers/decision-model';
 import type { NamedSwarmPreset } from './swarm';
 
 /** Kebab-case, lowercase-first: the same discipline role and skill names follow. */
@@ -82,6 +83,18 @@ export interface ProfileCatalog {
   accounts?: Readonly<Record<string, string>> | undefined;
   modelFallbacks?: Readonly<Record<string, readonly string[]>> | undefined;
   retries?: number | undefined;
+  /** The decision model that rates turns (`DECISION_MODELS`); absent is `DEFAULT_DECISION_MODEL`. */
+  decisionModel?: DecisionModel | undefined;
+  /** `SWARMS_BETA_SETTING`: the `agents` tool offers `swarm` only when true. */
+  betaSwarms?: boolean | undefined;
+}
+
+/** The account setting that offers swarms, named in Settings and in the refusal. */
+export const SWARMS_BETA_SETTING = 'Beta: swarms';
+
+/** Absent is off: a swarm-less `agents` tool is the one definition every such account shares. */
+export function betaSwarms(catalog: Pick<ProfileCatalog, 'betaSwarms'>): boolean {
+  return catalog.betaSwarms === true;
 }
 
 /** The owner's retry count when the catalog names none. */

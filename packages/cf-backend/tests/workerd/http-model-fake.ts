@@ -1,5 +1,6 @@
 import * as v from 'valibot';
-import { WAKE_MARKER, WakeHoldPlacementSchema, type WakeHoldPlacement } from './two-turn-shapes';
+import { WAKE_MARKER, WakeHoldPlacementSchema, type CallRecord, type WakeHoldPlacement } from './two-turn-shapes';
+import { aiLane, type AiRun } from '../helpers/workers-ai-binding';
 import { WORKERS_AI_FALLBACK_MODEL_CATALOG } from '../../../core/src/providers/workers-ai-catalog';
 /**
  * Node-side outbound handler for the two-turn HTTP-seam probe, and its test-only control surface.
@@ -36,6 +37,21 @@ function carriesMarker(call: CapturedHttpCall, marker: string): boolean {
 
 /** Catalog request count, read through `/log` to assert the catalog was served, not refused. */
 let catalogHits = 0;
+
+/** The runs the installed Workers AI binding answered, read through `/log`. */
+const aiCalls: CallRecord[] = [];
+
+export function recordAiRun(run: AiRun): void {
+  const users = (run.inputs.messages ?? []).filter((message) => message.role === 'user').map((message) => {
+    const content = v.parse(v.union([v.string(), v.array(v.unknown())]), message.content ?? '');
+
+    return v.is(v.string(), content)
+      ? content
+      : content.flatMap((part) => v.is(v.object({ type: v.literal('text'), text: v.string() }), part) ? [part.text] : []).join('');
+  });
+
+  aiCalls.push({ model: run.model, stream: run.inputs.stream ?? false, lane: aiLane(run), users });
+}
 
 /** Workers AI's built-in list as models.dev would carry it, so the platform gateway's listing is complete. */
 const WORKERS_AI_MODELS = Object.fromEntries(WORKERS_AI_FALLBACK_MODEL_CATALOG.map((model) => [model.id.replace(/^@cf\//u, ''), {
@@ -368,8 +384,9 @@ function toolBody(body: OutboundBody, callId: string, narration?: string): Respo
   return sseResponse(chunks);
 }
 
-/** The parity model: a `TOOL` line opens a `file` call, then answers `echo:part-one part-two` (parked after its first
- *  half on `partial`; a continuation writes the whole answer again); other lines echo, parked on `first`. */
+/** The parity model: a line ending `-TOOL` opens a `file` call, then answers `echo:part-one part-two` (parked after its
+ *  first half on `partial`; a continuation writes the whole answer again); other lines echo, parked on `first`. A line
+ *  that only quotes one, as the refiner's review of the conversation does, echoes. */
 async function parityBody(body: OutboundBody): Promise<Response> {
   const messages = body.messages ?? [];
   const users = messages.filter((m) => m.role === 'user').map((m) => textOf(m.content));
@@ -390,7 +407,7 @@ async function parityBody(body: OutboundBody): Promise<Response> {
     { headers: { 'content-type': 'text/event-stream' } },
   );
 
-  if (text.includes('TOOL')) {
+  if (text.trimEnd().endsWith('-TOOL')) {
     if (messages.some((m) => m.role === 'tool')) {
       const tail = [sseChunk({ content: 'part-two' }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()];
 
@@ -598,7 +615,7 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
   }
 
   if (url.pathname === '/log' && request.method === 'GET') {
-    return Response.json({ calls: [...log], catalogHits });
+    return Response.json({ calls: [...log], catalogHits, ai: [...aiCalls] });
   }
 
   if (url.pathname === '/log/until' && request.method === 'GET') {
@@ -617,6 +634,7 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
     log.length = 0;
     logWaiters.length = 0;
     catalogHits = 0;
+    aiCalls.length = 0;
 
     return Response.json({ ok: true });
   }

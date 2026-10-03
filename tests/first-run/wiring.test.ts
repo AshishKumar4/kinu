@@ -141,7 +141,7 @@ describe('the first-run corpus is the set this tier runs', () => {
     // itself, per project, so the partition is what the runner selects.
     const selected = (project: string): string[] => {
       const listed = spawnSync('bun', ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts',
-        '--project', project, '--filesOnly', '--json'], { cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
+        '--project', project, '--filesOnly', '--json'], { env: process.env, cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
 
       expect(listed.status, listed.stderr).toBe(0);
 
@@ -171,8 +171,7 @@ describe('the first-run corpus is the set this tier runs', () => {
     // Collecting a case imports it, under Bun as the tier runs it, which the partition above never does. On
     // 2026-09-25 35 cases failed there at import (`import { z } from 'zod'` in core came back undefined), and only a
     // deploy's post-publish wave would have shown it.
-    const listed = spawnSync('bun', ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts', '--json'],
-      { cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
+    const listed = spawnSync('bun', ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts', '--json'], { env: process.env, cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
 
     expect(listed.status, listed.stderr).toBe(0);
   });

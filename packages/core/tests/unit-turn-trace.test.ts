@@ -71,7 +71,7 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
 
   const tools = {
     file: tool({ description: 'Write a file', inputSchema: jsonSchema({ type: 'object' }), execute: async () => FILE_RESULT }),
-    agents: createAgentsTool({ mode: 'build', team: deps }),
+    agents: createAgentsTool({ mode: 'build', swarms: true, team: deps }),
   };
 
   const catalog = { roles: { planner: { description: 'Plan', instructions: 'Plan.',

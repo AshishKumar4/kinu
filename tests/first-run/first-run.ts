@@ -114,6 +114,7 @@ export const FIRST_RUN_CASES = [
   'capability-isolation',
   'steer-correction',
   'multi-account',
+  'turn-rated',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -626,6 +627,19 @@ export const FIRST_RUN_DEFECTS = {
       + '`setModel` refuses `openai@<name>/gpt-5.5`. Green needs the build with account keys (b29279646) '
       + 'and a workspace\'s own account choice (61db52a07).',
   },
+  'turn-rated': {
+    id: 'turn-rated',
+    found: 'The review of b53b8db77 (2026-10-02): production and staging rate turns through the Workers AI binding, '
+      + 'and the answer shape that path assumed ("bare, no usage") was never measured. Measured on a throwaway Worker '
+      + 'the same day, the binding answers `{ model, answers, usage }`.',
+    missedBecause: 'every rating test hands the decision port an answer the TEST author wrote, so a binding that '
+      + 'answers another shape, or refuses, rates nothing while every gate stays green.',
+    provedRedAt: null,
+    redDirection: 'Not yet run on a deployment: no build that rates turns is deployed. The red direction is any '
+      + 'deployed build before b53b8db77, where getQuality is no RPC, and a binding answer the port cannot read, '
+      + 'which leaves today\'s `rated` at 0 when the budget ends. The case waits on the `reads_changed` frame naming '
+      + 'getQuality, so a build that rates without announcing it is red the same way.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** The model every case's workspace pins: the scripted one, served by the tiers' Worker (scripts/tier-model.ts). */
@@ -753,6 +767,7 @@ const SHORT_SUBJECT = {
   'capability-isolation': 'isolation',
   'steer-correction': 'steer',
   'multi-account': 'accounts',
+  'turn-rated': 'rated',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

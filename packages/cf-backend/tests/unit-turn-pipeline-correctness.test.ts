@@ -417,13 +417,14 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('root mode facts describe submit_plan on the actual provider surface', async () => {
-    const cases: readonly { mode: 'build' | 'plan'; installed: boolean; available: boolean }[] = [
-      { mode: 'build', installed: true, available: false },
-      { mode: 'plan', installed: true, available: true },
-      { mode: 'plan', installed: false, available: false },
+    // A plain build turn is the static doctrine's default, so its block states no mode.
+    const cases: readonly { mode: 'build' | 'plan'; installed: boolean; available: boolean; facts: string | null }[] = [
+      { mode: 'build', installed: true, available: false, facts: null },
+      { mode: 'plan', installed: true, available: true, facts: 'Mode: plan; submit_plan: available.' },
+      { mode: 'plan', installed: false, available: false, facts: 'Mode: plan; submit_plan: unavailable.' },
     ];
 
-    for (const { mode, installed, available } of cases) {
+    for (const { mode, installed, available, facts } of cases) {
       const { agent } = orchestratorHarness();
       agent.harnessDrivingUserMessage(`Run the ${mode} turn`, { kinuMode: mode });
 
@@ -448,8 +449,24 @@ describe('turn-pipeline correctness wiring', () => {
       expect(request?.tools?.some((entry) => entry.name === 'submit_plan') ?? false).toBe(available);
       // The facts ride the turn's dynamic-context block, which sits before the person's request.
       const block = request?.prompt.find((message) => message.role === 'user' && JSON.stringify(message).includes(DYNAMIC_CONTEXT_OPEN_TAG));
-      expect(JSON.stringify(block)).toContain(`Mode: ${mode}; submit_plan: ${available ? 'available' : 'unavailable'}.`);
+      expect(/Mode: [a-z]+; submit_plan: [a-z]+\./u.exec(JSON.stringify(block ?? null))?.[0] ?? null).toBe(facts);
     }
+  });
+
+  // A body in the system prompt rewrote the cached prefix on the turn it arrived and again on the next.
+  test('a /skill turn leaves the system prompt alone and carries the body just before the request', async () => {
+    const plain = await chatSessionTurns(orchestratorHarness().agent).prepare({ messages: [{ role: 'user', content: 'build a board' }] });
+    const invoked = await chatSessionTurns(orchestratorHarness().agent).prepare({ messages: [{ role: 'user', content: '/slates build a board' }] });
+
+    if (!plain || !invoked) throw new Error('both turns must prepare a configuration');
+    expect(invoked.system).toBe(plain.system);
+    expect(JSON.stringify(invoked.system)).not.toContain('### slates');
+
+    // The request the model was sent, as the turn's own step pipeline built it.
+    const said = spoken(invoked.prompt ?? []).filter((message) => message.role === 'user');
+
+    expect(said.at(-1)?.text).toBe('/slates build a board');
+    expect(said.at(-2)?.text).toContain('### slates (explicit /slates)');
   });
 
   test('a rejected new preparation cannot reuse a previous turn dynamic snapshot', async () => {

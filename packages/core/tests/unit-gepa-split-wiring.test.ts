@@ -7,7 +7,7 @@ import type { LanguageModelV3Prompt } from '@ai-sdk/provider';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import {
-  buildOutcomeEvalSplit, describeSplitDegeneracy, recordTurnOutcome,
+  buildOutcomeEvalSplit, describeSplitDegeneracy, recordTurnRating,
   runScaffoldGepaOptimization, listGepaRuns, loadGepaCandidates, getPendingScaffold, type ScaffoldControl,
   advancePromptSectionLane, proposeMeasuredPromptSection, findPromptSectionTarget,
   activePromptSectionOverrides,
@@ -167,17 +167,17 @@ const guardTask = (i: number) => `guard #${i}: list the files under docs`;
 
 function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number }): void {
   for (let i = 0; i < counts.failures; i++) {
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      turnId: `bad-${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
-      userMessage: failureTask(i), assistantResponse: 'the wrong summary',
+    recordTurnRating(rt.storage.sql, rt.actor, {
+      turnId: `bad-${i}`, score: 1.5, corrected: 1, wrong: null, source: 'model',
+      request: failureTask(i), answer: 'the wrong summary',
       followup: 'no, summarise the conclusions', now: 1_000 + i,
     });
   }
 
   for (let i = 0; i < counts.guards; i++) {
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      turnId: `ok-${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
-      userMessage: guardTask(i), assistantResponse: 'a.txt, b.txt', now: 2_000 + i,
+    recordTurnRating(rt.storage.sql, rt.actor, {
+      turnId: `ok-${i}`, score: 4.5, corrected: 0, wrong: null, source: 'model',
+      request: guardTask(i), answer: 'a.txt, b.txt', now: 2_000 + i,
     });
   }
 }
@@ -274,13 +274,13 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     const actor = createTestActor(sql, execRaw, 'ws-gepa-split', 'gepa-split');
 
     for (let i = 0; i < 6; i++) {
-      recordTurnOutcome(sql, actor, {
-        turnId: `n${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
-        userMessage: `fix ${i}`, assistantResponse: 'bad', followup: 'no', now: 1000 + i,
+      recordTurnRating(sql, actor, {
+        turnId: `n${i}`, score: 1.5, corrected: 1, wrong: null, source: 'model',
+        request: `fix ${i}`, answer: 'bad', followup: 'no', now: 1000 + i,
       });
-      recordTurnOutcome(sql, actor, {
-        turnId: `a${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
-        userMessage: `good ${i}`, assistantResponse: 'ok', now: 2000 + i,
+      recordTurnRating(sql, actor, {
+        turnId: `a${i}`, score: 4.5, corrected: 0, wrong: null, source: 'model',
+        request: `good ${i}`, answer: 'ok', now: 2000 + i,
       });
     }
 

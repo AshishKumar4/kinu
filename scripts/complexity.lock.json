@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-10-01",
-  "files": 2928,
-  "functions": 73616,
+  "measuredAt": "2026-10-02",
+  "files": 2955,
+  "functions": 74294,
   "ceiling": 87,
-  "line": 29,
+  "line": 28,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -24,10 +24,6 @@
     {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
       "complexity": 43
-    },
-    {
-      "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
-      "complexity": 42
     },
     {
       "key": "scripts/platform-catalog.ts#auditSchema",
@@ -92,10 +88,6 @@
     {
       "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 36
-    },
-    {
-      "key": "packages/cli/src/cc-transcript.ts#mineSession",
-      "complexity": 35
     },
     {
       "key": "scripts/bench-external.ts#readHarborTrial",
@@ -274,6 +266,10 @@
       "complexity": 29
     },
     {
+      "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
+      "complexity": 29
+    },
+    {
       "key": "packages/core/src/feedback/png.ts#sanitizePng",
       "complexity": 29
     },
@@ -300,6 +296,98 @@
     {
       "key": "tests/first-run/agent-tab.first-run.ts#describe>liveTest>run",
       "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/src/components/ModelPicker.tsx#ModelPicker",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/components/slates/BlueprintShareForm.tsx#BlueprintShareForm",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#ChangelogEntryCard",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#6>handler",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage>prop#2",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cli/src/commands/debug.ts#writeDebugBundle",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cli/src/config.ts#resolveLLMConfig",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/execution/hub-device-transport.ts#createHubDeviceTransport>rpc",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/memory/hybrid-search.ts#fused>forEach>gen",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/orchestrator/terminal-roster.ts#declareTerminalRoster",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/vfs/diff.ts#diffLines",
+      "complexity": 28
+    },
+    {
+      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>stageChunkedDelta",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/agents-fields.ts#collectReads>walkExcept",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/bench-devbox-block-attach.ts#measureLarge",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/bench-devbox-fixture.test.ts#driverC3Proof>answer",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/egress-interception.ts#containerUseReasons>walk",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/error-model.ts#mechanismOf",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/infra-verify.ts#observe",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/syntax.ts#importUses>visit",
+      "complexity": 28
     }
   ]
 }

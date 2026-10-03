@@ -82,7 +82,7 @@ import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
-  BUILTIN_PROFILE_CATALOG,
+  BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
@@ -566,20 +566,30 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   return null;
 }
 
-/** Hashed with WebCrypto: the gallery has no `node:crypto`. */
-async function profileCatalogFixture(path: string): Promise<Response | null> {
+/** A saved catalog reads back. */
+let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = { catalog: BUILTIN_PROFILE_CATALOG, version: 0 };
+
+/** Hashed with WebCrypto: the gallery has no `node:crypto`. A stale write is refused. */
+async function profileCatalogFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
   if (path !== "/api/user/profile-catalog") return null;
 
-  const bytes = new TextEncoder().encode(profileCatalogCanonical(BUILTIN_PROFILE_CATALOG));
+  if (method === "PUT") {
+    const put = v.parse(v.object({ catalog: v.unknown(), expectedVersion: v.number() }), JSON.parse(v.parse(v.string(), body)));
+
+    if (put.expectedVersion !== galleryCatalog.version) return fixtureJson({ error: "The catalog changed since you read it." }, 409);
+    galleryCatalog = { catalog: validateProfileCatalog({ value: put.catalog }), version: galleryCatalog.version + 1 };
+  }
+
+  const bytes = new TextEncoder().encode(profileCatalogCanonical(galleryCatalog.catalog));
 
   const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
     .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
   return fixtureJson({
     authority: { kind: "account", accountId: "gallery" },
-    version: 0,
+    version: galleryCatalog.version,
     digest,
-    catalog: BUILTIN_PROFILE_CATALOG,
+    catalog: galleryCatalog.catalog,
   });
 }
 
@@ -2585,30 +2595,18 @@ const TRANSCRIPTS = {
 
 const TRANSCRIPT_BY_NODE = new Map<string, NodeTranscriptView>(Object.entries(TRANSCRIPTS));
 
-/** Evolution reads three non-array shapes the blanket `[]` would break; populated so the frame shows panels, not empty states. */
-const REPLAY_EVALS = [
-  { id: "rev_3", ranAt: NOW - 2 * 864e5, sampleSize: 24, acceptedCount: 19, negativeCount: 5, meanScore: 0.79, loss: 0.21, scaffoldVersion: 7, interval: { lo: 0.64, hi: 0.89, n: 24 } },
-  { id: "rev_2", ranAt: NOW - 9 * 864e5, sampleSize: 21, acceptedCount: 14, negativeCount: 7, meanScore: 0.67, loss: 0.33, scaffoldVersion: 6, interval: { lo: 0.51, hi: 0.80, n: 21 } },
-  { id: "rev_1", ranAt: NOW - 17 * 864e5, sampleSize: 18, acceptedCount: 10, negativeCount: 8, meanScore: 0.55, loss: 0.45, scaffoldVersion: 6, interval: { lo: 0.39, hi: 0.71, n: 18 } },
-];
+/** Satisfaction per day, as `getQuality` answers: two weeks rated, the newest day with no turns yet. */
+const QUALITY_DAYS = Array.from({ length: 14 }, (_, i) => {
+  const mean = 3.1 + i * 0.07;
+  const rated = 6 + (i % 4);
 
-const ALIGNMENT = {
-  segments: [
-    { scaffoldVersion: 6, firstAt: NOW - 20 * 864e5, turns: 62, abandoned: 3, rate: { per100: 14.5, lowPer100: 8.1, highPer100: 24.4, reliable: true } },
-    { scaffoldVersion: 7, firstAt: NOW - 6 * 864e5, turns: 41, abandoned: 1, rate: { per100: 7.3, lowPer100: 2.8, highPer100: 17.6, reliable: true } },
-  ],
-  overall: { turns: 103, abandoned: 4, rate: { per100: 11.7, lowPer100: 7.0, highPer100: 18.9, reliable: true } },
-  trend: "improving",
-  deltaPer100: -7.2,
-  comparedVersions: { from: 6, to: 7 },
-  note: "Corrections per 100 graded turns, from the turn-outcomes ledger alone — no benchmark and no judge.",
-};
-
-const CALIBRATION = {
-  universe: 103, labeled: 0, unclear: 0, orphaned: 0, labelers: [], lastLabeledAt: null,
-  strata: [], accuracy: null, kappa: null, overall: null, segments: [],
-  gap: { kind: "no_labels", labeled: 0, needed: 100 },
-};
+  return {
+    day: new Date(NOW - (13 - i) * 864e5).toISOString().slice(0, 10),
+    satisfaction: { mean, lo: mean - 0.45, hi: Math.min(5, mean + 0.4), n: rated },
+    corrected: { mean: 0.3 - i * 0.015, lo: 0.1, hi: 0.5, n: rated },
+    rated, thumbs: i % 3, turns: rated + 3,
+  };
+});
 
 const GEPA_RUNS = [
   { runId: "gepa_2", target: "scaffold", startedAt: NOW - 3 * 864e5, status: "completed", winnerId: "cand_2b", iterations: 6, metricCalls: 48 },
@@ -2626,11 +2624,7 @@ const GEPA_DETAIL = {
 };
 
 const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getReplayEvals") return rpcResult(REPLAY_EVALS).json<T>();
-
-  if (method === "getAlignmentConvergence") return rpcResult(ALIGNMENT).json<T>();
-
-  if (method === "getOutcomeCalibration") return rpcResult(CALIBRATION).json<T>();
+  if (method === "getQuality") return rpcResult(QUALITY_DAYS).json<T>();
 
   if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
 
@@ -3614,49 +3608,32 @@ function ClientContinuityFrame() {
   );
 }
 
-/** One quality branch fails until healed, the other held until released, so the interleaving is observable. */
-function QualityBranchFrame() {
-  const [alignmentHold] = useState(() => Promise.withResolvers<void>());
-  const replayHealthy = useRef(false);
+/** The quality read fails until healed, so its retry is observable. */
+function QualityRetryFrame() {
+  const healthy = useRef(false);
+
   useEffect(() => {
-    const heal = () => { replayHealthy.current = true; };
+    const heal = () => { healthy.current = true; };
 
-    const release = () => alignmentHold.resolve();
     window.addEventListener("gallery:quality-heal", heal);
-    window.addEventListener("gallery:quality-release", release);
 
-    return () => {
-      window.removeEventListener("gallery:quality-heal", heal);
-      window.removeEventListener("gallery:quality-release", release);
-    };
-  }, [alignmentHold]);
+    return () => window.removeEventListener("gallery:quality-heal", heal);
+  }, []);
 
   const rpc = useMemo<Rpc>(() => async <T,>(method: string): Promise<T> => {
-    if (method === "getReplayEvals") {
-      if (!replayHealthy.current) throw new Error("replay fixture failed");
+    if (method === "getQuality") {
+      if (!healthy.current) throw new Error("quality fixture failed");
 
-      return rpcResult(REPLAY_EVALS).json<T>();
-    }
-
-    if (method === "getAlignmentConvergence") {
-      await alignmentHold.promise;
-
-      return rpcResult(ALIGNMENT).json<T>();
-    }
-
-    if (method === "getOutcomeCalibration") {
-      await alignmentHold.promise;
-
-      return rpcResult(CALIBRATION).json<T>();
+      return rpcResult(QUALITY_DAYS).json<T>();
     }
 
     return stubRpc<T>(method);
-  }, [alignmentHold]);
+  }, []);
 
   return (
-    <div data-quality-branches className="p-bg p-text min-h-screen p-6">
+    <div data-quality-retry className="p-bg p-text min-h-screen p-6">
       <div className="mx-auto max-w-[760px]">
-        <QualityView rpc={rpc} />
+        <QualityView rpc={rpc} moved={0} />
       </div>
     </div>
   );
@@ -5054,9 +5031,9 @@ const SUPERVISE_CHANGELOG: SuperviseChangelogDigest = {
     { id: "cl_s1", kind: "scaffold", at: NOW - 10e5,
       summary: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
       evidence: "shadow eval: 7 trials · 5 pending wins · 1 regression · 1 tie" },
-    { id: "cl_s2", kind: "outcomes", at: NOW - 20e5,
-      summary: "Graded 6 turns · 4 accepted · 2 corrected",
-      evidence: "window closed after the deploy-failed run" },
+    { id: "cl_s2", kind: "ratings", at: NOW - 20e5,
+      summary: "Rated 6 turns · 6 by the decision model from the user's reply",
+      evidence: "satisfaction 3.4 (95% CI 2.6 to 4.1) of 5 · corrected 33%" },
     { id: "cl_s3", kind: "fact", at: NOW - 50e5,
       summary: "Remembered: percentage coupons carry kind:null after Tuesday's migration",
       evidence: null },
@@ -5093,7 +5070,7 @@ const superviseRpc =
       const changelog = evolvedAtStart ? SUPERVISE_CHANGELOG : evolved;
 
       const entries = request.changesOnly === true
-        ? changelog.entries.filter((entry) => entry.kind !== "outcomes" && entry.kind !== "replay")
+        ? changelog.entries.filter((entry) => entry.kind !== "ratings")
         : changelog.entries;
 
       return rpcResult({ ...changelog, entries }).json<T>();
@@ -6454,6 +6431,33 @@ const snapshotRaceRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promi
   return value === undefined ? workspacePageRpc<T>(method, args) : rpcResult(value).json<T>();
 };
 
+let qualityLiveRatings = 0;
+
+/** The Quality tab as a rating lands. */
+function QualityLiveFrame() {
+  const state = useKinu(WORKSPACE_PAGE_NAME);
+
+  const rpc = useMemo<Rpc>(() => async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method !== "getQuality") return workspacePageRpc<T>(method, args);
+    const today = QUALITY_DAYS.at(-1);
+
+    return rpcResult(today === undefined ? QUALITY_DAYS : [
+      ...QUALITY_DAYS.slice(0, -1),
+      { ...today, rated: today.rated + qualityLiveRatings, turns: today.turns + qualityLiveRatings },
+    ]).json<T>();
+  }, []);
+
+  return (
+    <div data-quality-live className="p-bg p-text min-h-screen p-6">
+      <button data-quality-rate onClick={() => {
+        qualityLiveRatings += 1;
+        galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getQuality"] }));
+      }}>Rate a turn</button>
+      <div className="mx-auto max-w-[760px]"><QualityView rpc={rpc} moved={state.readMoves.getQuality ?? 0} /></div>
+    </div>
+  );
+}
+
 function snapshotRaceFrame(): MountedFrame {
   serveGalleryRpc(snapshotRaceRpc);
 
@@ -6531,6 +6535,11 @@ async function mount() {
     }],
     ["drive-design", () => Promise.resolve(driveDesignFrame())],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
+    ["qualitylive", () => {
+      serveGalleryRpc(workspacePageRpc);
+
+      return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
+    }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
   ]);
 
@@ -6576,7 +6585,7 @@ async function mount() {
   else if (frame === "historyauthority") node = <HistoryAuthorityFrame />;
   else if (frame === "rosterauthority") node = <RosterAuthorityFrame />;
   else if (frame === "clientcontinuity") node = <ClientContinuityFrame />;
-  else if (frame === "qualitybranches") node = <QualityBranchFrame />;
+  else if (frame === "qualityretry") node = <QualityRetryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "toolrun") node = <ToolRunScaleFrame secrets={new URLSearchParams(location.search).get("secrets") === "1"} />;
   else if (frame === "advisor") node = <AdvisorFrame />;

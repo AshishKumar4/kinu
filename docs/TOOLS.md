@@ -483,6 +483,8 @@ refuses; `gate` requires `allow_all`.
 
 ## agents swarm: configured search
 
+Swarms are a beta, off for every account until its owner turns on Settings → Beta → "Beta: swarms" (`ProfileCatalog.betaSwarms`, `betaSwarms` in `types/profile.ts`). Off, the `agents` tool's schema and description carry no `swarm` (`agentsActionsFor`), and no account's tool names its catalog's roles or tiers: `role` and `tier` are open strings, the step context lists the choices (`delegationChoices`) and dispatch enforces them. Every such account shares one tool definition, and a `swarm` call is refused `denied`, naming the setting. The Swarms tab and the role editor's "Default swarm preset" are hidden. cf reads the setting from the catalog before it builds a turn's toolset and again after a catalog write, and reads it as it stands before a retry or a re-drive, which no turn read reconciles; the CLI reads it from the catalog its turn resolves against. The eval harness turns it on for the accounts the evals run as (`openPublicSession`).
+
 `runSwarmAction` resolves `preset`, validates its axis tuple, then calls
 `runSwarm`, the only step that spends. `AgentsSwarmDeps` holds the runtime,
 model resolver, pricing, isolation, and shared-prefix compaction.
@@ -512,9 +514,9 @@ corroborated lessons, confident facts, or a live scaffold with a passing
 misevolution veto.
 
 `import` runs the misevolution gate, records vetoes, and stages survivors in
-`imported_experience`. Only `EvolutionEngine.reviewTurn` promotes accepted
-entries, discards corrected or frustrated ones, or leaves ungraded ones
-waiting. Imported scaffolds enter `modifyScaffold` as pending. Only
+`imported_experience`. Only `EvolutionEngine.reviewTurn` promotes entries on
+a turn rated 4 or more, discards them on one rated 2 or lower, and leaves them
+waiting on an unrated or neutral one. Imported scaffolds enter `modifyScaffold` as pending. Only
 `applyPromotionDecision` writes `scaffoldPath`.
 
 ## CraftStore lifecycle

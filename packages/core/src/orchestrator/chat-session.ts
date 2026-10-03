@@ -969,7 +969,7 @@ export class ChatSession {
 
     if (turnId) completedTurn.turnId = turnId;
 
-    return snapshotCompletedTurn(this.actorSession.orchestrator.acc, completedTurn);
+    return snapshotCompletedTurn(this.actorSession.orchestrator, completedTurn);
   }
 
   private recordModelFallback(event: Extract<ChatEvent, { type: 'model-fallback' }>): void {

@@ -1,11 +1,10 @@
 /** Truncation ceilings shared by every evidence reader. */
 
 export const EVIDENCE_BUDGETS = {
-  /** turn_outcomes rows: every downstream reader is capped by these, so raise them first. */
+  /** turn_ratings rows: every downstream reader is capped by these, so raise them first. */
   storedUserMessage: 8_000,
   storedAssistantResponse: 16_000,
   storedFollowup: 8_000,
-  storedEvidence: 1_000,
 
   /** One window for judge input and trial row, so stored evidence is what the verdict saw. */
   shadowTask: 6_000,

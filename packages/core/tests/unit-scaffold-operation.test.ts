@@ -1,12 +1,25 @@
 import { expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import { createScaffoldLLMStream, createScaffoldCandidateSurface, buildSystemPromptSync, currentDateForPrompt,
+import { createScaffoldLLMStream, createScaffoldCandidateSurface,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
   currentOperationProfile,
   type ModelCallReport, type ModelOperationEvent, type ProfileCatalog,
 } from '../src/index';
 import { createTestRuntime } from './helpers';
+import type { ComposedRequest, ResolvedTurnProfile } from '../src/index';
+
+/** The live turn's assembly as a backend answers `composeRequest`: its system prompt and its dynamic block. */
+function composed(profile: ResolvedTurnProfile, model: MockLanguageModelV3): () => Promise<ComposedRequest> {
+  return async () => ({
+    profile,
+    execution: {
+      loopVersion: 1, extensions: [], instructions: null,
+      chat: { model, system: 'the turn system prompt', tools: {} },
+      dynamic: () => ({ runtime: { backend: 'cf', model: { id: profile.tier.model }, date: '2026-10-03' } }),
+    },
+  });
+}
 
 function fixture(failure?: Error) {
   const operations: ModelOperationEvent[] = [];
@@ -126,7 +139,7 @@ for (const provider of ['openai', 'anthropic']) {
     let resolutions = 0;
 
     const surface = createScaffoldCandidateSurface({
-      rt, tools: () => ({}), history: undefined,
+      rt, tools: () => ({}), history: undefined, compose: composed(profile, model),
       modelContext: async modelSpec => ({ id: modelSpec, contextWindow: 100_000, modelOutputLimit: 10_000 }),
       profile: async () => {
         resolutions += 1;
@@ -154,10 +167,11 @@ for (const provider of ['openai', 'anthropic']) {
       provider === 'openai' ? { reasoningEffort: 'high' } : { effort: 'high' },
     );
     expect(model.doStreamCalls[0]?.providerOptions?.['workers-ai']).toBeUndefined();
-    expect(model.doStreamCalls[0]?.prompt[0]).toEqual({ role: 'system', content: buildSystemPromptSync(rt, {
-      model: { id: spec }, currentDate: currentDateForPrompt(),
-    }) });
-    expect(model.doStreamCalls[0]?.prompt.at(-1)).toMatchObject({ role: 'user', content: [{ type: 'text', text: 'candidate task' }] });
+    // The live turn's frame: its system prompt, then its dynamic block (backend, model, date) before the task.
+    const sent = model.doStreamCalls[0]?.prompt ?? [];
+    expect(sent[0]).toEqual({ role: 'system', content: 'the turn system prompt' });
+    expect(JSON.stringify(sent.at(-2))).toContain(`## Runtime context\\n- Backend: cf\\n- Model: ${spec}\\n- Current date: 2026-10-03`);
+    expect(sent.at(-1)).toMatchObject({ role: 'user', content: [{ type: 'text', text: 'candidate task' }] });
     expect(operations.map(event => event.phase)).toEqual(['start', 'end']);
     expect(operations.every(event => event.spec === spec)).toBe(true);
     expect(reports).toHaveLength(1);
@@ -182,7 +196,7 @@ test('a long-lived candidate surface snapshots tools and profile per issued requ
   const tools: ToolSet = { tool_a: native };
 
   const surface = createScaffoldCandidateSurface({
-    rt, profile: async () => profile,
+    rt, profile: async () => profile, compose: composed(profile, model),
     tools: () => {
       scopes.push(currentOperationProfile(rt.actor)?.profile.tiers.deep.model);
 

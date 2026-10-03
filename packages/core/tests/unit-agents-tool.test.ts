@@ -5,7 +5,7 @@ import { createTestRuntime, toolExecute, scriptedTurnModel, unobservedSearchSeam
 import { hostedSeatsOver } from './helpers-actor-host';
 
 import * as v from 'valibot';
-import { AGENTS_ACTION_FIELDS } from '../src/delegation/agents-tool';
+import { AGENTS_ACTION_FIELDS, delegationChoices } from '../src/delegation/agents-tool';
 import { AGENTS_TOOL_NOTES } from '../src/tools/registry';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
@@ -20,7 +20,8 @@ import {
   type AgentsProfileContext,
   type SubordinateRosterEntry, type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
-  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC,
+  BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, validateProfileCatalog,
+  type ProfileCatalog,
 } from '../src/index';
 import { renderThrownChain } from '../src/obs/index';
 import { inWorkMode } from '../src/execution/work-mode';
@@ -42,17 +43,17 @@ interface Call { action: string; input: object }
 
 type AgentsTestResult = object | string | number | boolean | null | undefined;
 
-type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode'> & { mode?: AgentsToolDeps['mode'] };
+/** `swarms` defaults on: these suites pin the tool as it stands with "Beta: swarms" turned on. */
+type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode' | 'swarms'> & Partial<Pick<AgentsToolDeps, 'mode' | 'swarms'>>;
 
-function testProfile(): AgentsProfileContext {
-  const catalog = {
-    roles: BUILTIN_PROFILE_CATALOG.roles,
-    tiers: {
-      default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC },
-      fast: { model: DEFAULT_WORKERS_AI_MODEL_SPEC },
-      deep: { model: DEFAULT_WORKERS_AI_MODEL_SPEC },
-    },
-  };
+function testProfile(catalog: ProfileCatalog = {
+  roles: BUILTIN_PROFILE_CATALOG.roles,
+  tiers: {
+    default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC },
+    fast: { model: DEFAULT_WORKERS_AI_MODEL_SPEC },
+    deep: { model: DEFAULT_WORKERS_AI_MODEL_SPEC },
+  },
+}): AgentsProfileContext {
 
   return {
     envelope: {
@@ -69,7 +70,7 @@ function testProfile(): AgentsProfileContext {
 }
 
 function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
-  return { mode: 'build', ...deps };
+  return { mode: 'build', swarms: true, ...deps };
 }
 
 function agentsTool(deps: TestAgentsToolDeps) {
@@ -301,6 +302,38 @@ describe('agents tool — registration and dep-gating', () => {
     const t = agentsTool(deps);
     expect(actionEnum({ value: t.inputSchema })).toEqual([...AGENTS_TOOL_ACTIONS]);
     expect(t.description).toBe(BUILTIN_TOOL_DESCRIPTIONS.agents);
+  });
+
+  test('with "Beta: swarms" off the tool offers no swarm, in its schema or its words, and refuses one naming the setting', async () => {
+    const off = withBuildMode({ swarm: swarmDeps(), swarms: false, team: makeTeam().deps, peers: makePeers().deps });
+    const t = agentsTool(off);
+
+    expect(agentsActionsFor(off)).not.toContain('swarm');
+    expect(actionEnum({ value: t.inputSchema })).toEqual(AGENTS_TOOL_ACTIONS.filter((action) => action !== 'swarm'));
+    expect(t.description).not.toContain(AGENTS_TOOL_NOTES.swarm);
+    expect(JSON.stringify(t.inputSchema)).not.toContain('preset');
+    await expect(t.execute({ action: 'swarm', task: 'rank the three caching designs', preset: 'ideate' }))
+      .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('"Beta: swarms"') });
+  });
+
+  test('with it off, two accounts\' tools are byte-identical, whatever roles and tiers their catalogs hold', () => {
+    const bytes = (catalog: ProfileCatalog) => {
+      const t = agentsTool({ swarm: swarmDeps(), swarms: false, team: makeTeam().deps, profile: () => testProfile(catalog) });
+
+      return JSON.stringify({ description: t.description, schema: t.inputSchema });
+    };
+
+    // Two validated catalogs: one account adds a role and a tier the other has not.
+    const plain = validateProfileCatalog({ value: { roles: BUILTIN_PROFILE_CATALOG.roles, tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } } } });
+
+    const own = validateProfileCatalog({ value: {
+      roles: { reviewer: { ...BUILTIN_ROLE_DEFINITIONS.task, label: 'Reviewer', description: 'Reviews pull requests.' } },
+      tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC }, careful: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
+    } });
+
+    expect(bytes(own)).toBe(bytes(plain));
+    // What they differ in reaches each actor's step context instead.
+    expect(delegationChoices(testProfile(own))).toMatchObject({ roles: expect.arrayContaining(['reviewer: Reviews pull requests.']), tiers: expect.arrayContaining(['careful']) });
   });
 
   // `lifetime` is in the schema only with a temporary substrate, so its paragraph must be too.

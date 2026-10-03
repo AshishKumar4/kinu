@@ -104,7 +104,7 @@ export interface PromptSurface {
   temporaryAsk: boolean;
   externalTools: PromptExternalToolInfo[];
   executors: PromptExecutorInfo[];
-  selectableExecutors: PromptExecutorInfo[];
+  configuredExecutors: PromptExecutorInfo[];
   model: PromptModelProfile;
   backend?: PromptBackend;
   roleSection: { id: string; label: string; instructions: string } | null;
@@ -157,12 +157,11 @@ export function uniquePromptExecutors(opts: Pick<PromptSurfaceOptions, 'executor
   return sortExecutors([...out.values()]);
 }
 
-export function executorIsSelectable(exec: PromptExecutorInfo): boolean {
-  if (exec.name === 'workspace') return exec.available !== false;
+/** A runtime this workspace has, reachable or not right now: the system prompt describes it, the live state says which. */
+export function executorIsConfigured(exec: PromptExecutorInfo): boolean {
+  if (exec.name === 'workspace') return true;
 
-  if (exec.available === false) return false;
-
-  if (exec.status === 'not_configured' || exec.status === 'disconnected' || exec.status === 'error') return false;
+  if (exec.status === 'not_configured') return false;
 
   return exec.available === true || exec.configured === true || exec.active === true;
 }
@@ -244,7 +243,7 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     agentsActions: uniqueAgentsActions(opts.agentsActions, builtinTools),
     externalTools: uniqueExternalTools(opts.externalTools),
     executors,
-    selectableExecutors: executors.filter(executorIsSelectable),
+    configuredExecutors: executors.filter(executorIsConfigured),
     model: resolvePromptModelProfile(opts.model),
     roleSection: opts.roleSection ?? null,
     backend: opts.backend,

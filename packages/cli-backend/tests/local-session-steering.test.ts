@@ -171,7 +171,8 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     expect(landed).toBeGreaterThan(roles.indexOf('tool'));
     expect(activation).toBeGreaterThanOrEqual(0);
     expect(activation).toBeLessThan(roles.indexOf('tool'));
-    expect(messageText(present(third[activation + 1], 'the request'))).toBe('/focused remember this');
+    expect(messageText(present(third[activation + 1], "the turn's skills"))).toContain('Focus on memory only.');
+    expect(messageText(present(third[activation + 2], 'the request'))).toBe('/focused remember this');
     await session.end();
   });
 
@@ -859,17 +860,17 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     return { set, win: set.candidates[0].nodeId, alt: set.candidates[1].nodeId };
   }
 
-  test('picking the branch writes the take_pick ledger row and queues the continuation', async () => {
+  test('picking the branch writes the take_pick rating and queues the continuation', async () => {
     const { session, rt, events } = setup('answered with A');
     const { set, alt } = await answeredWithTakes(session, rt);
 
     const result = await session.pickAlternateTake(set.id, alt);
-    expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });
+    expect(result).toMatchObject({ changedAnswer: true, continuationQueued: true });
 
-    const row = rt.storage.sql<{ outcome: string; source: string; followup: string | null; turn_id: string }>`
-      SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0];
+    const row = rt.storage.sql<{ score: number; source: string; followup: string | null; turn_id: string }>`
+      SELECT score, source, followup, turn_id FROM turn_ratings`[0];
 
-    expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'go with approach B', turn_id: set.turnId });
+    expect(row).toMatchObject({ score: 2, source: 'take_pick', followup: 'go with approach B', turn_id: set.turnId });
 
     await events.until(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
     const continuation = present(turnStarts(events).find((s) => s.event === 'take_pick'), 'the take_pick continuation turn');
@@ -884,8 +885,9 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     const { set, win } = await answeredWithTakes(session, rt);
 
     const result = await session.pickAlternateTake(set.id, win);
-    expect(result).toMatchObject({ outcome: 'accepted', changedAnswer: false, continuationQueued: false });
-    expect(rt.storage.sql<{ source: string }>`SELECT source FROM turn_outcomes`[0].source).toBe('take_pick');
+    expect(result).toMatchObject({ changedAnswer: false, continuationQueued: false });
+    expect(rt.storage.sql<{ score: number; source: string }>`SELECT score, source FROM turn_ratings`[0])
+      .toEqual({ score: 4, source: 'take_pick' });
     expect(turnStarts(events).every((s) => s.kind === 'user')).toBe(true);
     await session.end();
   });
@@ -1003,7 +1005,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     await session.end();
   });
 
-  test('picking the branch records corrected + queues the continuation turn', async () => {
+  test('picking the branch rates the delivered answer low + queues the continuation turn', async () => {
     const { model, release } = branchableModel('the live answer', () => 'the branch answer');
     const { rt, session, events } = setup('unused', model);
 
@@ -1017,12 +1019,12 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     const set = present(session.latestAlternateTakes(), 'the alternate takes set');
     const branchCandidate = present(set.candidates.find((c) => c.origin === 'branch'), 'the branch candidate take');
     const result = await session.pickAlternateTake(set.id, branchCandidate.nodeId);
-    expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });
+    expect(result).toMatchObject({ changedAnswer: true, continuationQueued: true });
 
-    const ledger = rt.storage.sql<{ outcome: string; source: string; followup: string | null }>`
-      SELECT outcome, source, followup FROM turn_outcomes`[0];
+    const ledger = rt.storage.sql<{ score: number; source: string; followup: string | null }>`
+      SELECT score, source, followup FROM turn_ratings`[0];
 
-    expect(ledger).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'the branch answer' });
+    expect(ledger).toMatchObject({ score: 2, source: 'take_pick', followup: 'the branch answer' });
 
     await events.until(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
     expect(present(turnStarts(events).find((s) => s.event === 'take_pick'), 'the take_pick continuation turn').text)
@@ -1815,7 +1817,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
-    return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
+    return { deps: { mode: 'build', swarms: true, swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
   }
 
   test('a script searches, branches on the result, and returns its own synthesis', async () => {

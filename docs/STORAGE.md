@@ -480,8 +480,9 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 |---|---|---|
 | Events hub | `agent_log`, `reply_channels`, `triggers` | `core/src/events/hub/schema.ts` |
 | Run-event log | `run_events` | `core/src/events/recorder.ts` |
-| Turn outcomes | `turn_outcomes`, `lessons`, `outcome_labels`, `outcome_ensemble_labels`, `pattern_extractions` | `core/src/evolution/outcomes.ts` |
-| Replay eval | `replay_evals` | `core/src/evolution/replay.ts` |
+| Turn ratings | `turn_ratings` | `core/src/evolution/ratings.ts` |
+| Struggles and tool lessons | `turn_struggles`, `tool_lessons` | `core/src/evolution/struggles.ts` |
+| Lessons | `lessons`, `pattern_extractions` | `core/src/evolution/lessons.ts` |
 | Refinement | `refinement_requests` | `core/src/evolution/refinement.ts` |
 | GEPA | `gepa_runs`, `gepa_candidates` | `core/src/evolution/gepa/persistence.ts` |
 | Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
@@ -510,7 +511,7 @@ These are created outside that pass, by the root that owns each:
 | Subsystem | Tables | Owner |
 |---|---|---|
 | Subordinate roster | `actor_subordinates` (every actor that can hire) | `core/src/subordinates/roster.ts` |
-| Orchestrator-local | `turn_feedback`, `sleep_time_updates`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
+| Orchestrator-local | `sleep_time_updates`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
 | Webhook ingress (cf only) | `webhook_rate_windows`, `webhook_replay_claims`, `webhook_secrets` | `core/src/events/ingress/webhook.ts` (`initWebhookIngressTables`), `rate-limit.ts`, `secrets.ts` |
 
 Two tables are created lazily: `completed_turns` by the `EvolutionEngine`

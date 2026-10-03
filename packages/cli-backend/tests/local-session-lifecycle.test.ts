@@ -2,7 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
 import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
-import { initWorkspaceSchema, JobOutputFrameSchema } from '@kinu.run/core';
+import { initWorkspaceSchema, JobOutputFrameSchema, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -910,8 +910,34 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const activation = users.findIndex((text) => text.includes('- focused: explicit /focused'));
 
     expect(activation).toBeGreaterThanOrEqual(0);
-    expect(users.at(-1)).toContain('remember this');
-    expect(users.slice(activation + 1).every((text) => text.includes('remember this'))).toBe(true);
+    expect(users.slice(activation + 1)).toHaveLength(2);
+    expect(users[activation + 1]).toContain('Focus on memory only.');
+    expect(users.at(-1)).toBe('/focused remember this');
+  });
+
+  // A body in the system prompt rewrote the cached prefix on the turn it arrived and again on the next. The skill
+  // restricts no tool: a restriction changes the tool list, and with it the prompt's tool sections, by design.
+  test('a /skill turn carries the approved body before its request, leaves the system prompt alone, and the next turn drops it', async () => {
+    const prompts: PromptMessage[][] = [];
+    const { rt, session } = setup('ok', historyCapturingModel('ok', (messages) => { prompts.push(messages); }));
+    const path = workspaceSkillPath('tidy');
+    await rt.storage.vfs.mkdir(`${WORKSPACE_SKILLS_DIR}/tidy`, { recursive: true });
+    await writeText(rt.storage.vfs, path, '---\nname: tidy\ndescription: keep notes tidy\n---\nSort the notes first.\n');
+    const reviewed = present(await session.readInstructionApproval(path), 'the tidy skill');
+    expect((await session.approveInstruction(path, reviewed.digest)).ok).toBe(true);
+
+    for (const text of ['plain first', '/tidy sort these', 'plain after']) await session.send(text, { id: crypto.randomUUID() });
+
+    const system = (prompt: PromptMessage[] | undefined) => present(prompt, 'a request').filter((message) => message.role === 'system').map(messageText);
+    const users = (prompt: PromptMessage[] | undefined) => present(prompt, 'a request').filter((message) => message.role === 'user').map(messageText);
+    const [plain, tidy, after] = [prompts[0], prompts[1], prompts.at(-1)];
+
+    expect(system(tidy)).toEqual(system(plain));
+    expect(system(after)).toEqual(system(plain));
+    expect(users(tidy).at(-1)).toBe('/tidy sort these');
+    expect(users(tidy).at(-2)).toContain('### tidy (explicit /tidy)\n\nSort the notes first.');
+    expect(users(after).join('\n')).not.toContain('Sort the notes first.');
+    await session.end();
   });
 
   test('approval refuses bytes changed after the owner reviewed them', async () => {
@@ -1356,16 +1382,15 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 });
 
-describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)', () => {
-  /** `gate`, when given, is awaited before the classifier answers: a review still in flight at exit. */
+describe('LocalAgentSession — turn rating review (Hermes-style forked review)', () => {
   function setupWithEvolution(
-    classifierJson: string,
-    opts: { oneShot?: boolean; gate?: Promise<void>; model?: LanguageModel } = {},
+    reads: 'accepted' | 'corrected',
+    opts: { oneShot?: boolean; model?: LanguageModel } = {},
   ) {
     const db = new Database(scratchPath('local-session-review', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
-    // The classifier and reflection ride rt.llm.complete; stub it so the review
+    // The rating rides rt.decide and the reflection rt.llm.complete; both are stubbed so the review runs offline.
     const completions: string[] = [];
 
     const reviewLlm = {
@@ -1373,15 +1398,19 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       complete: async (prompt: string) => {
         completions.push(prompt);
 
-        if (opts.gate) await opts.gate;
-
-        return prompt.includes('Classify what the follow-up reveals')
-          ? classifierJson
-          : 'verify the cluster name before rotating keys';
+        return 'verify the cluster name before rotating keys';
       },
     };
 
-    // runs without a network LLM.
+    rt.decide = async ({ state }) => {
+      completions.push(state);
+
+      return { answers: reads === 'corrected'
+        ? { satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 }, wrong: { type: 'choice', choice: 'misunderstood' } }
+        : { satisfaction: { type: 'score', score: 3.6 }, corrected: { type: 'noul', noul: 0.02 }, wrong: { type: 'choice', choice: 'nothing' } },
+      usage: { input: 0, output: 0 } };
+    };
+
     Object.defineProperty(rt, 'llm', { value: reviewLlm });
     const events = new AwaitedList<SessionEvent>();
 
@@ -1402,21 +1431,23 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     return { db, rt, session, events, completions, reviewLlm };
   }
 
-  test('the next user message grades the previous turn into the durable outcome ledger', async () => {
-    const { db, rt, session } = setupWithEvolution('{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}');
+  const ratings = (db: Database) => db.query<{ c: number }, []>('SELECT count(*) AS c FROM turn_ratings').get()?.c;
+
+  test('the next user message rates the previous turn into the durable rating ledger', async () => {
+    const { db, rt, session } = setupWithEvolution('corrected');
 
     await session.send('please rotate the API keys for the staging cluster', { id: crypto.randomUUID() });
     await session.send('no — I said STAGING, you rotated production', { id: crypto.randomUUID() });
 
     await session.end();
 
-    const row = db.query<{
-      outcome: string; source: string; turn_id: string; followup: string;
-    }, []>(`SELECT * FROM turn_outcomes`).get();
+    const row = db.query<{ score: number; source: string; turn_id: string; followup: string }, []>(
+      'SELECT score, source, turn_id, followup FROM turn_ratings',
+    ).get();
 
-    if (!row) throw new Error('turn outcome row is missing');
-    expect(row.outcome).toBe('corrected');
-    expect(row.source).toBe('classifier');
+    if (!row) throw new Error('turn rating row is missing');
+    expect(row.score).toBe(1.5);
+    expect(row.source).toBe('model');
     expect(row.followup).toContain('STAGING');
 
     const firstAssistant = (await transcript(rt)).find((entry) => entry.role === 'assistant');
@@ -1429,24 +1460,24 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     ).get()?.c).toBe(1);
   });
 
-  test('trivial turns (greetings) skip classification entirely', async () => {
-    const { db, session } = setupWithEvolution('{"outcome":"accepted","confidence":0.9,"evidence":"x"}');
+  test('trivial turns (greetings) skip the rating entirely', async () => {
+    const { db, session, completions } = setupWithEvolution('accepted');
 
     await session.send('hi', { id: crypto.randomUUID() });
     await session.send('thanks!', { id: crypto.randomUUID() });
     await session.end();
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
+    expect(ratings(db)).toBe(0);
+    expect(completions).toEqual([]);
   });
 
-  // `kinu exec` is one process per turn, so the evolution window and pending verdict must outlive the session object.
-  test('the window and the pending review survive end() — the next run grades the turn', async () => {
-    const classifierJson = '{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}';
-    const { db, rt, session, reviewLlm } = setupWithEvolution(classifierJson);
+  // `kinu exec` is one process per turn, so the evolution window and pending review must outlive the session object.
+  test('the window and the pending review survive end() — the next run rates the turn', async () => {
+    const { db, rt, session, reviewLlm } = setupWithEvolution('corrected');
 
     await session.send('please summarize the deployment runbook for me', { id: crypto.randomUUID() });
     await session.end();
 
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
+    expect(ratings(db)).toBe(0);
     expect(db.query<{ c: number }, []>(
       `SELECT count(*) AS c FROM completed_turns WHERE in_window = 1`,
     ).get()?.c).toBe(1);
@@ -1456,22 +1487,16 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     await next.send('no — that summary missed the rollback step entirely', { id: crypto.randomUUID() });
     await next.end();
 
-    const row = db.query<{ outcome: string; source: string }, []>(
-      `SELECT outcome, source FROM turn_outcomes`,
-    ).get();
-
-    expect(row).toEqual({ outcome: 'corrected', source: 'classifier' });
+    expect(db.query<{ score: number; source: string }, []>('SELECT score, source FROM turn_ratings').get())
+      .toEqual({ score: 1.5, source: 'model' });
     expect(db.query<{ c: number }, []>(
       `SELECT count(*) AS c FROM completed_turns WHERE in_window = 1`,
     ).get()?.c).toBe(2);
   });
 
-  // A one-shot process defers its outcome review rather than joining it; joining cost more than the turn itself.
+  // A one-shot process defers its review rather than joining it; joining cost more than the turn itself.
   test('a one-shot end() waits ~0ms on the turn lane while the review sits durably owed', async () => {
-    const { db, session, completions } = setupWithEvolution(
-      '{"outcome":"accepted","confidence":0.9,"evidence":"x"}',
-      { oneShot: true, model: runThenAnswerModel() },
-    );
+    const { db, session, completions } = setupWithEvolution('accepted', { oneShot: true, model: runThenAnswerModel() });
 
     await session.send('run the build and report', { id: crypto.randomUUID() });
 
@@ -1480,22 +1505,18 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     // The settle-timings line is quiet under 1s; the proof of no join is that no review call was issued.
     if (timings) expect(timings.evolutionMs).toBeLessThan(100);
     expect(completions).toEqual([]);
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
+    expect(ratings(db)).toBe(0);
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c)
       .toBeGreaterThanOrEqual(1);
   });
 
-  test('the next open of the same workspace runs the deferred review', async () => {
-    const classifierJson = '{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}';
-
-    const { db, rt, session } = setupWithEvolution(classifierJson,
-      { oneShot: true, model: runThenAnswerModel() });
+  test('the next open runs the deferred review, and with no reply nothing is rated', async () => {
+    const { db, rt, session } = setupWithEvolution('corrected', { oneShot: true, model: runThenAnswerModel() });
 
     await session.send('run the build and report', { id: crypto.randomUUID() });
     await session.end();
     const owed = db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c ?? 0;
     expect(owed).toBeGreaterThanOrEqual(1);
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
 
     const events = new AwaitedList<SessionEvent>();
 
@@ -1505,18 +1526,15 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
     await next.recoverBackgroundJobs();
 
-    const row = db.query<{ outcome: string; source: string; followup: string | null }, []>(
-      `SELECT outcome, source, followup FROM turn_outcomes`,
-    ).get();
-
-    expect(row).toEqual({ outcome: 'accepted', source: 'execution', followup: null });
+    // A one-shot turn has no follow-up: its tools ran, and that rates nothing.
+    expect(ratings(db)).toBe(0);
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(0);
     expect(events.items.some((e) => e.type === 'evolution' && e.event === 'deferred_reviews_drained')).toBe(true);
     await next.end();
   });
 
-  test('a corrupt deferred row is refused at the next open — no verdict is invented', async () => {
-    const { db, rt } = setupWithEvolution('{"outcome":"accepted","confidence":0.9,"evidence":"x"}');
+  test('a corrupt deferred row is refused at the next open — no rating is invented', async () => {
+    const { db, rt } = setupWithEvolution('accepted');
     // A real owned row (owner as `deferTurnReview` supplies it) with only a truncated `turn`; a missing owner would
     // hit NOT NULL instead, a different refusal.
     db.query(`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
@@ -1530,7 +1548,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
     await next.recoverBackgroundJobs();
 
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
+    expect(ratings(db)).toBe(0);
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(0);
 
     const drained = events.items.flatMap((e) =>
@@ -1541,8 +1559,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
   });
 
   test('a one-shot open does NOT re-drive — the cost would only move to the next task', async () => {
-    const { db, rt, session } = setupWithEvolution('{"outcome":"accepted","confidence":0.9,"evidence":"x"}',
-      { oneShot: true });
+    const { db, rt, session } = setupWithEvolution('accepted', { oneShot: true });
 
     await session.send('write the report', { id: crypto.randomUUID() });
     await session.end();
@@ -1555,7 +1572,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
     await nextExec.recoverBackgroundJobs();
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(1);
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
+    expect(ratings(db)).toBe(0);
     await nextExec.end();
   });
 });

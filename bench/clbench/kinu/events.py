@@ -1,12 +1,13 @@
-"""Reading what `kinu exec --json` and `kinu alignment --json` hand back.
+"""Reading what `kinu exec --json` and `kinu quality --json` hand back.
 
 This is the contract between two repos, so it lives on its own with no
 CL-Bench imports and is covered by `bench/clbench/tests` — a silent change to
 the CLI's event shape would otherwise show up as a mysteriously bad benchmark
-score rather than as a failing test. Both benchmark adapters read it, so the
-turn stream and the grading ledger are parsed in one place: whether a turn was
-graded is the question both of them turned out to need, and two readers would
-have drifted.
+score rather than as a failing test. Both benchmark adapters read it: the turn
+stream and the ratings ledger are parsed in one place so their readings cannot
+drift. A rating needs a person's reply or explicit thumb/take pick;
+tool exits never rate a turn. A headless trial therefore reads rated=0 unless
+a reactive user replied, which is a finding rather than a failure.
 """
 
 from __future__ import annotations
@@ -61,7 +62,6 @@ EVOLUTION_EVENTS = frozenset({
     "scaffold_proposed",
     "consolidation",
     "turn_complete",
-    "replay_eval",
     "changelog_digest",
     "experience_import",
     "scaffold_promotion",
@@ -85,44 +85,52 @@ def split_activity(events: list[Event]) -> tuple[list[Event], list[Event]]:
 
 
 @dataclass(frozen=True)
-class TurnGrading:
-    """How many of this trial's turns reached a verdict, from the ledger that
-    owns the answer rather than from the prose the activity channel carries.
+class TurnRatings:
+    """Human ratings and reviewed turns, summed from ``kinu quality --json``.
 
-    ``kinu alignment --json`` reads ``turn_outcomes``, the table
-    ``packages/core/src/evolution/outcomes.ts`` writes. A benchmark container
-    holds no person, so ``user_graded`` is 0 by construction and
-    ``execution_graded`` — rows the ENVIRONMENT graded — is the number that says
-    whether the turn was graded at all. Reading the first as the second would
-    report every headless run as ungraded.
+    ``rated`` counts turns rated by a person's reply or explicit thumb/take
+    pick, ``by_thumbs`` counts ratings from thumbs, and ``turns`` counts all
+    reviewed turns, rated or not. The command reads ``turn_ratings`` over its
+    last 30 days. A headless trial reads rated=0 unless a reactive user replied;
+    nothing infers a rating from a tool exit, and zero is a finding, not failure.
     """
 
-    user_graded: int
-    execution_graded: int
-    abandoned: int
+    rated: int
+    by_thumbs: int
+    turns: int
 
     def as_dict(self) -> dict[str, int]:
         return {
-            "user_graded": self.user_graded,
-            "execution_graded": self.execution_graded,
-            "abandoned": self.abandoned,
+            "rated": self.rated,
+            "by_thumbs": self.by_thumbs,
+            "turns": self.turns,
         }
 
 
-def read_grading(path: Path) -> TurnGrading | None:
-    """The trial's grading counts, or None when the probe left no readable answer.
+def read_ratings(path: Path) -> TurnRatings | None:
+    """Sum the quality probe's days, or None when it left no readable answer.
 
-    None means MISSING EVIDENCE and is not the same as three zeros: a probe that
-    never ran and a turn that graded nothing are different findings, and
-    collapsing them would let a broken probe read as a healthy inert arm.
+    None means MISSING EVIDENCE, not zeros. An empty array is a valid reading of
+    zero ratings and zero reviewed turns. Ratings need a person's reply, so a
+    headless trial with no reactive user normally has rated=0: that is a finding,
+    not a failure. Reject the whole reading if any day's counts are malformed.
     """
     try:
-        overall = json.loads(path.read_text(encoding="utf-8"))["alignment"]["overall"]
-        return TurnGrading(
-            user_graded=int(overall["turns"]),
-            execution_graded=int(overall["executionGraded"]),
-            abandoned=int(overall["abandoned"]),
-        )
+        days = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(days, list):
+            return None
+        totals = [0, 0, 0]
+        for day in days:
+            if not isinstance(day, dict):
+                return None
+            for index, key in enumerate(("rated", "thumbs", "turns")):
+                value = day.get(key)
+                if type(value) is not int and not (
+                    type(value) is float and math.isfinite(value) and value.is_integer()
+                ):
+                    return None
+                totals[index] += int(value)
+        return TurnRatings(rated=totals[0], by_thumbs=totals[1], turns=totals[2])
     except (OSError, ValueError, KeyError, TypeError):
         return None
 

@@ -444,6 +444,14 @@ test('sandbox stat preserves a denied parent instead of reporting absence', asyn
   expect(await rejectionCode(() => sandboxFiles(handle).stat('/private/file'))).toBe('EACCES');
 });
 
+// The devbox lists entries by lstat, so a link is known; reporting it as a file would let a reader follow it.
+test('sandbox lstat reports a link as a link, with the size the listing gives', async () => {
+  const handle = sandboxHandle(new MemFs());
+  handle.listFiles = async () => ({ files: [{ name: 'AGENTS.md', type: 'symlink', size: 21, isDirectory: false }] });
+
+  expect(await sandboxFiles(handle).stat('/workspace/AGENTS.md', { follow: false })).toMatchObject({ type: 'symlink', size: 21 });
+});
+
 test('sandbox stat preserves a failed transport instead of reporting absence', async () => {
   const failure = new Error('the file transport disconnected');
   const handle = sandboxHandle(new MemFs());

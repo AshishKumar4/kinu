@@ -4,7 +4,6 @@ import {
   credentialToHeaders,
   normalizeModelMenu,
   createChatGptProvider,
-  availableJudgeSpecs,
   accountDeps,
   specModelInfo,
   createOpenAICompatProvider,
@@ -122,8 +121,6 @@ export interface LocalModelResolver {
   listModels(): Promise<ModelMenu>;
   /** Per-model metadata (e.g. input modalities); null when unknown or unreachable. */
   modelInfo(specOrNull?: string | null): Promise<ModelInfo | null>;
-  /** One spec per available provider, in registry preference order. */
-  judgeCandidates(): Promise<string[]>;
   /** Pre-request token count (core `providers/input-tokens.ts`); `unsupported`
    *  means the turn is assembled ungated rather than gated on an estimate. */
   countInputTokens(specOrNull: string | null | undefined, request: CountableRequest): Promise<InputTokenCount>;
@@ -208,15 +205,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const authStore = buildAuthStore(localEndpoint, credentials, opts.oauthStore);
 
   const cloud = opts.cloud;
-
-  // An explicit direct endpoint takes precedence over the signed-in proxy; the
-  // proxy-derived config registers through the cloud providers below.
-  const llmIsCloudProxy = cloud !== undefined
-    && localEndpoint !== null
-    && localEndpoint.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
-
   const defaultSpec = defaultSpecForEndpoint(localEndpoint);
-  const gateway = defaultProviderFor(localEndpoint) === 'workers-ai' && !llmIsCloudProxy ? localEndpoint : null;
+  const gateway = workersAiRoute(localEndpoint, cloud)?.gateway ?? null;
   const menu = cloud ? createCloudModelMenu(cloud, opts.fetch) : null;
 
   const cloudProvider = (id: CloudProxyProviderId, label: string, unavailableReason: string, defaultModel?: string): ModelProvider => {
@@ -323,9 +313,6 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     },
     listProviders() {
       return registry.listProviders(own);
-    },
-    judgeCandidates() {
-      return availableJudgeSpecs(registry, own);
     },
     listModels() {
       return registry.listAllModels(own);
@@ -586,6 +573,25 @@ function noDefaultModelMessage(): string {
 type CliProviderId =
   | 'workers-ai' | 'chatgpt' | 'openai' | 'anthropic'
   | 'openrouter' | 'openai-compat' | 'opencode' | 'claude';
+
+/**
+ * Where a Workers AI call from this CLI goes: the configured endpoint when it serves Workers AI (`KINU_BASE_URL`, a
+ * local gateway, a Cloudflare login), else the signed-in worker's proxy, an explicit endpoint winning over it.
+ * `gateway`: the endpoint, null through the proxy.
+ */
+export function workersAiRoute(
+  llm: LLMProviderConfig | null, cloud: LocalCloudSession | undefined,
+): { readonly gateway: LLMProviderConfig | null; readonly auth: AuthResolution } | null {
+  const proxied = cloud !== undefined && llm !== null && llm.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
+
+  if (llm !== null && !proxied && defaultProviderFor(llm) === 'workers-ai') {
+    return { gateway: llm, auth: { baseURL: llm.baseURL, headers: llm.headers } };
+  }
+
+  if (cloud === undefined) return null;
+
+  return { gateway: null, auth: { baseURL: cloudProxyBaseURL(cloud.origin), headers: { Authorization: `Bearer ${cloud.token}` } } };
+}
 
 /**
  * Which provider a bare model id belongs to, given the configured endpoint. The

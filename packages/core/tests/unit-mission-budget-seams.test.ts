@@ -100,7 +100,7 @@ function searchableDeps(opts: {
   };
 
   return {
-    mode: 'build',
+    mode: 'build', swarms: true,
     swarm: {
       rt,
       // One actor per node: spend is charged per node, and a shared handle would bill a wave to one ledger.

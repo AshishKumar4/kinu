@@ -8,7 +8,7 @@
 
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { listLessons, recordLesson } from './outcomes';
+import { listLessons, recordLesson } from './lessons';
 
 /** Arg echoes arrive already bounded by the detector. */
 export interface RecoveryFinding {

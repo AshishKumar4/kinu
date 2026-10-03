@@ -13,7 +13,7 @@ import { buildSync, transform, type BuildOptions } from 'esbuild';
 import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { configDefaults, defineConfig, type Plugin } from 'vitest/config';
 import type { UserConfig } from 'vite';
-import { probeOutbound } from './tests/workerd/http-model-fake';
+import { probeOutbound, recordAiRun } from './tests/workerd/http-model-fake';
 import { hireOutbound } from './tests/workerd/hire-model-fake';
 import { registryOutbound } from './tests/workerd/npm-registry-fake';
 import { nimbusAssets } from './tests/helpers/nimbus-assets';
@@ -21,11 +21,11 @@ import {
   DEPLOY_FAKE_CHANNEL, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_RECORD, DEPLOY_FAKE_REFRESH_TOKEN,
   assetsOutbound, deployOutbound,
 } from './tests/workerd/deploy-fake';
-import { kCurrentWorker, type V4ModuleDefinition } from 'miniflare';
+import type { V4ModuleDefinition } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { promptText } from './vite-prompt-text';
 import { AGENT_BUNDLE_ENTRY, buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
-import { workersAiBinding } from './tests/helpers/workers-ai-binding';
+import { readAiRun, workersAiAnswer, workersAiBinding } from './tests/helpers/workers-ai-binding';
 import type { Reporter } from 'vitest/reporters';
 import * as v from 'valibot';
 import { HELD_PROXY_MODEL } from './tests/workerd/ai-proxy-shapes';
@@ -33,18 +33,27 @@ import { readMatching } from '../../scripts/sources';
 import { workerdRequirements } from '../../scripts/workerd-requirements';
 import { workerSourceTriggers } from '../../scripts/worker-test-inputs';
 
-const NativeAiInputSchema = v.looseObject({ inputs: v.looseObject({ messages: v.optional(v.array(v.looseObject({ role: v.optional(v.string()) }))) }) });
-
 let hireAi: ReturnType<typeof workersAiBinding> | undefined;
 
 function getHireAi(): ReturnType<typeof workersAiBinding> {
-  hireAi ??= workersAiBinding(async (request) => {
-    const { inputs } = v.parse(NativeAiInputSchema, await request.json());
-
-    return Response.json({ response: JSON.stringify(inputs.messages?.[0]?.role === 'system' ? { title: 'Hire Probe' } : { upserts: [], decay: [] }) });
-  });
+  hireAi ??= workersAiBinding(async (request) => workersAiAnswer(await readAiRun(request)));
 
   return hireAi;
+}
+
+let twoTurnAi: ReturnType<typeof workersAiBinding> | undefined;
+
+/** The two-turn probe reads what the binding was asked through `/log`. */
+function getTwoTurnAi(): ReturnType<typeof workersAiBinding> {
+  twoTurnAi ??= workersAiBinding(async (request) => {
+    const run = await readAiRun(request);
+
+    recordAiRun(run);
+
+    return workersAiAnswer(run);
+  });
+
+  return twoTurnAi;
 }
 
 let surfaceAi: ReturnType<typeof workersAiBinding> | undefined;
@@ -57,9 +66,7 @@ function getSurfaceAi(): ReturnType<typeof workersAiBinding> {
       return Response.json({ response: 'held' });
     }
 
-    const { inputs } = v.parse(NativeAiInputSchema, await request.json());
-
-    return Response.json({ response: JSON.stringify(inputs.messages?.[0]?.role === 'system' ? { title: 'Two Turn Probe' } : { upserts: [], decay: [] }) });
+    return workersAiAnswer(await readAiRun(request));
   });
 
   return surfaceAi;
@@ -271,16 +278,13 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           throw new Error('Unmatched test egress is disabled: ' + request.url);
         }, })],
 ["two-turn-probe", async () => ({
-          // `env.AI` is a service binding to this worker's FakeAI, so the model plane stays in-pool.
-          
-          compatibilityDate: workerCompatibility.compatibilityDate,
-          // workerd marshals `request.signal` over RPC only under this flag
-          // ("AbortSignal serialization is not enabled" otherwise).
-          compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
+          // `env.AI` is the installed Workers AI binding, answered by request shape on the Node side.
+          ...workerCompatibility,
           workerLoaders: { LOADER: {} },
           modules: probeModules('two-turn-probe.ts', probeRuntime),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
-          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' }, ASSETS: agentAssets() },
+          ai: await getTwoTurnAi(),
+          serviceBindings: { ASSETS: agentAssets() },
           // Compat HTTP falls back to the
           // global fetch (owned-model-services passes no deps.fetch), which
           // routes to the Node-side fake; unknown hosts throw.

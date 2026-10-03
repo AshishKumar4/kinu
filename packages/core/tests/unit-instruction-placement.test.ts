@@ -85,7 +85,6 @@ function promptFor(opts: Partial<SystemPromptOptions>): string {
     soulOverride: 'You are Kinu.',
     availableTools: ['file', 'shell'],
     model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
-    currentDate: '2026-01-01',
     ...opts,
   });
 }

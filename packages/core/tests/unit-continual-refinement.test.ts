@@ -12,7 +12,7 @@ import * as v from 'valibot';
 
 import {
   activePromptSectionOverrides, advancePromptSectionLane, buildSystemPromptSync,
-  createFactsStore, findPromptSectionTarget, recordTurnOutcome,
+  createFactsStore, findPromptSectionTarget, recordTurnRating,
   type FactsStore, type ScaffoldControl,
 } from '../src/index';
 import { initAllTables } from '../src/state/workspace-schema';
@@ -20,7 +20,8 @@ import { EvolutionEngine } from '../src/evolution/engine';
 import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
 import type { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
-import { initTurnOutcomeTables } from '../src/evolution/outcomes';
+import { initLessonTables } from '../src/evolution/lessons';
+import { initTurnRatingTables } from '../src/evolution/ratings';
 import { buildChangelog } from '../src/evolution/changelog';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import { initPromptSectionTables, listPromptSectionVersions } from '../src/prompting/section-store';
@@ -238,7 +239,8 @@ interface Fixture {
 function fixture(): Fixture {
   const { rt, db, stores } = createTestRuntime();
   initAllTables(rt.storage.execRaw, rt.storage.sql);
-  initTurnOutcomeTables(rt.storage.execRaw);
+  initLessonTables(rt.storage.execRaw);
+  initTurnRatingTables(rt.storage.execRaw);
   initGepaTables(rt.storage.execRaw);
   initPromptSectionTables(rt.storage.execRaw);
   initInstructionApprovalsTable(rt.storage.execRaw);
@@ -278,15 +280,13 @@ function seedGradedTurns(rt: AgentRuntime, negatives: number, accepted = 2) {
 
   for (let i = 0; i < negatives; i += 1) {
     const turnId = `neg-${String((seeded += 1))}`;
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
+    recordTurnRating(rt.storage.sql, rt.actor, {
       turnId,
-      outcome: 'corrected',
-      confidence: 0.9,
-      source: 'classifier',
-      userMessage: `fix ${turnId}. always answer in one line.`,
-      assistantResponse: 'a long rambling answer',
+      score: 1.5, corrected: 1, wrong: null,
+      source: 'model',
+      request: `fix ${turnId}. always answer in one line.`,
+      answer: 'a long rambling answer',
       followup: 'no, shorter please',
-      evidence: 'the user re-asked for brevity',
       now: SEED_EPOCH + seeded,
     });
     seededNegatives.push(turnId);
@@ -294,13 +294,12 @@ function seedGradedTurns(rt: AgentRuntime, negatives: number, accepted = 2) {
 
   for (let i = 0; i < accepted; i += 1) {
     const turnId = `ok-${String((seeded += 1))}`;
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
+    recordTurnRating(rt.storage.sql, rt.actor, {
       turnId,
-      outcome: 'accepted',
-      confidence: 0.9,
-      source: 'classifier',
-      userMessage: `fine task ${turnId}`,
-      assistantResponse: 'done',
+      score: 4.5, corrected: 0, wrong: null,
+      source: 'model',
+      request: `fine task ${turnId}`,
+      answer: 'done',
       followup: 'thanks',
       now: SEED_EPOCH + seeded,
     });
@@ -800,7 +799,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
     const route = routeFor(row.routes, 'prompt_section');
     expect(route.disposition).toBe('refused');
-    expect(route.reason).toContain('no corrected/frustrated turns');
+    expect(route.reason).toContain('no low-rated turns');
     expect(row.stage).toBe('refused');
   });
 
@@ -1043,7 +1042,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     store.open({ trigger: 'explicit', scope: 'workspace', turnIds: negatives });
 
-    // The row holds ids; turn text stays in `turn_outcomes`.
+    // The row holds ids; turn text stays in `turn_ratings`.
     const stored = fx.rt.storage.sql<{ turn_ids: string }>`
       SELECT turn_ids FROM refinement_requests`;
 
@@ -2397,13 +2396,13 @@ describe('a refiner answer returns to the lane, never to the root', () => {
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
 
     // The reviewed turns are read synchronously, after the answer is taken and before any route.
-    void fx.rt.storage.sql`ALTER TABLE turn_outcomes RENAME TO turn_outcomes_away`;
+    void fx.rt.storage.sql`ALTER TABLE turn_ratings RENAME TO turn_ratings_away`;
     await advanceRefinementLane(fx.deps(resumed));
-    void fx.rt.storage.sql`ALTER TABLE turn_outcomes_away RENAME TO turn_outcomes`;
+    void fx.rt.storage.sql`ALTER TABLE turn_ratings_away RENAME TO turn_ratings`;
 
     const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
     expect(row.stage).toBe('refused');
-    expect(row.detail).toContain('turn_outcomes');
+    expect(row.detail).toContain('turn_ratings');
     expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
   });
 
