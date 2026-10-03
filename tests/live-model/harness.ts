@@ -13,7 +13,7 @@ import type {
   ProviderCatalogSnapshot, ToolCallRecord,
 } from '../../packages/core/src/index';
 import {
-  activePromptSectionOverrides, agentsActionsFor, buildActorTools,
+  artifactOverrides, currentArtifacts, agentsActionsFor, buildActorTools,
   buildSystemPromptSync, createFactsStore,
   createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
   isBuiltinToolName, JsonObjectSchema, collectDynamicContext, currentDateForPrompt, DynamicContextLedger, readMemoryTail,
@@ -103,7 +103,7 @@ export interface EvalAgentSurface {
   /**
    * One turn's first request as production frames it: the system prompt, and the history with the dynamic block
    * (backend, model, directory, date, live state) woven before the turn's input by the ledger the step pipeline
-   * uses. Per call, because `activePromptSectionOverrides` and the memory tail change between turns, exactly as in
+   * uses. Per call, because the promoted artifacts and the memory tail change between turns, exactly as in
    * the product.
    */
   request(history: readonly ModelMessage[]): Promise<{ readonly system: string; readonly messages: ModelMessage[] }>;
@@ -191,7 +191,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
         temporaryAsk: false,
         backend,
         model: { id: llm.model },
-        sectionOverrides: activePromptSectionOverrides(sql, rt.actor),
+        sectionOverrides: artifactOverrides(currentArtifacts(sql, rt.actor)).sections,
       });
 
       const runtime: RuntimeFacts = { backend, model: { id: llm.model }, cwd: rt.cwd ?? undefined, date: currentDateForPrompt() };

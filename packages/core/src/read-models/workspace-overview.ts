@@ -61,8 +61,6 @@ export interface WorkspaceOverviewInputs {
   readonly pendingActions: readonly PendingAction[];
   readonly pendingConsents: readonly PendingDeviceConsent[];
   readonly activePlan: { readonly status: PlanReviewStatus } | null;
-  /** A trial the engine applies itself is an update; one it cannot apply waits on the owner. */
-  readonly scaffoldAutoApply: boolean;
   readonly latestRun: { readonly status: string | null; readonly task: string | null } | null;
   readonly slates: readonly Omit<WorkspaceOverviewSlate, 'visibility'>[];
   readonly shares: readonly WorkspaceOverviewShare[];
@@ -70,14 +68,14 @@ export interface WorkspaceOverviewInputs {
 
 type QueueEffect = 'decision' | 'update' | 'ignore';
 
-function pendingActionEffect(kind: PendingActionKind, scaffoldAutoApply: boolean): QueueEffect {
+function pendingActionEffect(kind: PendingActionKind): QueueEffect {
   switch (kind) {
     case 'deferred_action':
       return 'decision';
     case 'unseen_changes':
       return 'update';
     case 'scaffold_version':
-      return scaffoldAutoApply ? 'update' : 'decision';
+      return 'decision';
     case 'curriculum_task':
       return 'ignore';
     case 'plan_review':
@@ -98,7 +96,7 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
   let hasUpdates = false;
 
   for (const action of inputs.pendingActions) {
-    const effect = pendingActionEffect(action.kind, inputs.scaffoldAutoApply);
+    const effect = pendingActionEffect(action.kind);
 
     if (effect === 'decision') decisionsWaiting += 1;
 

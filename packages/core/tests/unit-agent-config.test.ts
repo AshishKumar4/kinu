@@ -1,7 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
   AGENT_CONFIG_KEYS,
-  DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
   canonicalConversationId, setReasoningEffort,
 } from '../src/index';
 import { Database } from 'bun:sqlite';
@@ -51,31 +50,6 @@ describe('AgentConfigStore — lastActiveExecutor', () => {
     c.setLastActiveExecutor('');
     c.setLastActiveExecutor('a'.repeat(40));
     expect(c.getLastActiveExecutor()).toBe('sandbox'); // unchanged by the bad writes
-  });
-});
-
-describe('AgentConfigStore — auto-GEPA cadence', () => {
-  test('unset defaults to the autonomous cadence; explicit values stick', () => {
-    const c = setup();
-    expect(c.getAutoGepaEveryNTurns()).toBe(DEFAULT_AUTO_GEPA_EVERY_N_TURNS); // default ON
-    c.setAutoGepaEveryNTurns(40);
-    expect(c.getAutoGepaEveryNTurns()).toBe(40);
-  });
-
-  test('explicit disable (0/negative) persists and beats the default', () => {
-    const c = setup();
-    c.setAutoGepaEveryNTurns(0);
-    expect(c.getAutoGepaEveryNTurns()).toBe(0); // stored '0', not unset
-    expect(c.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns)).toBe('0');
-    c.setAutoGepaEveryNTurns(20);
-    c.setAutoGepaEveryNTurns(-5); // disables
-    expect(c.getAutoGepaEveryNTurns()).toBe(0);
-  });
-
-  test('an agent that explicitly configured a cadence keeps it', () => {
-    const c = setup();
-    c.set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, '7'); // pre-flip explicit config
-    expect(c.getAutoGepaEveryNTurns()).toBe(7);
   });
 });
 
@@ -196,13 +170,13 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getSleepTimeComputeEnabled()).toBe(true);
   });
 
-  test('autoPromoteScaffold: defaults ON; explicit false sticks', () => {
+  test('liveTrials: defaults OFF; only the owner\'s true turns them on', () => {
     const c = setup();
-    expect(c.getAutoPromoteScaffold()).toBe(true); // autonomy default ON
-    c.set(AGENT_CONFIG_KEYS.autoPromoteScaffold, 'false');
-    expect(c.getAutoPromoteScaffold()).toBe(false); // explicit opt-out wins
-    c.set(AGENT_CONFIG_KEYS.autoPromoteScaffold, 'true');
-    expect(c.getAutoPromoteScaffold()).toBe(true);
+    expect(c.getLiveTrials()).toBe(false);
+    c.setLiveTrials(true);
+    expect(c.getLiveTrials()).toBe(true);
+    c.set(AGENT_CONFIG_KEYS.liveTrials, 'yes');
+    expect(c.getLiveTrials()).toBe(false);
   });
 
   test('changelogSeenAt: 0 until marked, then sticks', () => {
@@ -212,58 +186,6 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getChangelogSeenAt()).toBe(1_750_000_000_000);
     c.setChangelogSeenAt(Number.NaN); // ignored
     expect(c.getChangelogSeenAt()).toBe(1_750_000_000_000);
-  });
-
-  test('shadowSampleRate: defaults 0.25, parses + clamps', () => {
-    const c = setup();
-    expect(c.getShadowSampleRate()).toBe(0.25);
-    c.set(AGENT_CONFIG_KEYS.shadowSampleRate, '0.5');
-    expect(c.getShadowSampleRate()).toBe(0.5);
-    c.set(AGENT_CONFIG_KEYS.shadowSampleRate, '2.0');
-    expect(c.getShadowSampleRate()).toBe(0.25);
-    c.set(AGENT_CONFIG_KEYS.shadowSampleRate, 'not-a-number');
-    expect(c.getShadowSampleRate()).toBe(0.25);
-  });
-
-  test('the evolution knobs round-trip through their setters and reject bad input', () => {
-    const c = setup();
-
-    c.setAutoPromoteScaffold(false);
-    expect(c.getAutoPromoteScaffold()).toBe(false);
-    c.setAutoPromoteScaffold(true);
-    expect(c.getAutoPromoteScaffold()).toBe(true);
-
-    c.setShadowSampleRate(0.5);
-    expect(c.getShadowSampleRate()).toBe(0.5);
-    c.setScaffoldExploreShare(0);
-    expect(c.getScaffoldExploreShare()).toBe(0);
-
-    // A percentage is a caller bug; clamping to 1 would run every turn in shadow.
-    expect(() => c.setShadowSampleRate(100)).toThrow(/invalid shadow_sample_rate/);
-    expect(() => c.setScaffoldExploreShare(-0.1)).toThrow(/invalid scaffold_explore_share/);
-    expect(() => c.setShadowSampleRate(Number.NaN)).toThrow(/invalid shadow_sample_rate/);
-    expect(c.getShadowSampleRate()).toBe(0.5);
-
-    c.setGepaEvalBudget(1000);
-    expect(c.getGepaEvalBudget()).toBe(64);
-    c.setGepaEvalBudget(1);
-    expect(c.getGepaEvalBudget()).toBe(4);
-  });
-});
-
-describe('AgentConfigStore — GEPA eval budget', () => {
-  test('defaults to 24, reads stored values, clamps to 4..64, ignores garbage', () => {
-    const c = setup();
-    expect(c.getGepaEvalBudget()).toBe(DEFAULT_GEPA_EVAL_BUDGET);
-    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '12');
-    expect(c.getGepaEvalBudget()).toBe(12);
-    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '500');
-    expect(c.getGepaEvalBudget()).toBe(64);
-    // Below the floor a disjoint split is impossible.
-    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '1');
-    expect(c.getGepaEvalBudget()).toBe(4);
-    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, 'many');
-    expect(c.getGepaEvalBudget()).toBe(DEFAULT_GEPA_EVAL_BUDGET);
   });
 });
 
@@ -317,18 +239,14 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setShellApprovalMode('allow_all'),
     (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'device' }]),
     (c) => c.setSleepTimeComputeEnabled(false),
-    (c) => c.setAutoPromoteScaffold(false),
-    (c) => c.setShadowSampleRate(0.5),
-    (c) => c.setScaffoldExploreShare(0.3),
+    (c) => c.setLiveTrials(true),
     (c) => c.setAdvisorEnabled(true),
     (c) => c.setAdvisorMinSeverity('blocker'),
     (c) => c.setAlwaysActiveSkills(['research']),
     (c) => c.setLastActiveExecutor('sandbox'),
-    (c) => c.setAutoGepaEveryNTurns(10),
     (c) => c.setChangelogSeenAt(1_750_000_000_000),
     (c) => c.countClosedTurnWindow(),
     (c) => c.countIsolateGeneration(),
-    (c) => c.setGepaEvalBudget(16),
     (c) => c.setEmailNotificationsEnabled(false),
     (c) => { canonicalConversationId(c); },
   ];

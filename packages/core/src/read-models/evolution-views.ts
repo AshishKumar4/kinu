@@ -13,7 +13,7 @@ import {
 } from '../mcts/takes';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import type { SessionHistory } from '../session/history';
-import { getCurrentScaffoldVersion } from '../scaffold/shadow';
+import { getCurrentScaffoldVersion } from '../scaffold/versions';
 import type { AgentInbox } from '../types/signals';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';

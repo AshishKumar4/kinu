@@ -24,7 +24,7 @@ const WEB_ACTION_FIELDS = {
 } as const satisfies Record<WebToolAction, readonly string[]>;
 
 /** Loose, so a field no action reads reaches the field check instead of being stripped unseen. */
-const WebToolInputSchema = z.looseObject({
+export const WebToolInputSchema = z.looseObject({
   action: oneOf(WEB_TOOL_ACTIONS),
   query: z.string().describe('For search.').optional(),
   limit: z.number().describe('For search: max results (default 5, max 20).').optional(),

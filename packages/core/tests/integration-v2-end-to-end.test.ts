@@ -1,5 +1,5 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
-/** v2 end-to-end: inline executor, branching heads, scaffold shadow rollout, durable event log, approval gate. */
+/** v2 end-to-end: inline executor, branching heads, scaffold proposal and promotion, durable event log, approval gate. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -8,8 +8,7 @@ import {
   HeadController, HeadJournal, initHeadsTables,
   type HeadInput, type HeadReport, type HeadRuntime, type SpawnedHead,
   type SerializedMessage, type SplitRequest, type MergeOutput,
-  initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision, readScaffoldVersion,
-  DEFAULT_SHADOW_CONFIG, recordShadowEvaluation,
+  getPendingScaffold, applyPromotionDecision, readScaffoldVersion,
   initScaffoldTables, modifyScaffold,
   initRunEventTables, RunEventRecorder,
   reviewCommand, gateExec,
@@ -151,11 +150,10 @@ describe('v2 e2e: branching heads → merge', () => {
   });
 });
 
-describe('v2 e2e: scaffold shadow rollout', () => {
+describe('v2 e2e: scaffold proposal and promotion', () => {
   test('modifyScaffold writes new version with status=pending', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
-    initShadowTables(rt.storage.execRaw);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield task; }');
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
@@ -176,7 +174,6 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
 
     expect(pending.version).toBe(1);
-    expect(pending.trialsSoFar).toBe(0);
 
     const statuses = rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions
@@ -187,10 +184,9 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     expect(map.get(1)).toBe('pending');
   });
 
-  test('pending wins → promote; statuses flip correctly', async () => {
+  test('the owner promotes the pending version; statuses and source flip together', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
-    initShadowTables(rt.storage.execRaw);
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial bootstrap', 'current')`;
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
@@ -204,28 +200,7 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     await writeText(rt.storage.vfs, `${rt.identity.scaffold.path}.v0`, V0);
     await writeText(rt.storage.vfs, `${rt.identity.scaffold.path}.v1`, V1);
 
-    const judge = (winner: 'pending' | 'current') => ({
-      winner, rationale: 'mock',
-      currentScore: winner === 'current' ? 0.8 : 0.5,
-      pendingScore: winner === 'pending' ? 0.8 : 0.5,
-    });
-
-    for (let i = 0; i < 5; i++) {
-      recordShadowEvaluation(rt.storage.sql, rt.actor, {
-        pendingVersion: 1,
-        task: `t${i}`, judgeResult: judge('pending'),
-      });
-    }
-
     const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
-
-    expect(pending.trialsSoFar).toBe(5);
-    expect(pending.pendingWins).toBe(5);
-    expect(pending.currentWins).toBe(0);
-
-    const decision = decidePromotion(pending, DEFAULT_SHADOW_CONFIG);
-    expect(decision.decision).toBe('promote');
-    expect(decision.winRate).toBeCloseTo(1, 2);
 
     const applied = await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(applied.action).toBe('promote');

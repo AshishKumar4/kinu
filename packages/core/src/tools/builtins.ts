@@ -119,7 +119,7 @@ export interface ReportToolDeps {
 const PlanEditsInputSchema = z.object({ edits: z.array(PlanEditSchema).min(1) });
 
 /** Device nicknames are not in the enum, so it stays advisory: any string passes, and an unknown one is a device. */
-function shellInputSchema(runtimes: readonly string[]) {
+export function shellInputSchema(runtimes: readonly string[]) {
   return z.object({
     command: z.string(),
     runtime: z.string().meta({

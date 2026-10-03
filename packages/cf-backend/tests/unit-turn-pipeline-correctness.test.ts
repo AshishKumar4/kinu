@@ -2,15 +2,15 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
 import {
-  MERGE_POLICY_BINDING, mergePolicyProfile, present, scriptedTurnModel, sqlOver, toolExecute,
+  MERGE_POLICY_BINDING, mergePolicyProfile, present, scriptedTurnModel, toolExecute,
 } from '@kinu.run/test-utils';
 import {
-  MergeOutputSchema, listQueuedShadowTrials, DEFAULT_WORKERS_AI_MODEL_SPEC, DYNAMIC_CONTEXT_OPEN_TAG, mcpToolKey, type JsonValue,
+  MergeOutputSchema, DEFAULT_WORKERS_AI_MODEL_SPEC, DYNAMIC_CONTEXT_OPEN_TAG, mcpToolKey, type JsonValue,
   type ReasoningEffort, type ResolvedTurnProfile,
   LiveWorkers,
 } from '@kinu.run/core';
 import {
-  declareShadowCandidate, hostedExplorationHarness, hostedMainActor, improvementLanesRan,
+  hostedExplorationHarness, hostedMainActor, improvementLanesRan,
   orchestratorHarness, reactivateOrchestratorHarness, catalogTurn, gatewayWorkspace, GATEWAY_CATALOG,
   chatSessionTurns, driveUntil, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
   workspaceMainActor, type RecordedUserPlaneCalls,
@@ -189,17 +189,11 @@ describe('turn-pipeline correctness wiring', () => {
     expect(await file({
       action: 'edit', path: '/context/working.jsonl', edits: [{ old_text: 'OLD premise', new_text: 'NEW premise' }],
     })).toMatchObject({ ok: true });
-    declareShadowCandidate(harness.db);
-    workspaceMainActor(harness.db).config.setShadowSampleRate(1);
     const prepared = await chatSessionTurns(agent).prepare(turn([first, reply, next]));
     await chatSessionTurns(agent).settle({ messageId: 'edited-answer-2', text: 'second answer', requestId: 'edited-req-2' });
-    const trial = listQueuedShadowTrials(sqlOver(harness.db), workspaceMainActor(harness.db), 1)[0];
 
-    if (trial === undefined || prepared?.messages === undefined) throw new Error('the turn did not retain its request and trial');
+    if (prepared?.messages === undefined) throw new Error('the turn did not retain its request');
     expect(prepared.messages[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
-    // The trial retains the called request (history plus dynamic block); compared on role and text.
-    expect(spoken(trial.context)).toEqual(spoken(prepared.prompt));
-    expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
   });
 
   test('a catalog the turn cannot reach runs on builtins; any other failure is the turn\'s own', async () => {

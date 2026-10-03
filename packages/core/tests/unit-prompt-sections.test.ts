@@ -11,7 +11,6 @@ import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import { definePromptSection, templateContract } from '../src/prompting/template';
 import { PROMPT_MATRIX } from './fixtures/prompt-surface-matrix';
 import { createTestRuntime } from '@kinu.run/test-utils';
-import { PROMPT_SECTION_MAX_BYTES } from '../src/prompting/section-store';
 
 /** Not a heading's first letter, so every diff position is attributable to the injection. */
 const MUTANT = 'Z';
@@ -150,7 +149,7 @@ describe('PROMPT_SECTIONS — the addressing scheme', () => {
 
     for (const section of PROMPT_SECTIONS) {
       expect(section.source.startsWith('## ')).toBe(true);
-      expect(Buffer.byteLength(section.source, 'utf8')).toBeLessThanOrEqual(PROMPT_SECTION_MAX_BYTES);
+      expect(Buffer.byteLength(section.source, 'utf8')).toBeLessThanOrEqual(4800);
       expect(templateContract(section.id, section.source)).toBeDefined();
     }
   });

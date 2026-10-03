@@ -32,9 +32,8 @@ import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initFactsTable } from '../src/memory/facts';
-import { initShadowTables } from '../src/scaffold/shadow';
 import { initTaskListTable } from '../src/tools/task-store';
-import { initPromptSectionTables } from '../src/prompting/section-store';
+import { initArtifactTables, initTrialTables } from '../src/evolution/artifact-schema';
 import { initExplorationRecordsTable } from '../src/strategy/records';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
 import { initCodemodeStateTable } from '../src/identity/program-state';
@@ -55,7 +54,6 @@ const OWNED = {
   initRefinementTables: (db) => initRefinementTables(db.execRaw),
   initEventsHubTables: (db) => initEventsHubTables(db.exec),
   initHeadsTables: (db) => initHeadsTables(db.execRaw),
-  initShadowTables: (db) => initShadowTables(db.execRaw),
   initRunEventTables: (db) => initRunEventTables(db.execRaw),
   initActorClaimTables: (db) => initActorClaimTables(db.execRaw),
   initFactsTable: (db) => initFactsTable(db.execRaw),
@@ -70,7 +68,8 @@ const OWNED = {
   initTaskListTable: (db) => initTaskListTable(db.execRaw),
   initMctsSearchTable: (db) => initMctsSearchTable(db.execRaw),
   initImportedExperienceTable: (db) => initImportedExperienceTable(db.execRaw),
-  initPromptSectionTables: (db) => initPromptSectionTables(db.execRaw),
+  initArtifactTables: (db) => initArtifactTables(db.execRaw),
+  initTrialTables: (db) => initTrialTables(db.execRaw),
   initAgentConfigTable: (db) => initAgentConfigTable(db.execRaw),
   initMemoryChunkTables: (db) => initMemoryChunkTables(db.sql),
 } satisfies Record<string, (db: WorkspaceSchemaSql) => void>;

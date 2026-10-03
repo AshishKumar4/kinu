@@ -5,11 +5,11 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import type { AgentRuntime, LLM, LLMProviderConfig } from '@kinu.run/core';
-import { initWorkspaceSchema, WORKSPACE_RUN_ID, recordShadowEvaluation } from '@kinu.run/core';
+import type { AgentRuntime, LLMProviderConfig } from '@kinu.run/core';
+import { initWorkspaceSchema, WORKSPACE_RUN_ID } from '@kinu.run/core';
 import {
   initScaffoldTables, initAgentConfigTable,
-  getPendingScaffold, getCurrentScaffoldVersion, listScaffoldArchive,
+  getPendingScaffold, getCurrentScaffoldVersion,
   INITIAL_SCAFFOLD_SOURCE,
 } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
@@ -87,7 +87,7 @@ async function installScaffold(
     VALUES (${rt.actor.actorId}, ${opts.version}, ${Date.now()}, ${`v${opts.version}`}, ${opts.status})`;
 }
 
-for (const mode of ['promote', 'auto', 'veto'] as const) {
+for (const mode of ['promote', 'veto'] as const) {
   test(`scaffold ${mode} shares the live and retained session event stream`, async () => {
     const { db, rt, session, events, started } = await setup('unused');
     await started;
@@ -98,16 +98,10 @@ for (const mode of ['promote', 'auto', 'veto'] as const) {
         : 'async function* run(rt, task) { yield { type: "chunk", data: "candidate" }; }',
     });
 
-    if (mode === 'auto') {
-      for (let trial = 0; trial < 5; trial++) recordShadowEvaluation(rt.storage.sql, rt.actor, {
-        pendingVersion: 1, task: `trial-${trial}`, judgeResult: { winner: 'pending', rationale: 'candidate met the fixture requirement', currentScore: 0, pendingScore: 1 },
-      });
-    }
-
     try {
       rt.stores.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'scaffold', usage: { input: 3, output: 1 } });
-      const decision = await session.applyScaffoldDecision(mode === 'auto' ? 'auto' : 'promote');
-      expect(decision).toMatchObject({ ok: true, action: mode === 'veto' ? 'rollback' : 'promote' });
+      const decision = await session.applyScaffoldDecision('promote');
+      expect(decision).toMatchObject({ action: mode === 'veto' ? 'rollback' : 'promote' });
       rt.stores.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'scaffold', usage: { input: 4, output: 2 } });
       await session.flushEvents();
       const retained = session.getRunEvents(WORKSPACE_RUN_ID);
@@ -137,7 +131,7 @@ test('a failed scaffold event write reports the failure without reversing the de
   const restore = setDiagnosticsSink(logger);
 
   try {
-    expect(await session.applyScaffoldDecision('promote')).toMatchObject({ ok: true, action: 'promote' });
+    expect(await session.applyScaffoldDecision('promote')).toMatchObject({ action: 'promote', newCurrentVersion: 1 });
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(1);
     expect(logger.emitted).toContainEqual(expect.objectContaining({ event: 'event.scaffold_decision_emit_failed', code: 'io' }));
   } finally {
@@ -214,78 +208,7 @@ describe('a promoted scaffold drives a local turn', () => {
   });
 });
 
-/** Identifies the pending by its marker, not by slot: the shadow eval randomizes output order (judgeTrialOrderSwapped). */
-function markerJudge(pendingMarker: string): LLM {
-  return {
-    stream: async function* () { yield ''; },
-    complete: async (prompt: string) => {
-      const a = prompt.slice(prompt.indexOf('Response A:'), prompt.indexOf('Response B:'));
-      const winner = a.includes(pendingMarker) ? 'a' : 'b';
-
-      return JSON.stringify({
-        winner, rationale: 'the pending answered better',
-        scoreA: winner === 'a' ? 0.9 : 0.2,
-        scoreB: winner === 'b' ? 0.9 : 0.2,
-      });
-    },
-  };
-}
-
-describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => {
-  test('sampled shadow eval promotes a winning pending, unblocking the next proposal', async () => {
-    const { rt, session, events } = await setup('the default loop answered');
-    await installScaffold(rt, {
-      version: 1, status: 'current',
-      code: `async function* run(rt, task) { yield { type: 'chunk', data: 'CURRENT-SCAFFOLD' }; }`,
-    });
-    await installScaffold(rt, {
-      version: 2, status: 'pending',
-      code: `async function* run(rt, task) { yield { type: 'chunk', data: 'PENDING-SCAFFOLD' }; }`,
-    });
-    rt.judgeModel = markerJudge('PENDING-SCAFFOLD');
-
-    const config = rt.actor.config;
-    config.setShadowSampleRate(1);      // evaluate every turn — no flaky sampling
-    config.setAutoPromoteScaffold(true);
-
-    expect(getPendingScaffold(rt.storage.sql, rt.actor)?.version).toBe(2);
-
-    // DEFAULT_SHADOW_CONFIG needs 5 decisive trials; each turn only queues one, and runDueEvolution drains the lane.
-    for (let i = 0; i < 6; i++) await session.send(`turn ${i}`, { id: crypto.randomUUID() });
-    await session.runDueEvolution();
-    await session.end();
-
-    expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
-    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(2);
-    expect(listScaffoldArchive(rt.storage.sql, rt.actor, 10).find((e) => e.version === 2)?.status).toBe('current');
-    expect(events.some((e) => e.type === 'evolution' && e.event === 'scaffold_promotion')).toBe(true);
-  });
-
-  test('a losing pending is rolled back, which also clears the block', async () => {
-    const { rt, session } = await setup('the default loop answered');
-    await installScaffold(rt, {
-      version: 1, status: 'current',
-      code: `async function* run(rt, task) { yield { type: 'chunk', data: 'CURRENT-SCAFFOLD' }; }`,
-    });
-    await installScaffold(rt, {
-      version: 2, status: 'pending',
-      code: `async function* run(rt, task) { yield { type: 'chunk', data: 'PENDING-SCAFFOLD' }; }`,
-    });
-    rt.judgeModel = markerJudge('CURRENT-SCAFFOLD');
-
-    const config = rt.actor.config;
-    config.setShadowSampleRate(1);
-    config.setAutoPromoteScaffold(true);
-
-    for (let i = 0; i < 6; i++) await session.send(`turn ${i}`, { id: crypto.randomUUID() });
-    await session.runDueEvolution();
-    await session.end();
-
-    expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
-    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(1);
-    expect(listScaffoldArchive(rt.storage.sql, rt.actor, 10).find((e) => e.version === 2)?.status).toBe('rolled_back');
-  });
-
+describe('a pending scaffold waits for the owner\'s decision', () => {
   test('opening a session heals a scaffold-less workspace (DO onStart parity)', async () => {
     // A workspace without scaffold/agent.js silently disables scaffold evolution; the session heals it as the DO does in onStart.
     const { rt, session } = await setup('unused', { provisionScaffold: false });
@@ -307,48 +230,10 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
       version: 2, status: 'pending', code: `async function* run(rt, task) { yield { type: 'chunk', data: 'v2' }; }`,
     });
 
-    expect(session.getShadowStatus().hasPending).toBe(true);
-    expect(await session.applyScaffoldDecision('auto')).toMatchObject({ ok: false });
-
-    expect(await session.applyScaffoldDecision('promote')).toMatchObject({ ok: true, newCurrentVersion: 2 });
+    expect(session.getEvolutionStatus().pendingScaffold?.version).toBe(2);
+    expect(await session.applyScaffoldDecision('promote')).toMatchObject({ action: 'promote', newCurrentVersion: 2 });
     expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
-    expect(session.getShadowStatus().hasPending).toBe(false);
-  });
-
-  test('a queued trial claims its tool calls under the TRIAL, not the ambient turn', async () => {
-    const { rt, session } = await setup('the default loop answered');
-    await installScaffold(rt, {
-      version: 1, status: 'current',
-      code: `async function* run(rt, task) { yield { type: 'chunk', data: 'CURRENT-SCAFFOLD' }; }`,
-    });
-    await installScaffold(rt, {
-      version: 2, status: 'pending',
-      code: `async function run({ task }) {
-        await host.callTool('memory', { action: 'search', query: 'anything' });
-        await host.emit({ type: 'text_delta', text: 'PENDING-SCAFFOLD' });
-      }`,
-    });
-    rt.judgeModel = markerJudge('PENDING-SCAFFOLD');
-    rt.actor.config.setShadowSampleRate(1);
-
-    await session.send('queue one trial', { id: crypto.randomUUID() });
-
-    const queued = rt.storage.sql<{ id: string }>`SELECT id FROM scaffold_trial_queue
-      WHERE actor_id = ${rt.actor.actorId}`;
-
-    expect(queued).toHaveLength(1);
-    const trialId = queued[0]?.id ?? '';
-
-    await session.runDueEvolution();
-    await session.end();
-
-    // Claims key on the trial (call id `<trial>#n`, turn id the trial) so a re-driven trial never runs a tool twice.
-    const claims = rt.storage.sql<{ turn_id: string; normalized_call_id: string }>`
-      SELECT turn_id, normalized_call_id FROM tool_effect_claims
-      WHERE turn_id = ${trialId}`;
-
-    expect(claims).toHaveLength(1);
-    expect(claims[0]?.normalized_call_id).toBe(`${trialId}#0`);
+    expect(session.getEvolutionStatus().pendingScaffold).toBeNull();
   });
 });
 

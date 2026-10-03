@@ -149,6 +149,31 @@
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "artifact_trials@packages/core/src/evolution/artifact-schema.ts": [
+    "actor_id TEXT NOT NULL",
+    "trial_id TEXT NOT NULL",
+    "artifact_id TEXT NOT NULL",
+    "version INTEGER NOT NULL",
+    "status TEXT NOT NULL CHECK (status IN (${sqlCheckList(TRIAL_STATUSES)}))",
+    "looks INTEGER NOT NULL DEFAULT 0",
+    "started_at INTEGER NOT NULL",
+    "decided_at INTEGER",
+    "verdict TEXT",
+    "PRIMARY KEY (actor_id, trial_id)"
+  ],
+  "artifact_versions@packages/core/src/evolution/artifact-schema.ts": [
+    "actor_id TEXT NOT NULL",
+    "artifact_id TEXT NOT NULL",
+    "version INTEGER NOT NULL",
+    "body TEXT NOT NULL",
+    "status TEXT NOT NULL CHECK (status IN (${sqlCheckList(ARTIFACT_STATUSES)}))",
+    "parent INTEGER",
+    "rationale TEXT NOT NULL",
+    "evidence TEXT",
+    "written_at INTEGER NOT NULL",
+    "decided_at INTEGER",
+    "PRIMARY KEY (actor_id, artifact_id, version)"
+  ],
   "background_job_serves@packages/core/src/jobs/store.ts": [
     "actor_id TEXT NOT NULL",
     "job_id TEXT NOT NULL",
@@ -856,21 +881,6 @@
     "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id, revision)"
   ],
-  "prompt_section_versions@packages/core/src/prompting/section-store.ts": [
-    "actor_id TEXT NOT NULL",
-    "section_id TEXT NOT NULL",
-    "version INTEGER NOT NULL",
-    "source TEXT NOT NULL",
-    "rationale TEXT NOT NULL",
-    "status TEXT NOT NULL CHECK (status IN ('current','pending','rolled_back','historical'))",
-    "incumbent_bytes INTEGER NOT NULL",
-    "written_at INTEGER NOT NULL",
-    "wins INTEGER NOT NULL DEFAULT 0",
-    "losses INTEGER NOT NULL DEFAULT 0",
-    "ties INTEGER NOT NULL DEFAULT 0",
-    "decided_at INTEGER",
-    "PRIMARY KEY (actor_id, section_id, version)"
-  ],
   "proposed_tasks@packages/core/src/curriculum/proposer.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -938,28 +948,6 @@
     "first_seen_at INTEGER NOT NULL",
     "announced_at INTEGER",
     "outcome TEXT"
-  ],
-  "scaffold_evaluations@packages/core/src/scaffold/shadow.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "pending_version INTEGER NOT NULL",
-    "task TEXT NOT NULL",
-    "current_score REAL",
-    "pending_score REAL",
-    "winner TEXT",
-    "judge_rationale TEXT",
-    "evaluated_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, id)"
-  ],
-  "scaffold_trial_queue@packages/core/src/scaffold/shadow.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "pending_version INTEGER NOT NULL",
-    "task TEXT NOT NULL",
-    "current_output TEXT NOT NULL",
-    "context TEXT NOT NULL",
-    "queued_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, id)"
   ],
   "scaffold_versions@packages/core/src/scaffold/schemas.ts": [
     "actor_id TEXT NOT NULL",
@@ -1161,6 +1149,15 @@
     "created_at INTEGER NOT NULL",
     "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
+  ],
+  "trial_turns@packages/core/src/evolution/artifact-schema.ts": [
+    "actor_id TEXT NOT NULL",
+    "trial_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "segment_id TEXT NOT NULL",
+    "arm TEXT NOT NULL CHECK (arm IN (${sqlCheckList(ARMS)}))",
+    "at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, trial_id, turn_id)"
   ],
   "triggers@packages/core/src/events/hub/schema.ts": [
     "actor_id TEXT NOT NULL",

@@ -1,41 +1,59 @@
 /** How the agent changes itself, as the owner sees and overrules it. */
 import { expect } from 'bun:test';
-import { CHAT_SESSION_ID, PlanReviewStore, recordBranchTakeSet } from '@kinu.run/core';
+import {
+  CHAT_SESSION_ID, PlanReviewStore, bundledArtifact, drawArm, recordBranchTakeSet, sectionArtifact, startTrial, writeCandidate,
+} from '@kinu.run/core';
 import type { SharedBackend } from '../backend';
+import { until } from '../../helpers/actor-harness';
 import type { SharedCase } from '../cases';
 
-/** A scaffold candidate in shadow trial, as the improvement lane leaves one. */
+/** A scaffold proposal waiting for the owner, as the proposer leaves one. */
 function pendingScaffold({ sql, actor }: SharedBackend, rationale: string): void {
   void sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${actor.actorId}, 1, ${Date.now()}, ${rationale}, 'pending')`;
-  actor.config.setShadowSampleRate(0.5);
 }
 
 export const EVOLUTION_CASES: readonly SharedCase[] = [
   {
-    title: 'a scaffold in shadow trial waits for evidence, and the owner can roll it back',
-    covers: ['getShadowStatus', 'applyScaffoldDecision'],
+    title: 'a live trial\'s turn reads its arm from its cache segment by the one seeded rule, and records it',
+    covers: ['getEvolutionStatus'],
+    async run({ surface, sql, actor }) {
+      const artifactId = sectionArtifact('guidance/operating');
+      const body = `${bundledArtifact(artifactId)?.trimEnd() ?? ''} Be brief.`;
+      writeCandidate(sql, actor, { artifactId, body, rationale: 'r', evidence: { turns: ['t'], reason: 'verbose_or_slow' } });
+      const trial = startTrial(sql, actor);
+
+      if (trial === null) throw new Error('the waiting candidate did not start a trial');
+      expect((await surface.getEvolutionStatus()).trial).toMatchObject({ trialId: trial.trialId, artifactId, version: 1 });
+
+      const rows = () => sql<{ turn_id: string; segment_id: string; arm: string }>`SELECT turn_id, segment_id, arm FROM trial_turns
+        WHERE actor_id = ${actor.actorId} AND trial_id = ${trial.trialId} ORDER BY at`;
+
+      // cf admits a send and runs its turn after it returns; the CLI runs it inside.
+      await surface.send('first');
+      await until(() => rows().length === 1, 'the turn reads its arm');
+
+      for (const row of rows()) expect(row.arm).toBe(drawArm(trial.trialId, row.segment_id));
+    },
+  },
+  {
+    title: 'a proposed scaffold waits for the owner, who can roll it back',
+    covers: ['getEvolutionStatus', 'applyScaffoldDecision'],
     async run(backend) {
       const { surface } = backend;
       pendingScaffold(backend, 'answer in the owner language');
 
-      expect(await surface.getShadowStatus()).toMatchObject({
-        hasPending: true,
-        pending: { version: 1, rationale: 'answer in the owner language', trialsSoFar: 0 },
-        decision: { decision: 'continue' },
+      expect(await surface.getEvolutionStatus()).toMatchObject({
+        pendingScaffold: { version: 1, rationale: 'answer in the owner language' }, trial: null, waiting: [],
       });
-      // No trial has run, so the promotion gate cannot conclude either way.
-      expect(await surface.applyScaffoldDecision('auto')).toEqual({ ok: false, error: 'inconclusive; need more trials' });
-      expect(await surface.applyScaffoldDecision('rollback')).toEqual({
-        ok: true, action: 'rollback', fromVersion: 1, newCurrentVersion: 0,
-      });
+      expect(await surface.applyScaffoldDecision('rollback')).toEqual({ action: 'rollback', fromVersion: 1, newCurrentVersion: 0 });
 
       // cf writes v0 as a precondition of its first turn, the CLI at session start: the candidate is the case's.
-      const status = await surface.getShadowStatus();
+      const status = await surface.getEvolutionStatus();
 
-      if (status.hasPending) throw new Error('a rolled-back candidate is no longer pending');
+      expect(status.pendingScaffold).toBeNull();
       expect(status.versions.find((row) => row.version === 1)?.status).toBe('rolled_back');
-      expect(await surface.applyScaffoldDecision('rollback')).toEqual({ ok: false, error: 'no pending scaffold' });
+      await expect(surface.applyScaffoldDecision('rollback')).rejects.toThrow('no pending scaffold');
     },
   },
   {

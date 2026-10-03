@@ -1,5 +1,4 @@
-// Head-and-tail evidence policy every evolution-loop reader shares. DEFAULT_SHADOW_CONFIG was calibrated on
-// head-only slices (scripts/shadow-veto-monte-carlo.ts); re-run it before changing the promotion rule.
+// Head-and-tail evidence policy every evolution-loop reader shares.
 
 import type { ToolSet, TypedToolResult } from 'ai';
 import * as v from 'valibot';

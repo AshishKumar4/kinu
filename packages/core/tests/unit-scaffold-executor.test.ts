@@ -2,7 +2,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  runScaffold, scaffoldEventText,
+  runScaffold,
   type ScaffoldEvent,
   type ScaffoldEmitFn,
 } from '../src/scaffold/executor';
@@ -177,7 +177,12 @@ describe('runScaffold', () => {
       llmStream: () => asyncOf({ type: 'text-delta', delta: 'one ' }, { type: 'text-delta', delta: 'two ' }, { type: 'text-delta', delta: 'three' }),
     });
 
-    const deltas = events.map(scaffoldEventText).filter(text => text !== null);
+    const deltas = events.flatMap((e) => {
+      if (e.type === 'text_delta') return [e.text];
+
+      return (e.type === 'chat_chunk' || e.type === 'model_chunk') && e.chunk.type === 'text-delta' ? [e.chunk.delta] : [];
+    });
+
     expect(deltas).toEqual(['one ', 'two ', 'three']);
   });
 

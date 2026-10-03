@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-02",
-  "files": 2955,
-  "functions": 74294,
+  "measuredAt": "2026-10-03",
+  "files": 2979,
+  "functions": 74824,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -186,10 +186,6 @@
       "complexity": 31
     },
     {
-      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
-      "complexity": 31
-    },
-    {
       "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep",
       "complexity": 31
     },
@@ -227,6 +223,10 @@
     },
     {
       "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
+      "complexity": 30
+    },
+    {
+      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
       "complexity": 30
     },
     {

@@ -6,10 +6,6 @@ export const EVIDENCE_BUDGETS = {
   storedAssistantResponse: 16_000,
   storedFollowup: 8_000,
 
-  /** One window for judge input and trial row, so stored evidence is what the verdict saw. */
-  shadowTask: 6_000,
-  shadowOutput: 10_000,
-
   gepaInstanceInput: 1_600,
   gepaInstanceEvidence: 3_200,
   gepaInstanceFeedback: 3_200,
@@ -17,10 +13,6 @@ export const EVIDENCE_BUDGETS = {
   gepaParentSource: 16_000,
 
   replayTask: 6_000,
-  replayFreshResponse: 12_000,
-  replayReferenceResponse: 12_000,
-  replayFailedResponse: 8_000,
-  replayCorrection: 4_000,
 
   outcomeUserMessage: 4_000,
   outcomeAssistantResponse: 8_000,
@@ -36,9 +28,6 @@ export const EVIDENCE_BUDGETS = {
   mergeNarrative: 12_000,
 
   convergenceObservation: 1_600,
-
-  evalReference: 6_000,
-  evalOutput: 8_000,
 
   reflection: 2_000,
   lessons: 6_000,

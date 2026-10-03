@@ -12,7 +12,7 @@ import {
   type AlarmScheduler,
   openWorkspaceMainActor,
   WorkspaceActorDirectory,
-  createAgentConfigStore,
+  createAgentConfigStore, getCurrentScaffoldVersion,
   type ActorHandle,
   type SqlExecutor,
   type WorkspaceActor,
@@ -725,17 +725,6 @@ function countOf(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): numb
   return all<{ c: number }>(db, sql, ...params).at(0)?.c ?? 0;
 }
 
-function currentScaffoldVersion(db: SqliteDb, actorId: string): number {
-  const current = all<{ version: number }>(
-    db,
-    `SELECT version FROM scaffold_versions
-     WHERE actor_id = ? AND status = 'current' ORDER BY version DESC LIMIT 1`,
-    actorId,
-  ).at(0);
-
-  return current?.version ?? 0;
-}
-
 function tableExists(db: SqliteDb, name: string): boolean {
   return coreTableExists(makeSql(db), name);
 }
@@ -826,20 +815,16 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
 
     if (!row) return null;
 
-    const config = tableExists(db, 'actor_config')
-      ? createAgentConfigStore(makeSql(db), actorId, () => {
-        if (!directory?.retained(actorId)) {
-          throw new Error(`actor ${actorId} is no longer retained in this workspace`);
-        }
-      })
-      : null;
+    const assertCurrent = () => {
+      if (!directory?.retained(actorId)) throw new Error(`actor ${actorId} is no longer retained in this workspace`);
+    };
+
+    const config = tableExists(db, 'actor_config') ? createAgentConfigStore(makeSql(db), actorId, assertCurrent) : null;
 
     return {
       name: row.name,
       purpose: '',
-      scaffoldVersion: tableExists(db, 'scaffold_versions')
-        ? currentScaffoldVersion(db, actorId)
-        : 0,
+      scaffoldVersion: tableExists(db, 'scaffold_versions') ? getCurrentScaffoldVersion(makeSql(db), { actorId, assertCurrent }) ?? 0 : 0,
       searchNodeCount: tableExists(db, 'search_nodes')
         ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId)
         : 0,
@@ -871,10 +856,7 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
     name: identity?.name ?? null,
     purpose: mission ?? '',
     createdAt: identity?.created_at ?? null,
-    // The live version, not MAX(version), which would include a pending proposal.
-    scaffoldVersion: actor && tableExists(db, 'scaffold_versions')
-      ? currentScaffoldVersion(db, actor.actorId)
-      : 0,
+    scaffoldVersion: actor && tableExists(db, 'scaffold_versions') ? getCurrentScaffoldVersion(makeSql(db), actor) ?? 0 : 0,
     searchNodeCount: actor && tableExists(db, 'search_nodes')
       ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actor.actorId)
       : 0,

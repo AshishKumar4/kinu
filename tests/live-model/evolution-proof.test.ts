@@ -410,9 +410,8 @@ describe('Evolution Proof', () => {
     // Provisioned through the seam: birth, the whole schema, open, the
     // executor-surface and sandbox guards and the pre-turn profile — the same
     // sequence every live suite drives, once. The hand-picked init calls this
-    // replaced omitted `initShadowTables`, so `scaffold_evaluations` did not
-    // exist and `engine.onSessionComplete` below died on it 102s into a paid
-    // run; `initWorkspaceSchema` is the one function that declares a
+    // replaced omitted a table, so `engine.onSessionComplete` below died on it
+    // 102s into a paid run; `initWorkspaceSchema` is the one function that declares a
     // workspace's tables. The real runtime rather than the birth one, so
     // evolution reaches a genuine branch spawner.
     target = await provisionLocalTarget({

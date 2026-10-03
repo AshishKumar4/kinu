@@ -1,8 +1,7 @@
-diff --git a/packages/core/src/scaffold/shadow.ts b/packages/core/src/scaffold/shadow.ts
-index 7e46e7ff3..2c7f8de85 100644
---- a/packages/core/src/scaffold/shadow.ts
-+++ b/packages/core/src/scaffold/shadow.ts
-@@ -540,7 +540,7 @@ export function applyPromotionDecision(
+diff --git a/packages/core/src/scaffold/versions.ts b/packages/core/src/scaffold/versions.ts
+--- a/packages/core/src/scaffold/versions.ts
++++ b/packages/core/src/scaffold/versions.ts
+@@ -110,7 +110,7 @@
            SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
            WHERE actor_id = ${rt.actor.actorId}
              AND (version = ${pending.version}
