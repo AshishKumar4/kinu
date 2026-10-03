@@ -57,7 +57,7 @@ describe('a heartbeat landing inside a restoration leaves that restoration alone
 
     await box.devboxHeartbeat();
 
-    expect(container.sequence.slice(before)).toEqual(['exec:devbox-beat-v1']);
+    expect(container.sequence.slice(before)).toEqual(['exec:cat']);
     expect((await box.devboxState()).lastTick?.ping).toBe('ok');
   });
 
@@ -122,8 +122,7 @@ describe('a stop or a discard on a box whose container is gone resurrects nothin
     await box.devboxStartup();
     const state = await box.devboxState();
     expect(state.restoration).toBe('attached');
-    expect(state.lastAttach?.detail).toContain(head);
-    expect(chainHead(rows)).toBe(head);
+    expect({ attached: state.lastAttach?.detail, head: chainHead(rows) }).toEqual({ attached: 'lazy', head });
   });
 
   test('a discard drops the durable state without a container command', async () => {

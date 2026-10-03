@@ -702,7 +702,11 @@ function overwritesUserFiles(executor: GatedExecutor, command: string, session: 
   let cwd = session?.cwd ?? '/';
 
   for (const step of roots.length === 0 ? [] : shellSteps(command)) {
-    const written = [...redirectTargets(step), copyTarget(step)].map((target) => (target === undefined ? null : shellPath(target, cwd, home)));
+    const targets = [...redirectTargets(step), copyTarget(step)].filter((target): target is ShellWord => target !== undefined);
+
+    // From a directory that may be the user's, a relative write may land there.
+    if (session?.mayBeUsers === true && targets.some((target) => target === null || !/^[/~]/u.test(target))) return true;
+    const written = targets.map((target) => shellPath(target, cwd, home));
 
     if (written.some((path) => path !== null && underRoots(path, roots))) return true;
     cwd = cdTarget(step, cwd, home) ?? cwd;

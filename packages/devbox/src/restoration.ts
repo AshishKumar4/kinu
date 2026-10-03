@@ -56,11 +56,10 @@ export function refusedStart(stored: StoredValue, inputs: StartInputs): string |
  *  settles a box onto a container it did not restore; deleted on every generation turnover. */
 export type SettledRestoration = Extract<Restoration, { readonly phase: 'attached' | 'repair' | 'unattached' }>;
 
-/** The readiness gate's answer for the first admitted operation: a caller let into a `repair`
- *  box learns from the call itself that a named service did not come back. */
+/** The readiness gate's answer. A `repair` box's gaps reach the agent through the inbox (D67). */
 export type RestoreAdmission =
   | { readonly kind: 'restored' }
-  | { readonly kind: 'repair'; readonly incomplete: string };
+  | { readonly kind: 'repair' };
 
 /** `pending` is returned, not thrown: Workers RPC normalises a thrown error's `name` to
  *  `Error`, so a thrown refusal loses the transient classification the caller needs. */
@@ -105,7 +104,7 @@ export function isSettledRestoration(stored: StoredValue): stored is SettledRest
 export function admissionOf(held: Restoration): RestoreAdmission | undefined {
   if (held.phase === 'attached') return { kind: 'restored' };
 
-  if (held.phase === 'repair') return { kind: 'repair', incomplete: held.incomplete };
+  if (held.phase === 'repair') return { kind: 'repair' };
 
   return undefined;
 }

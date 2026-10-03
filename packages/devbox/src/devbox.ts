@@ -2,10 +2,17 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, CONTAINER_TRUST_ENV } from "./processes";
+import { Processes, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, ListedFile, GatewayBindings } from './contracts';
-import { NativeArchives } from './native-archives';
+import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
+import { STORE_MOUNT, chainStoreRoot, storeObjectUrl } from './store-gateway';
+import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
+import {
+  GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeObject, refreshTools,
+  type GoldenAnswer, type GoldenPorts,
+} from './golden';
+import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import { Effect, Result } from 'effect';
@@ -27,8 +34,6 @@ import {
   classifyRecovery,
   isTerminalRecovery,
   parseRecoveryRow,
-  parseWorkdirHolders,
-  releaseWorkdirHoldersCommand,
   quiesceStep,
   recoveryStep,
   restartPlan,
@@ -41,7 +46,6 @@ import {
   type SupervisedProcessSpec,
   openStartBudget, awaitListenerCommand,
   LAST_INTERACTION_KEY,
-  LAST_WORK_KEY,
   QUIET_SINCE_KEY,
   racedRestoreSteps, runRestoreStep, type RestoreSteps,
   type StartClock,
@@ -67,17 +71,6 @@ import {
   type IncidentRow,
 } from './incidents';
 import {
-  CHAIN_EXCLUDES,
-  upperFingerprintCommand,
-  chainStoreRoot,
-  normalizeChainState,
-  seedStampPorts,
-  snapshotChainStorage,
-  storeObjectUrl,
-  type SnapshotChainPorts,
-} from './snapshot-chain';
-import {
-  DEFAULT_DEVBOX_STRATEGY,
   DEVBOX_RUNTIME_DIR,
   DEVBOX_WORKDIR,
   type AttachOutcome,
@@ -85,20 +78,8 @@ import {
   type CheckpointOutcome,
   type DevboxStorage,
   type DevboxStore,
-  type DevboxStrategyName,
   type StoredValue,
 } from './storage';
-import {
-  BOOT_ID_PATH,
-  SYNC_ALIVE_PROBE,
-  parseSyncOutcome,
-  serveSync,
-  syncFlushCommand,
-  syncStartCommand,
-  syncStopCommand,
-  type SyncAnswer,
-  type SyncConfig,
-} from './sync';
 
 /** Bounded wait for `running` to clear after an acknowledged stop: an unbounded wait pins the
  *  attempt, and `#armStartup` early-returns on a pinned attempt, so nothing re-arms. */
@@ -114,22 +95,6 @@ interface UntimedOptions {
   readonly execId: string;
   readonly env?: Readonly<Record<string, string>>;
 }
-
-/** The SDK's `killCommand` (D37). */
-const KILL_TREE = `
-tree() { for c in $(cat /proc/$1/task/$1/children 2>/dev/null); do tree "$c"; done; [ -d /proc/$1 ] && echo "$1"; }
-alive() { for p in $1; do [ -d /proc/$p ] && ! grep -q '^State:[[:space:]]*Z' /proc/$p/status 2>/dev/null && return 0; done; return 1; }
-first=$(tree "$1")
-alive "$first" || exit 3
-kill -TERM $first 2>/dev/null
-i=0
-while [ $i -lt 50 ] && alive "$first"; do sleep 0.1; i=$((i + 1)); done
-alive "$first" || exit 0
-kill -KILL $first $(tree "$1") 2>/dev/null
-exit 0
-`;
-
-const KILL_TREE_GONE = 3;
 
 /** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
 const PORT_LISTENERS = `
@@ -185,20 +150,13 @@ const CONTAINER_STOP_INTERVAL_MS = 100;
 
 
 /** All durable keys share the `devbox:` prefix so a host's own keys cannot collide with them. */
-const STORAGE_KEY = 'devbox:storage-state';
-
 const PROC_SPEC_PREFIX = 'devbox:proc:';
 
 const PORT_SPEC_PREFIX = 'devbox:port:';
 
 const LAST_ATTACH_KEY = 'devbox:last-attach';
 
-const SAVED_AT_KEY = 'devbox:saved-at';
-
-const SAVED_REASON = /^work directory is unchanged$|^nothing has been written since the attach$/;
-
-/** Recovery progress for one container identity: written only by the recovery ladder, deleted
- *  on the first landed attach; durable because a fresh object often runs the scheduled retry. */
+/** One container identity's recovery progress, written only by the ladder, deleted on the first attach. */
 const ATTACH_RECOVERY_KEY = 'devbox:attach-recovery';
 
 const LAST_TICK_KEY = 'devbox:last-tick';
@@ -207,8 +165,7 @@ const REST_ASK_KEY = 'devbox:rest-ask';
 
 const BOOT_ID_KEY = 'devbox:boot-id';
 
-/** Persisted so a mid-restore object reset is survivable; a stored `restoring` phase needs recovery.
- *  Generation turnover clears the row, so a stale phase cannot admit a different container. */
+/** Survives a mid-restore object reset; turnover clears it, so no stale phase admits another container. */
 const SETTLED_KEY = 'devbox:restoration';
 
 const REPLACED_COUNT_KEY = 'devbox:replaced-count';
@@ -224,6 +181,26 @@ const RUNNING_SIZE_KEY = 'devbox:running-size';
 
 const START_REFUSED_KEY = 'devbox:start-refused';
 
+const DISK_STATE_KEY = 'devbox:disk-chain';
+
+const SNAPSHOT_KEY = 'devbox:snapshot';
+
+/** Where the box stamps the container's identity: on the disk a replacement does not keep (P1). */
+const BOOT_ID_PATH = '/tmp/devbox-boot-id';
+
+const DEAD_SNAPSHOTS_KEY = 'devbox:dead-snapshots';
+
+/** Durable: a rest after an eviction still knows the parent. */
+const WOKE_FROM_KEY = 'devbox:woke-from';
+
+/** `lineage`: ancestors, root first; `rootTakenAt` ages the lineage (D65). */
+const SnapshotRecord = v.object({
+  id: v.string(), image: v.string(), chainRev: v.number(), takenAt: v.number(), lineage: v.optional(v.array(v.string()), []),
+  rootTakenAt: v.optional(v.number()),
+});
+
+const SNAPSHOT_LIFE_MS = 29 * 24 * 60 * 60 * 1000;
+
 const NO_START_IMAGE = 'no image to start: name it `devbox` in the container `images` map';
 
 /** Scheduled-callback names. Each MUST name a public method on the class:
@@ -238,6 +215,14 @@ const INCIDENT_CALLBACK = 'devboxIncidents';
 
 /** Rows a destroyed box neither keeps nor arms. */
 const CONTAINER_CALLBACKS: readonly string[] = [STARTUP_CALLBACK, HEARTBEAT_CALLBACK, CHECKPOINT_CALLBACK];
+
+const GOLDEN_BUILD_CALLBACK = 'golden-build';
+
+const GOLDEN_REFRESH_CALLBACK = 'golden-refresh';
+
+const GOLDEN_KEY = 'devbox:golden';
+
+type StartSource = { readonly kind: 'image' } | { readonly kind: 'own' | 'golden'; readonly id: string };
 
 /** A classified recovery obligation; executed outside the restore block. */
 const RECOVERY_ACTION_KEY = 'devbox:recovery-action';
@@ -276,11 +261,6 @@ interface Flight {
   readonly generation: number;
   readonly run: Promise<void>;
   readonly since: number;
-}
-
-function lostWorkNotice(restoredTo: number, excludes: readonly string[]): string {
-  return `The container stopped before its latest work was saved: the workspace was restored from its backup to ${new Date(restoredTo).toISOString()}, `
-    + `and anything written after that is lost. The backup never holds ${excludes.join(', ')}; rebuild those (for example \`bun install\`) before relying on them.`;
 }
 
 function unawaited(work: Promise<unknown>, lost: string): void {
@@ -325,6 +305,10 @@ function sameToken(held: string | undefined, given: string): boolean {
 export class Devbox<Env = unknown> extends DurableObject<Env> {
   readonly #gateways: GatewayBindings;
   #storage: DevboxStorage | undefined;
+
+  #started: StartSource = { kind: 'image' };
+  #awaitingGolden: string | undefined;
+  #sweeping: Promise<void> | undefined;
   #gateRestore: Flight | undefined;
   /** Fences every write below: an abandoned startup continuation keeps running, and must
    *  re-check this token after every await or it can clear its successor's single-flight entry. */
@@ -344,13 +328,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #restoration: Restoration = { phase: 'unstarted' };
   /** Activation defers identity comparison until the control listener is reachable. */
   #adoptionPending = false;
-  /** Holders the last release pass signalled, kept only so a refused detach can name them.
-   *  Cleared on every detach attempt so a later refusal cannot blame a stale list. */
-  #lastWorkdirHolders: readonly { readonly pid: string; readonly comm: string }[] | undefined;
   #lastInteraction: number | undefined;
   #lastInteractionPersisted = 0;
-  /** Every strategy checkpoint on this instance runs through one gate, so two
-   *  overlapping entry points can never interleave inside a strategy. */
+  /** One checkpoint at a time on this instance. */
   readonly #lane = createCheckpointLane();
   /** Public work with no resource name: shell commands and supervised starts.
    *  Resource and checkpoint work reports directly through their own lanes. */
@@ -414,8 +394,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (this.#adoptionPending) await this.#startContainer();
   }
 
-  /** Turnover needs a container answer that refutes the stamped boot id; absent rows prove nothing
-   *  (`#settle` sets memory before writing). Not timed: a clock here would overwrite the restore's row. */
+  /** Turnover needs a container answer that refutes the stamped boot id; absent rows prove nothing. */
   async #adoptOrTurnOver(): Promise<void> {
     const generation = this.#generation;
     this.#adoptionPending = false;
@@ -448,26 +427,124 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return undefined;
   }
 
-  /** Fixed per class: a box that already holds bytes cannot switch strategy, since
-   *  the strategies write different things. */
-  protected get strategy(): DevboxStrategyName {
-    return DEFAULT_DEVBOX_STRATEGY;
+  /** D55: 55 of 59 snapshot wakes answered within 3.1 s, 4 took 30 to 53 s. */
+  /** The golden builder, and the boxes it tells (D65). */
+  protected get peers(): BoxPeers | undefined {
+    return undefined;
+  }
+
+  protected get toolsPin(): string {
+    return artifact.tools.sha256;
+  }
+
+  /** `lost`: a golden the platform refused the asking box. */
+  goldenFor(box: string, lost?: string): Promise<GoldenAnswer> {
+    return settle(goldenFor(this.#goldenPorts(), box, lost));
+  }
+
+  /** Returns once the golden for the pinned tools is verified. */
+  ensureGolden(): Promise<string> {
+    return settle(this.#buildGolden(false).pipe(Effect.map(state => state.current?.id ?? '')));
+  }
+
+  devboxGolden(keepAlive: boolean): Promise<void> {
+    return settle(this.#buildGolden(keepAlive).pipe(Effect.asVoid));
+  }
+
+  #buildGolden(keepAlive: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      const state = yield* buildGolden(this.#goldenPorts(), keepAlive);
+      const next = state.current === undefined ? undefined : state.current.takenAt + GOLDEN_REFRESH_MS - Date.now();
+
+      if (next !== undefined) yield* attempt('io', () => this.armAlarm(GOLDEN_REFRESH_CALLBACK, Math.max(0, next / 1000)));
+
+      return state;
+    });
+  }
+
+  #refreshTools(): Effect.Effect<void, DevboxError> {
+    if (this.peers === undefined) return Effect.void;
+
+    return refreshTools({ pin: this.toolsPin, exec: (command) => this.#rawExec(command, DEVBOX_RUNTIME_DIR), pipe: (key, path) => this.#pipeObject(key, path) });
+  }
+
+  #pipeObject(key: string, path: string): Effect.Effect<void, DevboxError> {
+    return pipeObject({ get: async (wanted) => await this.store?.bucket.get(wanted) ?? null, container: this.#container() }, key, path);
+  }
+
+  #goldenPorts(): GoldenPorts {
+    const container = () => this.#container();
+
+    return {
+      tools: this.toolsPin,
+      read: () => {
+        const held = v.safeParse(GoldenStateSchema, this.ctx.storage.kv.get(GOLDEN_KEY));
+
+        return held.success ? held.output : { waiting: [] };
+      },
+      write: (state) => { this.ctx.storage.kv.put(GOLDEN_KEY, state); },
+      start: async (from) => {
+        if (container().running) await this.#destroyGoldenContainer();
+        const options = { instance: instanceOf(this.defaultSize), enableInternet: false, entrypoint: ['sleep', 'infinity'] };
+        container().start('image' in from ? { ...options, image: from.image } : { ...options, containerSnapshot: { id: from.snapshot } });
+        await firstExec(container(), AbortSignal.timeout(120_000));
+      },
+      exec: async (command) => decoded(await (await container().exec(['/bin/bash', '-c', command])).output()),
+      pipe: (key, path) => this.#pipeObject(key, path),
+      snapshot: async (name) => (await container().snapshotContainer({ name })).id,
+      destroy: () => this.#destroyGoldenContainer(),
+      build: () => this.armAlarm(GOLDEN_BUILD_CALLBACK, 0),
+      tell: async (box, answer) => { await this.peers?.box(box).goldenReady(answer); },
+      now: () => Date.now(),
+    };
+  }
+
+  async #destroyGoldenContainer(): Promise<void> {
+    if (this.#container().running) await this.#container().destroy();
+    await this.#awaitContainerStopped();
+  }
+
+  async goldenReady(answer: GoldenAnswer): Promise<void> {
+    if (this.#awaitingGolden === undefined) return;
+
+    if (answer.kind === 'pending') {
+      this.#awaitingGolden = answer.reason;
+
+      return;
+    }
+
+    this.#awaitingGolden = undefined;
+    await this.devboxStartup();
+  }
+
+  /** A Containers token (D65); without one, dead snapshots wait. */
+  protected get registryToken(): string | undefined {
+    return undefined;
+  }
+
+  protected get registryAccount(): string | undefined {
+    return /^registry\.cloudflare\.com\/([0-9a-f]{32})\//.exec(this.containerImage ?? '')?.[1];
+  }
+
+  protected get snapshotRegistry(): SnapshotRegistry | undefined {
+    const token = this.registryToken;
+    const account = this.registryAccount;
+
+    return token === undefined || account === undefined ? undefined : snapshotRegistry({ token, account, fetch: (input, init) => fetch(input, init) });
+  }
+
+  protected get snapshotWakeCutoverMs(): number {
+    return 10_000;
   }
 
   protected get policy(): DevboxPolicy {
     return DEFAULT_DEVBOX_POLICY;
   }
 
-  /** Must stay false in production: a deployed box would archive one base and never capture
-   *  more, since a plain directory has no overlay upper. Only local `wrangler dev` overrides. */
-  protected get allowExtraction(): boolean {
-    return false;
-  }
-
   /** Override to keep `target/` or `dist/` when they are the work; a larger base costs attach
    *  nothing because layers mount lazily. */
   protected get archiveExcludes(): readonly string[] {
-    return CHAIN_EXCLUDES;
+    return DEFAULT_EXCLUDES;
   }
 
   /** Undefined means previews are unavailable: port forwarding is not re-activated and the box
@@ -519,8 +596,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.onRestorePhase('settled', Date.now() - clock.openedAt);
   }
 
-  /** A benchmark box overrides to `false`: an ambient tick would commit its pending change and
-   *  reset the interval stamp, so the driver's measured tick would skip. The gate still applies. */
+  /** A benchmark box turns them off, so no ambient tick pre-empts the driver's own. */
   protected get ambientCheckpoints(): boolean {
     return true;
   }
@@ -559,27 +635,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     });
   }
 
-  async #startNative(inputs: StartInputs): Promise<void> {
+  async #startNative(inputs: StartInputs, source: StartSource | undefined): Promise<void> {
     if (this.#closed) throw new DevboxError("io", DESTROYED_START);
     const container = this.#container();
     const generation = this.#generation;
     // No await separates teardown admission from the platform start. Native exec never starts one.
     const wasRunning = container.running;
 
-    if (!wasRunning) {
+    if (!wasRunning && source !== undefined) {
       // D50: the one start boundary.
       this.ctx.storage.kv.put(RUNNING_SIZE_KEY, inputs.size);
-      container.start({ image: inputs.image, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
-      this.#routes().started();
+      this.#startFrom(container, inputs, source);
+
+      // A snapshot's `/run` may still hold the S3Mount marker of the mount it was taken under.
+      if (source.kind === 'image') this.#routes().started();
     }
 
     const cancel = new AbortController();
 
     const run = (async () => {
-      const ready = await container.exec(['/bin/true'], { signal: cancel.signal });
-      const result = await ready.output();
-
-      if (result.exitCode !== 0) throw new DevboxError("io", `native container admission exited ${result.exitCode}`);
+      if (!await this.#admit(container, cancel.signal, inputs)) return;
 
       if (!this.#owns(generation) || this.#closed) return;
       await this.configureContainer(wasRunning && (this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'));
@@ -595,6 +670,117 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       await run;
     } finally {
       this.#admissions.delete(admission);
+    }
+  }
+
+  #wakeSnapshot(): string | undefined {
+    const held = v.safeParse(SnapshotRecord, this.ctx.storage.kv.get(SNAPSHOT_KEY));
+    const chain = v.safeParse(DiskChainStateSchema, this.ctx.storage.kv.get(DISK_STATE_KEY));
+
+    if (!held.success || held.output.image !== this.#base() || Date.now() - (held.output.rootTakenAt ?? held.output.takenAt) > SNAPSHOT_LIFE_MS) return undefined;
+
+    return chain.success && chain.output.rev > held.output.chainRev ? undefined : held.output.id;
+  }
+
+  #base(): string {
+    return this.peers === undefined ? this.containerImage ?? '' : GOLDEN_BASE;
+  }
+
+  /** Its own snapshot, else the golden (or the image, with no builder), else wait to be told (D65). */
+  async #startSource(lost?: string): Promise<StartSource | { readonly kind: 'pending'; readonly reason: string }> {
+    const own = lost === undefined ? this.#wakeSnapshot() : undefined;
+
+    if (own !== undefined) return { kind: 'own', id: own };
+
+    if (this.peers === undefined) return { kind: 'image' };
+    const answer = await this.peers.golden().goldenFor(this.ctx.id.toString(), lost);
+
+    return answer.kind === 'ready' ? { kind: 'golden', id: answer.id } : answer;
+  }
+
+  #startFrom(container: Container, inputs: StartInputs, source: StartSource): void {
+    this.#started = source;
+    this.#awaitingGolden = undefined;
+    this.ctx.storage.kv.put(WOKE_FROM_KEY, source.kind === 'own' ? source.id : '');
+    const from = source.kind === 'image' ? { image: inputs.image } : { containerSnapshot: { id: source.id } };
+    const entrypoint = this.peers === undefined ? undefined : GOLDEN_ENTRYPOINT;
+
+    container.start({ ...from, entrypoint, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
+  }
+
+  /** A snapshot start that fails or misses the cutover falls back to the image and the chain. */
+  async #admit(container: Container, signal: AbortSignal, inputs: StartInputs): Promise<boolean> {
+    if (this.#started.kind !== 'image') {
+      // Cleared once settled: a later abort killed the image's container (D64).
+      const cutover = new AbortController();
+      const timer = setTimeout(() => { cutover.abort(new DevboxError('io', 'the snapshot start was not admitted within the cutover')); }, this.snapshotWakeCutoverMs);
+      const [woke] = await Promise.allSettled([firstExec(container, AbortSignal.any([signal, cutover.signal]))]);
+      clearTimeout(timer);
+
+      if (woke.status === 'fulfilled') return true;
+      this.#trace('startup.snapshot.cutover', { from: this.#started.kind, reason: describe({ cause: woke.reason }) });
+      const golden = this.#started.kind === 'golden' ? this.#started.id : undefined;
+      await container.destroy();
+      await this.#awaitContainerStopped();
+
+      if (golden === undefined) {
+        this.#supersede(SNAPSHOT_KEY);
+        unawaited(this.#sweepSnapshots(), 'sweeping dead snapshots');
+      }
+
+      const next = await this.#startSource(golden);
+
+      if (next.kind === 'pending') {
+        this.#awaitingGolden = next.reason;
+
+        return false;
+      }
+
+      this.#startFrom(container, inputs, next);
+    }
+
+    await firstExec(container, signal);
+
+    return true;
+  }
+
+  #supersede(key: string): void {
+    const held = v.safeParse(SnapshotRecord, this.ctx.storage.kv.get(key));
+
+    if (!held.success) return;
+    this.#bury([...held.output.lineage, held.output.id]);
+    this.ctx.storage.kv.delete(key);
+  }
+
+  #bury(ids: readonly string[]): void {
+    this.ctx.storage.kv.put(DEAD_SNAPSHOTS_KEY, [...new Set([...this.#deadSnapshots(), ...ids])]);
+  }
+
+  #deadSnapshots(): readonly string[] {
+    const dead = v.safeParse(v.array(v.string()), this.ctx.storage.kv.get(DEAD_SNAPSHOTS_KEY));
+
+    return dead.success ? dead.output : [];
+  }
+
+  /** Never throws; a refusal is logged and asked again next sweep. */
+  #sweepSnapshots(): Promise<void> {
+    return this.#sweeping ??= this.#sweepOnce().finally(() => { this.#sweeping = undefined; });
+  }
+
+  async #sweepOnce(): Promise<void> {
+    const registry = this.snapshotRegistry;
+
+    if (registry === undefined) return;
+
+    for (const id of this.#deadSnapshots()) {
+      const outcome = await registry.delete(id);
+
+      if (outcome.kind === 'refused') {
+        console.error(`[devbox] the dead snapshot ${id} was not deleted: ${outcome.reason}`);
+        continue;
+      }
+
+      this.ctx.storage.kv.put(DEAD_SNAPSHOTS_KEY, this.#deadSnapshots().filter(dead => dead !== id));
     }
   }
 
@@ -694,8 +880,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     await this.#armContainerSchedules();
 
-    if (this.#restoration.phase === 'attached') await this.#restartSync();
-
     if (this.#admission() !== undefined) {
       this.#deleteSchedule(STARTUP_CALLBACK);
       await this.ctx.storage.put(STARTED_AT_KEY, Date.now());
@@ -721,7 +905,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #armContainerSchedules(): Promise<void> {
     await this.#armStartup();
 
-    if (this.ambientCheckpoints && !this.#syncsInContainer()) {
+    if (this.ambientCheckpoints) {
       await this.armAlarm(CHECKPOINT_CALLBACK, Math.ceil(this.policy.checkpointIntervalMs / 1000));
     }
 
@@ -729,8 +913,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
 
-  /** A container/stored boot-id mismatch is the only reliable replacement signal; the platform
-   *  swaps instances silently. Fence every read, count and write: stale ones corrupt the successor. */
+  /** A boot-id mismatch is the only replacement signal: fence every read, count and write. */
   async #stampBootId(generation: number): Promise<void> {
     // Count replacements here: every restoration passes through this method, whatever drove it.
     // Counting only in the heartbeat misses replacements handled by startup or readiness paths.
@@ -814,116 +997,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return value.length > 0 ? value : undefined;
   }
 
-  /** One container call, one line per field: the server drops NUL bytes (P6). */
-  async #readBeat(): Promise<{ readonly bootId: string | undefined; readonly syncAlive: boolean }> {
-    const read = await this.#rawExec(
-      `# devbox-beat-v1\nprintf '%s\\n' "$(cat ${BOOT_ID_PATH} 2>/dev/null)"; ${SYNC_ALIVE_PROBE}`,
-      DEVBOX_RUNTIME_DIR,
-    );
-
-    const [bootId = '', sync = ''] = read.stdout.split('\n');
-
-    return { bootId: bootId.trim() || undefined, syncAlive: !this.#syncRuns() || sync === 'alive' };
-  }
-
-  /** A box that may extract runs in local `wrangler dev`, whose container cannot reach it. */
-  #syncsInContainer(): boolean {
-    return this.store !== undefined && !this.allowExtraction;
-  }
-
-  #syncRuns(): boolean {
-    return this.#syncsInContainer() && this.ambientCheckpoints;
-  }
-
-  #syncConfig(store: DevboxStore): SyncConfig {
-    return {
-      storeRoot: chainStoreRoot(this.#boxPrefix()),
-      binding: store.binding,
-      excludes: [...this.archiveExcludes],
-      periodMs: this.policy.checkpointIntervalMs,
-    };
-  }
-
-  /** A failure is an incident, not a failed restore: the stop's flush still commits. */
-  async #restartSync(): Promise<void> {
-    const store = this.store;
-
-    if (store === undefined || !this.#syncRuns()) return;
-    let reason: string | undefined;
-
-    try {
-      const started = await this.#rawExec(syncStartCommand(this.#syncConfig(store)), DEVBOX_RUNTIME_DIR);
-
-      if (started.exitCode === 0) this.#trace('sync.start', { generation: this.#generation });
-      else reason = started.stderr.trim() || started.stdout.trim() || `exit ${started.exitCode}`;
-    } catch (cause) { reason = describe({ cause }); }
-
-    if (reason !== undefined) await this.#record('checkpoint', `the container's sync did not start: ${reason}`);
-  }
-
-  async #stopSync(): Promise<void> {
-    if (!this.#syncsInContainer() || this.ctx.container?.running !== true) return;
-    let reason: string | undefined;
-
-    try {
-      const stopped = await this.#execute(syncStopCommand(), { cwd: DEVBOX_RUNTIME_DIR });
-
-      if (stopped.exitCode !== 0) reason = stopped.stderr.trim() || `exit ${stopped.exitCode}`;
-    } catch (cause) { reason = describe({ cause }); }
-
-    if (reason !== undefined) await this.#record('checkpoint', `the container's sync did not stop before the detach: ${reason}`);
-  }
-
-  async #runCheckpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
-    const store = this.store;
-
-    if (store === undefined || !this.#syncsInContainer()) return await this.#requireStorage().checkpoint(kind);
-
-    if (this.ctx.container?.running !== true) {
-      return { kind: 'skipped', reason: 'container is not running', bytes: undefined, movedBytes: 0 };
-    }
-
-    const command = syncFlushCommand(this.#syncConfig(store), kind);
-    const flushed = await this.#execute(command, { cwd: DEVBOX_RUNTIME_DIR });
-    this.#meter(command, flushed.stdout, flushed.stderr);
-
-    return parseSyncOutcome(flushed.stdout, flushed.stderr, flushed.exitCode);
-  }
-
-
-  devboxSync(body: string): Promise<SyncAnswer> {
-    return settle(attempt('io', async () => {
-      const store = this.store;
-
-      if (store === undefined) return { status: 403, body: JSON.stringify({ ok: false, error: 'refused', reason: 'this devbox has no store' }) };
-
-      const reply = await serveSync({
-        ports: this.#chainPorts(store),
-        generation: async () => await this.ctx.storage.get<string>(BOOT_ID_KEY),
-      }, body);
-
-      this.#meter(reply.body, body);
-      this.#stampSyncSaved(body, reply.body);
-
-      return reply;
-    }));
-  }
-
-  #syncCheckAt: number | undefined;
-
-  #stampSyncSaved(request: string, answer: string): void {
-    const op = /"op":"(\w+)"/.exec(request)?.[1];
-
-    if (op === 'checkChanges') {
-      this.#syncCheckAt = Date.now();
-
-      if (!/"status":"unchanged"/.test(answer)) return;
-    } else if (op !== 'writeState' || !answer.startsWith('{"ok":true')) {
-      return;
-    }
-
-    this.ctx.storage.kv.put(SAVED_AT_KEY, this.#syncCheckAt ?? Date.now());
-  }
 
   async #restoreNow(
     generation: number,
@@ -976,8 +1049,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
   }
 
-  /** All phases share one budget (D19). An attach overrun throws `ContainerStartOverrun` (identity is
-   *  replaced); later steps mutate no mount, so exhaustion is reported in `unready` and never re-arms. */
+  /** One budget for all phases (D19): an attach overrun replaces the identity; a later step's
+   *  exhaustion is reported in `unready` and never re-arms. */
   async #attachAndRestore(
     generation: number,
     claim: RecoveryClaim,
@@ -1001,8 +1074,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // keeps its generation's record.
     await this.ctx.storage.put(LAST_ATTACH_KEY, outcome);
     console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
-
-    if (outcome.kind === 'attached') await this.#tellLostWork();
     // Boot proof and durable settlement still need their shares after services.
     steps.declare(2);
     const restored = await this.#restartWorkloads(generation, steps);
@@ -1135,7 +1206,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#trace('startup.admit.enter', { generation, running: !startsContainer });
 
     try {
-      await this.#startNative(inputs);
+      const source = startsContainer ? await this.#startSource() : undefined;
+
+      if (source?.kind === 'pending') {
+        this.#awaitingGolden = source.reason;
+        this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: false, awaitingGolden: source.reason });
+
+        return;
+      }
+
+      await this.#startNative(inputs, source);
+
+      if (this.#awaitingGolden !== undefined) return;
 
       this.#refused = undefined;
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
@@ -1151,8 +1233,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (this.#owns(generation)) {
         const failure = classifyRecovery({ cause });
 
-        // Classified first, as the ladder does: a start that fails the same way every time (an
-        // S3Mount marker this box cannot route, D40) is refused once, not re-armed each second (D47).
+        // A start that fails the same way every time is refused once, not re-armed each second (D47).
         if (isTerminalRecovery(failure)) {
           const refusal = `[${failure} -> refuse] ${reason}`;
           this.#adoptionPending = false;
@@ -1366,7 +1447,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // The tag leads: `recordIncident` truncates at INCIDENT_REASON_MAX_CHARS, and a long cause
     // chain would cut a trailing tag that the host's prose tells the agent to read.
     const reason = `[${failure} -> ${decision.action}] ${describe(thrown)}`;
-    const restoration = { phase: 'unattached', reason, retry: decision.action === 'retry' } as const;
+    const restoration = { phase: 'unattached', reason, retry: decision.action !== 'refuse' } as const;
 
     if (!await this.#settleRecovery(claim, generation, decision, restoration)) return;
 
@@ -1404,8 +1485,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         phase: 'unattached',
         reason: `${reason}; and the container identity could not be destroyed: `
           + describe({ cause: error }),
-        // Terminal whatever the class: the abandoned work still runs in that container, so no retry;
-        // only a caller asking by name may attach, else it overlaps the work destruction guarded.
+        // Terminal: the abandoned work still runs there. Only a caller asking by name may attach.
         retry: false,
       });
       throw error;
@@ -1431,8 +1511,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     + 'refusing to treat the identity as gone', );
   }
 
-  /** Every durable process and port spec is required: a port is exposed only after its listener
-   *  answers, none if a process failed; each failure is still recorded and the phase continues. */
+  /** A port is exposed only once its listener answers; each failure is recorded and the phase continues. */
   async #restartWorkloads(generation: number, steps: RestoreSteps): Promise<readonly string[]> {
     const [processes, ports] = await Promise.all([this.#procSpecs(), this.#portSpecs()]);
     const plan = restartPlan(processes, ports);
@@ -1673,6 +1752,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#trace('readiness.enter', { generation: this.#generation, running: wasRunning, phase: this.#restoration.phase });
 
     if (!wasRunning) await this.#startContainer();
+
+    if (this.#awaitingGolden !== undefined && this.ctx.container?.running !== true) return { kind: 'pending', reason: this.#awaitingGolden };
     await this.#resolveAdoption();
 
     // Native allocation can report running before restoration starts.
@@ -1761,10 +1842,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       const process = yield* this.#startUntimed(command, options, pending);
-      const output = yield* attempt('process', () => process.output());
-      const text = new TextDecoder();
 
-      return { stdout: text.decode(output.stdout), stderr: text.decode(output.stderr), exitCode: output.exitCode };
+      return decoded(yield* attempt('process', () => process.output()));
     })).pipe(Effect.ensuring(Effect.sync(() => { this.#untimed.delete(options.execId); }))));
   }
 
@@ -1781,7 +1860,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         return execRecords(process, {
           exited: ended,
-          cancelled: async () => { await this.#endUntimed(options.execId); await gone.promise; },
+          cancelled: async () => { await this.killUntimed(options.execId); await gone.promise; },
         });
       }),
       Effect.onError(() => Effect.sync(ended)),
@@ -1793,7 +1872,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
 
       if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'sandbox exec cancelled before admission'));
-      const started = yield* attemptSync('process', () => container.exec(['bash', '-c', command], { cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...options.env, ...CONTAINER_TRUST_ENV } }));
+      // Its own group, which its kill ends (D69).
+      const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', '/bin/bash', '-c', command], options));
       pending.started = started;
 
       return yield* attempt('process', () => started);
@@ -1815,23 +1895,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** False when the command had already exited. */
   killUntimed(execId: string): Promise<boolean> {
-    return settle(attempt('io', () => this.#endUntimed(execId)));
-  }
+    return settle(Effect.gen({ self: this }, function* () {
+      const pending = this.#untimed.get(execId);
 
-  async #endUntimed(execId: string): Promise<boolean> {
-    const pending = this.#untimed.get(execId);
+      if (pending === undefined) return false;
+      pending.cancelled = true;
+      const started = pending.started;
 
-    if (pending === undefined) return false;
-    pending.cancelled = true;
+      if (started === undefined) return true;
+      const container = this.ctx.container;
 
-    if (pending.started === undefined) return true;
-    const container = this.ctx.container;
+      if (container?.running !== true) return false;
+      const { pid } = yield* attempt('process', () => started);
+      const ended = yield* attempt('process', async () => await (await container.exec(['sh', '-c', `${END_TREE}\nend_tree "$1"`, 'kill-tree', String(pid)])).output());
 
-    if (container?.running !== true) return false;
-    const { pid } = await pending.started;
-    const ended = await (await container.exec(['sh', '-c', KILL_TREE, 'kill-tree', String(pid)])).output();
+      if (ended.exitCode === 3) return false;
 
-    return ended.exitCode !== KILL_TREE_GONE;
+      if (ended.exitCode !== 0) return yield* Effect.fail(new DevboxError('process', `exec ${execId} was not ended: ${new TextDecoder().decode(ended.stderr)}`));
+
+      return true;
+    }));
   }
 
   readonly #untimed = new Map<string, UntimedExecution>();
@@ -1897,12 +1980,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       }
 
       const { sent, received } = this.#containerCommandBytes;
-      const asked = Date.now();
       const outcome = await this.#runCheckpoint(kind);
-
-      if (outcome.kind === 'committed' || (outcome.kind === 'skipped' && SAVED_REASON.test(outcome.reason ?? ''))) {
-        this.ctx.storage.kv.put(SAVED_AT_KEY, asked);
-      }
 
       this.#trace('checkpoint.bytes', {
         kind, outcome: outcome.kind, movedBytes: outcome.movedBytes,
@@ -1913,7 +1991,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** Fence admissions, drain owned work, release resident holders, then commit and detach. */
+  /** Fence admissions, drain owned work, then commit, snapshot and stop. */
   quiesce(): Promise<CheckpointOutcome> {
     return settle(attempt('io', () => this.#quiesce(false)));
   }
@@ -1935,7 +2013,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (starting !== undefined) await Promise.allSettled([starting.run]);
 
-    if (ending) await Promise.allSettled([...this.#untimed.keys()].map((execId) => this.#endUntimed(execId)));
+    if (ending) await Promise.allSettled([...this.#untimed.keys()].map((execId) => this.killUntimed(execId)));
 
     if (this.#activeCallers !== 0) {
       this.#callersDrained = Promise.withResolvers<void>();
@@ -1964,11 +2042,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return { kind: 'skipped', reason: `nothing is attached to commit: ${held.reason}`, bytes: undefined, movedBytes: undefined };
     }
 
-    let listed: Awaited<ReturnType<Processes["list"]>>;
     let warning: string | undefined;
 
     try {
-      listed = await this.#processes().list();
+      const listed = await this.#processes().list();
       const residents = new Set((await this.#procSpecs()).map(spec => spec.processId));
 
       if (!ending && listed.some(process => isProcessLive(process.status) && !residents.has(process.id))) {
@@ -1985,88 +2062,49 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       warning = 'the process list was unreadable, so an unobservable command may be stopped: ' + reason;
       this.#trace('quiesce.processes.unreadable', { reason });
       await this.#record('quiesce', warning);
-      listed = [];
     }
 
-    const generation = this.#generation;
-    let resumeResidents = true;
+    // The commit and the snapshot run beside the box's processes; the container's stop ends them.
+    const committed = await this.#checkpoint('quiesce');
+    const outcome = warning === undefined ? committed : { ...committed, reason: warning + (committed.reason === undefined ? '' : '; ' + committed.reason) };
 
-    try {
-      await this.#stopSync();
-      await this.#releaseWorkdirHolders(listed);
-      const committed = await this.#checkpoint('quiesce');
-      const outcome = warning === undefined ? committed : { ...committed, reason: warning + (committed.reason === undefined ? '' : '; ' + committed.reason) };
-
-      if (outcome.kind === 'failed') {
-        await this.#record('checkpoint', `final checkpoint failed: ${outcome.reason ?? 'unknown'}`);
-
-        return outcome;
-      }
-
-      resumeResidents = false;
-      await this.#detachStorage();
-      this.#invalidateGeneration();
-      await this.#stopContainer();
-      await this.#awaitContainerStopped();
+    if (outcome.kind === 'failed') {
+      await this.#record('checkpoint', `final checkpoint failed: ${outcome.reason ?? 'unknown'}`);
 
       return outcome;
-    } finally {
-      if (resumeResidents && this.#owns(generation) && this.ctx.container?.running === true) {
-        await this.#repairAttached(generation);
-        await this.#restartSync();
-      }
     }
+
+    await this.#restSnapshot();
+    this.#invalidateGeneration();
+    await this.#stopContainer();
+    await this.#awaitContainerStopped();
+    await this.#sweepSnapshots();
+
+    return outcome;
   }
 
+  /** A box with no store keeps nothing past a rest, its snapshot included. */
+  async #restSnapshot(): Promise<void> {
+    if (this.store === undefined) return;
+    const [taken] = await Promise.allSettled([this.#takeRestSnapshot()]);
 
-  /** Kill live supervised processes via `killProcess`, not `stopSupervised`: that drops the spec,
-   *  and the wake's restoration restarts exactly those specs. */
-  async #releaseWorkdirHolders(listed: Awaited<ReturnType<Processes['list']>>): Promise<void> {
-    if (this.ctx.container?.running !== true) return;
-
-    for (const live of listed) {
-      if (!isProcessLive(live.status)) continue;
-
-      try {
-        await this.#processes().kill(live.id);
-      } catch (error) {
-        // A failed kill does not abort the stop: the holder scan below still catches, by pid,
-        // whatever the process holds under the work directory.
-        console.error(
-          `[devbox] supervised process ${live.id} could not be killed before the stop: `
-          + describe({ cause: error }),
-        );
-      }
-    }
-
-    const released = await this.#rawExec(
-      releaseWorkdirHoldersCommand(DEVBOX_WORKDIR),
-      DEVBOX_RUNTIME_DIR,
-    );
-
-    if (released.exitCode !== 0) {
-      // A failed holder scan says nothing about the holders; proceeding to the detach would leave
-      // the caller's later refusal with no names to act on. The error text arrives on stderr.
-      throw new DevboxError("io", `the holders of ${DEVBOX_WORKDIR} could not be released: `
-      + `${released.stderr.trim() || released.stdout.trim() || `exit ${released.exitCode}`}`, );
-    }
-
-    this.#lastWorkdirHolders = parseWorkdirHolders(released.stdout);
+    if (taken.status === 'rejected') await this.#record('quiesce', `the rest took no snapshot, so the next wake recovers from the backup: ${describe({ cause: taken.reason })}`);
   }
 
-  /** Rethrows a still-busy refusal naming the holders the release pass found; the SDK's bare
-   *  `fusermount` busy error names nothing a caller could act on. */
-  async #detachStorage(): Promise<void> {
-    try {
-      await this.#requireStorage().detach?.();
-    } catch (error) {
-      const holders = this.#lastWorkdirHolders;
+  /** After an image start the new snapshot is a root, and the old lineage is dead. */
+  async #takeRestSnapshot(): Promise<void> {
+    const chain = v.safeParse(DiskChainStateSchema, this.ctx.storage.kv.get(DISK_STATE_KEY));
+    const held = v.safeParse(SnapshotRecord, this.ctx.storage.kv.get(SNAPSHOT_KEY));
+    const parent = held.success && held.output.id === this.ctx.storage.kv.get(WOKE_FROM_KEY) ? held.output : undefined;
+    const snapshot = await this.#container().snapshotContainer({ name: `${this.ctx.id.toString()}-${String(Date.now())}` });
 
-      throw holders === undefined || holders.length === 0 ? error : new DevboxError('io',
-        `the work directory could not be detached while these processes were still holding it: ${holders.map(holder => `${holder.pid} (${holder.comm})`).join(', ')}: ${describe({ cause: error })}`, { cause: error });
-    } finally {
-      this.#lastWorkdirHolders = undefined;
-    }
+    const takenAt = Date.now();
+
+    if (parent === undefined) this.#supersede(SNAPSHOT_KEY);
+    this.ctx.storage.kv.put(SNAPSHOT_KEY, {
+      id: snapshot.id, image: this.#base(), chainRev: chain.success ? chain.output.rev : 0, takenAt,
+      lineage: parent === undefined ? [] : [...parent.lineage, parent.id], rootTakenAt: parent === undefined ? takenAt : parent.rootTakenAt ?? parent.takenAt,
+    });
   }
 
   /** An in-flight restore writes nothing durable after this, and no tick publishes after the
@@ -2074,8 +2112,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   discardState(): Promise<void> {
     return settle(attempt('io', async () => {
       this.#invalidateGeneration();
-      await this.#stopSync();
       await this.#requireStorage().discard();
+      await this.#sweepSnapshots();
       // The attach evidence describes the discarded bytes, so it is deleted with them.
       await this.ctx.storage.delete(LAST_ATTACH_KEY);
     }));
@@ -2225,8 +2263,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** Runs on the port's claim, not gated on readiness: the token must be mintable before the
-   *  exposure it names; minting and removing the same row share the claim so URL and manifest agree. */
+  /** On the port's claim, not readiness: the token must exist before the exposure it names. */
   async #portToken(port: number, name?: string): Promise<{ urlToken: string }> {
     const key = `${PORT_SPEC_PREFIX}${port}`;
     const existing = await this.ctx.storage.get<PortExposureSpec>(key);
@@ -2281,7 +2318,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       ]);
 
       return {
-        strategy: this.strategy,
         durable: this.store !== undefined,
         running: this.ctx.container?.running === true,
         restoration: this.#restoration.phase,
@@ -2290,7 +2326,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         lastInteractionAt: this.#lastInteraction
           ?? await this.ctx.storage.get<number>(LAST_INTERACTION_KEY),
         quietSince: await this.ctx.storage.get<number>(QUIET_SINCE_KEY),
-        chain: normalizeChainState(await this.ctx.storage.get<StoredValue>(STORAGE_KEY)),
+        chain: parsedOrNull(DiskChainStateSchema, this.ctx.storage.kv.get<StoredValue>(DISK_STATE_KEY)),
+        snapshot: parsedOrNull(SnapshotRecord, this.ctx.storage.kv.get<StoredValue>(SNAPSHOT_KEY)),
         lastAttach: await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY),
         lastTick: await this.ctx.storage.get<HeartbeatTick>(LAST_TICK_KEY),
         bootId: await this.ctx.storage.get<string>(BOOT_ID_KEY),
@@ -2451,16 +2488,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       case HEARTBEAT_CALLBACK: await this.devboxHeartbeat(); break;
       case CHECKPOINT_CALLBACK: await this.devboxCheckpoint(); break;
       case INCIDENT_CALLBACK: await this.devboxIncidents(); break;
+      case GOLDEN_BUILD_CALLBACK: await this.devboxGolden(false); break;
+      case GOLDEN_REFRESH_CALLBACK: await this.devboxGolden(true); break;
       default: throw new DevboxError("io", `unknown devbox alarm: ${callback}`);
     }
   }
-  /** Failures go to both the strategy record and an incident: the alarm loop reduces a thrown
-   *  callback to a console line. Not re-armed while down; waking a container would keep it alive. */
+  /** An exec on a stopped container would start a blank one, and save its empty disk. */
+  async #runCheckpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
+    if (this.store !== undefined && this.ctx.container?.running !== true) {
+      return { kind: 'skipped', reason: 'container is not running', bytes: undefined, movedBytes: 0 };
+    }
+
+    return await this.#requireStorage().checkpoint(kind);
+  }
+
+  /** A failure becomes an incident: the alarm loop reduces a throw to a console line.
+   *  Not re-armed while down; waking a container would keep it alive. */
   devboxCheckpoint(): Promise<void> {
     return settle(attempt('io', async () => {
-      // The ambient schedule is this row's only writer; with it disabled the row is never armed,
-      // so a call here is stray and ending the chain keeps nothing ticking the host didn't ask for.
-      if (this.#quiescing !== undefined || !this.ambientCheckpoints || this.#syncsInContainer()) return;
+      // With the ambient schedule disabled the row is never armed: a call here is stray, so the chain ends.
+      if (this.#quiescing !== undefined || !this.ambientCheckpoints) return;
       const period = Math.ceil(this.policy.checkpointIntervalMs / 1000);
       await this.#scheduled(CHECKPOINT_CALLBACK, period, async () => {
         if (this.ctx.container?.running !== true) return null;
@@ -2500,11 +2547,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         }
 
         let observed: string | undefined;
-        let syncAlive: boolean;
 
         try {
           // The boot-id read is the liveness ping too: one container call, not two (D28).
-          ({ bootId: observed, syncAlive } = await this.#readBeat());
+          observed = await this.#readBootId();
         } catch (error) {
           const reason = describe({ cause: error });
           console.error(`[devbox] heartbeat ping failed: ${reason}`);
@@ -2513,8 +2559,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           return beat;
         }
 
-        // Replacement check runs only on a settled restoration: the stamp is a restoration's last step,
-        // so mid-wake the row and fresh instance always mismatch; an in-flight attempt owns its identity.
+        // Only a settled restoration: mid-wake the row and a fresh instance always mismatch.
         if (await this.#containerWasReplaced({ bootId: observed })) {
           this.#invalidateGeneration();
           await this.#tick({ running: true, ping: 'ok', armedNext: true, replaced: true });
@@ -2523,16 +2568,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           return beat;
         }
 
-        if (!syncAlive && this.#restoration.phase === 'attached') {
-          // Nothing commits while it is down, so its death is an incident, not only a restart.
-          await this.#record('checkpoint', 'the container\'s sync had stopped, so nothing was committed since; restarting it');
-          await this.#restartSync();
-        }
-
         const now = Date.now();
 
-        // Each busy lane covers its own tail: claims include draining streams, checkpoints queued runs,
-        // startup restore/repair; shell commands and supervised starts count only via `#activeCallers`.
+        // Each lane covers its own tail; shell commands and supervised starts count via `#activeCallers`.
         const backgroundWork = this.#quiescing !== undefined || this.#activeCallers !== 0 || this.#openSockets !== 0
           || this.#resources.busy()
           || this.#lane.busy()
@@ -2664,22 +2702,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  async #tellLostWork(): Promise<void> {
-    const work = v.safeParse(v.number(), this.ctx.storage.kv.get(LAST_WORK_KEY));
-    const saved = v.safeParse(v.number(), this.ctx.storage.kv.get(SAVED_AT_KEY));
-
-    if (!work.success || !saved.success || work.output <= saved.output) return;
-    this.ctx.storage.kv.delete(LAST_WORK_KEY);
-    await this.#record('recovered', lostWorkNotice(saved.output, this.archiveExcludes));
-  }
-
   /** Maintenance renews inactivity but is not use; only callers stamp idle time. */
   protected stampInteraction(): void {
     this.#renewContainer();
     const now = Date.now();
     this.#lastInteraction = now;
-
-    if (this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair') this.ctx.storage.kv.put(LAST_WORK_KEY, now);
 
     if (now - this.#lastInteractionPersisted < INTERACTION_PERSIST_INTERVAL_MS) return;
     this.#lastInteractionPersisted = now;
@@ -2745,71 +2772,70 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       };
     }
 
-    return snapshotChainStorage(this.#chainPorts(store));
+    return new DiskChainStorage(this.diskChain(this.#diskChainPorts(store)), {
+      prepare: () => this.#refreshTools(),
+      fromSnapshot: () => this.#started.kind === 'own',
+      recovered: async (restoredTo) => { await this.#record('recovered', recoveryNotice(restoredTo, this.archiveExcludes)); },
+      discard: async () => {
+        this.ctx.storage.kv.delete(DISK_STATE_KEY);
+        this.#supersede(SNAPSHOT_KEY);
+
+        // R2 pages at 1,000, refuses an empty delete (D64).
+        for (let listed = await store.bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/` }); listed.objects.length > 0;) {
+          await store.bucket.delete(listed.objects.map(object => object.key));
+
+          if (!listed.truncated) break;
+          listed = await store.bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/`, cursor: listed.cursor });
+        }
+      },
+    });
   }
 
-  /** The Durable Object id is hex and unique per box: no escaping, no collision. */
-  #boxPrefix(): string {
-    return `boxes/${this.ctx.id.toString()}`;
+  protected diskChain(ports: DiskChainPorts): DiskChain {
+    return diskChain(ports);
   }
 
-  #chainPorts(store: DevboxStore): SnapshotChainPorts {
+  #diskChainPorts(store: DevboxStore): DiskChainPorts {
+    const root = chainStoreRoot(this.#boxPrefix());
+    const exec = (command: string) => this.#rawExec(command, DEVBOX_RUNTIME_DIR);
+
     return {
-      containerRunning: () => this.ctx.container?.running === true,
-      allowExtraction: () => this.allowExtraction,
-      archiveExcludes: () => this.archiveExcludes,
-      readState: async () => normalizeChainState(await this.ctx.storage.get<StoredValue>(STORAGE_KEY)),
+      exec,
+      readState: async () => {
+        const stored = await this.ctx.storage.get<StoredValue>(DISK_STATE_KEY);
+
+        return stored === undefined ? null : v.parse(DiskChainStateSchema, stored);
+      },
       writeState: async (state, expectedRev) => this.ctx.storage.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
-        const stored = normalizeChainState(yield* attemptSync('io', () => this.ctx.storage.kv.get<StoredValue>(STORAGE_KEY)))?.rev ?? null;
+        const stored = yield* attemptSync('io', () => this.ctx.storage.kv.get<StoredValue>(DISK_STATE_KEY));
+        const rev = stored === undefined ? null : (yield* attemptSync('io', () => v.parse(DiskChainStateSchema, stored))).rev;
 
-        if (stored !== expectedRev) return yield* Effect.fail(chainAdvanced(expectedRev, stored));
-        yield* attemptSync('io', () => this.ctx.storage.kv.put(STORAGE_KEY, state));
+        if (rev !== expectedRev) return yield* Effect.fail(chainAdvanced(expectedRev, rev));
+        yield* attemptSync('io', () => this.ctx.storage.kv.put(DISK_STATE_KEY, state));
       }))),
-      clearState: async () => {
-        await this.ctx.storage.delete(STORAGE_KEY);
-      },
-      checkpointIntervalMs: () => this.policy.checkpointIntervalMs,
-      checkChanges: async (dir, since) => {
-        const checked = await this.#rawExec(upperFingerprintCommand(dir), DEVBOX_RUNTIME_DIR);
-
-        if (checked.exitCode !== 0) throw new DevboxError("io", `checking filesystem changes failed: ${checked.stderr}`);
-        const version = checked.stdout.trim();
-
-        return { status: since === version ? 'unchanged' : 'changed', version };
-      },
-      exec: async (command) => await this.#rawExec(command, DEVBOX_RUNTIME_DIR),
-      stamp: (phase) => this.#stampPhase(phase),
-      containerGeneration: async () => await this.#readBootId(),
-      storeRoot: () => chainStoreRoot(this.#boxPrefix()),
-      storeObjectUrl: (key) => storeObjectUrl(chainStoreRoot(this.#boxPrefix()), store.binding, key),
-      mountStore: (at) => this.#routes().mount(at),
-      unmountStore: (at) => this.#routes().unmount(at),
-      ...seedStampPorts(async (command) => await this.#rawExec(command, DEVBOX_RUNTIME_DIR)),
-      objectFacts: async (key) => {
-        // R2 `digest` exists only when R2 was given a checksum (s3fs and multipart supply none),
-        // so a chain layer's digest is normally absent; `objectVersion` is always present.
-        const head = await store.bucket.head(key);
-
-        if (head === null) return undefined;
-        const sha256 = head.checksums.sha256;
-
-        return {
-          bytes: head.size,
-          digest: sha256 === undefined ? undefined : Buffer.from(sha256).toString('hex'),
-          objectVersion: head.version,
-        };
-      },
+      storeRoot: () => root,
+      storeObjectUrl: (key) => storeObjectUrl(root, store.binding, key),
+      objectBytes: async (key) => (await store.bucket.head(key))?.size,
       deleteObjects: async (keys) => {
         await store.bucket.delete([...keys]);
       },
-      countEntries: async (dir) => (await this.#files().readDirectory(dir)).length,
-      restoreExtract: (backup) => this.#archives(store).restore(backup),
-      createExtractSnapshot: (options) => this.#archives(store).create(options),
+      mountStore: async () => {
+        if ((await exec(`mountpoint -q ${STORE_MOUNT}`)).exitCode === 0) return;
+        await this.#routes().unmount(STORE_MOUNT);
+        await this.#routes().mount(STORE_MOUNT);
+      },
+      excludes: () => this.archiveExcludes,
+      checkpointIntervalMs: () => this.policy.checkpointIntervalMs,
       now: () => Date.now(),
       log: (message) => {
         console.log(`[devbox] ${message}`);
       },
     };
+  }
+
+  /** The Durable Object id is hex and unique per box: no escaping, no collision. */
+  #boxPrefix(): string {
+    return `boxes/${this.ctx.id.toString()}`;
   }
 
   /** Internal commands bypass readiness; native admission has already succeeded. */
@@ -2861,7 +2887,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #routes(): ContainerRoutes {
     return this.#routeClient ??= new ContainerRoutes({
       container: this.#container(), bindings: this.#gateways, files: this.#files(), prefix: chainStoreRoot(this.#boxPrefix()) + '/',
-      owner: { binding: this.namespaceBinding, id: this.ctx.id.toString() }, internet: this.enableInternet,
+      internet: this.enableInternet,
     });
   }
 
@@ -2869,7 +2895,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   protected get namespaceBinding(): string { return this.constructor.name; }
 
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
-    await this.#routes().configure(await this.outboundPolicy(), this.allowExtraction ? undefined : this.store, reused);
+    await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     this.#renewContainer();
   }
 
@@ -2935,13 +2961,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return new Response(null, { status: 101, headers, webSocket: visitor });
   }
 
-  #archiveClient: NativeArchives | undefined;
-  #archives(store: DevboxStore): NativeArchives {
-    return this.#archiveClient ??= new NativeArchives({
-      container: this.#container(), files: this.#files(), store, root: chainStoreRoot(this.#boxPrefix()), exec: (command, cwd) => this.#rawExec(command, cwd),
-    });
-  }
-
   #fileClient: Files | undefined;
   #processClient: Processes | undefined;
   enableInternet = true;
@@ -2958,15 +2977,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #processes(): Processes { return this.#processClient ??= new Processes(this.#container()); }
 
   async #execute(command: string, options: DevboxExecOptions = {}): Promise<ExecResult> {
-    const output = await (await this.#container().exec(['/bin/bash', '-c', command], {
-      cwd: options.cwd ?? DEVBOX_WORKDIR,
-      env: options.env === undefined ? CONTAINER_TRUST_ENV : { ...CONTAINER_TRUST_ENV, ...options.env },
-      signal: options.signal,
-    })).output();
-
-    const decoder = new TextDecoder();
-
-    return { stdout: decoder.decode(output.stdout), stderr: decoder.decode(output.stderr), exitCode: output.exitCode };
+    return decoded(await (await launch(this.#container(), ['/bin/bash', '-c', command], options)).output());
   }
 
   #renewContainer(): void {
@@ -3146,3 +3157,33 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 }
 
+
+async function firstExec(container: Container, signal: AbortSignal): Promise<void> {
+  const ready = await container.exec(['/bin/true'], { signal });
+  const result = await ready.output();
+
+  if (result.exitCode !== 0) throw new DevboxError("io", `native container admission exited ${result.exitCode}`);
+}
+
+function launch(container: Container, argv: readonly string[], options: DevboxExecOptions): Promise<ExecProcess> {
+  return container.exec([...argv], {
+    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_TRUST_ENV, ...options.env }, signal: options.signal,
+  });
+}
+
+function decoded(output: ExecOutput): ExecResult {
+  const decoder = new TextDecoder();
+
+  return { stdout: decoder.decode(output.stdout), stderr: decoder.decode(output.stderr), exitCode: output.exitCode };
+}
+
+function parsedOrNull<S extends v.GenericSchema>(schema: S, value: StoredValue): v.InferOutput<S> | null {
+  const parsed = v.safeParse(schema, value);
+
+  return parsed.success ? parsed.output : null;
+}
+
+export interface BoxPeers {
+  readonly golden: () => { goldenFor(box: string, lost?: string): Promise<GoldenAnswer> };
+  readonly box: (id: string) => { goldenReady(answer: GoldenAnswer): Promise<void> };
+}

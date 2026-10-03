@@ -715,13 +715,6 @@
       "decision": "protected"
     },
     {
-      "file": "packages/devbox/src/store-gateway.ts",
-      "kind": "regex-literal",
-      "owner": "serveMultipart",
-      "sourceSha256": "0e6c227b3b184bbc96bb47073ac33137c1f1600d21c88074c56bcc291e106da6",
-      "decision": "xml"
-    },
-    {
       "file": "packages/pc-agent/src/update.js",
       "kind": "hand-parser",
       "owner": "parseUpdateFrame",
@@ -860,6 +853,34 @@
       "owner": "CJS_IMPORT",
       "sourceSha256": "35649bf934923ae7e10df35684af94ba865b4eefc387701406e8629df4dda392",
       "decision": "lexical"
+    },
+    {
+      "file": "packages/devbox/src/store-gateway.ts",
+      "kind": "regex-literal",
+      "owner": "completedParts",
+      "sourceSha256": "8b9928bf6a32150437c933640ee0419b7c95e1b6d0a2b4d0b8d084ed0ac486fb",
+      "decision": "xml"
+    },
+    {
+      "file": "packages/devbox/src/store-gateway.ts",
+      "kind": "regex-literal",
+      "owner": "number",
+      "sourceSha256": "fab31e6a5824f4932132fe1528ae9abfaa059d3e81a51c0d9d9ce5d23ec6b9a4",
+      "decision": "xml"
+    },
+    {
+      "file": "packages/devbox/src/store-gateway.ts",
+      "kind": "regex-literal",
+      "owner": "etag",
+      "sourceSha256": "a25956cd4bb8cd63d648015e3504c785b53718dd838180bd1fc542249f7ed031",
+      "decision": "xml"
+    },
+    {
+      "file": "packages/devbox/tests/store-gateway.test.ts",
+      "kind": "regex-literal",
+      "owner": "uploadId",
+      "sourceSha256": "9b030d5cd3b5e6d2bc72c640fda0deb28395089997810eec35fe7d3f90d37dfb",
+      "decision": "xml"
     }
   ]
 }

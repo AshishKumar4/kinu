@@ -25,7 +25,7 @@ next starts.
 
 `example/worker.ts` is the complete standalone host: its class supplies an
 R2 binding and its Durable Object binding name. The Worker exports
-`DevboxSyncGateway`, `DevboxOutbound` and `DevboxStoreGateway`. The store
+`DevboxOutbound` and `DevboxStoreGateway`. The store
 gateway answers the container's S3 requests from the R2 binding, so no key
 pair exists in the Worker or the guest (D41).
 
@@ -57,10 +57,9 @@ that when it attaches.
    streams without a work deadline. A detached, unsupervised command still
    running refuses the stop. D35 permits stop after an unreadable process
    list exhausts its quiet-confirm window; the result names that risk. Devbox
-   stops residents but retains their launch records, releases work-directory
-   holders, takes the final
-   checkpoint, detaches, and destroys the container. A failed commit resumes
-   residents and reopens admission (D39).
+   retains residents' launch records, takes the final checkpoint and the rest
+   snapshot beside the running processes, and stops the container. A failed
+   commit leaves the box running and reopens admission (D39).
 6. A lifecycle failure is stored before delivery retries until the host
    accepts it.
 7. `destroy` closes the box, cancels and joins starts in flight, and deletes
@@ -87,103 +86,42 @@ so tests can pin the reasoning without the platform.
 
 ## Storage
 
-The chain is one immutable base plus one cumulative delta, both squashfs archives
-in R2, attached as lazy FUSE layers. The first checkpoint archives the work
-directory. Each later checkpoint archives the overlay upper directory, including
-whiteouts, into one delta replaced by atomic `PUT`. The chain never exceeds two
-layers.
+The workspace is the container's own disk (D55). Two copies keep it:
 
-Attach mounts the store subtree read-only, then base, delta, and a fresh writable
-upper through `squashfuse` and `fuse-overlayfs`. A changed file stored as
-blocks in the delta is served by the read-only block lower in `block-lower/`.
-Attach moves no bytes until a read, so it fits the container-start budget at
-any work-directory size.
+- At each rest, after the final commit, Devbox takes a platform snapshot of the
+  container (`snapshotContainer`). The next start wakes from it with the disk as
+  it was, excluded folders and all. A snapshot is used only on the image that
+  took it, only when the chain has not moved past it, and only within 29 of its
+  30 days. A snapshot start that fails, or is not admitted within
+  `snapshotWakeCutoverMs` (10 s), is destroyed and replaced by an image start.
+- The disk chain (`src/disk-chain.ts`) is the R2 backup. The first save
+  streams the work directory as one squashfs base (D57, D58). Each later save
+  finds what changed since the last save by comparing file inventories and
+  publishes those files, with whiteouts for deletions, as one more layer. A
+  rest compacts the chain into a new base once the deltas outgrow a quarter of
+  the base or reach eight layers.
 
-The atomic `PUT` lets a reader see the old delta or the new one. Devbox writes
-the state record before cleanup. A crash between them leaves a complete unnamed
-delta that the next attach adopts. Squashfs checks its superblock, so the mount
-validates the object.
+An image start with a chain record recovers lazily inside the start gate: the
+layers mount through `squashfuse` under one `fuse-overlayfs` with a writable
+upper, and a background copy writes them to disk. The next start merges the
+upper into the copy and the workspace is plain disk again. The recovery records
+an incident saying when the workspace was restored to and which excluded
+folders (`node_modules`, caches, build output) must be rebuilt.
 
-Writes land on the overlay's local upper. The container syncs it in the
-background (D30): the image's `sync.js` runs the chain checkpoint every
-`checkpointIntervalMs` (5 min) on the container's own shell, gated on the
-upper's fingerprint, so an idle box costs one local walk per period. It asks
-its Durable Object only for the record, store metadata and mount control,
-over `http://devbox.internal`. `DevboxSyncGateway` binds that request to its
-own box. Payloads go through `DevboxStoreGateway` and never cross the owner
-object (D29). On DO recreation, Devbox rebuilds routing from the SDK's
-mount-registration marker, not a second copy in its own storage (D40).
-
-Keys are `boxes/<box>/backups/<uuid>/data.sqsh` and `…/delta.sqsh`: one chain
-root per box, every generation beneath it. Key builders require a UUID, so no
-key can use `..` or guess another box's key. One mount over the box root serves
-every generation the box will ever publish, including one a rebase mints while
-the previous generation's layers are still mounted.
-
-A record names two generations: the one it serves, and one fallback. A rebase
-writes a new generation and keeps the outgoing one. The attach that mounts the
-new generation proves it, and only then does the old one become garbage. So a
-restore always has a second generation to fall back to, and garbage collection
-cannot remove the last proven copy before its replacement is proven.
-
-Attach reads the two generations newest first. It compares the size the record
-declares against the size the store holds, compares the layer's identity the
-same way, then mounts. If the newest generation is missing, or its archive is
-not the one the record describes, attach records the refusal on the state row,
-promotes the fallback in one write, and serves it. The event line says which
-generation recovered. If both fail, the start fails with both reasons and
-deletes neither.
-
-Each layer carries two identities. The first is the SHA-256 of the bytes that
-landed. Devbox takes it while the upload streams, so it costs one CPU pass and
-no buffer; later it could only be recovered by reading the whole object back.
-The second is the version R2 mints for that upload and reports from every later
-`head`. A byte count cannot tell one archive from another of the same length.
-These can, so a same-length replacement is refused rather than mounted.
-
-A single-request upload also hands the digest to R2, so R2 verifies the bytes it
-received and reports that checksum afterwards. The Workers multipart API takes
-no checksum, so a large archive has no store-side digest. The version covers
-that case.
-
-The digest decides when both sides have one: equal content is sound whatever
-the versions say. The version decides only when no digest can. The order
-matters because a version belongs to an upload, not to content. This chain can
-re-put identical bytes, so refusing on a new version alone would reject a
-healthy archive. An absent identity means UNKNOWN, never sound. A record written
-before these fields existed still attaches, and learns them as its layers are
-rewritten.
+Keys are `boxes/<box>/backups/disk/<uuid>/base.sqsh` and
+`…/delta-<n>-<uuid>.sqsh`: one root per box, read through one store mount. The
+record is written only after the object's size is read back from the store and
+the layer reads back as a squashfs, so a record never names a torn layer. A
+superseded generation is deleted after the new record lands.
 
 The archive keeps `.git`. Git metadata is the only copy of a commit that was
-never pushed, and for a linked worktree the top-level `.git` file is what makes
-the tree a repository. The exclude list drops only trees a lockfile or a build
-can rebuild.
+never pushed. The exclude list drops only trees a lockfile or a build can
+rebuild; a class overrides `archiveExcludes` to keep one.
 
-A pattern in that list matches at any depth, in both storage modes. Devbox
-writes the patterns to an exclude file, in anchored and non-anchored form, and
-runs `mksquashfs -wildcards -ef`. The patterns travel as data, never as shell
-arguments. The staging-space estimate prunes the same paths, so it cannot report
-less than the archive needs.
-
-Extraction is only for local development. A store mount needs outbound
-interception that plain local `wrangler dev` lacks, and extraction reads every
-byte on every attach. The host allows it through `allowExtraction`, default
-false. A refused mount fails its checkpoint with its own reason, and an
-extract-mode record is refused at attach.
-
-I set that default after a deployed failure. A failed mount fell back to
-extraction, the box archived a base, and every later write was lost: a plain
-directory has no overlay upper, so it has no changed set to archive. Two phases
-later the error was `delta content lost across restore`.
-
-A chain is written only after a mount proves its mode. Its stored attach
-postcondition is strict: a chain-mode record must end as an overlay or attach
-throws.
-
-The upper layer must honour writable `MAP_SHARED` mappings, which SQLite's WAL
-mode needs for its shared-memory index. `tests/workspace-mount-contract.test.ts`
-holds that contract against the shipped image, and against a FUSE fixture that
-refuses it, to prove the test can go red.
+The upper layer of a recovery must honour writable `MAP_SHARED` mappings, which
+SQLite's WAL mode needs for its shared-memory index.
+`tests/workspace-mount-contract.test.ts` holds that contract against the shipped
+image, and against a FUSE fixture that refuses it, to prove the test can go red.
 
 ## Platform constraints
 
@@ -259,16 +197,6 @@ and a replaced identity all turn the generation over, so an attempt the platform
 abandoned publishes no readiness, files no failure, releases no successor's entry
 and destroys no identity.
 
-`fuse-overlayfs` does not expose `lowerdir`, `upperdir`, or `workdir` in
-`/proc/mounts`; kernel overlay does. An earlier chain parsed `upperdir`, passed
-local kernel-overlay tests, then failed deployed with `produced an overlay whose
-upper directory (unnamed) does not exist`. Devbox asks the mount line only if it
-is mounted and overlay-family. The strategy verifies its chosen upper directory
-by direct probe and reads the delta there. A mount is the workspace's only if
-its filesystem is overlay-family: `fuse.fuse-overlayfs` and `fuse.s3fs` are
-distinct mechanisms, and a generic `fuse` test would read a store mount as the
-workspace.
-
 The activity lease prevents only our own inactivity sleep. I held a probe box
 through an 11-minute true idle. The final tick was
 `running, ping ok, armedNext, decision hold`; one heartbeat row remained
@@ -287,11 +215,6 @@ last tick and arms nothing (D34). The arming guard counts strictly-future
 rows, not the callback currently being consumed. With no row left,
 `alarm()` deletes the platform alarm.
 
-Attach verifies a mount line and an existing writable layer before a checkpoint
-can report a change. A live container once reported a successful attach with no
-overlay mount; forced checkpoint returned `unchanged`, and restart found an empty
-work directory.
-
 ## Tests
 
 `bun run --cwd packages/devbox test` runs the package's Bun and workerd
@@ -303,8 +226,8 @@ The package test command loads the repository's one Workers platform preload.
 - `supervised-lifecycle.test.ts` and `lifecycle-generation.test.ts` drive the
   real class over `support/devbox-harness.ts` and its native platform model.
   They cover generation ownership, process restoration and bounded recovery.
-- `quiesce-order.test.ts` covers admission draining, resident restart and the
-  delta after a first-quiesce base. `untimed-exec.test.ts` uses real local
+- `quiesce-order.test.ts` covers admission draining, resident restart and a
+  wake from the rest snapshot. `untimed-exec.test.ts` uses real local
   processes to check output, process-tree termination and early cancellation.
 - `mount-route.test.ts` checks that an owner evicted over its running container
   rebinds the SDK's registration marker, or needs none when nothing is mounted,
@@ -313,15 +236,12 @@ The package test command loads the repository's one Workers platform preload.
 - `processes-image.test.ts` runs the process scripts in the real image's shell
   over `docker exec`: a stop escalates TERM to KILL, and a launch that never
   ran is recorded and launched again, never adopted as live (D48).
-- `snapshot-chain.test.ts` covers crash order, delta adoption, attach
-  postconditions, unattached checkpoint refusal, archive scope, generation
-  retention, and fallback recovery. Its denominator tests make an unexercised
-  outcome kind fail.
-- `strategy-conformance.test.ts` drives the shipped adapter through its own
-  production ports over a durable store and a container disk a replacement
-  blanks, dying at each commit sub-step. `workspace-mount-contract.test.ts`
-  holds the mmap and WAL contract described under Storage against the real
-  image.
+- `hybrid.test.ts` covers the rest snapshot and every wake that cannot use
+  it: a stalled or lost snapshot, a moved chain, another image, a refused
+  snapshot. `disk-chain-image.test.ts` runs the real chain in the image with
+  real FUSE: exact lazy recovery, exact plain disk, compaction.
+  `workspace-mount-contract.test.ts` holds the mmap and WAL contract described
+  under Storage against the real image.
 - `scripts/bench-devbox-independence.test.ts` rejects product-core imports and
   workspace dependencies; its third test proves the check can fail.
 - `workspace-resolution.test.ts` rejects `@kinu.run/*` resolving outside this

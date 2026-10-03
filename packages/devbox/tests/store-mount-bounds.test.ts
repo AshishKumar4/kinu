@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY } from '../src/lifecycle';
-import { CHAIN_STORE_MOUNT } from '../src/snapshot-chain';
+import { STORE_MOUNT } from '../src/store-gateway';
 import { chainBox } from './support/chain-box';
 
 /** A key the mount omits leaves s3fs's own default in charge, so its absence fails by name. */
@@ -54,7 +54,7 @@ describe('the store mount clears a marker only where one can be', () => {
     expect(s3Calls(arm)).toEqual(['s3-mount mount']);
 
     // s3fs gone while its marker stands: the mount must clear the marker, or the shim reports it mounted.
-    arm.container.s3fsMounts.delete(CHAIN_STORE_MOUNT);
+    arm.container.s3fsMounts.delete(STORE_MOUNT);
     await arm.box.writeFile('/workspace/notes.md', 'two lines');
     expect((await arm.box.checkpointNow('quiesce')).kind).toBe('committed');
     expect(s3Calls(arm)).toEqual(['s3-mount mount', 's3-mount unmount', 's3-mount mount']);

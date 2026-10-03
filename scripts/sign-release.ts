@@ -14,22 +14,19 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { RELEASE_SIGNING_PUBLIC_KEY, signRelease, verifyRelease, type ReleaseChecksums } from '../packages/core/src/http/release-signing';
+import { RELEASE_SIGNING_PUBLIC_KEY, signRelease, verifyRelease, type ReleaseChecksums, type SignedRelease } from '../packages/core/src/http/release-signing';
+
+if (process.argv.length === 3 && process.argv[2] === '--check') {
+  await signConfiguredRelease('signing-key-check', {});
+  console.log('sign-release: signing key matches the public pin');
+  process.exit(0);
+}
 
 const [outDir, version, sha] = process.argv.slice(2);
 
 if (!outDir || !version || !sha) {
-  console.error('usage: bun scripts/sign-release.ts <out dir> <version> <sha>');
+  console.error('usage: bun scripts/sign-release.ts --check | <out dir> <version> <sha>');
   process.exit(2);
-}
-
-const keyFile = process.env.KINU_RELEASE_SIGNING_KEY_FILE ?? join(homedir(), '.config', 'kinu', 'release-signing.key');
-
-const privateKey = process.env.KINU_RELEASE_SIGNING_KEY ?? (existsSync(keyFile) ? readFileSync(keyFile, 'utf-8').trim() : '');
-
-if (privateKey === '') {
-  console.error(`sign-release: no signing key — set KINU_RELEASE_SIGNING_KEY or run scripts/release-signing-key.ts (${keyFile})`);
-  process.exit(1);
 }
 
 const checksums: ReleaseChecksums = {};
@@ -51,19 +48,33 @@ if (Object.keys(checksums).length === 0) {
   process.exit(1);
 }
 
-const signed = await signRelease(version, checksums, privateKey);
-
-const publicKey = process.env.KINU_RELEASE_SIGNING_PUBLIC_KEY ?? RELEASE_SIGNING_PUBLIC_KEY;
-
-// The key that signed must be the key the shipped bundles pin, or every
-// machine refuses this release: proven here, before the manifest is written.
-if (!await verifyRelease(signed, publicKey)) {
-  console.error('sign-release: the signing key does not match the pinned public key — rotate the pin with the key');
-  process.exit(1);
-}
+const signed = await signConfiguredRelease(version, checksums);
 
 const stamp = { version, sha, builtAt: new Date().toISOString(), checksums: signed.checksums, signature: signed.signature };
 
 writeFileSync(join(outDir, 'kinu-version.json'), `${JSON.stringify(stamp)}\n`);
 
 console.log(`sign-release: signed ${String(Object.keys(checksums).length)} artifact(s) for ${version}`);
+
+async function signConfiguredRelease(buildVersion: string, artifactChecksums: ReleaseChecksums): Promise<SignedRelease> {
+  const keyFile = process.env.KINU_RELEASE_SIGNING_KEY_FILE ?? join(homedir(), '.config', 'kinu', 'release-signing.key');
+  const privateKey = process.env.KINU_RELEASE_SIGNING_KEY ?? (existsSync(keyFile) ? readFileSync(keyFile, 'utf-8').trim() : '');
+
+  if (privateKey === '') refuseSigning(`no signing key — set KINU_RELEASE_SIGNING_KEY or create ${keyFile}`);
+  const publicKey = process.env.KINU_RELEASE_SIGNING_PUBLIC_KEY ?? RELEASE_SIGNING_PUBLIC_KEY;
+
+  if (!/^[0-9a-f]{64}$/i.test(publicKey)) refuseSigning('no valid public pin — an Ed25519 public key is 64 hex characters');
+  const release = await signRelease(buildVersion, artifactChecksums, privateKey);
+
+  if (!await verifyRelease(release, publicKey)) refuseSigning('the signing key does not match the pinned public key');
+
+  return release;
+}
+
+function refuseSigning(reason: string): never {
+  console.error(`sign-release: ${reason}\n` +
+    '  Generate a private key with: bun scripts/release-signing-key.ts\n' +
+    '  Pin its printed public key in packages/core/src/http/release-signing.ts and packages/pc-agent/src/update.js.\n' +
+    '  See docs/SELF-HOSTING.md#release-signing for the complete bootstrap.');
+  process.exit(1);
+}

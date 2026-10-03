@@ -1,13 +1,8 @@
 import { ensureAgentHome, pathHint, type AgentMode } from '../config';
 import { createCliAgent, createLocalPeerAgent } from '../agent-create';
 import { ACCENT, DIM, OK, WARN, createSpinner, printCreatedCard, printFailure } from '../display';
-import { findUnusableModel } from '../local-model-resolver';
+import { findUnusableModel, type LocalModelResolverOptions } from '../local-model-resolver';
 import { ask, canPrompt } from '../prompt';
-
-interface ModelWarningInput {
-  model?: string;
-  agentName: string;
-}
 
 export async function createCommand(name: string | undefined, opts: {
   purpose?: string; model?: string; baseUrl?: string; auth?: string;
@@ -65,10 +60,7 @@ export async function createCommand(name: string | undefined, opts: {
     const created = await createCliAgent({ ...opts, name: named, purpose, mode, alias, allowInteractiveAuth: true });
     spinner.stop('Workspace created');
     printCreatedCard(named, purpose, created.model ?? opts.model ?? 'configured provider', created.dbPath ?? '');
-    const warningInput: ModelWarningInput = { agentName: named };
-
-    if (opts.model) warningInput.model = opts.model;
-    await warnUnusableModel(warningInput);
+    await warnUnusableModel(opts);
     const hint = pathHint();
 
     if (hint) console.log(DIM(hint));
@@ -88,9 +80,7 @@ async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: st
     spinner.stop('Agent added');
     console.log(`\n${OK('✓')} ${ACCENT(created.name)} ${DIM(`joined "${created.workspaceId}"`)}`);
     console.log(DIM(`Mission inherited from ${created.peers?.length ?? 0} peer(s). It names itself on your first message.`));
-    await warnUnusableModel(
-      opts.model ? { agentName: created.name, model: opts.model } : { agentName: created.name },
-    );
+    await warnUnusableModel(opts);
     console.log(`\n${DIM('Run:')} ${ACCENT(`kinu chat ${created.name}`)}\n`);
   } catch (err) {
     spinner.fail('Could not add an agent');
@@ -100,7 +90,7 @@ async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: st
 }
 
 /** Warn now rather than when the first turn dies; the workspace exists either way. */
-async function warnUnusableModel(opts: ModelWarningInput): Promise<void> {
+async function warnUnusableModel(opts: LocalModelResolverOptions): Promise<void> {
   const unusable = await findUnusableModel(opts);
 
   if (!unusable) return;
