@@ -136,7 +136,8 @@ describe('a struggling turn teaches one lesson about its tool', () => {
 
     await learn(turn('t-1', [], [{ id: 'tl-seed-edit', revision: 1 }, { id: 'tl-seed-shell', revision: 1 }]));
 
-    expect(lessons().map(({ id, helpful }) => ({ id, helpful }))).toEqual([
+    // By id: seeds written across a millisecond tick list in insertion order.
+    expect(lessons().map(({ id, helpful }) => ({ id, helpful })).sort((a, b) => a.id.localeCompare(b.id))).toEqual([
       { id: 'tl-seed-edit', helpful: 1 }, { id: 'tl-seed-shell', helpful: 0 }, { id: 'tl-seed-unshown', helpful: 0 },
     ]);
   });
