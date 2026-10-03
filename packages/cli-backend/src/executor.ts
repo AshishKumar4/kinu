@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import * as v from 'valibot';
-import { classify, renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { classify, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { requireBuild } from '@kinu.run/core';
 import { ISOLATED_BUN_FLAGS } from '@kinu.run/core';
 
@@ -62,11 +63,9 @@ export function createSandboxedExecutor(): Executor {
       // Provider functions cannot cross process boundaries; run in-process.
       const providerList: ResolvedProvider[] = normalizeProviders(providers);
 
-      if (providerList.some(p => Object.keys(p.fns).length > 0)) {
-        return executeInProcess(code, providerList);
-      }
-
-      return executeInSubprocess(code);
+      return settle(providerList.some(p => Object.keys(p.fns).length > 0)
+        ? executeInProcess(code, providerList)
+        : executeInSubprocess(code));
     },
   };
 }
@@ -122,43 +121,46 @@ async function runToCompletion(
   }
 }
 
-async function executeInSubprocess(code: string): Promise<ExecuteResult> {
-  // A compiled binary may have no bun CLI beside it.
-  const bunBin = Bun.which('bun');
+function executeInSubprocess(code: string): Effect.Effect<ExecuteResult> {
+  return Effect.gen(function* () {
+    // A compiled binary may have no bun CLI beside it.
+    const bunBin = Bun.which('bun');
 
-  if (!bunBin) return executeInProcess(code, []);
+    if (!bunBin) return yield* executeInProcess(code, []);
 
-  const wrapper = `
-    try {
-      const result = await (
-        ${normalizeCode(code)}
-      )();
-      console.log(JSON.stringify({ ok: true, result: result ?? null }));
-    } catch (e) {
-      console.log(JSON.stringify({ ok: false, error: e.message ?? String(e) }));
+    const wrapper = `
+      try {
+        const result = await (
+          ${normalizeCode(code)}
+        )();
+        console.log(JSON.stringify({ ok: true, result: result ?? null }));
+      } catch (e) {
+        console.log(JSON.stringify({ ok: false, error: e.message ?? String(e) }));
+      }
+    `;
+
+    // Beside its temp script, not in the project, and reading no bunfig or .env.
+    const run = yield* Effect.promise(() => runToCompletion([bunBin, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', tmpdir()));
+
+    if (run.exitCode !== 0) {
+      return { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
     }
-  `;
 
-  // Beside its temp script, not in the project, and reading no bunfig or .env.
-  const run = await runToCompletion([bunBin, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', tmpdir());
+    const lastLine = run.stdout.trim().split('\n').pop() ?? '';
 
-  if (run.exitCode !== 0) {
-    return { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
-  }
+    return yield* Effect.catchCause(Effect.sync((): ExecuteResult => {
+      const parsed = v.parse(subprocessResultSchema, JSON.parse(lastLine));
 
-  const lastLine = run.stdout.trim().split('\n').pop() ?? '';
+      if (parsed.ok) return { result: parsed.result };
 
-  try {
-    const parsed = v.parse(subprocessResultSchema, JSON.parse(lastLine));
+      return { result: undefined, error: parsed.error ?? 'Unknown error' };
+    }), (failed) => {
+      const error = Cause.squash(failed);
 
-    if (parsed.ok) return { result: parsed.result };
-
-    return { result: undefined, error: parsed.error ?? 'Unknown error' };
-  } catch (error) {
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
-
-    return { result: run.stdout.trim() || undefined };
-  }
+      // Not the wrapper's JSON line: the program printed its own answer.
+      return classify({ cause: error }) === 'malformed-input' ? Effect.succeed({ result: run.stdout.trim() || undefined }) : Effect.die(error);
+    });
+  });
 }
 
 function normalizeProviders(
@@ -172,9 +174,9 @@ function normalizeProviders(
 }
 
 /** In-process execution: tool-backed code, or JS when no subprocess runtime is on PATH. */
-async function executeInProcess(
+function executeInProcess(
   code: string, providers: ResolvedProvider[],
-): Promise<ExecuteResult> {
+): Effect.Effect<ExecuteResult> {
   const context: Record<string, ExecutorNamespace> = {};
 
   for (const p of providers) {
@@ -195,16 +197,12 @@ async function executeInProcess(
   const argNames = Object.keys(context);
   const argValues = argNames.map(k => context[k]);
 
-  try {
-    const fn = new Function(...argNames, `return (\n${normalizeCode(code)}\n)()`);
+  return Effect.matchCause(Effect.promise(async () => {
+    const value: unknown = await new Function(...argNames, `return (\n${normalizeCode(code)}\n)()`)(...argValues);
 
-    const value: unknown = await fn(...argValues);
-
-    return { result: value === undefined ? undefined : decodeJsonValue({ value }) };
-  } catch (error) {
-    return {
-      result: undefined,
-      error: renderThrownChain({ cause: error }),
-    };
-  }
+    return value === undefined ? undefined : decodeJsonValue({ value });
+  }), {
+    onSuccess: (result): ExecuteResult => ({ result }),
+    onFailure: (failed): ExecuteResult => ({ result: undefined, error: renderThrownChain({ cause: Cause.squash(failed) }) }),
+  });
 }

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-03",
   "files": 2963,
-  "functions": 78522,
+  "functions": 78742,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -211,10 +211,6 @@
     },
     {
       "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 30
-    },
-    {
-      "key": "packages/cli-backend/src/opencode-provider.ts#discoverModels",
       "complexity": 30
     },
     {

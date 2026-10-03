@@ -1,7 +1,7 @@
 // OpenCode bridge provider (local only): reuses a local opencode install's
 // providers and auth, reading auth.json at request time and proxying requests.
 
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
 import {
@@ -238,7 +238,7 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
         };
       }
 
-      const models = yield* Effect.promise(async () => discoverModels(spawnFn));
+      const models = yield* discoverModels(spawnFn);
       const firstModel = models[0];
 
       if (!firstModel) return yield* Effect.die(new Error('opencode reports no available models'));
@@ -408,89 +408,103 @@ function isOpenAIReasoningFamily(modelId: string): boolean {
   return /^(gpt-[5-9]|o[0-9])/.test(upstream);
 }
 
-async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo[]> {
-  const child = spawnFn(['models', '--verbose'], {});
-  child.stdin?.end();
+function discoverModels(spawnFn: OpenCodeSpawn): Effect.Effect<OpenCodeModelInfo[]> {
+  return Effect.gen(function* () {
+    const child = spawnFn(['models', '--verbose'], {});
+    child.stdin?.end();
 
-  // The verbose listing exceeds a pipe buffer; awaiting exit first would deadlock.
-  const [read, exitCode] = await Promise.all([readAllOutcome(child.stdout), child.exit]);
+    // The verbose listing exceeds a pipe buffer; awaiting exit first would deadlock.
+    const [read, exitCode] = yield* Effect.promise(() => Promise.all([readAllOutcome(child.stdout), child.exit]));
 
-  if (exitCode !== 0) {
-    const stderrRead = await readAllOutcome(child.stderr);
+    if (exitCode !== 0) {
+      const stderrRead = yield* Effect.promise(() => readAllOutcome(child.stderr));
 
-    const detail = 'text' in stderrRead
-      ? stderrRead.text.trim()
-      : `stderr unreadable: ${stderrRead.error instanceof Error ? stderrRead.error.message : String(stderrRead.error)}`;
+      const detail = 'text' in stderrRead
+        ? stderrRead.text.trim()
+        : `stderr unreadable: ${stderrRead.error instanceof Error ? stderrRead.error.message : String(stderrRead.error)}`;
 
-    throw new Error(`Could not read opencode models: ${detail || `exit ${exitCode}`}`);
-  }
+      return yield* Effect.die(new Error(`Could not read opencode models: ${detail || `exit ${exitCode}`}`));
+    }
 
-  if ('error' in read) {
-    throw new Error(
-      '`opencode models --verbose` exited 0 but its output could not be read',
-      { cause: read.error },
-    );
-  }
+    if ('error' in read) {
+      return yield* Effect.die(new Error(
+        '`opencode models --verbose` exited 0 but its output could not be read',
+        { cause: read.error },
+      ));
+    }
 
-  const stdout = read.text;
+    const stdout = read.text;
 
-  const models: OpenCodeModelInfo[] = [];
-  const unreadable: string[] = [];
-  // The verbose output alternates: "provider/model-id\n{...json...}" per model.
-  const header = /^([^\s/]+\/[^\s]+)\n\{/gm;
-  let match: RegExpExecArray | null;
+    const models: OpenCodeModelInfo[] = [];
+    const unreadable: string[] = [];
+    // The verbose output alternates: "provider/model-id\n{...json...}" per model.
+    const header = /^([^\s/]+\/[^\s]+)\n\{/gm;
+    let match: RegExpExecArray | null;
 
-  while ((match = header.exec(stdout)) !== null) {
-    const id = match[1];
-    const provider = id.slice(0, id.indexOf('/'));
-    const start = header.lastIndex - 1;
-    const end = jsonObjectEnd(stdout, start);
+    while ((match = header.exec(stdout)) !== null) {
+      const id = match[1];
+      const provider = id.slice(0, id.indexOf('/'));
+      const start = header.lastIndex - 1;
+      const end = jsonObjectEnd(stdout, start);
 
-    if (end < 0) continue;
+      if (end < 0) continue;
 
-    try {
-      const metadata = v.parse(modelMetadataSchema, JSON.parse(stdout.slice(start, end)));
+      const entry = yield* modelEntry(id, provider, stdout.slice(start, end));
 
-      if (metadata?.capabilities?.output?.text === false) continue;
+      if ('unreadable' in entry) {
+        unreadable.push(`${id}: ${entry.unreadable}`);
+        header.lastIndex = end;
+        continue;
+      }
 
-      if (metadata?.capabilities?.toolcall === false) continue;
+      // A model that cannot answer in text or call tools is skipped.
+      if (entry.model === null) continue;
+      models.push(entry.model);
 
+      header.lastIndex = end;
+    }
+
+    // Unreadable entries mean the output format changed; a short list would look like a small account.
+    if (unreadable.length > 0) {
+      diagnostics.failure(
+        'model.catalog_entries_unreadable',
+        new KinuError(
+          'bad_input',
+          `opencode models --verbose: entries could not be read: ${unreadable.join('; ')}`,
+        ),
+        { unreadable: unreadable.length, readable: models.length },
+      );
+    }
+
+    return models;
+  });
+}
+
+/** One verbose listing entry: the model, null when it cannot answer in text or call tools, or why it is unreadable. */
+function modelEntry(id: string, provider: string, json: string): Effect.Effect<{ readonly model: OpenCodeModelInfo | null } | { readonly unreadable: string }> {
+  return Effect.matchCause(Effect.sync(() => v.parse(modelMetadataSchema, JSON.parse(json))), {
+    onFailure: (failed) => ({ unreadable: renderThrownChain({ cause: Cause.squash(failed) }) }),
+    onSuccess: (metadata) => {
+      if (metadata?.capabilities?.output?.text === false || metadata?.capabilities?.toolcall === false) return { model: null };
       const context = metadata?.limit?.context;
-
       // Empty strings mean opencode declared the field but left it unset.
       const apiId = metadata.api?.id;
       const apiNpm = metadata.api?.npm;
       const name = metadata.name;
 
-      models.push({
-        id,
-        provider,
-        upstreamModel: apiId === undefined || apiId === '' ? id.slice(provider.length + 1) : apiId,
-        name: name === undefined || name === '' ? id : name,
-        contextWindow: context && context > 0 ? Math.floor(context) : undefined,
-        reasoning: metadata.capabilities?.reasoning,
-        apiNpm: apiNpm === '' ? undefined : apiNpm,
-      });
-    } catch (error) {
-      unreadable.push(`${id}: ${renderThrownChain({ cause: error })}`);
-    }
-
-    header.lastIndex = end;
-  }
-
-  // Unreadable entries mean the output format changed; a short list would look like a small account.
-  if (unreadable.length > 0) {
-    diagnostics.failure(
-      'model.catalog_entries_unreadable',
-      new KinuError(
-        'bad_input',
-        `opencode models --verbose: entries could not be read: ${unreadable.join('; ')}`,
-      ),
-      { unreadable: unreadable.length, readable: models.length },
-    );
-  }
-
-  return models;
+      return {
+        model: {
+          id,
+          provider,
+          upstreamModel: apiId === undefined || apiId === '' ? id.slice(provider.length + 1) : apiId,
+          name: name === undefined || name === '' ? id : name,
+          contextWindow: context && context > 0 ? Math.floor(context) : undefined,
+          reasoning: metadata.capabilities?.reasoning,
+          apiNpm: apiNpm === '' ? undefined : apiNpm,
+        },
+      };
+    },
+  });
 }
 
 /** Find the end of a JSON object starting at `start` (which must be '{'). */

@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect, type Exit } from 'effect';
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, flushSync, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -48,7 +48,7 @@ import {
   type TuiAgentSource,
   type TuiAgentSummary,
 } from './tui-shell';
-import { renderThrownChain, showing, detach } from '@kinu.run/core/obs';
+import { hold, renderThrownChain, showing, detach } from '@kinu.run/core/obs';
 
 type HomeTuiAction =
   | { type: 'open-agent'; name: string }
@@ -117,8 +117,8 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const textareaRef = useRef<TextareaRenderable | null>(null);
   const initialFocusApplied = useRef(false);
   // Effects return cleanup, not tasks; retain the task until it settles.
-  const cloudSyncTaskRef = useRef<Promise<void> | null>(null);
-  const catalogTaskRef = useRef<Promise<void> | null>(null);
+  const cloudSyncTaskRef = useRef<Promise<Exit.Exit<void>> | null>(null);
+  const catalogTaskRef = useRef<Promise<Exit.Exit<void>> | null>(null);
   const deviceConnect = useDeviceConnectPrompt();
   const cloudReady = isCloudAuthConfigured();
   const localReady = isLocalModelConfigured();
@@ -144,15 +144,10 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   useEffect(() => {
     if (setupRequired) return;
     let live = true;
-    catalogTaskRef.current = (async () => {
-      try {
-        const menu = await loadHomeModelCatalog(mode, opts);
-
-        if (live) setCatalog(menu);
-      } catch (cause) {
-        if (live) setCatalogHint(`Catalog unavailable: ${renderThrownChain({ cause })}`);
-      }
-    })();
+    catalogTaskRef.current = hold(Effect.matchCause(loadHomeModelCatalog(mode, opts), {
+      onSuccess: (menu) => { if (live) setCatalog(menu); },
+      onFailure: (failed) => { if (live) setCatalogHint(`Catalog unavailable: ${renderThrownChain({ cause: Cause.squash(failed) })}`); },
+    }));
 
     return () => { live = false; };
   }, [mode, opts, setupRequired]);
@@ -169,34 +164,29 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   useEffect(() => {
     if (!cloudReady) return;
     const abort = new AbortController();
-    let task: Promise<void> | null = null;
+    let task: Promise<Exit.Exit<void>> | null = null;
     let settled = false;
-    task = (async () => {
-      // Only this effect's cleanup aborts the signal, so it decides whether a refresh failure has anywhere to land.
-      let failure: { readonly cause: unknown } | undefined;
 
-      try {
-        const sync = await syncCloudAgentRefs();
+    // Only this effect's cleanup aborts the signal, so it decides whether a refresh failure has anywhere to land.
+    task = hold(Effect.catchCause(Effect.ensuring(Effect.gen(function* () {
+      const sync = yield* Effect.promise(() => syncCloudAgentRefs());
 
-        if (abort.signal.aborted) return;
-        await roster.reload();
+      if (abort.signal.aborted) return;
+      yield* Effect.promise(async () => roster.reload());
 
-        if (abort.signal.aborted) return;
-        // A contested name is neither store's cloud row; silence would read as "no such cloud workspace".
-        setCloudSyncNotice(sync.collisions.length === 0 ? null : collisionNotice(sync.collisions));
-      } catch (cause) {
-        failure = { cause };
-      } finally {
-        settled = true;
+      if (abort.signal.aborted) return;
+      // A contested name is neither store's cloud row; silence would read as "no such cloud workspace".
+      setCloudSyncNotice(sync.collisions.length === 0 ? null : collisionNotice(sync.collisions));
+    }), Effect.sync(() => {
+      settled = true;
 
-        if (task !== null && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
-      }
-
+      if (task !== null && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
+    })), (failed) => Effect.sync(() => {
       // A failed refresh must not read as the list; a torn-down scene shows nothing.
-      if (failure !== undefined && !abort.signal.aborted) {
-        setCloudSyncNotice(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause: failure.cause })}`);
+      if (!abort.signal.aborted) {
+        setCloudSyncNotice(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
       }
-    })();
+    })));
     cloudSyncTaskRef.current = task;
 
     if (settled && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
@@ -218,7 +208,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     setModelPicker({ menu: EMPTY_MODEL_MENU, loading: true, error: null });
 
     return yield* Effect.catchCause(Effect.gen(function* () {
-      const menu = yield* Effect.promise(async () => loadHomeModelCatalog(mode, opts));
+      const menu = yield* loadHomeModelCatalog(mode, opts);
 
       // Only an empty menu is a catalog error; partial failures explain themselves in the picker.
       if (menu.models.length === 0 && menu.failures.length === 0) {
@@ -850,17 +840,20 @@ function collisionNotice(collisions: readonly CloudRefCollision[]): string {
     : `${names}: local workspaces hold these names, so their cloud ones are not listed. Rename one side.`;
 }
 
-async function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Promise<AgentModelMenu> {
+function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Effect.Effect<AgentModelMenu> {
   return mode === 'cloud'
     ? loadCloudHomeModels(opts.origin)
-    : normalizeModelMenu({ payload: await createConfiguredLocalModelResolver(opts).resolver.listModels() });
+    : Effect.promise(async () => normalizeModelMenu({ payload: await createConfiguredLocalModelResolver(opts).resolver.listModels() }));
 }
 
-async function loadCloudHomeModels(originOverride: string | undefined) {
-  const config = loadConfigFile();
+function loadCloudHomeModels(originOverride: string | undefined): Effect.Effect<AgentModelMenu> {
+  return Effect.suspend(() => {
+    const config = loadConfigFile();
+    const token = config.accessToken;
 
-  if (!config.accessToken) throw new Error('Sign in with kinu auth to browse cloud models.');
+    if (!token) return Effect.die(new Error('Sign in with kinu auth to browse cloud models.'));
 
-  return listCloudAvailableModels(resolveCloudOrigin({ origin: originOverride }), config.accessToken);
+    return Effect.promise(() => listCloudAvailableModels(resolveCloudOrigin({ origin: originOverride }), token));
+  });
 }
 
