@@ -129,12 +129,10 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     setPath(jump.path);
   }, [jump]);
 
-  const run = useCallback((op: () => Promise<void>) => settle(Effect.gen(function* () {
+  const run = useCallback((op: Effect.Effect<void>) => settle(Effect.gen(function* () {
     setNotice(null);
 
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => op());
-    }), showing(setNotice));
+    return yield* Effect.catchCause(op, showing(setNotice));
   })), []);
 
   const readPlaneFile = useCallback((full: string) => rpc<FileText>("readExecutorFile", [PLANE, full]), [rpc]);
@@ -164,36 +162,36 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     yield* Effect.promise(async () => reloadListing());
   })), [path, rawUrl, reloadListing]);
 
-  const commitRename = useCallback((from: string, draft: string) => run(async () => {
+  const commitRename = useCallback((from: string, draft: string) => run(Effect.gen(function* () {
     const name = draft.trim();
     setRenaming(null);
 
-    if (!name || name.includes("/")) throw new Error("a name cannot be empty or contain /");
+    if (!name || name.includes("/")) return yield* Effect.die(new Error("a name cannot be empty or contain /"));
     const to = joinDir(parentDir(from), name);
 
     if (to === from) return;
-    const out = await rpc<WriteResult>("renameExecutorFile", [PLANE, from, to]);
+    const out = yield* Effect.promise(() => rpc<WriteResult>("renameExecutorFile", [PLANE, from, to]));
 
-    if ("error" in out) throw new Error(out.error);
+    if ("error" in out) return yield* Effect.die(new Error(out.error));
 
     if (preview === from) setPreview(to);
-    await reloadListing();
-  }), [preview, reloadListing, rpc, run]);
+    reloadListing();
+  })), [preview, reloadListing, rpc, run]);
 
-  const deletePath = useCallback((full: string) => run(async () => {
+  const deletePath = useCallback((full: string) => run(Effect.gen(function* () {
     setConfirmDelete(null);
-    const out = await rpc<WriteResult>("deleteExecutorFile", [PLANE, full]);
+    const out = yield* Effect.promise(() => rpc<WriteResult>("deleteExecutorFile", [PLANE, full]));
 
-    if ("error" in out) throw new Error(out.error);
+    if ("error" in out) return yield* Effect.die(new Error(out.error));
 
     if (preview === full) setPreview(null);
-    await reloadListing();
-  }), [preview, reloadListing, rpc, run]);
+    reloadListing();
+  })), [preview, reloadListing, rpc, run]);
 
   const uploadDropped = useCallback((files: FileList) => {
     const dropped = [...files];
 
-    detach(Effect.promise(async () => run(() => uploadFiles(dropped))));
+    detach(Effect.promise(() => run(Effect.promise(() => uploadFiles(dropped)))));
   }, [run, uploadFiles]);
 
   const { dragOver, handlers: listDrop } = useFileDrop(uploadDropped);
@@ -281,11 +279,11 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           badgeFor={badgeFor}
           onNavigate={(dir) => { setFilter(""); setPath(dir); }}
           onOpenFile={setPreview}
-          onToggle={(dir) => run(async () => {
+          onToggle={(dir) => run(Effect.gen(function* () {
             toggleExpanded(dir);
 
-            if (!treeCache.has(dir)) await listDir(dir);
-          })}
+            if (!treeCache.has(dir)) yield* Effect.promise(() => listDir(dir));
+          }))}
         />
       </div>
 
@@ -308,7 +306,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               const picked = [...(e.currentTarget.files ?? [])];
               e.currentTarget.value = "";
 
-              return run(() => uploadFiles(picked));
+              return run(Effect.promise(() => uploadFiles(picked)));
             }))} />
           <div className="ml-auto flex items-center gap-0.5 shrink-0">
             <button onClick={() => setPath(parentDir(path))} disabled={atRoot}
@@ -321,11 +319,11 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               className="flex items-center gap-1 p-text-3 hover:p-text p-1"
               title={`Upload files to ${path}`}><UploadSimpleIcon size={11} />Upload</button>
             {/* Drops every cached listing: a plane without mtime gives `nextTreeCache` nothing to compare. */}
-            <button onClick={() => detach(Effect.promise(async () => run(async () => {
+            <button onClick={() => detach(Effect.promise(() => run(Effect.sync(() => {
               setTreeCache(new Map());
-              await reloadListing();
+              reloadListing();
               reloadMounts();
-            })))}
+            }))))}
               className="p-text-3 hover:p-text p-1"
               title="Refresh" aria-label="Refresh"><ArrowsClockwiseIcon size={11} /></button>
           </div>

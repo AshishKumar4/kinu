@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Cause, Effect } from "effect";
+import { detach } from "@kinu.run/core/obs";
 import { AnnotationToolbar } from "@plannotator/ui/components/AnnotationToolbar";
 import { CommentPopover } from "@plannotator/ui/components/CommentPopover";
 import { AnnotationType } from "@plannotator/ui/types";
@@ -111,12 +113,12 @@ export function NotesProvider({ baseline, files, store, initial = [], writing, n
     if (store === null) return;
     let live = true;
 
-    store.load().then((kept) => {
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => store.load()), (kept) => {
       if (!live) return;
 
       if (!kept.ok) setFailure(kept.error);
       else if (!touched.current) setNotes(kept.notes);
-    }).catch(failed);
+    }), (cause) => Effect.sync(() => failed(Cause.squash(cause)))));
 
     return () => { live = false; };
   }, [store]);
