@@ -39,7 +39,7 @@ import { TierIdSchema,
   recoverActorTurns,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
-  BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type TaskListStore,
+  BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type TaskListStore,
   WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
@@ -155,6 +155,7 @@ import {
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
+import { OS_LEASE_PROCESS } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
 import { detectOrphanedFibers } from '@kinu.run/core';
@@ -328,6 +329,9 @@ export interface LocalAgentSessionOpts {
   hosted?: LocalHostedSession;
 }
 
+/** A job fiber's checkpoint names its job. */
+const FiberJobSchema = v.looseObject({ jobId: v.string() });
+
 const TurnTierMetadataSchema = v.object({
   profile_tier: v.optional(TierIdSchema),
 });
@@ -397,6 +401,7 @@ export class LocalAgentSession {
   private readonly jobs: BackgroundJobStore;
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
+  private readonly jobHolder: JobHolder;
   /** Every job operation in this session reaches the runner over the job's rows: the root's, or a node's or head's. */
   private readonly jobAuthorities: WorkspaceJobAuthorities;
   private readonly clock: Clock;
@@ -689,6 +694,7 @@ export class LocalAgentSession {
     });
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channel);
+    this.jobHolder = processJobHolder(this.rt.storage, OS_LEASE_PROCESS);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
@@ -713,6 +719,7 @@ export class LocalAgentSession {
       )),
       // Arms the session's one terminal-retry timer, which sweeps due jobs before replaying owed effects.
       scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
+      holder: this.jobHolder,
     } satisfies BackgroundJobRunnerDeps);
     this.jobAuthorities = new WorkspaceJobAuthorities({
       root: () => ({ kind: 'root', actorId: this.rt.actor.actorId, store: this.jobs, runner: this.jobRunner }),
@@ -1415,6 +1422,11 @@ export class LocalAgentSession {
     });
 
     for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
+      const job = v.safeParse(FiberJobSchema, orphan.snapshot);
+
+      // Its process is alive and still running it.
+      if (job.success && this.jobHolder.heldElsewhere(job.output.jobId)) continue;
+
       if (orphan.name.startsWith('bg:')) await this.jobAuthorities.recover(orphan.snapshot);
       void this.rt.storage.sql`DELETE FROM fibers
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
@@ -2775,7 +2787,7 @@ export class LocalAgentSession {
 
   /** The session's own job seams: a node's or head's output reaches the same listeners its chat's does. */
   private loopJobPorts(): WorkspaceJobPorts {
-    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null };
+    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null, holder: this.jobHolder };
   }
 
   /** A swarm actor no loop holds: its loop ended, with this process or before it, so its rows settle and wake nobody. */
