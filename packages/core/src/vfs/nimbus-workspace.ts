@@ -96,16 +96,29 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceBundle['vf
 }
 
 /** No per-command `cwd`: the shell owns its working directory so `cd` persists. */
+/**
+ * The workspace's one shell keeps a `cd` or `export` from call to call, so every call runs in a subshell, whose state
+ * ends with it, started at its `cwd` or the home. This shell keeps no named shells (Nimbus has none in process).
+ */
 function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
   return {
     async exec(command, stdinOrOptions) {
       const options = shellExecOptions({ value: stdinOrOptions });
 
-      const workspace = await open();
+      if (options?.name !== undefined) {
+        const refusal = { reason: 'unsupported' as const, error: 'this workspace keeps no named shells; run the command without a name' };
 
+        return { stdout: '', stderr: refusal.error, exitCode: 1, refusal };
+      }
+
+      const workspace = await open();
+      const home = workspace.shell.getEnv().HOME ?? WORKSPACE_ROOT;
+      const start = options?.cwd === undefined ? home : workspacePath(options.cwd, home);
       const output = options?.output;
 
-      const result = await workspace.exec(command, {
+      // The newline closes a command that ends in a comment.
+      const result = await workspace.exec(`(${command}\n)`, {
+        cwd: start,
         stdin: options?.stdin,
         signal: options?.signal,
         ...(output !== undefined && {
@@ -115,7 +128,7 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
       });
 
       return workspaceCommandNotFound(
-        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
+        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, cwd: start },
         // Read per call: installs re-register bins mid-session.
         (bin) => workspace.registry.has(bin),
       );

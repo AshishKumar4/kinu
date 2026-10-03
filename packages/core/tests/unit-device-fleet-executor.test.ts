@@ -408,7 +408,8 @@ describe('the shell tool names the machine', () => {
   test('the nickname rides the call to the named machine, and its absence on a fleet is the ask', async () => {
     const { t, run } = runTool([STUDIO, RIG]);
 
-    expect(await run({ command: 'uname', runtime: 'mrwhite@rig', why: 'their GPU' })).toBe('ran on dev-rig');
+    // The shell tool's answer says where the command started: a device's home, wherever that is on the machine.
+    expect(await run({ command: 'uname', runtime: 'mrwhite@rig', why: 'their GPU' })).toBe('cwd: ~\nran on dev-rig');
     expect(t.sent.map((frame) => frame.deviceId)).toEqual(['dev-rig']);
 
     const unknown = run({ command: 'uname', runtime: 'toaster', why: 'their GPU' });
@@ -420,8 +421,8 @@ describe('the shell tool names the machine', () => {
 
   test('one machine needs no name; the class name still reaches the sole machine', async () => {
     const { run } = runTool([STUDIO]);
-    expect(await run({ command: 'uname', runtime: 'ashish@studio', why: 'their files' })).toBe('ran on dev-studio');
-    expect(await run({ command: 'uname', runtime: 'device', why: 'their files' })).toBe('ran on dev-studio');
+    expect(await run({ command: 'uname', runtime: 'ashish@studio', why: 'their files' })).toBe('cwd: ~\nran on dev-studio');
+    expect(await run({ command: 'uname', runtime: 'device', why: 'their files' })).toBe('cwd: ~\nran on dev-studio');
   });
 
   test('a nickname before the fleet is described is refused by the executor, never as an unregistered runtime', async () => {

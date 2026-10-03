@@ -51,7 +51,7 @@ async function resize(provider: ExecutorProvider, size: string): Promise<ReturnT
 
 describe('the declaration the model reads', () => {
   test('names each size from the table, and none of the retired figures', () => {
-    const { types } = createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size })), undefined, undefined, SIZES);
+    const { types } = createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size })), { sizes: SIZES });
 
     expect(types).toContain('/** small: 1 vCPU, 4 GiB; medium: 2 vCPU, 8 GiB; large: 4 vCPU, 12 GiB. A running sandbox restarts at the new size');
     expect(types).toContain("function resize(size: 'small' | 'medium' | 'large'): Promise<string | Refusal>;");
@@ -65,7 +65,7 @@ describe('the declaration the model reads', () => {
 
   test('the prompt line names the default and every choice, and only where a sandbox is sized', () => {
     const router = new DefaultExecutionRouter();
-    router.register(createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size })), undefined, undefined, SIZES));
+    router.register(createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size })), { sizes: SIZES }));
     const { rt } = createTestRuntime();
     const sized = buildSystemPromptSync(rt, { backend: 'cf', executors: router.listExecutors() });
 
@@ -94,14 +94,14 @@ describe('what sandbox.resize answers', () => {
     test(name, async () => {
       const box = boxAnswering(async () => answer);
 
-      expect({ answered: await resize(createSandboxExecutor(box, undefined, undefined, SIZES), 'large'), asked: box.asked })
+      expect({ answered: await resize(createSandboxExecutor(box, { sizes: SIZES }), 'large'), asked: box.asked })
         .toEqual({ answered: says, asked: ['large'] });
     });
   }
 
   test('a restart whose final checkpoint failed is refused, naming the size it kept', async () => {
     const box = boxAnswering(async () => ({ kind: 'failed', size: 'large', previous: 'medium', reason: 'the store refused the write' }));
-    expect(await resize(createSandboxExecutor(box, undefined, undefined, SIZES), 'large')).toMatchObject({
+    expect(await resize(createSandboxExecutor(box, { sizes: SIZES }), 'large')).toMatchObject({
       reason: 'io',
       error: expect.stringContaining('The sandbox still runs at Medium (2 vCPU, 8 GiB): its final checkpoint failed (the store refused the write). '
         + 'It starts at Large (4 vCPU, 12 GiB) next time.'),
@@ -110,7 +110,7 @@ describe('what sandbox.resize answers', () => {
 
   test('a size the table does not name is refused before the container is asked', async () => {
     const box = boxAnswering(async (size) => ({ kind: 'recorded', size }));
-    const refused = await resize(createSandboxExecutor(box, undefined, undefined, SIZES), 'huge');
+    const refused = await resize(createSandboxExecutor(box, { sizes: SIZES }), 'huge');
 
     expect({ refused, asked: box.asked }).toMatchObject({
       refused: { reason: 'bad_input', error: expect.stringContaining('sandbox resize: size must be one of small, medium, large') },
@@ -119,7 +119,7 @@ describe('what sandbox.resize answers', () => {
   });
 
   test('without a container the refusal says so, and without a table there is no resize to call', async () => {
-    const unbound = await resize(createSandboxExecutor(undefined, undefined, undefined, SIZES), 'large');
+    const unbound = await resize(createSandboxExecutor(undefined, { sizes: SIZES }), 'large');
     const unsized = createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size })));
 
     expect({ unbound, unsized: Object.keys(unsized.tools).includes('resize') }).toMatchObject({ unbound: { reason: 'unavailable' }, unsized: false });

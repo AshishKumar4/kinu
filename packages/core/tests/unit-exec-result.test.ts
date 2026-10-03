@@ -145,7 +145,7 @@ describe('the surfaces the model reads', () => {
     };
 
     const workspace = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
     });
 
     const out = await workspace.tools.exec?.execute('pytest');

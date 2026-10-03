@@ -20,9 +20,10 @@ export interface HostedNodeHome {
  * `nimbusSessionFiles(box, cred)`; both are required or the facet cannot write its own home.
  */
 export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNodeHome): NimbusSandboxHandle {
+  // An unnamed call starts at home unless told; a named one where its shell is, unless told.
   const optionsFor = (options?: Parameters<NimbusSandboxHandle['exec']>[1]) => ({
     ...options,
-    cwd: options?.cwd ?? node.home,
+    ...(options?.name === undefined && { cwd: options?.cwd ?? node.home }),
     env: { ...options?.env, HOME: node.home, TMPDIR: node.tmp },
     cred: node.cred,
   });
@@ -35,6 +36,7 @@ export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNo
     ...(box.processes !== undefined && { processes: box.processes }),
     ...(box.ports !== undefined && { ports: box.ports }),
     ...(box.mountTable !== undefined && { mountTable: box.mountTable.bind(box) }),
+    ...(box.shellCwd !== undefined && { shellCwd: box.shellCwd.bind(box) }),
     exec: (command, options) => box.exec(command, optionsFor(options)),
   };
 

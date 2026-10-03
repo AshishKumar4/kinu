@@ -310,7 +310,7 @@ through `LOADER` (`@cloudflare/codemode`). The CLI evaluates in-process through
 | `workspace.editFile` | `(path: string, edits: [{old_text, new_text}]) → {ok, applied} \| {error}` | Exact-match edit, through the same dispatcher (`createFileDispatcher`) and gate as the native `file` tool's `edit` action |
 | `workspace.readdir` | `(path: string) → string[]` | List directory entries |
 | `workspace.exists` | `(path: string) → boolean` | Check whether a path exists |
-| `workspace.exec` | `(command: string) → string` | Run a POSIX shell command (cat, grep, find, sed, ls, etc.) |
+| `workspace.exec` | `(command: string, options?: {cwd, name}) → string` | Run a POSIX shell command (cat, grep, find, sed, ls, etc.): a fresh shell in `cwd` or the home, unless `name` keeps one |
 | `workspace.searchMemory` | `(query: string) → results` | FTS5 search over long-term memory |
 | `workspace.saveNote` | `(content: string) → "ok"` | Append a note to MEMORY.md with FTS indexing |
 | `workspace.listTools` | `() → Array<{name, description, qualityScore}>` | List crafted tools with their EMA scores |
@@ -474,6 +474,19 @@ separate files; each device mounts at `/pc/<name>`. `ExecutionRouter` has no
 fallback: an absent runtime returns `runtime_not_provisioned`. Relative paths
 resolve against `WORKSPACE_ROOT`, `/home/main`. Containers receive
 `/workspace`.
+
+Every call is a fresh shell. It starts in `cwd`, else the agent's home (a
+container's `/workspace`, a device's `~`), and a `cd` or `export` lasts only
+that call; calls run side by side. The answer opens with `cwd: <dir>`, where the
+command started. A `name` keeps its directory and exported variables from call
+to call: Nimbus's own named shells, keyed by agent, in the workspace; on the
+sandbox, a device and the CLI's host shell, one bash wrapper
+(`execution/shell-session.ts`) that restores and saves them in a 0600 file under
+`~/.kinu/shells`, `exit 3` included. A name runs one call at a time. One a
+detached job holds answers at once, `shell <name> is busy with job <id> since
+<time>`, until the command ends. Approval judges a named call from the
+directory its last call reported, and a name it has not seen from that saved
+state. The CLI's in-process workspace keeps no named shells and refuses a name.
 
 `shell`, `eval`, and resumable `agents` spawns can run in the background.
 `detachAfterMs` is 30,000 for interactive turns and 300,000 for one-shot

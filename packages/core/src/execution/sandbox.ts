@@ -4,10 +4,11 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
-import { readExecJob, readExecOutput, readExecSignal } from './signal';
+import { callJob, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
+import { createShellSession } from '../safety/approval-gate';
 import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
-import { commandResult, exposedPortText, type CommandResult } from './exec-result';
+import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
@@ -259,7 +260,7 @@ async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<
   throw lastErr;
 }
 
-function normalize(res: { output?: string; stdout?: string; stderr?: string; exitCode?: number }): CommandResult {
+function normalize(res: { output?: string; stdout?: string; stderr?: string; exitCode?: number; cwd?: string }): CommandResult {
   return commandResult({ ...res, stdout: res.stdout ?? res.output ?? '' });
 }
 
@@ -271,14 +272,21 @@ function notDispatched(): Error {
   );
 }
 
-/** Pass `undefined` for a "not configured" stub. Without `previewHostSuffix` only port exposure refuses;
- *  without `sizes` there is no `resize`. */
-export function createSandboxExecutor(
-  handle?: SandboxHandle,
-  previewHostSuffix?: string,
-  activated?: () => void,
-  sizes?: SandboxSizes,
-): ExecutorProvider {
+export interface SandboxExecutorOptions {
+  /** Without it only port exposure refuses. */
+  readonly previewHostSuffix?: string | undefined;
+  readonly activated?: () => void;
+  /** Without them there is no `resize`. */
+  readonly sizes?: SandboxSizes;
+  /** Where this agent's named shells keep their state; without it a name is refused. */
+  readonly shells?: MachineShells;
+}
+
+/** Pass no handle for a "not configured" stub. */
+export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxExecutorOptions = {}): ExecutorProvider {
+  const { previewHostSuffix, activated, sizes, shells } = options;
+  // One call at a time per name, and a name a detached job holds answers at once.
+  const names = createShellSession({ home: WORKSPACE_BACKUP_DIR, userRoots: () => [] });
   const connected = handle != null;
   const previews = previewHostSuffix !== undefined && previewHostSuffix.length > 0;
   let active = false;
@@ -353,28 +361,37 @@ export function createSandboxExecutor(
           return refusalOf(new KinuError('bad_input', 'sandbox exec: command must be a string'));
         }
 
-        const signal = readExecSignal({ context: args[1] });
-        const job = readExecJob({ context: args[1] });
-        const output = readExecOutput({ context: args[1] });
+        const exec = shellExecOptions({ value: args[1] });
+        const { signal, job, output } = exec;
+
+        if (exec.name !== undefined && shells === undefined) {
+          return refusalOf(new KinuError('unsupported', 'sandbox exec: this runtime keeps no named shells'));
+        }
+
+        const call = machineShellCall(command, exec, { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
 
         try {
           // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only
           // refuses to dispatch, before the first attempt and before each retry.
-          const res = await withSandboxRetry(() => touch(() => {
-            if (signal?.aborted) throw notDispatched();
-            // The signal is added only when given, so an adapter can tell "none" from "already fired".
-            const opts: SandboxExecOptions = { cwd: '/workspace' };
+          return await names.hold(exec.name, callJob(exec), async () => {
+            const res = await withSandboxRetry(() => touch(() => {
+              if (signal?.aborted) throw notDispatched();
+              // The signal is added only when given, so an adapter can tell "none" from "already fired".
+              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR };
 
-            if (signal !== undefined) opts.signal = signal;
+              if (signal !== undefined) opts.signal = signal;
 
-            if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
+              if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
 
-            if (output !== undefined) opts.output = output;
+              if (output !== undefined) opts.output = call.output(output);
 
-            return handle.exec(command, opts);
-          }));
+              return handle.exec(call.command, opts);
+            }));
 
-          return normalize(res);
+            const settled = call.settle({ ...res, stdout: res.stdout ?? res.output ?? '' });
+
+            return reportsCwd({ context: args[1] }) ? commandResultAt(settled) : normalize(settled);
+          }, (message) => refusalOf(new KinuError('unavailable', message)));
         } catch (err) {
           if (classifyErrorCode({ cause: err }) === 'cancelled') throw err;
 

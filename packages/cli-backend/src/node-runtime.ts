@@ -1,5 +1,5 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
-import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, localContextTree, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedFiles, withApprovalGatedShell, withMountTable, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
+import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, localContextTree, createInlineExecutor, createShellSession, observeWrites, skillsMount, withApprovalGatedFiles, withApprovalGatedShell, withMountTable, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
@@ -47,7 +47,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
       // A private home is a plane of the in-SQLite workspace, never the user's directory.
       const shellSession = createShellSession({
-        home: node.home, userRoots: () => mounted.userRoots(), keepsCwd: true, stored: () => shellCwd(plane.shell),
+        home: node.home, userRoots: () => mounted.userRoots(), stored: async (name) => await plane.shell.cwd?.(name) ?? null,
       });
 
       shell = withApprovalGatedShell(plane.shell, { filesOwner: 'agent', shellSession }, deps.approvalPolicy);

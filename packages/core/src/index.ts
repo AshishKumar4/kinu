@@ -936,7 +936,9 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 
 export {
   DefaultExecutionRouter, runOnExecutor, type ExecutorRun,
-  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach,
+  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach, type ShellReach,
+  busyShell, callJob, createBashShell, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
+  type MachineShells,
   createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending, sandboxSizeLabel,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,

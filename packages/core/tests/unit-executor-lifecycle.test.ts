@@ -164,7 +164,7 @@ function nimbusWorkspace(box: NimbusSandboxHandle) {
   const { rt } = createTestRuntime();
 
   return createNimbusWorkspaceExecutor({
-    box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+    box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
   });
 }
 
@@ -172,7 +172,7 @@ describe("executor lifecycle state", () => {
   test("configured sandbox is callable but inactive until first operation", async () => {
     const handle = sandboxHandle();
     const router = new DefaultExecutionRouter();
-    router.register(createSandboxExecutor(handle, "kinu.example.test"));
+    router.register(createSandboxExecutor(handle, { previewHostSuffix: "kinu.example.test" }));
 
     const [info] = router.listExecutors().filter((e) => e.name === "sandbox");
     expect(info).toMatchObject({
@@ -253,7 +253,7 @@ describe("executor lifecycle state", () => {
   // nothing.
   test("sandbox exec hands the AbortSignal to the container, and no work deadline", async () => {
     const handle = sandboxHandle();
-    const executor = createSandboxExecutor(handle, "kinu.example.test");
+    const executor = createSandboxExecutor(handle, { previewHostSuffix: "kinu.example.test" });
     const signal = new AbortController().signal;
 
     const result = await executor.tools.exec.execute("echo ok", { signal });
@@ -266,7 +266,7 @@ describe("executor lifecycle state", () => {
 
   test("sandbox exec with no caller signal sends none", async () => {
     const handle = sandboxHandle();
-    const executor = createSandboxExecutor(handle, "kinu.example.test");
+    const executor = createSandboxExecutor(handle, { previewHostSuffix: "kinu.example.test" });
 
     expect(await executor.tools.exec.execute("echo ok")).toBe("ok");
     expect(handle.execOptions).toEqual([{ cwd: "/workspace" }]);
@@ -295,7 +295,7 @@ describe("executor lifecycle state", () => {
     const handle = sandboxHandle();
     handle.getExposedPorts = async () => { throw new Error("preview registry unavailable"); };
 
-    const executor = createSandboxExecutor(handle, "kinu.example.test");
+    const executor = createSandboxExecutor(handle, { previewHostSuffix: "kinu.example.test" });
 
     if (!executor.listExposedPorts) throw new Error("the sandbox provider has no listExposedPorts seam");
 
@@ -354,7 +354,8 @@ describe("executor lifecycle state", () => {
     const output = await executor.tools.exec.execute("node -e 'console.log(2+2)'", { signal });
 
     expect(output).toBe("4\n");
-    expect(box.execOptions).toEqual([undefined]);
+    // An unnamed call says where it starts, and nothing else.
+    expect(box.execOptions).toEqual([{ cwd: WORKSPACE_ROOT }]);
   });
 
   test("Nimbus exposePort with no preview URL answers unsupported, not an empty URL", async () => {
@@ -383,7 +384,7 @@ describe("executor lifecycle state", () => {
       return { files: [] };
     };
 
-    const executor = createSandboxExecutor(handle, "kinu.example.test");
+    const executor = createSandboxExecutor(handle, { previewHostSuffix: "kinu.example.test" });
     const files = present(executor.files, "the sandbox file plane");
 
     expect(await files.stat("/mydir")).toMatchObject({ type: 'directory' });

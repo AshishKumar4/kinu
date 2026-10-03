@@ -37,9 +37,12 @@ function withDeviceOwnership(args: unknown[], channel: DeviceRequestChannel | un
 
   if (context !== undefined && !parsedContext.success) return args;
 
+  // A name its command holds stays held.
   const ownership = {
     onDeviceRequest: (requestId: string) => { channel.report(requestId); },
     deviceRequestOwner: () => channel.owningJobId,
+    job: channel.jobId,
+    detached: channel.detached,
   };
 
   const merged = parsedContext.success ? { ...parsedContext.output, ...ownership } : ownership;

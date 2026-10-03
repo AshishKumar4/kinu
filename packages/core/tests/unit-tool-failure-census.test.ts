@@ -587,7 +587,7 @@ describe('each executor tool files its own failure in the right part', () => {
         delete: async () => {} } };
 
     const narrow = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
     });
 
     const refusal = await narrow.tools.runCode.execute('print(1)');
