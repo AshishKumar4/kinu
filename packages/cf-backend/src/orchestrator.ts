@@ -19,7 +19,8 @@ import {
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
   activePromptSectionOverrides,
-  agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
+  agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools, BACKGROUNDABLE_TOOLS, BackgroundJobRunner,
+  invocationBackgroundPolicy, type ActorJobs,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
   mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
@@ -47,7 +48,7 @@ import { AgentOpenTurns, type AgentOpenTurn, CHAT_SESSION_ID, turnInputMessage, 
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
 import { contextFill, type ContextFill } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
-import { DELEGATION_LANE_FIBER } from './fiber-recovery';
+import { DELEGATION_LANE_FIBER, type FiberLaneTransports } from './fiber-recovery';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
@@ -120,7 +121,7 @@ import {
   AGENT_CONFIG_KEYS,
   listProposedTasks, updateProposedTaskStatus,
   hybridSearch, memorySnippetRehydrator, type HybridHit,
-  type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore,
+  type BackgroundJob, type BackgroundJobStore, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
   type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
@@ -701,7 +702,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sql: this.boundSql,
       seams: () => this.hostedSeams(),
       deliver: async (reference, task) => { await (await this.agentCalls(reference.actorId)).deliver(this.agentSnapshot(reference.actorId), task); },
-      interrupt: async (reference, turnId) => { await (await this.agentCalls(reference.actorId)).interrupt(this.agentSnapshot(reference.actorId), turnId); },
+      interrupt: async (reference, turnId) => {
+        for (const call of this.hireJobRunners.get(reference.actorId)?.foreground ?? []) call.abort(new Error('cancelled by operator'));
+        await (await this.agentCalls(reference.actorId)).interrupt(this.agentSnapshot(reference.actorId), turnId);
+      },
       holds: async (reference, turnId) => await (await this.agentCalls(reference.actorId)).holds(turnId),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       pricing: (spec) => this.modelCatalog.pricing(spec),
@@ -932,6 +936,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   ): Promise<EnqueueTurnResult> {
     const admitted = await admitHostedTask(this.hostedSeams(), actor.reference, {
       kind: 'message', body: input.text, mode: workModeForTurnMetadata(input.metadata),
+      ...(input.idempotencyKey !== undefined && { messageId: input.idempotencyKey }),
     });
 
     return { status: admitted.admitted ? 'queued' : 'skipped' };
@@ -970,6 +975,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.armDurableWake();
       },
       armWake: () => { this.armDelegationWake(); },
+      jobPorts: (actorId) => this.workspaceJobPorts(actorId),
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
       rederiveWake: () => { this.armDurableWake(); },
       oweAdvice: (actor) => this.advice.owe(actor.reference.actorId),
@@ -1075,11 +1081,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       vectorStore: turn.runtime.vectorStore,
       facts: turn.actor.stores.facts,
       webSearch,
+      jobs: this.hireJobs(turn.actor, turn.input.mode),
     };
 
     // `report` belongs only to a parent-driven turn; an owner chat with this actor must not carry it.
     deps.report = report;
-    const tools = withHeadCaptureRecording(buildActorTools(deps), turn.capture);
+    const tools = withHeadCaptureRecording(buildActorTools(deps).turn, turn.capture);
 
     // Framing is rendered from these exact tool names; `report` among them makes core's
     // `state/delegation` section name this actor as a hire.
@@ -1456,9 +1463,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** A waiting hired agent holds no transcript; its rows reopen it. */
+  /** A waiting hired agent holds no transcript; its rows reopen it. A running job keeps its runtime to the settle's turn. */
   private releaseIdleHosted(reference: ActorReference): void {
-    if (this.actorHost().hosted(reference) !== null && !this.hostedTurnInFlight(reference)) this.actorHost().release(reference);
+    if (this.actorHost().hosted(reference) === null || this.hostedTurnInFlight(reference)) return;
+
+    if ((this.hireJobRunners.get(reference.actorId)?.inFlight ?? 0) > 0) return;
+    this.actorHost().release(reference);
   }
 
   private hostedReactionsDueAt(now: number): number | null {
@@ -2817,14 +2827,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Background jobs (#173): lifecycle lives in core BackgroundJobRunner; below is the @callable transport.
 
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    return jobResult(this.jobs, jobId);
+    return jobResult(this.jobOwner(jobId)?.store ?? this.jobs, jobId);
   }
 
   @callable()
   async listBackgroundJobs(limit = 20, actor?: string): Promise<ListedBackgroundJob[]> {
-    if (actor !== undefined) return listBackgroundJobs(this.hostedChild(actor).child.stores.jobs, limit);
+    if (actor === undefined) return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
+    const { child } = this.hostedChild(actor);
+    const runner = this.hireJobRunner(child.reference);
 
-    return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
+    return listBackgroundJobs(child.stores.jobs, limit, (jobId) => runner.output.tail(jobId));
   }
 
   /** Wrapped at one boundary so the retry ratio is visible across all four sites.
@@ -2851,11 +2863,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return this.countJobOperation('cancel', await cancelBackgroundJob(this.jobRunner, jobId));
+    return this.countJobOperation('cancel', await cancelBackgroundJob(this.jobOwner(jobId)?.runner ?? this.jobRunner, jobId));
   }
 
   @callable()
   async retryBackgroundJob(jobId: string): Promise<RetryOutcome> {
+    if (this.jobOwner(jobId)?.hire === true) throw new KinuError('unsupported', "A hired agent's job is run again by asking that agent.");
+
     return this.countJobOperation('retry', await retryBackgroundJob({
       jobs: this.jobs,
       jobRunner: this.jobRunner,
@@ -2866,7 +2880,84 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async dismissBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return this.countJobOperation('dismiss', await dismissBackgroundJob(this.jobs, jobId));
+    return this.countJobOperation('dismiss', await dismissBackgroundJob(this.jobOwner(jobId)?.store ?? this.jobs, jobId));
+  }
+
+  // One runner per hire in this activation.
+  private readonly hireJobRunners = new Map<string, BackgroundJobRunner>();
+
+  /** A hire's own jobs; a settle wakes it with a message. */
+  private hireJobs(actor: BoundActor, mode: WorkMode): ActorJobs {
+    return { jobRunner: this.hireJobRunner(actor.reference), backgroundable: BACKGROUNDABLE_TOOLS, mode: () => mode };
+  }
+
+  /** Over stores bound for it alone: its turn's are released once it idles. */
+  private hireJobRunner(reference: ActorReference): BackgroundJobRunner {
+    const known = this.hireJobRunners.get(reference.actorId);
+
+    if (known !== undefined) return known;
+    const actor = this.actorHost().bindStores(reference);
+
+    const runner = this.actorJobRunner(reference.actorId, {
+      store: actor.stores.jobs,
+      // Unwatched, but woken by a message.
+      policy: () => invocationBackgroundPolicy('interactive', true),
+      fiber: (name, fn) => this.rt.schedule.fiber(name, fn),
+      // Its durable queue; a repeated wake is one message.
+      inbox: {
+        send: async ({ text, metadata, idempotencyKey }) => {
+          await this.enqueueHostedTurn(actor, { text, ...(metadata !== undefined && { metadata: { ...metadata } }), ...(idempotencyKey !== undefined && { idempotencyKey }) });
+
+          return 'queued';
+        },
+      },
+    });
+
+    this.hireJobRunners.set(reference.actorId, runner);
+
+    return runner;
+  }
+
+  /** Whose rows hold `jobId`, or null. */
+  private jobOwner(jobId: string): { store: BackgroundJobStore; runner: BackgroundJobRunner; hire: boolean } | null {
+    const owner = this.jobs.ownerInWorkspace(jobId);
+
+    if (owner === null) return null;
+
+    if (owner === this.actorHandle().actorId) return { store: this.jobs, runner: this.jobRunner, hire: false };
+    const record = this.actorDirectoryStore().retained(owner);
+
+    if (record === null) return null;
+    const hire = this.actorHost().bindStores(actorReferenceOf(record));
+
+    return { store: hire.stores.jobs, runner: this.hireJobRunner(hire.reference), hire: true };
+  }
+
+  /** A recovered fiber names its job; the row names the runner. */
+  protected override workspaceJobs(): FiberLaneTransports['jobs'] {
+    return {
+      recover: async (checkpoint) => {
+        const jobId = v.safeParse(v.object({ jobId: v.string() }), checkpoint);
+
+        return await (jobId.success ? this.jobOwner(jobId.output.jobId)?.runner ?? this.jobRunner : this.jobRunner).recover(checkpoint);
+      },
+      recoverOrphans: async () => [...await this.jobRunner.recoverOrphans(), ...await this.recoverHireOrphans()],
+    };
+  }
+
+  /** Each hire's orphaned rows fail and wake it: a hire has no re-drive. */
+  private async recoverHireOrphans(): Promise<BackgroundJob[]> {
+    const recovered: BackgroundJob[] = [];
+
+    for (const owner of this.jobs.runningOwnersInWorkspace()) {
+      if (owner === this.actorHandle().actorId) continue;
+      const record = this.actorDirectoryStore().retained(owner);
+
+      if (record === null) continue;
+      recovered.push(...await this.hireJobRunner(actorReferenceOf(record)).recoverOrphans());
+    }
+
+    return recovered;
   }
 
   @callable()

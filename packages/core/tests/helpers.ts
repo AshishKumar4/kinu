@@ -17,6 +17,10 @@ import type { ForkFileSource } from '../src/identity/fork';
 import { ConversationSearchStore, type ConversationRecall } from '../src/memory/conversation-search';
 import { initActorStateSchema, initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
+import { BackgroundJobRunner } from '../src/jobs/runner';
+import { initBackgroundJobsTable } from '../src/jobs/store';
+import type { ActorJobs } from '../src/jobs/background-wrap';
+import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { WORKSPACE_IDENTITY_DDL, tableExists } from '../src/identity/schema';
@@ -273,6 +277,19 @@ export function storesFor(rt: AgentRuntime): AgentStores {
     write => rt.storage.transactionSync(write),
     async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }),
   );
+}
+
+/** The runtime's actor's own jobs, as a root chat's: a call that settles inside its window never reaches them. */
+export function actorJobsFor(rt: AgentRuntime): ActorJobs {
+  initBackgroundJobsTable(rt.storage.execRaw);
+
+  return {
+    jobRunner: new BackgroundJobRunner({
+      store: storesFor(rt).jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'queued' },
+    }),
+    backgroundable: BACKGROUNDABLE_TOOLS,
+    mode: () => 'build',
+  };
 }
 
 /** Both console channels for one awaited call; stdout is the CLI's machine stream. */

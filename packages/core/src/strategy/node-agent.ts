@@ -23,7 +23,7 @@ import { buildToolSurface, type ReportToolDeps } from '../tools/builtins';
 import { AgentWakeQueue } from '../jobs/wake-queue';
 import { permitInPlan } from '../execution/work-mode';
 import { BackgroundJobRunner } from '../jobs/runner';
-import type { BackgroundJobRunnerDeps } from '../jobs/runner';
+import type { BackgroundJobRunnerDeps, WorkspaceJobPorts } from '../jobs/runner';
 import { initBackgroundJobsTable } from '../jobs/store';
 import { CONFINED_BACKGROUNDABLE_TOOLS, wrapToolsForBackground } from '../jobs/background-wrap';
 import type { BackgroundPolicy } from '../jobs/threshold';
@@ -177,6 +177,7 @@ export interface HostedNodeSeat {
   readonly conversations: ConversationRecall;
   /** The window a turn on `spec` is admitted against, from the backend's catalog; null is the caller's own model. */
   readonly windowOf: (spec: string | null) => Promise<ResolvedModelWindow>;
+  readonly jobs: WorkspaceJobPorts;
 }
 
 export interface NodeLoopDeps {
@@ -191,6 +192,7 @@ export interface NodeLoopDeps {
     => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   conversations: ConversationRecall;
+  jobs: WorkspaceJobPorts;
   model: LanguageModel;
   window: ResolvedModelWindow;
   logger: Logger;
@@ -428,6 +430,7 @@ async function runNodeLoop(
   initBackgroundJobsTable(deps.actor.runtime.storage.execRaw);
 
   const runnerDeps: BackgroundJobRunnerDeps = {
+    ...deps.jobs,
     store: deps.actor.stores.jobs,
     fiber: deps.actor.runtime.schedule.fiber.bind(deps.actor.runtime.schedule),
     inbox: wakes,
@@ -658,6 +661,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
     profile: seat.profile,
     dynamic: seat.dynamic,
     conversations: seat.conversations,
+    jobs: seat.jobs,
     model: deps.model,
     logger: deps.logger,
     // Real time unless the run handed a clock (D19).

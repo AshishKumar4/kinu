@@ -189,6 +189,7 @@ export function hostedSeatsOver(input: {
         inputs: { envelope: ENVELOPE, provider: PROVIDER },
       }),
       dynamic: () => ({}),
+      jobs: { jobOutput: () => {} },
     };
 
     seats.set(name, seated);

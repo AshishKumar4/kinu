@@ -116,6 +116,7 @@ export function headSeatFactory(
         approvals: () => ({ items: [], total: 0 }),
       }),
       windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
+      jobs: { jobOutput: () => {} },
       release: async () => {
         host.release(binding.reference);
         writes?.delete(binding.reference.actorId);
@@ -214,6 +215,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
     // No catalog in a fixture: every spec is admitted against the static table.
     windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
     window: resolveModelWindow('', null),
+    jobs: { jobOutput: () => {} },
   } satisfies Omit<HeadSeat, 'release'> & Pick<HeadInferenceDeps, 'window'>;
 }
 
@@ -225,6 +227,9 @@ export function nodeSeatFactory(rt: CLIRuntime, runId = 'fixture-run'): (node: N
     const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, undefined, true);
     const seams = headLoopSeams(rt, runId, handle, runtime);
 
-    return { actor: seams.actor, runId: seams.runId, profile: seams.profile, dynamic: seams.dynamic, conversations: seams.conversations, windowOf: seams.windowOf };
+    return {
+      actor: seams.actor, runId: seams.runId, profile: seams.profile, dynamic: seams.dynamic, conversations: seams.conversations,
+      windowOf: seams.windowOf, jobs: seams.jobs,
+    };
   };
 }

@@ -3,7 +3,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
-import { createTestRuntime, conversationsFor } from './helpers';
+import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
 import { programCodemode } from './helpers-program';
 import {
   buildActorTools,
@@ -44,7 +44,7 @@ function capturedSurface(rt: ActorToolsetDeps['rt']): () => CodemodeSurface {
 
 /** An actor surface over `rt` whose sandbox is `codemode`. */
 function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'codemode'>) {
-  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() }, ...deps, conversations: conversationsFor(rt) });
+  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() }, jobs: actorJobsFor(rt), ...deps, conversations: conversationsFor(rt) }).turn;
 }
 
 async function runProgram(rt: ActorToolsetDeps['rt'], code: string) {

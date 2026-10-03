@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, ModelInfo, ModelRouteResolution } from '@kinu.run/core';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, Clock, ModelInfo, ModelRouteResolution, ActorToolsets } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { SessionTranscript, WorkspaceOverview } from '@kinu.run/core';
@@ -88,6 +88,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
         holdHarnessFiber(this.agentTurnSettled(actorReferenceOf(this.agentOf(actorId))));
       },
     });
+  }
+
+  /** The world's clock, when it sets one: a job's foreground window then runs on the suite's time. */
+  protected override jobClock(): Clock {
+    return activationWorlds.get(this.ctx)?.jobClock ?? super.jobClock();
   }
 
   /** Work the object detached, run to its end: a task agent's retirement follows its answer this way. */
@@ -451,11 +456,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  for another mode (a role imposing Plan) is the actor's own. */
   private _suppliedTools: ToolSet | null = null;
   harnessSupplyTools(tools: ToolSet | undefined): void { this._suppliedTools = tools ?? null; }
-  protected override getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
+  protected override actorToolsets(mode: WorkMode, claimScope?: string): ActorToolsets {
     // The requested mode is the message's, never the operation a role bound over it.
-    if (this._suppliedTools !== null && mode === workModeForTurnMetadata(this.turnUserMetadata())) return this._suppliedTools;
+    if (this._suppliedTools !== null && mode === workModeForTurnMetadata(this.turnUserMetadata())) {
+      return { turn: this._suppliedTools, raw: this._suppliedTools };
+    }
 
-    return super.getRawToolsForWorkMode(mode, claimScope);
+    return super.actorToolsets(mode, claimScope);
   }
 
   /** The scripted model the next turns run on; held, not consumed by one turn. */
@@ -1523,6 +1530,9 @@ export interface HarnessActorWorld {
   container?: boolean;
   /** Every call the workspace made on a box, as `<box>.<method>`, in call order. */
   boxCalls?: string[];
+  /** What a box answers, by name, when the container is on: unset, every call is recorded in `boxCalls` and
+   *  answered with nothing. */
+  box?: (name: string) => object;
   /** `PREVIEW_HOST_SUFFIX` as the deployment names it from the start: with it, the sandbox lists its exposed ports. */
   previewHostSuffix?: string;
   /** Every method this object served over its own namespace's stub, in call order. */
@@ -1533,6 +1543,9 @@ export interface HarnessActorWorld {
   /** The platform steer-branch heads run on: each head's report, when it lands. A promise that never
    *  settles is a head still running. Unset, branching needs the production head runtime. */
   heads?: (task: string) => Promise<ScriptedHeadReport>;
+  /** The clock every actor's job runner detaches on, the box's commands too when a suite times them by it. Unset,
+   *  the real one. */
+  jobClock?: Clock;
 }
 
 /** What a scripted steer-branch head reports; the rest of the report is the empty run it did. */
@@ -1568,7 +1581,7 @@ export function makeEnv(
     ...(world?.previewHostSuffix !== undefined && { PREVIEW_HOST_SUFFIX: world.previewHostSuffix }),
     ...(world?.container === true && {
       KinuDevbox: {
-        getByName: (name: string) => new Proxy({}, {
+        getByName: (name: string) => world.box?.(name) ?? new Proxy({}, {
           get: (_target, method) => () => { world.boxCalls?.push(`${name}.${String(method)}`); },
         }),
       },

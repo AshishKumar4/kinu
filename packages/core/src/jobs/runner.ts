@@ -112,6 +112,10 @@ export interface BackgroundJobRunnerDeps {
   scheduleResume?: (atMs: number) => Promise<void> | void;
 }
 
+/** The workspace's half of every job runner in it. */
+export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutput'>>
+  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled'>;
+
 const SearchJobInputSchema = v.object({ task: v.string() });
 
 const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()) });
@@ -193,6 +197,9 @@ export class BackgroundJobRunner {
   private readonly fenced = new Map<string, () => Promise<void>>();
 
   readonly output: JobOutputFeeds;
+
+  /** Foreground calls; the actor's Stop aborts them. */
+  readonly foreground = new Set<AbortController>();
 
   constructor(private readonly deps: BackgroundJobRunnerDeps) {
     this.output = new JobOutputFeeds({ clock: deps.clock ?? REAL_CLOCK, send: (frame) => { deps.jobOutput?.(frame); } });

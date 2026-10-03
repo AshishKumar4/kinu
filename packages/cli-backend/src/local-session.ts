@@ -41,7 +41,7 @@ import { TierIdSchema,
   type BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type TaskListStore,
   backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
-  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
+  BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
   EventLog,
@@ -375,7 +375,7 @@ export class LocalAgentSession {
   private cachedModel: LanguageModel | null = null;
   private cachedModelSpec: string | null = null;
   private tools: ToolSet = {};
-  private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
+  private readonly toolSets: Partial<Record<WorkMode, ActorToolsets>> = {};
   private readonly engine: EvolutionEngine;
   private readonly actorSession: ActorSession;
   private readonly chat: ChatSession;
@@ -2591,16 +2591,6 @@ export class LocalAgentSession {
     return inheritedContextFromTranscript(this.stores.history.transcript(CHAT_SESSION_ID));
   }
 
-  /** The shared background wrap (core background-tools), the same the cf backend applies: shallow
-   *  clone, 30s threshold, per-call abort. */
-  private wrapToolsForBackground(raw: ToolSet): ToolSet {
-    return wrapToolsForBackground(raw, {
-      jobRunner: this.jobRunner,
-      backgroundable: BACKGROUNDABLE_TOOLS,
-      mode: () => this.actorSession.workMode,
-    });
-  }
-
   /** One routed non-turn lane as an {@link LLM}. `system` carries core-declared prompt pairs so the
    *  CLI issues the same request as the cloud backend. */
   private localRouteLlm(resolution: ModelRouteResolution, system?: string): LLM {
@@ -2838,6 +2828,8 @@ export class LocalAgentSession {
         dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
         windowOf: (spec) => (spec === null ? this.modelCatalog.resolved() : this.modelCatalog.windowFor(spec)),
         conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
+        // The session's own job seams: a node's output reaches the same listeners its chat's does.
+        jobs: { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null },
       },
     };
   }
@@ -2896,13 +2888,11 @@ export class LocalAgentSession {
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(() => model));
 
     for (const mode of ['build', 'plan'] as const) {
-      const raw = buildActorTools(this.actorToolsetDeps(
+      this.toolSets[mode] = buildActorTools(this.actorToolsetDeps(
         mode,
         // A closure: this toolset is rebuilt only on model change, but the turn changes every turn.
         () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
       ));
-
-      this.toolSets[mode] = { raw, wrapped: this.wrapToolsForBackground(raw) };
     }
 
     this.activateToolMode(this.actorSession.workMode);
@@ -2945,6 +2935,7 @@ export class LocalAgentSession {
       roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),
       facts: this.factsStore,
       webSearch: this.getWebSearchProvider(),
+      jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },
     };
 
     // The toolset is rebuilt per turn, so `report` exists only on parent-driven turns.
@@ -2960,7 +2951,7 @@ export class LocalAgentSession {
   /** Raw tools with the effect-claim id pinned to the rollout, so a live run and a replay claim the
    *  same call once. Raw because backgrounding would key work to the ambient turn. */
   private rolloutTools(callScope: string): ToolSet {
-    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => callScope));
+    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => callScope)).raw;
   }
 
   private activateToolMode(mode: WorkMode): void {
@@ -2972,7 +2963,7 @@ export class LocalAgentSession {
 
     if (!surface) throw new Error(`tool surface for ${mode} mode is unavailable`);
 
-    return surface.wrapped;
+    return surface.turn;
   }
 }
 

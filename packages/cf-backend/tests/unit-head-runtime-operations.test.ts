@@ -83,6 +83,7 @@ const neverHost: HostedActorSeams = {
   announce() { throw new Error('mergeLLM announced a roster change'); },
   scheduleDrain() { throw new Error('mergeLLM scheduled a drain'); },
   armWake() { throw new Error('mergeLLM armed a wake'); },
+  jobPorts() { throw new Error("mergeLLM reached a job runner's ports"); },
   temporary() { throw new Error('mergeLLM reached the task-hire port'); },
   rederiveWake() { throw new Error('mergeLLM re-derived the wake'); },
   oweAdvice() { throw new Error('mergeLLM owed advisor advice'); },
