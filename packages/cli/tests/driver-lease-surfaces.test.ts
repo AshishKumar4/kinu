@@ -162,6 +162,30 @@ describe('the interactive client and the driver lease', () => {
     expect(result.heldPid).toBe(result.otherPid);
   });
 
+  // Rank 10: `kinu jobs cancel` marked the row cancelled while the process running it went on.
+  test("a job another live driver may be running is not cancelled from outside, and the answer names that driver", async () => {
+    const result = await scenario(`
+      const otherPid = rivalHolds('interactive');
+      const { BackgroundJobStore, openWorkspaceMainActor } = await import('@kinu.run/core');
+      const seeded = new Database(dbPath);
+      try {
+        const sql = makeSql(seeded);
+        new BackgroundJobStore(sql, openWorkspaceMainActor(sql)).create({ id: 'bgjob-held', kind: 'shell', workMode: 'build', now: Date.now() });
+      } finally { seeded.close(); }
+      const { jobsCommand } = await import('./packages/cli/src/commands/control.ts');
+      let answer = null;
+      const { renderThrownChain } = await import('@kinu.run/core/obs');
+      try { await jobsCommand('leasebot', 'cancel', 'bgjob-held', { json: true }); } catch (error) { answer = renderThrownChain({ cause: error }); }
+      const after = new Database(dbPath);
+      let status = null;
+      try { status = after.query("SELECT status FROM background_jobs WHERE id = 'bgjob-held'").get()?.status ?? null; } finally { after.close(); }
+      console.log(JSON.stringify({ otherPid, answer, status }));
+    `);
+
+    expect(result.status).toBe('running');
+    expect(printed(result, 'answer')).toContain(`the interactive driver in process ${printed(result, 'otherPid')}`);
+  });
+
   test('a foreground daemon tick reports a deferred pass instead of printing a tick', async () => {
     const result = await scenario(`
       const ownerPid = rivalHolds('interactive');

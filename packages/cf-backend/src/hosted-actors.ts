@@ -37,6 +37,7 @@ export interface HostedTaskTurn {
 /** Tools and framing together: the prompt's tool index is rendered from the built surface. */
 export interface HostedTaskProfile {
   readonly tools: ToolSet;
+  readonly raw: ToolSet;
   readonly framing: AssignedTurnFraming;
 }
 
@@ -305,6 +306,39 @@ export function prepareHostedTurn(
   return settle(Effect.gen(function* () {
     const run = task.run;
     const actor = run?.inference.actor ?? (yield* Effect.promise(() => seams.host.acquire(reference)));
+    const { turn, model } = yield* hostedTaskTurn(seams, actor, task, run);
+
+    const profile = run === undefined ? yield* Effect.promise(() => seams.taskProfile(turn)) : {
+      tools: run.inference.tools,
+      framing: run.inference.framing ?? {
+        system: buildHeadSystemPrompt(turn.input, Object.keys(run.inference.tools), run.inference.workspaceLayout),
+        messages: buildHeadMessages(turn.input),
+      },
+    };
+
+    return {
+      turn, model, tools: profile.tools, framing: profile.framing,
+      birthContext: run === undefined ? turn.input.inheritedContext.map(inheritedAsModelMessage) : [],
+    };
+  }));
+}
+
+/** The raw tools a turn of the hosted actor's own would hold in `mode`: a retry of its job runs on them, as it. */
+export function hostedRetryTools(seams: HostedActorSeams, reference: ActorReference, mode: WorkMode, sequenceId: string): Promise<ToolSet> {
+  return settle(Effect.gen(function* () {
+    const actor = yield* Effect.promise(() => seams.host.acquire(reference));
+    const { turn } = yield* hostedTaskTurn(seams, actor, { body: '', mode, sequenceId }, undefined);
+
+    return (yield* Effect.promise(() => seams.taskProfile(turn))).raw;
+  }));
+}
+
+function hostedTaskTurn(
+  seams: HostedActorSeams, actor: HostedActor,
+  task: { readonly body: string; readonly mode: WorkMode; readonly sequenceId: string; readonly inheritedContext?: SubordinateInheritedContext },
+  run: HostedTurnRequest['run'],
+) {
+  return Effect.gen(function* () {
     const runtime = yield* cfRuntimeOf(actor, 'a hosted agent');
 
     const resolved = yield* Effect.promise(() => run === undefined
@@ -323,19 +357,8 @@ export function prepareHostedTurn(
       profile: resolved,
     };
 
-    const profile = run === undefined ? yield* Effect.promise(() => seams.taskProfile(turn)) : {
-      tools: run.inference.tools,
-      framing: run.inference.framing ?? {
-        system: buildHeadSystemPrompt(input, Object.keys(run.inference.tools), run.inference.workspaceLayout),
-        messages: buildHeadMessages(input),
-      },
-    };
-
-    return {
-      turn, model, tools: profile.tools, framing: profile.framing,
-      birthContext: run === undefined ? input.inheritedContext.map(inheritedAsModelMessage) : [],
-    };
-  }));
+    return { turn, model };
+  });
 }
 
 /** Only completion answers; abort resumes; the rest are errors. */

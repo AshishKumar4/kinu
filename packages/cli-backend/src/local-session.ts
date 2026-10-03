@@ -986,7 +986,7 @@ export class LocalAgentSession {
   }
 
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return cancelBackgroundJob(this.jobRunner, jobId);
+    return cancelBackgroundJob((this.jobAuthorities.owning(jobId) ?? this.jobAuthorities.root()).runner, jobId);
   }
 
   getEvolutionChangelog(limit = 50): EvolutionChangelogView {

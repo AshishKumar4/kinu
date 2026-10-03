@@ -61,7 +61,7 @@ import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
+  admitHostedTask, hostedDelegationBudget, hostedRetryTools, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
   reportSettlesRun, hostedTaskEnding, reclaimSettledExplorationActors,
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
@@ -1089,11 +1089,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // `report` belongs only to a parent-driven turn; an owner chat with this actor must not carry it.
     deps.report = report;
-    const tools = withHeadCaptureRecording(buildActorTools(deps).turn, turn.capture);
+    const built = buildActorTools(deps);
+    const tools = withHeadCaptureRecording(built.turn, turn.capture);
 
     // Framing is rendered from these exact tool names; `report` among them makes core's
     // `state/delegation` section name this actor as a hire.
-    return { tools, framing: await this.hostedTaskFraming(turn, tools, agents) };
+    return { tools, raw: built.raw, framing: await this.hostedTaskFraming(turn, tools, agents) };
   }
 
   /**
@@ -2816,9 +2817,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** A pane naming `actor` acts on its jobs alone. */
-  private jobOperation(
-    operation: string, jobId: string, actor: string | undefined, run: (authority: JobAuthority) => Promise<{ ok: boolean }> | { ok: boolean },
-  ): Effect.Effect<{ ok: boolean }, KinuError> {
+  private jobOperation<Outcome extends { ok: boolean }>(
+    operation: string, jobId: string, actor: string | undefined, run: (authority: JobAuthority) => Promise<Outcome> | Outcome,
+  ): Effect.Effect<Outcome, KinuError> {
     const authority = this.jobAuthorities.owning(jobId) ?? this.jobAuthorities.root();
 
     if (actor !== undefined && authority.actorId !== this.hostedChild(actor).child.reference.actorId) {
@@ -2856,16 +2857,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async retryBackgroundJob(jobId: string): Promise<RetryOutcome> {
-    if (this.jobAuthorities.owning(jobId)?.kind !== 'root') throw new KinuError('unsupported', "A hired agent's job is run again by asking that agent.");
-    await this.currentAccountSwarms();
+  async retryBackgroundJob(jobId: string, actor?: string): Promise<RetryOutcome> {
+    return await settle(this.jobOperation('retry', jobId, actor, (authority) => this.retryJob(authority, jobId)));
+  }
 
-    return this.countJobOperation('retry', await retryBackgroundJob({
-      jobs: this.jobs,
-      jobRunner: this.jobRunner,
-      rawTools: (mode) => this.getRawToolsForWorkMode(mode),
-      logActivity: (event, detail) => this.logActivity(event, detail),
-    }, jobId));
+  /** On its owner's raw tools and runner: a hire's job runs again as the hire, and its settle wakes the hire. */
+  private async retryJob(authority: JobAuthority, jobId: string): Promise<RetryOutcome> {
+    if (authority.kind === 'step-loop') return { ok: false, error: "a swarm node's job ends with its run" };
+
+    const rawTools = authority.kind === 'root'
+      ? async (mode: WorkMode) => {
+        await this.currentAccountSwarms();
+
+        return this.getRawToolsForWorkMode(mode);
+      }
+      : (mode: WorkMode) => hostedRetryTools(this.hostedSeams(), actorReferenceOf(this.liveAgentOf(authority.actorId)), mode, `retry:${jobId}`);
+
+    return await retryBackgroundJob({
+      jobs: authority.store, jobRunner: authority.runner, rawTools, logActivity: (event, detail) => this.logActivity(event, detail),
+    }, jobId);
   }
 
   @callable()

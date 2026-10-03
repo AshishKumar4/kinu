@@ -371,10 +371,10 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         const call = machineShellCall(command, exec, { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
 
         try {
-          // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only
-          // refuses to dispatch, before the first attempt and before each retry.
+          // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
+          // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
           return await names.hold(exec.name, callJob(exec), async () => {
-            const res = await withSandboxRetry(() => touch(() => {
+            const res = await touch(() => {
               if (signal?.aborted) throw notDispatched();
               // The signal is added only when given, so an adapter can tell "none" from "already fired".
               const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR };
@@ -386,7 +386,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
               if (output !== undefined) opts.output = call.output(output);
 
               return handle.exec(call.command, opts);
-            }));
+            });
 
             const settled = call.settle({ ...res, stdout: res.stdout ?? res.output ?? '' });
 

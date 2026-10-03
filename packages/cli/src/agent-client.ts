@@ -319,6 +319,8 @@ export interface AgentClient {
   readMemory(): Promise<string>;
   searchNodes(): Promise<AgentSearchNode[]>;
   listJobs(limit?: number): Promise<AgentJobSummary[]>;
+  /** Through the runner that holds it: its work ends, and its owner is woken. */
+  cancelJob(jobId: string): Promise<{ ok: boolean }>;
   latestTakes(): Promise<AlternateTakeSet | null>;
   pickTake(takeId: string, nodeId: string): Promise<TakePickOutcome>;
   setRole(roleId: string): Promise<{ role: string }>;

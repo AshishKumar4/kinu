@@ -27,6 +27,7 @@ import {
   ActivitySpendSchema,
   callAgentRpc,
   CloudAgentStatusSchema,
+  CancelJobSchema,
   CloudBackgroundJobSchema,
   CloudToolDescriptionsSchema,
   createCloudAgentConnectTicket,
@@ -773,6 +774,10 @@ export class CloudAgentClient implements AgentClient {
     const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), args);
 
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status, label: job.label ?? null, ...(job.output !== undefined && { output: job.output }) }));
+  }
+
+  async cancelJob(jobId: string): Promise<{ ok: boolean }> {
+    return await this.callHttp('cancelBackgroundJob', CancelJobSchema, this.subordinateName === null ? [jobId] : [jobId, this.subordinateName]);
   }
 
   async getModelSpec(): Promise<string | null> {
