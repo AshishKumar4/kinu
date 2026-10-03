@@ -19,6 +19,7 @@ import type { WorkMode } from '../types/turn';
 import type { AgentConfigStore } from '../config/store';
 import type { RoleId, TierId } from '../profiles/catalog';
 import type {
+  SubordinateDismissal,
   SubordinateHandoff,
   SubordinateRosterEntry,
   TeamToolDeps,
@@ -140,6 +141,7 @@ export function admitSubordinateTask(log: EventLog, input: {
   inheritedContext?: SubordinateInheritedContext;
   creationId?: string;
   messageId?: string;
+  idempotencyKey?: string;
   mode: WorkMode;
   now: number;
 }): PublishResult {
@@ -163,6 +165,8 @@ export function admitSubordinateTask(log: EventLog, input: {
     if (input.creationId !== undefined) Object.assign(payload, { creation_id: yield* requiredText(input.creationId, 'creationId') });
 
     if (input.messageId !== undefined) Object.assign(payload, { message_id: yield* requiredText(input.messageId, 'messageId') });
+
+    if (input.idempotencyKey !== undefined) Object.assign(payload, { idempotency_key: requiredText(input.idempotencyKey, 'idempotencyKey') });
 
     return log.publish({
       descriptor: {
@@ -280,7 +284,7 @@ export interface SubordinateRuntime {
   /** Called with `user` for an owner rename, which makes `planWorkspaceTitle`'s refusal durable. */
   rename(name: string, displayName: string, nameOrigin: NameOrigin): Promise<void>;
   /** Without `interrupt`, retirement waits for the turn to settle. */
-  dismiss(name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference): Promise<void>;
+  dismiss(name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference): Promise<SubordinateDismissal>;
 }
 
 /** Same default as `AgentConfigStore.getRoleSelection`. */
@@ -561,20 +565,21 @@ export function createTeamToolDeps(deps: {
 
         if (keepHistory) deps.roster.dismiss(input.name, deps.now());
         else deps.roster.requestDeletion(input.name, reference, deps.now());
+        let dismissal: SubordinateDismissal;
 
         if (keepHistory) {
-          yield* Effect.catchCause(
+          dismissal = yield* Effect.catchCause(
             Effect.promise(async () => deps.runtime.dismiss(input.name, { keepHistory: true, interrupt: true }, reference)),
             rollback(before, deps.roster, 'retained subordinate dismissal'),
           );
         } else {
-          yield* Effect.promise(async () => deps.runtime.dismiss(input.name, { keepHistory: false, interrupt: true }, reference));
+          dismissal = yield* Effect.promise(async () => deps.runtime.dismiss(input.name, { keepHistory: false, interrupt: true }, reference));
           deps.roster.removeActor(input.name, reference);
         }
 
         deps.rosterMoved();
 
-        return { ok: true, name: input.name, historyKept: keepHistory };
+        return { ok: true, name: input.name, historyKept: keepHistory, stoppedJobs: dismissal.stoppedJobs };
       }));
     },
   };

@@ -272,7 +272,8 @@ describe('the startup kick arms restoration without attaching inline', () => {
   });
 
 
-  test('a state poll reactivates a stopped container but leaves attachment scheduled', async () => {
+  // A read starts, arms and attaches nothing; state-read.test.ts covers a box at rest and a reset object.
+  test('a state poll of a stopped container starts, arms and attaches nothing', async () => {
     const { box, container } = harness(TestBox);
     await container.stop();
 
@@ -282,7 +283,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
       startupArms: armed(container),
       restoration: state.restoration,
       attachCommands: container.execs,
-    }).toEqual({ starts: 0, startupArms: 1, restoration: 'unstarted', attachCommands: [] });
+    }).toEqual({ starts: 0, startupArms: 0, restoration: 'unstarted', attachCommands: [] });
   });
 });
 

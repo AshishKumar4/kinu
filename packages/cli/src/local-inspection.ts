@@ -77,8 +77,13 @@ import {
   type SeekCursor,
   type WorkspaceSpend,
   type AccountSpend,
+  MEMORY_PATH,
+  WORKSPACE_ROOT,
+  searchMemoryChunks,
+  type MemorySearchResult,
 } from '@kinu.run/core';
-import { settle, settleSync, tolerate } from '@kinu.run/core/obs';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { tolerate, tolerateAsync, settle, settleSync } from '@kinu.run/core/obs';
 import {
   makeSql, makeSqlExec, schemaGenesisOf, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
   resolverModelPlane,
@@ -159,15 +164,19 @@ export interface LocalAgentState {
   executors: LocalExecutorInfo[];
 }
 
-export function getLocalAgentState(name: string): LocalAgentState {
-  return settleSync(withLocalDb(name, (db) => ({
+export function getLocalAgentState(name: string): Promise<LocalAgentState> {
+  return settle(Effect.gen(function* () {
+    const memoryContent = yield* Effect.promise(() => readLocalMemory(name));
+
+    return yield* withLocalDb(name, (db) => ({
     status: getLocalStatus(db),
     tools: getLocalToolSummary(db),
-    memoryContent: readLocalMemory(name),
+    memoryContent,
     mcts: listLocalMcts(name),
     timeline: listLocalTimeline(name, 250),
     executors: listLocalExecutors(),
-  })));
+    }));
+  }));
 }
 
 /** Same read model as the cloud panel; no window, since `workspaceSpend` sums the whole log. */
@@ -230,35 +239,18 @@ export function readLocalNextTurnTier(name: string): Promise<ResolvedTurnProfile
   }));
 }
 
-/** Reassembled from `memory_chunks`, MemoryStore's index of `memory/MEMORY.md`; opening the file would write (see getLocalStatus). */
-export function readLocalMemory(name: string): string {
-  return settleSync(withLocalDb(name, (db) => {
-    if (!tableExists(db, 'memory_chunks')) return '';
-
-    return all<{ text: string }>(
-      db,
-      `SELECT text FROM memory_chunks WHERE path = 'memory/MEMORY.md' ORDER BY start_line ASC`,
-    ).map((row) => row.text).join('\n');
-  }));
+/** The file itself, through the read-only plane; `memory_chunks` is the search index and can lag an edit. */
+export function readLocalMemory(name: string): Promise<string> {
+  return settle(withLocalDbAsync(name, async (db) =>
+    await tolerateAsync(() => readText(inspectionFiles(db, null), `${WORKSPACE_ROOT}/${MEMORY_PATH}`), 'enoent') ?? ''));
 }
 
 /** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */
-export function searchLocalMemory(name: string, query: string, limit = 10): Array<{ path: string; text: string; score?: number; startLine?: number; endLine?: number }> {
-  const q = query.trim();
-
-  if (!q) return [];
+/** The agent's own ranked search over the same index. */
+export function searchLocalMemory(name: string, query: string, limit = 10): MemorySearchResult[] {
   const window = boundedInt(limit, 10, 1, Number.MAX_SAFE_INTEGER);
 
-  return settleSync(withLocalDb(name, (db) => {
-    if (!tableExists(db, 'memory_chunks')) return [];
-
-    return all<{ path: string; text: string; start_line: number; end_line: number }>(
-      db,
-      `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY rowid DESC LIMIT ?`,
-      `%${q}%`,
-      window,
-    ).map((row) => ({ path: row.path, text: row.text, startLine: row.start_line, endLine: row.end_line }));
-  }));
+  return settleSync(withLocalDb(name, (db) => tableExists(db, 'memory_chunks_fts') ? searchMemoryChunks(makeSql(db), query, window) : []));
 }
 
 export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {

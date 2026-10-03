@@ -61,13 +61,12 @@ export function resolveActiveSkills(opts: LoadActiveSkillsOpts): ActivatedSkill[
     }
   }
 
-  // `user_invocable=false` ignores `/skill-name`.
+  // `user_invocable=false` ignores `/skill-name`. A pinned skill stays pinned: its body is already in the system
+  // prompt, and an explicit reason would move it to the turn's opening message (splitTurnSkills).
   for (const name of opts.explicit) {
     const skill = byName.get(name);
 
-    if (!skill) continue;
-
-    if (!skill.user_invocable) continue;
+    if (!skill || !skill.user_invocable || reasons.has(name)) continue;
     reasons.set(name, { kind: 'explicit', matched_token: name });
   }
 

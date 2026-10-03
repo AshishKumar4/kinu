@@ -215,7 +215,7 @@ export function createTemporaryAgentPort(deps: {
 
       if (!actor) return;
       deps.roster.dismiss(name, deps.now());
-      deps.afterTurn(actor, () => deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor));
+      deps.afterTurn(actor, async () => { await deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor); });
     },
 
     reclaim: (request) => deps.roster.helpers.answerFor(request),

@@ -22,7 +22,7 @@ export {
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  branchesTerminalEffect, turnRecordTerminalEffect,
+  branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
   terminalEffectKey, keyedScope, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
@@ -172,7 +172,6 @@ export {
   RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
   listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
   retractThumbs, listThumbs, satisfactionInterval, qualitySeries, renderQualitySeries, isTrivialTurn,
-  blendRealOutcomeRates, type RealOutcomeRate,
   type RatingSource, type WrongReason, type RatingVerdict, type TurnRating, type RatingQuery,
   type RecordTurnRatingInput,
 } from './evolution/ratings';
@@ -565,7 +564,7 @@ export {
 
 export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
-  parseAgentsToolInput, agentsProfileContext,
+  parseAgentsToolInput, agentsProfileContext, delegationChoices,
   AGENTS_ACTION_FIELDS, AGENTS_FIELD_TS_TYPES,
   type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
 } from './delegation/agents-tool';
@@ -644,10 +643,10 @@ export {
 // An actor surface is buildBuiltinTools plus `agents`; see delegation/actor-tools.ts.
 export {
   buildActorTools, PEER_REPLY_TOPIC,
-  type ActorToolsetDeps,
+  type ActorToolsetDeps, type ActorToolsets,
   type AgentsToolDeps, type AgentsSwarmDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
-  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
+  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff, type SubordinateDismissal,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './delegation/actor-tools';
@@ -739,7 +738,6 @@ export { isWorkMode, WorkModeSchema, type TurnReason, type WorkMode } from './ty
 
 export {
   compilePromptSurface,
-  executorIsSelectable,
   turnReasonForMetadata,
   workModeForTurnMetadata,
   uniquePromptExecutors,
@@ -766,8 +764,12 @@ export {
   collectWorkspaceAgentsMd,
   admitAgentsMd,
   advisorWorkspaceGuidance,
+  discoverInstructionFiles,
   renderInstructionOmission,
   type AdvisorWorkspace,
+  type InstructionCandidate,
+  type InstructionFileProbe,
+  type InstructionFileRead,
   type AgentsMdFile,
   type AgentsMdReference,
   type AgentsMdSources,
@@ -783,7 +785,7 @@ export {
 } from './prompting/attachment-sanitizer';
 
 export {
-  DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type DynamicTask, type MissingCapability,
+  DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type RuntimeFacts, type DynamicTask, type MissingCapability,
 } from './prompting/volatile-context';
 
 export type { ActiveRoster } from './types/dynamic-context';
@@ -917,8 +919,8 @@ export {
 
 // Variant archive over scaffold_versions/scaffold_evaluations (no parallel store).
 export {
-  listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
-  type ScaffoldArchiveEntry, type EvolutionBaseSelection,
+  listScaffoldArchive, listRejectedProposals, selectEvolutionBase, blendRealOutcomeRates,
+  type ScaffoldArchiveEntry, type EvolutionBaseSelection, type RealOutcomeRate,
   type RejectedProposal, type RejectionKind,
 } from './scaffold/archive';
 
@@ -1063,7 +1065,7 @@ export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates,
-  subordinateAgentName, headAgentName,
+  actorHomeName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
   type AgentIdentity, type HomeRootVfs, type RootMoveVfs, type SlatesMoveVfs, type TmpConfiner,
 } from './vfs/agent-home';
@@ -1088,6 +1090,8 @@ export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 export { oneAtATime } from './utils/one-at-a-time';
 
 export { markStoreChanged, storeRevision } from '@kinu.run/agent-utils';
+
+export { searchMemoryChunks } from '@kinu.run/agent-utils/memory';
 
 export { ISOLATED_BUN_FLAGS, isolatedBunArgs } from './utils/bun-isolation';
 
@@ -1576,7 +1580,8 @@ export {
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
-  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel,
+  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
+  WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,
   JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, lastOutputLines, jobName, shortJobId, type JobName,
   type JobOutputFrame, type JobOutputTail,
 } from './jobs/index';
@@ -1691,11 +1696,11 @@ export {
 } from './orchestrator/background-tools';
 
 export {
-  wrapToolsForBackground, CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool,
+  CONFINED_BACKGROUNDABLE_TOOLS, type ActorJobs, type BackgroundableTool,
 } from './jobs/background-wrap';
 
 export {
-  resolveTurnSkills, steerSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
+  resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 
@@ -2053,7 +2058,7 @@ export {
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
-  ProfileCatalogEnvelopeSchema,
+  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING,
 } from './profiles';
 
 export type {

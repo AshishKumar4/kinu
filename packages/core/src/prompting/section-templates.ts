@@ -16,7 +16,6 @@ import toolsSection from "../prompts/tools-section.md" with { type: 'text' };
 import workspaceExecutorLine from "../prompts/workspace-executor-line.md" with { type: 'text' };
 import sandboxExecutorLine from "../prompts/sandbox-executor-line.md" with { type: 'text' };
 import deviceExecutorLine from "../prompts/device-executor-line.md" with { type: 'text' };
-import offlineDeviceLine from "../prompts/offline-device-line.md" with { type: 'text' };
 import genericExecutorLine from "../prompts/generic-executor-line.md" with { type: 'text' };
 import executorsSection from "../prompts/executors-section.md" with { type: 'text' };
 import persistenceSection from "../prompts/persistence-section.md" with { type: 'text' };
@@ -116,13 +115,6 @@ export const DEVICE_EXECUTOR_LINE = definePromptSection(
   "executors/device",
   "",
   deviceExecutorLine.trimEnd(),
-);
-
-/** An offline device is still listed (the user can bring it back); other unavailable executors are omitted. */
-export const OFFLINE_DEVICE_LINE = definePromptSection(
-  "executors/device-offline",
-  "{{deviceName}}",
-  offlineDeviceLine.trimEnd(),
 );
 
 export const GENERIC_EXECUTOR_LINE = definePromptSection(

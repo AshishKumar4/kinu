@@ -1,6 +1,6 @@
 import { Effect, Cause } from 'effect';
 import { detach } from '@kinu.run/core/obs';
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { DatabaseIcon, GaugeIcon } from "@phosphor-icons/react";
 import { scoreInterval, type QualityDay } from "@kinu.run/core";
@@ -104,11 +104,19 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
 }
 
 
-// Satisfaction per day (`getQuality`, evolution/ratings.ts): the mean rating 1-5 with its 95% interval.
-export function QualityView({ rpc }: { rpc: Rpc }) {
+// Satisfaction per day (`getQuality`, evolution/ratings.ts): the mean rating 1-5 with its 95% interval. `moved`: its
+// `reads_changed` count.
+export function QualityView({ rpc, moved }: { rpc: Rpc; moved: number }) {
   const load = useCallback(() => rpc<QualityDay[]>("getQuality", [30]), [rpc]);
   const { resource, reload } = useAsyncResource(load);
   const days = lastValue(resource);
+  const readMoved = useRef(moved);
+
+  useEffect(() => {
+    if (readMoved.current === moved) return;
+    readMoved.current = moved;
+    reload();
+  }, [moved, reload]);
 
   if (days === null) {
     if (resource.status === "error") return <LoadFailure what="the quality history" message={resource.message} onRetry={reload} />;

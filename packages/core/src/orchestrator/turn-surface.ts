@@ -7,13 +7,14 @@ import {
 } from '../skills/loader';
 import { discoverSkills, BUILTIN_SKILL_HEADERS } from '../skills/discover';
 import { unionAllowedTools, toolAllowedBySkills, trustedActiveSkills, renderActiveSkillsSection } from '../skills/render';
+import { renderUnverifiedInstructions } from '../prompt';
 import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { stepContextLimit, type ModelWindow } from '../context-window';
 import { renderFactsBlock, type FactsStore } from '../memory/facts';
 import { Cause, Effect } from 'effect';
 import { diagnostics, settle, toKinuError } from '../obs/index';
-import { STEER_SKILLS_HEADING } from '../utils/prompt-sections';
+import { STEER_SKILLS_HEADING, TURN_SKILLS_HEADING } from '../utils/prompt-sections';
 
 export interface TurnSkillsConfig {
   getAlwaysActiveSkills(): string[];
@@ -61,16 +62,47 @@ export async function steerSkillsBlock(opts: Parameters<typeof resolveTurnSkills
   const { activeSkills } = await resolveTurnSkills(opts);
 
   if (activeSkills === undefined) return null;
-  const fresh = activeSkills.active.filter((skill) => !opts.alreadyActive.has(skill.name) && skill.body !== null);
 
-  if (fresh.length === 0) return null;
+  return skillsBlock(STEER_SKILLS_HEADING, onlySkills(activeSkills, (skill) => !opts.alreadyActive.has(skill.name) && skill.body !== null));
+}
 
-  const rendered = renderActiveSkillsSection({
-    active: fresh,
-    reasons: activeSkills.reasons.filter((reason) => fresh.some((skill) => skill.name === reason.name)),
-  }, 'system');
+/** A pin rides the system prompt every turn; a person's `/name` rides that turn's opening message. */
+export interface TurnSkillPlacement {
+  readonly pinned: ActiveSkillSet | undefined;
+  readonly invoked: ActiveSkillSet | undefined;
+}
 
-  return rendered === '' ? null : `${STEER_SKILLS_HEADING}\n${rendered}`;
+export function splitTurnSkills(set: ActiveSkillSet | undefined): TurnSkillPlacement {
+  if (set === undefined) return { pinned: undefined, invoked: undefined };
+  const invoked = new Set(set.reasons.filter(({ reason }) => reason.kind === 'explicit').map(({ name }) => name));
+  const nonEmpty = (part: ActiveSkillSet) => part.active.length === 0 ? undefined : part;
+
+  return {
+    pinned: nonEmpty(onlySkills(set, (skill) => !invoked.has(skill.name))),
+    invoked: nonEmpty(onlySkills(set, (skill) => invoked.has(skill.name))),
+  };
+}
+
+/**
+ * Skills a person's message activates, as one turn-only message just before it; null when none renders. Never the
+ * system prompt, where a body would rewrite the cached prefix on the turn it arrives and again on the next.
+ */
+export function activatedSkillsBlock(set: ActiveSkillSet): string | null {
+  return skillsBlock(TURN_SKILLS_HEADING, set);
+}
+
+/** Unapproved bodies ride sealed, as the instruction files do. */
+function skillsBlock(heading: string, set: ActiveSkillSet): string | null {
+  const parts = [renderActiveSkillsSection(set, 'system').trim(), renderUnverifiedInstructions({ activeSkills: set }) ?? '']
+    .filter((part) => part !== '');
+
+  return parts.length === 0 ? null : `${heading}\n\n${parts.join('\n\n')}`;
+}
+
+function onlySkills(set: ActiveSkillSet, keep: (skill: ActiveSkillSet['active'][number]) => boolean): ActiveSkillSet {
+  const active = set.active.filter(keep);
+
+  return { active, reasons: set.reasons.filter((reason) => active.some((skill) => skill.name === reason.name)) };
 }
 
 async function admitTurnSkills(

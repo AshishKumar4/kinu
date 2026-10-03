@@ -810,7 +810,8 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
         })));
     },
 
-    stat(path) {
+    // The devbox lists by lstat, so only `follow: false` can name a link; a followed stat keeps the listed entry.
+    stat(path, options) {
       const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
 
       if (clean === '/' || clean === '') return Promise.resolve({ size: 0, mtimeMs: 0, type: 'directory' as const });
@@ -820,7 +821,12 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
       return settle(Effect.map(tolerated(serving(clean, 'stat', () => handle.listFiles(vfsDirname(clean), { recursive: false })), 'enoent'), (listing) => {
         const entry = listing === undefined ? undefined : (listing.files ?? []).find((file) => nameOf(file) === name);
 
-        return entry === undefined ? null : { size: entry.size ?? 0, mtimeMs: 0, type: isDir(entry) ? 'directory' as const : 'file' as const };
+        if (entry === undefined) return null;
+        const size = entry.size ?? 0;
+
+        if (options?.follow === false && entry.type === 'symlink') return { size, mtimeMs: 0, type: 'symlink' as const };
+
+        return { size, mtimeMs: 0, type: isDir(entry) ? 'directory' as const : 'file' as const };
       }));
     },
 

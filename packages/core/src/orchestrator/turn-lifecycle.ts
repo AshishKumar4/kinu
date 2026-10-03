@@ -11,6 +11,7 @@ import type { CompletedTurn } from '../evolution/types';
 import type { WorkMode } from '../types/turn';
 import { usageReported, type Usage } from '../usage';
 import type { TurnAccumulator } from './turn-accumulator';
+import type { TurnSteering } from './turn-steering';
 import {
   planOverflowRecovery,
   type OverflowRecoveryDecision,
@@ -217,14 +218,16 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   }, { runId });
 }
 
-/** `durationMs` uses the accumulator's own start so both backends report the same clock. */
-export function snapshotCompletedTurn(acc: TurnAccumulator, opts: {
+/** The turn's record, with the struggles its steering detector saw. `durationMs` uses the accumulator's own start
+ *  so both backends report the same clock. */
+export function snapshotCompletedTurn(turn: { readonly acc: TurnAccumulator; readonly steering: Pick<TurnSteering, 'struggles'> }, opts: {
   userMessage: string;
   assistantResponse: string;
   turnId?: string | undefined;
   sessionId: string;
   origin: 'user' | 'programmatic';
 }): CompletedTurn {
+  const { acc } = turn;
   const usage = acc.reportedUsage();
 
   const completed: CompletedTurn = {
@@ -238,6 +241,8 @@ export function snapshotCompletedTurn(acc: TurnAccumulator, opts: {
     hadError: acc.hadError,
     sessionId: opts.sessionId,
     origin: opts.origin,
+    struggles: turn.steering.struggles(),
+    shownLessons: acc.lessonsShown(),
   };
 
   if (opts.turnId !== undefined) completed.turnId = opts.turnId;

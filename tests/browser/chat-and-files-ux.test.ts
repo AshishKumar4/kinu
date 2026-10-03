@@ -2134,6 +2134,25 @@ describe('independent settings and quality reads publish independently', () => {
     });
   });
 
+  test('a rating landing while the Quality tab is open shows without a reload', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 900, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=qualitylive`, { waitUntil: 'networkidle0' });
+
+      const rated = () => page.evaluate(() => [...document.querySelectorAll('[data-quality-live] *')]
+        .find((node) => node.textContent?.startsWith('Turns rated') === true && node.children.length > 0)?.textContent ?? '');
+
+      await page.waitForFunction(() => document.querySelector('[data-quality-live]')?.textContent?.includes('Turns rated') === true);
+      const before = await rated();
+
+      await page.click('[data-quality-rate]');
+      await page.waitForFunction((was: string) => [...document.querySelectorAll('[data-quality-live] *')]
+        .find((node) => node.textContent?.startsWith('Turns rated') === true && node.children.length > 0)?.textContent !== was, {}, before);
+      await page.close();
+    });
+  });
+
   test('a failed quality read retries, then shows satisfaction per day', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();

@@ -24,6 +24,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Typed failure edges retain the beta and instruction-file contracts.** A disabled swarm still names its beta setting, and each deferred AGENTS.md probe keeps its own containing directory; bounded reads retain their inode checks and descriptor cleanup.
 - **Freight reuse is measured across turns, not calls within one turn.** The grader records the crafted tool's public reviewed-turn counter in September and requires an increase in October. The jcnu57 case, with one September call and two October calls but `uses=2`, is accepted without weakening the independently computed manifest totals.
 - **Connect reports a daemon that exits at startup, not a vanished pidfile.** The pidfile is created at mode 0600; its redundant later chmod no longer races the daemon unlinking it on exit.
 - **The hosted hammer reads Bun’s Actions report as well as its terminal report.** Grouped file headings and colour codes no longer hide executed files, and an exit-zero run with missing coverage keeps its complete output as red evidence.

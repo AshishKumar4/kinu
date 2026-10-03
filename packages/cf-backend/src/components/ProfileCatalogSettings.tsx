@@ -11,6 +11,7 @@ import {
   DEFAULT_PROVIDER_RETRIES,
   NAMED_SWARM_PRESETS,
   TIER_IDS,
+  betaSwarms,
   deriveRoleLabel,
   isTierId,
   tierIdsOf,
@@ -513,6 +514,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                 tiers={tierIdsOf(draft)}
                 roleIds={Object.keys(roles).sort()}
                 customized={selectedRole in draft.roles}
+                swarms={betaSwarms(draft)}
                 onChange={(next) => replaceRole(selectedRole, next)}
                 onReset={removeRoleOverride}
               />
@@ -605,6 +607,8 @@ function RoleEditor(props: {
   tiers: readonly TierId[];
   roleIds: readonly RoleId[];
   customized: boolean;
+  /** "Beta: swarms"; off, no preset. */
+  swarms: boolean;
   onChange: (role: RoleDefinition) => void;
   onReset: () => void;
 }) {
@@ -646,12 +650,14 @@ function RoleEditor(props: {
               onChange={(event) => set('instructions', event.target.value)} />
           </Field>
         </div>
-        <Field label="Default swarm preset">
-          <Choice label="Default swarm preset"
-            value={props.role.preset}
-            options={NAMED_SWARM_PRESETS.map((preset) => ({ value: preset, label: preset }))}
-            onChange={(preset) => set('preset', preset)} />
-        </Field>
+        {props.swarms && (
+          <Field label="Default swarm preset">
+            <Choice label="Default swarm preset"
+              value={props.role.preset}
+              options={NAMED_SWARM_PRESETS.map((preset) => ({ value: preset, label: preset }))}
+              onChange={(preset) => set('preset', preset)} />
+          </Field>
+        )}
         <Field label="Plan mode" hint="This role opens its workspace in Plan mode.">
           <label className="flex w-fit items-center gap-2 p-row-text p-text-2">
             <input type="checkbox" aria-label="Start in Plan mode"

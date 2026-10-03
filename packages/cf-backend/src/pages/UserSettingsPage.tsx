@@ -24,6 +24,7 @@ import { InviteCard } from "@/components/account/InviteCard";
 import { DevicesCard } from "@/components/devices/DevicesCard";
 import { AccountUsageCard } from "@/components/account/AccountUsageCard";
 import { SandboxSizeSettings } from "@/components/SandboxSize";
+import { BetaSettings } from "@/components/BetaSettings";
 import { showing, detach } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
@@ -150,6 +151,8 @@ export default function UserSettingsPage() {
         {section === "models" && <ProfileCatalogSettings />}
 
         {section === "sandbox" && <SandboxSizeSettings />}
+
+        {section === "beta" && <BetaSettings />}
 
         {section === "usage" && <AccountUsageCard />}
             </div>

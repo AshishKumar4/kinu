@@ -4,7 +4,7 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { describe, test, expect } from 'bun:test';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { forkTransferFrames, readForkLineage, readSoul, type ForkFrameReply } from '../src/index';
+import { forkTransferFrames, readForkLineage, readSoul, type ForkFrameReply, actorHomeName } from '../src/index';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
 import {
   ForkConversation, readChain, readWorkingContext, seedForkSource, seedForkTarget,
@@ -14,7 +14,7 @@ import { receiverFor, sourceFrames, streamFork } from './helpers/fork-stream';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../src/config/store';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
-import { agentCred, agentIdentity, provisionAgentHome, subordinateAgentName } from '../src/vfs/agent-home';
+import { agentCred, agentIdentity, provisionAgentHome } from '../src/vfs/agent-home';
 
 function forkInto(src: TestWorkspace, tgt: TestWorkspace, opts: {
   untilMessageId: string; targetWorkspaceId?: string; targetWorkspaceName?: string; now?: number; frameBytes?: number;
@@ -42,7 +42,7 @@ describe('a workspace fork', () => {
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'fork the workspace' });
     const sourceSession = await src.bundle.session();
-    const sourceName = subordinateAgentName('source-owner');
+    const sourceName = actorHomeName({ origin: 'agent', storageKey: 'source-owner' });
     const sourceOwner = agentIdentity(sourceSession.sql, sourceName);
     const root = sourceSession.vfs.as(CRED_KERNEL);
     provisionAgentHome(root, sourceName, sourceOwner);
@@ -54,7 +54,7 @@ describe('a workspace fork', () => {
 
     await forkInto(src, tgt, { untilMessageId: 'm1' });
     const targetSession = await tgt.bundle.session();
-    const unrelatedName = subordinateAgentName('unrelated');
+    const unrelatedName = actorHomeName({ origin: 'agent', storageKey: 'unrelated' });
     const unrelated = agentIdentity(targetSession.sql, unrelatedName);
     provisionAgentHome(targetSession.vfs.as(CRED_KERNEL), unrelatedName, unrelated);
     // The registry did not cross: the unrelated hire reuses the number, not the source principal's authority.
@@ -74,7 +74,7 @@ describe('a workspace fork', () => {
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'fork the workspace' });
     const sourceSession = await src.bundle.session();
-    const sourceGroup = agentIdentity(sourceSession.sql, subordinateAgentName('source-group'));
+    const sourceGroup = agentIdentity(sourceSession.sql, actorHomeName({ origin: 'agent', storageKey: 'source-group' }));
     const root = sourceSession.vfs.as(CRED_KERNEL);
     const directory = `${WORKSPACE_ROOT}/shared`;
     const secret = `${directory}/group-secret`;
@@ -89,7 +89,7 @@ describe('a workspace fork', () => {
 
     await forkInto(src, tgt, { untilMessageId: 'm1' });
     const targetSession = await tgt.bundle.session();
-    const unrelated = agentIdentity(targetSession.sql, subordinateAgentName('unrelated'));
+    const unrelated = agentIdentity(targetSession.sql, actorHomeName({ origin: 'agent', storageKey: 'unrelated' }));
     expect(unrelated.gid).toBe(sourceGroup.gid);
 
     // Main must not acquire the kernel's ownership either. Every hire is also in the shared group 1000.

@@ -12,6 +12,33 @@ import type { ScaffoldArchiveEntry, ScaffoldStatus } from './shadow';
 
 export type { ScaffoldArchiveEntry, ScaffoldStatus } from './shadow';
 
+/** High and low ratings per scaffold version, the archive's real-use evidence. */
+export interface RealOutcomeRate {
+  accepted: number;
+  negative: number;
+}
+
+/** Blends rated outcomes into archive win-rates and trials for branch-base
+ *  selection. Pure; never mutates. */
+export function blendRealOutcomeRates(
+  archive: ReadonlyArray<ScaffoldArchiveEntry>,
+  rates: ReadonlyMap<number, RealOutcomeRate>,
+): ScaffoldArchiveEntry[] {
+  return archive.map((e) => {
+    const real = rates.get(e.version);
+    const realDecisive = real ? real.accepted + real.negative : 0;
+
+    if (!real || realDecisive === 0) return e;
+    const shadowDecisive = e.wins + e.losses;
+
+    return {
+      ...e,
+      trials: e.trials + realDecisive,
+      winRate: (e.wins + real.accepted) / (shadowDecisive + realDecisive),
+    };
+  });
+}
+
 const VetoDataSchema = v.object({
   detail: v.optional(v.string()),
   surface: v.optional(v.string()),

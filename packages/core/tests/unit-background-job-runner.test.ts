@@ -303,6 +303,42 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
   });
 });
 
+// Review of 4028013fc, 2026-10-03: dismissing a hire left its detached processes alive, holding the workspace's detach cap.
+describe('BackgroundJobRunner.retire — the actor leaves', () => {
+  test("every running job stops, its external work confirmed, and nothing wakes the agent that is leaving", async () => {
+    const confirmed: string[] = [];
+    const { runner, runnerDeps, store, enqueued } = setup({ onCancelled: (jobId) => { confirmed.push(jobId); } });
+    const live = new AbortController();
+    const held = runner.create('shell', { command: 'node server.js' }, 'build', live);
+
+    runner.detach(held, 'shell', new Promise(() => {}));
+
+    // A row an earlier activation left running: no controller here, and still this actor's.
+    const orphan = new BackgroundJobRunner({ ...runnerDeps }).create('shell', { command: 'sleep 600' }, 'build', new AbortController());
+    const retirement = await runner.retire();
+
+    expect([...retirement.stopped].sort()).toEqual([held, orphan].sort());
+    expect(retirement.refused).toEqual([]);
+    expect(live.signal.aborted).toBe(true);
+    expect([store.get(held)?.status, store.get(orphan)?.status]).toEqual(['cancelled', 'cancelled']);
+    expect(confirmed.sort()).toEqual([held, orphan].sort());
+    expect(enqueued).toEqual([]);
+  });
+
+  test('a job whose device work nothing confirmed stopped is refused, and keeps running', async () => {
+    const { runner, store, enqueued } = setup({
+      onCancelled: (jobId) => { if (jobId === refused) throw new Error('the device did not answer the cancel'); },
+    });
+
+    const refused = runner.create('shell', { command: 'tail -f log' }, 'build', new AbortController());
+    const stopped = runner.create('shell', { command: 'node server.js' }, 'build', new AbortController());
+
+    expect(await runner.retire()).toEqual({ stopped: [stopped], refused: [refused] });
+    expect([store.get(refused)?.status, store.get(stopped)?.status]).toEqual(['running', 'cancelled']);
+    expect(enqueued).toEqual([]);
+  });
+});
+
 describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   test.each([undefined, null])('without an external owner (%p), cancel aborts, marks cancelled, and wakes once', async (external) => {
     const { runner, store, enqueued, settled } = setup({ onDetached: external, onCancelled: external });

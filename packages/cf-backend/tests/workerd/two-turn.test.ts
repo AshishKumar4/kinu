@@ -21,11 +21,6 @@ import {
   type PendingSteer,
 } from './two-turn-shapes';
 
-const SignalProbeSchema = v.union([
-  v.object({ signalKind: v.string() }),
-  v.object({ threw: v.string() }),
-]);
-
 const FailuresSchema = v.array(DiagnosticFailureSchema);
 
 const HttpSchema = v.array(HttpCallSchema);
@@ -326,24 +321,18 @@ describe('two real turns over the HTTP model seam', () => {
     expect(out.landed).toBe('mid-turn');
   });
 
-  it('spikes the service-binding RPC, then runs A and B end to end', async () => {
+  it('runs A and B end to end', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('driver'));
-
-    // Sleep/title lanes still use the direct binding, so the drive depends on AbortSignal surviving service-binding RPC.
-    const signal = v.parse(SignalProbeSchema, await root.signalProbe());
-
-    expect(signal).toEqual({ signalKind: 'AbortSignal' });
 
     // claimOwner boots the hosted workspace plane on first scaffold touch; each turn is joined on its
     // terminal settle inside `exercise`, so everything below is post-settle.
     const out = await root.exercise();
     const http = v.parse(HttpSchema, out.http);
 
-    // No streamed turn reached the binding. The sleep judge is excluded: its cadence is beyond two
-    // turns and `calls` is worker-wide.
+    // No streamed turn reached the binding, and no run it was asked went unanswered. `calls` is suite-wide.
     const calls = v.parse(v.array(CallRecordSchema), out.calls);
 
-    expect(calls.filter((c) => c.stream)).toHaveLength(0);
+    expect(calls.filter((c) => c.stream || c.lane === null)).toEqual([]);
 
     // The real prompt appends harness `<dynamic_context>` user rows after the typed text, hence `toContain`.
     expect(http.every((h) => h.host === 'fake-models.invalid')).toBe(true);

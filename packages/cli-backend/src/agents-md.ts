@@ -4,13 +4,12 @@
  */
 
 import { Effect, Cause } from 'effect';
-import { settleSync } from '@kinu.run/core/obs';
+import { settle } from '@kinu.run/core/obs';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
-  admitAgentsMd,
-  type AgentsMdFile, type AgentsMdReference, type AgentsMdSources,
-  type AgentsMdUnavailable,
+  discoverInstructionFiles,
+  type AgentsMdSources, type InstructionCandidate, type InstructionFileProbe, type InstructionFileRead,
   type InstructionTrustResolver, type ModelWindow,
 } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -93,118 +92,68 @@ function probing<A>(read: () => A, answers: Readonly<Record<string, Candidate>>)
   });
 }
 
-/** `afterAdmission` is a test-only fault-injection seam for the swap-after-admission regression. */
+/** The host port: the bytes are read through a descriptor proven to be the sized inode, and never past its size. */
+function readAsSized(candidate: Extract<Candidate, { kind: 'file' }>): Effect.Effect<InstructionFileRead> {
+  const changed = (reason: string): InstructionFileRead => ({ kind: 'unavailable', reason });
+
+  return Effect.suspend(() => {
+    let fd: number | undefined;
+
+    return Effect.ensuring(Effect.catchCause(Effect.sync((): InstructionFileRead => {
+      fd = openSync(candidate.target, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const opened = fstatSync(fd);
+
+      if (opened.dev !== candidate.dev || opened.ino !== candidate.ino || opened.size !== candidate.bytes) {
+        return changed('file changed after containment check');
+      }
+
+      const bytes = Buffer.alloc(candidate.bytes);
+      let offset = 0;
+
+      while (offset < bytes.length) {
+        const read = readSync(fd, bytes, offset, bytes.length - offset, offset);
+
+        if (read === 0) break;
+        offset += read;
+      }
+
+      if (offset !== bytes.length || fstatSync(fd).size !== candidate.bytes) return changed('file changed during bounded read');
+
+      return { kind: 'text', text: bytes.toString('utf8') };
+    }), (failed) => {
+      const code = errnoOf({ error: Cause.squash(failed) });
+
+      return code === 'ENOENT' || code === 'ELOOP'
+        ? Effect.succeed(changed('file changed after containment check')) : Effect.failCause(failed);
+    }), Effect.sync(() => { if (fd !== undefined) closeSync(fd); }));
+  });
+}
+
+/** Every directory from cwd up to the root, root-most first. `afterAdmission` is a test-only swap seam. */
 export function discoverAgentsMd(
   cwd: string,
   limits: ModelWindow,
   trust: InstructionTrustResolver,
   afterAdmission?: () => void,
-): AgentsMdSources {
-  return settleSync(Effect.gen(function* () {
-    const candidates: Array<{
-      readonly ref: AgentsMdReference;
-      readonly target: string;
-      readonly dev: number;
-      readonly ino: number;
-    }> = [];
+): Promise<AgentsMdSources> {
+  const candidates: InstructionCandidate[] = [];
+  let dir = resolve(cwd);
 
-    const unavailable: AgentsMdUnavailable[] = [];
-    let dir = resolve(cwd);
+  for (;;) {
+    const path = join(dir, 'AGENTS.md');
+    const candidateDir = dir;
+    candidates.push({ label: path, probe: (): Promise<InstructionFileProbe> => settle(Effect.gen(function* () {
+      const candidate = yield* candidateAt(candidateDir, path);
 
-    for (;;) {
-      const path = join(dir, 'AGENTS.md');
-      const candidate = yield* candidateAt(dir, path);
+      if (candidate?.kind !== 'file') return candidate;
 
-      if (candidate?.kind === 'file') candidates.push({
-        ref: { path, bytes: candidate.bytes },
-        target: candidate.target,
-        dev: candidate.dev,
-        ino: candidate.ino,
-      });
-      else if (candidate?.kind === 'unavailable') unavailable.push({ path, reason: candidate.reason });
-      const parent = dirname(dir);
+      return { kind: 'file', bytes: candidate.bytes, read: () => settle(readAsSized(candidate)) };
+    })) });
+    const parent = dirname(dir);
 
-      if (parent === dir) break;
-      dir = parent;
-    }
+    if (parent === dir) break;
+    dir = parent;
+  }
 
-    candidates.reverse();
-    unavailable.reverse();
-
-    const admission = admitAgentsMd(candidates.map((candidate) => candidate.ref), limits);
-    const allowed = new Set(admission.admit);
-    afterAdmission?.();
-    const admitted: AgentsMdFile[] = [];
-
-    for (const candidate of candidates) {
-      if (!allowed.has(candidate.ref)) continue;
-      let fd: number | undefined;
-
-      yield* Effect.ensuring(Effect.catchCause(Effect.sync(() => {
-        fd = openSync(candidate.target, constants.O_RDONLY | constants.O_NOFOLLOW);
-        const opened = fstatSync(fd);
-
-        if (
-          opened.dev !== candidate.dev
-          || opened.ino !== candidate.ino
-          || opened.size !== candidate.ref.bytes
-        ) {
-          unavailable.push({
-            path: candidate.ref.path,
-            reason: 'file changed after containment check',
-          });
-
-          return;
-        }
-
-        const bytes = Buffer.alloc(candidate.ref.bytes);
-        let offset = 0;
-
-        while (offset < bytes.length) {
-          const read = readSync(fd, bytes, offset, bytes.length - offset, offset);
-
-          if (read === 0) break;
-          offset += read;
-        }
-
-        const finished = fstatSync(fd);
-
-        if (offset !== bytes.length || finished.size !== candidate.ref.bytes) {
-          unavailable.push({
-            path: candidate.ref.path,
-            reason: 'file changed during bounded read',
-          });
-
-          return;
-        }
-
-        const content = bytes.toString('utf8');
-
-        if (!content.trim()) return;
-        admitted.push({
-          path: candidate.ref.path,
-          content,
-          trust: trust(candidate.ref.path, content),
-        });
-      }), (failed) => Effect.gen(function* () {
-        const error = Cause.squash(failed);
-        const code = errnoOf({ error });
-
-        if (code === 'ENOENT' || code === 'ELOOP') {
-          unavailable.push({
-            path: candidate.ref.path,
-            reason: 'file changed after containment check',
-          });
-
-          return;
-        }
-
-        return yield* Effect.failCause(failed);
-      })), Effect.sync(() => {
-        if (fd !== undefined) closeSync(fd);
-      }));
-    }
-
-    return { admitted, referenced: admission.referenced, unavailable };
-  }));
+  return discoverInstructionFiles(candidates.reverse(), limits, trust, afterAdmission);
 }

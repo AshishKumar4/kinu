@@ -53,6 +53,8 @@ export interface TurnAdmission {
   tools?: ToolSet | undefined;
   /** The unapproved instructions message the step pipeline weaves in. */
   instructions?: string | null | undefined;
+  /** The turn's `/name` skill bodies the step pipeline splices before the input. */
+  activated?: string | null | undefined;
   limits: ResolvedModelWindow;
 }
 
@@ -143,8 +145,8 @@ export function assembleTurnMessages(input: TurnContextInput): Promise<Assembled
     const limit = stepContextLimit(admission.limits);
 
     const measure = async (turn: AssembledTurn): Promise<number> => {
-      const instructions = admission.instructions ?? null;
-      const messages = instructions === null ? turn.messages : [...turn.messages, { role: 'user' as const, content: instructions }];
+      const extra = [admission.instructions, admission.activated].flatMap((content) => content === null || content === undefined ? [] : [{ role: 'user' as const, content }]);
+      const messages = [...turn.messages, ...extra];
 
       if (admission.count) {
         const counted = await admission.count({

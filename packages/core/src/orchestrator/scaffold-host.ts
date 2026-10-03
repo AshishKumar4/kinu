@@ -55,7 +55,7 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
 
 export function createScaffoldDefaultInference(
   opts: ScaffoldBridgeOpts,
-  frame: Pick<ChatOptions, 'system' | 'history' | 'modelContext'>,
+  frame: Pick<ChatOptions, 'system' | 'history' | 'modelContext' | 'dynamicContext'>,
 ): NonNullable<ScaffoldRunOptions['defaultInference']> {
   return async function* () {
     for await (const event of streamScaffoldChat(opts, { ...frame, tools: opts.tools() })) {
@@ -66,7 +66,7 @@ export function createScaffoldDefaultInference(
 
 async function* streamScaffoldChat(
   opts: ScaffoldBridgeOpts,
-  frame: Pick<ChatOptions, 'system' | 'history' | 'tools' | 'modelContext'>,
+  frame: Pick<ChatOptions, 'system' | 'history' | 'tools' | 'modelContext' | 'dynamicContext'>,
 ): ReturnType<ScaffoldRunOptions['llmStream']> {
   assertScaffoldActive(opts);
   const spend = opts.spend;

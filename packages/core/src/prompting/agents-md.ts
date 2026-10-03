@@ -1,4 +1,5 @@
-import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { tolerateAsync } from '../obs/effect';
 /**
  * AGENTS.md rendering. Backends feed files ordered root-most → nearest; the
  * nearest wins on conflict. Files are admitted on metadata before any read,
@@ -26,7 +27,7 @@ export interface AgentsMdReference {
   readonly bytes: number;
 }
 
-/** A path discovery declined to resolve (symlink cycle, escaping link). Never read,
+/** A path discovery declined to read (a link, a cycle, a swap after sizing). Never read,
  *  approvable, or turn-failing; the reason lets the owner see which file is inert. */
 export interface AgentsMdUnavailable {
   readonly path: string;
@@ -37,7 +38,7 @@ export interface AgentsMdUnavailable {
 export interface AgentsMdSources {
   readonly admitted: ReadonlyArray<AgentsMdFile>;
   readonly referenced: ReadonlyArray<AgentsMdReference>;
-  /** Absent where the plane has no symlinks (cloud). */
+  /** Absent where a caller built the sources by hand. */
   readonly unavailable?: ReadonlyArray<AgentsMdUnavailable>;
 }
 
@@ -127,10 +128,88 @@ export function renderAgentsMdSection(
   return parts.join('\n\n');
 }
 
-interface WorkspacePlane {
-  readonly files: VFS;
-  readonly path: string;
+/** What a plane found at one instruction path: how many bytes it may read and how, or why it may not. */
+export type InstructionFileProbe =
+  | { readonly kind: 'file'; readonly bytes: number; readonly read: () => Promise<InstructionFileRead> }
+  | { readonly kind: 'unavailable'; readonly reason: string }
+  | null;
+
+/** The bytes that were sized, or why they could not be had. */
+export type InstructionFileRead =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'unavailable'; readonly reason: string };
+
+export interface InstructionCandidate {
+  /** How the file is named to the model and keyed for approval. */
   readonly label: string;
+  readonly probe: () => Promise<InstructionFileProbe>;
+}
+
+/**
+ * Every backend's instruction-file discovery. Candidates come root-most first, each probed by its own plane's port,
+ * admitted on size nearest-first, and only then read as sized. An unavailable file is reported, never read.
+ * `afterAdmission` is a test-only seam for a swap after admission.
+ */
+export async function discoverInstructionFiles(
+  candidates: readonly InstructionCandidate[],
+  limits: ModelWindow,
+  trust: InstructionTrustResolver,
+  afterAdmission?: () => void,
+): Promise<AgentsMdSources> {
+  const probed = await Promise.all(candidates.map(async (candidate) => ({ candidate, probe: await candidate.probe() })));
+  const unavailable: AgentsMdUnavailable[] = [];
+  const found: Array<{ readonly ref: AgentsMdReference; readonly read: () => Promise<InstructionFileRead> }> = [];
+
+  for (const { candidate, probe } of probed) {
+    if (probe?.kind === 'file') found.push({ ref: { path: candidate.label, bytes: probe.bytes }, read: probe.read });
+    else if (probe?.kind === 'unavailable') unavailable.push({ path: candidate.label, reason: probe.reason });
+  }
+
+  const admission = admitAgentsMd(found.map((entry) => entry.ref), limits);
+  const admit = new Set(admission.admit);
+  afterAdmission?.();
+  const admitted: AgentsMdFile[] = [];
+
+  for (const { ref, read } of found.filter((entry) => admit.has(entry.ref))) {
+    const result = await read();
+
+    if (result.kind === 'unavailable') {
+      unavailable.push({ path: ref.path, reason: result.reason });
+      continue;
+    }
+
+    // Keyed on the label: an approval for the workspace file does not cover the sandbox copy.
+    if (result.text.trim()) admitted.push({ path: ref.path, content: result.text, trust: trust(ref.path, result.text) });
+  }
+
+  return { admitted, referenced: admission.referenced, unavailable };
+}
+
+/**
+ * A Nimbus plane's port. A link is never followed: the plane cannot resolve one through its mounts (NIMBUS-ASKS 10).
+ * The bytes read must be the ones sized, so the file is sized again after the read. A sandbox that cannot size a file
+ * reports 0, and then only the second size is compared.
+ */
+function vfsInstructionProbe(files: VFS, path: string): () => Promise<InstructionFileProbe> {
+  return async () => {
+    const sized = await files.stat(path, { follow: false });
+
+    if (sized === null || sized.type === 'directory') return null;
+
+    if (sized.type === 'symlink') return { kind: 'unavailable', reason: 'a link this plane does not follow' };
+
+    const read = async (): Promise<InstructionFileRead> => {
+      const bytes = await tolerateAsync(async () => await files.readFile(path), 'enoent');
+      const after = await files.stat(path, { follow: false });
+
+      const same = bytes !== undefined && after !== null && after.type === sized.type && after.size === sized.size
+        && after.mtimeMs === sized.mtimeMs && after.ino === sized.ino && (sized.size === 0 || bytes.length === sized.size);
+
+      return same ? { kind: 'text', text: new TextDecoder().decode(bytes) } : { kind: 'unavailable', reason: 'file changed after it was sized' };
+    };
+
+    return { kind: 'file', bytes: sized.size, read };
+  };
 }
 
 /**
@@ -138,53 +217,19 @@ interface WorkspacePlane {
  * sandbox as the nearest file; never provisions a sandbox. A failed read is not
  * reported as absence. Both planes are agent-writable, so neither is trusted by location.
  */
-export async function collectWorkspaceAgentsMd(
+export function collectWorkspaceAgentsMd(
   vfs: VFS,
   limits: ModelWindow,
   trust: InstructionTrustResolver,
   sandbox?: ExecutorProvider,
 ): Promise<AgentsMdSources> {
-  const planes: WorkspacePlane[] = [
-    { files: vfs, path: 'AGENTS.md', label: 'AGENTS.md (workspace)' },
-  ];
+  const candidates: InstructionCandidate[] = [{ label: 'AGENTS.md (workspace)', probe: vfsInstructionProbe(vfs, 'AGENTS.md') }];
 
   if (sandbox?.getStatus?.().active && sandbox.files) {
-    planes.push({
-      files: sandbox.files,
-      path: '/workspace/AGENTS.md',
-      label: '/workspace/AGENTS.md (sandbox)',
-    });
+    candidates.push({ label: '/workspace/AGENTS.md (sandbox)', probe: vfsInstructionProbe(sandbox.files, '/workspace/AGENTS.md') });
   }
 
-  const sized = await Promise.all(planes.map(async (plane) => ({
-    plane, stat: await plane.files.stat(plane.path),
-  })));
-
-  const found: Array<{ plane: WorkspacePlane; ref: AgentsMdReference }> = [];
-
-  for (const { plane, stat } of sized) {
-    // Size zero is not absence: sandbox stat may report 0 (execution/sandbox.ts fallback). Zero fits, so the file is read.
-    if (!stat || (stat.type === 'directory')) continue;
-    found.push({ plane, ref: { path: plane.label, bytes: stat.size } });
-  }
-
-  const admission = admitAgentsMd(found.map((entry) => entry.ref), limits);
-  const admit = new Set(admission.admit);
-
-  const read = await Promise.all(
-    found.filter((entry) => admit.has(entry.ref)).map(async ({ plane, ref }) => {
-      const raw = await readText(plane.files, plane.path);
-      const text = raw;
-
-      // Keyed on the label: an approval for the workspace file does not cover the sandbox copy.
-      return { path: ref.path, content: text, trust: trust(ref.path, text) };
-    }),
-  );
-
-  return {
-    admitted: read.filter((file) => file.content.trim().length > 0),
-    referenced: admission.referenced,
-  };
+  return discoverInstructionFiles(candidates, limits, trust);
 }
 
 export interface AdvisorWorkspace {
@@ -192,18 +237,16 @@ export interface AdvisorWorkspace {
   readonly limits: () => Promise<ModelWindow>;
 }
 
-/** ADVISOR.md goes through the same admission as AGENTS.md. '' means absent. */
+/** ADVISOR.md goes through the same discovery as AGENTS.md; nobody approves it. '' means absent or unavailable. */
 export async function advisorWorkspaceGuidance(workspace: AdvisorWorkspace | undefined): Promise<string> {
   if (workspace === undefined) return '';
   const path = 'ADVISOR.md';
-  const stat = await workspace.vfs.stat(path);
 
-  if (stat === null || (stat.type === 'directory')) return '';
-  const admission = admitAgentsMd([{ path, bytes: stat.size }], await workspace.limits());
+  const sources = await discoverInstructionFiles(
+    [{ label: path, probe: vfsInstructionProbe(workspace.vfs, path) }], await workspace.limits(), () => 'unverified',
+  );
 
-  if (admission.referenced.length > 0) return renderInstructionOmission(admission.referenced, path);
-  const raw = await readText(workspace.vfs, path);
-  const text = raw;
+  if (sources.referenced.length > 0) return renderInstructionOmission(sources.referenced, path);
 
-  return text.trim();
+  return sources.admitted[0]?.content.trim() ?? '';
 }

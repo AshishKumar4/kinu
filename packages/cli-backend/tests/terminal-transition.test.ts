@@ -14,12 +14,13 @@ import {
   type Shell, type TemporaryAgentPort, type TerminalEffectFault,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
-import type { TestLanguageModelV2 } from './test-language-model';
+import { TestLanguageModelV2 } from './test-language-model';
 import type { CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import {
   armShadowTrials, openTerminalWorkspace, scriptedModel,
 } from './terminal-workspace';
+import { fakeModel, toolSequenceModel, type PromptMessage } from './helpers/local-session';
 
 /** The advisor a workspace's sessions hire through; a session with no host has no port of its own. */
 const advisors = new WeakMap<CLIRuntime, TemporaryAgentPort>();
@@ -779,6 +780,70 @@ describe('a one-shot exit waits on the turn\'s own close', () => {
     expect(events.items.filter((e) => e.type === 'background')).toEqual([]);
     await session.end();
     db.close();
+  });
+});
+
+describe('a turn\'s lessons are one owed terminal effect', () => {
+  const LESSON = 'Name `path` in every file read.';
+
+  /** Calls `file` with no path, which its schema refuses; asked for a lesson, answers one, or refuses while
+   *  `refusing`. */
+  function struggler(state: { lessonAsks: number; refusing: boolean }) {
+    const turn = toolSequenceModel([{ name: 'file', input: { action: 'read' } }]);
+    const lesson = fakeModel(JSON.stringify({ update: null, text: LESSON }));
+
+    const answering = (prompt: readonly PromptMessage[]) => {
+      if (!JSON.stringify(prompt).includes('spared this turn the struggle')) return turn;
+      state.lessonAsks += 1;
+
+      if (state.refusing) throw new Error('the fast tier is down');
+
+      return lesson;
+    };
+
+    return new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doGenerate: async (options) => answering(options.prompt).doGenerate(options),
+      doStream: async (options) => answering(options.prompt).doStream(options),
+    });
+  }
+
+  const lessons = (rt: CLIRuntime) => rt.storage.sql<{ tool: string; text: string }>`SELECT tool, text FROM tool_lessons`;
+
+  test('a programmatic turn asks for its lesson once, with its review and a restart run too', async () => {
+    const { db, rt } = workspace();
+    const state = { lessonAsks: 0, refusing: false };
+    const model = struggler(state);
+    const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
+
+    await session.enqueueTurn({ text: 'read the README', metadata: { kinuEvent: 'background_job' } });
+    await session.settleBackgroundWork();
+    await session.end();
+    const next = await restart({ rt, db, model, events: [] });
+
+    expect({ asked: state.lessonAsks, lessons: lessons(rt) }).toEqual({ asked: 1, lessons: [{ tool: 'file', text: LESSON }] });
+    await next.end();
+  });
+
+  test('a refused lesson stays owed, and the next start writes it', async () => {
+    const { db, rt } = workspace();
+    const state = { lessonAsks: 0, refusing: true };
+    const model = struggler(state);
+    const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
+
+    await session.send('read the README', { id: crypto.randomUUID() });
+    await session.end();
+
+    expect(lessons(rt)).toEqual([]);
+    expect(stillOwed(rt)).toEqual([{ effect_name: 'turn_lessons', status: 'pending' }]);
+
+    state.refusing = false;
+    const next = await restart({ rt, db, model, events: [] });
+
+    expect(lessons(rt)).toEqual([{ tool: 'file', text: LESSON }]);
+    expect(stillOwed(rt)).toEqual([]);
+    await next.end();
   });
 });
 

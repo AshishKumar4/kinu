@@ -1183,7 +1183,9 @@ const SUPERVISOR_SCRIPT = `
 const fs = require('node:fs');
 const { execFile, spawn } = require('node:child_process');
 
-const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile, lifeFile] = process.argv.slice(1);
+// fd 4 is the record's \`life\`, handed over at this process's spawn: the kernel closes it however this process exits,
+// and the daemon reads that close as this supervisor gone.
+const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile] = process.argv.slice(1);
 const maxOutput = Number(maxText);
 // Half kept from the start, half from the end, as core's BoundedOutput keeps them (COMMAND_OUTPUT_LIMITS).
 const HEAD = Math.floor(maxOutput / 2);
@@ -1250,10 +1252,6 @@ function abandonStartup() {
 async function publishState() {
   // First, before anything yields: on Linux the command's identity is read before the event loop can reap it.
   const [start, groupStart] = await startIdentities();
-  // Held until this process exits, however it exits: the kernel closes it, and the daemon reads that close as
-  // this supervisor gone. Opened before the state exists, so whoever reads the state finds it held.
-  await run('mkfifo', [lifeFile]);
-  fs.openSync(lifeFile, 'r+');
   const stateTemporary = stateFile + '.tmp.' + process.pid;
   fs.writeFileSync(
     stateTemporary,
@@ -1642,9 +1640,9 @@ function waitForFile(file, signal) {
 }
 
 /**
- * Resolves once the supervisor of `dir` is gone, or `signal` aborts. It holds `life` open for writing from before
- * its state was published, so a reader opened while that end is held is hung up when the supervisor exits, and one
- * opened after finds no writer at all. A record from a supervisor older than `life` has nothing to watch.
+ * Resolves once the supervisor of `dir` is gone, or `signal` aborts. It holds `life` open for writing from its spawn,
+ * so a reader opened while that end is held is hung up when the supervisor exits, and one opened after finds no
+ * writer at all. A record from a supervisor older than `life` has nothing to watch.
  */
 async function supervisorExit(dir, signal) {
   let fd;
@@ -1704,11 +1702,54 @@ async function resultWritten(entry, requestId) {
     await Promise.allSettled([written, exited]);
   }
 
-  // The supervisor writes its result before it can exit, so one gone without a result never wrote one.
-  if (!fs.existsSync(resultFile)) {
+  resultRecorded(entry, requestId);
+}
+
+/**
+ * Resolves once the supervisor of `dir` has published its state. It holds `life` from its spawn, so a record nothing
+ * holds has no supervisor coming, and one whose supervisor exits first never will: both reject.
+ */
+async function supervisorStateWritten(dir) {
+  const stateFile = path.join(dir, 'state');
+
+  if (!fs.existsSync(path.join(dir, 'life'))) throw new Error(`no supervisor holds ${dir}`);
+  const settled = new AbortController();
+  const written = waitForFile(stateFile, settled.signal);
+  const exited = supervisorExit(dir, settled.signal);
+
+  try {
+    await Promise.race([written, exited]);
+  } finally {
+    settled.abort();
+    await Promise.allSettled([written, exited]);
+  }
+
+  if (!fs.existsSync(stateFile)) throw new Error(`the supervisor of ${dir} exited before publishing its state`);
+}
+
+/** The supervisor writes its result before it can exit, so one gone without a result never wrote one. */
+function resultRecorded(entry, requestId) {
+  if (!fs.existsSync(path.join(entry.dir, 'result'))) {
     throw new Error(`the supervisor of ${requestId} (pid ${entry.pid}) exited without recording the command's result, `
       + `so its outcome is unknown; the command may still be running in process group ${entry.group}`);
   }
+}
+
+/**
+ * Tells the supervisor of `entry` to stop, and waits for its result. One gone since its identity was checked
+ * cannot be told (ESRCH): it is answered for from what it left, as one that exits mid-wait is.
+ */
+async function stopSupervisor(entry, requestId) {
+  try {
+    process.kill(entry.pid, 'SIGUSR1');
+  } catch (err) {
+    if (!err || err.code !== 'ESRCH') throw err;
+    resultRecorded(entry, requestId);
+
+    return;
+  }
+
+  await resultWritten(entry, requestId);
 }
 
 /** The ACK to a live supervisor, settled once it has removed its directory or once it is gone, whichever is first. */
@@ -1748,7 +1789,8 @@ function removeRequestDirectory(dir) {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-function createInFlight(root = INFLIGHT_ROOT) {
+/** `isStarting(requestId)`: a start in this daemon is still building that record, which its start registers. */
+function createInFlight(root = INFLIGHT_ROOT, isStarting = () => false) {
   const entries = new Map();
 
   function entryFor(requestId) {
@@ -1782,15 +1824,21 @@ function createInFlight(root = INFLIGHT_ROOT) {
     const recovered = [];
 
     for (const directory of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!directory.isDirectory()) continue;
+      if (!directory.isDirectory() || isStarting(directory.name)) continue;
       const dir = path.join(root, directory.name);
 
       try {
         requestDirectory(root, directory.name);
+
+        if (!fs.existsSync(path.join(dir, 'state'))) await supervisorStateWritten(dir);
         const state = readSupervisorState(dir);
+        // The supervisor alone, as the ACK asks: a command that has ended is its supervisor's until the result is
+        // written. Asked first, because a supervisor writes its result before it exits: a result read after
+        // finding it gone is final.
+        const supervising = await startedAs(state.pid, state.start);
         const terminal = fs.existsSync(path.join(dir, 'result'));
 
-        if (!terminal && !(await supervisorStartMatches(state))) {
+        if (!terminal && !supervising) {
           removeRequestDirectory(dir);
           continue;
         }
@@ -1827,8 +1875,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
       throw new Error(`cannot terminate ${requestId}: supervisor identity no longer matches`);
     }
 
-    process.kill(entry.pid, 'SIGUSR1');
-    await resultWritten(entry, requestId);
+    await stopSupervisor(entry, requestId);
     const terminal = readTerminalResult(entry.dir);
 
     if (terminal.kind !== 'cancelled') {
@@ -1948,13 +1995,18 @@ function createInFlight(root = INFLIGHT_ROOT) {
   };
 }
 
+/** Exec requests whose supervisor has not published its state yet, by request
+ *  id. Each waits behind its pre-mutation snapshot in checkpoint-store order;
+ *  a re-delivered frame joins it, and a cancel lets it start before stopping it. */
+const starting = new Map();
+
 /** One daemon, one registry. Reconciliation makes a restarted daemon the
  * durable request owner without creating another supervisor. */
-const inFlight = createInFlight();
+const inFlight = createInFlight(INFLIGHT_ROOT, (requestId) => starting.has(requestId));
 
 /** `uncheckpointed`: why no checkpoint covers the command, or null. `watched`: the hub asked for its output
  *  while it runs, so the supervisor gets a pipe for it on fd 3 and `child.stdio[3]` is this daemon's end. */
-function startSupervisor(requestId, command, plan, { uncheckpointed, watched }) {
+async function startSupervisor(requestId, command, plan, { uncheckpointed, watched }) {
   assertSupervisionSupported();
   const dir = requestDirectory(INFLIGHT_ROOT, requestId);
   fs.mkdirSync(INFLIGHT_ROOT, { recursive: true, mode: 0o700 });
@@ -1981,12 +2033,25 @@ function startSupervisor(requestId, command, plan, { uncheckpointed, watched }) 
     fs.writeFileSync(path.join(dir, UNCHECKPOINTED_FILE), JSON.stringify(uncheckpointed), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   }
 
-  const child = spawn(process.execPath, [
-    '-e', SUPERVISOR_SCRIPT,
-    commandFile, path.join(dir, 'state'), path.join(dir, 'result'),
-    path.join(dir, 'stdout'), path.join(dir, 'stderr'), path.join(dir, 'ack'),
-    String(EXEC_STREAM_MAX_BYTES), planFile, path.join(dir, 'life'),
-  ], { detached: true, env: COMMAND_ENV, stdio: watched ? ['ignore', 'ignore', 'ignore', 'pipe'] : 'ignore' });
+  // The record's liveness, held here before its supervisor exists and handed to it at its spawn: a daemon that
+  // finds this directory with no state yet can tell a supervisor still starting from one that never came.
+  const lifeFile = path.join(dir, 'life');
+  const made = await runToExit('mkfifo', [lifeFile]);
+
+  if (made.error) throw new Error(`could not create ${lifeFile}: ${errorDetail(made.error)}`, { cause: made.error });
+  const life = fs.openSync(lifeFile, 'r+');
+  let child;
+
+  try {
+    child = spawn(process.execPath, [
+      '-e', SUPERVISOR_SCRIPT,
+      commandFile, path.join(dir, 'state'), path.join(dir, 'result'),
+      path.join(dir, 'stdout'), path.join(dir, 'stderr'), path.join(dir, 'ack'),
+      String(EXEC_STREAM_MAX_BYTES), planFile,
+    ], { detached: true, env: COMMAND_ENV, stdio: ['ignore', 'ignore', 'ignore', watched ? 'pipe' : 'ignore', life] });
+  } finally {
+    fs.closeSync(life);
+  }
 
   child.unref();
 
@@ -2459,11 +2524,6 @@ function socketClosed(ws) {
   return ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED;
 }
 
-/** Exec requests whose supervisor has not published its state yet, by request
- *  id. Each waits behind its pre-mutation snapshot in checkpoint-store order;
- *  a re-delivered frame joins it, and a cancel lets it start before stopping it. */
-const starting = new Map();
-
 /** Commands whose output a hub is watching, by request id, while their supervisor's pipe is open. */
 const outputWatches = new Map();
 
@@ -2599,6 +2659,14 @@ function startCommand(msg, cmd, ws, ctx) {
     if (msg.output === true) outputWatches.set(id, watchOutput(id, supervisor.child.stdio[3], ws));
     await waitForSupervisorState(supervisor.dir, supervisor.child);
     inFlight.register(id, supervisor.dir);
+
+    /** @param {unknown} error */
+    function reportStopFailure(error) {
+      log('Could not terminate abandoned command', id, error);
+    }
+
+    // Its socket dropped while it started: stopped as the drop's sweep stopped the rest, now it has a supervisor.
+    if (socketClosed(ws)) await inFlight.cancel(id).catch(reportStopFailure);
   })();
 
   const forget = () => { starting.delete(id); };
@@ -3740,6 +3808,7 @@ module.exports = {
   watchOutput,
   waitForFile,
   waitForSupervisorState,
+  stopSupervisor,
   createCheckpoints,
   CONFIG_PATH,
   readDeviceConfig,

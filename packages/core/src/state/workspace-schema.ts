@@ -23,6 +23,7 @@ import { resetGuardedExec } from './store-reset';
 import { initGepaTables } from '../evolution/gepa/persistence';
 import { initLessonTables } from '../evolution/lessons';
 import { initTurnRatingTables } from '../evolution/ratings';
+import { initStruggleTables } from '../evolution/struggles';
 import { initRefinementTables } from '../evolution/refinement';
 import { initImportedExperienceTable } from '../experience/imports';
 import { initHeadsTables } from '../heads/schema';
@@ -141,6 +142,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   // A woken actor can record outcomes before any turn constructs EvolutionEngine.
   initLessonTables(execRaw);
   initTurnRatingTables(execRaw);
+  initStruggleTables(execRaw);
   initRefinementTables(execRaw);
   // Spec: docs/ARCHITECTURE.md, "Events and ingress".
   initEventsHubTables(exec);

@@ -44,6 +44,8 @@ export const DEFAULT_DEVBOX_POLICY: DevboxPolicy = {
  *  The names are a contract kept beside the policy, not one module's internals. */
 export const LAST_INTERACTION_KEY = 'devbox:last-interaction';
 
+export const LAST_WORK_KEY = 'devbox:last-work';
+
 export const QUIET_SINCE_KEY = 'devbox:quiet-since';
 
 /** What abandoned container-start work rejected with, if it ever settled.
@@ -828,7 +830,7 @@ export function createCheckpointLane(): CheckpointLane {
 
 /** A runtime list, not a bare type union: the receiving host validates stages against it,
  *  so producer and consumer share this one list or incidents get rejected unseen. */
-export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port', 'quiesce', 'rest'] as const;
+export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port', 'quiesce', 'rest', 'recovered'] as const;
 
 export type IncidentStage = (typeof INCIDENT_STAGES)[number];
 

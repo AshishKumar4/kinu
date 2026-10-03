@@ -288,7 +288,7 @@ export function createCFRuntime(
     const craftStore = new AgentUtilsCraftStore(sql);
     craftStore.ensureSchema();
 
-    const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
+    const memory = adaptMemory(memoryStore, originVfs, { store: vectorStore, config: memoryConfig });
 
     const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }));
 

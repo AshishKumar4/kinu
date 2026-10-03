@@ -8,6 +8,7 @@ import type { TurnSteeringRecord, TurnSteeringTrigger } from '../events/types';
 import type { PrepareStepContext, ToolCallContext, ToolResultContext } from '../extension';
 import type { AgentSignal } from '../types/signals';
 import type { RecoveryFinding } from '../evolution/recovery';
+import type { Struggle } from '../evolution/struggles';
 import { fnv1a64 } from '../utils/fnv1a';
 import {
   isJsonObject,
@@ -23,6 +24,8 @@ export const CONSECUTIVE_FAILURES_BEFORE_STEER = 3;
 export const STEPS_WITHOUT_PROGRESS_BEFORE_STEER = 12;
 
 const ARGS_ECHO_MAX_CHARS = 200;
+
+const STRUGGLE_SAMPLE_CHARS = 600;
 
 /** The model must never read a harness steer as something the user typed. */
 export const TURN_STEERING_HEADER =
@@ -121,10 +124,15 @@ export class TurnSteering {
   /** -1 so the first step counts as a change, not a stall. */
   private lastProgress = -1;
   private stalledSteps = 0;
+  /** Keyed by kind and tool; a count only grows. */
+  private readonly struggled = new Map<string, Struggle>();
+  private readonly refusals = new Map<string, number>();
 
   reset(): void {
     this.failures.clear();
     this.repeats.clear();
+    this.struggled.clear();
+    this.refusals.clear();
     this.fired = null;
     this.converted = false;
     this.namedCall = null;
@@ -145,12 +153,21 @@ export class TurnSteering {
     if (isFailingToolResult(ctx)) {
       const streak = this.failures.get(ctx.toolName);
 
+      const failures = (streak?.count ?? 0) + 1;
+
       if (streak) {
-        streak.count += 1;
+        streak.count = failures;
         streak.signature = signature;
         streak.args = echoArgs(ctx.args);
       } else {
         this.failures.set(ctx.toolName, { count: 1, signature, args: echoArgs(ctx.args) });
+      }
+
+      if (failures >= CONSECUTIVE_FAILURES_BEFORE_STEER) this.struggle('repeated_failure', ctx.toolName, failures, ctx.result);
+
+      if (!ctx.success && ctx.reason === 'bad_input') {
+        this.refusals.set(ctx.toolName, (this.refusals.get(ctx.toolName) ?? 0) + 1);
+        this.struggle('schema_refusal', ctx.toolName, this.refusals.get(ctx.toolName) ?? 1, ctx.result);
       }
     } else {
       const streak = this.failures.get(ctx.toolName);
@@ -175,6 +192,8 @@ export class TurnSteering {
     if (seen && seen.resultHash === resultHash) {
       seen.count += 1;
 
+      if (seen.count >= IDENTICAL_CALLS_BEFORE_STEER) this.struggle('repeated_call', ctx.toolName, seen.count, seen.args);
+
       return recovery;
     }
 
@@ -183,6 +202,19 @@ export class TurnSteering {
     });
 
     return recovery;
+  }
+
+  /** Where this turn fought its tools so far (evolution/struggles.ts); a struggle is recorded, never a steer. */
+  struggles(): Struggle[] {
+    return [...this.struggled.values()];
+  }
+
+  private struggle(kind: Struggle['kind'], tool: string | null, count: number, sample: string): void {
+    const key = `${kind}:${tool ?? ''}`;
+
+    if ((this.struggled.get(key)?.count ?? 0) < count) {
+      this.struggled.set(key, { kind, tool, count, sample: sample.slice(0, STRUGGLE_SAMPLE_CHARS) });
+    }
   }
 
   snapshot(): TurnSteeringRecord[] {
@@ -204,6 +236,8 @@ export class TurnSteering {
 
     if (score === this.lastProgress) this.stalledSteps += 1;
     else { this.stalledSteps = 0; this.lastProgress = score; }
+
+    if (this.stalledSteps >= STEPS_WITHOUT_PROGRESS_BEFORE_STEER) this.struggle('no_progress', null, this.stalledSteps, '');
 
     if (this.fired) return null;
     const looping = [...this.repeats].find(([, call]) => call.count >= IDENTICAL_CALLS_BEFORE_STEER);

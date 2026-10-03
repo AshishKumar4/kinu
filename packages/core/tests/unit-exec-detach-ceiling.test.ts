@@ -103,7 +103,10 @@ function fakeJobRunner(
   policy: BackgroundPolicy,
   onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome,
 ) {
-  return { policy, thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold }), output: new JobOutputFeeds({ clock: REAL_CLOCK, send: () => {} }) };
+  return {
+    policy, thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold }), output: new JobOutputFeeds({ clock: REAL_CLOCK, send: () => {} }),
+    foreground: new Set<AbortController>(),
+  };
 }
 
 function wrapShellTool(provider: ExecutorProvider, runner: ReturnType<typeof fakeJobRunner>) {
@@ -521,6 +524,34 @@ describe("a running job's output", () => {
     expect(listed?.output).toMatchObject({ seq: 2, omitted: 33, chunks: [{ omitted: 33 }] });
     expect(joined(present(listed?.output, "the running job's listed output").chunks).length).toBe(TAIL_CHARS);
     await build.finish();
+  });
+
+  test('a window cut inside a four-byte character drops the whole character and counts its four bytes', async () => {
+    const clock = handClock(Date.now());
+    const build = await detachedBuild(clock);
+    const grin = String.fromCodePoint(0x1f600);
+
+    // Two UTF-16 units each: one unit past the window, so the cut lands inside the oldest one.
+    build.output.write('stdout', `${grin.repeat(WINDOW_CHARS / 2)}x`);
+    clock.advance(250);
+
+    expect(build.frames.at(-1)).toEqual({
+      type: JOB_OUTPUT_EVENT, jobId: build.jobId, seq: 2,
+      chunks: [{ stream: 'stdout', text: `${grin.repeat(WINDOW_CHARS / 2 - 1)}x`, omitted: 4 }], dropped: 4,
+    });
+    await build.finish();
+  });
+
+  test('a tail cut inside a four-byte character drops the whole character and counts its four bytes', () => {
+    const grin = String.fromCodePoint(0x1f600);
+
+    const frame: JobOutputFrame = {
+      type: JOB_OUTPUT_EVENT, jobId: 'bgjob-grin', seq: 1, chunks: [{ stream: 'stdout', text: `${grin.repeat(TAIL_CHARS / 2)}x` }], dropped: 0,
+    };
+
+    expect(followJobOutput(undefined, frame)).toEqual({
+      seq: 1, chunks: [{ stream: 'stdout', text: `${grin.repeat(TAIL_CHARS / 2 - 1)}x`, omitted: 4 }], omitted: 4,
+    });
   });
 
   test("a loss the command's sink reports is marked between the lines around it", async () => {

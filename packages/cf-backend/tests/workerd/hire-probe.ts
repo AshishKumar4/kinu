@@ -1,17 +1,19 @@
 /**
  * Workerd fixture for delegation: the shipped orchestrator, a hire authored by a fake model wire, verdicts read from storage.
  * The child resolves its model from the role tier (`actor-agent.ts:hostedActorProfile`), not the workspace pin.
- * No clocks: `scripts/test-clocks.ts` locks this file, so every wait is a gate and a missing path hangs.
+ * No clocks: `scripts/test-clocks.ts` locks this file, so every wait is a gate and a missing path hangs. A job's window
+ * runs on a hand clock the object is handed and the test advances.
  */
 
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import * as v from 'valibot';
-import { actorReferenceOf, isSubordinateOrigin, ownerCaller, type ArchiveCursor } from '@kinu.run/core';
+import { actorReferenceOf, isSubordinateOrigin, ownerCaller, type ArchiveCursor, type Clock } from '@kinu.run/core';
+import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
-import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, REPORT_MARK, type ActorRow, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
+import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, REPORT_MARK, type ActorRow, type JobRow, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 
 export * from '../../src/server';
 
@@ -42,11 +44,49 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections'];
+    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'loseJobFiber', 'jobRows'];
 
     for (const name of reads) Reflect.deleteProperty(this, name);
 
     sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, ...reads]);
+  }
+
+  private readonly probeClock = handClock(Date.now());
+
+  /** Every job runner here detaches on this clock: a window fires only when the test moves it. */
+  protected override jobClock(): Clock {
+    return this.probeClock;
+  }
+
+  /** Settles once `count` waits were armed on the job clock; a call's window is the first its job clock sees. */
+  async jobWindowArmed(count: number): Promise<void> {
+    await this.probeClock.whenArmed(count);
+  }
+
+  /** The armed window fires: the call it bounds outruns it. */
+  async outrunJobWindow(): Promise<void> {
+    this.probeClock.tick();
+  }
+
+  /** The job's command ends: the file it waits on now exists in the workspace's home. */
+  async openJobGate(): Promise<void> {
+    await this.workspaceBox(this.shellId()).files.write(JOB_GATE, 'open');
+  }
+
+  /** What a restart's fiber recovery does for a job whose fiber outlived its settle: re-deliver its wake. */
+  async redeliverJobWake(jobId: string): Promise<void> {
+    await this.workspaceJobs().recover({ phase: 'running', jobId, kind: 'shell' });
+  }
+
+  /** The window a restart can hit: the job's row written, its fiber row not (yet, or any more). */
+  async loseJobFiber(jobId: string): Promise<number> {
+    return this.probeState.storage.sql.exec(`DELETE FROM cf_agents_runs WHERE name LIKE 'bg:%' AND snapshot LIKE ?`, `%${jobId}%`).rowsWritten;
+  }
+
+  async jobRows(): Promise<JobRow[]> {
+    return this.probeState.storage.sql.exec<{ actor_id: string; id: string; status: string }>(
+      'SELECT actor_id, id, status FROM background_jobs ORDER BY created_at').toArray()
+      .map((row) => ({ actorId: row.actor_id, id: row.id, status: row.status }));
   }
 
   /** Read, not assumed: child counts are "not this id", and a guessed literal would count the root's rows. */
@@ -240,7 +280,8 @@ const WireLogSchema = v.looseObject({
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
-    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'>;
+    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'
+    | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'loseJobFiber' | 'jobRows'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -314,6 +355,11 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     await target.stopHosted(child.name);
   }
 
+  /** The owner's Dismiss of `name` with its history kept, answered as the roster menu reads it. */
+  async dismissAnswer(workspace: string, name: string): Promise<string> {
+    return JSON.stringify(await (await this.target(workspace)).dismissSubordinate(name, true));
+  }
+
   /** The owner's Dismiss with its history kept, as the roster menu calls it. */
   async dismissChild(workspace: string): Promise<string> {
     const target = await this.target(workspace);
@@ -351,6 +397,30 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
   async archiveSections(workspace: string): Promise<ArchiveSections> {
     return await (await this.target(workspace)).archiveSections();
+  }
+
+  async jobWindowArmed(workspace: string, count: number): Promise<void> {
+    await (await this.target(workspace)).jobWindowArmed(count);
+  }
+
+  async outrunJobWindow(workspace: string): Promise<void> {
+    await (await this.target(workspace)).outrunJobWindow();
+  }
+
+  async openJobGate(workspace: string): Promise<void> {
+    await (await this.target(workspace)).openJobGate();
+  }
+
+  async redeliverJobWake(workspace: string, jobId: string): Promise<void> {
+    await (await this.target(workspace)).redeliverJobWake(jobId);
+  }
+
+  async loseJobFiber(workspace: string, jobId: string): Promise<number> {
+    return await (await this.target(workspace)).loseJobFiber(jobId);
+  }
+
+  async jobRows(workspace: string): Promise<JobRow[]> {
+    return await (await this.target(workspace)).jobRows();
   }
 
   async observe(workspace: string): Promise<HireObservation> {

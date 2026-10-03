@@ -554,6 +554,7 @@ async function admitRequest(opts: ChatOptions) {
     count: opts.countInputTokens,
     tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(primary))),
     instructions: opts.dynamicContext?.instructions,
+    activated: opts.dynamicContext?.activated,
     limits: window,
   };
 

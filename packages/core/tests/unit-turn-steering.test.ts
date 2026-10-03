@@ -831,3 +831,35 @@ function repeatingModel(prompts: PromptMessage[][], command: string | null) {
     },
   });
 }
+
+describe('the struggles a turn records (docs/EVOLUTION-REDESIGN.md §2)', () => {
+  const struggles = (orch: AgentOrchestrator) => orch.steering.struggles().map((seen) => ({ kind: seen.kind, tool: seen.tool, count: seen.count }));
+
+  test('each trigger and every schema refusal is a struggle, at its longest count', async () => {
+    const orch = newTurn();
+    await fail(orch, 'shell', CONSECUTIVE_FAILURES_BEFORE_STEER + 1);
+    await repeat(orch, 'read', { path: 'a.ts' }, IDENTICAL_CALLS_BEFORE_STEER);
+    await toolResult(orch, { toolName: 'edit', args: {}, result: 'edit: path is required', success: false, reason: 'bad_input' });
+
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) await step(orch, s, [user('ship it')]);
+
+    expect(struggles(orch)).toEqual([
+      { kind: 'repeated_failure', tool: 'shell', count: CONSECUTIVE_FAILURES_BEFORE_STEER + 1 },
+      { kind: 'repeated_call', tool: 'read', count: IDENTICAL_CALLS_BEFORE_STEER },
+      { kind: 'schema_refusal', tool: 'edit', count: 1 },
+      { kind: 'no_progress', tool: null, count: STEPS_WITHOUT_PROGRESS_BEFORE_STEER },
+    ]);
+    expect(orch.steering.struggles()[2]?.sample).toBe('edit: path is required');
+  });
+
+  test('failures short of a streak are no struggle, and the next turn starts with none', async () => {
+    const orch = newTurn();
+    await fail(orch, 'shell', CONSECUTIVE_FAILURES_BEFORE_STEER - 1);
+    expect(struggles(orch)).toEqual([]);
+
+    await fail(orch, 'shell', 1);
+    expect(struggles(orch)).toHaveLength(1);
+    orch.steering.reset();
+    expect(struggles(orch)).toEqual([]);
+  });
+});

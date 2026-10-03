@@ -299,7 +299,7 @@ function localDebugSource(localName: string): DebugSource {
     triggers: () => Effect.sync(() => decodeJsonValue({ value: listLocalTriggers(localName) })),
     toolDescriptions: () => Effect.sync(() => decodeJsonValue({ value: getLocalToolSurface(localName) })),
     facts: (limit) => Effect.sync(() => parseLocal(JsonRowsSchema, { value: getLocalFacts(localName, limit) })),
-    memoryContent: () => Effect.sync(() => readLocalMemory(localName)),
+    memoryContent: () => Effect.promise(() => readLocalMemory(localName)),
     recordObjectives: (limit) => Effect.sync(() => listLocalRecordObjectives(localName, limit)),
     recordCells: (handle, limit) => Effect.sync(() => listLocalRecordCells(localName, handle, limit)),
     recordOccupants: (handle, cursor, limit) => Effect.sync(() => readLocalRecordCell(localName, handle, cursor, limit)),

@@ -174,7 +174,7 @@ describe('the readers can see the end of a long turn', () => {
 
       return { answers: {
         satisfaction: { type: 'score', score: 2 }, corrected: { type: 'noul', noul: 0 }, wrong: { type: 'choice', choice: 'nothing' },
-      }, usage: {} };
+      }, usage: { input: 0, output: 0 } };
     }, {
       request: trajectory(20_000, `ASK-${ending}`),
       actions: '',

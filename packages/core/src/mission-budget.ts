@@ -401,10 +401,7 @@ export class MissionGovernor {
       yield* this.admitCall(labels);
       const result = yield* Effect.promise(() => decide(request));
 
-      if (result !== null) {
-        const estimated = estimateTokens(request.state.length + JSON.stringify(request.questions).length);
-        this.debit(result.usage.input ?? estimated, { labels, calls: 1 });
-      }
+      if (result !== null) this.debit(result.usage.input, { labels, calls: 1 });
 
       return result;
     }));

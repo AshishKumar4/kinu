@@ -9,13 +9,13 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture, MergeOutputSchema,
-  MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions, explorationActorKey, headAgentName, defaultLoopOrigin,
-  initWorkspaceSchema, RunEventRecorder, startBranchHead, workspaceSpend, createAgentStores,
+  MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions, explorationActorKey, defaultLoopOrigin,
+  initWorkspaceSchema, RunEventRecorder, startBranchHead, workspaceSpend, createAgentStores, BackgroundJobRunner,
+  CONFINED_BACKGROUNDABLE_TOOLS,
   type ReasoningEffort,
   type HeadInput, type WebSearchProvider, type JsonObject, type WriteObserver,
   type ModelCallReport, type ModelOperationEvent,
-  type HeadStreamFrame, type ExecutionRouter, type AgentRuntime,
-} from '@kinu.run/core';
+  type HeadStreamFrame, type ExecutionRouter, type AgentRuntime, actorHomeName } from '@kinu.run/core';
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
   mergePolicyProfile, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, createTestActorsOver,
@@ -573,12 +573,19 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     const rt = await createHeadRuntime(makeParent(dir), 'h2');
     const capture = new HeadCapture();
 
+    const stores = createAgentStores(() => rt.storage.sql, () => rt.actor,
+      rt.storage.transactionSync, async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }));
+
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
-      conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => createAgentStores(() => rt.storage.sql, () => rt.actor,
-        rt.storage.transactionSync, async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' })).history.transcript(sessionId)),
+      conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => stores.history.transcript(sessionId)),
       codemodeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
       webSearch: stubWeb,
+      jobs: {
+        jobRunner: new BackgroundJobRunner({ store: stores.jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'queued' } }),
+        backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
+        mode: () => 'build',
+      },
       split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),
     });
 
@@ -673,7 +680,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
     };
 
     const runtime = createCLIHeadRuntime(headDeps(
-      scratchProbeModel(barrier(2, () => {}), (id) => `/home/${headAgentName(key(id))}/note.txt`),
+      scratchProbeModel(barrier(2, () => {}), (id) => `/home/${actorHomeName({ origin: 'swarm', storageKey: key(id) })}/note.txt`),
       { journal: () => journal, parentRuntime: parent },
     ));
 

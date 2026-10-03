@@ -86,6 +86,7 @@ const ProfileCatalogObjectSchema = v.strictObject({
   ))),
   retries: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(10))),
   decisionModel: v.optional(v.picklist(DECISION_MODELS)),
+  betaSwarms: v.optional(v.boolean()),
 });
 
 function allSpawnReferencesExist(

@@ -5,7 +5,7 @@ export interface PromptSection {
   readonly chars: number;
 }
 
-/** The soul opens the prompt, unheaded. */
+/** The soul opens the workspace's part of the prompt, unheaded. */
 const SOUL_SECTION_TITLE = 'Soul';
 
 export const DYNAMIC_CONTEXT_OPEN_TAG = '<dynamic_context';
@@ -17,6 +17,9 @@ export const SYSTEM_REMINDER_TAG = 'system-reminder';
 
 /** A skill activation spliced after a person's message, in the same user role. */
 export const STEER_SKILLS_HEADING = 'The message above activates these skills; they apply for the rest of this turn.';
+
+/** A turn's own `/name` activations, spliced just before its input, for that turn only. */
+export const TURN_SKILLS_HEADING = 'The next message activates these skills; they apply for this turn only.';
 
 export const SLEEP_TIME_PROMPT_OPENING = 'You are a background memory-compression agent.';
 
@@ -42,11 +45,11 @@ export function sealDelimiters(body: string, delimiter: RegExp, tag: string): st
   return body.replace(delimiter, `&lt;$1${tag}`);
 }
 
-/** Splits on line-start `## `; the section budget and context meter rely on these boundaries. */
+/** Splits on line-start `## ` and `<soul>`; the section budget and context meter rely on these boundaries. */
 export function splitPromptSections(prompt: string): PromptSection[] {
   if (prompt === '') return [];
 
-  return prompt.split(/\n(?=## )/).map((block) => {
+  return prompt.split(/\n(?=## |<soul>)/).map((block) => {
     const first = block.split('\n', 1)[0] ?? '';
 
     return {

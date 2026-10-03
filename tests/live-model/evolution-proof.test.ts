@@ -24,10 +24,8 @@ import * as v from 'valibot';
 import {
   collectStepText,
   EvolutionEngine,
-  readMemoryTail,
   recordTurnRating,
   thumbsRating,
-  renderDynamicContextBlock,
   type LLMProviderConfig,
   type CompletedTurn,
   type ToolCallRecord,
@@ -119,18 +117,13 @@ interface ChatTurn {
 async function chatTurn(turn: ChatTurn): Promise<TurnResult> {
   const { model, rt, sessionId, surface, userMessage } = turn;
   const start = Date.now();
-  const memoryTail = await readMemoryTail(rt.memory);
-  // The PRODUCTION projection, from the production tool surface. A hand-assembled
-  // option set — no `agentsActions`, no `workMode`, no `sectionOverrides`, and
-  // `soulOverride` which the CLI turn path does not pass — over a ToolSet that
-  // cannot contain `agents` gives the model a prompt the product never sends, with
-  // the delegation ladder (prompt.ts:236) absent from every turn this proof
-  // measures.
-  const system = surface.systemPrompt();
+  // The PRODUCTION frame, from the production tool surface: its system prompt, and the dynamic block (runtime facts
+  // and the memory tail) woven before the request by the step pipeline's ledger. A hand-assembled option set gives
+  // the model a prompt the product never sends.
+  const { system, messages } = await surface.request([{ role: 'user', content: userMessage }]);
   // The wrapper forwards the call unchanged; it only reads the tool list and the
   // system message the provider actually receives.
   const recorder = recordRequestSurface(model);
-  const dynamicContext = renderDynamicContextBlock({ memoryTail });
 
   const reuseMode: ReuseMode =
     /\b(?:must\s+)?use eval\b/i.test(userMessage) ? 'instructed' : 'autonomous';
@@ -140,10 +133,7 @@ async function chatTurn(turn: ChatTurn): Promise<TurnResult> {
   const result = await generateText({
     model: recorder.model,
     system,
-    messages: [
-      ...(dynamicContext ? [{ role: 'user' as const, content: dynamicContext }] : []),
-      { role: 'user' as const, content: userMessage },
-    ],
+    messages,
     tools: surface.tools,
     stopWhen: stepCountIs(500),
     onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
@@ -469,6 +459,7 @@ describe('Evolution Proof', () => {
     expect(result.request.toolsOffered).toEqual(Object.keys(surface.tools).sort());
     expect(result.request.agentsOffered).toBe(true);
     expect(result.request.agentsIndexed).toBe(true);
+    expect(result.request.runtimeFacts).toBe(true);
     session1Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);

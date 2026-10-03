@@ -10,6 +10,7 @@ import {
   agentsActionsFor,
   createAgentsCodemodeProvider,
   createAgentsTool,
+  delegationChoices,
   decodeJsonValue,
   parseAgentsToolInput,
 
@@ -107,10 +108,11 @@ function echoHandoff(calls: Call[], echo: HandoffEcho) {
   return { ok: true as const, name: echo.input.name, ...handoff(echo.delivery, echo.busy) };
 }
 
-type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode'> & { mode?: AgentsToolDeps['mode'] };
+/** `swarms` defaults on: these suites pin the tool as it stands with "Beta: swarms" turned on. */
+type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode' | 'swarms'> & Partial<Pick<AgentsToolDeps, 'mode' | 'swarms'>>;
 
 function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
-  return { mode: 'build', ...deps };
+  return { mode: 'build', swarms: true, ...deps };
 }
 
 /**
@@ -199,7 +201,7 @@ function makeTeam() {
       dismiss: async (input) => {
         recordCall(calls, 'dismiss', { input });
 
-        return { ok: true, name: input.name, historyKept: input.keepHistory ?? false };
+        return { ok: true, name: input.name, historyKept: input.keepHistory ?? false, stoppedJobs: [] };
       },
     } satisfies TeamToolDeps,
   };
@@ -290,7 +292,7 @@ describe('agents.* codemode namespace — dispatch', () => {
   test('a Plan provider keeps its trusted mode after the host advances to Build', async () => {
     const team = makeTeam();
     let currentMode: 'plan' | 'build' = 'plan';
-    const provider = createAgentsCodemodeProvider(() => ({ mode: currentMode, team: team.deps }));
+    const provider = createAgentsCodemodeProvider(() => ({ mode: currentMode, swarms: true, team: team.deps }));
     currentMode = 'build';
 
     await member(provider.tools, 'msg').execute({ agent: 'researcher', message: 'inspect only' });
@@ -303,7 +305,7 @@ describe('agents.* codemode namespace — dispatch', () => {
 
   test('Plan mode does not narrow the search surface', async () => {
     // Plan mode constrains what a helper may do, never which members exist.
-    const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', swarm: swarmDeps() }));
+    const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', swarms: true, swarm: swarmDeps() }));
     expect(await member(provider.tools, 'swarm').execute({ task: 'research' }))
       .toMatchObject({ reason: 'bad_input' });
     expect(Object.keys(provider.tools))
@@ -360,7 +362,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(await member(ns, 'msg').execute({ event_id: 'pe1', message: 'here you go' })).toEqual({ ok: true });
     expect(await member(ns, 'list').execute()).toEqual({ subordinates: [rosterEntry], peers: [{ name: 'scout', displayName: 'Scout' }] });
     expect(await member(ns, 'dismiss').execute({ agent: 'researcher' }))
-      .toEqual({ ok: true, name: 'researcher', historyKept: true });
+      .toEqual({ ok: true, name: 'researcher', historyKept: true, stoppedJobs: [] });
 
     expect(team.calls.map((c) => c.action)).toEqual(['spawn', 'assign', 'message', 'dismiss']);
     expect(peers.calls.map((c) => c.action)).toEqual(['reply']);
@@ -891,14 +893,15 @@ describe('agents delegation — role/tier/preset precedence', () => {
     expect(team.calls).toEqual([]);
   });
 
-  test('role summaries project into the native schema from the same catalog', () => {
+  test('role summaries reach the step context from the catalog, never the shared native schema', () => {
     const rendered = (deps: TestAgentsToolDeps): string =>
       JSON.stringify(createAgentsTool(withBuildMode(deps)).inputSchema);
 
-    const withCatalog = rendered(profileDeps());
-    expect(withCatalog).toContain('researcher');
-    // No catalog wired → no summaries, and nothing invented.
-    expect(rendered({ swarm: swarmDeps() })).not.toContain('researcher');
+    const deps = profileDeps();
+    expect(rendered(deps)).not.toContain('researcher');
+    expect(delegationChoices(deps.profile?.() ?? null)?.roles.some((role) => role.startsWith('researcher: '))).toBe(true);
+    // No catalog wired: no choices, and nothing invented.
+    expect(delegationChoices(null)).toBeNull();
   });
 });
 

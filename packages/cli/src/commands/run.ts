@@ -492,13 +492,13 @@ function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentClient):
       case 'get_state':
       case 'state':
         return decodeJsonValue({ value: {
-          ...getLocalAgentState(name),
+          ...(yield* Effect.promise(() => getLocalAgentState(name))),
           sessionId: client.cliSession.id,
           tools: getLocalToolSurface(name),
           model: yield* Effect.promise(() => client.getModelSpec()),
         } });
       case 'status':
-        return decodeJsonValue({ value: getLocalAgentState(name) });
+        return decodeJsonValue({ value: yield* Effect.promise(() => getLocalAgentState(name)) });
       case 'tools':
         return decodeJsonValue({ value: yield* Effect.promise(() => client.describeTools()) });
       case 'triggers':
@@ -508,7 +508,7 @@ function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentClient):
       case 'memory': {
         const query = stringField(cmd, 'query');
 
-        return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: readLocalMemory(name) } });
+        return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: yield* Effect.promise(() => readLocalMemory(name)) } });
       }
 
       case 'events':

@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import { seedTranscriptEntry, createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
-import { createTestWorkspace, conversationsFor } from './helpers';
+import { actorJobsFor, createTestWorkspace, conversationsFor } from './helpers';
 import { buildHeadToolSet } from '../src/heads/head-tools';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -205,7 +205,7 @@ describe('buildHeadAccumulatorTools', () => {
 
     // The head's own surface, as both backends build it.
     const tools = buildHeadToolSet({
-      input, capture, rt, conversations: conversationsFor(rt), codemodeTool: undefined,
+      input, capture, rt, conversations: conversationsFor(rt), codemodeTool: undefined, jobs: actorJobsFor(rt),
       webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
       split: async () => { throw new Error('this head cannot split'); },
     });
@@ -278,7 +278,7 @@ describe('durable delegated turn opening', () => {
       await session.restoreWorkingHistory();
       expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered', 'two', 'two answered']);
       // A block woven against the four-message stream: positioned there, and meaningless anywhere else.
-      session.dynamic.weave(session.history, { mode: { workMode: 'build', planSubmission: false } });
+      session.dynamic.weave(session.history, { mode: { workMode: 'plan', planSubmission: true } });
       expect(session.dynamic.size).toBe(1);
 
       // The host's own idle condition is raised inside the same transaction: nothing moves.

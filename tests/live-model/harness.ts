@@ -4,22 +4,22 @@
  * probe, and the refusals that stop a runtime which cannot execute, or can
  * execute on the developer's own machine, before any model is driven.
  */
-import type { LanguageModel, StepResult, ToolSet } from 'ai';
+import type { LanguageModel, ModelMessage, StepResult, ToolSet } from 'ai';
 import * as v from 'valibot';
 
 import type {
   AgentRuntime, AgentsToolAction, AgentsSwarmDeps, AgentsToolDeps, BuiltinToolName,
-  LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope,
+  LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope, RuntimeFacts,
   ProviderCatalogSnapshot, ToolCallRecord,
 } from '../../packages/core/src/index';
 import {
   activePromptSectionOverrides, agentsActionsFor, buildActorTools,
   buildSystemPromptSync, createFactsStore,
   createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
-  currentDateForPrompt, isBuiltinToolName, JsonObjectSchema,
+  isBuiltinToolName, JsonObjectSchema, collectDynamicContext, currentDateForPrompt, DynamicContextLedger, readMemoryTail,
   projectJsonValue, failedToolOutcome, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
-  WORKSPACE_RUN_ID, ConversationSearchStore,
+  WORKSPACE_RUN_ID, ConversationSearchStore, BackgroundJobRunner, BACKGROUNDABLE_TOOLS,
 } from '../../packages/core/src/index';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import {
@@ -100,10 +100,13 @@ export interface EvalAgentSurface {
   /** The `agents` actions this surface's deps actually wire, from the same
    *  `agentsActionsFor` the tool's own input enum is built from. */
   readonly agentsActions: readonly AgentsToolAction[];
-  /** The production system prompt for one turn on this surface. A function
-   *  because `activePromptSectionOverrides` is a read the evolution loop can
-   *  change between turns, exactly as in the product. */
-  systemPrompt(): string;
+  /**
+   * One turn's first request as production frames it: the system prompt, and the history with the dynamic block
+   * (backend, model, directory, date, live state) woven before the turn's input by the ledger the step pipeline
+   * uses. Per call, because `activePromptSectionOverrides` and the memory tail change between turns, exactly as in
+   * the product.
+   */
+  request(history: readonly ModelMessage[]): Promise<{ readonly system: string; readonly messages: ModelMessage[] }>;
 }
 
 export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurface {
@@ -142,9 +145,11 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     )),
   };
 
-  const agents: AgentsToolDeps = { mode: 'build', swarm };
+  // The live rungs measure swarms, which the eval accounts have turned on.
+  const agents: AgentsToolDeps = { mode: 'build', swarm, swarms: true };
 
-  const tools = buildActorTools({
+  // No session takes a wake here, so its calls run inline: the raw surface, over a runner nothing detaches into.
+  const { raw: tools } = buildActorTools({
     rt,
     conversations: new ConversationSearchStore(sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)),
     codemode: createNodeCodemodeToolFactory({
@@ -160,28 +165,51 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     effectClaims: { sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID, durable: () => Promise.resolve() },
     facts,
     webSearch,
+    jobs: {
+      jobRunner: new BackgroundJobRunner({ store: rt.stores.jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'undelivered' } }),
+      backgroundable: BACKGROUNDABLE_TOOLS,
+      mode: () => 'build',
+    },
   });
 
   const builtinTools = Object.keys(tools).filter(isBuiltinToolName);
   const agentsActions = agentsActionsFor(agents);
 
+  const backend = rt.cwd ? 'cli-local' : 'cli-vfs';
+
   return {
     tools,
     builtinTools,
     agentsActions,
-    systemPrompt: () => buildSystemPromptSync(rt, {
-      executors: rt.executionRouter?.listExecutors() ?? [],
-      availableTools: builtinTools,
-      agentsActions,
-      // No child substrate here: the prompt must not advertise a rung the
-      // action would refuse.
-      temporaryAsk: false,
-      externalTools: [],
-      backend: 'cli-local',
-      model: { id: llm.model },
-      currentDate: currentDateForPrompt(),
-      sectionOverrides: activePromptSectionOverrides(sql, rt.actor),
-    }),
+    request: async (history) => {
+      const system = buildSystemPromptSync(rt, {
+        executors: rt.executionRouter?.listExecutors() ?? [],
+        availableTools: builtinTools,
+        agentsActions,
+        // No child substrate here: the prompt must not advertise a rung the
+        // action would refuse.
+        temporaryAsk: false,
+        externalTools: [],
+        backend,
+        model: { id: llm.model },
+        sectionOverrides: activePromptSectionOverrides(sql, rt.actor),
+      });
+
+      const runtime: RuntimeFacts = { backend, model: { id: llm.model }, cwd: rt.cwd ?? undefined, date: currentDateForPrompt() };
+
+      const dynamic = collectDynamicContext({
+        rt, stores: rt.stores, tools,
+        profile: { workMode: 'build', allowedTools: Object.keys(tools) },
+        runtime,
+        memoryTail: await readMemoryTail(rt.memory),
+        missingCapabilities: [],
+      });
+
+      const messages = [...history];
+      const woven = new DynamicContextLedger().weave(messages, dynamic, { at: Math.max(0, messages.length - 1), firstStep: true });
+
+      return { system, messages: woven ?? messages };
+    },
   };
 }
 
@@ -270,12 +298,18 @@ export interface RequestSurfaceEvidence {
   /** System-prompt size, so a truncated or empty projection is visible without
    *  publishing the prompt itself. */
   readonly systemChars: number;
+  /** Whether every observed request carried the dynamic block's runtime section (backend, model, date), which the
+   *  system prompt no longer states. */
+  readonly runtimeFacts: boolean;
 }
 
 /** The swarm rung's marker in the RENDERED section (section-templates.ts:296):
  *  `action=swarm` appears only when the ladder was rendered WITH the swarm
  *  rung, which is the fact §9.5 wants — not merely that a heading exists. */
 const AGENTS_INDEX_MARKER = '- **agents**:';
+
+/** The dynamic block's runtime section opening, as it reads inside the JSON of a provider prompt. */
+const RUNTIME_SECTION_MARKER = JSON.stringify('## Runtime context\n- Backend: ').slice(1, -1);
 
 /**
  * The two fields of a provider call this reads, in the shape BOTH model
@@ -353,6 +387,7 @@ export function recordRequestSurface(model: LanguageModel): RecordedRequestSurfa
   let calls = 0;
   let systemChars = 0;
   let agentsIndexed = false;
+  let runtimeFacts = true;
 
   const observe = (options: ObservedRequest): void => {
     calls += 1;
@@ -370,6 +405,8 @@ export function recordRequestSurface(model: LanguageModel): RecordedRequestSurfa
     systemChars = Math.max(systemChars, system.length);
 
     if (system.includes(AGENTS_INDEX_MARKER)) agentsIndexed = true;
+
+    if (!JSON.stringify(options.prompt).includes(RUNTIME_SECTION_MARKER)) runtimeFacts = false;
   };
 
   const recording: LanguageModel = model.specificationVersion === 'v2'
@@ -408,6 +445,7 @@ export function recordRequestSurface(model: LanguageModel): RecordedRequestSurfa
       agentsOffered: offered.has('agents'),
       agentsIndexed,
       systemChars,
+      runtimeFacts: calls > 0 && runtimeFacts,
     }),
   };
 }

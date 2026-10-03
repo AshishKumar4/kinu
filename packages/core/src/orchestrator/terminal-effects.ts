@@ -67,6 +67,7 @@ export function isDefinitiveTerminalFailure(code: ErrorCode): boolean {
 const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {
   sleep_time: 'memory compression', auto_title: 'naming the chat', auto_gepa: 'prompt tuning',
   shadow_trial: 'the shadow trial', improvement_lanes: 'self-improvement', turn_record: 'recording the turn',
+  turn_lessons: 'learning from the turn\'s struggles',
 };
 
 /** Doubling from the base delay to the ceiling. */
@@ -85,6 +86,8 @@ const TERMINAL_EFFECT_NAMES = [
   // `output_continuation` are mutually exclusive.
   'turn_end_extensions', 'overflow_retry', 'output_continuation', 'task_reminder',
   'turn_record', 'event_drain', 'improvement_lanes',
+  // Detached: its reflection is a model call that waits on no reply; the row is its one owner, retried and parked.
+  'turn_lessons',
   // Detached: the review is a model call the next turn must not wait on; a replay finds its note already recorded.
   'advisor_review',
   // Its own row: a full queue is a legitimate refusal, and the lanes' model calls must not wait on it.
@@ -281,6 +284,18 @@ export function turnRecordTerminalEffect(
       return autoEvolve
         ? { status: 'completed' }
         : { status: 'completed', detail: 'the turn was produced with auto-evolution off' };
+    },
+  });
+}
+
+/** Each part is tombstoned on the turn, so a retry neither rescores nor asks again; a refusal throws, for the ledger. */
+export function turnLessonsTerminalEffect(engine: Pick<EvolutionEngine, 'learnFromTurn'>): TerminalEffect {
+  return terminalEffect({
+    input: v.object({ turn: JsonValueSchema }),
+    run: async ({ turn }) => {
+      await engine.learnFromTurn(v.parse(CompletedTurnSchema, turn));
+
+      return { status: 'completed' };
     },
   });
 }

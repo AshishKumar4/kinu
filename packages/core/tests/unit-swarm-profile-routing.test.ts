@@ -141,7 +141,7 @@ function harness(input: {
     ? { envelope: input.envelope, provider: PROVIDER, roleId: input.roleId, availableTools: [], pins: {} }
     : agentsProfileContext(input.caller, { envelope: input.envelope, provider: PROVIDER }) ?? unreachable());
 
-  const deps: AgentsToolDeps = { mode: 'build', swarm, profile };
+  const deps: AgentsToolDeps = { mode: 'build', swarms: true, swarm, profile };
   const entry = createAgentsTool(deps);
 
   if (!entry) throw new Error('Expected the agents tool to be created');
@@ -270,7 +270,7 @@ describe('a delegated tier routes the model its nodes run', () => {
     const caller = countingModel('m-default');
 
     const entry = createAgentsTool({
-      mode: 'build',
+      mode: 'build', swarms: true,
       swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model, ...unobservedSearchSeams() },
     });
 
@@ -399,7 +399,7 @@ function perNodeHarness() {
     },
   };
 
-  const deps: AgentsToolDeps = { mode: 'build', swarm };
+  const deps: AgentsToolDeps = { mode: 'build', swarms: true, swarm };
   const entry = createAgentsTool(deps);
 
   if (!entry) throw new Error('Expected the agents tool to be created');

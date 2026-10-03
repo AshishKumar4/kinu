@@ -359,13 +359,13 @@ describe('resolveActiveSkills', () => {
     expect(set[0]?.reason.kind).toBe('always_active');
   });
 
-  test('explicit overrides always_active, and the same skill is activated once', () => {
+  test('a pin outlasts an explicit /name of the same skill, which is activated once', () => {
     const set = resolveActiveSkills({
       available: [fakeSkill('a')], explicit: ['a'], alwaysActive: ['a'],
     });
 
     expect(set).toHaveLength(1);
-    expect(set[0]?.reason.kind).toBe('explicit');
+    expect(set[0]?.reason.kind).toBe('always_active');
   });
 
   test('user_invocable: false blocks /skill-name explicit invocation', () => {

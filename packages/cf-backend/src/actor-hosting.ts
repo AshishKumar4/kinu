@@ -10,7 +10,7 @@
 import type { Agent, AgentContext } from 'agents';
 import {
   childContextResolver, localContextTree, type ContextEditor, type ContextTree, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, EventLog, MissionGovernor,
-  facetHomeProvisioner, facetHomeReleaser, headAgentName, subordinateAgentName, parseActorKey, actorStateRoot,
+  facetHomeProvisioner, facetHomeReleaser, actorHomeName, actorStateRoot,
   actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, type ActorHost,
   type ActorHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
   type AgentOrchestratorDeps, type AgentRuntime, type BackendHost, type BroadcastEvent,
@@ -103,12 +103,10 @@ export interface HostedActorPlacement {
 
 export function hostedActorPlacement(record: WorkspaceActor): HostedActorPlacement {
   if (record.origin === 'system') return { homeName: null, shellId: `agent:${record.name}` };
-  const id = parseActorKey(record.storageKey).id;
-  const subordinate = isSubordinateOrigin(record.origin);
 
   return {
-    homeName: subordinate ? subordinateAgentName(id) : headAgentName(id),
-    shellId: `${subordinate ? 'subordinate' : 'run'}:${record.storageKey}`,
+    homeName: actorHomeName(record),
+    shellId: `${isSubordinateOrigin(record.origin) ? 'subordinate' : 'run'}:${record.storageKey}`,
   };
 }
 

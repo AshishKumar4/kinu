@@ -12,15 +12,13 @@ import {
   AGENT_UID_FLOOR,
   facetHomeProvisioner,
   agentIdentity,
-  headAgentName,
   createAgentsTool,
   initWorkspaceSchema,
   explorationActorKey,
   type AgentsSwarmDeps,
   type AgentsToolInput,
   type JsonValue,
-  type LLMProviderConfig,
-} from '@kinu.run/core';
+  type LLMProviderConfig, actorHomeName } from '@kinu.run/core';
 import { scriptedTurnModel, scratchPath, toolExecute, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { openLocalActor, registerLocalNode } from '@kinu.run/core';
@@ -79,14 +77,14 @@ function nodeHomeWiring(rt: CLIRuntime) {
     provisionNodeHome: () => async (node: { readonly nodeId: string; readonly rootId: string; readonly depth: number }) => {
       const actor = registerLocalNode(rt.actor, node);
 
-      return facetHomeProvisioner(nodeHome())(headAgentName(actor.storageKey));
+      return facetHomeProvisioner(nodeHome())(actorHomeName({ origin: 'swarm', storageKey: actor.storageKey }));
     },
   };
 }
 
 /** The home directory name a settled node's actor owns, read back via the directory's `resolve`, never derived. */
 function nodeHomeName(rt: CLIRuntime, nodeId: string): string {
-  return headAgentName(openLocalActor(rt.actor, explorationActorKey(nodeId)).storageKey);
+  return actorHomeName({ origin: 'swarm', storageKey: openLocalActor(rt.actor, explorationActorKey(nodeId)).storageKey });
 }
 
 /** `diagnostics` writes JSON lines to console.error with no injection seam, so the line is read where it lands. */
@@ -128,7 +126,7 @@ function settledNodes(lines: string[]): SettledNode[] {
 }
 
 async function runShippedSwarm(swarm: AgentsSwarmDeps): Promise<SettledNode[]> {
-  const tool = createAgentsTool({ mode: 'build', swarm });
+  const tool = createAgentsTool({ mode: 'build', swarms: true, swarm });
   const execute = toolExecute<AgentsToolInput, JsonValue>(tool);
   let outcome: JsonValue = null;
 
@@ -200,7 +198,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
       expect(await rt.storage.vfs.stat(`/home/${home}`)).toMatchObject({ type: 'directory' });
     }
 
-    for (const { node } of settled) expect(homes).not.toContain(headAgentName(node));
+    for (const { node } of settled) expect(homes).not.toContain(actorHomeName({ origin: 'swarm', storageKey: node }));
 
     const { sql } = await nodeHome();
     const uids = new Set(owned.map((home) => agentIdentity(sql, home).uid));
@@ -229,6 +227,6 @@ describe('a node seat shares the origin plane on its own head row', () => {
     expect(seat.actor.record.origin).toBe('swarm');
     expect(seat.actor.handle.actorId).not.toBe(rt.actor.actorId);
     expect(seat.actor.runtime.shell).toBe(rt.shell);
-    expect(nodeHomeName(rt, 'seat-probe')).toBe(headAgentName(seat.actor.handle.storageKey));
+    expect(nodeHomeName(rt, 'seat-probe')).toBe(actorHomeName({ origin: 'swarm', storageKey: seat.actor.handle.storageKey }));
   });
 });
