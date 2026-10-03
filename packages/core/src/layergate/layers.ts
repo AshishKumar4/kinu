@@ -374,7 +374,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'context-assembly/skill-activation-precedence',
-        asserts: 'explicit beats always-active, and non-invocable skills stay off',
+        asserts: 'a pin outlasts an explicit /name of the same skill, and non-invocable skills stay off',
         observe: (s) => s.resolveActiveSkills({
           available: [SKILL, PINNED_SKILL],
           explicit: ['house-style'],

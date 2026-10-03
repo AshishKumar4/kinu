@@ -58,7 +58,7 @@ import { TierIdSchema,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
-  resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills,
+  resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolSetBySkills,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
@@ -1724,13 +1724,15 @@ export class LocalAgentSession {
 
     if (availableSkills.lines.length > 0) systemPromptOptions.availableSkills = availableSkills;
 
-    if (activeSkills) systemPromptOptions.activeSkills = activeSkills;
+    const { pinned, invoked } = splitTurnSkills(activeSkills);
+
+    if (pinned) systemPromptOptions.activeSkills = pinned;
 
     if (soul) systemPromptOptions.soulOverride = soul;
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     // Why the turn runs and the unapproved instruction files ride the dynamic-context ledger, out of the cached
     // prefix: provenance flips when a background job lands.
-    const instructions = renderUnverifiedInstructions(activeSkills ? { agentsMd, activeSkills } : { agentsMd });
+    const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
     const cache = this.cacheIdentity(turnSpec);
     // Normalized spelling: `parseModelSpec` refuses a bare tier id without a slash.
     const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, parseModelSpec(turnSpec).provider);
@@ -1791,6 +1793,7 @@ export class LocalAgentSession {
         extensions: [this.compactionExtension],
         dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools, { turn, activeSkills }),
         instructions,
+        activated: invoked ? activatedSkillsBlock(invoked) : null,
         scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       },
       profile,
@@ -2347,7 +2350,7 @@ export class LocalAgentSession {
     return {
       backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
       model: { id: this.profiles().normalizeSpec(profile.tier.model) },
-      ...(cwd !== undefined && { cwd }),
+      cwd,
       date: currentDateForPrompt(),
     };
   }

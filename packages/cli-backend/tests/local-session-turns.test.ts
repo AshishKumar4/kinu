@@ -1081,8 +1081,11 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     expect(sealed).toBeGreaterThan(-1);
     expect(first[sealed + 1]).toContain('- focused: explicit /focused');
     expect(first.at(-1)).toContain('remember this');
-    // The next request opens with the whole first one, its copy of the instructions included.
-    expect(second.slice(0, first.length)).toEqual(first);
+    // The next request opens with the whole first one, its copy of the instructions included, but the skill body the
+    // first turn's `/focused` carried for that turn alone.
+    const kept = first.filter((text) => !text.includes('Focus on memory only.'));
+    expect(kept).toHaveLength(first.length - 1);
+    expect(second.slice(0, kept.length)).toEqual(kept);
     expect(second.filter(isWorkspaceInstructions)).toHaveLength(1);
     await session.end();
   });

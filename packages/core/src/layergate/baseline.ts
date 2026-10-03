@@ -16,7 +16,7 @@ export const LOCKED_BASELINE: Baseline = {
   'compaction/latest-ask-is-verbatim': 'f92c9f20bfaeabc5',
   'context-assembly/agents-md-budget': 'f6b044dc7259be93',
   'context-assembly/prefix-stable-under-activation-reason': '7aef53790c441472',
-  'context-assembly/skill-activation-precedence': '29a72ea65ec5acec',
+  'context-assembly/skill-activation-precedence': 'a7c92856162098ca',
   'context-assembly/skill-tool-restriction': 'b0619fb621e18276',
   'context-assembly/surface-compilation': 'f28519e141e9a86d',
   'context-assembly/system-prefix': '1de599f0b5e43450',

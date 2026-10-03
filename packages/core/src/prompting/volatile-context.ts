@@ -65,7 +65,7 @@ export interface DynamicDelegate {
 export interface RuntimeFacts {
   readonly backend: PromptBackend;
   readonly model: PromptModelContext;
-  readonly cwd?: string;
+  readonly cwd?: string | undefined;
   /** `currentDateForPrompt`: date-only, so it changes at most once a day. */
   readonly date: string;
 }

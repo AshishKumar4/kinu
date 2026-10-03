@@ -18,6 +18,9 @@ export const SYSTEM_REMINDER_TAG = 'system-reminder';
 /** A skill activation spliced after a person's message, in the same user role. */
 export const STEER_SKILLS_HEADING = 'The message above activates these skills; they apply for the rest of this turn.';
 
+/** A turn's own `/name` activations, spliced just before its input, for that turn only. */
+export const TURN_SKILLS_HEADING = 'The next message activates these skills; they apply for this turn only.';
+
 export const SLEEP_TIME_PROMPT_OPENING = 'You are a background memory-compression agent.';
 
 export const DYNAMIC_CONTEXT_DELIMITER = /<(\/?)dynamic_context/g;

@@ -279,7 +279,7 @@ function hasUnverifiedInstructions(opts: SystemPromptOptions): boolean {
 
 export interface UnverifiedInstructions {
   readonly agentsMd?: AgentsMdSources;
-  readonly activeSkills?: ActiveSkillSet;
+  readonly activeSkills?: ActiveSkillSet | undefined;
 }
 
 export const WORKSPACE_INSTRUCTIONS_HEADER =

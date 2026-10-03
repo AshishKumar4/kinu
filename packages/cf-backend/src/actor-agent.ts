@@ -77,7 +77,7 @@ import {
   turnReasonForMetadata,
   workModeForTurnMetadata, authoredTurnMetadata,
   renderUnverifiedInstructions,
-  observeSystemPromptHash, steerSkillsBlock,
+  observeSystemPromptHash, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -296,6 +296,8 @@ interface ComposedTurn {
   readonly rawMessages: readonly ModelMessage[];
   /** The unapproved instruction files as one message, null for none. */
   readonly instructions: string | null;
+  /** The input's `/name` activations, spliced before it for this turn only. */
+  readonly activated: string | null;
   readonly activeSkills: ActiveSkillSet | null;
   readonly operation: OperationProfile;
   /** Window for admission, compaction and pruning; records whether figures are the
@@ -4060,6 +4062,7 @@ export abstract class ActorAgent extends Agent<Env> {
       extensions: this.extensions.list(),
       dynamic: (profile, turnTools) => this.dynamicContextSnapshot(profile, turnTools, composed.memoryTail, composed.activeSkills),
       instructions: composed.instructions,
+      activated: composed.activated,
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
     };
   }
@@ -4171,6 +4174,7 @@ export abstract class ActorAgent extends Agent<Env> {
     });
 
     if (activeSetForPrompt) activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
+    const { pinned, invoked } = splitTurnSkills(activeSetForPrompt);
 
     const mcpToolNames = Object.keys(mcpTools);
 
@@ -4261,7 +4265,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (availableSkills.lines.length > 0) promptOptions.availableSkills = availableSkills;
 
-    if (activeSetForPrompt) promptOptions.activeSkills = activeSetForPrompt;
+    if (pinned) promptOptions.activeSkills = pinned;
     promptOptions.agentsMd = agentsMd;
     const systemOverride = buildSystemPromptSync(this.rt, promptOptions);
 
@@ -4276,7 +4280,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // The reflection loop assumes the model sees its latest MEMORY.md lessons in-turn; read once
     // here since it is the one dynamic-context input needing an await.
     const memoryTail = await readMemoryTail(this.rt.memory);
-    const instructions = renderUnverifiedInstructions(activeSetForPrompt ? { agentsMd, activeSkills: activeSetForPrompt } : { agentsMd });
+    const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
 
     const submittedTools = { ...modeTools, ...effectiveTools };
     const providers = this.providerRegistry();
@@ -4305,7 +4309,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return {
       profile, profileInputs, system: systemOverride, model: languageModel, tools, activeTools: effectiveActiveTools, activeToolSurface,
-      rawMessages, instructions, window, memoryTail, countInputTokens,
+      rawMessages, instructions, activated: invoked ? activatedSkillsBlock(invoked) : null, window, memoryTail, countInputTokens,
       reasoningOptions, promptModel: model, activeSkills: activeSetForPrompt ?? null, operation,
     };
   }

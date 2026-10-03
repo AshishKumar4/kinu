@@ -1694,7 +1694,7 @@ export {
 } from './jobs/background-wrap';
 
 export {
-  resolveTurnSkills, steerSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
+  resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 

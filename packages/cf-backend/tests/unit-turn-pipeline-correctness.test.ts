@@ -453,6 +453,22 @@ describe('turn-pipeline correctness wiring', () => {
     }
   });
 
+  // A body in the system prompt rewrote the cached prefix on the turn it arrived and again on the next.
+  test('a /skill turn leaves the system prompt alone and carries the body just before the request', async () => {
+    const plain = await chatSessionTurns(orchestratorHarness().agent).prepare({ messages: [{ role: 'user', content: 'build a board' }] });
+    const invoked = await chatSessionTurns(orchestratorHarness().agent).prepare({ messages: [{ role: 'user', content: '/slates build a board' }] });
+
+    if (!plain || !invoked) throw new Error('both turns must prepare a configuration');
+    expect(invoked.system).toBe(plain.system);
+    expect(JSON.stringify(invoked.system)).not.toContain('### slates');
+
+    // The request the model was sent, as the turn's own step pipeline built it.
+    const said = spoken(invoked.prompt ?? []).filter((message) => message.role === 'user');
+
+    expect(said.at(-1)?.text).toBe('/slates build a board');
+    expect(said.at(-2)?.text).toContain('### slates (explicit /slates)');
+  });
+
   test('a rejected new preparation cannot reuse a previous turn dynamic snapshot', async () => {
     const { agent } = orchestratorHarness();
     const handed: ModelMessage[] = [{ role: 'user', content: 'prepare one turn' }];

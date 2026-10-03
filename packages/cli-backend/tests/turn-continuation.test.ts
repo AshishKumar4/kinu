@@ -226,9 +226,12 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
       const users = prompt.flatMap((message) => message.role === 'user' ? [messageText(message)] : []);
       const activation = users.findIndex((text) => text.includes('- focused: explicit /focused'));
 
-      // The kept steps follow the request; the dynamic block naming the activation rides before it, never after them.
+      // The kept steps follow the request; the dynamic block naming the activation and the turn's skill bodies ride
+      // before it, never after them.
       expect(activation).toBeGreaterThanOrEqual(0);
-      expect(users.slice(activation + 1)).toEqual(['/focused remember this']);
+      expect(users.slice(activation + 1)).toHaveLength(2);
+      expect(users[activation + 1]).toContain('Focus on memory only.');
+      expect(users.at(-1)).toBe('/focused remember this');
       expect(roles.lastIndexOf('user')).toBeLessThan(roles.indexOf('tool'));
     }
 
