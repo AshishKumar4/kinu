@@ -60,7 +60,6 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   };
 
   const wire: ChatWire = {
-    resumes: true,
     turnOwed: () => owed,
     steps: () => recorded,
     broadcast: (message, exclude) => {
@@ -662,6 +661,19 @@ describe('ChatWireTransport', () => {
     const tab = h.connection('c1');
     await revived.onMessage(tab, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-1' }));
     revived.quiet();
+
+    expect(h.connectionFrames('c1').map((frame) => JSON.parse(frame))).toEqual([
+      { type: 'cf_agent_stream_pending', probeId: 'p-1' },
+      { type: 'cf_agent_stream_resume_none', reason: 'idle', probeId: 'p-1' },
+    ]);
+  });
+
+  test('a tab waiting on a turn that ends before its room opens it hears nothing resumes', async () => {
+    const h = harness();
+    const revived = h.afterEviction();
+    const tab = h.connection('c1');
+    await revived.onMessage(tab, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-1' }));
+    await revived.closeTurn();
 
     expect(h.connectionFrames('c1').map((frame) => JSON.parse(frame))).toEqual([
       { type: 'cf_agent_stream_pending', probeId: 'p-1' },

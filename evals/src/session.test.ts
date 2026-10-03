@@ -654,6 +654,65 @@ test("a working helper is heard in its own room, on a socket that closes when th
   } finally { await session.teardown(); await server.stop(true); }
 });
 
+test("a helper's room opened mid-call acknowledges the turn once, and the replayed call runs until its output", async () => {
+  const acked: string[] = [];
+  const spoke = Promise.withResolvers<void>();
+  const ended = Promise.withResolvers<void>();
+  const call: UIMessageChunk = { type: 'tool-input-available', toolCallId: 'helper-call', toolName: 'shell', input: {} };
+  const room = Promise.withResolvers<ServerWebSocket<{ room: boolean }>>();
+
+  const server = Bun.serve<{ room: boolean }>({ port: 0, hostname: '127.0.0.1',
+    fetch(request, upgrading) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+
+      if (upgrading.upgrade(request, { data: { room: new URL(request.url).pathname.includes('/actor/') } })) return;
+
+      return new Response('not found', { status: 404 });
+    },
+    websocket: {
+      // The helper's room announces its open turn on connect and again on request, and holds its live chunks back until the ack.
+      open(socket) {
+        if (!socket.data.room) return;
+        room.resolve(socket);
+        socket.send(streamResumingFrame('helper-turn', 'helper-turn'));
+        socket.send(streamResumingFrame('helper-turn', 'helper-turn'));
+      },
+      message(socket, message) {
+        const frame = v.parse(v.looseObject({ type: v.string(), id: v.optional(v.string()) }), JSON.parse(message.toString()));
+
+        if (frame.type !== CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK || frame.id === undefined) return;
+        acked.push(frame.id);
+        socket.send(chatChunkFrame({ requestId: 'helper-turn', chunk: call, replay: true }));
+        socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: 'helper-turn', body: '', done: false, replay: true, replayComplete: true }));
+        // Live, after the replay on the same socket: once it is heard, so is the replay.
+        socket.send(chatChunkFrame({ requestId: 'helper-turn', chunk: { type: 'text-delta', id: 'text', delta: 'Still checking.' } }));
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'a helper joined mid-call',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  session.onHeard = (heard, type) => {
+    if (heard === 'task-helper' && type === 'text-delta') spoke.resolve();
+
+    if (heard === 'task-helper' && type === 'tool-output-available') ended.resolve();
+  };
+
+  try {
+    await session.connect();
+    session.listen(['task-helper']);
+    await spoke.promise;
+    expect({ acked, running: session.toolCallsInFlight() }).toEqual({ acked: ['helper-turn'], running: ['helper-call'] });
+
+    (await room.promise).send(chatChunkFrame({ requestId: 'helper-turn', chunk: { type: 'tool-output-available', toolCallId: 'helper-call', output: 'ok' } }));
+    await ended.promise;
+    expect(session.toolCallsInFlight()).toEqual([]);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
 /**
  * A turn whose activation ends once per script: connection 1 takes the request and streams FILE_TURN_CHUNKS up to
  * `cut`, then each later connection is a later activation's. It tells the redial the turn is pending, then resuming

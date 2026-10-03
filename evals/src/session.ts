@@ -1703,8 +1703,8 @@ export class KinuPublicSession {
 
   /**
    * Listen to exactly these helpers' rooms, by name or path. A helper's turn streams to its own window alone (`broadcastToActor`), so it
-   * is heard only on a socket opened on its path, as its window opens one. A room relays no replay: a call that started
-   * before its socket opened is not known to run.
+   * is heard only on a socket opened on its path, as its window opens one. A room opened mid-turn is replayed the turn, as every room
+   * is, so a call that started before it opened is known to run.
    */
   listen(helpers: readonly string[]): void {
     for (const [name, room] of this.rooms) {
@@ -1723,10 +1723,18 @@ export class KinuPublicSession {
   private openRoom(name: string): HelperRoom {
     const socket = this.newSocket(hostedActorSocketPath(name));
     const heard = new HeardStreams();
+    const acked = new Set<string>();
 
     this.hearing.add(heard);
     socket.addEventListener('message', (event: MessageEvent) => {
       const frame = decodeFrame(event.data);
+
+      // Told on connect and again on request, acked once as the SDK's hook acks it: until then the room keeps the turn's
+      // live chunks from this socket.
+      if (frame?.kind === 'resuming' && !acked.has(frame.id)) {
+        acked.add(frame.id);
+        socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }));
+      }
 
       // A head's broadcasts reach every socket, and the workspace's own hears them.
       if (frame?.kind !== 'response') return;

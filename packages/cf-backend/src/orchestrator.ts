@@ -2143,7 +2143,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
 
     return {
-      resumes: false,
+      turnOwed: () => this.currentTurnOf(reference) !== null,
+      // A hosted turn opens its room at step 0 in each activation (`drainActorAssignments`): its relay holds every step the room restates.
+      steps: () => [],
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
       history: (limit) => this.agentStores(actorId).history(limit),

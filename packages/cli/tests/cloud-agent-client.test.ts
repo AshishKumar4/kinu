@@ -1180,7 +1180,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     let joined = false;
 
     const transport = new ChatWireTransport({
-      resumes: true, turnOwed: () => true,
+      turnOwed: () => true,
       steps: () => [[{ type: 'text', text: 'one, ', state: 'done' }], [{ type: 'text', text: 'two, ', state: 'done' }]],
       broadcast: (raw, exclude) => { if (joined && !(exclude ?? []).includes(connection.id)) connection.send(raw); },
       getConnection: (id) => joined && id === connection.id ? connection : undefined,

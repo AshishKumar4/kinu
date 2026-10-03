@@ -23,14 +23,12 @@ import { diagnostics, KinuError, refusalOf, toKinuError } from '@kinu.run/core/o
 
 export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState'>;
 
-/** A resuming wire draws the owed turn's recorded steps before live chunks. */
-export type ChatWire = ChatWireBase & ({ readonly resumes: false } | {
-  readonly resumes: true;
+/** Every room replays a joiner the open turn: the steps its ledger records, then the relay's chunks after them. */
+export interface ChatWire {
+  /** A turn this activation has not opened yet: the one an ended activation left open, or an acknowledged send. */
   turnOwed(): boolean;
+  /** The open turn's finished steps as its ledger records them, drawn. */
   steps(): readonly (readonly JsonObject[])[];
-});
-
-interface ChatWireBase {
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
@@ -186,11 +184,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   constructor(private readonly wire: ChatWire) {}
 
-  /** The turn a reconnecting tab can be replayed, or null. */
-  private get resumable(): LiveStream | null {
-    return this.wire.resumes ? this.live : null;
-  }
-
   /** The connect frame is the pane's only seed, so a socket opening mid-turn gets the current window. */
   async onConnect(connection: ChatSocket): Promise<void> {
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
@@ -207,7 +200,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   /** Told proactively on connect and again on the tab's own request; the client acknowledges once. False when no
    *  turn streams here and none is owed. */
   private announce(connection: ChatSocket, probeId?: string): boolean {
-    const live = this.resumable;
+    const { live } = this;
 
     if (live !== null) {
       this.notifyResuming(connection, live, probeId);
@@ -215,9 +208,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return true;
     }
 
-    const { wire } = this;
-
-    if (!wire.resumes || !wire.turnOwed()) return false;
+    if (!this.wire.turnOwed()) return false;
     this.parked.set(connection.id, { connection, probeId });
     sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_PENDING, ...(probeId !== undefined && { probeId }) }));
 
@@ -247,7 +238,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, replay: true, ...fields });
 
     // A request that is no longer live settles; its answer is in the transcript frame.
-    if (!wire.resumes || live === null || live.requestId !== requestId) {
+    if (live === null || live.requestId !== requestId) {
       sendIfOpen(connection, frame({ body: '', done: true }));
 
       return;
@@ -417,11 +408,16 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
   }
 
-  /** The answer row is durable before this. */
+  /** The answer row is durable before this. A turn that ends before this room opened it releases the tabs waiting on it. */
   async closeTurn(): Promise<void> {
     const live = this.live;
 
-    if (live === null) return;
+    if (live === null) {
+      this.quiet();
+
+      return;
+    }
+
     this.live = null;
 
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
@@ -449,7 +445,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         const chunk: UIMessageChunk = { type: 'data-kinu-step-cut', data: { stepIndex: event.stepIndex }, transient: true };
         const body = JSON.stringify(chunk);
 
-        if (this.wire.resumes) live.relayed.push({ step: live.finished, type: chunk.type, body });
+        live.relayed.push({ step: live.finished, type: chunk.type, body });
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }),
           this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
 
@@ -534,7 +530,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         const body = JSON.stringify(chunk);
 
-        if (this.wire.resumes) live.relayed.push({ step: live.finished, type: chunk.type, body });
+        live.relayed.push({ step: live.finished, type: chunk.type, body });
 
         // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);

@@ -1832,7 +1832,6 @@ export abstract class ActorAgent extends Agent<Env> {
   private _chatTransport: ChatWireTransport | null = null;
   protected get chatTransport(): ChatWireTransport {
     this._chatTransport ??= new ChatWireTransport({
-      resumes: true,
       turnOwed: () => this.chatLoopOwesWork(),
       steps: () => {
         const run = this.eventRecorder.openRun();
