@@ -4982,32 +4982,33 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Device rides as tool context read by readDeviceSelection (docs/EXECUTION-LAYER-SPEC.md
     // "The user's account is a fleet"); with none, the call keeps the unnamed default.
-    try {
-      const result = v.parse(CommandResultSchema, device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device }));
+    return settle(Effect.matchCauseEffect(Effect.promise(async () => v.parse(CommandResultSchema, device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device }))), {
+      onSuccess: (result) => Effect.sync(() => {
+        const output = v.is(v.string(), result)
+          ? { stdout: result, stderr: '', exitCode: 0 }
+          : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
 
-      const output = v.is(v.string(), result)
-        ? { stdout: result, stderr: '', exitCode: 0 }
-        : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
+        this.recordExecutorOutput(executorId, command, output);
 
-      this.recordExecutorOutput(executorId, command, output);
+        this.broadcast(JSON.stringify({
+          type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now(),
+        }));
 
-      this.broadcast(JSON.stringify({
-        type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now(),
-      }));
+        return output;
+      }),
+      onFailure: (failed) => Effect.sync(() => {
+        const refusal = refusalOf(toKinuError({ doing: 'execute on ' + executorId, cause: Cause.squash(failed), otherwise: 'io' }));
+        const errMsg = refusal.error;
+        this.recordExecutorOutput(executorId, command, { stdout: null, stderr: errMsg, exitCode: 1 });
+        // Broadcast errors too: the UI terminal renders only from broadcasts. (STABILITY-AUDIT §B4.)
+        this.broadcast(JSON.stringify({
+          type: 'executor-output', executor: executorId, command, stdout: '',
+          stderr: errMsg, exitCode: 1, refusal, timestamp: Date.now(),
+        }));
 
-      return output;
-    } catch (err) {
-      const refusal = refusalOf(toKinuError({ doing: 'execute on ' + executorId, cause: err, otherwise: 'io' }));
-      const errMsg = refusal.error;
-      this.recordExecutorOutput(executorId, command, { stdout: null, stderr: errMsg, exitCode: 1 });
-      // Broadcast errors too: the UI terminal renders only from broadcasts. (STABILITY-AUDIT §B4.)
-      this.broadcast(JSON.stringify({
-        type: 'executor-output', executor: executorId, command, stdout: '',
-        stderr: errMsg, exitCode: 1, refusal, timestamp: Date.now(),
-      }));
-
-      return { error: errMsg, exitCode: 1, refusal };
-    }
+        return { error: errMsg, exitCode: 1, refusal };
+      }),
+    }));
   }
 
   /** Directory listing read off each executor's own raw handle, in that environment's paths. */

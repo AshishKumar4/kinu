@@ -418,10 +418,10 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   }
 
   /** Held for a reconnecting tab and broadcast; a continuation renews from the turn's parts, keeping one answer id. */
-  async observe(stream: ReadableStream<UIMessageChunk>, call: ObservedCall): Promise<void> {
+  observe(stream: ReadableStream<UIMessageChunk>, call: ObservedCall): Promise<void> {
     const live = this.live;
 
-    if (live === null) return;
+    if (live === null) return Promise.resolve();
 
     if (call.index > 0) {
       live.accumulator = new StreamAccumulator({
@@ -432,37 +432,39 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       });
     }
 
-    try {
-      for await (const chunk of stream) {
-        // The provider's own words: the sender's chat would keep them as its error, and the turn's classified
-        // failure follows as the frame that ends it.
-        if (chunk.type === 'error') continue;
-        live.accumulator.applyChunk(chunk);
-
-        if (!live.open.admits(chunk)) {
-          this.degradeRelay(live, toKinuError({
-            doing: 'relaying the answer stream to the connected clients',
-            cause: new KinuError('io', `the model stream carried a ${chunk.type} continuing a part this relay never saw open`),
-            otherwise: 'io',
-          }));
-
-          return;
-        }
-
-        // The row id on every `start`: a missing or SDK-minted one draws the answer twice.
-        if (chunk.type === 'start') chunk.messageId = live.accumulator.messageId;
-
-        const body = JSON.stringify(chunk);
-
-        if (this.wire.resumes) live.relayed.push(body);
-
-        // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
-        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
-      }
-    } catch (cause) {
+    return settle(Effect.catchCause(Effect.promise(() => this.relay(live, stream)), (failed) => Effect.sync(() => {
       this.degradeRelay(live, toKinuError({
-        doing: 'relaying the answer stream to the connected clients', cause, otherwise: 'io',
+        doing: 'relaying the answer stream to the connected clients', cause: Cause.squash(failed), otherwise: 'io',
       }));
+    })));
+  }
+
+  private async relay(live: LiveStream, stream: ReadableStream<UIMessageChunk>): Promise<void> {
+    for await (const chunk of stream) {
+      // The provider's own words: the sender's chat would keep them as its error, and the turn's classified
+      // failure follows as the frame that ends it.
+      if (chunk.type === 'error') continue;
+      live.accumulator.applyChunk(chunk);
+
+      if (!live.open.admits(chunk)) {
+        this.degradeRelay(live, toKinuError({
+          doing: 'relaying the answer stream to the connected clients',
+          cause: new KinuError('io', `the model stream carried a ${chunk.type} continuing a part this relay never saw open`),
+          otherwise: 'io',
+        }));
+
+        return;
+      }
+
+      // The row id on every `start`: a missing or SDK-minted one draws the answer twice.
+      if (chunk.type === 'start') chunk.messageId = live.accumulator.messageId;
+
+      const body = JSON.stringify(chunk);
+
+      if (this.wire.resumes) live.relayed.push(body);
+
+      // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
+      this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
     }
   }
 

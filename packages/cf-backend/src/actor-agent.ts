@@ -43,7 +43,7 @@ import {
 import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { createAgentTracing, hold, logged, recording, renderThrownChain, type AgentTracing, settle, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { createAgentTracing, hold, logged, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createCompactionExtension, createSharedPrefixCompactor, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer, COMPACTION_PRESETS,
@@ -545,15 +545,16 @@ export abstract class ActorAgent extends Agent<Env> {
     return true;
   }
 
-  override async alarm(): Promise<void> {
+  override alarm(): Promise<void> {
     if (!this.hostsActor()) return super.alarm();
 
     // Returned, not thrown: the platform retries a thrown alarm.
-    if (this.storageRefusal !== undefined) return;
+    if (this.storageRefusal !== undefined) return Promise.resolve();
     const refusal = this.actorRuntimeRefusal();
 
-    if (refusal) throw new KinuError(refusal.reason, refusal.error);
-    await super.alarm();
+    if (refusal) return settle(Effect.fail(new KinuError(refusal.reason, refusal.error)));
+
+    return super.alarm();
   }
   /** Actor kind for the operational dataset's `agentKind` dimension. Abstract because a
    * bundler may rewrite `constructor.name`. */
@@ -2507,7 +2508,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * concurrently. `(isolateGen, pushSeq)` orders a root's frames across isolates.
    */
   broadcastMctsProgress(rootId: string): void {
-    try {
+    return settleSync(Effect.catchCause(Effect.sync(() => {
       const nodes = readSearchTree(this.boundSql, this.actorHandle(), rootId);
       const head = this.headJournal.readRun(rootId);
 
@@ -2521,13 +2522,9 @@ export abstract class ActorAgent extends Agent<Env> {
       this.broadcast(JSON.stringify({
         type: 'mcts-progress', rootId, isolateGen: this.isolateGeneration, pushSeq, nodes, head,
       }));
-    } catch (err) {
-      diagnostics.failure('mcts.progress_broadcast_failed', toKinuError({
-        doing: 'pushing a swarm search tree to connected surfaces',
-        cause: err,
-        otherwise: 'io',
-      }), { rootId });
-    }
+    }), recording({ doing: 'pushing a swarm search tree to connected surfaces', otherwise: 'io' }, (failure) => {
+      diagnostics.failure('mcts.progress_broadcast_failed', failure, { rootId });
+    })));
   }
 
   /** Per activation: a reconnecting client is served by the surface's poll, not a resend. */
@@ -3346,11 +3343,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Run a command in this workspace's shell for a fork: one round trip instead of one RPC per
    * file through an emulated shell. */
-  async execWorkspaceCommand(command: string): Promise<ParentExecResult> {
-    return answerParentRpc('', async () => {
+  execWorkspaceCommand(command: string): Promise<ParentExecResult> {
+    return answerParentRpc('', () => {
       const shell = this.rt.shell;
 
-      if (!shell) throw new KinuError('unsupported', 'this workspace has no shell');
+      if (!shell) return settle(Effect.fail(new KinuError('unsupported', 'this workspace has no shell')));
 
       return shell.exec(command);
     });
@@ -3488,20 +3485,19 @@ export abstract class ActorAgent extends Agent<Env> {
       cancelChats: () => { this.chatLoop.stop(); },
       activeToolControllers: this._activeToolControllers,
       broadcast: (payload) => { this.broadcastToActor(null, payload); },
-      stopDeviceCommands: turnId === null ? undefined : async () => {
-        try {
-          const { stub, caller } = await this.userHub();
+      stopDeviceCommands: turnId === null ? undefined : () => settle(Effect.catchCause(Effect.promise(async () => {
+        const { stub, caller } = await this.userHub();
 
-          return await stub.cancelDeviceRequestsForTurn(caller, turnId);
-        } catch (err) {
-          diagnostics.failure('device.turn_cancel_failed', toKinuError({
-            doing: "cancelling this turn's device commands", cause: err, otherwise: 'unavailable',
-          }), { turnId });
+        return stub.cancelDeviceRequestsForTurn(caller, turnId);
+      }), (failed) => Effect.sync(() => {
+        const err = Cause.squash(failed);
+        diagnostics.failure('device.turn_cancel_failed', toKinuError({
+          doing: "cancelling this turn's device commands", cause: err, otherwise: 'unavailable',
+        }), { turnId });
 
-          // Local controllers are already aborted; report the durable device sweep failure explicitly.
-          return [{ outcome: 'failed' as const, detail: renderThrownChain({ cause: err }) }];
-        }
-      },
+        // Local controllers are already aborted; report the durable device sweep failure explicitly.
+        return [{ outcome: 'failed' as const, detail: renderThrownChain({ cause: err }) }];
+      }))),
       onCancelled: (outcome) => this.onWorkCancelled(outcome),
     });
   }

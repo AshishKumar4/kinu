@@ -2,7 +2,7 @@ import { Effect, Cause } from 'effect';
 import type { Browser, BrowserWorker } from '@cloudflare/puppeteer';
 import * as v from 'valibot';
 import { markStoreChanged, sha256Hex, type RawSqlExec, type SqlExec } from '@kinu.run/core';
-import { diagnostics, toKinuError, settle } from '@kinu.run/core/obs';
+import { diagnostics, recording, toKinuError, settle } from '@kinu.run/core/obs';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from '../workspace-host';
 
 const AFTER_LAST_RENDER_MS = 30_000;
@@ -106,20 +106,18 @@ export class SlatePictures {
   }
 
   /** Left open: a shot whose put lands between this listing and the row's removal keeps its object; rare, and teardown reclaims it. */
-  async forget(workspace: string, slate: string, bucket: PictureBucket | undefined): Promise<void> {
-    try {
-      if (bucket !== undefined) await deletePictures(bucket, picturePrefix(workspace, slate));
+  forget(workspace: string, slate: string, bucket: PictureBucket | undefined): Promise<void> {
+    return settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+      if (bucket !== undefined) yield* Effect.promise(() => deletePictures(bucket, picturePrefix(workspace, slate)));
       this.db.exec(`DELETE FROM slate_pictures WHERE slate = ?`, slate);
       markStoreChanged(this.db);
-    } catch (cause) {
+    }), recording({ doing: `deleting the pictures of removed slate ${slate}`, otherwise: 'unavailable' }, (failure) => {
       this.db.exec(
         `UPDATE slate_pictures SET due_at = ? + ? * (1 << MIN(attempts, 7)), due_since = NULL, attempts = attempts + 1 WHERE slate = ?`,
         Date.now(), RETRY_MS, slate,
       );
-      diagnostics.failure('slate.picture_delete_failed', toKinuError({
-        doing: `deleting the pictures of removed slate ${slate}`, cause, otherwise: 'unavailable',
-      }), { workspace, slate });
-    }
+      diagnostics.failure('slate.picture_delete_failed', failure, { workspace, slate });
+    })));
   }
 
   captureDue(capture: PictureCapture, now: number): Promise<boolean> {
