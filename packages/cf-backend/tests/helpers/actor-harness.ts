@@ -42,7 +42,7 @@ import {
   type TierAssignments,
   composePrepareStep,
   BackgroundJobStore, parseJsonValue, type JsonValue,
-  type WorkMode, type JsonObject,
+  type WorkMode, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown, WORKSPACE_SOUL_DDL,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
   type EgressSecretBinding,
@@ -975,12 +975,16 @@ export function tapDiagnostics(logger: Logger): () => void {
 }
 
 /** Replace, not update: `onStart` seeds its own row after its first await. */
+/** The mission as production holds it: in the owner's soul, which every listing reads it off. */
 export function seedMission(db: Database, mission: string): void {
   db.prepare('DELETE FROM workspace_identity').run();
   db.prepare(
-    `INSERT INTO workspace_identity (id, name, owner_user_id, mission)
-     VALUES ('harness-actor', 'harness-actor', 'harness-owner', ?)`,
-  ).run(mission);
+    `INSERT INTO workspace_identity (id, name, owner_user_id)
+     VALUES ('harness-actor', 'harness-actor', 'harness-owner')`,
+  ).run();
+  db.exec(WORKSPACE_SOUL_DDL);
+  db.prepare('INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown')
+    .run(renderSoulMarkdown({ name: 'harness-actor', mission }));
 }
 
 /** The workspace's main actor as its durable identity rows name it, read through core's directory. */
@@ -1604,6 +1608,8 @@ export interface RecordedUserPlaneCalls {
   failWarm: Error | null;
   /** Set to make `userMcp_toolDescriptors` reject with this error; unset, the read is unreachable. */
   failDescriptors?: Error;
+  /** The owner's MCP tools, served as the UserDO serves them; each call is recorded and answered by `answerMcp`. */
+  mcp?: { readonly descriptors: readonly SerializableToolDescriptor[]; readonly calls: Array<{ tool: string; args: JsonValue }>; readonly answer: JsonValue };
   /** How many times the object asked for its tool descriptors. */
   descriptorReads?: number;
   /** Set to make the egress-vault listing reject; unset, it answers empty. */
@@ -1723,10 +1729,21 @@ export function makeEnv(
 
             return { servers: 1 };
           },
-          userMcp_toolDescriptors: async (): Promise<never> => {
+          userMcp_toolDescriptors: async (): Promise<string> => {
             if (userPlane) userPlane.descriptorReads = (userPlane.descriptorReads ?? 0) + 1;
+
+            if (userPlane?.mcp !== undefined && userPlane.failDescriptors === undefined) {
+              return JSON.stringify({ descriptors: userPlane.mcp.descriptors, unavailable: [] });
+            }
+
             throw userPlane?.failDescriptors
               ?? new Error('harness UserDO: userMcp_toolDescriptors is not reachable under bun');
+          },
+          userMcp_callTool: async (_caller: UserCaller, _server: string, tool: string, args: JsonValue): Promise<string> => {
+            if (userPlane?.mcp === undefined) throw new Error('harness UserDO: no MCP tools are served');
+            userPlane.mcp.calls.push({ tool, args });
+
+            return JSON.stringify(userPlane.mcp.answer);
           },
           getProfile: async (): Promise<{ email: string } | null> => userPlane?.profile ?? null,
           // No stored egress secrets; `failVault` drives an unreadable vault.

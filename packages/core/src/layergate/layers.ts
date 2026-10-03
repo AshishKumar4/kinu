@@ -273,7 +273,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'duplicate tools collapse, executors sort into doctrine order, model profile resolves',
         observe: (s) => s.compilePromptSurface({
           availableTools: ['shell', 'agents', 'shell', 'memory'],
-          externalTools: [{ name: 'jira', source: 'mcp' }, 'linear'],
           executors: EXECUTORS,
           backend: 'cf',
           model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },

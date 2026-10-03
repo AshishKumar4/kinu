@@ -62,7 +62,7 @@ import { TierIdSchema,
   resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolSetBySkills,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
-  BUILTIN_TOOL_NAMES, isMcpToolKey,
+  BUILTIN_TOOL_NAMES,
   TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial, readMission,
   branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
@@ -477,6 +477,8 @@ export class LocalAgentSession {
   private readonly compactionExtension: KinuExtension;
 
   private extraTools: ToolSet = {};
+  /** `externalToolsFor` the running turn's profile, which `eval` reads during the turn. */
+  private turnExternalTools: ToolSet = {};
   private mcpClose: (() => Promise<void>) | null = null;
 
   /** Steer-as-Branch redirects; each runs as a budgeted head and settles into Alternate Takes. */
@@ -1638,6 +1640,7 @@ export class LocalAgentSession {
     const model = this.ensureModelState();
     this.activateToolMode(this.actorSession.workMode);
     const { execution } = await this.composeTurnRequest(resolved, model);
+    this.turnExternalTools = this.externalToolsFor(resolved.profile);
     this.recordSystemPromptHash(execution.chat.system);
     const sessionKey = this.cacheIdentity().sessionKey;
     // `historyLength` is the durable length the measurement is bound to (orchestrator/turn-context.ts).
@@ -1705,17 +1708,12 @@ export class LocalAgentSession {
       Object.entries(filterToolSetBySkills(this.toolSurface(profile.workMode), activeSkills)).filter(([name]) => toolAllowed(name)),
     );
 
-    const filteredExternal = Object.fromEntries(Object.entries(this.extraTools).filter(([name]) => toolAllowed(name)));
-    const turnTools = toolsInWorkMode(profile.workMode, { ...filteredBuiltins, ...filteredExternal });
+    const turnTools = toolsInWorkMode(profile.workMode, filteredBuiltins);
 
     const availableBuiltins = Object.keys(filteredBuiltins).filter(
       (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
     );
 
-    const externalTools = Object.keys(filteredExternal).map((name) => ({
-      name,
-      source: isMcpToolKey(name) ? 'mcp' as const : 'external' as const,
-    }));
 
     const resolvedAgentActions = toolAllowed('agents') ? resolved.agentActions : [];
     const memoryTail = await readMemoryTail(this.rt.memory);
@@ -1732,7 +1730,6 @@ export class LocalAgentSession {
       agentsActions: resolvedAgentActions,
       // A session with no roster substrate never advertises the temporary rung.
       temporaryAsk: this.teamDeps?.temporary !== undefined,
-      externalTools,
       backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
       roleSection: profile.role,
       model: { id: turnSpec },
@@ -2378,6 +2375,13 @@ export class LocalAgentSession {
     };
   }
 
+  /** The allowed MCP tools, which only `eval` reaches: as native definitions they would split the tools prefix. */
+  private externalToolsFor(profile: Pick<ResolvedTurnProfile, 'allowedTools'>): ToolSet {
+    const allowed = new Set(profile.allowedTools);
+
+    return allowed.has('eval') ? Object.fromEntries(Object.entries(this.extraTools).filter(([name]) => allowed.has(name))) : {};
+  }
+
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
    *  wall-clock field would re-fingerprint the block every request. */
   private dynamicContextSnapshot(
@@ -2389,6 +2393,7 @@ export class LocalAgentSession {
       stores: this.stores,
       profile,
       tools,
+      externalTools: this.externalToolsFor(profile),
       runtime: this.runtimeFacts(profile, this.cwd),
       turn: turnOf.turn,
       ...(turnOf.activeSkills !== undefined && { activeSkills: turnOf.activeSkills }),
@@ -2980,6 +2985,7 @@ export class LocalAgentSession {
       fileLedger: this.actorSession.orchestrator.acc.files,
       escalations: this.actorSession.orchestrator.acc.escalations,
       vectorStore: null,
+      external: () => this.turnExternalTools,
       codemode: (surface) => {
         // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
         const narrowing = narrowToolSurface(this.actorSession.profile?.allowedTools);

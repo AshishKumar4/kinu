@@ -160,14 +160,6 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: { availableTools: [], executors: [WORKSPACE], backend: 'cf' },
   },
   {
-    name: 'external-tools',
-    opts: {
-      availableTools: ['shell'],
-      externalTools: [{ name: 'jira', source: 'mcp', description: 'Issue tracker.' }, 'linear'],
-      backend: 'cf',
-    },
-  },
-  {
     name: 'executors-workspace-only',
     opts: { availableTools: ['shell'], executors: [WORKSPACE], backend: 'cf' },
   },

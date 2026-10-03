@@ -689,7 +689,8 @@ export class ForkTransferReceiver {
   ): Promise<{ status: 'staged'; sectionCursor: number } | { status: 'want'; hashes: string[] }> {
     if (frame.kind === 'soul') {
       this.filesPhase(staged);
-      this.writer.stageSoul((await this.files.publishSoul(frame.bytes)).mission);
+      await this.files.publishSoul(frame.bytes);
+      this.writer.stageSoul();
 
       return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
     }

@@ -33,7 +33,7 @@ import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
 import { compareSkillNames } from '../skills/discover';
 import type { ActiveRoster, DelegationChoices, DynamicApproval, MissingCapability, ShownLesson } from '../types/dynamic-context';
-import { renderCraftedToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
+import { renderCraftedToolsDeclaration, type CraftedDeclaration, type ExternalToolDeclaration } from '../tools/sandbox-contract';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
@@ -79,6 +79,7 @@ export interface DynamicContext {
   skills?: readonly { readonly name: string; readonly reason: string }[];
   /** Empty renders a "none yet" line: the model checks `workspace.listTools()` before building. */
   craftedTools?: readonly CraftedDeclaration[];
+  externalTools?: readonly ExternalToolDeclaration[];
   factsBlock?: string;
   memoryTail?: string;
   /** Re-read per step; facts and the memory tail freeze at turn assembly. */
@@ -135,6 +136,7 @@ export interface DynamicContextSources {
   readonly mode?: DynamicContext['mode'];
   readonly activeSkills?: ActiveSkillSet;
   readonly craftedTools?: readonly CraftedDeclaration[];
+  readonly externalTools?: readonly ExternalToolDeclaration[];
   readonly factsBlock: string | undefined;
   /** Read once per turn (the plane's only await); callers close over it. */
   readonly memoryTail: string | undefined;
@@ -166,6 +168,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
     turn: sources.turn,
     mode: sources.mode,
     craftedTools: sources.craftedTools,
+    externalTools: sources.externalTools,
     // Re-listed per step: availability flips mid-turn.
     executors: sources.executors,
     jobs: {
@@ -454,6 +457,7 @@ const DYNAMIC_SECTION_TITLES = {
   mode: '## Work mode',
   skills: '## Active skills (why each is on)',
   craftedTools: '## Crafted tools available through eval',
+  externalTools: '## MCP and extension tools available through eval (call them there; they are not native tools)',
   factsBlock: '## World model (facts you remembered)',
   memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
   recoveries: '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
@@ -485,6 +489,21 @@ function delegationSection(choices: DelegationChoices | undefined): RenderedSect
   return { text: `${DYNAMIC_SECTION_TITLES.delegation}\nRoles: ${choices.roles.join('; ') || 'none'}\nTiers: ${choices.tiers.join(', ')}` };
 }
 
+/** What `eval` reaches beyond the builtins: the turn's MCP and extension tools, then the crafted ones. */
+function addToolPlanes(ctx: DynamicContext, add: (key: keyof DynamicContext, section: RenderedSection | null) => void): void {
+  add('externalTools', rosterSection(
+    DYNAMIC_SECTION_TITLES.externalTools, { items: ctx.externalTools ?? [], total: (ctx.externalTools ?? []).length },
+    { cap: Infinity, keyed: true },
+    (tool) => `- tools[${JSON.stringify(tool.name)}](input): ${tool.description}${tool.inputSchema === undefined ? '' : `. Input schema: ${tool.inputSchema}`}`,
+  ));
+
+  if (ctx.craftedTools !== undefined) {
+    add('craftedTools', { text: `${DYNAMIC_SECTION_TITLES.craftedTools}\n${ctx.craftedTools.length > 0
+      ? renderCraftedToolsDeclaration(ctx.craftedTools)
+      : NO_CRAFTED_TOOLS_YET}` });
+  }
+}
+
 function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, RenderedSection> {
   const sections = new Map<keyof DynamicContext, RenderedSection>();
 
@@ -504,11 +523,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     (skill) => `- ${skill.name}: ${skill.reason}`,
   ));
 
-  if (ctx.craftedTools !== undefined) {
-    add('craftedTools', { text: `${DYNAMIC_SECTION_TITLES.craftedTools}\n${ctx.craftedTools.length > 0
-      ? renderCraftedToolsDeclaration(ctx.craftedTools)
-      : NO_CRAFTED_TOOLS_YET}` });
-  }
+  addToolPlanes(ctx, add);
 
   const facts = ctx.factsBlock?.trim();
 

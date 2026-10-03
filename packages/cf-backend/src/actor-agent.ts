@@ -288,6 +288,8 @@ interface ComposedTurn {
   readonly model: LanguageModel;
   /** The invocable surface: task-plan and operation-profile wrapped. */
   readonly tools: ToolSet;
+  /** MCP and extension tools; only `eval` reaches them. */
+  readonly externalTools: ToolSet;
   readonly activeTools: string[];
   /** The exact active subset, for admission counting and the dynamic ledger. */
   readonly activeToolSurface: ToolSet;
@@ -2802,6 +2804,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
   /** Built in beforeTurn; read by the per-step dynamic context. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
+  private _turnExternalTools: ToolSet = {};
   /** Instruction trust (KINU-N028): one store over actor SQL, scoped to this workspace so a forked
    *  or copied root starts unapproved. */
   private _instructionApprovals: InstructionApprovalStore | null = null;
@@ -3797,6 +3800,7 @@ export abstract class ActorAgent extends Agent<Env> {
         },
         // The sandbox declares the finished native surface, so core builds it last over all other tools.
         codemode: (surface) => this.getCodemodeToolFactory(mode, profileKey).toolFor(surface),
+        external: () => this._turnExternalTools,
         // Lives on the accumulator so the cached toolset keeps a stable reference and resets per turn.
         contextBudget: this.acc.context,
         // Same ownership: rides the accumulator so the cached toolset sees the turn's ledger.
@@ -4301,17 +4305,12 @@ export abstract class ActorAgent extends Agent<Env> {
       ? [SUBMIT_PLAN_TOOL]
       : [];
 
-    const effectiveActiveTools = [
-      ...promptActiveTools,
-      ...planToolNames,
-      ...mcpToolNames.filter(toolAllowed),
-      ...extensionToolNames.filter(toolAllowed),
-    ];
+    const effectiveActiveTools = [...promptActiveTools, ...planToolNames];
 
-    const effectiveTools: ToolSet = Object.fromEntries(
+    const externalTools: ToolSet = toolAllowed('eval') ? Object.fromEntries(
       [...Object.entries(mcpTools), ...Object.entries(extensionTools)]
         .filter(([name]) => toolAllowed(name)),
-    );
+    ) : {};
 
     // AGENTS.md is turn-scoped state, so it rides the beforeTurn system override, not the cached
     // base prompt.
@@ -4333,8 +4332,6 @@ export abstract class ActorAgent extends Agent<Env> {
       availableTools: promptActiveTools,
       agentsActions: resolvedAgentActions,
       temporaryAsk: turnActorDeps.team?.temporary !== undefined,
-      externalTools: mcpToolNames.filter(toolAllowed)
-        .map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
       roleSection: profile.role,
       model,
@@ -4362,7 +4359,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const memoryTail = await readMemoryTail(this.rt.memory);
     const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
 
-    const submittedTools = { ...modeTools, ...effectiveTools };
+    const submittedTools = modeTools;
     const providers = this.providerRegistry();
     // Normalise via the serving registry first: `parseModelSpec` throws on a bare model id and
     // parses a bare `@cf/…` to an unknown provider. One parse serves admission and reasoning effort.
@@ -4380,7 +4377,7 @@ export abstract class ActorAgent extends Agent<Env> {
     );
 
     const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(input.item) });
-    const tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan), operation);
+    const tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, modeTools), taskPlan), operation);
 
     const reasoningOptions = reasoningEffortOptions(
       profile.tier.reasoningEffort,
@@ -4388,7 +4385,7 @@ export abstract class ActorAgent extends Agent<Env> {
     );
 
     return {
-      profile, profileInputs, system: systemOverride, model: languageModel, tools, activeTools: effectiveActiveTools, activeToolSurface,
+      profile, profileInputs, system: systemOverride, model: languageModel, tools, externalTools, activeTools: effectiveActiveTools, activeToolSurface,
       rawMessages, instructions, activated: invoked ? activatedSkillsBlock(invoked) : null, window, memoryTail, countInputTokens,
       reasoningOptions, promptModel: model, activeSkills: activeSetForPrompt ?? null, operation,
     };
@@ -4405,6 +4402,7 @@ export abstract class ActorAgent extends Agent<Env> {
     }
 
     this._turnOperation = composed.operation;
+    this._turnExternalTools = composed.externalTools;
     this.orch.restrictTurnWorkMode(composed.profile.workMode);
     this.recordSystemPromptHash(composed.system);
     this._turnDurableLength = composed.rawMessages.length;
@@ -4445,6 +4443,7 @@ export abstract class ActorAgent extends Agent<Env> {
       stores: this.stores,
       profile,
       tools,
+      externalTools: this._turnExternalTools,
       runtime: { backend: 'cf', model: this.promptModelContextFor(profile.tier.model), date: currentDateForPrompt() },
       turn: this.turnReason(),
       ...(activeSkills !== null && { activeSkills }),

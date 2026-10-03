@@ -9,7 +9,7 @@ import {
   agentArtifactDirectory, agentHome, CHAT_SESSION_ID, MAIN_AGENT,
   FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver,
   foldForkStream, createWorkspaceForkSink, createWorkspaceForkSource, writeWorkspaceSoul, forkTransferFrames, initWorkspaceSchema, nimbusSessionFiles,
-  readForkLineage, SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
+  readForkLineage, readMission, SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
   type ForkFrame, type ForkFrameReply, type ForkLineageRow, type ForkResult, type ForkStaging, type SqlExecutor, type SqlValue,
   WORKSPACE_ROOT,
 } from '@kinu.run/core';
@@ -347,6 +347,13 @@ export interface ForkTargetState {
   files: ProbeFile[];
 }
 
+/** The identity row and the mission every listing reads, which is the soul's. */
+function identityWithMission(sql: SqlExecutor): { id: string; name: string; mission: string | null } | null {
+  const row = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`[0];
+
+  return row === undefined ? null : { ...row, mission: readMission(sql) };
+}
+
 export class ForkTargetProbeDO extends ForkProbeDO {
   /** Per-activation only, as in `rawCopyFromFork`. */
   private receiver: ForkTransferReceiver | null = null;
@@ -395,8 +402,7 @@ export class ForkTargetProbeDO extends ForkProbeDO {
 
     return {
       lineage: readForkLineage(this.sql),
-      identity: this.sql<{ id: string; name: string; mission: string | null }>`
-        SELECT id, name, mission FROM workspace_identity LIMIT 1`[0] ?? null,
+      identity: identityWithMission(this.sql),
       displayName: openWorkspaceMainActor(this.sql).config.getDisplayName(),
       entries: tally(this.sql<{ count: number }>`
         SELECT COUNT(*) AS count FROM conversation_entries WHERE role <> ${'system'}`),

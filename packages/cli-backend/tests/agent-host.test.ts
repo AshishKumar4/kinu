@@ -1284,6 +1284,29 @@ describe('LocalAgentHost', () => {
     expect(hirerCopies(false)).toEqual([]);
   });
 
+  // As on the cloud, a hire is framed with its workspace's soul, never a SOUL.md of its own.
+  test('a hire is framed with its workspace\'s soul, not one written for it', async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const systems: string[] = [];
+
+    const model = streamingModel('Checked.', (options) => {
+      if (!isReview(options)) systems.push(JSON.stringify(options.prompt.filter((message) => message.role === 'system')));
+    });
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const hireRan = Promise.withResolvers<void>();
+    host.subscribe((agent, event) => { if (agent !== 'root' && event.type === 'turn-end') hireRan.resolve(); });
+    const team = await host.team('root');
+    await team.spawn({ role: 'researcher', mission: 'Check the probe.', mode: 'build' });
+    await hireRan.promise;
+    await host.close();
+
+    const hire = present(systems.find((system) => system.includes('## Role: Researcher')), "the hire's system prompt");
+    expect(hire).toContain('Test agent root');
+    expect(hire).not.toContain('Check the probe.');
+  });
+
   test('no hosted child records a turn into the evolution window, whatever its lifetime', async () => {
     const ask = makeRoots();
     const askDb = await seedAgent(ask.state, 'root');

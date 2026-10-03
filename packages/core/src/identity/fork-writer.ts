@@ -230,9 +230,8 @@ export class ForkTargetWriter {
     this.staging.count({ contextMembers: rows.length });
   }
 
-  /** SOUL.md landed through its protected write, which returned the mission it carries. */
-  stageSoul(mission: string): void {
-    this.staging.mission(mission);
+  /** SOUL.md landed through its protected write; the mission is read off it, never copied. */
+  stageSoul(): void {
     this.staging.addFile(SOUL_PATH);
   }
 
@@ -282,8 +281,6 @@ export class ForkTargetWriter {
         VALUES (${this.opts.workspaceId}, ${this.opts.workspaceName}, ${this.now})
       `;
     }
-
-    void this.target`UPDATE workspace_identity SET mission = ${staged.mission}`;
 
     // The search index keyed on old rows is stale (equal counts evade its rowid watermark); invalidate it.
     invalidateConversationSearchIndex(this.target);

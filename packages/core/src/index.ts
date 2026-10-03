@@ -62,7 +62,6 @@ export {
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
-  writeSoul,
 } from './identity/soul';
 
 export { WORKSPACE_IDENTITY_DDL, WORKSPACE_SOUL_DDL } from './identity/schema';
@@ -743,7 +742,6 @@ export {
   uniquePromptExecutors,
   type PromptBackend,
   type PromptExecutorInfo,
-  type PromptExternalToolInfo,
   type PromptIdentity,
   type PromptSurface,
   type PromptSurfaceOptions,

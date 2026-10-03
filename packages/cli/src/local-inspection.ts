@@ -78,6 +78,7 @@ import {
   type AccountSpend,
   MEMORY_PATH,
   WORKSPACE_ROOT,
+  readMission,
   searchMemoryChunks,
   type MemorySearchResult,
 } from '@kinu.run/core';
@@ -863,10 +864,8 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
       db, `SELECT name, created_at FROM workspace_identity LIMIT 1`).at(0)
     : null;
 
-  // From the identity row, not SOUL.md: opening the workspace filesystem writes. `writeSoul` keeps it current (identity/soul.ts).
-  const mission = hasIdentity
-    ? all<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`).at(0)?.mission?.trim() ?? null
-    : null;
+  // Off the soul's row, not SOUL.md: opening the workspace filesystem writes.
+  const mission = readMission(makeSql(db));
 
   return {
     name: identity?.name ?? null,
