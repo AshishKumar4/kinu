@@ -57,6 +57,7 @@ export interface AgentOrchestratorDeps {
     | 'runStoredTurnReview'
     | 'deferTurnReview'
     | 'runDeferredTurnReviews'
+    | 'learnFromTurn'
     | 'onSessionComplete'
     | 'runDueShadowTrials'
     | 'recentAdvisorNotes'
@@ -238,6 +239,9 @@ export class AgentOrchestrator {
     // Promptness on top of durability; the queue's claim keeps it exactly-once.
     // A one-shot host must not open work it cannot finish.
     if (!this.deps.oneShot) {
+      // Its lessons do not wait on the reply that rates it.
+      this.detach(this.deps.engine.learnFromTurn(scoped), 'Turn lessons');
+
       if (!awaitsFollowup) {
         this.detach(this.deps.engine.runDeferredTurnReviews().then(() => undefined), 'Turn review');
       }

@@ -46,6 +46,7 @@ export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   // Persisted with the turn: the drain needs it after the running scope is gone.
   missionLabels: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
   struggles: v.optional(v.array(StruggleSchema)),
+  shownLessons: v.optional(v.array(v.object({ id: v.string(), revision: v.number() }))),
 });
 
 const APPEND_SCOPE = 'turn_append';

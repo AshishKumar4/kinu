@@ -42,8 +42,8 @@ import {
 } from '../advisor/review';
 import { initLessonTables, recordLesson, corroborateLessonsForTurn, renderRecentLessons } from './lessons';
 import {
-  applyStruggleLesson, initStruggleTables, listToolLessons, recordTurnStruggles, scoreToolLessons, StruggleLessonSchema,
-  struggleLessonPrompt, teachingStruggle,
+  applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, recordTurnStruggles, scoreToolLessons,
+  StruggleLessonSchema, struggleLessonPrompt, teachingStruggle,
 } from './struggles';
 import {
   initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf, listTurnRatings, hasLowRating,
@@ -499,9 +499,6 @@ export class EvolutionEngine {
       this.announceReview(turn, rated);
     });
 
-    // Struggles teach whether or not the turn is rated.
-    await this.learnFromStruggles(turn, gradedKey);
-
     const rating = effective();
 
     if (rating === null) return;
@@ -558,12 +555,15 @@ export class EvolutionEngine {
     }
   }
 
-  /** Records the turn's struggles and scores the lessons it used, then has the fast tier write one lesson about the
-   *  tool it struggled with most. Each part has its tombstone, so a retry neither rescores nor asks again. A turn
-   *  with no id has none to key them by. */
-  private async learnFromStruggles(reviewed: CompletedTurn, turnId: string | null): Promise<void> {
-    if (turnId === null) return;
-    const turn = { ...reviewed, turnId };
+  /**
+   * The turn's own completion effect, apart from its rating, which may wait on a reply that never comes: records its
+   * struggles and scores the lessons it was shown, then has the fast tier write one lesson about the tool it
+   * struggled with most. Each part has its tombstone, so a retry neither rescores nor asks again. A turn with no id
+   * has none to key them by.
+   */
+  async learnFromTurn(completed: CompletedTurn): Promise<void> {
+    if (!this.config.enabled || completed.turnId === undefined || completed.turnId === '') return;
+    const turn = { ...completed, turnId: completed.turnId };
     const { sql } = this.rt.storage;
     const { actor } = this.rt;
     const recordKey = `${turn.turnId}:struggles`;
@@ -580,7 +580,7 @@ export class EvolutionEngine {
     const lessonKey = `${turn.turnId}:struggle-lesson`;
 
     if (struggle === null || effectAlreadyDone(sql, actor, TURN_REVIEW_STEP_SCOPE, lessonKey)) return;
-    const prompt = struggleLessonPrompt(turn, struggle, listToolLessons(sql, actor, new Set([struggle.tool])));
+    const prompt = struggleLessonPrompt(turn, struggle, listToolLessons(sql, actor, [struggle.tool], MAX_TOOL_LESSONS));
     const said = await this.reviewLlm(turn).complete(prompt);
     const answer = v.safeParse(StruggleLessonSchema, tolerate(() => extractJsonObject(said), 'malformed-input'));
 
@@ -648,6 +648,8 @@ export class EvolutionEngine {
 
     for (const row of taken.reviews) {
       try {
+        // A one-shot host learns here, at its exit; elsewhere the turn learned when it was recorded.
+        await this.learnFromTurn(row.turn);
         await this.reviewTurn(row.turn, row.followup);
       } catch (err) {
         // A governor refusal is a decision: the row goes back unchanged. Any other throw

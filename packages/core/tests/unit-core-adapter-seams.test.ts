@@ -287,6 +287,7 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
     deferTurnReview: () => 'queued',
     // With no follow-up turn, this drain runs the review the recording wrote onto the turn row, the
     // same claim-guarded path production takes.
+    learnFromTurn: async () => {},
     runDeferredTurnReviews: async () => {
       const taken = store.takeQueuedReviews(8);
 

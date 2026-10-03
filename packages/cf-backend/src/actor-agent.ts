@@ -171,7 +171,7 @@ import {
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
-  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
+  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsForInvocation, withTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount,
   type AgentInbox,
@@ -3344,13 +3344,18 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** `record` lets core emit the `profile_resolution` run event; this backend only picks where it goes. */
   protected async profileInputs(): Promise<ProfileAuthorityInputs> {
-    const { stub, caller } = await this.userHub();
-
     return loadProfileAuthorityInputs({
-      envelope: () => stub.getWorkspaceProfileCatalog(caller),
+      envelope: () => this.profileCatalog(),
       provider: () => this.ownedModelServices.profileProviderSnapshot(),
       record: (event) => this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event),
     });
+  }
+
+  /** The account's catalog as it stands, read through this workspace's own authority. */
+  protected async profileCatalog(): Promise<ProfileCatalogEnvelope> {
+    const { stub, caller } = await this.userHub();
+
+    return stub.getWorkspaceProfileCatalog(caller);
   }
 
   protected resolvedTurnProfile(): ResolvedTurnProfile | null {
@@ -3788,7 +3793,14 @@ export abstract class ActorAgent extends Agent<Env> {
   private _accountSwarms: boolean | null = null;
 
   protected async readAccountSwarms(): Promise<boolean> {
-    this._accountSwarms ??= betaSwarms((await this.profileInputs()).envelope.catalog);
+    this._accountSwarms ??= await this.currentAccountSwarms();
+
+    return this._accountSwarms;
+  }
+
+  /** As the account holds it now: work that builds no turn has no turn read to reconcile a stale value against. */
+  protected async currentAccountSwarms(): Promise<boolean> {
+    this._accountSwarms = betaSwarms((await this.profileCatalog()).catalog);
 
     return this._accountSwarms;
   }
@@ -4776,8 +4788,7 @@ export abstract class ActorAgent extends Agent<Env> {
     mode: WorkMode,
     signal: AbortSignal,
   ): Promise<JsonValue | undefined> {
-    // A re-drive may be the activation's first tool build.
-    await this.readAccountSwarms();
+    await this.currentAccountSwarms();
 
     return await resumeBackgroundJob({
       rawTools: (resumeMode) => this.getRawToolsForWorkMode(resumeMode),

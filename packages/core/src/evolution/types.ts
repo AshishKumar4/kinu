@@ -38,6 +38,8 @@ export interface CompletedTurn {
   missionLabels?: readonly string[];
   /** Where the turn fought its tools, from its steering detector; absent on turns recorded before. */
   struggles?: readonly Struggle[];
+  /** The tool lessons its steps listed, at the revision each saw; only these does the turn score. */
+  shownLessons?: readonly { readonly id: string; readonly revision: number }[];
 }
 
 export interface CompletedSession {

@@ -42,7 +42,7 @@ import {
   type SwarmPreset,
 } from '../strategy/swarm';
 import {
-  TIER_IDS, TierIdSchema, tierIdsOf,
+  TierIdSchema, tierIdsOf,
   effectiveRoleCatalog,
   resolveTurnProfile,
   type ProfileAuthorityInputs, type ProfileProvenance,
@@ -60,6 +60,7 @@ import type { HostedNodeSeat, NodeCodemode } from '../strategy/node-agent';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { WorkMode } from '../types/turn';
 import { SWARMS_BETA_SETTING } from '../types/profile';
+import type { DelegationChoices } from '../types/dynamic-context';
 import { nanoid } from '../utils/nanoid';
 import {
   diagnostics, KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, type TurnTrace,
@@ -1080,11 +1081,10 @@ type SchemaPropertiesFor<Action extends AgentsToolAction> =
 
 type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
 
-/** The roles this actor may name, `id: description`; empty with no catalog. */
-function roleSummaries(deps: AgentsToolDeps): string {
-  const ctx = deps.profile?.();
-
-  if (!ctx) return '';
+/** The roles and tiers this actor's `role` and `tier` take, for its step context: in the schema they would make each
+ *  account's tool bytes its own. Null with no catalog. */
+export function delegationChoices(ctx: AgentsProfileContext | null): DelegationChoices | null {
+  if (!ctx) return null;
   const roles = effectiveRoleCatalog(ctx.envelope.catalog);
   const callerSpawns = roles[ctx.roleId]?.spawns;
 
@@ -1096,16 +1096,10 @@ function roleSummaries(deps: AgentsToolDeps): string {
     return callerSpawns.includes(id);
   };
 
-  return Object.entries(roles)
-    .filter(([id]) => allowed(id))
-    .map(([id, role]) => `${id}: ${role.description}`)
-    .join('; ');
-}
-
-function tierIds(deps: AgentsToolDeps): TierId[] {
-  const ctx = deps.profile?.();
-
-  return ctx ? tierIdsOf(ctx.envelope.catalog) : [...TIER_IDS];
+  return {
+    roles: Object.entries(roles).filter(([id]) => allowed(id)).map(([id, role]) => `${id}: ${role.description}`),
+    tiers: tierIdsOf(ctx.envelope.catalog),
+  };
 }
 
 /** Registered instruments with their `spec` keys, from `VERIFIER_KIND_DOC`, so the schema matches `swarmValidity`. */
@@ -1120,11 +1114,12 @@ function roleProperties(deps: AgentsToolDeps): Pick<SchemaPropertiesFor<'swarm'>
     ...(deps.swarm ? ['for swarm, the one every node runs under (default: yours)'] : []),
   ].join('; ');
 
-  const roles = roleSummaries(deps);
-
   return {
-    role: { type: 'string', maxLength: 64, description: `Catalog role id: ${uses}.${roles ? ` Roles: ${roles}.` : ''}` },
-    tier: { type: 'string', enum: tierIds(deps), description: 'Inference tier; default: the role\'s. A lifetime:"task" hire refuses it.' },
+    role: { type: 'string', maxLength: 64, description: `Catalog role id: ${uses}. Your step context lists the roles.` },
+    tier: {
+      type: 'string',
+      description: 'Inference tier id, one your step context lists; default: the role\'s. A lifetime:"task" hire refuses it.',
+    },
   };
 }
 

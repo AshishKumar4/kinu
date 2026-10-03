@@ -1186,6 +1186,7 @@
     "id TEXT NOT NULL",
     "tool TEXT NOT NULL",
     "text TEXT NOT NULL",
+    "revision INTEGER NOT NULL",
     "helpful INTEGER NOT NULL",
     "harmful INTEGER NOT NULL",
     "turn_ids TEXT NOT NULL",

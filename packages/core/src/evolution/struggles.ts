@@ -1,9 +1,9 @@
 /**
  * Struggles: where a turn fought its tools (docs/EVOLUTION-REDESIGN.md §2). The turn's steering detector owns what
- * counts as one; a struggle never decides satisfaction. Each reviewed turn records its struggles, tool errors and
+ * counts as one; a struggle never decides satisfaction. Each completed turn records its struggles, tool errors and
  * steps (`turn_struggles`), and a turn that struggled with a tool teaches one lesson about it (`tool_lessons`), an
- * itemized bullet as in ACE's evolving playbooks (Zhang et al., arXiv:2510.04618): edited in place, scored by the
- * later turns that use its tool, retired when it hurts more than it helps.
+ * itemized bullet as in ACE's evolving playbooks (Zhang et al., arXiv:2510.04618): edited in place as a new revision,
+ * scored by the later turns that were shown it and used its tool, retired when it hurts more than it helps.
  */
 
 import * as v from 'valibot';
@@ -12,6 +12,7 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn } from './types';
 import type { TurnSteeringTrigger } from '../events/types';
+import type { ShownLesson } from '../types/dynamic-context';
 import { sqlCheckList } from '../identity/schema';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { parseJsonValue, type JsonValue } from '../utils/json';
@@ -37,8 +38,11 @@ export type Struggle = v.InferOutput<typeof StruggleSchema>;
 /** Uses after which a lesson that hurt more often than it helped retires. */
 const LESSON_TRIAL_USES = 5;
 
-/** Lessons shown per step, newest first. */
+/** Lessons shown per step, newest first, and the most a reflector reads about one tool. */
 export const MAX_TOOL_LESSONS = 5;
+
+/** The struggled tool's calls a reflector reads, the last ones. */
+const REFLECTOR_CALLS = 8;
 
 const LESSON_MAX_CHARS = 300;
 
@@ -58,6 +62,7 @@ export function initStruggleTables(execRaw: RawSqlExec): void {
     id         TEXT NOT NULL,
     tool       TEXT NOT NULL,
     text       TEXT NOT NULL,
+    revision   INTEGER NOT NULL,
     helpful    INTEGER NOT NULL,
     harmful    INTEGER NOT NULL,
     turn_ids   TEXT NOT NULL,
@@ -82,8 +87,10 @@ export function recordTurnStruggles(sql: SqlExecutor, actor: ActorHandle, turn: 
   markStoreChanged(sql);
 }
 
+/** One lesson at one revision; a rewrite is a new revision with no evidence yet. */
 export interface ToolLesson {
   readonly id: string;
+  readonly revision: number;
   readonly tool: string;
   readonly text: string;
   readonly helpful: number;
@@ -91,43 +98,51 @@ export interface ToolLesson {
   readonly turnIds: readonly string[];
 }
 
-/** Active lessons about `tools`, newest first. */
-export function listToolLessons(
-  sql: SqlExecutor, actor: ActorHandle, tools: ReadonlySet<string>, limit = Infinity,
-): ToolLesson[] {
+type ToolLessonRow = { id: string; revision: number; tool: string; text: string; helpful: number; harmful: number; turn_ids: string };
+
+const lessonOf = (row: ToolLessonRow): ToolLesson => ({
+  id: row.id, revision: row.revision, tool: row.tool, text: row.text, helpful: row.helpful, harmful: row.harmful,
+  turnIds: v.parse(v.array(v.string()), parseJsonValue(row.turn_ids)),
+});
+
+/** The newest `limit` active lessons about `tools`. */
+export function listToolLessons(sql: SqlExecutor, actor: ActorHandle, tools: readonly string[], limit: number): ToolLesson[] {
   actor.assertCurrent();
 
-  return sql<{ id: string; tool: string; text: string; helpful: number; harmful: number; turn_ids: string }>`
-    SELECT id, tool, text, helpful, harmful, turn_ids FROM tool_lessons
-    WHERE actor_id = ${actor.actorId} AND status = 'active'
-    ORDER BY updated_at DESC, id DESC`
-    .filter((row) => tools.has(row.tool))
-    .slice(0, limit)
-    .map((row) => ({
-      id: row.id, tool: row.tool, text: row.text, helpful: row.helpful, harmful: row.harmful,
-      turnIds: v.parse(v.array(v.string()), parseJsonValue(row.turn_ids)),
-    }));
+  return sql<ToolLessonRow>`
+    SELECT id, revision, tool, text, helpful, harmful, turn_ids FROM tool_lessons
+    WHERE actor_id = ${actor.actorId} AND status = 'active' AND tool IN (SELECT value FROM json_each(${JSON.stringify(tools)}))
+    ORDER BY updated_at DESC, id DESC LIMIT ${limit}`
+    .map(lessonOf);
 }
 
-export function toolLessonText(lesson: ToolLesson): string {
-  return `\`${lesson.tool}\`: ${lesson.text}`;
+export function shownLesson(lesson: ToolLesson): ShownLesson {
+  return { id: lesson.id, revision: lesson.revision, line: `\`${lesson.tool}\`: ${lesson.text}` };
 }
 
-/** Helpful when this turn used a lesson's tool without struggling with it, harmful when it struggled again; a turn
- *  never scores the lesson it taught. */
+/** Each lesson the turn was shown, at the revision it saw: helpful when the turn then used its tool without
+ *  struggling with it, harmful when it struggled again. A lesson rewritten since, one the turn never used the tool
+ *  of, and the one the turn taught are not scored. */
 export function scoreToolLessons(sql: SqlExecutor, actor: ActorHandle, turn: ReviewedTurn): void {
+  const used = new Set(turn.toolCalls.map((call) => call.name));
   const struggled = new Set((turn.struggles ?? []).map((struggle) => struggle.tool));
   const now = nowMs();
 
-  for (const lesson of listToolLessons(sql, actor, new Set(turn.toolCalls.map((call) => call.name)))) {
-    if (lesson.turnIds.includes(turn.turnId)) continue;
+  for (const shown of turn.shownLessons ?? []) {
+    const [row] = sql<ToolLessonRow>`
+      SELECT id, revision, tool, text, helpful, harmful, turn_ids FROM tool_lessons
+      WHERE actor_id = ${actor.actorId} AND id = ${shown.id} AND revision = ${shown.revision} AND status = 'active'`;
+
+    const lesson = row === undefined ? undefined : lessonOf(row);
+
+    if (lesson === undefined || !used.has(lesson.tool) || lesson.turnIds.includes(turn.turnId)) continue;
     const harmed = struggled.has(lesson.tool);
     const helpful = lesson.helpful + (harmed ? 0 : 1);
     const harmful = lesson.harmful + (harmed ? 1 : 0);
     const status = helpful + harmful >= LESSON_TRIAL_USES && harmful > helpful ? 'retired' : 'active';
 
     void sql`UPDATE tool_lessons SET helpful = ${helpful}, harmful = ${harmful}, status = ${status}, updated_at = ${now}
-      WHERE actor_id = ${actor.actorId} AND id = ${lesson.id}`;
+      WHERE actor_id = ${actor.actorId} AND id = ${lesson.id} AND revision = ${lesson.revision}`;
   }
 
   markStoreChanged(sql);
@@ -158,6 +173,7 @@ export function struggleLessonPrompt(
 
   const calls = turn.toolCalls
     .filter((call) => call.name === struggle.tool)
+    .slice(-REFLECTOR_CALLS)
     .map((call) => `- ${call.name}(${window(call.args)}) -> ${call.outcome?.success === false ? 'failed' : 'ok'}: ${window(call.result)}`);
 
   const lessons = known.map((lesson) => `- [${lesson.id}] ${lesson.text} (helped ${String(lesson.helpful)}, hurt ${String(lesson.harmful)})`);
@@ -179,7 +195,8 @@ export const StruggleLessonSchema = v.object({
   text: v.pipe(v.string(), v.trim(), v.nonEmpty()),
 });
 
-/** Rewrites the named lesson in place, or adds one keyed by the teaching turn so a replay writes the same row. */
+/** Rewrites the named lesson as its next revision, whose evidence starts at none, or adds one keyed by the teaching
+ *  turn so a replay writes the same row. */
 export function applyStruggleLesson(sql: SqlExecutor, actor: ActorHandle, input: {
   readonly turnId: string;
   readonly tool: string;
@@ -187,12 +204,18 @@ export function applyStruggleLesson(sql: SqlExecutor, actor: ActorHandle, input:
 }): string {
   const now = nowMs();
   const text = input.answer.text.slice(0, LESSON_MAX_CHARS);
-  const target = listToolLessons(sql, actor, new Set([input.tool])).find((lesson) => lesson.id === input.answer.update);
+
+  const [row] = input.answer.update === null ? [] : sql<ToolLessonRow>`
+    SELECT id, revision, tool, text, helpful, harmful, turn_ids FROM tool_lessons
+    WHERE actor_id = ${actor.actorId} AND id = ${input.answer.update} AND tool = ${input.tool} AND status = 'active'`;
+
+  const target = row === undefined ? undefined : lessonOf(row);
 
   if (target !== undefined) {
     const turnIds = target.turnIds.includes(input.turnId) ? target.turnIds : [...target.turnIds, input.turnId];
 
-    void sql`UPDATE tool_lessons SET text = ${text}, turn_ids = ${JSON.stringify(turnIds)}, updated_at = ${now}
+    void sql`UPDATE tool_lessons SET text = ${text}, revision = ${target.revision + 1}, helpful = 0, harmful = 0,
+      turn_ids = ${JSON.stringify(turnIds)}, updated_at = ${now}
       WHERE actor_id = ${actor.actorId} AND id = ${target.id}`;
     markStoreChanged(sql);
 
@@ -201,8 +224,8 @@ export function applyStruggleLesson(sql: SqlExecutor, actor: ActorHandle, input:
 
   const id = `tl-${input.turnId}`;
 
-  void sql`INSERT INTO tool_lessons (actor_id, id, tool, text, helpful, harmful, turn_ids, status, created_at, updated_at)
-    VALUES (${actor.actorId}, ${id}, ${input.tool}, ${text}, 0, 0, ${JSON.stringify([input.turnId])}, 'active', ${now}, ${now})
+  void sql`INSERT INTO tool_lessons (actor_id, id, tool, text, revision, helpful, harmful, turn_ids, status, created_at, updated_at)
+    VALUES (${actor.actorId}, ${id}, ${input.tool}, ${text}, 1, 0, 0, ${JSON.stringify([input.turnId])}, 'active', ${now}, ${now})
     ON CONFLICT(actor_id, id) DO NOTHING`;
   markStoreChanged(sql);
 

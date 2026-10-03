@@ -10,6 +10,7 @@ import {
   agentsActionsFor,
   createAgentsCodemodeProvider,
   createAgentsTool,
+  delegationChoices,
   decodeJsonValue,
   parseAgentsToolInput,
 
@@ -892,14 +893,15 @@ describe('agents delegation — role/tier/preset precedence', () => {
     expect(team.calls).toEqual([]);
   });
 
-  test('role summaries project into the native schema from the same catalog', () => {
+  test('role summaries reach the step context from the catalog, never the shared native schema', () => {
     const rendered = (deps: TestAgentsToolDeps): string =>
       JSON.stringify(createAgentsTool(withBuildMode(deps)).inputSchema);
 
-    const withCatalog = rendered(profileDeps());
-    expect(withCatalog).toContain('researcher');
-    // No catalog wired → no summaries, and nothing invented.
-    expect(rendered({ swarm: swarmDeps() })).not.toContain('researcher');
+    const deps = profileDeps();
+    expect(rendered(deps)).not.toContain('researcher');
+    expect(delegationChoices(deps.profile?.() ?? null)?.roles.some((role) => role.startsWith('researcher: '))).toBe(true);
+    // No catalog wired: no choices, and nothing invented.
+    expect(delegationChoices(null)).toBeNull();
   });
 });
 

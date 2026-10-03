@@ -2862,7 +2862,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async retryBackgroundJob(jobId: string): Promise<RetryOutcome> {
-    await this.readAccountSwarms();
+    await this.currentAccountSwarms();
 
     return this.countJobOperation('retry', await retryBackgroundJob({
       jobs: this.jobs,

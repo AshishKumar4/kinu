@@ -223,7 +223,7 @@ test('a step sees the active struggle lessons about the tools it offers, and no 
   teach('t-1', 'edit', 'Name `path` in every edit call.');
   teach('t-2', 'deploy', 'Build before you deploy.');
 
-  expect(collect(o, { tools: offered('edit') }).toolLessons).toEqual(['`edit`: Name `path` in every edit call.']);
+  expect(collect(o, { tools: offered('edit') }).toolLessons).toEqual([{ id: 'tl-t-1', revision: 1, line: '`edit`: Name `path` in every edit call.' }]);
   expect(collect(o, { tools: offered('read') }).toolLessons).toBeUndefined();
 });
 

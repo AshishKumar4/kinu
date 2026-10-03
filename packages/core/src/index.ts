@@ -564,7 +564,7 @@ export {
 
 export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
-  parseAgentsToolInput, agentsProfileContext,
+  parseAgentsToolInput, agentsProfileContext, delegationChoices,
   AGENTS_ACTION_FIELDS, AGENTS_FIELD_TS_TYPES,
   type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
 } from './delegation/agents-tool';

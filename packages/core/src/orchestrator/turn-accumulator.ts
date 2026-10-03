@@ -83,6 +83,8 @@ export class TurnAccumulator {
   readonly escalations = new TurnEscalationLedger();
   /** Written by craft-cycle.ts: crafted tools run inside `eval`, never as `toolCalls` names. */
   private readonly craftUsed = new Set<string>();
+  /** The tool lessons a step listed, id to the revision shown. */
+  private readonly lessons = new Map<string, number>();
   /** Messages already durable; a shorter array is a re-drive, resynced without recording the step twice. */
   private durableMessages = 0;
 
@@ -105,6 +107,7 @@ export class TurnAccumulator {
     this.files.reset();
     this.escalations.reset();
     this.craftUsed.clear();
+    this.lessons.clear();
     this.durableMessages = 0;
   }
 
@@ -114,6 +117,14 @@ export class TurnAccumulator {
 
   craftedToolsUsed(): string[] {
     return [...this.craftUsed];
+  }
+
+  noteLessonsShown(lessons: readonly { readonly id: string; readonly revision: number }[]): void {
+    for (const lesson of lessons) this.lessons.set(lesson.id, lesson.revision);
+  }
+
+  lessonsShown(): { id: string; revision: number }[] {
+    return [...this.lessons].map(([id, revision]) => ({ id, revision }));
   }
 
   /** `undefined` when no step reported anything; a reported zero comes back as one. */

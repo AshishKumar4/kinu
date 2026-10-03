@@ -70,6 +70,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
     recordRecovery: () => {},
     // Real store, so deferral and drain run the production path.
     deferTurnReview: (turn, followup, review) => store.enqueueReview(turn, followup, review),
+    learnFromTurn: async () => {},
     runDeferredTurnReviews: async () => {
       const taken = store.takeQueuedReviews(5);
       let reviewed = 0;

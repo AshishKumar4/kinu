@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { asSchema, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { toolExecute } from '@kinu.run/test-utils';
-import { chatSessionTurns, orchestratorHarness } from './helpers/actor-harness';
+import { chatSessionTurns, jobsOver, orchestratorHarness } from './helpers/actor-harness';
 
 function agentsActions(tools: ToolSet): readonly string[] {
   const agents = tools.agents;
@@ -37,5 +37,25 @@ describe('a turn offers swarm only when the account turned the beta on', () => {
 
   test('on: the tool offers swarm', async () => {
     expect(agentsActions(await turnTools(true))).toContain('swarm');
+  });
+});
+
+describe('a retried swarm job reads the setting as it stands, not as the toolset was last built', () => {
+  test('turned off since the last turn, with no settings notification delivered, the retry is refused naming it', async () => {
+    const { agent, db } = orchestratorHarness();
+    agent.harnessInstallCatalog({ betaSwarms: true });
+    await agent.activateActor();
+    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'compare three caching designs' }] });
+
+    // The account turns it off; the fan-out that would tell this object is lost.
+    agent.harnessInstallCatalog({ betaSwarms: false });
+    const jobs = jobsOver(db);
+    jobs.create({ id: 'bgjob-swarm', kind: 'agents', workMode: 'build', now: Date.now(), label: 'swarm: rank designs', input: JSON.stringify({ action: 'swarm', task: 'rank them', preset: 'ideate' }) });
+    jobs.fail('bgjob-swarm', 0, 'the first run was interrupted', Date.now());
+
+    const retried = await agent.retryBackgroundJob('bgjob-swarm');
+    await agent.harnessJoinDetachedFibers();
+
+    expect(jobs.get(retried.jobId ?? '')).toMatchObject({ status: 'failed', error: expect.stringContaining('"Beta: swarms"') });
   });
 });

@@ -328,7 +328,7 @@ export function codemodeModel(code: string): LanguageModel {
 export function toolSequenceModel(
   calls: ReadonlyArray<{ name: string; input: JsonObject }>,
   seen?: (options: LanguageModelV2CallOptions) => void,
-): LanguageModel {
+): TestLanguageModelV2 {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let step = 0;
 

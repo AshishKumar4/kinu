@@ -390,19 +390,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     const overlay = this._catalogOverlay;
     const revision = this._providerRevision;
+    const envelope = await this.profileCatalog();
 
-    if (overlay === null) return { envelope: HARNESS_PROFILE_ENVELOPE, provider: { ...HARNESS_PROVIDER_SNAPSHOT, revision } };
+    if (overlay === null) return { envelope, provider: { ...HARNESS_PROVIDER_SNAPSHOT, revision } };
 
-    // Merged over the builtins, digest recomputed. Overlay tier models join the
-    // provider snapshot: a tier naming an unlisted model is refused before routing.
-    const catalog: ProfileCatalog = {
-      roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
-      tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
-      betaSwarms: overlay.betaSwarms ?? true,
-    };
-
+    // Overlay tier models join the provider snapshot: a tier naming an unlisted model is refused before routing.
     return {
-      envelope: { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) },
+      envelope,
       provider: overlay.availableModels === undefined ? { ...HARNESS_PROVIDER_SNAPSHOT, revision } : {
         ...HARNESS_PROVIDER_SNAPSHOT,
         revision,
@@ -410,7 +404,21 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       },
     };
   }
-  /** Install roles/tiers over the builtin catalog; hosted children resolve through it. */
+  /** The installed overlay merged over the builtins, digest recomputed. */
+  protected override async profileCatalog(): Promise<ProfileCatalogEnvelope> {
+    const overlay = this._catalogOverlay;
+
+    if (overlay === null) return HARNESS_PROFILE_ENVELOPE;
+
+    const catalog: ProfileCatalog = {
+      roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
+      tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
+      betaSwarms: overlay.betaSwarms ?? true,
+    };
+
+    return { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) };
+  }
+
   /** Whether the object's timer wake is due now, as the alarm would fire it. */
   harnessTimerDue(now = Date.now()): boolean {
     const at = this.nextWakeAt(now);
@@ -509,7 +517,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const result = await composePrepareStep(
       {
         extensions,
-        dynamic: { ledger: this.actorSession.dynamic, snapshot: () => dynamic(profile, this._preparedTools) },
+        dynamic: { ledger: this.actorSession.dynamic, snapshot: () => this.actorSession.stepContext(dynamic, profile, this._preparedTools) },
         // The destination provider a cross-provider replay is re-keyed at.
         destinationProviderId: this.promptModelContext().provider,
       },
