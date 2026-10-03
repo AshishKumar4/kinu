@@ -662,7 +662,8 @@ describe('a named shell, judged from where it is', () => {
     await expect(held).rejects.toThrow('stopped');
 
     expect((await shell.exec('rm -rf build', { name: 'work' })).exitCode).not.toBe(0);
-    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect((await shell.exec('echo changed > kept.txt', { name: 'work' })).exitCode).not.toBe(0);
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build', 'echo changed > kept.txt']);
     expect(ran).toEqual([]);
   });
 
