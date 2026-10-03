@@ -46,7 +46,7 @@ describe('adaptMemory — semantic index sync on write', () => {
   test('indexing embeds every chunk with its verbatim text', async () => {
     const { store, files, config } = createStore();
     const vs = fakeVectorStore();
-    const memory = adaptMemory(store, files, vs.store, config);
+    const memory = adaptMemory(store, files, { store: vs.store, config });
 
     await memory.write(PATH, doc(60));
     await memory.index(PATH);
@@ -64,7 +64,7 @@ describe('adaptMemory — semantic index sync on write', () => {
   test('shrinking a memory deletes the vanished chunk vectors', async () => {
     const { store, files, config } = createStore();
     const vs = fakeVectorStore();
-    const memory = adaptMemory(store, files, vs.store, config);
+    const memory = adaptMemory(store, files, { store: vs.store, config });
 
     await memory.write(PATH, doc(60));
     await memory.index(PATH);
@@ -95,7 +95,7 @@ describe('adaptMemory — semantic index sync on write', () => {
     config.set('memory_vector_backfill_done', 'true');
     config.set('memory_vector_backfill_cursor', 'memory/MEMORY.md:9999-9999');
 
-    const memory = adaptMemory(store, files, throwing, config);
+    const memory = adaptMemory(store, files, { store: throwing, config });
     await memory.write(PATH, doc(60));
     await expect(memory.index(PATH)).resolves.toBeUndefined();
     expect((await memory.search('note', 5)).length).toBeGreaterThan(0);
@@ -113,7 +113,7 @@ describe('adaptMemory — semantic index sync on write', () => {
     const { store, files, config } = createStore();
     const vs = fakeVectorStore();
     config.set('memory_vector_backfill_done', 'true');
-    const memory = adaptMemory(store, files, vs.store, config);
+    const memory = adaptMemory(store, files, { store: vs.store, config });
     await memory.write(PATH, doc(60));
     await memory.index(PATH);
     expect(config.get('memory_vector_backfill_done')).toBe('true');
@@ -122,7 +122,7 @@ describe('adaptMemory — semantic index sync on write', () => {
   test('an unavailable vector store is never called', async () => {
     const { store, files, config } = createStore();
     const vs = fakeVectorStore(false);
-    const memory = adaptMemory(store, files, vs.store, config);
+    const memory = adaptMemory(store, files, { store: vs.store, config });
     await memory.write(PATH, doc(60));
     await memory.index(PATH);
     expect(vs.upserted).toEqual([]);
@@ -236,4 +236,21 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
     expect(vs.upserted).toEqual([]);
     expect(config.get('memory_vector_backfill_done')).toBeNull();
   });
+});
+
+// An emptied note is a change like any other: its chunks leave the index, or a search finds words no file holds.
+test('emptying a note through the agent\'s memory removes it from search and from the vector index', async () => {
+  const { store, files, config } = createStore();
+  const vs = fakeVectorStore();
+  const memory = adaptMemory(store, files, { store: vs.store, config });
+
+  await memory.write(PATH, 'the wrangler deploy goes to staging');
+  await memory.index(PATH);
+  expect((await memory.search('wrangler', 5)).length).toBe(1);
+
+  await memory.write(PATH, '');
+  await memory.index(PATH);
+
+  expect(await memory.search('wrangler', 5)).toEqual([]);
+  expect([...vs.live.keys()]).toEqual([]);
 });

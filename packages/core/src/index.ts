@@ -1062,7 +1062,7 @@ export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates,
-  subordinateAgentName, headAgentName,
+  actorHomeName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
   type AgentIdentity, type HomeRootVfs, type RootMoveVfs, type SlatesMoveVfs, type TmpConfiner,
 } from './vfs/agent-home';
@@ -1087,6 +1087,8 @@ export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 export { oneAtATime } from './utils/one-at-a-time';
 
 export { markStoreChanged, storeRevision } from '@kinu.run/agent-utils';
+
+export { searchMemoryChunks } from '@kinu.run/agent-utils/memory';
 
 export { ISOLATED_BUN_FLAGS, isolatedBunArgs } from './utils/bun-isolation';
 

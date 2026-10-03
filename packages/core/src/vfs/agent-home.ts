@@ -11,6 +11,8 @@ import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import { vfsBasename } from '../utils/vfs-helpers';
 import * as v from 'valibot';
 import { ownerSoulDb, SOUL_PATH, UNVERIFIED_SOUL_PATH } from '../identity/soul';
+import { parseActorKey } from '../identity/actor-key';
+import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
 import { diagnostics, toKinuError } from '../obs/index';
 import { NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
@@ -63,7 +65,7 @@ export function agentTmpRoot(agentName: string): string {
 }
 
 /** Revalidated here: the roster's rule and this one are checked by different callers. */
-export function subordinateAgentName(subordinateName: string): string {
+function subordinateAgentName(subordinateName: string): string {
   const agentName = `sub-${subordinateName}`;
   assertAgentName(agentName);
 
@@ -71,11 +73,22 @@ export function subordinateAgentName(subordinateName: string): string {
 }
 
 /** Unsafe ids are refused, not escaped: grader and merge-back must derive the same home. */
-export function headAgentName(headId: string): string {
+function headAgentName(headId: string): string {
   const agentName = `head-${headId}`;
   assertAgentName(agentName);
 
   return agentName;
+}
+
+/**
+ * An actor's home, from its storage key and kind; the workspace's own agent's is {@link MAIN_AGENT}. The one
+ * derivation creation, the file plane and retirement share: a roster name is unique only under one parent.
+ */
+export function actorHomeName(record: Pick<WorkspaceActor, 'origin' | 'storageKey'>): string {
+  if (record.origin === 'system') return MAIN_AGENT;
+  const { id } = parseActorKey(record.storageKey);
+
+  return isSubordinateOrigin(record.origin) ? subordinateAgentName(id) : headAgentName(id);
 }
 
 /** Storage key; only the confinement boundary uses it. */

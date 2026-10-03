@@ -34,6 +34,7 @@ function seed(rows: number): void {
       [actorId, `ev-${i}`, 'note', `m${i}`, 1000 + i]);
     db.run('INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text) VALUES (?, ?, ?, ?, ?, ?)',
       [`c-${i}`, `memory/n${i}.md`, 1, 2, `h${i}`, `wrangler staging note ${i}`]);
+    db.run('INSERT INTO memory_chunks_fts (rowid, text) SELECT rowid, text FROM memory_chunks WHERE id = ?', [`c-${i}`]);
   }
 
   db.close();

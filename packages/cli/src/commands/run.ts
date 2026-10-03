@@ -456,13 +456,13 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
     case 'get_state':
     case 'state':
       return decodeJsonValue({ value: {
-        ...getLocalAgentState(name),
+        ...await getLocalAgentState(name),
         sessionId: client.cliSession.id,
         tools: getLocalToolSurface(name),
         model: await client.getModelSpec(),
       } });
     case 'status':
-      return decodeJsonValue({ value: getLocalAgentState(name) });
+      return decodeJsonValue({ value: await getLocalAgentState(name) });
     case 'tools':
       return decodeJsonValue({ value: await client.describeTools() });
     case 'triggers':
@@ -472,7 +472,7 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
     case 'memory': {
       const query = stringField(cmd, 'query');
 
-      return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: readLocalMemory(name) } });
+      return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: await readLocalMemory(name) } });
     }
 
     case 'events':
