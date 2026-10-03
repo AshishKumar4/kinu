@@ -8,7 +8,7 @@ import {
   type WebSearchProvider,
   type ProviderEnv, type WorkersAIBinding,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError, settleSync } from '@kinu.run/core/obs';
+import { diagnostics, recording, settle, settleSync } from '@kinu.run/core/obs';
 import { buildCfWebSearchProvider, type BrowserRunQuickActions } from '@kinu.run/core';
 import {
   createAgentProviderRegistry,
@@ -127,32 +127,30 @@ export class OwnedModelServices<Id = DurableObjectId> {
     };
   }
 
-  async profileProviderSnapshot(): Promise<ProviderSnapshotRead> {
+  profileProviderSnapshot(): Promise<ProviderSnapshotRead> {
+    return settle(Effect.gen({ self: this }, function* () {
     // Durable reconciliation against the account revision: the fan-out can fail silently, this cannot.
-    try {
-      const revision = await this.options.getCredentialsRevision();
+      yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const revision = yield* Effect.promise(() => this.options.getCredentialsRevision());
 
-      if (revision !== this.cachedCredentialsRevision) this.invalidate();
-      this.cachedCredentialsRevision = revision;
-    } catch (cause) {
-      // Logged so a possibly stale listing is diagnosable.
-      diagnostics.failure('profile.credentials_revision_unreadable', toKinuError({
-        doing: 'reading the account credential revision a cached provider listing is measured against',
-        cause,
-        otherwise: 'unavailable',
-      }), { agent: this.options.agentName() });
-    }
+        if (revision !== this.cachedCredentialsRevision) this.invalidate();
+        this.cachedCredentialsRevision = revision;
+      }), recording({ doing: 'reading the account credential revision a cached provider listing is measured against', otherwise: 'unavailable' }, (failure) => {
+        // Logged so a possibly stale listing is diagnosable.
+        diagnostics.failure('profile.credentials_revision_unreadable', failure, { agent: this.options.agentName() });
+      }));
 
-    const { listing, cache } = await this.providerListings.read();
-    const snapshot = providerSnapshotOf(listing);
-    diagnostics.event('profile.provider_snapshot.resolved', {
-      cache,
-      models: snapshot.availableModels.length,
-      unavailable: listing.failures.length,
-      revision: snapshot.revision,
-    });
+      const { listing, cache } = yield* Effect.promise(() => this.providerListings.read());
+      const snapshot = providerSnapshotOf(listing);
+      diagnostics.event('profile.provider_snapshot.resolved', {
+        cache,
+        models: snapshot.availableModels.length,
+        unavailable: listing.failures.length,
+        revision: snapshot.revision,
+      });
 
-    return { snapshot, cache };
+      return { snapshot, cache };
+    }));
   }
 
   private async sweepProviderListing(): Promise<ProviderListing> {

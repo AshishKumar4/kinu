@@ -10,7 +10,8 @@ import {
   NO_TIMER_DEADLINE_MS, bindTaskPlan, codemodeFunction, decodeJsonValue, relayedAnswer,
   type CraftedToolSource, type ExecuteResult, type Executor, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, WORKSPACE_ROOT } from '@kinu.run/core';
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { EGRESS_FAILURE_HEADER, codemodeEgress, type CodemodeEgressProps } from './codemode-egress';
@@ -105,27 +106,26 @@ export class KinuSandboxExecutor {
     this.#inner = launch;
   }
 
-  async execute(code: string, providers: DynamicProviderInput) {
+  execute(code: string, providers: DynamicProviderInput): Promise<ProgramResult> {
     const providerArr: ResolvedProvider[] = Array.isArray(providers)
       ? providers
       : [{ name: 'codemode', fns: providers }];
 
-    try {
+    const inner = this.#inner;
+
+    return settle(Effect.catchCause(Effect.gen(function* () {
       // The vendor reads only err.message. Carry an explicitly thrown refusal
       // as a result so the shared completion mapper retains its classification.
       const callable = normalizeCode(code);
       const source = `async () => { try { return await (${callable})(); } catch (cause) { if (cause && cause.success === false && typeof cause.error === 'string') return cause; throw cause; } }`;
-      const result = await this.#inner.run(source, attributeProviders(providerArr));
+      const result = yield* Effect.promise(() => inner.run(source, attributeProviders(providerArr)));
 
       // DWE returns sandbox-internal failures as strings; only the native-tool ReferenceError is
       // rewritten into the correction.
       return result.error
         ? { ...result, error: explainSandboxError(result.error) }
         : result;
-    } catch (err) {
-      // createCodeTool turns a non-empty `error` into a tool-output-error the model sees.
-      return { result: undefined, error: renderThrownChain({ cause: err }) };
-    }
+    }), programFailed));
   }
 }
 
@@ -133,8 +133,8 @@ export class KinuSandboxExecutor {
 export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
   return {
     languages: ['javascript'],
-    async execute(code: string, providers: HostProvider[]): Promise<ExecuteResult> {
-      try {
+    execute(code: string, providers: HostProvider[]): Promise<ExecuteResult> {
+      return settle(Effect.catchCause(Effect.gen(function* () {
         const normalized = Array.isArray(providers)
           ? providers
           : [{ name: 'codemode', fns: providers }];
@@ -147,7 +147,7 @@ export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
           ])),
         }));
 
-        const res = await launch.run(code, bridged);
+        const res = yield* Effect.promise(() => launch.run(code, bridged));
         const result = res.result === undefined ? undefined : decodeJsonValue({ value: res.result });
         const output: ExecuteResult = { result };
 
@@ -156,9 +156,12 @@ export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
         if (res.logs !== undefined) output.logs = res.logs;
 
         return output;
-      } catch (e) {
-        return { result: undefined, error: renderThrownChain({ cause: e }) };
-      }
+      }), programFailed));
     },
   };
+}
+
+/** A program that could not run, as the `error` createCodeTool turns into the tool-output-error the model sees. */
+function programFailed(failed: Cause.Cause<unknown>): Effect.Effect<{ result: undefined; error: string }> {
+  return Effect.succeed({ result: undefined, error: renderThrownChain({ cause: Cause.squash(failed) }) });
 }

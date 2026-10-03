@@ -61,7 +61,7 @@ import {
 } from './gepa/types';
 import { scoreInterval, type ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, renderThrownChain, settle, settleLogged, toKinuError } from '../obs/index';
+import { diagnostics, recording, renderThrownChain, settle, settleLogged, settleSync } from '../obs/index';
 import { Cause, Effect, Exit, Result } from 'effect';
 
 export type { ScaffoldVersionView } from '../types/scaffold';
@@ -224,29 +224,21 @@ export function queueTurnShadowTrial(
   turn: ShadowTrialTurn,
   plan: ShadowTrialPlan,
 ): ShadowTrialQueueOutcome {
-  try {
-    const trial = {
-      pendingVersion: plan.pendingVersion,
-      // Passed whole: runAutoShadowEval applies the evidence budget once, and the pending
-      // scaffold must answer the same question the live turn did.
-      task: turn.task,
-      currentOutput: turn.currentOutput,
-      context: turn.context,
-    };
+  const trial = {
+    pendingVersion: plan.pendingVersion,
+    // Passed whole: runAutoShadowEval applies the evidence budget once, and the pending
+    // scaffold must answer the same question the live turn did.
+    task: turn.task,
+    currentOutput: turn.currentOutput,
+    context: turn.context,
+  };
 
-    return queueShadowTrial(
-      control.sql,
-      control.rt.actor,
-      plan.id === undefined ? trial : { ...trial, id: plan.id },
-    );
-  } catch (err) {
-    diagnostics.failure(
-      'evolution.shadow_trial_queue_failed',
-      toKinuError({ doing: 'queue a shadow trial', cause: err, otherwise: 'io' }),
-    );
-
-    return 'failed';
-  }
+  return settleSync(Effect.catchCause(
+    Effect.sync((): ShadowTrialQueueOutcome => queueShadowTrial(control.sql, control.rt.actor, plan.id === undefined ? trial : { ...trial, id: plan.id })),
+    (failed) => Effect.as(recording({ doing: 'queue a shadow trial', otherwise: 'io' }, (failure) => {
+      diagnostics.failure('evolution.shadow_trial_queue_failed', failure);
+    })(failed), 'failed' as const),
+  ));
 }
 
 /**

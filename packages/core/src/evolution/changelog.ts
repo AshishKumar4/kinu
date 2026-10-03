@@ -4,7 +4,7 @@
  * reverts dispatch to the real paths (scaffold rollback, fact forget).
  */
 
-import { Result } from 'effect';
+import { Cause, Effect, Result } from 'effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
@@ -27,7 +27,7 @@ import {
 import { describePathology } from './pathology';
 import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
-import { renderThrownChain, tolerate } from '../obs/index';
+import { renderThrownChain, settle, tolerate } from '../obs/index';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.optional(v.number()),
@@ -624,68 +624,73 @@ function revertPromptSection(
   return { ok: true, detail: `rolled ${sectionId} back to v${String(prev.version)}` };
 }
 
-export async function executeChangelogRevert(
+export function executeChangelogRevert(
   ctx: ChangelogRevertContext,
   action: ChangelogRevertAction,
 ): Promise<ChangelogRevertResult> {
-  switch (action.type) {
-    case 'scaffold_rollback': {
-      const version = Number(action.target);
+  return settle(changelogRevert(ctx, action));
+}
 
-      if (!Number.isInteger(version) || version <= 0) {
-        return { ok: false, error: `invalid scaffold version: ${action.target}` };
-      }
+function changelogRevert(ctx: ChangelogRevertContext, action: ChangelogRevertAction): Effect.Effect<ChangelogRevertResult> {
+  return Effect.gen(function* (): Effect.gen.Return<ChangelogRevertResult> {
+    switch (action.type) {
+      case 'scaffold_rollback': {
+        const version = Number(action.target);
 
-      return revertScaffoldVersion(ctx.rt, version, ctx.events);
-    }
-
-    case 'prompt_section_rollback': {
-      const [sectionId, raw] = action.target.split(':');
-      const version = Number(raw);
-
-      if (!sectionId || !Number.isInteger(version) || version <= 0) {
-        return { ok: false, error: `invalid prompt-section target: ${action.target}` };
-      }
-
-      return revertPromptSection(ctx.rt.storage.sql, ctx.rt.actor, sectionId, version);
-    }
-
-    case 'fact_forget': {
-      if (!ctx.facts.recall(action.target)) {
-        return { ok: false, error: `fact ${action.target} is already forgotten` };
-      }
-
-      ctx.facts.forget(action.target);
-
-      return { ok: true, detail: `forgot fact ${action.target}` };
-    }
-
-    case 'fact_forget_many': {
-      const forgotten: string[] = [];
-      const failures: string[] = [];
-
-      for (const target of action.targets) {
-        try {
-          const result = await executeChangelogRevert(ctx, { type: 'fact_forget', target });
-
-          if (result.ok) forgotten.push(target);
-          else failures.push(`${target}: ${result.error ?? 'unknown error'}`);
-        } catch (error) {
-          failures.push(`${target}: ${renderThrownChain({ cause: error })}`);
+        if (!Number.isInteger(version) || version <= 0) {
+          return { ok: false, error: `invalid scaffold version: ${action.target}` };
         }
+
+        return yield* Effect.promise(async () => revertScaffoldVersion(ctx.rt, version, ctx.events));
       }
 
-      if (failures.length > 0) {
-        return {
-          ok: false,
-          detail: `forgot ${forgotten.length} of ${action.targets.length} facts`,
-          error: `failed to forget ${failures.length} fact${failures.length === 1 ? '' : 's'}: ${failures.join('; ')}`,
-        };
+      case 'prompt_section_rollback': {
+        const [sectionId, raw] = action.target.split(':');
+        const version = Number(raw);
+
+        if (!sectionId || !Number.isInteger(version) || version <= 0) {
+          return { ok: false, error: `invalid prompt-section target: ${action.target}` };
+        }
+
+        return yield* Effect.promise(async () => revertPromptSection(ctx.rt.storage.sql, ctx.rt.actor, sectionId, version));
       }
 
-      return { ok: true, detail: `forgot ${forgotten.length} fact${forgotten.length === 1 ? '' : 's'}` };
+      case 'fact_forget': {
+        if (!ctx.facts.recall(action.target)) {
+          return { ok: false, error: `fact ${action.target} is already forgotten` };
+        }
+
+        ctx.facts.forget(action.target);
+
+        return { ok: true, detail: `forgot fact ${action.target}` };
+      }
+
+      case 'fact_forget_many': {
+        const forgotten: string[] = [];
+        const failures: string[] = [];
+
+        for (const target of action.targets) {
+          const failure = yield* Effect.matchCause(changelogRevert(ctx, { type: 'fact_forget', target }), {
+            onSuccess: (result) => result.ok ? null : (result.error ?? 'unknown error'),
+            onFailure: (failed) => renderThrownChain({ cause: Cause.squash(failed) }),
+          });
+
+          if (failure === null) forgotten.push(target);
+          else failures.push(`${target}: ${failure}`);
+        }
+
+        if (failures.length > 0) {
+          return {
+            ok: false,
+            detail: `forgot ${forgotten.length} of ${action.targets.length} facts`,
+            error: `failed to forget ${failures.length} fact${failures.length === 1 ? '' : 's'}: ${failures.join('; ')}`,
+          };
+        }
+
+        return { ok: true, detail: `forgot ${forgotten.length} fact${forgotten.length === 1 ? '' : 's'}` };
+      }
     }
-  }
+  });
 }
 
 /** Id-addressed so a digest that shifted between list and revert cannot hit

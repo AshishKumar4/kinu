@@ -26,7 +26,8 @@ import type {
 } from './types';
 import { DEFAULT_EVOLUTION_CONFIG } from './types';
 import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../providers/structured';
-import { tolerate, settleLogged } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { settle, tolerate, settleLogged } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
@@ -596,40 +597,45 @@ export class EvolutionEngine {
      * turn being opened. A row is retired only once its review ran. Undecodable rows
      * and missions over cap come back in `refused` with their disposition.
      */
-  async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
-    if (!this.config.enabled) return { reviewed: 0, refused: [] };
-    this.recoverInterruptedWork();
-    const taken = this.sessionWindow.takeQueuedReviews(MAX_TURN_REVIEWS_PER_OPEN);
-    const refused: RefusedTurnReview[] = [...taken.refused];
-    let reviewed = 0;
+  runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!this.config.enabled) return { reviewed: 0, refused: [] };
+      this.recoverInterruptedWork();
+      const taken = this.sessionWindow.takeQueuedReviews(MAX_TURN_REVIEWS_PER_OPEN);
+      const refused: RefusedTurnReview[] = [...taken.refused];
+      let reviewed = 0;
 
-    for (const row of taken.reviews) {
-      try {
-        await this.reviewTurn(row.turn, row.followup);
-      } catch (err) {
-        // A governor refusal is a decision: the row goes back unchanged. Any other throw
-        // also releases it untombstoned.
-        if (err instanceof MissionBudgetExhausted) {
-          refused.push({ id: row.id, reason: 'budget' });
-        } else {
-          diagnostics.failure(
-            'evolution.deferred_review_failed',
-            toKinuError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
-            { reviewId: row.id },
-          );
-        }
+      for (const row of taken.reviews) {
+        const ran = yield* Effect.catchCause(Effect.as(Effect.promise(() => this.reviewTurn(row.turn, row.followup)), true), (failed) => Effect.sync(() => {
+          const err = Cause.squash(failed);
 
-        this.sessionWindow.releaseQueuedReview(row.id);
-        continue;
+          // A governor refusal is a decision: the row goes back unchanged. Any other throw
+          // also releases it untombstoned.
+          if (err instanceof MissionBudgetExhausted) {
+            refused.push({ id: row.id, reason: 'budget' });
+          } else {
+            diagnostics.failure(
+              'evolution.deferred_review_failed',
+              toKinuError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
+              { reviewId: row.id },
+            );
+          }
+
+          this.sessionWindow.releaseQueuedReview(row.id);
+
+          return false;
+        }));
+
+        if (!ran) continue;
+
+        // Before the lease settles, leaving a one-step crash window.
+        this.sessionWindow.recordReviewRan(row.id);
+        this.sessionWindow.settleReview(row.id);
+        reviewed++;
       }
 
-      // Before the lease settles, leaving a one-step crash window.
-      this.sessionWindow.recordReviewRan(row.id);
-      this.sessionWindow.settleReview(row.id);
-      reviewed++;
-    }
-
-    return { reviewed, refused };
+      return { reviewed, refused };
+    }));
   }
 
   /**

@@ -13,7 +13,8 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn } from './types';
 import { JsonObjectSchema, JsonValueSchema, parseJsonValue } from '../utils/json';
 import { UsageSchema } from '../usage';
-import { diagnostics, toKinuError, tolerate } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, recording, settleSync, toKinuError, tolerate } from '../obs/index';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
@@ -337,23 +338,18 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       }
 
       if (this.countQueuedReviews() >= MAX_QUEUED_TURN_REVIEWS) return 'queue_full';
-      let encoded: string;
 
-      try {
-        encoded = JSON.stringify(turn);
-      } catch (err) {
-        diagnostics.failure(
-          'evolution.deferred_review_unserializable',
-          toKinuError({ doing: 'serialize a turn for its deferred review', cause: err, otherwise: 'bad_input' }),
-        );
+      return settleSync(Effect.matchCauseEffect(Effect.sync(() => JSON.stringify(turn)), {
+        onSuccess: (encoded) => Effect.sync(() => {
+          void sql`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at)
+              VALUES (${actorId}, ${`rev-${nanoid()}`}, ${encoded}, ${followup}, 0, 'queued', ${nowMs()})`;
 
-        return 'unserializable';
-      }
-
-      void sql`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at)
-          VALUES (${actorId}, ${`rev-${nanoid()}`}, ${encoded}, ${followup}, 0, 'queued', ${nowMs()})`;
-
-      return 'queued';
+          return 'queued' as const;
+        }),
+        onFailure: (failed) => Effect.as(recording({ doing: 'serialize a turn for its deferred review', otherwise: 'bad_input' }, (failure) => {
+          diagnostics.failure('evolution.deferred_review_unserializable', failure);
+        })(failed), 'unserializable' as const),
+      }));
     },
 
     takeQueuedReviews(limit) {

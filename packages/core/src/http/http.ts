@@ -1,7 +1,8 @@
 // Shared HTTP helpers for backend route modules, plus the policy for rebuilding a request for an upstream.
 import { inlineFileType } from '../read-models/file-types';
 import { projectJsonValue } from '../utils/json';
-import { KinuError, publicMessage, toKinuError, tolerateAsync, type ErrorCode } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { KinuError, publicMessage, settle, toKinuError, tolerateAsync, type ErrorCode } from '../obs/index';
 import { PRIVATE_NO_STORE } from './security-headers';
 import { copyHeaders } from '../providers/fetch-shim';
 import * as v from 'valibot';
@@ -69,42 +70,42 @@ export async function safeJson<Schema extends v.GenericSchema>(
  * a missing `content-length` reads as 0, so the declared length is only a pre-filter. On overflow the
  * stream is cancelled, not drained. A stalled body returns classified; `sink` failures propagate.
  */
-export async function readBoundedStream(
+export function readBoundedStream(
   request: Request,
   limit: number,
   sink: (chunk: Uint8Array) => Promise<void> | void,
 ): Promise<'ok' | 'too_large' | KinuError> {
-  const declared = Number(request.headers.get('content-length'));
+  return settle(Effect.gen(function* () {
+    const declared = Number(request.headers.get('content-length'));
 
-  if (Number.isFinite(declared) && declared > limit) return 'too_large';
-  const body = request.body;
+    if (Number.isFinite(declared) && declared > limit) return 'too_large';
+    const body = request.body;
 
-  if (body === null) return 'ok';
-  const reader = body.getReader();
-  let total = 0;
+    if (body === null) return 'ok';
+    const reader = body.getReader();
+    let total = 0;
 
-  for (;;) {
-    let arrived: Awaited<ReturnType<typeof reader.read>>;
+    for (;;) {
+      const arrived = yield* Effect.matchCause(Effect.promise(() => reader.read()), {
+        onSuccess: (read) => ({ read }),
+        onFailure: (failed) => ({ unread: toKinuError({ doing: 'reading a request body', cause: Cause.squash(failed), otherwise: 'unavailable' }) }),
+      });
 
-    try {
-      arrived = await reader.read();
-    } catch (cause) {
-      return toKinuError({ doing: 'reading a request body', cause, otherwise: 'unavailable' });
+      if ('unread' in arrived) return arrived.unread;
+      const value = arrived.read.value;
+
+      if (arrived.read.done || value === undefined) return 'ok';
+      total += value.byteLength;
+
+      if (total > limit) {
+        yield* Effect.promise(() => reader.cancel('the request body is over its limit'));
+
+        return 'too_large';
+      }
+
+      yield* Effect.promise(async () => sink(value));
     }
-
-    const value = arrived.value;
-
-    if (arrived.done || value === undefined) return 'ok';
-    total += value.byteLength;
-
-    if (total > limit) {
-      await reader.cancel('the request body is over its limit');
-
-      return 'too_large';
-    }
-
-    await sink(value);
-  }
+  }));
 }
 
 /** The whole body, bounded, or the classified reason there is not one. */

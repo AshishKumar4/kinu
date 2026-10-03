@@ -1,5 +1,5 @@
-import { Effect, Result } from 'effect';
-import { settleSync } from '../obs/effect';
+import { Cause, Effect, Result } from 'effect';
+import { settle, settleSync } from '../obs/effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import type { WorkMode } from '../types/turn';
@@ -543,45 +543,48 @@ export class PlanReviewStore {
   }
 
   submit(sessionId: string, edits: readonly PlanEdit[]): PlanReviewResult {
-    const current = this.getActive(sessionId);
+    return settleSync(Effect.gen({ self: this }, function* (): Effect.gen.Return<PlanReviewResult> {
+      const current = this.getActive(sessionId);
 
-    if (current?.status === 'pending') {
-      return { ok: false, error: `plan ${current.id} revision ${current.revision} is awaiting review`, plan: current };
-    }
+      if (current?.status === 'pending') {
+        return { ok: false, error: `plan ${current.id} revision ${current.revision} is awaiting review`, plan: current };
+      }
 
-    const revising = current?.status === 'changes_requested' ? current : null;
-    const existingLines = revising ? revising.content.split('\n') : [];
-    let content: string;
+      const revising = current?.status === 'changes_requested' ? current : null;
+      const existingLines = revising ? revising.content.split('\n') : [];
 
-    try {
-      content = applyPlanEdits(existingLines, edits).join('\n');
-    } catch (error) {
-      return { ok: false, error: renderThrownChain({ cause: error }), plan: current };
-    }
+      const edited = yield* Effect.matchCause(Effect.sync(() => applyPlanEdits(existingLines, edits).join('\n')), {
+        onSuccess: (content) => ({ content }),
+        onFailure: (failed) => ({ refused: renderThrownChain({ cause: Cause.squash(failed) }) }),
+      });
 
-    if (byteLength(content) + byteLength('[]') > MAX_PLAN_REVIEW_ROW_BYTES) {
-      return { ok: false, error: `plan content exceeds the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };
-    }
+      if ('refused' in edited) return { ok: false, error: edited.refused, plan: current };
+      const { content } = edited;
 
-    const id = revising?.id ?? this.newId();
-    const revision = revising ? revising.revision + 1 : 1;
-    const now = this.now();
-    void this.sql`INSERT INTO plan_reviews (
+      if (byteLength(content) + byteLength('[]') > MAX_PLAN_REVIEW_ROW_BYTES) {
+        return { ok: false, error: `plan content exceeds the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };
+      }
+
+      const id = revising?.id ?? this.newId();
+      const revision = revising ? revising.revision + 1 : 1;
+      const now = this.now();
+      void this.sql`INSERT INTO plan_reviews (
       actor_id, id, session_id, revision, content, status, annotations_json, feedback,
       handoff_accepted, handoff_attempt, created_at, updated_at
     ) VALUES (
       ${this.actorId}, ${id}, ${sessionId}, ${revision}, ${content}, 'pending', '[]', NULL,
       0, 0, ${now}, ${now}
     )`;
-    markStoreChanged(this.sql);
+      markStoreChanged(this.sql);
 
-    if (revising) {
-      void this.sql`UPDATE plan_reviews SET status='superseded', updated_at=${now}
+      if (revising) {
+        void this.sql`UPDATE plan_reviews SET status='superseded', updated_at=${now}
         WHERE actor_id=${this.actorId} AND id=${revising.id} AND revision=${revising.revision}
           AND status='changes_requested'`;
-    }
+      }
 
-    return this.written(id, revision);
+      return this.written(id, revision);
+    }));
   }
 
   saveAnnotations(id: string, revision: number, annotations: { value: unknown }): PlanReviewResult {
@@ -803,9 +806,9 @@ export class PlanReviewActions {
     const plan = result.plan;
     const { text, metadata } = planHandoffTurn(plan, decision);
 
-    try {
+    return settle(Effect.catchCause(Effect.gen({ self: this }, function* (): Effect.gen.Return<PlanDecisionOutcome> {
       const attempt = this.store.handoffAttempt(plan.id, plan.revision);
-      const queued = await enqueue({ text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt) });
+      const queued = yield* Effect.promise(() => enqueue({ text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt) }));
 
       if (queued.status !== 'queued') {
         return { ok: true, plan, queued: false, queueError: 'the durable turn submission was skipped' };
@@ -819,8 +822,6 @@ export class PlanReviewActions {
       if (accepted.plan?.status === 'superseded') return { ok: true, plan: accepted.plan, queued: true };
 
       return accepted;
-    } catch (error) {
-      return { ok: true, plan, queued: false, queueError: renderThrownChain({ cause: error }) };
-    }
+    }), (failed) => Effect.sync((): PlanDecisionOutcome => ({ ok: true, plan, queued: false, queueError: renderThrownChain({ cause: Cause.squash(failed) }) }))));
   }
 }

@@ -7,7 +7,8 @@ import {
   resolveProviderCredentials,
 } from './config';
 import { readDefaultTier } from './profiles';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 
 interface LocalModelResolverOptions {
   model?: string;
@@ -29,27 +30,26 @@ interface UnusableModel {
   reason: string;
 }
 
-export async function findUnusableModel(opts: LocalModelResolverOptions = {}): Promise<UnusableModel | null> {
-  let resolver: LocalModelResolver;
-  let spec: string;
-  let provider: string;
+export function findUnusableModel(opts: LocalModelResolverOptions = {}): Promise<UnusableModel | null> {
+  return settle(Effect.gen(function* () {
+    const resolved = yield* Effect.matchCause(Effect.sync(() => {
+      const resolver = createConfiguredLocalModelResolver(opts).resolver;
+      const spec = resolver.normalizeSpecSync(opts.model ?? null);
 
-  try {
-    resolver = createConfiguredLocalModelResolver(opts).resolver;
-    spec = resolver.normalizeSpecSync(opts.model ?? null);
-    provider = parseModelSpec(spec).provider;
-  } catch (error) {
-    return {
-      spec: opts.model ?? 'The configured model',
-      reason: renderThrownChain({ cause: error }),
-    };
-  }
+      return { resolver, spec, provider: parseModelSpec(spec).provider };
+    }), {
+      onSuccess: (named) => ({ named }),
+      onFailure: (failed) => ({ unusable: { spec: opts.model ?? 'The configured model', reason: renderThrownChain({ cause: Cause.squash(failed) }) } }),
+    });
 
-  const info = (await resolver.listProviders()).find((entry) => entry.id === provider);
+    if ('unusable' in resolved) return resolved.unusable;
+    const { resolver, spec, provider } = resolved.named;
+    const info = (yield* Effect.promise(() => resolver.listProviders())).find((entry) => entry.id === provider);
 
-  if (!info || info.available) return null;
+    if (!info || info.available) return null;
 
-  return { spec, provider, reason: info.unavailableReason ?? `No credential is connected for ${provider}.` };
+    return { spec, provider, reason: info.unavailableReason ?? `No credential is connected for ${provider}.` };
+  }));
 }
 
 export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptions = {}): ConfiguredLocalModelResolver {
