@@ -239,6 +239,11 @@ function renderTurnReason(turn: TurnReason): string {
 
 /** Volatile, so rendered in the dynamic-context block, never the cacheable prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
+  // Up, but unreachable until the owner consents: the device executor's 'idle' with no grant (device-tunnel-executor.ts).
+  if (exec.granted === false && exec.status === 'idle') {
+    return 'connected, no grant yet for this workspace: the first call asks the owner once';
+  }
+
   // A configured runtime that cannot take a call right now.
   if (exec.available === false || exec.status === 'disconnected' || exec.status === 'error') {
     return exec.name === 'device' ? 'offline' : 'unavailable now';

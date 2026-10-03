@@ -94,6 +94,18 @@ test('the execution status names a configured runtime that is down, and leaves o
   expect(block).not.toContain('- gpu:');
 });
 
+// A connected machine this workspace has no grant on yet reports available=false too, but it is up: the first call
+// raises the owner's consent card, which is expected, not an outage.
+test('a connected device awaiting its first grant reads as connected and asks once, never as offline', () => {
+  const awaiting: PromptExecutorInfo = {
+    name: 'device', kind: 'device', configured: true, available: false, active: false, status: 'idle', granted: false,
+    reason: 'Connected, but this workspace has no access yet: the first command raises a consent card for the owner.',
+  };
+
+  expect(executorAvailabilityLabel(awaiting)).toBe('connected, no grant yet for this workspace: the first call asks the owner once');
+  expect(executorAvailabilityLabel({ ...awaiting, status: 'disconnected', granted: undefined })).toBe('offline');
+});
+
 // The system prompt states none of these, so a new day, a model switch or a new directory moves no cached byte.
 test('date, model and working directory are live state: a new day is a delta of the runtime section alone', () => {
   const ledger = new DynamicContextLedger();

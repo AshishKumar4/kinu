@@ -2176,9 +2176,10 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  private scaffoldCandidateModel(): Pick<ScaffoldCandidateBinding, 'rt' | 'profile' | 'bindModel' | 'modelContext'> {
+  private scaffoldCandidateModel(): Pick<ScaffoldCandidateBinding, 'rt' | 'profile' | 'bindModel' | 'modelContext' | 'compose'> {
     return {
       rt: this.rt,
+      compose: () => this.composeNextRequest(),
       profile: async () => {
         const mode = await this.preparedWorkMode();
 
