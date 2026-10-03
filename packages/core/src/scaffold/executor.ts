@@ -85,21 +85,6 @@ export type ScaffoldEvent =
 
 export type ScaffoldEmitFn = (event: ScaffoldEvent) => void | Promise<void>;
 
-/** Visible text of an event, including text-deltas inside ui_chunks, so delegating scaffolds are scored on real output. */
-export function scaffoldEventText(event: ScaffoldEvent): string | null {
-  if (event.type === 'text_delta') return event.text;
-
-  if ((event.type === 'chat_chunk' || event.type === 'model_chunk') && event.chunk.type === 'text-delta') return event.chunk.delta;
-
-  if (event.type === 'ui_chunk' && isJsonObject(event.chunk)) {
-    const delta = v.safeParse(v.string(), event.chunk.delta);
-
-    if (event.chunk.type === 'text-delta' && delta.success) return delta.output;
-  }
-
-  return null;
-}
-
 export interface ScaffoldRunResult {
   ok: boolean;
   /** True iff the scaffold emitted 'done' before completing. */
@@ -207,7 +192,7 @@ export interface ScaffoldRunOptions extends ScaffoldRunControl {
   defaultInference?: () => AsyncIterable<ScaffoldDefaultInferenceChunk>;
   /** Budgeted conversation page for `host.history()` (orchestrator/scaffold-host.ts); absent means it returns an error. */
   history?: ScaffoldHistoryReader;
-  /** Scaffold code override for shadow runs. Default: rt.identity.scaffold.read(). */
+  /** Scaffold code override for a pending-version run. Default: rt.identity.scaffold.read(). */
   scaffoldCodeOverride?: string;
 }
 

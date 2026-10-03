@@ -73,7 +73,7 @@ export const FileEditInputSchema = z.object({
 });
 
 /** Input of the native tool and of `workspace.*` in eval. */
-const FileToolInputSchema = z.object({
+export const FileToolInputSchema = z.object({
   action: oneOf(FILE_TOOL_ACTIONS),
   path: z.string().trim().min(1)
     .describe('Relative paths resolve at the workspace root.'),

@@ -11,17 +11,14 @@ import { DEFAULT_CONFIG } from '../config';
 import { isoDate, nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { getLesson, listLessons } from '../evolution/lessons';
-import {
-  DEFAULT_SHADOW_CONFIG, decidePromotion, readShadowVerdict,
-  type ScaffoldStatus,
-} from '../scaffold/shadow';
+import type { ScaffoldStatus } from '../types/scaffold';
 import { getCurrentScaffoldVersion } from '../scaffold/versions';
 import type { ExperienceKind, PublishableCandidate } from './types';
 
 const EXPERIENCE_MIN_FACT_CONFIDENCE = 0.8;
 
-/** Live graded turns required after promotion: the same evidence count the shadow gate demands offline. */
-const EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS = DEFAULT_SHADOW_CONFIG.minTrials;
+/** Live rated turns required after promotion. */
+const EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS = 10;
 
 export interface PublishSources {
   sql: SqlExecutor;
@@ -189,26 +186,12 @@ async function scaffoldCandidate(
   if (row.status !== 'current') {
     return {
       refused: `scaffold v${version} is ${row.status}, not the version this workspace runs: `
-        + 'only a loop the local shadow gate promoted has been proven here',
+        + 'only a loop promoted here has been proven here',
     };
   }
 
-  // status='current' is not enough: the v0 bootstrap and forced promotes never earned it.
-  const record = readShadowVerdict(src.sql, src.actor, version).summary;
-
-  const gate = decidePromotion({
-    trialsSoFar: record.trials,
-    pendingWins: record.pendingWins,
-    currentWins: record.currentWins,
-  }, DEFAULT_SHADOW_CONFIG);
-
-  if (gate.decision !== 'promote') {
-    return {
-      refused: `scaffold v${version} is live but its shadow record does not clear the promotion gate `
-        + `(${record.pendingWins}W-${record.currentWins}L-${record.ties}T over ${record.trials} trial`
-        + `${record.trials === 1 ? '' : 's'}), so nothing here has actually proven it`,
-    };
-  }
+  // The v0 bootstrap is the bundled loop: nothing here proved it.
+  if (version === 0) return { refused: 'scaffold v0 is the bundled loop, which every workspace already has' };
 
   // Ratings stamped with this version are exactly the rated turns since promotion; the veto window runs to now.
   const turns = src.sql<{ created_at: number }>`
@@ -220,8 +203,7 @@ async function scaffoldCandidate(
     return {
       refused: `scaffold v${version} has served ${turns.length} rated turn`
         + `${turns.length === 1 ? '' : 's'} since promotion, below the `
-        + `${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}-turn probation this workspace's own promotion gate `
-        + 'demands as evidence (DEFAULT_SHADOW_CONFIG.minTrials)',
+        + `${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}-turn probation it must serve here first`,
     };
   }
 
@@ -241,16 +223,12 @@ async function scaffoldCandidate(
     return { refused: `scaffold v${version} has no source in this workspace's version store, so there is nothing to share` };
   }
 
-  const decisive = record.pendingWins + record.currentWins;
-
   return {
     kind: 'scaffold',
     key: String(version),
     title: titleOf(`Scaffold v${version}: ${row.rationale}`),
     payload: { kind: 'scaffold', version, rationale: row.rationale, code },
-    evidence: `promoted here on ${record.pendingWins} of ${decisive} decisive shadow trials `
-      + `(win-rate ${Math.round(gate.winRate * 100)}%), then ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS} `
-      + 'rated turns live with no misevolution veto',
+    evidence: `live here for ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS} rated turns with no misevolution veto`,
   };
 }
 

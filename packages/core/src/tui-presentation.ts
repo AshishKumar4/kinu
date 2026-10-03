@@ -36,7 +36,7 @@ export const CHANGE_KIND_GLYPH = {
   fact: '✦',
   gepa: '◬',
   ratings: '✓',
-  prompt_section: '➤',
+  artifact: '➤',
   refinement: '⌁',
 } satisfies Record<ChangelogEntryKind, string>;
 

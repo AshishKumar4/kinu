@@ -136,7 +136,7 @@ export async function runExperienceAction(
           status: 'provisional',
           payload: entry.payload,
           note: entry.kind === 'scaffold'
-            ? 'Staged provisionally: once this turn is accepted it is PROPOSED as a pending scaffold version here, and it has to win this workspace\'s own shadow trial before it ever runs.'
+            ? 'Staged provisionally: once this turn is accepted it is PROPOSED as a pending scaffold version here, and it runs only once the owner promotes it.'
             : 'Staged provisionally: it becomes part of this workspace once this turn is accepted.',
         };
       }

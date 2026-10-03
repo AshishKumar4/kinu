@@ -1,13 +1,13 @@
 import {
-  decodeJsonValue, formatScoreInterval, JsonArraySchema, JsonValueSchema,
+  decodeJsonValue, JsonArraySchema, JsonValueSchema,
   QualityDaySchema, renderQualitySeries, SPEND_SOURCE_LABEL, usageTotal,
-  type GepaOptimizationResult, type JsonObject, type JsonValue,
+  type ProposerOutcome, type JsonObject, type JsonValue,
   type MissionBudgetLimits, type SearchNode, type Usage, type WorkspaceSpend,
   type AgentRpcMethod,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
-import { runLocalGepa } from '../local-agent-client';
+import { runLocalOptimization } from '../local-agent-client';
 import { requireAuthConfig } from '../config';
 import {
   ActivitySpendSchema, callAgentRpc, createCloudWebhookTrigger,
@@ -44,20 +44,12 @@ interface InspectOpts {
 
 interface GepaOpts extends InspectOpts {
   run?: boolean;
-  iterations?: string;
-  evalSize?: string;
-  metricCalls?: string;
 }
 
-const ScoreIntervalSchema = v.object({ mean: v.number(), lo: v.number(), hi: v.number(), n: v.number() });
-
-const GepaOptimizationResultSchema: v.GenericSchema<GepaOptimizationResult> = v.object({
-  ok: v.boolean(), error: v.optional(v.string()), runId: v.optional(v.string()), proposed: v.optional(v.boolean()),
-  pendingVersion: v.optional(v.nullable(v.number())), skipReason: v.optional(v.string()),
-  bestScore: v.optional(ScoreIntervalSchema), seedScore: v.optional(ScoreIntervalSchema), iterations: v.optional(v.number()),
-  selection: v.optional(v.object({ heldOutNegatives: v.number(), guards: v.number() })),
-  selectionWarning: v.optional(v.string()),
-});
+const ProposerOutcomeSchema: v.GenericSchema<ProposerOutcome> = v.variant('kind', [
+  v.object({ kind: v.literal('idle') }),
+  v.object({ kind: v.literal('searched'), artifactId: v.string(), version: v.nullable(v.number()), detail: v.string() }),
+]);
 
 const SearchNodeSchema: v.GenericSchema<SearchNode> = v.object({
   id: v.string(), parent_id: v.nullable(v.string()), root_id: v.string(),
@@ -373,47 +365,26 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
 
 async function runGepaPass(name: string, opts: GepaOpts): Promise<void> {
   const target = resolveAgentTarget(name);
-  const budget: Parameters<typeof runLocalGepa>[1] = {};
-
-  if (opts.iterations) budget.maxIterations = Number(opts.iterations);
-
-  if (opts.evalSize) budget.evalSize = Number(opts.evalSize);
-
-  if (opts.metricCalls) budget.maxMetricCalls = Number(opts.metricCalls);
 
   const result = await readTarget(target, {
     cloud: (auth) => callAgentRpc({
-      origin: auth.origin,
-      token: auth.token,
-      name: target.cloudName,
-      method: 'runScaffoldGepaOptimization',
-      schema: GepaOptimizationResultSchema,
-      args: [decodeJsonValue({ value: budget })],
+      origin: auth.origin, token: auth.token, name: target.cloudName,
+      method: 'runOptimization', schema: ProposerOutcomeSchema, args: [],
     }),
-    local: () => runLocalGepa(target.localName, budget),
+    local: () => runLocalOptimization(target.localName),
   });
 
   if (opts.json) return printJson(decodeJsonValue({ value: result }));
 
-  if (!result.ok) {
-    console.log(`${ERR('GEPA did not run')} ${result.error ?? ''}`);
+  if (result.kind === 'idle') {
+    console.log(DIM('  nothing to search: no low-rated turns in the last 14 days'));
 
     return;
   }
 
-  console.log(`${OK('GEPA run')} ${ACCENT(result.runId ?? '')}  ${result.iterations ?? 0} iteration(s)`);
-  const score = (i: typeof result.seedScore): string => (i ? formatScoreInterval(i) : 'not scored');
-  console.log(`  seed  ${score(result.seedScore)}`);
-  console.log(`  best  ${score(result.bestScore)}`);
-
-  if (result.selection) {
-    console.log(DIM(`  selected on ${result.selection.heldOutNegatives} held-out failure(s) + ${result.selection.guards} guard(s)`));
-  }
-
-  if (result.selectionWarning) console.log(`${WARN('exploratory')} ${result.selectionWarning}`);
-  console.log(result.proposed
-    ? `${OK('proposed')} scaffold v${result.pendingVersion}, resolved by the shadow eval`
-    : DIM(`  no proposal: ${result.skipReason ?? 'no strictly better candidate'}`));
+  console.log(result.version === null
+    ? `${WARN('no edit passed')} ${result.artifactId}: ${result.detail}`
+    : `${OK('proposed')} ${result.artifactId} v${String(result.version)} (${result.detail}), waiting for your decision`);
 }
 
 export async function executorsCommand(

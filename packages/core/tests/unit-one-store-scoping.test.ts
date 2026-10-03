@@ -39,10 +39,10 @@ import {
   initCurriculumTable, listProposedTasks, updateProposedTaskStatus,
 } from '../src/curriculum/proposer';
 import {
-  initPromptSectionTables, activePromptSectionOverrides, incumbentSectionSource,
-  firstPendingPromptSection, getPendingPromptSection, applyPromptSectionDecision,
-  recordPromptSectionTrial, listPromptSectionVersions,
-} from '../src/prompting/section-store';
+  artifactBody, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, settleArtifact,
+  waitingCandidate, writeCandidate,
+} from '../src/evolution/artifacts';
+import { initArtifactTables } from '../src/evolution/artifact-schema';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import {
   initAlternateTakesTable, recordBranchTakeSet, listAlternateTakeSets,
@@ -535,49 +535,31 @@ describe('two actors, one database: proposed_tasks', () => {
   });
 });
 
-describe('two actors, one database: prompt_section_versions', () => {
-  test('one section id carries a different promoted source per actor', () => {
+describe('two actors, one database: artifact_versions', () => {
+  test('one artifact id carries a different promoted body per actor, and one actor\'s revert leaves the other\'s', () => {
     const w = world();
-    initPromptSectionTables(w.execRaw);
+    initArtifactTables(w.execRaw);
     const section = PROMPT_SECTIONS[0];
 
     if (section === undefined) throw new Error('the prompt-section registry is empty');
+    const id = sectionArtifact(section.id);
+    const evidence = { turns: ['t'], reason: 'incorrect' };
 
-    for (const [actor, source, status] of [
-      [w.a, 'a-source', 'current'], [w.b, 'b-source', 'pending'],
-    ] as const) {
-      void w.sql`INSERT INTO prompt_section_versions
-          (actor_id, section_id, version, source, rationale, status, incumbent_bytes, written_at)
-        VALUES (${actor.actorId}, ${section.id}, 1, ${source}, ${'because'}, ${status}, 10, 1)`;
+    for (const [actor, body] of [[w.a, 'a-source'], [w.b, 'b-source']] as const) {
+      writeCandidate(w.sql, actor, { artifactId: id, body, rationale: 'because', evidence, now: 1 });
     }
 
-    expect(w.count('prompt_section_versions')).toBe(2);
+    settleArtifact(w.sql, w.a, { artifactId: id, version: 1, status: 'current', now: 2 });
+    expect(w.count('artifact_versions')).toBe(2);
+    expect(currentArtifacts(w.sql, w.a)[id]).toBe('a-source');
+    expect(currentArtifacts(w.sql, w.b)[id]).toBeUndefined();
+    expect(artifactBody(w.sql, w.b, id)).toBe(section.source);
+    expect(waitingCandidate(w.sql, w.a)).toBeNull();
+    expect(waitingCandidate(w.sql, w.b)?.body).toBe('b-source');
 
-    expect(activePromptSectionOverrides(w.sql, w.a)[section.id]).toBe('a-source');
-    expect(activePromptSectionOverrides(w.sql, w.b)[section.id]).toBeUndefined();
-    expect(incumbentSectionSource(w.sql, w.a, section)).toBe('a-source');
-    expect(incumbentSectionSource(w.sql, w.b, section)).toBe(section.source);
-    expect(firstPendingPromptSection(w.sql, w.a)).toBeNull();
-    expect(firstPendingPromptSection(w.sql, w.b)).toBe(section.id);
-    expect(listPromptSectionVersions(w.sql, w.a)).toHaveLength(1);
-
-    // Trials on the same section and version.
-    for (const [actor, winner] of [[w.a, 'pending'], [w.b, 'current']] as const) {
-      recordPromptSectionTrial(w.sql, actor, { sectionId: section.id, pendingVersion: 1, winner });
-    }
-
-    expect(listPromptSectionVersions(w.sql, w.a)[0]).toMatchObject({ wins: 1, losses: 0, ties: 0 });
-    expect(listPromptSectionVersions(w.sql, w.b)[0]).toMatchObject({ wins: 0, losses: 1, ties: 0 });
-
-    const pendingB = getPendingPromptSection(w.sql, w.b, section.id);
-
-    if (pendingB === null) throw new Error('B has a pending candidate for this section');
-    expect(pendingB.trialsSoFar).toBe(1);
-    expect(getPendingPromptSection(w.sql, w.a, section.id)).toBeNull();
-
-    applyPromptSectionDecision(w.sql, w.b, pendingB, 'rollback');
-    // A's promoted row is untouched by B's rollback.
-    expect(activePromptSectionOverrides(w.sql, w.a)[section.id]).toBe('a-source');
+    revertArtifact(w.sql, w.b, id, 1);
+    expect(currentArtifacts(w.sql, w.a)[id]).toBe('a-source');
+    expect(listArtifactVersions(w.sql, w.b, id)[0]?.status).toBe('rolled_back');
     w.close();
   });
 });

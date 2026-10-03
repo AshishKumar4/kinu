@@ -140,7 +140,7 @@ describe('layer gate — decomposition', () => {
     expect(reached.has('compilePromptSurface')).toBe(true);
     expect(reached.has('renderAgentsMdSection')).toBe(true);
     // …and it crosses module boundaries, not just direct imports.
-    expect(reachableSubjects(resolve(SRC, SUBJECT_SOURCE.selectEvolutionBase)).has('checkMisevolution')).toBe(true);
+    expect(reachableSubjects(resolve(SRC, 'evolution/trials.ts')).has('trialDecision')).toBe(true);
   });
 
   test('no layer\'s production code reaches another layer\'s subject', () => {

@@ -19,7 +19,7 @@ import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { SessionTranscript, WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
-import type { ChatTurnInput, ActorTurnLease, PreparedTurn } from '@kinu.run/core';
+import type { ChatTurnInput, ActorTurnLease, PreparedTurn, TurnOpening } from '@kinu.run/core';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import { isWorkMode, workModeForTurnMetadata, ChatSession, ExtensionHost, type KinuExtension } from '@kinu.run/core';
 import { ActorClaimStore, admitSubordinateTask, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
@@ -546,11 +546,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return failure;
   }
-  protected override async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
+  protected override async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     this._prepareFailure = null;
 
     try {
-      const prepared = await super.prepareTurn(item, lease);
+      const prepared = await super.prepareTurn(item, lease, opening);
       this._preparedTools = prepared.execution.chat.tools ?? {};
       this._preparedDynamic = prepared.execution.dynamic;
       this._preparedExtensions = prepared.execution.extensions;
@@ -998,10 +998,9 @@ export function workspaceMainActor(db: Database): ActorHandle {
   return openWorkspaceMainActor(sqlOver(db));
 }
 
-/** A candidate under trial, seeded under `runtime.actor`: the pointer is per-actor. */
+/** A pending scaffold proposal, seeded under `runtime.actor`: the pointer is per-actor. */
 export function declareShadowCandidate(db: Database): void {
   const actor = workspaceMainActor(db);
-  actor.config.setShadowSampleRate(0.5);
   void sqlOver(db)`INSERT OR REPLACE INTO scaffold_versions
     (actor_id, version, written_at, rationale, status)
     VALUES (${actor.actorId}, 1, ${Date.now()}, 'a harness candidate', 'pending')`;

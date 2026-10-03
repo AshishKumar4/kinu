@@ -631,7 +631,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
   };
 }
 
-/** `buildOutcomeEvalSplit` holds out round(n/3); three is the smallest batch with a held-out failure. */
+/** Three is the smallest batch with a failure to answer beside the rest. */
 const MIN_REFINEMENT_DEBT = 3;
 
 /** Bounds the brief, not the ledger; leftovers accrue to the next batch under its own key. */

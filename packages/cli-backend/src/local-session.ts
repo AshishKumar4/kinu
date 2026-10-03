@@ -55,7 +55,6 @@ import { TierIdSchema,
   agentsActionsFor, betaSwarms, type ProfileCatalog,
   facetHomeProvisioner, facetHomeReleaser, actorHomeName, explorationActorKey,
   type HeadSeat, type HostedNodeSeat, type NodeIdentity, type ModelPricing,
-  type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
@@ -63,19 +62,18 @@ import { TierIdSchema,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
-  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial, readMission,
+  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, readMission,
   branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
-  eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
+  eventDrainTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
   terminalEffect,
   RunEndReasonSchema, WorkModeSchema,
-  shadowTrialPlan, trimTrialContext,
   type TerminalTransition, type TerminalEffectTable, type TerminalEffectFault,
   type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, buildSystemPromptSync, currentDateForPrompt,
   type ActorToolsetDeps,
-  activePromptSectionOverrides,
+  turnArtifactBodies, artifactOverrides, currentArtifacts, withToolText, type TurnOpening,
   turnReasonForMetadata, type TurnReason,
   type CountableRequest,
   parseModelSpec, agentAffinityKey, bindRoute, routedLlm,
@@ -96,11 +94,10 @@ import { TierIdSchema,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldGepaOptimization,
-  queueTurnShadowTrial, runQueuedShadowTrials,
-  type GepaOptimizationResult, type ScaffoldControl,
+  applyScaffoldDecision, createLlmJsonJudge, getEvolutionStatus, runOptimization,
+  type ProposerOutcome, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
-  type ShadowStatus,
+  type EvolutionStatus,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, refinementPass, requestOwnerRefinement,
   showRefinementRoute, type RefinementLaneStep,
   type RefinementDecisionInput, type RefinementDecisionResult,
@@ -225,9 +222,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
-    shadowTrialQueue: (turn, opts) => input.session().queueShadowTrial(turn, opts),
-    // A resolved gate swaps the live scaffold, so model-bound state is dropped.
-    shadowTrialRunner: () => input.session().runShadowTrials(),
   });
 
   engine.onEvent((event) => { input.session().reportEvolutionEvent(event); });
@@ -614,7 +608,7 @@ export class LocalAgentSession {
       transaction: (body) => writeTransaction(this.db, body),
       transport: { deliver: (event) => { opts.onEvent(event); } },
       ports: {
-        prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+        prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
         composeRequest: () => this.composeNextRequest(),
         // Only a root chat can approve a plan; a subordinate's plan is refused at admission.
         stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
@@ -1620,8 +1614,11 @@ export class LocalAgentSession {
     return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
-  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
+  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
+    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it.
+    const artifacts = turnArtifactBodies(this.rt.storage.sql, this.rt.actor, { ...opening, main: this.rt.actor.parentActorId === null });
+    this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnIsParentAssigned = item.kind === 'programmatic';
     this.turnDriving = authoredTurnMetadata(item);
@@ -1646,7 +1643,14 @@ export class LocalAgentSession {
 
     if (measured.providerReportedTokens !== undefined) chat.providerReportedTokens = measured.providerReportedTokens;
 
-    return { execution: { ...execution, chat }, sessionKey, contextWindow: chat.modelContext?.contextWindow ?? 0, historyLength };
+    return { execution: { ...execution, chat }, sessionKey, contextWindow: chat.modelContext?.contextWindow ?? 0, historyLength, trial: artifacts.trial };
+  }
+
+  /** The turn's evolved text; between turns, the promoted text. */
+  private turnArtifacts: ReturnType<typeof artifactOverrides> | null = null;
+
+  private currentTurnArtifacts(): ReturnType<typeof artifactOverrides> {
+    return this.turnArtifacts ?? artifactOverrides(currentArtifacts(this.rt.storage.sql, this.rt.actor));
   }
 
   private async resolveTurnProfile(item: TurnAsked): Promise<ResolvedLocalTurn> {
@@ -1702,7 +1706,7 @@ export class LocalAgentSession {
     );
 
     const filteredExternal = Object.fromEntries(Object.entries(this.extraTools).filter(([name]) => toolAllowed(name)));
-    const turnTools = toolsInWorkMode(profile.workMode, { ...filteredBuiltins, ...filteredExternal });
+    const turnTools = withToolText(toolsInWorkMode(profile.workMode, { ...filteredBuiltins, ...filteredExternal }), this.currentTurnArtifacts().tools);
 
     const availableBuiltins = Object.keys(filteredBuiltins).filter(
       (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
@@ -1733,7 +1737,7 @@ export class LocalAgentSession {
       roleSection: profile.role,
       model: { id: turnSpec },
       // Read here: the builder is the byte-stable cacheable prefix and does no I/O.
-      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.rt.actor),
+      sectionOverrides: this.currentTurnArtifacts().sections,
       identity: this.promptIdentity(),
     };
 
@@ -1875,18 +1879,6 @@ export class LocalAgentSession {
       parts.advisor = projectJsonValue({ value: this.actorSession.advisorSnapshot(scoped, input.reachableTools) });
     }
 
-    // Decided once: the plan re-reads the pending version, so a replay would score against the wrong candidate.
-    const sampled = owesShadowTrial(facts) ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
-
-    if (sampled !== null) {
-      parts.shadowTrial = {
-        pendingVersion: sampled,
-        // Bounded here: a million-token turn exceeds a SQLite row, and a failed insert mid-sequence leaves
-        // a prefix recovery reads as the whole roster.
-        trialContext: projectJsonValue({ value: trimTrialContext([...input.trialContext]) }),
-      };
-    }
-
     parts.autoTitle = { mission };
 
     // One claimed effect; the sequence id is the parent's dedupe key, so a replay is recognised.
@@ -1988,8 +1980,6 @@ export class LocalAgentSession {
           return { status: 'completed' };
         },
       }),
-
-      shadow_trial: shadowTrialTerminalEffect(this.engine),
 
       auto_title: terminalEffect({
         input: v.object({ subject: v.string() }),
@@ -2236,7 +2226,6 @@ export class LocalAgentSession {
       events: this.eventRecorder,
       sql: this.rt.storage.sql,
       history: this.stores.history,
-      config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         rt: this.rt,
         compose: () => this.composeNextRequest(),
@@ -2323,24 +2312,22 @@ export class LocalAgentSession {
     return listRefinements(this.refinementDeps, limit);
   }
 
-  getShadowStatus(): ShadowStatus {
-    return getShadowStatus(this.rt.storage.sql, this.rt.actor);
+  getEvolutionStatus(): EvolutionStatus {
+    return getEvolutionStatus(this.rt.storage.sql, this.rt.actor);
   }
 
-  /** 'auto' acts only on a conclusive promotion gate; 'promote'/'rollback' force it. */
-  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
+  /** The owner's decision on the pending scaffold; a promote swaps the live scaffold, so model-bound state is dropped. */
+  async applyScaffoldDecision(mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
     const result = await applyScaffoldDecision(this.scaffoldControl, mode);
 
-    if (result.ok) this.invalidateModelState();
+    this.invalidateModelState();
 
     return result;
   }
 
-  /** GEPA pass over this workspace's scaffold; a strictly better winner enters shadow-eval → promote. */
-  runScaffoldGepaOptimization(opts?: {
-    maxIterations?: number; evalSize?: number; maxMetricCalls?: number;
-  }): Promise<GepaOptimizationResult> {
-    return runScaffoldGepaOptimization(this.scaffoldControl, opts);
+  /** One proposer search on `target` (default the scaffold); the edit waits like any other. */
+  runOptimization(target?: string): Promise<ProposerOutcome> {
+    return runOptimization(this.scaffoldControl, target);
   }
 
   /** `host.history`: a read-only, budgeted page, resolved per call. */
@@ -2419,26 +2406,6 @@ export class LocalAgentSession {
 
   reportEvolutionEvent(event: { readonly type: string; readonly message: string }): void {
     this.emit({ type: 'evolution', event: event.type, message: event.message });
-  }
-
-  queueShadowTrial(turn: ShadowTrialTurn, plan: ShadowTrialPlan): ShadowTrialQueueOutcome {
-    return queueTurnShadowTrial(this.scaffoldControl, turn, plan);
-  }
-
-  /** A resolved gate swaps the live scaffold, so model-bound state is dropped. */
-  async runShadowTrials(): Promise<ShadowTrialDrain> {
-    const drain = await runQueuedShadowTrials(this.scaffoldControl);
-
-    if (drain.applied) {
-      this.emit({
-        type: 'evolution',
-        event: drain.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
-        message: `Shadow eval ${drain.applied}d the pending scaffold after ${drain.trials} trial(s)`,
-      });
-      this.invalidateModelState();
-    }
-
-    return drain;
   }
 
   /** The ActorHost for a session with no {@link LocalAgentHost} above it; it is the root of its tree. */

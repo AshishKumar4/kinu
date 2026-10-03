@@ -803,11 +803,11 @@ describe('config plane', () => {
     db.close();
   });
 
-  test('an evolution write answers with the EFFECTIVE config, clamps included', () => {
+  test('an evolution write answers with the EFFECTIVE config; live trials are off until turned on', () => {
     const { db, config } = workspace();
-    const effective = setEvolutionConfig(config, { autoPromoteScaffold: true, gepaEvalBudget: 1_000_000 });
-    expect(effective.autoPromoteScaffold).toBe(true);
-    expect(effective.gepaEvalBudget).toBeLessThan(1_000_000);
+    expect(getEvolutionConfig(config).liveTrials).toBe(false);
+    const effective = setEvolutionConfig(config, { liveTrials: true });
+    expect(effective.liveTrials).toBe(true);
     expect(getEvolutionConfig(config)).toEqual(effective);
     db.close();
   });

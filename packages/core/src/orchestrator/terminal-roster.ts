@@ -53,16 +53,10 @@ export interface TerminalTurnParts {
   /** Decided by the caller, the only one that reads the list and the outcome together. */
   readonly taskReminder?: { readonly text: string };
   readonly advisor?: JsonValue;
-  readonly shadowTrial?: {
-    readonly pendingVersion: number;
-    /** Already bounded by the caller: an oversized recorded input fails its insert mid-sequence. */
-    readonly trialContext: JsonValue;
-  };
   /** The lane reads the transcript, so the row carries no input. */
   readonly sleepTime?: boolean;
   /** `standIn`: the shown title is a new workspace's, replaced by this turn's naming (identity/naming.ts). */
   readonly autoTitle?: { readonly mission: string | null; readonly standIn?: boolean };
-  readonly autoGepa?: boolean;
   /** Presence is the caller's decision: a `task` child owes a terminal answer on every ending, a durable child only on completion. */
   readonly parentReport?: {
     readonly text: string;
@@ -232,27 +226,12 @@ function completedBuildEffects(
   const { messageId } = facts;
   const owed: OwedEffect[] = [];
 
-  if (parts.shadowTrial && owesShadowTrial(facts)) {
-    owed.push({
-      name: 'shadow_trial', scope: messageId, lane: 'inline',
-      input: {
-        turn: facts.scopedTurn,
-        trialContext: parts.shadowTrial.trialContext,
-        pendingVersion: parts.shadowTrial.pendingVersion,
-      },
-    });
-  }
-
   // Each lane is durably gated at its own boundary, so each replays from its recorded input.
   if (parts.sleepTime) {
     owed.push({ name: 'sleep_time', scope: messageId, lane: 'detached', input: {} });
   }
 
   if (naming !== null) owed.push(naming);
-
-  if (parts.autoGepa) {
-    owed.push({ name: 'auto_gepa', scope: messageId, lane: 'detached', input: {} });
-  }
 
   return owed;
 }
@@ -264,11 +243,6 @@ function autoTitleEffect(
   const input = autoTitleInput(parts.autoTitle, facts.userText);
 
   return { effect: { name: 'auto_title', scope: facts.messageId, lane: 'detached', input }, standIn: 'standIn' in input };
-}
-
-/** Asked by a host before it reads the sampling plan at all. */
-export function owesShadowTrial(facts: Pick<TerminalTurnFacts, 'completed' | 'workMode' | 'evolutionEnabled'>): boolean {
-  return facts.completed && facts.workMode !== 'plan' && facts.evolutionEnabled;
 }
 
 /** The mission unless it is still a placeholder, then the owner's own words. */

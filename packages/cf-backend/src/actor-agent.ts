@@ -56,12 +56,12 @@ import {
 
 import {
   EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference, createDbCodemodeProvider,
-  type EvolutionConfig, type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
+  type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
   initActorClaimTables, ActorClaimStore, initPendingSendTables, PendingSendStore,
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory, type ScaffoldCandidateBinding,
-  queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
+  createJsonJudge, type ScaffoldControl,
   refinementPass, type RefinementDeps,
   type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
   type AdvisorRecoverySnapshot,
@@ -72,7 +72,7 @@ import {
   browserSessions,
   buildSystemPromptSync,
   type PromptIdentity,
-  activePromptSectionOverrides,
+  turnArtifactBodies, artifactOverrides, currentArtifacts, withToolText, type TurnOpening,
   currentDateForPrompt,
   turnReasonForMetadata,
   workModeForTurnMetadata, authoredTurnMetadata,
@@ -197,7 +197,7 @@ import {
   // Once-only lifecycle for one settled response; both backends drive this state machine.
   TerminalTransitions, initTerminalEffectTable,
   terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  turnRecordTerminalEffect, turnLessonsTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
+  turnRecordTerminalEffect, turnLessonsTerminalEffect, eventDrainTerminalEffect,
   RunEndReasonSchema, WorkModeSchema,
   AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
@@ -657,15 +657,6 @@ export abstract class ActorAgent extends Agent<Env> {
   protected extraCodemodeProviders(): CodemodeProvider[] { return []; }
 
   protected abstract get engine(): EvolutionEngine;
-
-  /** Wired here rather than per subclass: a facet that queues trials without a runner stalls on its
-   *  first proposal. */
-  protected get shadowTrialPorts(): Pick<EvolutionConfig, 'shadowTrialQueue' | 'shadowTrialRunner'> {
-    return {
-      shadowTrialQueue: (turn, opts) => queueTurnShadowTrial(this.scaffoldControl, turn, opts),
-      shadowTrialRunner: () => runQueuedShadowTrials(this.scaffoldControl),
-    };
-  }
 
   protected abstract notifyOwner(subject: string, body: string): void;
 
@@ -1306,8 +1297,6 @@ export abstract class ActorAgent extends Agent<Env> {
           return { status: 'completed' };
         },
       }),
-
-      shadow_trial: shadowTrialTerminalEffect(this.engine),
     };
   }
 
@@ -1796,7 +1785,7 @@ export abstract class ActorAgent extends Agent<Env> {
         transport: this.chatTransport,
         mintAnswerId: () => this.mintAnswerId(),
         ports: {
-          prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+          prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
           composeRequest: () => this.composeNextRequest(),
           owedTerminalEffects: (input) => this.owedTerminalEffects(input),
           answerMetadata: (turnId, texts) => this.answerMetadata(turnId, texts),
@@ -2139,17 +2128,13 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  /**
-   * This actor's ports and models for core's scaffold control plane (evolution/control.ts).
-   * On the substrate because the shadow trial queue fills for every actor, facets included.
-   */
+  /** This actor's ports and models for core's scaffold control plane (evolution/control.ts). */
   protected get scaffoldControl(): ScaffoldControl {
     return {
       rt: this.rt,
       events: this.eventRecorder,
       sql: this.boundSql,
       history: this.stores.history,
-      config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         ...this.scaffoldCandidateModel(),
         tools: () => this.getRawToolsForWorkMode(this.turnWorkMode(), callScope),
@@ -4024,8 +4009,15 @@ export abstract class ActorAgent extends Agent<Env> {
   private _turnItem: ChatTurnInput | null = null;
 
   /** The ChatSession's `prepareTurn` port; the loop has already opened the run row and lease. */
-  protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
+  protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     this._turnItem = item;
+    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it.
+
+    const artifacts = turnArtifactBodies(this.rt.storage.sql, this.actorHandle(), {
+      ...opening, main: this.actorHandle().parentActorId === null,
+    });
+
+    this._turnArtifacts = artifactOverrides(artifacts.bodies);
 
     // Clear the previous turn's profile before anything reads a mode: `turnWorkMode()` prefers the
     // bound profile, and the tool build below is the first reader.
@@ -4033,7 +4025,9 @@ export abstract class ActorAgent extends Agent<Env> {
     // The chat view, not the raw surface: a slow `run` must detach into a background job whose
     // settle wakes a turn, and that wrap lives here.
     const body = item.metadata ?? {};
-    const { tools, reads } = await this.turnToolsAndReads(body);
+    const surface = await this.turnToolsAndReads(body);
+    const tools = withToolText(surface.tools, this._turnArtifacts.tools);
+    const { reads } = surface;
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(body);
     this._turnContinuity = readTurnContinuity(body);
@@ -4066,11 +4060,21 @@ export abstract class ActorAgent extends Agent<Env> {
       sessionKey: this.name,
       contextWindow: assembled.window.contextWindow,
       historyLength: assembled.rawMessages.length,
+      trial: artifacts.trial,
     };
   }
 
+  /** The turn's evolved text; between turns, the promoted text. */
+  private _turnArtifacts: ReturnType<typeof artifactOverrides> | null = null;
+
+  private turnArtifacts(): ReturnType<typeof artifactOverrides> {
+    return this._turnArtifacts ?? artifactOverrides(currentArtifacts(this.rt.storage.sql, this.actorHandle()));
+  }
+
   private async composeNextRequest(): Promise<ComposedRequest> {
-    const { tools, reads } = await this.turnToolsAndReads({});
+    const surface = await this.turnToolsAndReads({});
+    const tools = withToolText(surface.tools, this.turnArtifacts().tools);
+    const { reads } = surface;
     const { messages: history } = await this.stores.history.materialize();
 
     const composed = await this.composeTurn({
@@ -4322,7 +4326,7 @@ export abstract class ActorAgent extends Agent<Env> {
       roleSection: profile.role,
       model,
       // Read here, not in the builder: the builder is the byte-stable cacheable prefix and does no I/O.
-      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.actorHandle()),
+      sectionOverrides: this.turnArtifacts().sections,
       identity,
     };
 

@@ -54,11 +54,7 @@ sequenceDiagram
 
     Agent->>Session: Every 5 turns → onSessionComplete(session)
     Session->>Session: Reflect only if a turn errored or drew negative feedback
-    alt 3+ closed windows, and this window reflected
-        Session->>Session: maybeEvolveScaffold()
-        Session->>Session: LLM proposes a new agent.js from an archived base
-        Session->>Session: 4-gate validation → shadow eval → promote or roll back
-    end
+    Note over Session: The cadence lane: a look at the live trial, then the proposer when a trigger holds
 
     Note over Lifetime: Every 5 closed session windows
     Agent->>Lifetime: onLifetimeEvolution()
@@ -94,14 +90,20 @@ The cadence lives in `AgentOrchestrator`, not the engine. Every five turns it ca
 
 `onSessionComplete` is selective. It needs at least 3 turns in the window, and `sessionWarrantsReflection()` requires that some turn errored, drew negative feedback, or was rated 2 or lower. A clean session produces no reflection. When it reflects, an LLM call analyzes the window's recent lessons and records a `session_reflection` lesson. That lesson reaches the curated memory note only when a turn in the window carries the user's own negative.
 
-Scaffold mutation runs inside that reflection path, so the window must have reflected. It also needs at least 3 closed session windows, and it is skipped if a proposal is pending. `selectEvolutionBase()` (`core/src/scaffold/archive.ts`) picks the base from the DGM archive. With probability `1 − scaffold_explore_share` (default 0.2, `getScaffoldExploreShare` in `core/src/config/store.ts`) it branches from the live `current`. Otherwise it samples an archived `historical` or `rolled_back` variant weighted by clade-metaproductivity and inverse trial count. The clade score is the evidence-weighted pooled win rate over the candidate's whole descendant subtree, itself included, with win rates already blended with real user ratings. That is HGM's (ICLR 2026) correction to DGM: a trial win whose children all regressed is a dead end, and the middling ancestor of every good version is worth branching off again. A candidate with no descendants scores exactly its own win rate, so a shallow archive reproduces the pre-clade policy. `maybeEvolveScaffold` reads 12 archive entries, and `renderArchiveBlock` puts the newest 8 into the proposal prompt (`core/src/evolution/engine.ts`).
+### The proposer
+
+One proposer edits the agent's own text and loop (docs/EVOLUTION-REDESIGN.md §3; `core/src/evolution/proposer.ts`). It runs on the cadence lane (`EvolutionEngine.runDueEvolution`) for the main agent only, when no live trial is running and a trigger holds in the last 14 days: three turns rated 2 or lower that share a `wrong` reason, or three struggles with one built-in tool over two turns. A trigger whose turns were already searched (a `gepa_runs` row with the same `target_ref`) does not fire again. The manual optimisation RPC (`runOptimization`, `kinu gepa --run`, Settings) starts the same search on a named artifact.
+
+The proposer edits one artifact in `artifact_versions` (`core/src/evolution/artifacts.ts`): `section:<id>` (a prompt section), `tool:<name>.description`, or `tool:<name>.schema` (the input fields' description strings only; types, required fields and enum values stay the bundled schema's). A tool-struggle trigger edits that tool's text, its fields after a schema refusal; a reason trigger edits the section the decision model names. The scaffold stays in `scaffold_versions` and goes through `modifyScaffold` below. Prompt and tool assembly read each artifact's current version, else the bundled text, so an edit changes only the agent that promoted it.
+
+GEPA (`core/src/evolution/gepa/`) is the search: reflective mutation over a Pareto set, every candidate recorded in `gepa_candidates`. Its metric is the judge-only comparison of §4, asked of the decision model: for each recorded turn it reads the old and new text and answers `fixes` (would the new text have prevented this bad turn's failure) and `harms` (would it have made this good turn worse). Nothing runs the agent. The bad set is the motivating turns plus up to ten more with the same reason or tool struggles; the regression set is up to 30 recent turns rated 4 or 5 that used the artifact, thumbs first, frozen when the search starts. An edit passes when it fixes at least 60% of the bad set and harms at most one regression turn, after the static checks: at most 600 changed characters (40 changed lines of scaffold), a section's slots and flags unchanged, the schema rule, and the misevolution gate. A passing edit waits in the changelog as a candidate; a scaffold edit lands `pending` for the owner's decision. The continual-refinement lane's section edits take the same tests (`judgeAuthoredEdit`).
 
 `modifyScaffold()` then validates through 4 gates:
 
 1. Structural gate. The rationale must reach `minRationaleLength` (50 characters). The code must parse as JavaScript, declare `async function* run(rt, task)` at its top level, and reference none of `require`, `import`, `globalThis`, `eval` or `Function` (`scaffoldRefusal` in `core/src/scaffold/safety-patterns.ts`, judged on the acorn syntax tree, so a comment naming them is not a finding). Then the misevolution veto below runs.
 2. Parse gate. The code is compiled through `rt.executor` as a syntax check.
 3. Version checkpoint. A single-pending invariant refuses a second `pending` version. The base is taken from `status = 'current'` rather than `MAX(version)`, and `newVersion = MAX(version) + 1`. The DGM base must exist in the archive. The current version is backed up in this step.
-4. Write gate. The proposal is written to a versioned file beside the live scaffold, never over it, so shadow evaluation never compares new code against itself. Both names come from `scaffoldPath()`.
+4. Write gate. The proposal is written to a versioned file beside the live scaffold, never over it, so the owner's promotion swaps in exactly the reviewed code. Both names come from `scaffoldPath()`.
 
 ### Misevolution gate
 
@@ -110,8 +112,8 @@ Scaffold mutation runs inside that reflection path, so the window must have refl
 | Criterion | Rejects |
 |---|---|
 | `network-egress` | code naming `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`, including through an alias, or stating one as a folded string (`Reflect.get(self, "fe" + "tch")`) |
-| `version-machinery-tamper` | `scaffold_versions`, `scaffold_evaluations`, `scaffold_trial_queue`, a path to `scaffold/agent.js` or a versioned `agent.js.vN` |
-| `rollout-config-tamper` | `auto_promote_scaffold`, `shadow_sample_rate`, `scaffold_explore_share`, `auto_gepa_every_n_turns`, `changelog_seen_at` |
+| `version-machinery-tamper` | `scaffold_versions`, `artifact_versions`, `artifact_trials`, a path to `scaffold/agent.js` or a versioned `agent.js.vN` |
+| `rollout-config-tamper` | `live_trials`, `trial_turns`, `changelog_seen_at` |
 | `self-modification-reentry` | `proposeScaffold`, `modifyScaffold`, `applyPromotionDecision`, `applyScaffoldDecision`, `rollbackScaffold`, `checkMisevolution` |
 | `consent-weakening` | `shell_approval_mode`, `setShellApprovalMode`, `allow_all`, `device_consent` |
 | `unanalysable-code` | code that does not parse, reads `eval`, `Function` or `require` (a property or key of that name is not a read; `instanceof Function` is allowed), imports a module, uses `with`, takes `.constructor` out of an object other than to compare it or read its properties, or uses an unshadowed `globalThis`/`self`/`window`/`global` other than to read a property it names |
@@ -123,39 +125,33 @@ What it cannot see: a name built at runtime (a `join`, char codes, a decoded str
 | Surface | Call site | Artifact |
 |---|---|---|
 | `scaffold` | The proposal gate, `modifyScaffold` in `core/src/scaffold/modify.ts` | code |
-| `scaffold` | The promotion decision, re-checked against the on-disk pending file, `core/src/scaffold/shadow.ts` | code |
-| `scaffold` | Prompt-section proposal and promotion, `proposePromptSection` and `applyPromptSectionDecision` in `core/src/prompting/section-store.ts` | prose |
-| `scaffold` | Section GEPA candidates, `runSectionGepa` in `core/src/evolution/gepa/section-bridge.ts` | prose |
+| `scaffold` | The promotion decision, re-checked against the on-disk pending file, `core/src/scaffold/versions.ts` | code |
+| `scaffold` | Every artifact edit and its search's candidates, `artifactEditRefusal` in `core/src/evolution/artifacts.ts` | prose |
 | `craft` | Extracted crafted-tool upsert, `upsertCraftedTool` in `core/src/craft/conflict.ts` | code |
 | `craft_tool` | `workspace.createTool`, `core/src/tools/inline-executor.ts` | code, without `network-egress` |
 | `import` | Experience-library import, `core/src/experience/imports.ts` | code and description or rationale for a tool or scaffold; prose for a lesson or fact |
 
 `craft_tool` is the one exception. It skips `network-egress` because the codemode Worker exposes raw network globals: the same `fetch(...)` runs freely in an ephemeral `eval` call one line earlier, so vetoing only the persisted form buys no containment. Persistence changes blast radius over time, so the other criteria apply there in full.
 
-### Shadow evaluation
+### Live trials
 
-A validated proposal is sampled into real turns at `shadow_sample_rate` (default 0.25, `getShadowSampleRate` in `core/src/config/store.ts`) and judged against the incumbent before it takes effect. `DEFAULT_SHADOW_CONFIG` (`core/src/scaffold/shadow.ts`):
+A candidate that passed the pre-live tests runs against the incumbent on the main agent (docs/EVOLUTION-REDESIGN.md §5; `core/src/evolution/trials.ts`). Trials are off until the owner turns them on (`live_trials`, `/trials on`); until then candidates wait in the changelog. One trial runs at a time.
 
-```
-minTrials 5 · maxTrials 20 · promoteThreshold 0.6 · rollbackThreshold 0.4
-maxRegressions 1 · minDecisiveTrials 5
-```
+The unit is a cache segment: a turn whose request finds the prompt cache cold opens one, and every later turn joins it until the cache goes cold again, so the prompt and tools never change inside a cached prefix. Each segment's arm is a seeded 50/50 hash of trial and segment ids (`drawArm`, FNV-1a), the same on both backends; `turnArtifactBodies` reads it at turn assembly and records the turn in `trial_turns`, and the completed turn carries it so its errors and steps are recorded.
 
-Each trial is judged twice with the two responses swapped, unlabelled and in random order. A candidate takes the trial only by winning both orders; a split records as a tie. This removes the position and status-quo bias that a prompt pinning the incumbent to "Response A" builds in. The judge prefers a model from a different vendor family than the chat model whenever one is connected, because a model grading its own family's prose inflates it. Same-model judging remains as the single-vendor fallback.
+The cadence lane looks at the trial (`advanceTrial`) at 10, 20 and 30 rated segments per arm, each look one-sided at α = 0.05/3 (z = 2.128) on the difference of mean segment satisfaction. It keeps the candidate when the lower bound clears 0, the corrected rate has not risen and neither tool errors nor steps per turn are higher with confidence. It reverts when the upper bound falls below 0, a guardrail rose, the 30-segment look is undecided, 14 days pass, or the candidate no longer passes its static checks (a plumbing error). Each decision writes a changelog entry with its arms, interval and corrected rates; the entry's revert restores the version it replaced, or the bundled text.
 
-The regression veto runs first: more than `maxRegressions` losses rolls the proposal back regardless of win rate. At `maxTrials` the decision is forced, and only `winRate > 0.5` promotes (`decidePromotion`), so a tie rolls back to current. Every constant here comes from binomial Monte Carlo in `scripts/shadow-veto-monte-carlo.ts`, which models the judging protocol itself. At the shipping settings that script reports a better scaffold promoted about 62% of the time, against a worst case of about 3.2% for promoting a clearly worse one. Neither figure carries a measurement date in the source; re-run the script to date them.
+The scaffold's pending proposal is decided by the owner (`applyScaffoldDecision`), which re-runs the misevolution check against the on-disk file before it swaps.
 
 ### How much of a turn a judge sees
 
-Readers in this loop once truncated evidence to its opening (`slice(0, n)`): the shadow judge, the GEPA reflector, and the turn rater among them. A turn whose payoff lands at step 9 of 12 was invisible to them, so the loop could not select for long-horizon behaviour.
+Readers in this loop once truncated evidence to its opening (`slice(0, n)`): the GEPA reflector and the turn rater among them. A turn whose payoff lands at step 9 of 12 was invisible to them, so the loop could not select for long-horizon behaviour.
 
 `core/src/utils/evidence-window.ts` is now the single source. `evidenceWindow` keeps head and tail on an even split and names what it dropped. A tool result's head carries the command echo, while a judged trajectory carries its outcome at the end, and the outcome is what is being judged.
 
-`EVIDENCE_BUDGETS` (`core/src/types/evidence.ts`) is ordered so a reader never asks for more than the row it reads was stored at. The stored `turn_ratings` budgets cap the whole ledger path and were widened first. GEPA's eval instances read those rows: `storedUserMessage` 8,000, `storedAssistantResponse` 16,000, `storedFollowup` 8,000. Readers sit under them: `shadowTask` 6,000, `shadowOutput` 10,000, `outcomeUserMessage` 4,000, `outcomeAssistantResponse` 8,000, `replayTask` 6,000, `replayFreshResponse` and `replayReferenceResponse` 12,000. A candidate's source stays head-truncated rather than windowed (`gepaParentSource` 16,000), because a rewrite of code whose middle was elided comes back with a hole.
+`EVIDENCE_BUDGETS` (`core/src/types/evidence.ts`) is ordered so a reader never asks for more than the row it reads was stored at. The stored `turn_ratings` budgets cap the whole ledger path and were widened first. GEPA's eval instances read those rows: `storedUserMessage` 8,000, `storedAssistantResponse` 16,000, `storedFollowup` 8,000. Readers sit under them: `outcomeUserMessage` 4,000, `outcomeAssistantResponse` 8,000, `replayTask` 6,000. A candidate's source stays head-truncated rather than windowed (`gepaParentSource` 16,000), because a rewrite of code whose middle was elided comes back with a hole.
 
-This change left the protocols, thresholds, and sampling rates above as they were, but not unaffected. The Monte Carlo that set them modelled the old evidence, and richer evidence moves decisive yield and tie rate. Those constants are due a re-run against the new budgets.
-
-The archive keeps every version: a read model over `scaffold_versions` joined to `scaffold_evaluations`, with no eviction, so a rolled-back variant stays available as a stepping stone.
+The scaffold lineage is a read model over `scaffold_versions` (`listScaffoldArchive`), with no eviction.
 
 ## Lifetime-level evolution
 
@@ -186,20 +182,20 @@ Every self-modification shows up as a human-readable card (`core/src/evolution/c
 | `fact` | `agent_facts`, collapsed into one card with children | `fact_forget` / `fact_forget_many` |
 | `gepa` | completed GEPA runs | not revertable |
 | `ratings` | `turn_ratings`: mean satisfaction with its interval, the corrected rate, and each rated turn's reason | not revertable |
-| `prompt_section` | `prompt_section_versions`, keyed `<sectionId>:<version>` because versions are numbered per section | `prompt_section_rollback` |
+| `artifact` | `artifact_versions`, keyed `<artifactId>@<version>` because versions are numbered per artifact; a decided trial's arms, interval and corrected rates ride the entry | `artifact_revert` |
 | `refinement` | `refinement_requests`, one card per request with one child per routed edit | the children carry the owner's own revert |
 
-Reverts dispatch to the real code paths rather than a separate undo log (`executeChangelogRevert`, `core/src/evolution/changelog.ts`): `revertScaffoldVersion`, `craftStore.delete` with the matching `craft_scores` row, `facts.forget`, and the prompt-section rollback.
+Reverts dispatch to the real code paths rather than a separate undo log (`executeChangelogRevert`, `core/src/evolution/changelog.ts`): `revertScaffoldVersion`, `craftStore.delete` with the matching `craft_scores` row, `facts.forget`, and `revertArtifact`.
 
 ## Continual refinement
 
 A refinement reviews the agent's own recent failures and proposes the smallest typed edits. It is the only evolution lane whose proposer is a full agent: the read-only task lifetime (`agents.hire` with `lifetime:'task'`, reached programmatically through `TemporaryAgentPort`) reads the trajectory and answers with one strict object.
 
-`/refine` opens one on request. The automatic trigger opens one when three or more corrected or frustrated turns sit unresolved and no earlier request has taken them (`MIN_REFINEMENT_DEBT`). Three is a pattern rather than a coincidence. It is also the point where `buildOutcomeEvalSplit` can both give reflection something to fix and keep a failure back to score against: at three it holds one out and leaves two to train on.
+`/refine` opens one on request. The automatic trigger opens one when three or more corrected or frustrated turns sit unresolved and no earlier request has taken them (`MIN_REFINEMENT_DEBT`). Three is a pattern rather than a coincidence.
 
 Debt excludes covered turns before it caps the batch, not after. A batch is at most twelve (`MAX_REFINEMENT_DEBT_BATCH`), oldest first, and the remainder is reported ("8 more waiting behind this batch") rather than dropped. Filtering a fixed window would let twelve refined failures hide every older unresolved one permanently.
 
-The refiner sees only the train half. The held-out turns are the ones `proposeMeasuredPromptSection` and `runPromptSectionTrials` score candidates on, and showing them to the proposer would let a proposal memorise its own exam. `runSectionGepa` follows the same split. The brief says how many turns it withheld.
+A section edit is judged on the request's own low-rated turns and the regression set, never on whether the agent would pass them if run, so there is no held-out half to hide from the refiner.
 
 ### The request is durable and changes no behaviour
 
@@ -228,7 +224,7 @@ Every transition is `WHERE stage = <from>`, so a duplicate delivery writes nothi
 | Edit | Authority | What happens |
 |---|---|---|
 | `fact` | `agent_facts` (`FactsStore.upsert`) | Applied immediately, and only when the refiner quotes the user substantively. A trial cannot decide a preference, so the user's own words stand in as the evidence. The quote must be at least 20 characters and 4 words (a fragment like "one line" matches almost any conversation), and must appear in a user message or follow-up, never in the agent's own response. The accepted quote rides the route into the changelog. |
-| `prompt_section` | `prompt_section_versions` (`proposeMeasuredPromptSection`) | Scored against the incumbent on held-out labelled turns first, then handed to `proposePromptSection`, where it lands pending. `advancePromptSectionLane` promotes it on trial evidence or not at all. A degenerate split refuses the proposal rather than scoring a counterfactual against a ledger with no failures. |
+| `prompt_section` | `artifact_versions` (`judgeAuthoredEdit`) | Takes the proposer's pre-live tests: the static checks, then the judge-only comparison over the request's low-rated turns and the regression set. A passing edit waits as a candidate; only a live trial promotes it. With no low-rated turn among the request's, it is refused. |
 | `skill` | staged under `.kinu/`, promoted into the workspace VFS by `instruction_approvals` | Stages the bytes at `.kinu/refinement/<requestId>/<name>.md`, which nothing that builds a prompt reads. The owner's approval promotes them. Refuses a non-canonical path, a built-in's name, an unparsable file, a final path that already exists, and any standing approval or revocation for that path. |
 | `subagent_spec` | none | Refused by name. A subordinate's role and spec belong to that agent's own config, which a workspace reads and never writes. The finding is recorded; no mirror store is created. |
 

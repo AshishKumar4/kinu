@@ -45,12 +45,12 @@ type SameCall =
   | 'listBackgroundJobs' | 'jobResult' | 'cancelBackgroundJob'
   | 'createTimerTrigger' | 'cancelTrigger'
   | 'listRuns' | 'getRunEvents'
-  | 'markChangelogSeen' | 'revertChangelogEntry' | 'getShadowStatus' | 'applyScaffoldDecision'
+  | 'markChangelogSeen' | 'revertChangelogEntry' | 'getEvolutionStatus' | 'applyScaffoldDecision'
   | 'latestAlternateTakes' | 'pickAlternateTake'
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
   | 'listRefinements' | 'showRefinement' | 'decideRefinement'
-  | 'revertConversation' | 'runScaffoldGepaOptimization';
+  | 'revertConversation' | 'runOptimization';
 
 /** The cf signature, answered asynchronously: the CLI's synchronous answers are awaited the same way. */
 type Answer<K extends SameCall> = OrchestratorAgent[K] extends (...args: infer A) => infer R
@@ -134,7 +134,7 @@ async function cloudflare(): Promise<SharedBackend> {
       getEvolutionChangelog: (limit) => agent.getEvolutionChangelog({ limit }),
       markChangelogSeen: () => agent.markChangelogSeen(),
       revertChangelogEntry: (id) => agent.revertChangelogEntry(id),
-      getShadowStatus: () => agent.getShadowStatus(),
+      getEvolutionStatus: () => agent.getEvolutionStatus(),
       applyScaffoldDecision: (mode) => agent.applyScaffoldDecision(mode),
       latestAlternateTakes: () => agent.latestAlternateTakes(),
       pickAlternateTake: (takeId, nodeId) => agent.pickAlternateTake(takeId, nodeId),
@@ -151,7 +151,7 @@ async function cloudflare(): Promise<SharedBackend> {
       requestRefinement: (opts) => agent.requestRefinement(opts),
       decideRefinement: (input) => agent.decideRefinement(input),
       revertConversation: (entryId) => agent.revertConversation(entryId),
-      runScaffoldGepaOptimization: (opts) => agent.runScaffoldGepaOptimization(opts),
+      runOptimization: (target) => agent.runOptimization(target),
       send: (text, id) => agent.send(text, id ?? crypto.randomUUID()),
     },
   };
@@ -241,7 +241,7 @@ function cli(): SharedBackend {
       getEvolutionChangelog: async (limit) => session.getEvolutionChangelog(limit),
       markChangelogSeen: async () => session.markChangelogSeen(),
       revertChangelogEntry: (id) => session.revertChangelogEntry(id),
-      getShadowStatus: async () => session.getShadowStatus(),
+      getEvolutionStatus: async () => session.getEvolutionStatus(),
       applyScaffoldDecision: (mode) => session.applyScaffoldDecision(mode),
       latestAlternateTakes: async () => session.latestAlternateTakes(),
       pickAlternateTake: (takeId, nodeId) => session.pickAlternateTake(takeId, nodeId),
@@ -258,7 +258,7 @@ function cli(): SharedBackend {
       requestRefinement: (opts) => session.requestRefinement(opts),
       decideRefinement: (input) => session.decideRefinement(input),
       revertConversation: (entryId) => session.revertConversation(entryId),
-      runScaffoldGepaOptimization: (opts) => session.runScaffoldGepaOptimization(opts),
+      runOptimization: (target) => session.runOptimization(target),
       send: async (text, id) => { await session.send(text, { id: id ?? crypto.randomUUID() }); },
     },
   };

@@ -36,9 +36,8 @@ import { initPlanReviewTable } from '../plans/review';
 import { initAlternateTakesTable } from '../mcts/takes';
 import { initMctsSearchTable } from '../mcts/search-store';
 import { initFactsTable } from '../memory/facts';
-import { initShadowTables } from '../scaffold/shadow';
 import { initTaskListTable } from '../tools/task-store';
-import { initPromptSectionTables } from '../prompting/section-store';
+import { initArtifactTables, initTrialTables } from '../evolution/artifact-schema';
 import { initSlateStateTable } from '../slates/state';
 import { initExplorationRecordsTable } from '../strategy/records';
 import { initSwarmNodeRecords } from '../strategy/swarm-resume';
@@ -147,7 +146,6 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   // Spec: docs/ARCHITECTURE.md, "Events and ingress".
   initEventsHubTables(exec);
   initHeadsTables(execRaw);
-  initShadowTables(execRaw);
   initRunEventTables(execRaw);
   initActorClaimTables(resetGuardedExec(execRaw, exec));
   initFactsTable(execRaw);
@@ -164,7 +162,8 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initTaskListTable(execRaw);
   initMctsSearchTable(execRaw);
   initImportedExperienceTable(execRaw);
-  initPromptSectionTables(execRaw);
+  initArtifactTables(execRaw);
+  initTrialTables(execRaw);
   initCompactionStateTables(execRaw);
   initAgentConfigTable(execRaw);
   // Durable, not in-memory: a DO hibernates soon after going idle.

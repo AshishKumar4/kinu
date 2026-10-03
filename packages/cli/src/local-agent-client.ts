@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
-import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
+import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type ProposerOutcome } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
@@ -119,16 +119,13 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
   return client;
 }
 
-/** Core's evolution control plane, the same one the cloud backend drives. */
-export async function runLocalGepa(
-  name: string,
-  opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
-): Promise<GepaOptimizationResult> {
-  // Auto-evolution must not race the candidate being measured.
+/** Core's proposer, the same one the cloud backend drives: one search on `target` (default the scaffold). */
+export async function runLocalOptimization(name: string, target?: string): Promise<ProposerOutcome> {
+  // Auto-evolution must not race the search.
   const client = await openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true });
 
   try {
-    return await client.runScaffoldGepaOptimization(opts);
+    return await client.runOptimization(target);
   } finally {
     await client.close();
   }
@@ -352,10 +349,8 @@ export class LocalAgentClient implements AgentClient {
     await this.session.settleBackgroundWork();
   }
 
-  runScaffoldGepaOptimization(
-    opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
-  ): Promise<GepaOptimizationResult> {
-    return this.session.runScaffoldGepaOptimization(opts);
+  runOptimization(target?: string): Promise<ProposerOutcome> {
+    return this.session.runOptimization(target);
   }
 
   async close(): Promise<void> {

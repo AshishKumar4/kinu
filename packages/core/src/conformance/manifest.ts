@@ -139,8 +139,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     fork_transfer: EVERYWHERE,
     fork_staged_files: EVERYWHERE,
     scaffold_versions: EVERYWHERE,
-    scaffold_evaluations: EVERYWHERE,
-    scaffold_trial_queue: EVERYWHERE,
 
     turn_ratings: EVERYWHERE,
     lessons: EVERYWHERE,
@@ -246,7 +244,9 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     gepa_runs: EVERYWHERE,
     gepa_candidates: EVERYWHERE,
 
-    prompt_section_versions: EVERYWHERE,
+    artifact_versions: EVERYWHERE,
+    artifact_trials: EVERYWHERE,
+    trial_turns: EVERYWHERE,
 
     // The Evolution Changelog reads it on every root.
     refinement_requests: EVERYWHERE,
