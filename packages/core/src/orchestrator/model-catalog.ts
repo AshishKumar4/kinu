@@ -8,7 +8,8 @@ import { resolveModelWindow, type ModelWindow, type ResolvedModelWindow } from '
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
 import type { ModelInfo, ModelPricing } from '../providers/types';
 import type { PromptModelContext } from '../prompting/model-profile';
-import { classifyErrorCode, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { classifyErrorCode, diagnostics, renderThrownChain, settle, settleSync, toKinuError } from '../obs/index';
 
 /** Tier, then stored spec, through the backend's normalization, so every row names one spelling. Falls back to the raw value rather than throwing. */
 export function resolveEffectiveModelSpec(deps: {
@@ -19,13 +20,11 @@ export function resolveEffectiveModelSpec(deps: {
 }): string {
   const stored = deps.live() ?? deps.stored();
 
-  try {
-    return deps.normalize(stored);
-  } catch (error) {
-    diagnostics.event('actor.model_spec_unresolvable', { error: renderThrownChain({ cause: error }) });
+  return settleSync(Effect.catchCause(Effect.sync(() => deps.normalize(stored)), (failed) => Effect.sync(() => {
+    diagnostics.event('actor.model_spec_unresolvable', { error: renderThrownChain({ cause: Cause.squash(failed) }) });
 
     return stored ?? '';
-  }
+  })));
 }
 
 /** One spec's catalog reads, fixed when a model request is composed. */
@@ -96,20 +95,18 @@ export class ModelCatalogSession {
   }
 
   /** Warmed before the turn so each step prices at its model's rate; a refused one stays blended. */
-  async warm(specs: readonly string[]): Promise<void> {
-    await Promise.all(specs.filter((spec) => !this.others.has(spec)).map(async (spec) => {
-      try {
-        const info = await this.lookup(spec);
+  warm(specs: readonly string[]): Promise<void> {
+    return settle(Effect.forEach(specs.filter((spec) => !this.others.has(spec)), (spec) => Effect.catchCause(Effect.gen({ self: this }, function* () {
+      const info = yield* Effect.promise(() => this.lookup(spec));
 
-        if (info !== null) this.others.set(spec, info);
-      } catch (cause) {
-        diagnostics.failure(
-          'model.catalog_lookup_failed',
-          toKinuError({ doing: 'price a fallback model', cause, otherwise: 'unavailable' }),
-          { model: spec },
-        );
-      }
-    }));
+      if (info !== null) this.others.set(spec, info);
+    }), (failed) => Effect.sync(() => {
+      diagnostics.failure(
+        'model.catalog_lookup_failed',
+        toKinuError({ doing: 'price a fallback model', cause: Cause.squash(failed), otherwise: 'unavailable' }),
+        { model: spec },
+      );
+    })), { concurrency: 'unbounded', discard: true }));
   }
 
   /** The turn's model, or another `spec` once warmed, as `pricing` reads it. */

@@ -148,7 +148,7 @@ export class ActorClaimStore {
 
       const consumed = this.transactionSync(() => {
         return settleSync(Effect.gen({ self: this }, function* () {
-          this.assertLive(claim);
+          yield* this.live(claim);
           const currentRevision = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
 
           if (currentRevision !== latest) return yield* new KinuError('denied', 'another request consumed this claim during preparation');
@@ -187,7 +187,10 @@ export class ActorClaimStore {
   }
 
   settle(claim: ActorTurnClaim, outcome: ClaimOutcome): void {
-    this.transactionSync(() => { this.assertLive(claim); void this.sql`UPDATE actor_turn_claims SET outcome=${outcome} WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`; });
+    this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
+      yield* this.live(claim);
+      void this.sql`UPDATE actor_turn_claims SET outcome=${outcome} WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`;
+    })));
     this.changed();
   }
 
@@ -239,12 +242,14 @@ export class ActorClaimStore {
       program: Object.freeze({ kind: row.program_kind, version: row.program_version, digest: row.program_digest, build: row.program_build }),
       status: row.outcome === null ? 'admitted' : 'settled', outcome: row.outcome, claimedAt: row.claimed_at });
   }
-  private assertLive(claim: ActorTurnClaim): void {
-    const current = this.read(claim.turnId);
+  private live(claim: ActorTurnClaim): Effect.Effect<void, KinuError> {
+    return Effect.suspend(() => {
+      const current = this.read(claim.turnId);
 
-    if (current === null || current.epoch !== claim.epoch) throw new KinuError('denied', 'actor turn is owned by another execution epoch');
+      if (current === null || current.epoch !== claim.epoch) return Effect.fail(new KinuError('denied', 'actor turn is owned by another execution epoch'));
 
-    if (current.status !== 'admitted') throw new KinuError('denied', 'actor turn is settled and takes no further work');
+      return current.status === 'admitted' ? Effect.void : Effect.fail(new KinuError('denied', 'actor turn is settled and takes no further work'));
+    });
   }
 }
 

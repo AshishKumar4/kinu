@@ -103,6 +103,18 @@ export const DECLARED = byFile([
     within: ['detach'],
     reason: 'the React edge\'s runner: nothing awaits it, so its one rejection observer turns a defect into a diagnostic',
   }],
+  ['packages/core/src/orchestrator/agent-orchestrator.ts', {
+    mechanisms: ['catch'],
+    within: ['detach'],
+    reason: 'the turn lane\'s holder for detached post-turn work: nothing awaits what it is handed, so its one catch reports '
+      + 'the failure, and the lane drains what it holds at close',
+  }],
+  ['packages/core/src/orchestrator/chat-session.ts', {
+    mechanisms: ['catch'],
+    within: ['emit'],
+    reason: 'session events reach the frontend listener in order, synchronously when it answers synchronously; a promise '
+      + 'chain keeps that order (settle\'s hops would reorder events), and a listener\'s failure is reported, never the loop\'s end',
+  }],
   ['packages/test-utils/src/mossaic.ts', {
     mechanisms: ['throw'],
     within: ['fakeMossaic'],

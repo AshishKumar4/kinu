@@ -32,7 +32,8 @@ import { nanoid } from '../utils/nanoid';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { type WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
-import { diagnostics, toKinuError, settleLogged, settleLoggedSync } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { diagnostics, toKinuError, settle, settleLogged, settleLoggedSync } from '../obs/index';
 
 /**
  * Whether an arriving user message is a genuine follow-up or an independent task invocation.
@@ -434,67 +435,67 @@ export class AgentOrchestrator {
    * sees them consumed), then send the batch as one signal bound to `replyTurnId`. An undelivered signal
    * puts its events back. No-op when nothing is pending.
    */
-  async drainPendingEvents(
+  drainPendingEvents(
     /** Rethrow selection/binding failures: a durable effect that owes this drain must not report done. */
     opts?: { readonly rethrow?: boolean },
   ): Promise<void> {
-    let batch: ReturnType<typeof buildDrainBatch>;
-    const turnId = `evt-${nanoid()}`;
-    const bound: string[] = [];
+    return settle(Effect.gen({ self: this }, function* () {
+      const turnId = `evt-${nanoid()}`;
+      const bound: string[] = [];
 
-    try {
-      const pending = this.deps.eventLog.pending({ resolve_deferred: { now: Date.now(), phase: 'idle' } });
-      batch = buildDrainBatch(pending, this.deps.eventLog.isEvolutionReport);
+      const batch = yield* Effect.catchCause(Effect.sync(() => {
+        const pending = this.deps.eventLog.pending({ resolve_deferred: { now: Date.now(), phase: 'idle' } });
+        const selected = buildDrainBatch(pending, this.deps.eventLog.isEvolutionReport);
 
-      if (!batch) return;
+        for (const id of selected?.ids ?? []) {
+          this.deps.eventLog.markConsumed(id, turnId, 0);
+          bound.push(id);
+        }
 
-      for (const id of batch.ids) {
-        this.deps.eventLog.markConsumed(id, turnId, 0);
-        bound.push(id);
-      }
-    } catch (err) {
-      // Unbind the prefix so the retry sees the whole batch; otherwise it strands with no signal or wake.
-      for (const id of bound) {
-        settleLoggedSync('orchestrator.drain_unbind_failed', { doing: 'release an event bound by a drain that failed', otherwise: 'io' }, () => {
-          this.deps.eventLog.unbind(id);
-        }, { turnId, event: id });
-      }
+        return selected;
+      }), (failed) => {
+        // Unbind the prefix so the retry sees the whole batch; otherwise it strands with no signal or wake.
+        for (const id of bound) {
+          settleLoggedSync('orchestrator.drain_unbind_failed', { doing: 'release an event bound by a drain that failed', otherwise: 'io' }, () => {
+            this.deps.eventLog.unbind(id);
+          }, { turnId, event: id });
+        }
 
-      const failure = toKinuError({
-        doing: 'select the pending events for a drain turn', cause: err, otherwise: 'io',
+        const failure = toKinuError({
+          doing: 'select the pending events for a drain turn', cause: Cause.squash(failed), otherwise: 'io',
+        });
+
+        diagnostics.failure('orchestrator.drain_select_failed', failure, { turnId });
+
+        return opts?.rethrow === true ? Effect.fail(failure) : Effect.succeed(null);
       });
 
-      diagnostics.failure('orchestrator.drain_select_failed', failure, { turnId });
+      if (!batch) return;
+      const ids = batch.ids;
+      let metadata: JsonObject | undefined;
 
-      if (opts?.rethrow) throw failure;
+      if (batch.mode !== null || batch.missions.length > 0) {
+        metadata = {};
 
-      return;
-    }
+        if (batch.mode !== null) metadata.kinuMode = batch.mode;
 
-    const ids = batch.ids;
-    let metadata: JsonObject | undefined;
+        if (batch.missions.length > 0) metadata[MISSION_LABELS_METADATA_KEY] = batch.missions;
+      }
 
-    if (batch.mode !== null || batch.missions.length > 0) {
-      metadata = {};
+      const signal: AgentSignal = {
+        kind: 'event_drain',
+        text: batch.text,
+        stepText: batch.midTurnText,
+        replyTurnId: turnId,
+        // The rows are already bound to `turnId`, so it routes the queued half through the host's durable
+        // admission ledger; a re-delivery of the same drain collapses to one turn.
+        idempotencyKey: turnId,
+        compensate: () => this.returnEventsToPending(ids),
+        metadata,
+      };
 
-      if (batch.mode !== null) metadata.kinuMode = batch.mode;
-
-      if (batch.missions.length > 0) metadata[MISSION_LABELS_METADATA_KEY] = batch.missions;
-    }
-
-    const signal: AgentSignal = {
-      kind: 'event_drain',
-      text: batch.text,
-      stepText: batch.midTurnText,
-      replyTurnId: turnId,
-      // The rows are already bound to `turnId`, so it routes the queued half through the host's durable
-      // admission ledger; a re-delivery of the same drain collapses to one turn.
-      idempotencyKey: turnId,
-      compensate: () => this.returnEventsToPending(ids),
-      metadata,
-    };
-
-    await this.inbox.send(signal);
+      yield* Effect.promise(() => this.inbox.send(signal));
+    }));
   }
 
   // The settle spine is `declareTerminalRoster` (orchestrator/terminal-roster.ts). The pure rules below are

@@ -11,7 +11,8 @@ import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { stepContextLimit, type ModelWindow } from '../context-window';
 import { renderFactsBlock, type FactsStore } from '../memory/facts';
-import { diagnostics, toKinuError } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { diagnostics, settle, toKinuError } from '../obs/index';
 import { STEER_SKILLS_HEADING } from '../utils/prompt-sections';
 
 export interface TurnSkillsConfig {
@@ -28,7 +29,7 @@ export interface TurnSkillSurface {
  * Bounded by `stepContextLimit`: the ambient index is charged first, active bodies get the rest
  * (same derivation as cf-backend/src/user/mcp.ts). Never fails the turn: falls back to built-ins.
  */
-export async function resolveTurnSkills(opts: {
+export function resolveTurnSkills(opts: {
   vfs: VFS;
   config: TurnSkillsConfig;
   userText: string;
@@ -39,12 +40,10 @@ export async function resolveTurnSkills(opts: {
 }): Promise<TurnSkillSurface> {
   const admissionTokens = stepContextLimit(opts.limits);
 
-  try {
-    return await admitTurnSkills(opts, admissionTokens);
-  } catch (err) {
+  return settle(Effect.catchCause(Effect.promise(() => admitTurnSkills(opts, admissionTokens)), (failed) => Effect.sync((): TurnSkillSurface => {
     diagnostics.failure(
       'skills.discovery_failed',
-      toKinuError({ doing: 'discover the turn\'s skills', cause: err, otherwise: 'io' }),
+      toKinuError({ doing: 'discover the turn\'s skills', cause: Cause.squash(failed), otherwise: 'io' }),
     );
 
     // Built-in bodies are module constants: no VFS needed.
@@ -52,7 +51,7 @@ export async function resolveTurnSkills(opts: {
       available: admitSkillsIndex({ skills: [...BUILTIN_SKILL_HEADERS], unread: [], omitted: 0 }, admissionTokens),
       activeSkills: undefined,
     };
-  }
+  })));
 }
 
 /** Skills a mid-turn message activates that the turn lacks, rendered for that step; null when none. */

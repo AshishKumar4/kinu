@@ -415,7 +415,7 @@ export class ChatSession {
     if (workModeForTurnMetadata(input.metadata) === 'plan') {
       const refusal = this.ports.planTurnRefusal();
 
-      if (refusal !== null) return Promise.reject(new Error(refusal));
+      if (refusal !== null) return settleEffect(Effect.die(new Error(refusal)));
     }
 
     // During shutdown: 'skipped' sends the caller down its durable path; the next run drains it.
