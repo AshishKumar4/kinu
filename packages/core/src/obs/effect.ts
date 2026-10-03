@@ -51,6 +51,11 @@ export async function settle<A>(effect: Effect.Effect<A, KinuError | VfsError>, 
   return fail(exit.cause, options);
 }
 
+/** A run whose promise is stored and joined later: it never rejects, and its holder decides what the exit means. */
+export function hold<A, E>(effect: Effect.Effect<A, E>): Promise<Exit.Exit<A, E>> {
+  return settle(Effect.exit(effect));
+}
+
 export function settleSync<A>(effect: Effect.Effect<A, KinuError | VfsError>, options?: Pick<SettleOptions, 'interrupted'>): A {
   const exit = Effect.runSyncExit(effect);
 

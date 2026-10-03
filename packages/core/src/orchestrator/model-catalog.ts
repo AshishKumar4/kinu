@@ -8,8 +8,8 @@ import { resolveModelWindow, type ModelWindow, type ResolvedModelWindow } from '
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
 import type { ModelInfo, ModelPricing } from '../providers/types';
 import type { PromptModelContext } from '../prompting/model-profile';
-import { Cause, Effect } from 'effect';
-import { classifyErrorCode, diagnostics, renderThrownChain, settle, settleSync, toKinuError } from '../obs/index';
+import { Cause, Effect, type Exit } from 'effect';
+import { classifyErrorCode, diagnostics, hold, renderThrownChain, settle, settleSync, toKinuError } from '../obs/index';
 
 /** Tier, then stored spec, through the backend's normalization, so every row names one spelling. Falls back to the raw value rather than throwing. */
 export function resolveEffectiveModelSpec(deps: {
@@ -35,7 +35,7 @@ export interface ModelCatalogRead {
   resolved(): Promise<ResolvedModelWindow>;
 }
 
-interface CachedEntry { spec: string; info: ModelInfo | null; lookup?: Promise<void> }
+interface CachedEntry { spec: string; info: ModelInfo | null; lookup?: Promise<Exit.Exit<ModelInfo | null>> }
 
 export class ModelCatalogSession {
   private cached: CachedEntry | null = null;
@@ -59,14 +59,14 @@ export class ModelCatalogSession {
 
   /** Awaited before the provider is called, for decisions that refuse work. */
   resolved(): Promise<ResolvedModelWindow> {
-    return this.resolvedOf(this.deps.effectiveSpec());
+    return settle(this.resolvedOf(this.deps.effectiveSpec()));
   }
 
   /** The reads of one request, on the spec it resolved once. */
   at(spec: string): ModelCatalogRead {
     return Object.freeze({
       window: () => this.windowPairOf(spec),
-      resolved: () => this.resolvedOf(spec),
+      resolved: () => settle(this.resolvedOf(spec)),
     });
   }
 
@@ -76,8 +76,8 @@ export class ModelCatalogSession {
   }
 
   /** As {@link contextFor}, the window alone: what a head or swarm node on `spec` is admitted against. */
-  async windowFor(spec: string): Promise<ResolvedModelWindow> {
-    return resolveModelWindow(spec, await this.lookup(spec));
+  windowFor(spec: string): Promise<ResolvedModelWindow> {
+    return settle(Effect.map(this.lookup(spec), (info) => resolveModelWindow(spec, info)));
   }
 
   /** The window pair every producer divides (`stepContextLimit`), read now. */
@@ -97,7 +97,7 @@ export class ModelCatalogSession {
   /** Warmed before the turn so each step prices at its model's rate; a refused one stays blended. */
   warm(specs: readonly string[]): Promise<void> {
     return settle(Effect.forEach(specs.filter((spec) => !this.others.has(spec)), (spec) => Effect.catchCause(Effect.gen({ self: this }, function* () {
-      const info = yield* Effect.promise(() => this.lookup(spec));
+      const info = yield* this.lookup(spec);
 
       if (info !== null) this.others.set(spec, info);
     }), (failed) => Effect.sync(() => {
@@ -126,7 +126,10 @@ export class ModelCatalogSession {
   private armed(spec: string): CachedEntry {
     if (this.cached?.spec !== spec) {
       this.cached = { spec, info: null };
-      this.cached.lookup = this.armLookup(spec);
+      // Held, not left floating: a sync read arms it, and only `resolved` answers its refusal.
+      this.cached.lookup = hold(this.lookup(spec, info => {
+        if (info && this.cached?.spec === spec) this.cached.info = info;
+      }));
     }
 
     return this.cached;
@@ -142,39 +145,41 @@ export class ModelCatalogSession {
     return { contextWindow, modelOutputLimit };
   }
 
-  private async resolvedOf(spec: string): Promise<ResolvedModelWindow> {
-    // Awaits the cached promise, keeping one catalog round trip.
-    await this.armed(spec).lookup;
+  private resolvedOf(spec: string): Effect.Effect<ResolvedModelWindow> {
+    return Effect.gen({ self: this }, function* () {
+      // Joins the held lookup, keeping one catalog round trip.
+      const held = this.armed(spec).lookup;
 
-    return this.windowOf(spec);
-  }
+      // A held refusal is answered here, as the awaited read it was before.
+      if (held !== undefined) yield* (yield* Effect.promise(() => held));
 
-  private async armLookup(spec: string): Promise<void> {
-    await this.lookup(spec, info => {
-      if (info && this.cached?.spec === spec) this.cached.info = info;
+      return this.windowOf(spec);
     });
   }
 
-  private async lookup(spec: string, accept?: (info: ModelInfo | null) => void): Promise<ModelInfo | null> {
-    try {
-      const info = await this.deps.lookup(spec);
+  private lookup(spec: string, accept?: (info: ModelInfo | null) => void): Effect.Effect<ModelInfo | null> {
+    return Effect.catchCause(Effect.gen({ self: this }, function* () {
+      const info = yield* Effect.promise(() => this.deps.lookup(spec));
       accept?.(info);
 
       return info;
-    } catch (cause) {
+    }), (failed) => {
+      const cause = Cause.squash(failed);
       // Only an unreachable catalog is tolerated; any other classified failure propagates.
       const reason = classifyErrorCode({ cause });
 
-      if (reason !== null && reason !== 'unavailable' && reason !== 'io' && reason !== 'timeout') throw cause;
+      if (reason !== null && reason !== 'unavailable' && reason !== 'io' && reason !== 'timeout') return Effect.die(cause);
 
       // Reads never block, so the reason is logged once, with the spec.
-      diagnostics.failure(
-        'model.catalog_lookup_failed',
-        toKinuError({ doing: 'look a model up in the provider catalog', cause, otherwise: 'unavailable' }),
-        { model: spec },
-      );
+      return Effect.sync(() => {
+        diagnostics.failure(
+          'model.catalog_lookup_failed',
+          toKinuError({ doing: 'look a model up in the provider catalog', cause, otherwise: 'unavailable' }),
+          { model: spec },
+        );
 
-      return null;
-    }
+        return null;
+      });
+    });
   }
 }

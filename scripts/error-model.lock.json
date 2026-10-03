@@ -184,8 +184,6 @@
     "packages/core/src/orchestrator/chat-session.ts#throw": 1,
     "packages/core/src/orchestrator/inbox.ts#catch": 2,
     "packages/core/src/orchestrator/inbox.ts#promise-rejection": 3,
-    "packages/core/src/orchestrator/model-catalog.ts#catch": 1,
-    "packages/core/src/orchestrator/model-catalog.ts#throw": 1,
     "packages/core/src/orchestrator/session-stream.ts#throw": 4,
     "packages/core/src/orchestrator/terminal-effects.ts#catch": 1,
     "packages/core/src/orchestrator/terminal-effects.ts#throw": 1,
