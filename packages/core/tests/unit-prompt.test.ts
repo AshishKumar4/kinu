@@ -1036,13 +1036,15 @@ describe('the system prompt: the core, then the workspace, then the agent', () =
     return a.slice(0, at);
   }
 
-  test('two workspaces share every byte of the core', () => {
+  // The lead doctrine is the largest part, and the same for every workspace's own agent.
+  test('two workspaces share every byte of the core and the lead doctrine', () => {
     const { rt } = createTestRuntime();
     const books = buildSystemPromptSync(rt, workspace('# Books\nKeep the ledger.', 'Books', 'Run the ledger checks.', 'reconcile'));
     const garden = buildSystemPromptSync(rt, workspace('# Garden\nPlan the beds.', 'Garden', 'Water before noon.', 'planting'));
     const shared = sharedPrefix(books, garden);
 
     expect(shared).toContain('## Output format');
+    expect(shared).toContain('## Direct-edit reminder');
     expect(shared.length).toBeGreaterThanOrEqual(books.indexOf('<soul>'));
   });
 
