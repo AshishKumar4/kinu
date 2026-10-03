@@ -65,11 +65,14 @@ const { OrchestratorAgent } = await import('../../src/orchestrator');
 
 /** The scaffold precondition, declared satisfied. The soul is not: a turn
  *  refreshes the cache `setObservedSoul` pre-fills from the workspace filesystem. */
+/** "Beta: swarms" on, so the swarm suites pin the tool as it stands; a suite turns it off by overlay. */
+const HARNESS_CATALOG: ProfileCatalog = { ...BUILTIN_PROFILE_CATALOG, betaSwarms: true };
+
 const HARNESS_PROFILE_ENVELOPE: ProfileCatalogEnvelope = {
   authority: { kind: 'local' },
   version: 0,
-  digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG),
-  catalog: BUILTIN_PROFILE_CATALOG,
+  digest: profileCatalogDigest(HARNESS_CATALOG),
+  catalog: HARNESS_CATALOG,
 };
 
 const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
@@ -395,6 +398,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const catalog: ProfileCatalog = {
       roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
       tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
+      betaSwarms: overlay.betaSwarms ?? true,
     };
 
     return {
@@ -420,6 +424,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     /** Merged over the builtin tiers, so `default` may be left as it is. */
     readonly tiers?: Partial<TierAssignments>;
     readonly availableModels?: readonly string[];
+    /** "Beta: swarms"; on unless the suite turns it off. */
+    readonly betaSwarms?: boolean;
   }): void {
     this._catalogOverlay = overlay;
   }
@@ -427,6 +433,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     readonly roles?: RoleCatalog;
     readonly tiers?: Partial<TierAssignments>;
     readonly availableModels?: readonly string[];
+    readonly betaSwarms?: boolean;
   } | null = null;
   /** Answer these specs as the provider catalog would; any other spec asks the real catalog. */
   harnessCatalogModels(entries: Readonly<Record<string, Omit<ModelInfo, 'id'>>>): void {

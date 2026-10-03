@@ -42,7 +42,8 @@ interface Call { action: string; input: object }
 
 type AgentsTestResult = object | string | number | boolean | null | undefined;
 
-type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode'> & { mode?: AgentsToolDeps['mode'] };
+/** `swarms` defaults on: these suites pin the tool as it stands with "Beta: swarms" turned on. */
+type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode' | 'swarms'> & Partial<Pick<AgentsToolDeps, 'mode' | 'swarms'>>;
 
 function testProfile(): AgentsProfileContext {
   const catalog = {
@@ -69,7 +70,7 @@ function testProfile(): AgentsProfileContext {
 }
 
 function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
-  return { mode: 'build', ...deps };
+  return { mode: 'build', swarms: true, ...deps };
 }
 
 function agentsTool(deps: TestAgentsToolDeps) {
@@ -301,6 +302,28 @@ describe('agents tool — registration and dep-gating', () => {
     const t = agentsTool(deps);
     expect(actionEnum({ value: t.inputSchema })).toEqual([...AGENTS_TOOL_ACTIONS]);
     expect(t.description).toBe(BUILTIN_TOOL_DESCRIPTIONS.agents);
+  });
+
+  test('with "Beta: swarms" off the tool offers no swarm, in its schema or its words, and refuses one naming the setting', async () => {
+    const off = withBuildMode({ swarm: swarmDeps(), swarms: false, team: makeTeam().deps, peers: makePeers().deps });
+    const t = agentsTool(off);
+
+    expect(agentsActionsFor(off)).not.toContain('swarm');
+    expect(actionEnum({ value: t.inputSchema })).toEqual(AGENTS_TOOL_ACTIONS.filter((action) => action !== 'swarm'));
+    expect(t.description).not.toContain(AGENTS_TOOL_NOTES.swarm);
+    expect(JSON.stringify(t.inputSchema)).not.toContain('preset');
+    await expect(t.execute({ action: 'swarm', task: 'rank the three caching designs', preset: 'ideate' }))
+      .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('"Beta: swarms"') });
+  });
+
+  test('with it off, two accounts\' tools are byte-identical', () => {
+    const bytes = (deps: TestAgentsToolDeps) => {
+      const t = agentsTool({ ...deps, swarms: false });
+
+      return JSON.stringify({ description: t.description, schema: t.inputSchema });
+    };
+
+    expect(bytes({ swarm: swarmDeps(), team: makeTeam().deps })).toBe(bytes({ swarm: swarmDeps(), team: makeTeam().deps }));
   });
 
   // `lifetime` is in the schema only with a temporary substrate, so its paragraph must be too.

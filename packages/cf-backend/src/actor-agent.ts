@@ -116,7 +116,7 @@ import {
   nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   CHAT_SESSION_ID, type SessionTranscript,
   type SqlExecutor,
-  agentsActionsFor,
+  agentsActionsFor, betaSwarms,
   // Background-job system (#173: auto-background past the surface threshold)
   BackgroundJobRunner, type InvocationSurface,
   invocationBackgroundPolicy,
@@ -449,8 +449,8 @@ function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
 }
 
 /** The `agents` actions this actor profile supports, gated by the same rule as the tool's enum. */
-function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
-  return agentsActionsFor({ swarm: {}, team: deps.team, peers: deps.peers });
+function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsToolAction[] {
+  return agentsActionsFor({ swarm: {}, swarms, team: deps.team, peers: deps.peers });
 }
 
 /** The codemode tool whose script keeps issuing device execs even after its call has detached. */
@@ -2723,6 +2723,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const deps: AgentsToolDeps = {
       mode: workMode,
       swarm,
+      swarms: this._accountSwarms === true,
       budget: this.budget,
     };
 
@@ -3265,7 +3266,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // different namespaces.
     const profile = this.operationProfile()?.profile;
     const narrowing = narrowToolSurface(profile?.allowedTools);
-    const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${profile?.digest ?? ''}`;
+    const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${profile?.digest ?? ''}:${String(this._accountSwarms)}`;
 
     if (!this._codemodeFactories.has(key)) {
       this._codemodeFactories.set(key, createCodemodeToolFactory({
@@ -3670,6 +3671,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The owner changed what decides a tier's model or credential: a parked refusal may answer differently. */
   protected async modelSettingsChanged(): Promise<void> {
     this.modelSettingsChanges += 1;
+    this._accountSwarms = null;
     this.invalidateModelCaches();
     await this.terminal.releaseParked();
   }
@@ -3710,7 +3712,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const profileKey = actorActiveTools(actorDeps).join(',');
     // Key includes crafted_tools quality (score filtering depends on recency) and the actor profile,
     // so an owner chat never reuses an assigned turn's upward-reporting surface.
-    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}`;
+    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}`;
 
     // Only the chat surface is cached; a scoped rollout's surface is built once per rollout.
     if (claimScope === undefined && this._cachedTools && cacheKey === this._cachedToolsKey) {
@@ -3780,6 +3782,26 @@ export abstract class ActorAgent extends Agent<Env> {
       }), { mode });
       throw err;
     }
+  }
+
+  /** "Beta: swarms" as the toolset is built; null until read, and after a catalog write. */
+  private _accountSwarms: boolean | null = null;
+
+  protected async readAccountSwarms(): Promise<boolean> {
+    this._accountSwarms ??= betaSwarms((await this.profileInputs()).envelope.catalog);
+
+    return this._accountSwarms;
+  }
+
+  /** Rebuilt when the turn's catalog read moved the setting. */
+  private async turnToolsAndReads(body: JsonObject): Promise<{ tools: ToolSet; reads: TurnReads }> {
+    const built = await this.readAccountSwarms();
+    const tools = this.getTools();
+    const reads = await this.readTurnInputs(tools, body);
+
+    this._accountSwarms = betaSwarms(reads.profileInputs.envelope.catalog);
+
+    return { tools: this._accountSwarms === built ? tools : this.getTools(), reads };
   }
 
   /** Built lazily once per DO lifetime; heads need the owner for UserDO auth, so undefined without one. */
@@ -3962,9 +3984,8 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnOperation = null;
     // The chat view, not the raw surface: a slow `run` must detach into a background job whose
     // settle wakes a turn, and that wrap lives here.
-    const tools = this.getTools();
     const body = item.metadata ?? {};
-    const reads = await this.readTurnInputs(tools, body);
+    const { tools, reads } = await this.turnToolsAndReads(body);
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(body);
     this._turnContinuity = readTurnContinuity(body);
@@ -4001,8 +4022,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   private async composeNextRequest(): Promise<ComposedRequest> {
-    const tools = this.getTools();
-    const reads = await this.readTurnInputs(tools, {});
+    const { tools, reads } = await this.turnToolsAndReads({});
     const { messages: history } = await this.stores.history.materialize();
 
     const composed = await this.composeTurn({
@@ -4180,7 +4200,7 @@ export abstract class ActorAgent extends Agent<Env> {
     );
 
     const extensionToolNames = Object.keys(extensionTools);
-    const availableAgentActions = actorAgentsActions(turnActorDeps);
+    const availableAgentActions = actorAgentsActions(turnActorDeps, this._accountSwarms === true);
     // `agent` / `llm` are reachable only inside `eval`, so they must be listed here or
     // the role intersection drops them; derived from providers wired for this mode.
     const turnCodemodeProviders = this.turnCodemodeProviders();
@@ -4750,13 +4770,16 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Re-drive an evicted background job from its checkpoint (B6) over the raw surface, so a
    *  re-drive can't detach a second job. Legacy `fork` and 'think' rows map to the search path. */
-  protected resumeBackgroundJob(
+  protected async resumeBackgroundJob(
     kind: string,
     input: JsonValue,
     mode: WorkMode,
     signal: AbortSignal,
   ): Promise<JsonValue | undefined> {
-    return resumeBackgroundJob({
+    // A re-drive may be the activation's first tool build.
+    await this.readAccountSwarms();
+
+    return await resumeBackgroundJob({
       rawTools: (resumeMode) => this.getRawToolsForWorkMode(resumeMode),
       kind, input, mode, signal,
     });

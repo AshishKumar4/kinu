@@ -82,7 +82,7 @@ import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
-  BUILTIN_PROFILE_CATALOG,
+  BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
@@ -566,20 +566,30 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   return null;
 }
 
-/** Hashed with WebCrypto: the gallery has no `node:crypto`. */
-async function profileCatalogFixture(path: string): Promise<Response | null> {
+/** A saved catalog reads back. */
+let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = { catalog: BUILTIN_PROFILE_CATALOG, version: 0 };
+
+/** Hashed with WebCrypto: the gallery has no `node:crypto`. A stale write is refused, as the route does. */
+async function profileCatalogFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
   if (path !== "/api/user/profile-catalog") return null;
 
-  const bytes = new TextEncoder().encode(profileCatalogCanonical(BUILTIN_PROFILE_CATALOG));
+  if (method === "PUT") {
+    const put = v.parse(v.object({ catalog: v.unknown(), expectedVersion: v.number() }), JSON.parse(v.parse(v.string(), body)));
+
+    if (put.expectedVersion !== galleryCatalog.version) return fixtureJson({ error: "The catalog changed since you read it." }, 409);
+    galleryCatalog = { catalog: validateProfileCatalog({ value: put.catalog }), version: galleryCatalog.version + 1 };
+  }
+
+  const bytes = new TextEncoder().encode(profileCatalogCanonical(galleryCatalog.catalog));
 
   const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
     .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
   return fixtureJson({
     authority: { kind: "account", accountId: "gallery" },
-    version: 0,
+    version: galleryCatalog.version,
     digest,
-    catalog: BUILTIN_PROFILE_CATALOG,
+    catalog: galleryCatalog.catalog,
   });
 }
 

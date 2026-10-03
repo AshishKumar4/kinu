@@ -517,7 +517,7 @@ describe('the mission ledger a search charges', () => {
     const { model, script } = workingNode({ proposeAtDepth1: true });
 
     const deps: AgentsToolDeps = {
-      mode: 'build',
+      mode: 'build', swarms: true,
       swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, ...unobservedSearchSeams() },
       budget: governor,
     };

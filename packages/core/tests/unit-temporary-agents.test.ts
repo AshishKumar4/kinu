@@ -193,6 +193,7 @@ function makeScene(options: {
 
   const deps: AgentsToolDeps = {
     mode: 'build' satisfies WorkMode,
+    swarms: true,
     team,
     profile: () => testProfile(),
   };
@@ -803,7 +804,7 @@ describe('the rung is structural, and so is its absence', () => {
       expect(agentsActionsFor(child.deps)).toContain('hire');
     }
 
-    const leaf: AgentsToolDeps = { mode: 'build' };
+    const leaf: AgentsToolDeps = { mode: 'build', swarms: true };
     expect(agentsActionsFor(leaf)).not.toContain('hire');
   });
 

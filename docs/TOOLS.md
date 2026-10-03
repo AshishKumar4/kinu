@@ -483,6 +483,8 @@ refuses; `gate` requires `allow_all`.
 
 ## agents swarm: configured search
 
+Swarms are a beta, off for every account until its owner turns on Settings → Beta → "Beta: swarms" (`ProfileCatalog.betaSwarms`, `betaSwarms` in `types/profile.ts`). Off, the `agents` tool's schema and description carry no `swarm` (`agentsActionsFor`), so every such account shares one tool definition, and a `swarm` call is refused `denied`, naming the setting. The Swarms tab and the role editor's "Default swarm preset" are hidden. cf reads the setting from the catalog before it builds a turn's or a re-drive's toolset, and again after a catalog write; the CLI reads it from the catalog its turn resolves against. The eval harness turns it on for the accounts the evals run as (`openPublicSession`).
+
 `runSwarmAction` resolves `preset`, validates its axis tuple, then calls
 `runSwarm`, the only step that spends. `AgentsSwarmDeps` holds the runtime,
 model resolver, pricing, isolation, and shared-prefix compaction.

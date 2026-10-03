@@ -19,7 +19,7 @@ import {
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
   activePromptSectionOverrides,
-  agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
+  agentsActionsFor, agentsProfileContext, betaSwarms, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
   mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
@@ -1133,6 +1133,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const deps: AgentsToolDeps = {
       mode: turn.input.mode,
       swarm,
+      swarms: turn.profile.inputs !== null && betaSwarms(turn.profile.inputs.envelope.catalog),
       budget: this.budget,
     };
 
@@ -2861,6 +2862,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async retryBackgroundJob(jobId: string): Promise<RetryOutcome> {
+    await this.readAccountSwarms();
+
     return this.countJobOperation('retry', await retryBackgroundJob({
       jobs: this.jobs,
       jobRunner: this.jobRunner,
@@ -4818,7 +4821,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         work: workspaceWork, pending: pendingActions, jobs,
         changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''),
       }),
-      explorations: listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
+      // Hidden while the account's swarms are off, whatever runs it kept.
+      explorations: await this.readAccountSwarms() && listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
     };
   }
 

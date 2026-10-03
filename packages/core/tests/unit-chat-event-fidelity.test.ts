@@ -157,7 +157,7 @@ describe('ChatEvent tool success/error fidelity', () => {
 
     // A production seat per node, so the refusal is the run's and not the fixture's.
     const deps = {
-      mode: 'build',
+      mode: 'build', swarms: true,
       swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: new MockLanguageModelV3(), ...unobservedSearchSeams() },
     } satisfies Parameters<typeof createAgentsTool>[0];
 

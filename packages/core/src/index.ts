@@ -2052,7 +2052,7 @@ export {
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
-  ProfileCatalogEnvelopeSchema,
+  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING,
 } from './profiles';
 
 export type {

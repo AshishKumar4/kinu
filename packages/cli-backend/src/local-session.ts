@@ -51,7 +51,7 @@ import { TierIdSchema,
   createTimerTrigger, cancelTrigger, fireDueTriggers,
   EvolutionEngine,
   readMemoryTail,
-  agentsActionsFor,
+  agentsActionsFor, betaSwarms, type ProfileCatalog,
   facetHomeProvisioner, facetHomeReleaser, headAgentName, explorationActorKey,
   type HeadSeat, type HostedNodeSeat, type NodeIdentity, type ModelPricing,
   type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
@@ -375,6 +375,8 @@ export class LocalAgentSession {
   private cachedModelSpec: string | null = null;
   private tools: ToolSet = {};
   private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
+  /** The account's "Beta: swarms" the tool sets are built under; a turn whose catalog moved it rebuilds them. */
+  private accountSwarms = false;
   private readonly engine: EvolutionEngine;
   private readonly actorSession: ActorSession;
   private readonly chat: ChatSession;
@@ -1468,13 +1470,16 @@ export class LocalAgentSession {
 
   /** Re-drive an interrupted background job through core's shared resume gate over the raw surface,
    *  so it cannot detach a second job. Legacy `fork`/'think' rows map onto search. */
-  private resumeBackgroundJob(
+  private async resumeBackgroundJob(
     kind: string,
     input: { value: unknown },
     mode: WorkMode,
     signal: AbortSignal,
   ) {
-    return resumeBackgroundJob({
+    // A re-drive can come before any turn: the setting is read first, as a turn reads it.
+    this.followAccountSwarms((await this.profiles().envelope()).catalog);
+
+    return await resumeBackgroundJob({
       rawTools: (resumeMode) => {
         this.ensureModelState();
         const surface = this.toolSets[resumeMode];
@@ -1633,6 +1638,9 @@ export class LocalAgentSession {
 
   private async resolveTurnProfile(item: TurnAsked): Promise<ResolvedLocalTurn> {
     const profileInputs = await this.profiles().inputs();
+
+    this.followAccountSwarms(profileInputs.envelope.catalog);
+
     const activeRoleId = this.getActiveRoleId();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     const { available: availableSkills, activeSkills } = await this.resolveTurnSkills(item.text, roleSkills);
@@ -2571,7 +2579,7 @@ export class LocalAgentSession {
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {
     const swarm = this.buildAgentsSwarmDeps();
-    const base: AgentsToolDeps = { mode, swarm, budget: this.budget };
+    const base: AgentsToolDeps = { mode, swarm, swarms: this.accountSwarms, budget: this.budget };
     base.profile = () => agentsProfileContext(this.actorSession.profile, this.actorSession.profileInputs);
 
     if (this.teamDeps) base.team = this.teamDeps;
@@ -2888,7 +2896,18 @@ export class LocalAgentSession {
 
   private rebuildModelBoundState(model: LanguageModel): void {
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(() => model));
+    this.buildToolSets();
+  }
 
+  /** Rebuilds the tool sets when the account's catalog moved "Beta: swarms"; unbuilt, they are built with it. */
+  private followAccountSwarms(catalog: ProfileCatalog): void {
+    if (betaSwarms(catalog) === this.accountSwarms) return;
+    this.accountSwarms = !this.accountSwarms;
+
+    if (this.toolSets.build !== undefined) this.buildToolSets();
+  }
+
+  private buildToolSets(): void {
     for (const mode of ['build', 'plan'] as const) {
       const raw = buildActorTools(this.actorToolsetDeps(
         mode,
