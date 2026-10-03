@@ -142,9 +142,16 @@ function sizeNow() {
 }
 
 async function abort(error) {
+  const archiverFailed = exit !== undefined && exit !== 0;
+
   if (exit === undefined) child.kill('SIGKILL');
   await exited;
   rmSync(archive, { force: true });
+
+  if (archiverFailed) {
+    if (uploadId !== undefined) await fetch(url + '?uploadId=' + uploadId, { method: 'DELETE' }).catch(() => undefined);
+    refuse(4, 'mksquashfs exited ' + exit + ': ' + (archiverWords.trim() || 'no output'));
+  }
 
   if (uploadId !== undefined) {
     const aborted = await fetch(url + '?uploadId=' + uploadId, { method: 'DELETE' }).catch(() => ({ ok: false, status: 'unreachable' }));
@@ -292,7 +299,7 @@ interface ArchiveInput {
 }
 
 /** Patterns travel as base64 so none becomes shell syntax; `-ef` carries non-anchored lines.
- *  `nice`: the archiver outruns uploads, and the script must keep its turn to stop it (D57). */
+ *  `nice` lets the script stop the archiver (D57); `-no-duplicates`: copies read back are holes. */
 function archiverParts(input: ArchiveInput) {
   let bytes = '';
 
@@ -307,7 +314,7 @@ function archiverParts(input: ArchiveInput) {
     prepare: `mkdir -p ${shellPath(parent)} && rm -f ${shellPath(input.archivePath)} `
       + `&& printf %s ${shellPath(encoded)} | base64 -d > ${shellPath(input.excludeFile)}`,
     archiver: `/usr/bin/nice -n 10 /usr/bin/mksquashfs ${shellPath(input.sourceDir)} ${shellPath(input.archivePath)} `
-      + `-noappend -comp zstd -Xcompression-level 1 -no-progress -wildcards -ef ${shellPath(input.excludeFile)}`,
+      + `-noappend -no-duplicates -comp zstd -Xcompression-level 1 -no-progress -wildcards -ef ${shellPath(input.excludeFile)}`,
   };
 }
 
