@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import type { StoredValue } from '../../src/storage';
 import { TOOLS_STAMP } from '../../src/tools';
 import { shellSyntaxError } from "./container-shell";
+import { DEVBOX_SCRATCH_PREFIX } from './scratch';
 import * as v from 'valibot';
 import type { ExecResult, GatewayBindings } from '../../src/contracts';
 
@@ -908,7 +909,9 @@ export class FakeSandbox {
     if (options.signal !== undefined) this.execSignals.push(options.signal);
     await this.#admitNative(options);
 
-    if (this.nativeExec !== undefined && (args[0] === "bash" || args[3] === "kill-tree" || args[3] === "port-listeners")) return this.nativeExec(args, options);
+    const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[3] === "kill-tree" || args[3] === "port-listeners";
+
+    if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 
     // `cat > <path>` fed on stdin: the bytes land in the file once the writer closes.
     if (options.stdin === 'pipe' && args[0] === '/bin/sh') {

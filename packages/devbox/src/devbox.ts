@@ -505,11 +505,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         container().start('image' in from ? { ...options, image: from.image } : { ...options, containerSnapshot: { id: from.snapshot } });
         await firstExec(container(), AbortSignal.timeout(120_000));
       },
-      exec: async (command) => {
-        const output = await (await container().exec(['/bin/bash', '-c', command])).output();
-
-        return { stdout: new TextDecoder().decode(output.stdout), stderr: new TextDecoder().decode(output.stderr), exitCode: output.exitCode };
-      },
+      exec: async (command) => decoded(await (await container().exec(['/bin/bash', '-c', command])).output()),
       pipe: (key, path) => this.#pipeObject(key, path),
       snapshot: async (name) => (await container().snapshotContainer({ name })).id,
       destroy: () => this.#destroyGoldenContainer(),
@@ -1862,10 +1858,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       const process = yield* this.#startUntimed(command, options, pending);
-      const output = yield* attempt('process', () => process.output());
-      const text = new TextDecoder();
 
-      return { stdout: text.decode(output.stdout), stderr: text.decode(output.stderr), exitCode: output.exitCode };
+      return decoded(yield* attempt('process', () => process.output()));
     })).pipe(Effect.ensuring(Effect.sync(() => { this.#untimed.delete(options.execId); }))));
   }
 
@@ -1894,7 +1888,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
 
       if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'sandbox exec cancelled before admission'));
-      const started = yield* attemptSync('process', () => container.exec(['bash', '-c', command], { cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...options.env, ...CONTAINER_TRUST_ENV } }));
+      const started = yield* attemptSync('process', () => launch(container, command, options));
       pending.started = started;
 
       return yield* attempt('process', () => started);
@@ -2995,15 +2989,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #processes(): Processes { return this.#processClient ??= new Processes(this.#container()); }
 
   async #execute(command: string, options: DevboxExecOptions = {}): Promise<ExecResult> {
-    const output = await (await this.#container().exec(['/bin/bash', '-c', command], {
-      cwd: options.cwd ?? DEVBOX_WORKDIR,
-      env: options.env === undefined ? CONTAINER_TRUST_ENV : { ...CONTAINER_TRUST_ENV, ...options.env },
-      signal: options.signal,
-    })).output();
-
-    const decoder = new TextDecoder();
-
-    return { stdout: decoder.decode(output.stdout), stderr: decoder.decode(output.stderr), exitCode: output.exitCode };
+    return decoded(await (await launch(this.#container(), command, options)).output());
   }
 
   #renewContainer(): void {
@@ -3189,6 +3175,18 @@ async function firstExec(container: Container, signal: AbortSignal): Promise<voi
   const result = await ready.output();
 
   if (result.exitCode !== 0) throw new DevboxError("io", `native container admission exited ${result.exitCode}`);
+}
+
+function launch(container: Container, command: string, options: DevboxExecOptions): Promise<ExecProcess> {
+  return container.exec(['/bin/bash', '-c', command], {
+    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_TRUST_ENV, ...options.env }, signal: options.signal,
+  });
+}
+
+function decoded(output: ExecOutput): ExecResult {
+  const decoder = new TextDecoder();
+
+  return { stdout: decoder.decode(output.stdout), stderr: decoder.decode(output.stderr), exitCode: output.exitCode };
 }
 
 function parsedOrNull<S extends v.GenericSchema>(schema: S, value: StoredValue): v.InferOutput<S> | null {

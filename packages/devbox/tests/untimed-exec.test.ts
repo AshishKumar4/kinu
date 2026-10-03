@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import { devboxFailure } from '../src/errors';
 import { collectExecRecords } from '../src/exec-stream';
+import { CONTAINER_TRUST_ENV } from '../src/processes';
 import { Devbox, gate, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
@@ -27,7 +28,7 @@ class TestBox extends Devbox<unknown> {
 
 /** The runtime's `exec`, as a local process with its output on pipes. */
 const localExec: Container['exec'] = async (argv, options) => {
-  const child = Bun.spawn(argv, { cwd: options?.cwd, stdout: 'pipe', stderr: 'pipe' });
+  const child = Bun.spawn(argv, { cwd: options?.cwd, env: { ...process.env, ...options?.env }, stdout: 'pipe', stderr: 'pipe' });
   const exitCode = child.exited;
 
   return {
@@ -68,6 +69,16 @@ describe('an untimed command on the runtime\'s exec', () => {
 
     expect(await box.execUntimed('pwd; echo out; echo err >&2; exit 7', { cwd, execId: 'one' }))
       .toEqual({ stdout: `${cwd}\nout\n`, stderr: 'err\n', exitCode: 7 });
+  });
+
+  // 2026-10-03: an untimed exec forced the trust env over the caller's; a raw one did not.
+  test('runs with the box\'s trust environment under the caller\'s own, as a raw exec does', async () => {
+    const box = await readyBox();
+    const cwd = mkdtempSync(join(root, 'env-'));
+    const env = { REQUESTS_CA_BUNDLE: join(cwd, 'bundle.pem') };
+
+    expect(await box.execUntimed('printf "%s %s" "$REQUESTS_CA_BUNDLE" "$NODE_EXTRA_CA_CERTS"', { cwd, execId: 'env', env }))
+      .toEqual({ stdout: `${env.REQUESTS_CA_BUNDLE} ${CONTAINER_TRUST_ENV.NODE_EXTRA_CA_CERTS}`, stderr: '', exitCode: 0 });
   });
 
   test('ending it ends what it started, and a command already gone is not ended again', async () => {
