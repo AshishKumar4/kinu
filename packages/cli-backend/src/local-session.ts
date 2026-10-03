@@ -1700,7 +1700,7 @@ export class LocalAgentSession {
     const memoryTail = await readMemoryTail(this.rt.memory);
 
     // Re-statted each turn; only files fitting the model window are read, each classified by owner approval.
-    const agentsMd = discoverAgentsMd(this.cwd, this.modelCatalog.window(), this.instructionTrust);
+    const agentsMd = await discoverAgentsMd(this.cwd, this.modelCatalog.window(), this.instructionTrust);
 
     // agentStateVfs is the identity tree when it differs; a missing SOUL.md renders the default.
     const soul = await currentSoul(this.rt);

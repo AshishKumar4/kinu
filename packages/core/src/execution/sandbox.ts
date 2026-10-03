@@ -885,7 +885,8 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
         });
     },
 
-    async stat(path) {
+    // The devbox lists by lstat, so only `follow: false` can name a link; a followed stat keeps the listed entry.
+    async stat(path, options) {
       const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
 
       if (clean === '/' || clean === '') return { size: 0, mtimeMs: 0, type: 'directory' };
@@ -900,7 +901,11 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
 
       if (!entry) return null;
 
-      return { size: entry.size ?? 0, mtimeMs: 0, type: isDir(entry) ? 'directory' : 'file' };
+      const size = entry.size ?? 0;
+
+      if (options?.follow === false && entry.type === 'symlink') return { size, mtimeMs: 0, type: 'symlink' };
+
+      return { size, mtimeMs: 0, type: isDir(entry) ? 'directory' : 'file' };
     },
 
     async unlink(path) { await serving(path, 'unlink', () => handle.deleteFile(path)); },

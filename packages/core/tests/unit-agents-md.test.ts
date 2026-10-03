@@ -2,8 +2,12 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // A file is admitted on its size before its bytes are read, so these tests prove what was read, not only rendered.
 import { describe, test, expect } from 'bun:test';
 import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
+import { Database } from 'bun:sqlite';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { createWorkspaceBundle } from './helpers';
 import {
-  admitAgentsMd, buildSystemPromptSync, collectWorkspaceAgentsMd, renderAgentsMdSection,
+  admitAgentsMd, advisorWorkspaceGuidance, buildSystemPromptSync, collectWorkspaceAgentsMd, renderAgentsMdSection,
   stepContextLimit, CHARS_PER_TOKEN,
   type InstructionTrustResolver, type ModelWindow,
 } from '../src/index';
@@ -221,10 +225,11 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
     expect(sandbox.reads).toEqual(['/workspace/AGENTS.md']);
   });
 
-  test('a file that fits is sized once and read once, and renders whole', async () => {
+  // The second size proves the bytes read are the ones sized.
+  test('a file that fits is sized, read once, sized again, and renders whole', async () => {
     const workspace = fakeVfs({ 'AGENTS.md': 'Use bun for everything.' });
     const sources = await collectWorkspaceAgentsMd(workspace.vfs, WINDOW, APPROVED);
-    expect(workspace.stats).toEqual(['AGENTS.md']);
+    expect(workspace.stats).toEqual(['AGENTS.md', 'AGENTS.md']);
     expect(workspace.reads).toEqual(['AGENTS.md']);
     expect(renderAgentsMdSection(sources, 'system')).toContain('Use bun for everything.');
   });
@@ -275,7 +280,7 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
       fakeSandbox({ active: false, files: sandbox.vfs }),
     );
 
-    expect(sources).toEqual({ admitted: [], referenced: [] });
+    expect(sources).toEqual({ admitted: [], referenced: [], unavailable: [] });
     // The idle sandbox is never asked, so discovery cannot provision a container.
     expect(workspace.stats).toEqual(['AGENTS.md']);
     expect(workspace.reads).toEqual([]);
@@ -313,5 +318,49 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
     expect(sources.admitted.map((f) => f.trust)).toEqual(['unverified']);
     expect(renderAgentsMdSection(sources, 'system')).toBe('');
     expect(renderAgentsMdSection(sources, 'unverified')).toContain('Use bun for everything.');
+  });
+});
+
+// The cloud plane cannot resolve a link through Nimbus yet (NIMBUS-ASKS 10), so a link is never followed, and the
+// bytes read must be the ones sized: AGENTS.md is agent-writable, and a link or a swap would carry any file in.
+describe('cloud instruction files are contained and read as sized', () => {
+  test('an AGENTS.md or ADVISOR.md that is a link is reported unavailable, never read', async () => {
+    const workspace = createWorkspaceBundle(new Database(':memory:'));
+    const kernel = (await workspace.session()).vfs.as(CRED_KERNEL);
+    await kernel.writeFile('/home/main/secret.txt', new TextEncoder().encode('the owner key'));
+    await kernel.symlink('/home/main/secret.txt', '/home/main/AGENTS.md');
+    await kernel.symlink('/home/main/secret.txt', '/home/main/ADVISOR.md');
+
+    const sources = await collectWorkspaceAgentsMd(workspace.vfs, WINDOW, APPROVED);
+
+    expect(sources.admitted).toEqual([]);
+    expect(sources.unavailable).toEqual([{ path: 'AGENTS.md (workspace)', reason: 'a link this plane does not follow' }]);
+    expect(await advisorWorkspaceGuidance({ vfs: workspace.vfs, limits: async () => WINDOW })).toBe('');
+  });
+
+  test('a file swapped between sizing and reading is reported, not read', async () => {
+    const workspace = createWorkspaceBundle(new Database(':memory:'));
+    const files = workspace.vfs;
+    await writeText(files, 'AGENTS.md', 'short');
+    let swapped = false;
+
+    const swapping: VFS = {
+      ...files,
+      stat: async (path, options) => {
+        const stat = await files.stat(path, options);
+
+        if (!swapped) {
+          swapped = true;
+          await writeText(files, 'AGENTS.md', 'a much longer file, written after the size was taken');
+        }
+
+        return stat;
+      },
+    };
+
+    const sources = await collectWorkspaceAgentsMd(swapping, WINDOW, APPROVED);
+
+    expect(sources.admitted).toEqual([]);
+    expect(sources.unavailable).toEqual([{ path: 'AGENTS.md (workspace)', reason: 'file changed after it was sized' }]);
   });
 });
