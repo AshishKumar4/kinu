@@ -303,10 +303,10 @@ describe('the start hook owns restoration', () => {
     expect(container.starts).toEqual([]);
     expect((await box.devboxState()).unready).toContain('[abandoned -> replace]');
     container.clearSchedules("devboxStartup");
-    // The page's read names the refusal without arming the startup the next line proves it arms.
-    expect((await box.restoreStatus()).refused).toContain('no attached work directory');
+    // A pending replacement is no refusal. The page's read arms nothing; a caller's ask does.
+    expect((await box.restoreStatus()).refused).toBeUndefined();
     expect(armed(container)).toBe(0);
-    await expect(box.resolveReadiness()).rejects.toThrow('no attached work directory');
+    expect((await box.resolveReadiness()).kind).toBe('pending');
     expect(armed(container)).toBe(1);
     await box.devboxStartup();
     expect(container.destroys).toBe(1);
@@ -477,7 +477,7 @@ describe('the start hook owns restoration', () => {
     expect((await box.devboxState()).unready).toContain('[abandoned -> replace]');
     expect((await box.checkpointNow('tick')).kind).toBe('failed');
     parked.release();
-    await expect(box.resolveReadiness()).rejects.toThrow('no attached work directory');
+    expect((await box.resolveReadiness()).kind).toBe('pending');
     expect((await box.devboxState()).ready).toBe(false);
   });
 
