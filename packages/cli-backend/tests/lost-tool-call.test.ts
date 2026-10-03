@@ -1,7 +1,8 @@
 /**
  * A reset between a claimed call's effect and its result: the next process keeps the step the call belongs to, runs
  * the effect no second time, and tells the model the call may have taken effect (DESIGN reds 1 and 3; the owner's
- * approved item 6). The effect is an MCP tool that marks a file and never answers, so the first process dies inside it.
+ * approved item 6). The effect is an MCP tool, reached through `eval`, that marks a file and never answers, so the first
+ * process dies inside it.
  */
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -26,7 +27,8 @@ function model(steps: readonly (() => LanguageModelV2StreamPart[])[], prompts: P
     provider: 'fake',
     modelId: 'fake-model',
     doStream: async ({ prompt }) => {
-      const parts = (steps[Math.min(prompts.length, steps.length - 1)] ?? (() => []))();
+      // Past its script the model answers, so a turn never loops (a turn has no step bound).
+      const parts = (steps[prompts.length] ?? answer)();
       prompts.push(prompt);
 
       return { stream: new ReadableStream({ start(controller) { for (const part of parts) controller.enqueue(part); controller.close(); } }), response: { headers: {} } };
@@ -36,7 +38,10 @@ function model(steps: readonly (() => LanguageModelV2StreamPart[])[], prompts: P
 
 const markCall = (path: string) => (): LanguageModelV2StreamPart[] => [
   { type: 'stream-start', warnings: [] },
-  { type: 'tool-call', toolCallId: 'call-mark', toolName: mcpToolKey('marker', 'mark'), input: JSON.stringify({ path }) },
+  {
+    type: 'tool-call', toolCallId: 'call-mark', toolName: 'eval',
+    input: JSON.stringify({ code: `return await tools[${JSON.stringify(mcpToolKey('marker', 'mark'))}](${JSON.stringify({ path })});` }),
+  },
   { type: 'finish', finishReason: 'tool-calls', usage: USAGE },
 ];
 
@@ -75,7 +80,7 @@ test('a call cut off after its effect runs once, and the model is told it may ha
   const results = (prompts[0] ?? []).flatMap((message) => message.role === 'tool' ? message.content : []);
   // The provider sees the call under its portable id; the refusal names the original.
   expect(results).toEqual([expect.objectContaining({
-    toolName: mcpToolKey('marker', 'mark'),
+    toolName: 'eval',
     output: { type: 'error-text', value: expect.stringMatching(/may or may not have taken effect\..*the call is call-mark/u) },
   })]);
 
