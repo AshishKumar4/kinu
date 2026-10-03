@@ -41,6 +41,7 @@ import {
   type SupervisedProcessSpec,
   openStartBudget, awaitListenerCommand,
   LAST_INTERACTION_KEY,
+  LAST_WORK_KEY,
   QUIET_SINCE_KEY,
   racedRestoreSteps, runRestoreStep, type RestoreSteps,
   type StartClock,
@@ -192,6 +193,10 @@ const PORT_SPEC_PREFIX = 'devbox:port:';
 
 const LAST_ATTACH_KEY = 'devbox:last-attach';
 
+const SAVED_AT_KEY = 'devbox:saved-at';
+
+const SAVED_REASON = /^work directory is unchanged$|^nothing has been written since the attach$/;
+
 /** Recovery progress for one container identity: written only by the recovery ladder, deleted
  *  on the first landed attach; durable because a fresh object often runs the scheduled retry. */
 const ATTACH_RECOVERY_KEY = 'devbox:attach-recovery';
@@ -271,6 +276,11 @@ interface Flight {
   readonly generation: number;
   readonly run: Promise<void>;
   readonly since: number;
+}
+
+function lostWorkNotice(restoredTo: number, excludes: readonly string[]): string {
+  return `The container stopped before its latest work was saved: the workspace was restored from its backup to ${new Date(restoredTo).toISOString()}, `
+    + `and anything written after that is lost. The backup never holds ${excludes.join(', ')}; rebuild those (for example \`bun install\`) before relying on them.`;
 }
 
 function unawaited(work: Promise<unknown>, lost: string): void {
@@ -893,9 +903,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       }, body);
 
       this.#meter(reply.body, body);
+      this.#stampSyncSaved(body, reply.body);
 
       return reply;
     }));
+  }
+
+  #syncCheckAt: number | undefined;
+
+  #stampSyncSaved(request: string, answer: string): void {
+    const op = /"op":"(\w+)"/.exec(request)?.[1];
+
+    if (op === 'checkChanges') {
+      this.#syncCheckAt = Date.now();
+
+      if (!/"status":"unchanged"/.test(answer)) return;
+    } else if (op !== 'writeState' || !answer.startsWith('{"ok":true')) {
+      return;
+    }
+
+    this.ctx.storage.kv.put(SAVED_AT_KEY, this.#syncCheckAt ?? Date.now());
   }
 
   async #restoreNow(
@@ -974,6 +1001,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // keeps its generation's record.
     await this.ctx.storage.put(LAST_ATTACH_KEY, outcome);
     console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
+
+    if (outcome.kind === 'attached') await this.#tellLostWork();
     // Boot proof and durable settlement still need their shares after services.
     steps.declare(2);
     const restored = await this.#restartWorkloads(generation, steps);
@@ -1868,7 +1897,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       }
 
       const { sent, received } = this.#containerCommandBytes;
+      const asked = Date.now();
       const outcome = await this.#runCheckpoint(kind);
+
+      if (outcome.kind === 'committed' || (outcome.kind === 'skipped' && SAVED_REASON.test(outcome.reason ?? ''))) {
+        this.ctx.storage.kv.put(SAVED_AT_KEY, asked);
+      }
 
       this.#trace('checkpoint.bytes', {
         kind, outcome: outcome.kind, movedBytes: outcome.movedBytes,
@@ -2630,11 +2664,22 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** Maintenance renews native inactivity but is not caller use; only callers stamp idle time. */
+  async #tellLostWork(): Promise<void> {
+    const work = v.safeParse(v.number(), this.ctx.storage.kv.get(LAST_WORK_KEY));
+    const saved = v.safeParse(v.number(), this.ctx.storage.kv.get(SAVED_AT_KEY));
+
+    if (!work.success || !saved.success || work.output <= saved.output) return;
+    this.ctx.storage.kv.delete(LAST_WORK_KEY);
+    await this.#record('recovered', lostWorkNotice(saved.output, this.archiveExcludes));
+  }
+
+  /** Maintenance renews inactivity but is not use; only callers stamp idle time. */
   protected stampInteraction(): void {
     this.#renewContainer();
     const now = Date.now();
     this.#lastInteraction = now;
+
+    if (this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair') this.ctx.storage.kv.put(LAST_WORK_KEY, now);
 
     if (now - this.#lastInteractionPersisted < INTERACTION_PERSIST_INTERVAL_MS) return;
     this.#lastInteractionPersisted = now;
