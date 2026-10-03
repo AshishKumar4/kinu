@@ -2,7 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
 import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
-import { initWorkspaceSchema, JobOutputFrameSchema, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
+import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,6 +16,7 @@ import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
+import { OS_LEASE_PROCESS } from '../src/agent-host/lease-process';
 import * as v from 'valibot';
 import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, } from './helpers/local-session';
 
@@ -1014,6 +1015,33 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(db.query<{ c: number }, []>(`SELECT COUNT(*) c FROM fibers`).get()?.c).toBe(0);
     expect(db.query(`SELECT COUNT(*) c FROM fibers WHERE id='f1'`).get()).toEqual({ c: 0 });
     expect(events.items.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job')).toBe(true);
+  });
+
+  // Main, 2026-10-03: a TUI opening while the daemon ran a job re-drove it as an orphan, so it ran twice.
+  test('recoverBackgroundJobs leaves a job another live process runs to it, and recovers one whose process is gone', async () => {
+    const { db, rt, session } = setup();
+    const daemon = Bun.spawn(['sleep', '600']);
+    const gone = Bun.spawn(['true']);
+    await gone.exited;
+
+    try {
+      for (const [id, fiber, pid] of [['bgjob-held', 'f-held', daemon.pid], ['bgjob-gone', 'f-gone', gone.pid]] as const) {
+        db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', '${id}', 'shell', 'build', 'running', 1)`);
+        db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', '${fiber}', 'bg:run', '{"phase":"running","jobId":"${id}","kind":"shell"}', 1)`);
+        // As that process's own runner records the job it runs.
+        processJobHolder(rt.storage, { ...OS_LEASE_PROCESS, pid }).hold(id);
+      }
+
+      await session.recoverBackgroundJobs();
+      await session.settleBackgroundWork();
+
+      expect(jobStatus(db, 'bgjob-held')).toBe('running');
+      expect(db.query(`SELECT id FROM fibers`).all()).toEqual([{ id: 'f-held' }]);
+      expect(jobStatus(db, 'bgjob-gone')).toBe('failed');
+      expect(jobError(db, 'bgjob-gone')).toContain('interrupted');
+    } finally {
+      daemon.kill();
+    }
   });
 
   test('recoverBackgroundJobs fails an orphaned agents job whose row names an action the tool no longer has', async () => {

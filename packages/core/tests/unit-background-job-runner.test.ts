@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, newJobId,
-  type JobHarvester, type JobResumer,
+  type JobHarvester, type JobHolder, type JobResumer,
 } from '../src/jobs/runner';
 import { Inbox } from '../src/orchestrator/inbox';
 import {
@@ -68,6 +68,7 @@ function setup(opts: {
   onDetached?: ((jobId: string, requestIds: readonly string[]) => Promise<void> | void) | null;
   onCancelled?: ((jobId: string) => Promise<void> | void) | null;
   scheduleResume?: (atMs: number) => Promise<void> | void;
+  holder?: JobHolder;
 } = {}) {
   const db = opts.db ?? new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
@@ -107,6 +108,7 @@ function setup(opts: {
     policy: policy === undefined ? undefined : () => policy,
     harvest: opts.harvest,
     scheduleResume: opts.scheduleResume,
+    holder: opts.holder,
   };
 
   const runner = new BackgroundJobRunner(runnerDeps);
@@ -754,6 +756,20 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     expect(first.store.get('jz')?.resumeAttempts).toBe(6);
     expect(first.store.get('jz')?.status).toBe('running');
     expect(first.store.runningIds()).toEqual(['jz']);
+  });
+
+  test('a job another live process runs is left to it and named in flight; one it no longer runs is re-driven and held here', async () => {
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const held = new Map<string, string>([['jl', 'daemon'], ['jg', 'gone']]);
+    const holder: JobHolder = { hold: (jobId) => { held.set(jobId, 'this'); }, heldElsewhere: (jobId) => held.get(jobId) === 'daemon' };
+    const { runner, store } = setup({ resume, holder });
+    store.create({ id: 'jl', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    store.create({ id: 'jg', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+
+    expect((await runner.recoverOrphans()).map((job) => job.id).sort()).toEqual(['jg', 'jl']);
+    expect({ live: store.get('jl')?.resumeAttempts, gone: store.get('jg')?.resumeAttempts }).toEqual({ live: 0, gone: 1 });
+    expect(Object.fromEntries(held)).toEqual({ jl: 'daemon', jg: 'this' });
+    expect(held.get(runner.create('think', {}, 'build', new AbortController()))).toBe('this');
   });
 
   test('a job whose executor is alive in THIS process is not reclaimed as an orphan', async () => {

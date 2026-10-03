@@ -59,7 +59,15 @@ export type JobHarvester = (
 type JobRecoveryOutcome =
   | { readonly state: 'redriven'; readonly job: BackgroundJob }
   | { readonly state: 'deferred'; readonly job: BackgroundJob }
+  | { readonly state: 'held'; readonly job: BackgroundJob }
   | { readonly state: 'none' };
+
+/** Which process runs a job, where several processes share one store. */
+export interface JobHolder {
+  hold(jobId: string): void;
+  /** Another live process runs it: it is that process's, not an orphan. */
+  heldElsewhere(jobId: string): boolean;
+}
 
 export interface JobRetirement {
   readonly stopped: string[];
@@ -115,11 +123,13 @@ export interface BackgroundJobRunnerDeps {
   harvest?: JobHarvester;
   /** Wake at `atMs` to retry a deferred attempt; absent when no later activation exists. */
   scheduleResume?: (atMs: number) => Promise<void> | void;
+  /** Absent: one process owns the store (a Durable Object). */
+  holder?: JobHolder;
 }
 
 /** The workspace's half of every job runner in it. */
 export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutput'>>
-  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock'>;
+  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock' | 'holder'>;
 
 const SearchJobInputSchema = v.object({ task: v.string() });
 
@@ -223,6 +233,7 @@ export class BackgroundJobRunner {
       id, kind, workMode: mode, input: serializeJobResult({ value: input }), now: Date.now(),
       label: describeJobInput(kind, input),
     });
+    this.deps.holder?.hold(id);
     this.controllers.set(id, controller);
 
     return id;
@@ -243,6 +254,7 @@ export class BackgroundJobRunner {
     });
 
     if (!created) return null;
+    this.deps.holder?.hold(id);
     this.controllers.set(id, request.controller);
 
     return id;
@@ -693,7 +705,7 @@ export class BackgroundJobRunner {
     for (const jobId of this.deps.store.runningIds()) {
       const outcome = await this.recoverJob(jobId);
 
-      if (outcome.state === 'deferred') inFlight.add(jobId);
+      if (outcome.state === 'deferred' || outcome.state === 'held') inFlight.add(jobId);
     }
 
     for (const jobId of this.controllers.keys()) inFlight.add(jobId);
@@ -741,6 +753,8 @@ export class BackgroundJobRunner {
       return { state: 'none' };
     }
 
+    if (this.deps.holder?.heldElsewhere(jobId) === true) return { state: 'held', job };
+
     if (this.deps.resume) {
       const now = Date.now();
 
@@ -751,6 +765,7 @@ export class BackgroundJobRunner {
       const claim = this.deps.store.reclaim(jobId, now);
 
       if (!claim) return { state: 'none' }; // lost the race — another activation reclaimed it
+      this.deps.holder?.hold(jobId);
       // Armed before the drive: an eviction during it cannot write the wait afterwards.
       this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.attempts - 1));
       this.deps.logActivity?.('bg_job_resume', `${job.kind} -> ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
