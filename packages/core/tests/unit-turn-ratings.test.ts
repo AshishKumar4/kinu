@@ -51,7 +51,7 @@ function turn(): CompletedTurn {
 }
 
 function decide(answers: DecisionAnswers): DecisionPort {
-  return async () => ({ answers, usage: {} });
+  return async () => ({ answers, usage: { input: 0, output: 0 } });
 }
 
 /** Refusal notices over the runtime's own config and activity log, as both backends build them. */
@@ -95,7 +95,7 @@ describe('the rating ledger', () => {
     rt.decide = async () => {
       asked++;
 
-      return { answers: LOW, usage: {} };
+      return { answers: LOW, usage: { input: 0, output: 0 } };
     };
 
     const engine = new EvolutionEngine(rt, stores.history);
@@ -174,7 +174,7 @@ describe('the decision model', () => {
     ]);
   });
 
-  test('sends the state and questions only, and refuses an answer that skips a question', async () => {
+  test("sends its model, state and questions, as Clef's published schema requires, and refuses an answer that skips a question", async () => {
     const bodies: unknown[] = [];
 
     const port = createDecisionPort({
@@ -189,7 +189,7 @@ describe('the decision model', () => {
     });
 
     await expect(port({ state: 's', questions: QUESTIONS })).rejects.toThrow('did not answer corrected, wrong');
-    expect(bodies).toEqual([{ modelId: '@cf/cloudflare/clef-flash', keys: ['state', 'questions'] }]);
+    expect(bodies).toEqual([{ modelId: '@cf/cloudflare/clef-flash', keys: ['model', 'state', 'questions'] }]);
   });
 
   test('a refusal only the owner can fix is said once, leaves the turn unrated, and fails no review', async () => {
@@ -216,6 +216,15 @@ describe('the decision model', () => {
     expect(listTurnRatings(rt.storage.sql, rt.actor)).toEqual([]);
     expect(said()).toEqual(['Your decision model is refusing requests. workers-ai/@cf/cloudflare/clef: '
       + '@cf/cloudflare/clef answered 403: Authentication error. Change it in Settings → Models.']);
+  });
+
+  test('an owner tier named `decision` is said as a tier, never as the decision model', () => {
+    const { rt } = createTestRuntime();
+    const { refusals, said } = noticesOf(rt);
+
+    refusals.refused({ tier: 'decision', since: 0, refusals: [{ model: 'openrouter/acme/m', cause: new KinuError('budget', 'acme answered 402') }] });
+
+    expect(said()).toEqual(['Your decision tier is refusing requests. openrouter/acme/m: acme answered 402. Change it in Settings → Models.']);
   });
 
   test('a failure that may pass fails the review, for its retry', async () => {

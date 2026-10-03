@@ -26,8 +26,8 @@ export const DECISION_MODELS = [DEFAULT_DECISION_MODEL, 'workers-ai/@cf/cloudfla
 
 export type DecisionModel = (typeof DECISION_MODELS)[number];
 
-/** The notice key a refusing decision model is said under, beside the tiers' (`profiles/tier-refusals.ts`). */
-export const DECISION_REFUSALS = 'decision';
+/** The notice key a refusing decision model is said under, beside the tiers'; a space no tier id can hold. */
+export const DECISION_REFUSALS = 'decision model';
 
 export type DecisionQuestion =
   | { readonly type: 'score'; readonly instructions: string; readonly criteria: string[] }
@@ -64,7 +64,7 @@ export type DecisionRun = (modelId: string, body: JsonObject) => Promise<JsonObj
 
 export interface DecisionResult {
   readonly answers: DecisionAnswers;
-  readonly usage: Usage;
+  readonly usage: Required<Pick<Usage, 'input' | 'output'>>;
 }
 
 /** What a runtime carries. Null: the model refused for a reason only the owner can fix, already said to them. */
@@ -87,7 +87,7 @@ export function createDecisionPort(opts: {
     const since = opts.refusals.changes();
 
     const raw = yield* Effect.tryPromise({
-      try: () => opts.run(modelId, { state: request.state, questions: { ...request.questions } }),
+      try: () => opts.run(modelId, { model: modelId, state: request.state, questions: { ...request.questions } }),
       catch: (cause) => toKinuError({ doing: `rating a turn with ${spec}`, cause, otherwise: 'unavailable' }),
     }).pipe(Effect.catch((failure) => OWNER_FIXABLE_REFUSALS.has(providerRefusalCode({ cause: failure }) ?? failure.code)
       ? Effect.sync(() => {

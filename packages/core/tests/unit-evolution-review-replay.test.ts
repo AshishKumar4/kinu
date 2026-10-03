@@ -29,7 +29,7 @@ describe('a replayed turn review', () => {
       return { answers: {
         satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 },
         wrong: { type: 'choice', choice: 'ignored_instruction' },
-      }, usage: {} };
+      }, usage: { input: 0, output: 0 } };
     };
 
     const counts = () => ({

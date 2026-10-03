@@ -44,7 +44,7 @@ import { initLessonTables, recordLesson, corroborateLessonsForTurn, renderRecent
 import {
   initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf, listTurnRatings, hasLowRating,
   isLowRating, isHighRating, feedbackOf, ratingQuality, thumbsRating, retractThumbs, realRatingScaffoldRates,
-  isTrivialTurn, blendRealOutcomeRates,
+  isTrivialTurn,
   type RatingVerdict, type TurnRating,
 } from './ratings';
 import type { PathologyInput } from './pathology';
@@ -72,7 +72,7 @@ import { modifyScaffold } from '../scaffold/modify';
 import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor';
 import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns';
 import {
-  listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
+  listScaffoldArchive, listRejectedProposals, selectEvolutionBase, blendRealOutcomeRates,
   type EvolutionBaseSelection, type ScaffoldArchiveEntry,
 } from '../scaffold/archive';
 import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow';

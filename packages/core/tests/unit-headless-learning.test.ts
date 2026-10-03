@@ -174,7 +174,7 @@ describe('a headless actor runs the step clock only', () => {
     rt.decide = async () => ({ answers: {
       satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 },
       wrong: { type: 'choice', choice: 'unrecovered_error' },
-    }, usage: {} });
+    }, usage: { input: 0, output: 0 } });
     const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true });
     const seat = await seats.seat('head-under-test', 'swarm');
     const actor = seat.actor.handle;

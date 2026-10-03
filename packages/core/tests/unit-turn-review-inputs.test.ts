@@ -7,12 +7,12 @@ import { makeSql, createTestActor, createTestWorkspace } from './helpers';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { recordLesson, listLessons, corroborateLessonsForTurn } from '../src/evolution/lessons';
 import {
-  blendRealOutcomeRates, isTrivialTurn, realRatingScaffoldRates, recordTurnRating, type RecordTurnRatingInput,
+  isTrivialTurn, realRatingScaffoldRates, recordTurnRating, type RecordTurnRatingInput,
 } from '../src/evolution/ratings';
 import { buildOutcomeEvalSplit, describeSplitDegeneracy } from '../src/evolution/eval-split';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
-import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';
+import { blendRealOutcomeRates, type ScaffoldArchiveEntry } from '../src/scaffold/archive';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { ToolCallRecord } from '../src/evolution/types';
 import { seedTranscriptEntry, present } from '@kinu.run/test-utils';

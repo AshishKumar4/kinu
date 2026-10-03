@@ -1382,7 +1382,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
       return { answers: reads === 'corrected'
         ? { satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 }, wrong: { type: 'choice', choice: 'misunderstood' } }
         : { satisfaction: { type: 'score', score: 3.6 }, corrected: { type: 'noul', noul: 0.02 }, wrong: { type: 'choice', choice: 'nothing' } },
-      usage: {} };
+      usage: { input: 0, output: 0 } };
     };
 
     Object.defineProperty(rt, 'llm', { value: reviewLlm });
