@@ -6,6 +6,8 @@ import type { WriteObserver } from '../vfs/observe';
 import type { HostedNodeSeat } from '../strategy/node-agent';
 import type { SpawnedHead } from './controller';
 import { HeadCapture, runHeadInference, type HeadInferenceDeps } from './head-inference';
+import { CONFINED_BACKGROUNDABLE_TOOLS } from '../jobs/background-wrap';
+import { stepLoopJobs } from '../jobs/step-loop';
 import { buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult, type HeadToolDeps } from './head-tools';
 import type { ReportHeadDelta } from './head-stream';
 import type { HeadInput, HeadReport, HeadStep } from './types';
@@ -34,6 +36,8 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
 
   const run = async (seat: HeadSeat, capture: HeadCapture): Promise<HeadReport> => {
     const { model, spec } = await deps.model(input, seat);
+    // Long calls detach into its jobs; a settle wakes it.
+    const { runner, next, detach } = stepLoopJobs({ actor: seat.actor, seat: seat.jobs });
 
     const inference: HeadInferenceDeps = {
       actor: seat.actor,
@@ -44,6 +48,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
       tools: buildHeadToolSet({
         input, capture, rt: seat.actor.runtime, conversations: seat.conversations,
         codemodeTool: deps.codemodeTool(seat), webSearch: deps.webSearch, split: deps.split(seat, input),
+        jobs: { jobRunner: runner, backgroundable: CONFINED_BACKGROUNDABLE_TOOLS, mode: () => input.mode },
       }),
       capture,
       workspaceLayout: 'shared-workspace',
@@ -54,6 +59,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
       dynamic: seat.dynamic,
       reportStep: (seq, step) => deps.reportStep(input.id, seq, step),
       reportDelta: deps.reportDelta,
+      resume: next,
     };
 
     const mission = deps.mission(input, spec);
@@ -62,7 +68,13 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
 
     if (spec !== null) inference.modelSpec = spec;
 
-    return await (seat.infer ?? runHeadInference)(input, inference);
+    try {
+      return await (seat.infer ?? runHeadInference)(input, inference);
+    } finally {
+      // Its jobs' results have no reader left.
+      runner.cancelRunning();
+      detach();
+    }
   };
 
   return {

@@ -7,7 +7,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool } from 'ai';
-import type { ActorHandle, AgentsToolDeps, CodemodeSurface, DeviceRequestChannel, ExecutionRouter } from "@kinu.run/core";
+import { readDeviceRequestChannel, type ActorHandle, type AgentsToolDeps, type CodemodeSurface, type DeviceRequestChannel, type ExecutionRouter } from "@kinu.run/core";
 import { createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
@@ -26,8 +26,6 @@ export interface CodemodeFactoryOptions {
   agents?: () => AgentsToolDeps;
   extraProviders?: () => CodemodeProvider[];
   onExecutorUsed?: (name: string) => void;
-  /** Read per provider call: the tool is built once per DO lifetime, but the owning job changes on each detach. */
-  deviceRequests?: () => DeviceRequestChannel | undefined;
   reach?: ToolSurfaceNarrowing;
 }
 
@@ -56,6 +54,8 @@ export interface CodemodeFactory {
 
 export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
   const { rt, webSearch } = options;
+  // The running program's channel, read per provider call: a detach changes the owning job mid-program.
+  let deviceRequests: DeviceRequestChannel | undefined;
   const stateProvider = createStateCodemodeProvider(rt.actor.programState);
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
 
@@ -72,9 +72,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       wrapped[name] = {
         ...entry,
         execute: async (...args) => {
-          const result = await entry.execute(
-            ...(carriesOwnership ? withDeviceOwnership(args, options.deviceRequests?.()) : args),
-          );
+          const result = await entry.execute(...(carriesOwnership ? withDeviceOwnership(args, deviceRequests) : args));
 
           options.onExecutorUsed?.(p.name);
 
@@ -184,10 +182,19 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
           const execute = selected.execute;
 
           if (execute === undefined) throw new Error('Codemode executor is not callable');
+          const channel = readDeviceRequestChannel({ toolOptions: context });
 
-          return withCodemodeProgram(async () => v.parse(v.object({
-            result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())),
-          }), await execute(input, context)));
+          return withCodemodeProgram(async () => {
+            const outer = deviceRequests;
+
+            if (channel !== undefined) deviceRequests = channel;
+
+            try {
+              return v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), await execute(input, context));
+            } finally {
+              deviceRequests = outer;
+            }
+          });
         },
       }), surface.craftedTools);
     },

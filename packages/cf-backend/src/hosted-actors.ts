@@ -3,7 +3,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { INTERRUPTED_TURN, currentDateForPrompt, type ConversationRecall, type HeadReport, isSubordinateOrigin } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
-import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, buildHeadMessages, buildHeadSystemPrompt, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type HeadInferenceDeps, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, buildHeadMessages, buildHeadSystemPrompt, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type HeadInferenceDeps, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { isCFRuntime, type CFRuntime } from './runtime';
@@ -87,6 +87,9 @@ export interface HostedActorSeams {
   announce(actor: BoundActor): void;
   /** Drain on a reaction (a child's report). Never for an assignment: `wakesADrain` excludes it. */
   scheduleDrain(actor: BoundActor): void;
+  /** The workspace's half of a node's job runner. */
+  jobSeat(actorId: string): StepLoopJobSeat;
+  retireJobs(actorId: string): Promise<JobRetirement>;
   /** Arm the wake chain that reaches the delegation runners; the admitting request must not run it. */
   armWake(): void;
   rederiveWake(): void;
@@ -152,6 +155,7 @@ export async function admitHostedTask(
     readonly inheritedContext?: SubordinateInheritedContext;
     readonly creationId?: string;
     readonly messageId?: string;
+    readonly idempotencyKey?: string;
   },
 ): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> {
   const admitAs = async (actor: HostedActor): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> => {
@@ -172,6 +176,8 @@ export async function admitHostedTask(
     if (input.creationId !== undefined) admission.creationId = input.creationId;
 
     if (input.messageId !== undefined) admission.messageId = input.messageId;
+
+    if (input.idempotencyKey !== undefined) admission.idempotencyKey = input.idempotencyKey;
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
 
     // No chat session means no `auto_title` effect: the first admitted message lands a stand-in title
@@ -471,16 +477,31 @@ export function hostedSubordinateRuntime(
       actor.stores.config.setDisplayNameOrigin(displayName, nameOrigin);
     }))),
     /** Wipe removes rows, home and state subtree; archive keeps them. `observed` lets the host settle a live claim. */
-    dismiss: async (name, { keepHistory, interrupt }, reference) => {
-      await retireDescendants(seams, reference, keepHistory);
+    dismiss: (name, { keepHistory, interrupt }, reference) => settle(Effect.gen(function* () {
+      // Its subtree's jobs stop first, or none retires.
+      const stoppedJobs: string[] = [];
+      const refused: string[] = [];
+
+      for (const descendant of [...subordinateDescendants(seams.directory.list(), reference.actorId).map((record) => record.actorId), reference.actorId]) {
+        const retirement = yield* Effect.promise(() => seams.retireJobs(descendant));
+
+        stoppedJobs.push(...retirement.stopped);
+        refused.push(...retirement.refused);
+      }
+
+      yield* refusal(refused.length > 0, () => new KinuError('unavailable',
+        `${name} keeps running: nothing confirmed its job(s) ${refused.join(', ')} stopped${stoppedJobs.length === 0 ? '' : `; ${stoppedJobs.join(', ')} stopped`}.`));
+      yield* Effect.promise(() => retireDescendants(seams, reference, keepHistory));
       const live = seams.host.hosted(reference);
       const claim = live === null ? null : live.session.turnClaim;
       // `observed` only when a claim was seen: the host's refusal depends on absent vs present.
       const request: ActorRetirementRequest = { reference, name, keepHistory, interrupt };
 
       if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
-      await seams.host.retire(parent().reference, actorRetirementFor(request));
-    },
+      yield* Effect.promise(() => seams.host.retire(parent().reference, actorRetirementFor(request)));
+
+      return { stoppedJobs };
+    })),
   };
 }
 
@@ -637,6 +658,7 @@ async function runActorSeat(seams: HostedActorSeams, reference: ActorReference):
     profile: (request) => seams.profile({ actor, ...request }),
     dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
     conversations: seams.conversations(reference),
+    jobs: seams.jobSeat(reference.actorId),
   };
 }
 

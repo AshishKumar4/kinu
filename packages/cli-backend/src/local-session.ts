@@ -39,9 +39,10 @@ import { TierIdSchema,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type TaskListStore,
+  WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
-  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
+  BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
   EventLog,
@@ -375,7 +376,7 @@ export class LocalAgentSession {
   private cachedModel: LanguageModel | null = null;
   private cachedModelSpec: string | null = null;
   private tools: ToolSet = {};
-  private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
+  private readonly toolSets: Partial<Record<WorkMode, ActorToolsets>> = {};
   /** The account's "Beta: swarms" the tool sets are built under; a turn whose catalog moved it rebuilds them. */
   private accountSwarms = false;
   private readonly engine: EvolutionEngine;
@@ -409,6 +410,8 @@ export class LocalAgentSession {
   private readonly jobs: BackgroundJobStore;
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
+  /** Every job operation in this session reaches the runner over the job's rows: the root's, or a node's or head's. */
+  private readonly jobAuthorities: WorkspaceJobAuthorities;
   private readonly clock: Clock;
   /** Durable swarm checkpoint, so an interrupted swarm resumes instead of losing its budget. */
   private readonly mctsSearchStore: MctsSearchStore;
@@ -720,6 +723,10 @@ export class LocalAgentSession {
       // Arms the session's one terminal-retry timer, which sweeps due jobs before replaying owed effects.
       scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
     } satisfies BackgroundJobRunnerDeps);
+    this.jobAuthorities = new WorkspaceJobAuthorities({
+      root: () => ({ kind: 'root', actorId: this.rt.actor.actorId, store: this.jobs, runner: this.jobRunner }),
+      revive: (actorId) => this.endedLoopJobs(actorId),
+    });
     // Scaffold cold-start heal (DO onStart parity): without scaffold/agent.js,
     // engine.maybeEvolveScaffold silently disables scaffold evolution. Idempotent; tracked for end().
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
@@ -1410,7 +1417,7 @@ export class LocalAgentSession {
     });
 
     for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
-      if (orphan.name.startsWith('bg:')) await this.jobRunner.recover(orphan.snapshot);
+      if (orphan.name.startsWith('bg:')) await this.jobAuthorities.recover(orphan.snapshot);
       void this.rt.storage.sql`DELETE FROM fibers
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
     }
@@ -1422,7 +1429,8 @@ export class LocalAgentSession {
       runEvents: this.eventRecorder,
       liveRuns: () => this.chat.drivenRuns(),
       resume: jobRedriveResumeGate({
-        recoverOrphans: () => this.jobRunner.recoverOrphans(),
+        // Every actor's: a node's or head's loop died with this process too.
+        recoverOrphans: () => this.jobAuthorities.recoverOrphans(),
         inputOf: (jobId) => this.jobs.getInput(jobId),
         rootsForTask: (task) => resumableForkRoots(
           { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
@@ -1569,6 +1577,11 @@ export class LocalAgentSession {
    */
   flushEvents(): Promise<void> {
     return this.chat.flushEvents();
+  }
+
+  /** This agent is leaving: its running jobs stop without a wake. */
+  retireJobs(): Promise<JobRetirement> {
+    return this.jobRunner.retire();
   }
 
   async settleBackgroundWork(): Promise<void> {
@@ -2608,16 +2621,6 @@ export class LocalAgentSession {
     return inheritedContextFromTranscript(this.stores.history.transcript(CHAT_SESSION_ID));
   }
 
-  /** The shared background wrap (core background-tools), the same the cf backend applies: shallow
-   *  clone, 30s threshold, per-call abort. */
-  private wrapToolsForBackground(raw: ToolSet): ToolSet {
-    return wrapToolsForBackground(raw, {
-      jobRunner: this.jobRunner,
-      backgroundable: BACKGROUNDABLE_TOOLS,
-      mode: () => this.actorSession.workMode,
-    });
-  }
-
   /** One routed non-turn lane as an {@link LLM}. `system` carries core-declared prompt pairs so the
    *  CLI issues the same request as the cloud backend. */
   private localRouteLlm(resolution: ModelRouteResolution, system?: string): LLM {
@@ -2834,6 +2837,27 @@ export class LocalAgentSession {
     };
   }
 
+  /** The session's own job seams: a node's or head's output reaches the same listeners its chat's does. */
+  private loopJobPorts(): WorkspaceJobPorts {
+    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null };
+  }
+
+  /** A swarm actor no loop holds: its loop ended, with this process or before it, so its rows settle and wake nobody. */
+  private endedLoopJobs(actorId: string): JobAuthority | null {
+    // Only the local root owns the actor directory; a hire's session runs no loop of its own here.
+    if (this.rt.actor.parentActorId !== null) return null;
+    const record = localActorDirectory(this.rt.actor).directory.retained(actorId);
+
+    if (record === null || record.origin !== 'swarm' || record.retiringAt !== null || record.deletedAt !== null) return null;
+
+    return endedStepLoopJobs({
+      actorId,
+      store: this.actorHost.bindStores(actorReferenceOf(record)).stores.jobs,
+      ports: this.loopJobPorts(),
+      fiber: (name, fn) => this.trackFiber(name, fn),
+    });
+  }
+
   /** One run actor's seat, for a head or a swarm node; `declare` runs before the host builds it. */
   private async seatRunActor(creationId: string, declare: (actorId: string) => void): Promise<{
     readonly binding: LocalActorBinding;
@@ -2855,6 +2879,7 @@ export class LocalAgentSession {
         dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
         windowOf: (spec) => (spec === null ? this.modelCatalog.resolved() : this.modelCatalog.windowFor(spec)),
         conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
+        jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
       },
     };
   }
@@ -2925,13 +2950,11 @@ export class LocalAgentSession {
 
   private buildToolSets(): void {
     for (const mode of ['build', 'plan'] as const) {
-      const raw = buildActorTools(this.actorToolsetDeps(
+      this.toolSets[mode] = buildActorTools(this.actorToolsetDeps(
         mode,
         // A closure: this toolset is rebuilt only on model change, but the turn changes every turn.
         () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
       ));
-
-      this.toolSets[mode] = { raw, wrapped: this.wrapToolsForBackground(raw) };
     }
 
     this.activateToolMode(this.actorSession.workMode);
@@ -2974,6 +2997,7 @@ export class LocalAgentSession {
       roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),
       facts: this.factsStore,
       webSearch: this.getWebSearchProvider(),
+      jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },
     };
 
     // The toolset is rebuilt per turn, so `report` exists only on parent-driven turns.
@@ -2989,7 +3013,7 @@ export class LocalAgentSession {
   /** Raw tools with the effect-claim id pinned to the rollout, so a live run and a replay claim the
    *  same call once. Raw because backgrounding would key work to the ambient turn. */
   private rolloutTools(callScope: string): ToolSet {
-    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => callScope));
+    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => callScope)).raw;
   }
 
   private activateToolMode(mode: WorkMode): void {
@@ -3001,7 +3025,7 @@ export class LocalAgentSession {
 
     if (!surface) throw new Error(`tool surface for ${mode} mode is unavailable`);
 
-    return surface.wrapped;
+    return surface.turn;
   }
 }
 

@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { asSchema } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime, conversationsFor, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor, storesFor, actorJobsFor } from './helpers';
 import { programCodemode } from './helpers-program';
 import {
   narrowToolSurface, codemodeCapabilitiesFor, TOOL_REACH,
@@ -46,7 +46,8 @@ function tools(
     escalations,
     codemode: nodeCodemodeBuilder,
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
-  });
+    jobs: actorJobsFor(rt),
+  }).turn;
 }
 
 const CONDITIONAL_TOOLS = ['agents', 'web', 'report'] as const;
@@ -136,7 +137,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       knows: async () => true,
       status: async () => ({}),
       message: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
-      dismiss: async () => ({ ok: true as const, name: 's', historyKept: false }),
+      dismiss: async () => ({ ok: true as const, name: 's', historyKept: false, stoppedJobs: [] }),
     };
 
     const stubPeers = {
@@ -163,7 +164,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       report: stubReport,
       // Wired over the same SQL the backends use, not a stand-in that records nothing.
       effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
-    });
+      jobs: actorJobsFor(rt),
+    }).turn;
 
     const names = Object.keys(t);
 
@@ -499,6 +501,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
           return nodeCodemodeBuilder(surface);
         },
         effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+        jobs: actorJobsFor(rt),
       });
     } finally {
       restore();

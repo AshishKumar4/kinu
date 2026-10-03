@@ -103,7 +103,10 @@ function fakeJobRunner(
   policy: BackgroundPolicy,
   onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome,
 ) {
-  return { policy, thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold }), output: new JobOutputFeeds({ clock: REAL_CLOCK, send: () => {} }) };
+  return {
+    policy, thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold }), output: new JobOutputFeeds({ clock: REAL_CLOCK, send: () => {} }),
+    foreground: new Set<AbortController>(),
+  };
 }
 
 function wrapShellTool(provider: ExecutorProvider, runner: ReturnType<typeof fakeJobRunner>) {

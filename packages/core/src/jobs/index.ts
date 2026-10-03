@@ -35,9 +35,20 @@ export {
   MAX_CONCURRENT_DETACHED_JOBS,
   type BackgroundJobRunnerDeps,
   type JobResumer,
+  type JobRetirement,
+  type WorkspaceJobPorts,
 } from './runner';
 
 export { AgentWakeQueue } from './wake-queue';
+
+export {
+  WorkspaceJobAuthorities,
+  type JobAuthority,
+  type JobAuthorityKind,
+  type WorkspaceJobAuthoritiesDeps,
+} from './authorities';
+
+export { endedStepLoopJobs, inlineResultInbox, type StepLoopJobSeat } from './step-loop';
 
 export { jobName, shortJobId, type JobName } from './job-name';
 
@@ -57,6 +68,7 @@ export { DeviceRequestOwnership, type DeviceRequestChannel } from './device-owne
 export {
   wrapToolsForBackground,
   CONFINED_BACKGROUNDABLE_TOOLS,
+  type ActorJobs,
   type BackgroundableTool,
 } from './background-wrap';
 

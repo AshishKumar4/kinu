@@ -22,17 +22,14 @@ export const CONFINED_BACKGROUNDABLE_TOOLS = {
   shell: { completion: 'result', detachable: () => true },
 } as const satisfies Readonly<Record<string, BackgroundableTool>>;
 
-/**
- * Returns a shallow clone; never mutates the cached raw toolset, which eval side-streams (shadow eval,
- * scaffold, GEPA) use unwrapped. Once a job retains a call, BackgroundJobRunner owns its controller.
- */
-export function wrapToolsForBackground(raw: ToolSet, deps: {
-  jobRunner: Pick<BackgroundJobRunner, 'thresholdDeps' | 'policy' | 'output'>;
-  /** Named by the caller so a confined surface's set is visible where it is built. */
-  backgroundable: Readonly<Record<string, BackgroundableTool>>;
-  mode: () => WorkMode;
-  trackController?: (controller: AbortController) => (() => void);
-}): ToolSet {
+export interface ActorJobs {
+  readonly jobRunner: Pick<BackgroundJobRunner, 'thresholdDeps' | 'policy' | 'output' | 'foreground'>;
+  readonly backgroundable: Readonly<Record<string, BackgroundableTool>>;
+  readonly mode: () => WorkMode;
+}
+
+/** A shallow clone, so the raw surface stays inline; once a job retains a call, its runner owns the controller. */
+export function wrapToolsForBackground(raw: ToolSet, deps: ActorJobs): ToolSet {
   const wrapped: ToolSet = { ...raw };
 
   for (const [key, { completion, detachable }] of Object.entries(deps.backgroundable)) {
@@ -56,7 +53,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
         const mode = deps.mode();
         const turnSignal = options.abortSignal;
         const abortSignal = turnSignal ? AbortSignal.any([turnSignal, controller.signal]) : controller.signal;
-        const untrack = deps.trackController?.(controller);
+        deps.jobRunner.foreground.add(controller);
         // Policy is read per call: on cf one runner serves both surfaces.
         let run: Promise<unknown>;
 
@@ -98,7 +95,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
           );
         }
 
-        return untrack ? run.finally(untrack) : run;
+        return run.finally(() => { deps.jobRunner.foreground.delete(controller); });
       },
     };
   }

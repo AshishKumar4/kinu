@@ -19,7 +19,8 @@ import {
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
   activePromptSectionOverrides,
-  agentsActionsFor, agentsProfileContext, betaSwarms, assignedTurnFraming, buildActorTools,
+  agentsActionsFor, agentsProfileContext, betaSwarms, assignedTurnFraming, buildActorTools, BACKGROUNDABLE_TOOLS,
+  invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
   mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
@@ -702,7 +703,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sql: this.boundSql,
       seams: () => this.hostedSeams(),
       deliver: async (reference, task) => { await (await this.agentCalls(reference.actorId)).deliver(this.agentSnapshot(reference.actorId), task); },
-      interrupt: async (reference, turnId) => { await (await this.agentCalls(reference.actorId)).interrupt(this.agentSnapshot(reference.actorId), turnId); },
+      interrupt: async (reference, turnId) => {
+        for (const call of this.jobAuthorities.live(reference.actorId)?.runner.foreground ?? []) call.abort(new Error('cancelled by operator'));
+        await (await this.agentCalls(reference.actorId)).interrupt(this.agentSnapshot(reference.actorId), turnId);
+      },
       holds: async (reference, turnId) => await (await this.agentCalls(reference.actorId)).holds(turnId),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       pricing: (spec) => this.modelCatalog.pricing(spec),
@@ -938,6 +942,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   ): Promise<EnqueueTurnResult> {
     const admitted = await admitHostedTask(this.hostedSeams(), actor.reference, {
       kind: 'message', body: input.text, mode: workModeForTurnMetadata(input.metadata),
+      // A message id says the row is open.
+      ...(input.idempotencyKey !== undefined && { idempotencyKey: input.idempotencyKey }),
     });
 
     return { status: admitted.admitted ? 'queued' : 'skipped' };
@@ -976,6 +982,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.armDurableWake();
       },
       armWake: () => { this.armDelegationWake(); },
+      jobSeat: (actorId) => ({ ports: this.workspaceJobPorts(actorId), attach: (authority) => this.jobAuthorities.attach(authority) }),
+      retireJobs: (actorId) => this.jobAuthorities.retire(actorId),
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
       rederiveWake: () => { this.armDurableWake(); },
       oweAdvice: (actor) => this.advice.owe(actor.reference.actorId),
@@ -1081,11 +1089,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       vectorStore: turn.runtime.vectorStore,
       facts: turn.actor.stores.facts,
       webSearch,
+      jobs: this.hireJobs(turn.actor, turn.input.mode),
     };
 
     // `report` belongs only to a parent-driven turn; an owner chat with this actor must not carry it.
     deps.report = report;
-    const tools = withHeadCaptureRecording(buildActorTools(deps), turn.capture);
+    const tools = withHeadCaptureRecording(buildActorTools(deps).turn, turn.capture);
 
     // Framing is rendered from these exact tool names; `report` among them makes core's
     // `state/delegation` section name this actor as a hire.
@@ -1463,9 +1472,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** A waiting hired agent holds no transcript; its rows reopen it. */
+  /** A waiting hired agent holds no transcript; its rows reopen it. A running job keeps its runtime to the settle's turn. */
   private releaseIdleHosted(reference: ActorReference): void {
-    if (this.actorHost().hosted(reference) !== null && !this.hostedTurnInFlight(reference)) this.actorHost().release(reference);
+    if (this.actorHost().hosted(reference) === null || this.hostedTurnInFlight(reference)) return;
+
+    if ((this.jobAuthorities.live(reference.actorId)?.runner.inFlight ?? 0) > 0) return;
+    this.actorHost().release(reference);
   }
 
   private hostedReactionsDueAt(now: number): number | null {
@@ -2823,14 +2835,31 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Background jobs (#173): lifecycle lives in core BackgroundJobRunner; below is the @callable transport.
 
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    return jobResult(this.jobs, jobId);
+    return jobResult(this.jobAuthorities.owning(jobId)?.store ?? this.jobs, jobId);
   }
 
   @callable()
   async listBackgroundJobs(limit = 20, actor?: string): Promise<ListedBackgroundJob[]> {
-    if (actor !== undefined) return listBackgroundJobs(this.hostedChild(actor).child.stores.jobs, limit);
+    const { store, actorId } = actor === undefined
+      ? { store: this.jobs, actorId: this.actorHandle().actorId }
+      : (({ child }) => ({ store: child.stores.jobs, actorId: child.reference.actorId }))(this.hostedChild(actor));
 
-    return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
+    const live = this.jobAuthorities.live(actorId);
+
+    return listBackgroundJobs(store, limit, (jobId) => live?.runner.output.tail(jobId));
+  }
+
+  /** A pane naming `actor` acts on its jobs alone. */
+  private jobOperation(
+    operation: string, jobId: string, actor: string | undefined, run: (authority: JobAuthority) => Promise<{ ok: boolean }> | { ok: boolean },
+  ): Effect.Effect<{ ok: boolean }, KinuError> {
+    const authority = this.jobAuthorities.owning(jobId) ?? this.jobAuthorities.root();
+
+    if (actor !== undefined && authority.actorId !== this.hostedChild(actor).child.reference.actorId) {
+      return Effect.fail(new KinuError('denied', `Job ${jobId} is not ${actor}'s.`));
+    }
+
+    return Effect.promise(async () => this.countJobOperation(operation, await run(authority)));
   }
 
   /** Wrapped at one boundary so the retry ratio is visible across all four sites.
@@ -2856,12 +2885,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return this.countJobOperation('cancel', await cancelBackgroundJob(this.jobRunner, jobId));
+  async cancelBackgroundJob(jobId: string, actor?: string): Promise<{ ok: boolean }> {
+    return await settle(this.jobOperation('cancel', jobId, actor, (authority) => cancelBackgroundJob(authority.runner, jobId)));
   }
 
   @callable()
   async retryBackgroundJob(jobId: string): Promise<RetryOutcome> {
+    if (this.jobAuthorities.owning(jobId)?.kind !== 'root') throw new KinuError('unsupported', "A hired agent's job is run again by asking that agent.");
     await this.currentAccountSwarms();
 
     return this.countJobOperation('retry', await retryBackgroundJob({
@@ -2873,8 +2903,55 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async dismissBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return this.countJobOperation('dismiss', await dismissBackgroundJob(this.jobs, jobId));
+  async dismissBackgroundJob(jobId: string, actor?: string): Promise<{ ok: boolean }> {
+    return await settle(this.jobOperation('dismiss', jobId, actor, (authority) => dismissBackgroundJob(authority.store, jobId)));
+  }
+
+  /** A hire's own jobs; a settle wakes it with a message. */
+  private hireJobs(actor: BoundActor, mode: WorkMode): ActorJobs {
+    const authority = this.jobAuthorities.live(actor.reference.actorId) ?? this.hireJobAuthority(actor.reference);
+
+    return { jobRunner: authority.runner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => mode };
+  }
+
+  protected override reviveJobAuthority(actorId: string): JobAuthority | null {
+    const record = this.actorDirectoryStore().retained(actorId);
+
+    if (record === null || record.retiringAt !== null || record.deletedAt !== null) return null;
+
+    if (isSubordinateOrigin(record.origin)) return this.hireJobAuthority(actorReferenceOf(record));
+
+    return record.origin === 'swarm' ? endedStepLoopJobs({
+      actorId, store: this.actorHost().bindStores(actorReferenceOf(record)).stores.jobs,
+      ports: this.workspaceJobPorts(actorId), fiber: (name, fn) => this.rt.schedule.fiber(name, fn),
+    }) : null;
+  }
+
+  /** Over stores bound for it alone: its turn's are released once it idles. */
+  private hireJobAuthority(reference: ActorReference): JobAuthority {
+    const actor = this.actorHost().bindStores(reference);
+    const store = actor.stores.jobs;
+
+    const runner = this.actorJobRunner(actor.reference.actorId, {
+      store,
+      // Unwatched, but woken by a message.
+      policy: () => invocationBackgroundPolicy('interactive', true),
+      fiber: (name, fn) => this.rt.schedule.fiber(name, fn),
+      // Its durable queue; a repeated wake is one message.
+      inbox: inlineResultInbox(store, {
+        send: async ({ text, metadata, idempotencyKey }) => {
+          await this.enqueueHostedTurn(actor, { text, ...(metadata !== undefined && { metadata: { ...metadata } }), ...(idempotencyKey !== undefined && { idempotencyKey }) });
+
+          return 'queued';
+        },
+      }),
+    });
+
+    const authority = { kind: 'hire', actorId: actor.reference.actorId, store, runner } as const;
+
+    this.jobAuthorities.attach(authority);
+
+    return authority;
   }
 
   @callable()
@@ -3222,7 +3299,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Runs the resumed loop re-opened are live and must not be sealed as wreckage.
         liveRuns: () => this.chatLoop.drivenRuns(),
         resume: jobRedriveResumeGate({
-          recoverOrphans: () => this.jobRunner.recoverOrphans(),
+          // Every actor's: some jobs have no fiber row.
+          recoverOrphans: () => this.jobAuthorities.recoverOrphans(),
           inputOf: (jobId) => this.jobs.getInput(jobId),
           rootsForTask: (task) => resumableForkRoots(
             { ledger: this.mctsSearchStore, journal: this.headJournal }, task,

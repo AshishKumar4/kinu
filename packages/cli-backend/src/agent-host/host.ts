@@ -51,7 +51,7 @@ import {
   terminalTaskReport,
   taskAnswerIsLater,
   type ActorHost,
-  type ActorReference, type AgentSignal, type SendOutcome,
+  type ActorReference, type AgentSignal, type JobRetirement, type SendOutcome, type SubordinateDismissal,
   type AgentRuntime,
   type AdmittedSubordinateReport,
   type BoundActor,
@@ -1203,9 +1203,7 @@ export class LocalAgentHost {
         child.config.setDisplayNameOrigin(displayName, nameOrigin);
         child.session.host.broadcast({ type: 'workspace_renamed', displayName });
       },
-      dismiss: async (name, { keepHistory, interrupt }, reference) => {
-        await this.removeChild(parentOf(), name, { keepHistory, interrupt }, reference);
-      },
+      dismiss: (name, dismissal, reference) => this.dismissChild(parentOf(), name, dismissal, reference),
     };
   }
 
@@ -1484,6 +1482,40 @@ export class LocalAgentHost {
     });
 
     this.answerPasses.add(pass);
+  }
+
+  /** Every job in the child's subtree stops first: a refusal removes nobody, and no process outlives the agent it answers. */
+  dismissChild(
+    parent: HostEntry, name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference,
+  ): Promise<SubordinateDismissal> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const retirement = yield* Effect.promise(() => this.retireSubtreeJobs(parent, name, reference));
+
+      if (retirement.refused.length > 0) {
+        return yield* Effect.fail(new KinuError('unavailable', `${name} keeps running: nothing confirmed its job(s) ${retirement.refused.join(', ')} stopped.`));
+      }
+
+      yield* Effect.promise(() => this.removeChild(parent, name, dismissal, reference));
+
+      return { stoppedJobs: retirement.stopped };
+    }));
+  }
+
+  /** The running jobs of the hosted child `name` and of every helper below it that this host holds. */
+  private async retireSubtreeJobs(parent: HostEntry, name: string, reference: ActorReference): Promise<JobRetirement> {
+    const retirement: JobRetirement = { stopped: [], refused: [] };
+    const below = subordinateDescendants(parent.tree.directory.list(), reference.actorId).map((record) => this.byActor.get(record.actorId));
+    const candidate = parent.children.get(name) ?? this.entries.get(`${parent.key}/${name}`);
+
+    for (const entry of [...below, candidate?.ws.rt.actor.actorId === reference.actorId ? candidate : undefined]) {
+      if (entry === undefined) continue;
+      const own = await entry.session.retireJobs();
+
+      retirement.stopped.push(...own.stopped);
+      retirement.refused.push(...own.refused);
+    }
+
+    return retirement;
   }
 
   private async removeDescendants(tree: HostTree, reference: ActorReference, keepHistory: boolean): Promise<void> {

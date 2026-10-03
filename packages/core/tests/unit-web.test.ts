@@ -3,7 +3,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime, conversationsFor } from './helpers';
+import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
 import {
   buildActorTools,
   buildBuiltinTools,
@@ -502,7 +502,8 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
     codemode: createNodeCodemodeBuilder([createWebCodemodeProvider({ provider, files: rt.storage, sessions: NO_BROWSER_RUN })]),
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
     webSearch: provider,
-  });
+    jobs: actorJobsFor(rt),
+  }).turn;
 }
 
 describe('web builtin', () => {

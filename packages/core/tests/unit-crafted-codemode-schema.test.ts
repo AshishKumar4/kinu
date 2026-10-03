@@ -6,7 +6,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
-import { createTestRuntime, conversationsFor } from './helpers';
+import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
 import {
   buildActorTools,
   type ActorToolsetDeps,
@@ -49,8 +49,9 @@ function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'co
     rt,
     conversations: conversationsFor(rt),
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+    jobs: actorJobsFor(rt),
     ...deps,
-  });
+  }).turn;
 }
 
 describe('Phase D — crafted tools reach the eval builder under tools.*', () => {

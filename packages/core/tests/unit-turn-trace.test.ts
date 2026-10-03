@@ -49,7 +49,7 @@ function team() {
     recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName }),
     spawn: async () => ({ name: roster.name, displayName: 'Researcher' }),
     status: async () => ({ roster: [roster] }),
-    dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
+    dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),
     assign: async (input) => ({ ok: true, name: input.name, ...handoff }),
     message: async (input) => {
       messages.push(input.content);

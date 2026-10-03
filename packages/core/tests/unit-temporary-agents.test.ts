@@ -156,6 +156,8 @@ function makeScene(options: {
       calls.push(`dismiss:${name}:${keepHistory}`);
 
       if (options.failRelease) throw new Error('the release failed');
+
+      return { stoppedJobs: [] };
     },
     async rename() { /* not reached by this rung */ },
   };

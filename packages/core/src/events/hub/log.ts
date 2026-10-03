@@ -176,6 +176,7 @@ const SubordinateTaskPayloadSchema = v.object({
   kinu_mode: WorkModeSchema,
   creation_id: v.optional(v.string()),
   message_id: v.optional(v.string()),
+  idempotency_key: v.optional(v.string()),
 });
 
 /** `v.object` strips unnamed fields; the total `satisfies` makes a forgotten field a compile error. */
