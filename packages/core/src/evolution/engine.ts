@@ -42,8 +42,8 @@ import {
 } from '../advisor/review';
 import { initLessonTables, recordLesson, corroborateLessonsForTurn, renderRecentLessons } from './lessons';
 import {
-  applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, recordTurnStruggles, scoreToolLessons,
-  StruggleLessonSchema, struggleLessonPrompt, teachingStruggle,
+  applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, owesTurnLessons, recordTurnStruggles,
+  scoreToolLessons, StruggleLessonSchema, struggleLessonPrompt, teachingStruggle,
 } from './struggles';
 import {
   initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf, listTurnRatings, hasLowRating,
@@ -562,7 +562,7 @@ export class EvolutionEngine {
    * refusal throws, for the ledger to retry or park. A turn with no id has none to key them by.
    */
   async learnFromTurn(completed: CompletedTurn): Promise<void> {
-    if (!this.config.enabled || completed.turnId === undefined || completed.turnId === '') return;
+    if (!this.config.enabled || completed.turnId === undefined || completed.turnId === '' || !owesTurnLessons(completed)) return;
     const turn = { ...completed, turnId: completed.turnId };
     const { sql } = this.rt.storage;
     const { actor } = this.rt;

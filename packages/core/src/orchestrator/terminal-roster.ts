@@ -9,6 +9,9 @@ import type { TurnContinuity } from './agent-orchestrator';
 import type { OwedEffect } from './terminal-effects';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import { isPlaceholderMission } from '../identity/soul';
+import * as v from 'valibot';
+import { CompletedTurnSchema } from '../evolution/session-window';
+import { owesTurnLessons } from '../evolution/struggles';
 
 /** `completed` is the driver's verdict; rows keyed to the answer gate on the narrower `durablyAnswered`. */
 export interface TerminalTurnFacts {
@@ -212,9 +215,13 @@ export function declareTerminalRoster(
   return owed;
 }
 
-/** Owed whether or not a reply ever rates the turn; recorded, so a session with evolution off learns nothing. */
+/** Owed whether or not a reply ever rates the turn, only by a turn with something to learn from (`owesTurnLessons`);
+ *  recorded, so a session with evolution off learns nothing. */
 function turnLessonsEffect(facts: TerminalTurnFacts): OwedEffect[] {
   if (!facts.evolutionEnabled || facts.workMode === 'plan') return [];
+  const turn = v.safeParse(CompletedTurnSchema, facts.scopedTurn);
+
+  if (turn.success && !owesTurnLessons(turn.output)) return [];
 
   return [{ name: 'turn_lessons', scope: facts.messageId, lane: 'detached', input: { turn: facts.scopedTurn } }];
 }
