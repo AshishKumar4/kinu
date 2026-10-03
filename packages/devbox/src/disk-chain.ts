@@ -408,14 +408,16 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     const base = at(layers.length - 1);
     const lowers = [...deltas.map(delta => `${delta}/tree`), base].map(shellPath).join(':');
 
-    const mounts = layers.map((key, index) => `mountpoint -q ${shellPath(at(index))} || { mkdir -p ${shellPath(at(index))} && `
-      + `/usr/local/bin/devbox-squashfuse ${shellPath(mounted(ports.storeRoot(), key))} ${shellPath(at(index))} -o allow_other,ro,nonempty; }`);
+    // At once: each mount is a few store round trips (D68: 3.4 s in turn at 2 GB).
+    const mounts = [...layers.map((key, index) => `{ mountpoint -q ${shellPath(at(index))} || { mkdir -p ${shellPath(at(index))} && `
+      + `/usr/local/bin/devbox-squashfuse ${shellPath(mounted(ports.storeRoot(), key))} ${shellPath(at(index))} -o allow_other,ro,nonempty; }; } & pids="$pids $!"`),
+    'for pid in $pids; do wait "$pid"; done'];
 
     const blocks = `/usr/local/bin/devbox-block-lower --base ${shellPath(base)} ${[...deltas].reverse().map(delta => `--layer ${shellPath(delta)}`).join(' ')} `
       + `--mount ${shellPath(BLOCK_LOWER)} --stats ${shellPath(`${BLOCK_LOWER}.json`)}`;
 
     yield* run('mounting the recovered layers', [
-      'set -e', ...mounts, `mkdir -p ${shellPath(UPPER)} ${shellPath(WORK)} ${shellPath(LOWERS)} ${shellPath(DEVBOX_WORKDIR)} ${shellPath(BLOCK_LOWER)}`,
+      'set -e', "pids=''", ...mounts, `mkdir -p ${shellPath(UPPER)} ${shellPath(WORK)} ${shellPath(LOWERS)} ${shellPath(DEVBOX_WORKDIR)} ${shellPath(BLOCK_LOWER)}`,
       `top=''; held=''`,
       ...deltas.map(delta => `[ -e ${shellPath(`${delta}/.devbox-delta/manifest.json`)} ] && held=1`),
       `if [ -n "$held" ]; then`,
@@ -425,8 +427,9 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
       `  mountpoint -q ${shellPath(BLOCK_LOWER)} || { cat ${shellPath(`${BLOCK_LOWER}.log`)} >&2; exit 1; }`,
       `  top=${shellPath(BLOCK_LOWER)}:`,
       'fi',
-      `mountpoint -q ${shellPath(DEVBOX_WORKDIR)} || /usr/bin/fuse-overlayfs -o "lowerdir=$top"${lowers},upperdir=${shellPath(UPPER)},workdir=${shellPath(WORK)} ${shellPath(DEVBOX_WORKDIR)}`,
+      `{ mountpoint -q ${shellPath(DEVBOX_WORKDIR)} || /usr/bin/fuse-overlayfs -o "lowerdir=$top"${lowers},upperdir=${shellPath(UPPER)},workdir=${shellPath(WORK)} ${shellPath(DEVBOX_WORKDIR)}; } & work=$!`,
       `mountpoint -q ${shellPath(LOWERS)} || /usr/bin/fuse-overlayfs -o "lowerdir=$top"${lowers} ${shellPath(LOWERS)}`,
+      'wait "$work"',
     ].join('\n'));
   });
 
