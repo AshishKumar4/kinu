@@ -1789,7 +1789,8 @@ function removeRequestDirectory(dir) {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-function createInFlight(root = INFLIGHT_ROOT) {
+/** `isStarting(requestId)`: a start in this daemon is still building that record, which its start registers. */
+function createInFlight(root = INFLIGHT_ROOT, isStarting = () => false) {
   const entries = new Map();
 
   function entryFor(requestId) {
@@ -1823,7 +1824,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
     const recovered = [];
 
     for (const directory of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!directory.isDirectory()) continue;
+      if (!directory.isDirectory() || isStarting(directory.name)) continue;
       const dir = path.join(root, directory.name);
 
       try {
@@ -1994,9 +1995,14 @@ function createInFlight(root = INFLIGHT_ROOT) {
   };
 }
 
+/** Exec requests whose supervisor has not published its state yet, by request
+ *  id. Each waits behind its pre-mutation snapshot in checkpoint-store order;
+ *  a re-delivered frame joins it, and a cancel lets it start before stopping it. */
+const starting = new Map();
+
 /** One daemon, one registry. Reconciliation makes a restarted daemon the
  * durable request owner without creating another supervisor. */
-const inFlight = createInFlight();
+const inFlight = createInFlight(INFLIGHT_ROOT, (requestId) => starting.has(requestId));
 
 /** `uncheckpointed`: why no checkpoint covers the command, or null. `watched`: the hub asked for its output
  *  while it runs, so the supervisor gets a pipe for it on fd 3 and `child.stdio[3]` is this daemon's end. */
@@ -2518,11 +2524,6 @@ function socketClosed(ws) {
   return ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED;
 }
 
-/** Exec requests whose supervisor has not published its state yet, by request
- *  id. Each waits behind its pre-mutation snapshot in checkpoint-store order;
- *  a re-delivered frame joins it, and a cancel lets it start before stopping it. */
-const starting = new Map();
-
 /** Commands whose output a hub is watching, by request id, while their supervisor's pipe is open. */
 const outputWatches = new Map();
 
@@ -2658,6 +2659,14 @@ function startCommand(msg, cmd, ws, ctx) {
     if (msg.output === true) outputWatches.set(id, watchOutput(id, supervisor.child.stdio[3], ws));
     await waitForSupervisorState(supervisor.dir, supervisor.child);
     inFlight.register(id, supervisor.dir);
+
+    /** @param {unknown} error */
+    function reportStopFailure(error) {
+      log('Could not terminate abandoned command', id, error);
+    }
+
+    // Its socket dropped while it started: stopped as the drop's sweep stopped the rest, now it has a supervisor.
+    if (socketClosed(ws)) await inFlight.cancel(id).catch(reportStopFailure);
   })();
 
   const forget = () => { starting.delete(id); };
