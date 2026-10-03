@@ -50,124 +50,124 @@ interface McpConnectionDiagnostic {
  * logged and skipped. `signal` is the only end for a child that stays alive and
  * answers nothing: the SDK always arms a timer, so cancellation replaces a clock.
  */
-export async function connectMcpServers(
+export function connectMcpServers(
   servers: Record<string, McpServerConfig>,
   onLog?: (msg: string) => void,
   signal?: AbortSignal,
 ): Promise<McpConnection> {
-  const clients = new Map<string, Client>();
-  const callTimeoutByServer = new Map<string, number>();
-  const descriptors: SerializableToolDescriptor[] = [];
-  const refused: McpToolRefusal[] = [];
-  const connectionDiagnostics: McpConnectionDiagnostic[] = [];
+  return settle(Effect.gen(function* () {
+    const clients = new Map<string, Client>();
+    const callTimeoutByServer = new Map<string, number>();
+    const descriptors: SerializableToolDescriptor[] = [];
+    const refused: McpToolRefusal[] = [];
+    const connectionDiagnostics: McpConnectionDiagnostic[] = [];
 
-  for (const [serverName, cfg] of Object.entries(servers)) {
-    const client = new Client({ name: 'kinu-cli', version: '0.1.0' });
-    let stderr = '';
+    for (const [serverName, cfg] of Object.entries(servers)) {
+      const client = new Client({ name: 'kinu-cli', version: '0.1.0' });
+      let stderr = '';
 
-    try {
-      signal?.throwIfAborted();
+      yield* Effect.catchCause(Effect.gen(function* () {
+        signal?.throwIfAborted();
 
-      const transport = new StdioClientTransport({
-        command: cfg.command,
-        args: cfg.args ?? [],
-        env: cfg.env,
-        stderr: 'pipe',
-      });
+        const transport = new StdioClientTransport({
+          command: cfg.command,
+          args: cfg.args ?? [],
+          env: cfg.env,
+          stderr: 'pipe',
+        });
 
-      transport.stderr?.on('data', (chunk) => {
-        stderr = `${stderr}${String(chunk)}`.slice(-4_000);
-      });
-      await client.connect(transport, { timeout: NO_TIMER_DEADLINE_MS, signal });
-      const listed = await listServerTools(client, serverName, signal);
+        transport.stderr?.on('data', (chunk) => {
+          stderr = `${stderr}${String(chunk)}`.slice(-4_000);
+        });
+        yield* Effect.promise(() => client.connect(transport, { timeout: NO_TIMER_DEADLINE_MS, signal }));
+        const listed = yield* Effect.promise(() => listServerTools(client, serverName, signal));
 
-      if (cfg.timeoutMs !== undefined) callTimeoutByServer.set(serverName, cfg.timeoutMs);
-      const refusals = [...listed.refused];
+        if (cfg.timeoutMs !== undefined) callTimeoutByServer.set(serverName, cfg.timeoutMs);
+        const refusals = [...listed.refused];
 
-      for (const t of listed.tools) {
-        const described = describeMcpTool({ id: serverName, name: serverName }, t);
+        for (const t of listed.tools) {
+          const described = describeMcpTool({ id: serverName, name: serverName }, t);
 
-        if ('admitted' in described) descriptors.push(described.admitted);
-        else refusals.push(described.refused);
-      }
+          if ('admitted' in described) descriptors.push(described.admitted);
+          else refusals.push(described.refused);
+        }
 
-      for (const refusal of refusals) {
-        diagnostics.failure('mcp.tool_refused', new KinuError('bad_input', refusal.reason), { server: serverName });
-        onLog?.(`mcp: ${serverName} ${refusal.reason}`);
-      }
+        for (const refusal of refusals) {
+          diagnostics.failure('mcp.tool_refused', new KinuError('bad_input', refusal.reason), { server: serverName });
+          onLog?.(`mcp: ${serverName} ${refusal.reason}`);
+        }
 
-      refused.push(...refusals);
-      clients.set(serverName, client);
-      connectionDiagnostics.push({ server: serverName, status: 'connected', toolCount: listed.tools.length });
-      onLog?.(`mcp: ${serverName} -> ${listed.tools.length} tool(s)`);
-    } catch (err) {
-      // A failed close on the half-open transport means a leaked child; report it, never drop it.
-      const reasons = [renderThrownChain({ cause: err })];
+        refused.push(...refusals);
+        clients.set(serverName, client);
+        connectionDiagnostics.push({ server: serverName, status: 'connected', toolCount: listed.tools.length });
+        onLog?.(`mcp: ${serverName} -> ${listed.tools.length} tool(s)`);
+      }), (failed) => Effect.gen(function* () {
+        // A failed close on the half-open transport means a leaked child; report it, never drop it.
+        const reasons = [renderThrownChain({ cause: Cause.squash(failed) })];
 
-      try {
-        await client.close();
-      } catch (closeError) {
-        reasons.push(`closing it also failed: ${renderThrownChain({ cause: closeError })}`);
-      }
+        yield* Effect.catchCause(Effect.promise(() => client.close()), (unclosed) => Effect.sync(() => {
+          reasons.push(`closing it also failed: ${renderThrownChain({ cause: Cause.squash(unclosed) })}`);
+        }));
 
-      const reason = reasons.join('; ');
-      const stderrText = stderr.trim();
-      connectionDiagnostics.push({
-        server: serverName,
-        status: 'failed',
-        toolCount: 0,
-        reason,
-        stderr: stderrText || undefined,
-      });
-      onLog?.(`mcp: ${serverName} failed: ${stderrText ? `${reason}; stderr: ${stderrText}` : reason}`);
+        const reason = reasons.join('; ');
+        const stderrText = stderr.trim();
+        connectionDiagnostics.push({
+          server: serverName,
+          status: 'failed',
+          toolCount: 0,
+          reason,
+          stderr: stderrText || undefined,
+        });
+        onLog?.(`mcp: ${serverName} failed: ${stderrText ? `${reason}; stderr: ${stderrText}` : reason}`);
+      }));
     }
-  }
 
-  return {
-    descriptors,
-    refused,
-    diagnostics: connectionDiagnostics,
-    call(serverName, toolName, args, callSignal) {
-      return settle(Effect.gen(function* () {
-        const client = clients.get(serverName);
+    return {
+      descriptors,
+      refused,
+      diagnostics: connectionDiagnostics,
+      call(serverName, toolName, args, callSignal) {
+        return settle(Effect.gen(function* () {
+          const client = clients.get(serverName);
 
-        if (!client) return yield* Effect.die(new Error(`Unknown MCP server: ${serverName}`));
-        const timeout = callTimeoutByServer.get(serverName) ?? NO_TIMER_DEADLINE_MS;
+          if (!client) return yield* Effect.die(new Error(`Unknown MCP server: ${serverName}`));
+          const timeout = callTimeoutByServer.get(serverName) ?? NO_TIMER_DEADLINE_MS;
 
-        const res = yield* Effect.promise(() => client.callTool(
-          { name: toolName, arguments: v.parse(JsonObjectSchema, args ?? {}) },
-          undefined,
-          { timeout, signal: callSignal },
-        ));
-
-        if (res.isError === true) return yield* Effect.die(new McpToolError(decodeJsonValue({ value: res })));
-
-        return formatMcpResult(res);
-      }));
-    },
-    close() {
-      return settle(Effect.gen(function* () {
-        // Close every client before throwing; a failed close is a surviving child process.
-        const failures: unknown[] = [];
-
-        for (const c of clients.values()) {
-          yield* Effect.catchCause(Effect.gen(function* () {
-            yield* Effect.promise(async () => c.close());
-          }), (failed) => Effect.sync(() => {
-            const error = Cause.squash(failed);
-            failures.push(error);
-          }));
-        }
-
-        if (failures.length > 0) {
-          return yield* Effect.die(new AggregateError(
-            failures,
-            `${failures.length} of ${clients.size} MCP server(s) failed to disconnect`,
+          const res = yield* Effect.promise(() => client.callTool(
+            { name: toolName, arguments: v.parse(JsonObjectSchema, args ?? {}) },
+            undefined,
+            { timeout, signal: callSignal },
           ));
-        }
-      }));
-    },
-  };
+
+          if (res.isError === true) return yield* Effect.die(new McpToolError(decodeJsonValue({ value: res })));
+
+          return formatMcpResult(res);
+        }));
+      },
+      close() {
+        return settle(Effect.gen(function* () {
+          // Close every client before throwing; a failed close is a surviving child process.
+          const failures: unknown[] = [];
+
+          for (const c of clients.values()) {
+            yield* Effect.catchCause(Effect.gen(function* () {
+              yield* Effect.promise(async () => c.close());
+            }), (failed) => Effect.sync(() => {
+              const error = Cause.squash(failed);
+              failures.push(error);
+            }));
+          }
+
+          if (failures.length > 0) {
+            return yield* Effect.die(new AggregateError(
+              failures,
+              `${failures.length} of ${clients.size} MCP server(s) failed to disconnect`,
+            ));
+          }
+        }));
+      },
+    };
+  }));
 }
 
 /** Strict first, since it caches output validators. */

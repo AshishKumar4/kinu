@@ -83,7 +83,7 @@
     "packages/cli-backend/src/local-session.ts#catch": 7,
     "packages/cli-backend/src/local-session.ts#promise-rejection": 1,
     "packages/cli-backend/src/local-session.ts#throw": 9,
-    "packages/cli-backend/src/mcp.ts#catch": 3,
+    "packages/cli-backend/src/mcp.ts#catch": 1,
     "packages/cli-backend/src/model-resolver.ts#catch": 1,
     "packages/cli-backend/src/model-resolver.ts#throw": 1,
     "packages/cli-backend/src/node-runtime.ts#throw": 1,
@@ -107,7 +107,6 @@
     "packages/cli/src/commands/provider-connect.ts#throw": 1,
     "packages/cli/src/consent-watch.ts#catch": 2,
     "packages/cli/src/device-connect.ts#catch": 1,
-    "packages/cli/src/local-agent-client.ts#catch": 1,
     "packages/cli/src/local-inspection.ts#catch": 1,
     "packages/cli/src/local-inspection.ts#throw": 4,
     "packages/cli/src/profiles.ts#catch": 2,
@@ -123,13 +122,11 @@
     "packages/cli/src/slash-commands.ts#catch": 1,
     "packages/cli/src/tui/chat-app.tsx#catch": 11,
     "packages/cli/src/tui/chat-app.tsx#throw": 2,
-    "packages/cli/src/tui/draft-keys.ts#catch": 1,
     "packages/cli/src/tui/home-app.tsx#catch": 2,
     "packages/cli/src/tui/home-app.tsx#throw": 1,
     "packages/cli/src/tui/onboarding.tsx#promise-rejection": 1,
     "packages/cli/src/tui/overlays.tsx#promise-rejection": 1,
     "packages/cli/src/tui/use-composer-paste.ts#catch": 1,
-    "packages/cli/src/tui/use-device-connect.ts#catch": 1,
     "packages/compaction/src/extension.ts#catch": 1,
     "packages/compaction/src/extension.ts#throw": 1,
     "packages/core/src/cli/bun-runtime.ts#throw": 1,
@@ -179,7 +176,6 @@
     "packages/devbox/src/sync.ts#catch": 6,
     "packages/devbox/src/sync.ts#throw": 13,
     "packages/test-utils/src/llm.ts#throw": 1,
-    "packages/test-utils/src/runtime.ts#throw": 1,
-    "packages/test-utils/src/slate-viewer.ts#catch": 1
+    "packages/test-utils/src/runtime.ts#throw": 1
   }
 }

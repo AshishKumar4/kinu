@@ -1,5 +1,5 @@
 /** A visitor's Cap'n Web batch against a shared slate's origin; a refusal rejects with the share's reason. */
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { newHttpBatchRpcSession } from 'capnweb';
 import * as v from 'valibot';
 import { VIEWER_EXCHANGE_PATH, type JsonValue } from '@kinu.run/core';
@@ -22,7 +22,7 @@ export function consentToShare(url: string): Promise<string> {
   }));
 }
 
-export async function callSharedSlate<Value>(
+export function callSharedSlate<Value>(
   url: string, method: string, schema: v.GenericSchema<JsonValue, Value>, cookie?: string,
 ): Promise<SlateViewerAnswer<Value>> {
   const target = new URL('/__rpc', url).toString();
@@ -31,9 +31,8 @@ export async function callSharedSlate<Value>(
     cookie === undefined ? target : new Request(target, { method: 'POST', headers: { cookie } }),
   );
 
-  try {
-    return { value: v.parse(schema, await stub[method]()) };
-  } catch (cause) {
-    return { error: renderThrownChain({ cause }) };
-  }
+  return settle(Effect.matchCause(Effect.promise(async () => v.parse(schema, await stub[method]())), {
+    onSuccess: (value) => ({ value }),
+    onFailure: (failed) => ({ error: renderThrownChain({ cause: Cause.squash(failed) }) }),
+  }));
 }

@@ -1,11 +1,11 @@
-import { Effect } from 'effect';
+import { Cause, Effect, type Exit } from 'effect';
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { applyWorkspaceTitle, getChatHistoryPage, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError, settle } from '@kinu.run/core/obs';
+import { diagnostics, hold, KinuError, toKinuError, settle } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
   OS_LEASE_PROCESS,
@@ -192,7 +192,7 @@ interface PendingLocalTurn {
 
 interface AutoTitleOperation {
   readonly controller: AbortController;
-  promise: Promise<void> | null;
+  promise: Promise<Exit.Exit<void>> | null;
 }
 
 /** A turn that never reported an end must not read as a clean empty success, or `kinu exec` exits 0 on a turn
@@ -292,32 +292,23 @@ export class LocalAgentClient implements AgentClient {
     };
 
     this.autoTitleTask = owner;
-    owner.promise = (async () => {
+    owner.promise = hold(Effect.catchCause(Effect.ensuring(Effect.promise(() => autoTitleLocalWorkspace(this.agentName, this.deps.rt, source, {
+      ...this.deps.naming,
+      signal: owner.controller.signal,
+    })), Effect.sync(() => {
+      if (this.autoTitleTask === owner) this.autoTitleTask = null;
+    })), (failed) => Effect.sync(() => {
       // Only `close()` aborts this controller, so a failure after the abort is the requested cancellation, not a
       // `title_save_failed` io fault.
-      let failure: { readonly cause: unknown } | undefined;
-
-      try {
-        await autoTitleLocalWorkspace(this.agentName, this.deps.rt, source, {
-          ...this.deps.naming,
-          signal: owner.controller.signal,
-        });
-      } catch (cause) {
-        failure = { cause };
-      } finally {
-        if (this.autoTitleTask === owner) this.autoTitleTask = null;
-      }
-
-      if (failure !== undefined && !owner.controller.signal.aborted) {
-        diagnostics.failure(
-          'workspace.title_save_failed',
-          toKinuError({
-            doing: 'saving the workspace title', cause: failure.cause, otherwise: 'io',
-          }),
-          { workspace: this.agentName },
-        );
-      }
-    })();
+      if (owner.controller.signal.aborted) return;
+      diagnostics.failure(
+        'workspace.title_save_failed',
+        toKinuError({
+          doing: 'saving the workspace title', cause: Cause.squash(failed), otherwise: 'io',
+        }),
+        { workspace: this.agentName },
+      );
+    })));
   }
 
   get cliSession(): CliSession {
