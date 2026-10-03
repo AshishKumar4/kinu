@@ -348,24 +348,15 @@ export function buildSystemPromptSync(
   const render = sectionRenderer(opts.sectionOverrides);
   const lead = rt.actor.parentActorId === null && surface.agentsActions.includes('hire');
 
+  // Prefix caching stops at the first differing byte: the core every workspace shares, then this workspace,
+  // then this agent.
   return [
-    readSoulForPrompt(opts.soulOverride),
-    renderAgentNames(surface, render),
-    renderRoleSection(surface, render),
     renderOperatingGuidance(surface, render),
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
     renderExecutorSection(surface, render, rt.workspaceIsMachine),
     renderToolsSection(surface, render),
     renderAgentStateSection(surface, render),
-    ...(lead ? [
-      render(LEAD_RESPONSIBILITY, { hasTaskHire: surface.temporaryAsk }),
-      render(LEAD_BRIEF, { familyDelta: promptFamilyDelta(LEAD_BRIEF.id, surface.model.family) }),
-      render(LEAD_PARALLEL, { hasTaskHire: surface.temporaryAsk }),
-      render(LEAD_REVIEW, {}),
-      render(LEAD_INTERRUPTION, {}),
-      render(LEAD_DELIVERY, {}),
-      render(LEAD_DIRECT_EDIT, {}),
-    ] : []),
+    readSoulForPrompt(opts.soulOverride),
     // System placement carries only owner-approved (by digest) and built-in instructions; the rest ride the
     // unapproved-instructions block (prompting/volatile-context.ts).
     opts.agentsMd ? renderAgentsMdSection(opts.agentsMd, 'system') : '',
@@ -375,6 +366,17 @@ export function buildSystemPromptSync(
       : '',
     // Above the content it governs so the content cannot displace it.
     hasUnverifiedInstructions(opts) ? render(WORKSPACE_INSTRUCTIONS_SECTION, {}) : '',
+    renderAgentNames(surface, render),
+    renderRoleSection(surface, render),
+    ...(lead ? [
+      render(LEAD_RESPONSIBILITY, { hasTaskHire: surface.temporaryAsk }),
+      render(LEAD_BRIEF, { familyDelta: promptFamilyDelta(LEAD_BRIEF.id, surface.model.family) }),
+      render(LEAD_PARALLEL, { hasTaskHire: surface.temporaryAsk }),
+      render(LEAD_REVIEW, {}),
+      render(LEAD_INTERRUPTION, {}),
+      render(LEAD_DELIVERY, {}),
+      render(LEAD_DIRECT_EDIT, {}),
+    ] : []),
     // Last: the only volatile bytes (date, model, cwd). Prefix caching stops at the first difference, so
     // rendering these earlier invalidates everything after them.
     renderRuntimeContext(opts),

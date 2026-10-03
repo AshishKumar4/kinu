@@ -456,6 +456,13 @@
       "decision": "frontmatter"
     },
     {
+      "file": "packages/core/src/utils/prompt-sections.ts",
+      "kind": "regex-literal",
+      "owner": "splitPromptSections",
+      "sourceSha256": "2ecf572ee254330d4d562a59971502d6f7880364cfe3a08c04537bbfde471246",
+      "decision": "lexical"
+    },
+    {
       "file": "packages/core/src/utils/xxhash64.ts",
       "kind": "hand-parser",
       "owner": "stripes",

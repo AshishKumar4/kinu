@@ -5,7 +5,7 @@ export interface PromptSection {
   readonly chars: number;
 }
 
-/** The soul opens the prompt, unheaded. */
+/** The soul opens the workspace's part of the prompt, unheaded. */
 const SOUL_SECTION_TITLE = 'Soul';
 
 export const DYNAMIC_CONTEXT_OPEN_TAG = '<dynamic_context';
@@ -42,11 +42,11 @@ export function sealDelimiters(body: string, delimiter: RegExp, tag: string): st
   return body.replace(delimiter, `&lt;$1${tag}`);
 }
 
-/** Splits on line-start `## `; the section budget and context meter rely on these boundaries. */
+/** Splits on line-start `## ` and `<soul>`; the section budget and context meter rely on these boundaries. */
 export function splitPromptSections(prompt: string): PromptSection[] {
   if (prompt === '') return [];
 
-  return prompt.split(/\n(?=## )/).map((block) => {
+  return prompt.split(/\n(?=## |<soul>)/).map((block) => {
     const first = block.split('\n', 1)[0] ?? '';
 
     return {
