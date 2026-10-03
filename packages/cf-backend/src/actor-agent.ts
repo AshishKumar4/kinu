@@ -4057,11 +4057,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Clears transcript, working history, dynamic ledger and compaction plan. */
   private async clearConversation(): Promise<void> {
-    this.stores.history.clearConversation(CHAT_SESSION_ID, () => {
-      if (this._chatLoop?.turnInFlight() === true || this._actorSession?.inFlight === true) {
-        throw new KinuError('denied', 'Stop the active turn before clearing its conversation');
-      }
-    });
+    this.stores.history.clearConversation(CHAT_SESSION_ID, () => this._chatLoop?.turnInFlight() === true || this._actorSession?.inFlight === true
+      ? Effect.fail(new KinuError('denied', 'Stop the active turn before clearing its conversation'))
+      : Effect.void);
     this.actorSession.dynamic.reset();
 
     await settleLogged('compaction.reset_failed', { doing: 'clearing the persisted compaction plan after clear-history', otherwise: 'io' }, () => this.compactionState.plans.save(this.name, null), { workspace: this.name });

@@ -1,4 +1,5 @@
 // runHeadInference: the backend-agnostic head loop, driven through the real generateText loop.
+import { Effect } from 'effect';
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import { seedTranscriptEntry, createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
@@ -264,7 +265,7 @@ describe('durable delegated turn opening', () => {
     const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back', 'agent');
     const { session, stores } = seat.actor;
     const chat = stores.history.transcript(CHAT_SESSION_ID);
-    const assertOwner = () => rt.actor.assertCurrent();
+    const assertOwner = () => rt.actor.current();
 
     try {
       for (const [ask, answer, text] of [['ask-1', 'answer-1', 'one'], ['ask-2', 'answer-2', 'two']] as const) {
@@ -286,7 +287,7 @@ describe('durable delegated turn opening', () => {
       expect(chat.entries().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
       expect(session.dynamic.size).toBe(1);
 
-      await session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => {});
+      await session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => Effect.void);
       expect(chat.entries().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1']);
       expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered']);
       expect((await stores.history.materialize()).messages.map((message) => message.content)).toEqual(['one', 'one answered']);

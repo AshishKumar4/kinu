@@ -134,7 +134,7 @@ async function runTurn(bound: Bound, opts: {
 async function selectedInput(bound: Bound, messages: readonly ModelMessage[]) {
   return (await bound.stores.history.replaceHistory(messages, {
     author: bound.handle.actorId, via: 'session', turnId: null, stage: false,
-    assertOwner: () => bound.handle.assertCurrent(),
+    assertOwner: () => bound.handle.current(),
   })).selection;
 }
 
@@ -487,7 +487,7 @@ test('pending context edits can be read and revised but cannot overwrite another
     .rejects.toMatchObject({ verdict: 'stale' });
   await first({ action: 'read', path });
   await first({ action: 'edit', path, edits: [{ old_text: 'first proposal', new_text: 'revised proposal' }] });
-  const next = await left.stores.history.stepBase(() => left.handle.assertCurrent());
+  const next = await left.stores.history.stepBase(() => left.handle.current());
   expect(next.messages).toEqual([{ role: 'user', content: 'revised proposal' }]);
 });
 

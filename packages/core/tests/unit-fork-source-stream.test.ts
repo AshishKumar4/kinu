@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Frames must carry the cut's conversation, stay within the frame budget, and carry an oversized row alone. */
 
@@ -238,7 +239,7 @@ describe('forkTransferFrames source streamer', () => {
       files: async () => ({ vfs: ws.vfs, artifactDirectory: SOURCE_ARTIFACTS }),
     });
 
-    history.revertTo(CHAT_SESSION_ID, 'm2', () => {});
+    history.revertTo(CHAT_SESSION_ID, 'm2', () => Effect.void);
     await chat.say({ id: 'm4', role: 'user', text: 'fourth' });
 
     await expect(framesFor(ws, 2048, 'm3'))

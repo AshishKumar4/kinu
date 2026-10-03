@@ -119,11 +119,11 @@ export class SessionProposals {
     });
   }
 
-  apply(id: string, assertEpoch: () => void, validate: (entries: readonly ContextEntry[]) => StagedContextDeferral | null, turnId: string | null = null): ContextSelection | null {
+  apply(id: string, assertEpoch: () => Effect.Effect<void, KinuError>, validate: (entries: readonly ContextEntry[]) => StagedContextDeferral | null, turnId: string | null = null): ContextSelection | null {
     return this.transactionSync(() => {
       return settleSync(Effect.gen({ self: this }, function* () {
         this.actor.assertCurrent();
-        assertEpoch();
+        yield* assertEpoch();
         const proposal = yield* this.requirePending(id);
         const selected = this.context.selected();
 

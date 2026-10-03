@@ -338,7 +338,7 @@ export class AgentDatabase {
     if (rows.has(opening.id)) return;
 
     const message = await history.admitInput({
-      id: opening.id, turnId: opening.id, message: opening.message, assertOwner: () => bound.handle.assertCurrent(),
+      id: opening.id, turnId: opening.id, message: opening.message, assertOwner: () => bound.handle.current(),
     });
 
     const prepared = await rows.prepareUser({ id: opening.id, turnId: opening.id, message, metadata: opening.metadata });
@@ -405,11 +405,9 @@ export class AgentDatabase {
   clear(): void {
     const reference = this.reference();
 
-    this.actorHost().bindStores(reference).stores.history.clearConversation(CHAT_SESSION_ID, () => {
-      if (this.actorHost().hosted(reference)?.session.inFlight === true) {
-        return settleSync(Effect.fail(new KinuError('denied', 'Stop the active turn before clearing its conversation')));
-      }
-    });
+    this.actorHost().bindStores(reference).stores.history.clearConversation(CHAT_SESSION_ID, () => this.actorHost().hosted(reference)?.session.inFlight === true
+      ? Effect.fail(new KinuError('denied', 'Stop the active turn before clearing its conversation'))
+      : Effect.void);
   }
 
 }

@@ -31,6 +31,8 @@ export function sameActorReference(left: ActorReference, right: ActorReference):
 export interface ActorHandle extends ActorIdentity {
   /** The getters' own validation, run before acting without `config` or `programState`. */
   readonly assertCurrent: () => void;
+  /** The same validation as an effect, for a fence a transaction yields. */
+  readonly current: () => Effect.Effect<void, KinuError>;
   readonly config: AgentConfigStore;
   readonly programState: ProgramStateStore;
 }
@@ -43,6 +45,7 @@ export function bindActorHandle(sql: SqlExecutor, identity: ActorIdentity, valid
   const handle: ActorHandle = Object.freeze({
     ...identity,
     assertCurrent: () => settleSync(validate()),
+    current: validate,
     get config() {
       handle.assertCurrent();
 

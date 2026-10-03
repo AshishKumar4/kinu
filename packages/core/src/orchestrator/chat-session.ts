@@ -599,18 +599,14 @@ export class ChatSession {
 
   /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
   async revertTo(entryId: string): Promise<void> {
-    await this.actorSession.revertConversation(this.sessionId, entryId, () => {
-      if (this.turnInFlight()) throw new KinuError('denied', REVERT_NEEDS_IDLE);
-    });
+    await this.actorSession.revertConversation(this.sessionId, entryId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void);
     this.emit({ type: 'history-reverted', entryId });
     await this.flushEvents();
   }
 
   /** Resolves once the emptied request is measured, with why not if the measure failed; the clear itself stands. */
   async clear(): Promise<KinuError | null> {
-    await this.actorSession.clearConversation(this.sessionId, () => {
-      if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
-    });
+    await this.actorSession.clearConversation(this.sessionId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE)) : Effect.void);
 
     return this.measureCleared();
   }
@@ -883,7 +879,7 @@ export class ChatSession {
     this.messageId = item.continuation?.messageId ?? this.mintAnswerId();
 
     this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
-    const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
+    const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.current() });
 
     const opening = await this.transcript.prepareUser({ id: this.turnId, turnId: this.turnId, runId: this.runId, message: inputReference,
       metadata: authoredTurnMetadata(item) });

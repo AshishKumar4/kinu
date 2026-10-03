@@ -505,7 +505,7 @@ interface NextTurnInput {
 
 async function appendNextTurnInput({ session, deps, conversation, turnId, kind, messages }: NextTurnInput): Promise<void> {
   for (const [part, message] of messages.entries()) {
-    const reference = await session.canonical.append({ id: `${turnId}:${kind}:${part}`, message, origin: 'input', turnId, assertOwner: () => deps.actor.handle.assertCurrent() });
+    const reference = await session.canonical.append({ id: `${turnId}:${kind}:${part}`, message, origin: 'input', turnId, assertOwner: () => deps.actor.handle.current() });
     conversation.push(await session.canonical.messages.materialize(reference));
   }
 }

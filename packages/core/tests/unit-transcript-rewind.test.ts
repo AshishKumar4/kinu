@@ -1,4 +1,5 @@
 /** A rewind deletes the entry it names and everything after it, and records that it did. */
+import { Effect } from 'effect';
 import { describe, test, expect, afterEach } from 'bun:test';
 import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
 import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '../src/obs/index';
@@ -46,7 +47,7 @@ describe('a rewind', () => {
     const logger = createRecordingLogger();
     restore = setDiagnosticsSink(logger);
 
-    fixture.history.revertTo(CHAT_SESSION_ID, 'u2', () => {});
+    fixture.history.revertTo(CHAT_SESSION_ID, 'u2', () => Effect.void);
 
     expect(fixture.transcript.newestId()).toBe('a1');
     expect(fixture.transcript.count()).toBe(2);
@@ -61,7 +62,7 @@ describe('a rewind', () => {
     const logger = createRecordingLogger();
     restore = setDiagnosticsSink(logger);
 
-    fixture.history.revertTo(CHAT_SESSION_ID, 'u1', () => {});
+    fixture.history.revertTo(CHAT_SESSION_ID, 'u1', () => Effect.void);
 
     expect(fixture.transcript.newestId()).toBeNull();
     expect(await fixture.transcript.history()).toEqual([]);

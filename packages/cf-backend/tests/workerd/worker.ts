@@ -49,7 +49,7 @@ import {
   bindActorHandle, CacheWarmStore, CacheWarmingLane, initCacheWarmTable,
   type SqlExecutor, type SqlValue,
 } from '@kinu.run/core';
-import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { KinuError, renderThrownChain, settleSync } from '@kinu.run/core/obs';
 
 /** Parsed, not probed: fails on a body that is not a replay. */
 const ReplayBodySchema = v.looseObject({ max_tokens: v.number(), stream: v.optional(v.boolean()) });
@@ -212,6 +212,16 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
 
       if (failOuter) throw new Error('outer transaction failed');
     });
+  }
+
+  /** A fence as core's stores run one: yielded mid-body, its failure thrown by `settleSync` as the rollback. */
+  admitFenced(id: string, refuse: boolean): void {
+    this.ensureSchema();
+    this.ctx.storage.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
+      this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
+      yield* refuse ? Effect.fail(new KinuError('denied', 'a turn started mid-revert')) : Effect.void;
+      this.ctx.storage.sql.exec("UPDATE actor_subordinates SET status = 'idle' WHERE name = 'relay'");
+    })));
   }
 
   /** The bun arm: same body, same failure, no atomicity. */

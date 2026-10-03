@@ -139,7 +139,7 @@ export class SessionStream {
 
   constructor(private readonly history: SessionHistory, private readonly turnId: string, private readonly epoch: number) {
     this.requestId = `${turnId}:${epoch}:admission`;
-    this.claim = { turnId, epoch, assert: () => this.history.assertEpoch(turnId, epoch) };
+    this.claim = { turnId, epoch, assert: () => this.history.epochFence(turnId, epoch) };
     this.assistant = this.container('assistant');
     this.tool = this.container('tool');
     this.ui = this.container('assistant', 2);
@@ -478,7 +478,7 @@ export class SessionStream {
     const selected = this.history.context.selected();
 
     if (selected === null) throw new KinuError('missing', 'stream has no selected context');
-    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => this.history.assertEpoch(this.turnId, this.epoch), mutate: entries => {
+    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => this.history.epochFence(this.turnId, this.epoch), mutate: entries => {
       this.history.messages.seal(container.id, content, envelope);
 
       if (entries.some(entry => entry.messageId === container.id)) return entries;

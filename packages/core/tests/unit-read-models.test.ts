@@ -340,7 +340,7 @@ describe('agent status', () => {
 
     const message = await history.admitInput({
       id, turnId: id, message: { role: 'user', content: '9 head(s) across 1 fork run(s)…' },
-      assertOwner: () => { w.actor.assertCurrent(); },
+      assertOwner: () => w.actor.current(),
     });
 
     transcript.appendUser(await transcript.prepareUser({

@@ -37,7 +37,7 @@ function chatStore(db: Database) {
 
       const message = await history.admitInput({
         id, turnId: id, message: { role: 'user', content: text },
-        assertOwner: () => { actor.assertCurrent(); },
+        assertOwner: () => actor.current(),
       });
 
       transcript.appendUser(await transcript.prepareUser(
@@ -238,7 +238,7 @@ describe('a settled background job announces itself once, and not as the owner',
 
     const message = await store.history.admitInput({
       id, turnId: id, message: { role: 'user', content: text },
-      assertOwner: () => { ws.actor.assertCurrent(); },
+      assertOwner: () => ws.actor.current(),
     });
 
     store.transcript.appendUser(await store.transcript.prepareUser({

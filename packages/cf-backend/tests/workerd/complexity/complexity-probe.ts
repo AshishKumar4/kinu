@@ -185,7 +185,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
   private async turn(actor: ActorHandle, stores: AgentStores, dynamic: DynamicContextLedger, scripted: { readonly turn: number; readonly deltas: number }): Promise<number> {
     const { turn, deltas } = scripted;
     const turnId = `turn-${String(turn)}`;
-    const assertOwner = (): void => { actor.assertCurrent(); };
+    const assertOwner = () => actor.current();
 
     const { history, claims } = stores;
 
@@ -205,7 +205,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     const stream = new SessionStream(history, turnId, claim.epoch);
 
     const context: StepContextPlane = {
-      base: () => history.stepBase(() => { history.assertEpoch(claim.turnId, claim.epoch); }, claim.turnId, null),
+      base: () => history.stepBase(() => history.epochFence(claim.turnId, claim.epoch), claim.turnId, null),
       consume: async ({ stepNumber, messages }) => {
         const consumed = await claims.consume(claim, { index: stepNumber, messages });
 

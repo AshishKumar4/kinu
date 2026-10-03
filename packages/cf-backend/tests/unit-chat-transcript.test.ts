@@ -26,7 +26,7 @@ function transcript() {
   const store = history.transcript(CHAT_SESSION_ID);
 
   const user = async (id: string, text: string, metadata?: JsonObject) => {
-    const message = await history.admitInput({ id, turnId: id, message: { role: 'user', content: text }, assertOwner: () => actor.assertCurrent() });
+    const message = await history.admitInput({ id, turnId: id, message: { role: 'user', content: text }, assertOwner: () => actor.current() });
     const entry = await store.prepareUser({ id, turnId: id, message, metadata });
     store.appendUser(entry);
   };

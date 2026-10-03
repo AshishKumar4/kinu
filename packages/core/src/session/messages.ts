@@ -37,11 +37,11 @@ export interface PreparedMessage {
   readonly content: PreparedContent;
 }
 
-/** The claim a write belongs to, and the check that throws once it is no longer current. */
+/** The claim a write belongs to, and the check that refuses once it is no longer current. */
 export interface ClaimFence {
   readonly turnId: string;
   readonly epoch: number;
-  readonly assert: () => void;
+  readonly assert: () => Effect.Effect<void, KinuError>;
 }
 
 export interface StreamPartInput {
@@ -453,8 +453,9 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
             RETURNING segment`;
 
         if (extended.length > 0) continue;
+
         // A stale claim is refused here, not by a new segment.
-        fence?.assert();
+        if (fence !== null) yield* fence.assert();
 
         const last = this.sql<{ segment: number; ended: number; kind: string; stream_order: number }>`SELECT segment,ended,kind,stream_order FROM stream_parts
           WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} ORDER BY segment DESC LIMIT 1`[0];

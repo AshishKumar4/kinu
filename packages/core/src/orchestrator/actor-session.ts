@@ -237,7 +237,7 @@ export class ActorSession {
     const publish = await prepareDrain?.(rows, atStep, reference);
     this.canonical.landInput({
       prepared, reference, turnId: claim.turnId,
-      assertOwner: () => { this.canonical.assertEpoch(claim.turnId, claim.epoch); }, publish,
+      assertOwner: () => this.canonical.epochFence(claim.turnId, claim.epoch), publish,
     });
     const message = await this.canonical.messages.materialize(reference);
     this.landed.push(...rows);
@@ -418,7 +418,7 @@ export class ActorSession {
     const active = this.active;
 
     return this.restoreAfterPending(async () => {
-      const receipt = await this.canonical.replaceHistory(messages, { author: this.actorId, via: 'session', turnId: active?.lease.turnId ?? null, stage: active !== null, assertOwner: () => this.runtime.actor.assertCurrent(), events: this.options.events });
+      const receipt = await this.canonical.replaceHistory(messages, { author: this.actorId, via: 'session', turnId: active?.lease.turnId ?? null, stage: active !== null, assertOwner: () => this.runtime.actor.current(), events: this.options.events });
 
       if (receipt.proposalId === null) {
         const current = await this.canonical.materialize();
@@ -430,20 +430,14 @@ export class ActorSession {
   }
 
   /** Refused while a turn is in flight; `assertIdle` is the host's further condition, raised in the same transaction. */
-  async revertConversation(sessionId: string, entryId: string, assertIdle: () => void): Promise<void> {
-    this.canonical.revertTo(sessionId, entryId, () => {
-      if (this.inFlight) throw new KinuError('denied', REVERT_NEEDS_IDLE);
-      assertIdle();
-    });
+  async revertConversation(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>): Promise<void> {
+    this.canonical.revertTo(sessionId, entryId, () => this.inFlight ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : assertIdle());
     this.dynamic.unload();
     await this.restoreWorkingHistory();
   }
 
-  async clearConversation(sessionId: string, assertIdle: () => void): Promise<void> {
-    this.canonical.clearConversation(sessionId, () => {
-      if (this.inFlight) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
-      assertIdle();
-    });
+  async clearConversation(sessionId: string, assertIdle: () => Effect.Effect<void, KinuError>): Promise<void> {
+    this.canonical.clearConversation(sessionId, () => this.inFlight ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE)) : assertIdle());
     this.dynamic.unload();
     await this.restoreWorkingHistory();
   }
@@ -465,12 +459,12 @@ export class ActorSession {
     return pending;
   }
 
-  private preparingTurnFence(lease: ActorTurnLease, refusal: string): () => void {
-    return () => {
-      this.runtime.actor.assertCurrent();
+  private preparingTurnFence(lease: ActorTurnLease, refusal: string): () => Effect.Effect<void, KinuError> {
+    return () => Effect.gen({ self: this }, function* () {
+      yield* this.runtime.actor.current();
 
-      if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', refusal);
-    };
+      if (this.requireTurn(lease).phase !== 'preparing') return yield* new KinuError('denied', refusal);
+    });
   }
 
   /** Open a durable assignment. The lease's turn id is the delivery identity, so a re-drive admits a task once,
@@ -794,7 +788,7 @@ export class ActorSession {
     const { tools, extensions } = this.turnToolset(input, profile);
     // Activation names the input's entry after its message; an edit keeps the entry.
     const turnInput = this.canonical.admittedInput(claim.turnId);
-    const assertClaim = () => this.canonical.assertEpoch(claim.turnId, claim.epoch);
+    const assertClaim = () => this.canonical.epochFence(claim.turnId, claim.epoch);
     let stepEntries: readonly ContextEntry[] = [];
     let turnOpened = false;
 

@@ -75,7 +75,7 @@ export class ForkConversation {
     let reference: MessageReference | null = null;
 
     if (input.working ?? true) {
-      this.context.commit(this.selection(), { cause: origin, turnId: null, assertEpoch: () => this.actor.assertCurrent(), mutate: (entries) => {
+      this.context.commit(this.selection(), { cause: origin, turnId: null, assertEpoch: () => this.actor.current(), mutate: (entries) => {
         reference = this.messages.insert(prepared, origin);
 
         return [...entries, { ...reference, entryId: input.id, position: entries.length }];
@@ -143,7 +143,7 @@ export class ForkConversation {
       cause: 'context_transform', turnId: null,
       mutate: (entries) => entries.filter((entry) => entry.entryId !== entryId)
         .map((entry, position) => ({ ...entry, position })),
-      assertEpoch: () => this.actor.assertCurrent(),
+      assertEpoch: () => this.actor.current(),
     });
   }
 }

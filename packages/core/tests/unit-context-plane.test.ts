@@ -118,7 +118,7 @@ function planeFor(bound: Bound, children?: ChildContextResolver): VFS {
 async function hydrate(bound: Bound, messages: readonly ModelMessage[]): Promise<void> {
   await bound.history.replaceHistory(messages, {
     author: bound.handle.actorId, via: 'session', turnId: null, stage: false,
-    assertOwner: () => { bound.handle.assertCurrent(); },
+    assertOwner: () => bound.handle.current(),
   });
 }
 
@@ -163,7 +163,7 @@ async function admitOn(bound: Bound, ids: { readonly runId: string; readonly tur
 function stepsOf(bound: Bound, claim: ActorTurnClaim): StepContextPlane {
   return {
     base: () => bound.history.stepBase(
-      () => { bound.history.assertEpoch(claim.turnId, claim.epoch); }, claim.turnId, bound.stores.events,
+      () => bound.history.epochFence(claim.turnId, claim.epoch), claim.turnId, bound.stores.events,
     ),
     consume: async ({ stepNumber, messages }) => { await bound.claims.consume(claim, { index: stepNumber, messages }); },
   };
@@ -330,7 +330,7 @@ test('a rollback is a new revision written from a retained one, and the audit it
 
   // Activated, so the regret is a committed revision.
   await writeText(vfs, '/context/working.jsonl', first.replace('the good history', 'a regrettable edit'));
-  await actor.history.stepBase(() => { actor.handle.assertCurrent(); });
+  await actor.history.stepBase(() => actor.handle.current());
   expect(await committed(actor)).toEqual([{ role: 'user', content: 'a regrettable edit' }]);
 
   // Roll back by writing the prior revision's own retained payloads.
@@ -345,7 +345,7 @@ test('a rollback is a new revision written from a retained one, and the audit it
     ...prior.entries.map((entry) => JSON.stringify({ new: true, message: entry.message })),
   ].join('\n') + '\n');
 
-  await actor.history.stepBase(() => { actor.handle.assertCurrent(); });
+  await actor.history.stepBase(() => actor.handle.current());
   expect(await committed(actor)).toEqual([{ role: 'user', content: 'the good history' }]);
   // A rollback does not erase what it rolled back.
   const log = revisions(actor);
@@ -549,7 +549,7 @@ test('a landed edit preserves the recorded tail exactly, with a woven block and 
   expect(renderedFirst?.workingRevision).toBe(claim.workingRevision);
   expect(actor.history.context.entries({ contextId: claim.workingContextId, revision: claim.workingRevision })).toHaveLength(3);
 
-  const assertOwner = () => { actor.handle.assertCurrent(); };
+  const assertOwner = () => actor.handle.current();
 
   const tail: ModelMessage[] = [
     { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'probe', input: { path: 'a' } }] },
@@ -600,7 +600,7 @@ test('a landed edit preserves the recorded tail exactly, with a woven block and 
 async function twoStepTurns(prune: StepPruneBudget, output: (turn: number) => string): Promise<{ rows: number; statements: number }[]> {
   const ws = workspace();
   const actor = ws.bind('actor-growth');
-  const assertOwner = () => { actor.handle.assertCurrent(); };
+  const assertOwner = () => actor.handle.current();
 
   const pipeline = {
     prune,
@@ -662,7 +662,7 @@ test('an edit mid-exchange is deferred with its reason, then lands at the next s
   await hydrate(actor, [{ role: 'user', content: 'ask' }]);
   const claim = await admitOn(actor, { runId: 'run-defer', turnId: 'turn-defer' });
   const steps = stepsOf(actor, claim);
-  const assertOwner = () => { actor.handle.assertCurrent(); };
+  const assertOwner = () => actor.handle.current();
 
   const served = await readText(vfs, '/context/working.jsonl');
   await writeText(vfs, '/context/working.jsonl', served.replace('"ask"', '"edited ask"'));
@@ -702,7 +702,7 @@ test('an edit authored between turns is consumed by the next turn with the new i
   const claim = await admitOn(actor, { runId: 'run-one', turnId: 'turn-one' });
   actor.claims.settle(claim, 'completed');
 
-  const assertOwner = () => { actor.handle.assertCurrent(); };
+  const assertOwner = () => actor.handle.current();
 
   await actor.history.append({ id: 'answer-one', message: { role: 'assistant', content: 'first answer' }, origin: 'output', turnId: 'turn-one', assertOwner });
   expect(await committed(actor)).toHaveLength(2);

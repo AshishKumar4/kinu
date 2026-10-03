@@ -40,7 +40,7 @@ export interface ContextCommitRequest {
   /** Returns the membership the revision publishes; runs inside the transaction. */
   readonly mutate: (current: readonly ContextEntry[]) => readonly ContextEntry[];
   /** Throws when the turn that prepared this change no longer holds the actor. */
-  readonly assertEpoch: () => void;
+  readonly assertEpoch: () => Effect.Effect<void, KinuError>;
   /** The staged proposal this change applies: it authors the revision and is recorded on it. */
   readonly proposal?: { readonly id: string; readonly author: string };
 }
@@ -162,7 +162,7 @@ export class SessionContext {
     return this.transactionSync(() => {
       return settleSync(Effect.gen({ self: this }, function* () {
         this.actor.assertCurrent();
-        assertEpoch();
+        yield* assertEpoch();
         const selected = this.selected() ?? (expected === null ? this.initialize() : null);
 
         if (selected === null || (expected !== null && (selected.contextId !== expected.contextId || selected.revision !== expected.revision))) return yield* new KinuError('denied', 'context changed during preparation');
@@ -193,11 +193,11 @@ export class SessionContext {
   /** Before entry `before`, else at the end; one revision, less the renders it `replaces`. */
   addRender(
     reference: MessageReference, at: { readonly before: string | null; readonly replaces: boolean },
-    request: { readonly turnId: string | null; readonly assertEpoch: () => void },
+    request: { readonly turnId: string | null; readonly assertEpoch: () => Effect.Effect<void, KinuError> },
   ): ContextSelection {
-    return this.transactionSync(() => {
+    return this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
-      request.assertEpoch();
+      yield* request.assertEpoch();
       const selected = this.selected() ?? this.initialize();
       const current = this.headEntries(selected);
       const kept = at.replaces ? this.conversationOf(current) : current;
@@ -207,7 +207,7 @@ export class SessionContext {
       const next = [...kept.slice(0, index), added, ...kept.slice(index)].map((entry, position) => ({ ...entry, position }));
 
       return this.revise(selected, current, next, { author: this.actor.actorId, cause: 'render', turnId: request.turnId, proposalId: null, recordUnchanged: false });
-    });
+    })));
   }
 
   /** The next revision of an unselected context, opened on first use: an entry is its position, so a kept message writes nothing. */
@@ -284,11 +284,11 @@ export class SessionContext {
     });
   }
 
-  select(expected: ContextSelection, target: ContextSelection, assertIdle: () => void): void {
+  select(expected: ContextSelection, target: ContextSelection, assertIdle: () => Effect.Effect<void, KinuError>): void {
     this.transactionSync(() => {
       return settleSync(Effect.gen({ self: this }, function* () {
         this.actor.assertCurrent();
-        assertIdle();
+        yield* assertIdle();
         const selected = this.selected();
 
         if (selected?.contextId !== expected.contextId || selected.revision !== expected.revision) return yield* new KinuError('denied', 'context selection changed');

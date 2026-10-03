@@ -463,7 +463,7 @@ describe('LocalAgentSession.send — a user turn', () => {
 
       await rt.stores.history.replaceHistory(history, {
         author: rt.actor.actorId, via: 'runtime', turnId: null, stage: false,
-        assertOwner: () => { rt.actor.assertCurrent(); },
+        assertOwner: () => rt.actor.current(),
       });
     }
 
