@@ -20,11 +20,9 @@ import type { ResolvedModelWindow } from '../context-window';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
 import type { DynamicContext } from '../prompting/volatile-context';
 import { buildToolSurface, type ReportToolDeps } from '../tools/builtins';
-import { AgentWakeQueue } from '../jobs/wake-queue';
 import { permitInPlan } from '../execution/work-mode';
-import { BackgroundJobRunner } from '../jobs/runner';
-import type { BackgroundJobRunnerDeps, WorkspaceJobPorts } from '../jobs/runner';
-import { initBackgroundJobsTable } from '../jobs/store';
+import type { BackgroundJobRunner, WorkspaceJobPorts } from '../jobs/runner';
+import { stepLoopJobs } from '../jobs/step-loop';
 import { CONFINED_BACKGROUNDABLE_TOOLS, wrapToolsForBackground } from '../jobs/background-wrap';
 import type { BackgroundPolicy } from '../jobs/threshold';
 import { readProposalCode } from '../execution/code-fence';
@@ -424,28 +422,16 @@ async function runNodeLoop(
     produced: [],
   };
 
-  // In-process counterpart of the actor's durable queue, behind the same `AgentInbox` seam.
-  const wakes = new AgentWakeQueue();
-  // Reconciled here: nothing guarantees this actor's jobs table was opened before.
-  initBackgroundJobsTable(deps.actor.runtime.storage.execRaw);
-
-  const runnerDeps: BackgroundJobRunnerDeps = {
-    ...deps.jobs,
-    store: deps.actor.stores.jobs,
-    fiber: deps.actor.runtime.schedule.fiber.bind(deps.actor.runtime.schedule),
-    inbox: wakes,
+  const { runner: jobRunner, next } = stepLoopJobs({
+    actor: deps.actor,
+    ports: deps.jobs,
+    policy: deps.backgroundPolicy,
     logActivity: (event, detail) => {
       deps.logger.event('swarm.node_job', {
         nodeId: spec.headInput.id, job: event, detail: detail ?? '',
       });
     },
-    // No `eventLog`/`scheduleDrain`/`resume`: a node is abandoned with its run, so there is no later
-    // activation to deliver to.
-  };
-
-  // An absent policy must be an absent key: the runner reads presence to pick the default.
-  if (deps.backgroundPolicy !== undefined) runnerDeps.policy = deps.backgroundPolicy;
-  const jobRunner = new BackgroundJobRunner(runnerDeps);
+  });
 
   // A null arbiter is the only spelling of "no branch can be granted here".
   const tools = buildNodeToolSet({
@@ -486,11 +472,7 @@ async function runNodeLoop(
     },
     reportMessages: (messages) => { scratch.produced = messages; },
     // A reported node is finished; an unreported one waits while a job runs or a wake is queued.
-    resume: async () => {
-      if (scratch.reported !== null) return null;
-
-      return wakes.next(() => jobRunner.inFlight > 0);
-    },
+    resume: async () => (scratch.reported === null ? next() : null),
   };
 
   // Absent seams must be absent keys: `runHeadInference` reads presence.

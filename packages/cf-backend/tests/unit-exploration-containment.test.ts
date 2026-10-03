@@ -20,7 +20,9 @@ import {
   type MergeOutput,
   type WebSearchProvider,
 } from '@kinu.run/core';
-import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult } from '@kinu.run/core';
+import {
+  BackgroundJobRunner, CONFINED_BACKGROUNDABLE_TOOLS, HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult,
+} from '@kinu.run/core';
 
 function report(id: string): HeadReport {
   return {
@@ -110,6 +112,11 @@ function buildSurface(opts?: {
     conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => stores.history.transcript(sessionId)),
     codemodeTool,
     webSearch: noopWebSearch,
+    jobs: {
+      jobRunner: new BackgroundJobRunner({ store: stores.jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'queued' } }),
+      backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
+      mode: () => 'build',
+    },
     split: opts?.split ?? (async () => ({
       narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0,
     })),

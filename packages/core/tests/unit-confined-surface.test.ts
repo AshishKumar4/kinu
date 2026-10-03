@@ -3,12 +3,15 @@
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
-import { scriptedTurnModel, toolExecute, unobservedSpend } from '@kinu.run/test-utils';
-import { createTestRuntime, conversationsFor } from './helpers';
+import { handClock, scriptedTurnModel, toolExecute, unobservedSpend } from '@kinu.run/test-utils';
+import { actorJobsFor, createTestRuntime, conversationsFor } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadCapture } from '../src/heads/head-inference';
 import { buildHeadToolSet, type HeadSplitResult } from '../src/heads/head-tools';
+import { spawnSeatedHead } from '../src/heads/seated-head';
+import type { JobOutputFrame } from '../src/jobs/live-output';
+import { readCallJob } from '../src/tools/call-job';
 import { HeadJournal } from '../src/heads/journal';
 import { initHeadsTables } from '../src/heads/schema';
 import { runNodeAgent, type NodeAgentDeps, type NodeAgentInput } from '../src/strategy/node-agent';
@@ -101,6 +104,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
       input: headInput({ allowedTools: allowed }),
       capture: new HeadCapture(),
       rt,
+      jobs: actorJobsFor(rt),
       codemodeTool,
       webSearch: stubWeb,
       split: neverSplit,
@@ -132,6 +136,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
       input: headInput({ allowedTools: ['shell'] }),
       capture: new HeadCapture(),
       rt,
+      jobs: actorJobsFor(rt),
       codemodeTool,
       webSearch: stubWeb,
       split: neverSplit,
@@ -150,6 +155,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
       input: headInput(),
       capture: new HeadCapture(),
       rt,
+      jobs: actorJobsFor(rt),
       codemodeTool: sandboxEntry('direct-ran'),
       webSearch: stubWeb,
       split: neverSplit,
@@ -235,5 +241,86 @@ describe('node proposal merges after the eval finish', () => {
 
     if (run.granted?.kind === 'granted') expect(run.granted.nodeIds).toEqual(['c1', 'c2']);
     expect(run.candidate).toContain('the granted children hold the answer');
+  });
+});
+
+// The head runner's own eval, outrunning its window: it detaches into the head's job, and the head is woken to finish.
+describe("a seated head's long call becomes its own job, and the settle wakes it", () => {
+  test('the call answers with a handle, its output streams, and the head reads the settled result', async () => {
+    const { rt, db } = createTestRuntime();
+    const seats = hostedSeatsOver({ rt, db });
+    const clock = handClock(Date.now());
+    const frames: JobOutputFrame[] = [];
+    const prompts: string[] = [];
+    /** How long the build runs, on the workspace's clock: past the 30 s window. */
+    const BUILD_MS = 60_000;
+
+    const build = tool({
+      description: 'Run code in the sandbox.',
+      inputSchema: jsonSchema<{ code: string }>({ type: 'object', required: ['code'], properties: { code: { type: 'string' } } }),
+      execute: async ({ code }, options) => {
+        await new Promise<void>((resolve) => { clock.after(BUILD_MS, resolve); });
+        readCallJob(options)?.output.write('stdout', 'built\n');
+
+        return `ran ${code}: exit 0`;
+      },
+    });
+
+    // Calls eval; read back its answer, ends its turn; woken by the settle, answers.
+    const model = scriptedTurnModel({
+      doGenerate: ({ prompt }) => {
+        const text = JSON.stringify(prompt);
+        prompts.push(text);
+        const usage = { inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } };
+        const answer = (said: string) => ({ content: [{ type: 'text' as const, text: said }], finishReason: { unified: 'stop' as const, raw: undefined }, usage, warnings: [] });
+
+        if (text.includes('Background eval job')) return answer('The build finished.');
+
+        if (prompt.some((message) => message.role === 'tool')) return answer('Started it.');
+
+        return {
+          content: [{ type: 'tool-call', toolCallId: 'eval-1', toolName: 'eval', input: JSON.stringify({ code: 'await build()' }) }],
+          finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [],
+        };
+      },
+    });
+
+    const head = spawnSeatedHead(headInput({ id: 'head-detach' }), {
+      seat: async () => {
+        const seat = await seats.seat('head-detach', 'swarm');
+
+        // The workspace's clock, which the call's window and the build run on.
+        return { ...seat, release: async () => {}, jobs: { jobOutput: (frame) => { frames.push(frame); }, clock } };
+      },
+      model: async () => ({ model, spec: null }),
+      codemodeTool: () => build,
+      webSearch: stubWeb,
+      split: () => neverSplit,
+      mission: () => null,
+      reportStep: () => {},
+      reportDelta: () => {},
+    });
+
+    const running = head.run();
+    // The first wait to arm is the call's window; fired, the call outruns it.
+    await clock.whenArmed(1);
+    clock.tick();
+
+    // Its build still runs, as the head's job: the run ends only after the build does.
+    const first = await Promise.race([
+      running.then(() => 'the head finished'), clock.whenArmed(2).then(() => 'the build still runs'),
+    ]);
+
+    expect(first).toBe('the build still runs');
+    clock.advance(BUILD_MS);
+    const report = await running;
+
+    expect(prompts.some((text) => text.includes('backgrounded'))).toBe(true);
+    // Woken with what it would have read: it has no `agent.jobResult`.
+    expect(prompts.at(-1)).toContain('ran await build(): exit 0');
+    expect(report.status).toBe('completed');
+    expect(report.summary).toContain('The build finished.');
+    // What it printed went out through the workspace's port.
+    expect(frames.flatMap((frame) => frame.chunks.map((chunk) => chunk.text)).join('')).toBe('built\n');
   });
 });

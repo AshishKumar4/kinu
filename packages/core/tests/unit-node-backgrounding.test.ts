@@ -277,6 +277,8 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     expect(resumed.slice(0, firstTurn.length)).toEqual(firstTurn);
     expect(resumed.at(-1)).toContain('Background eval job');
     expect(resumed.at(-1)).toContain('completed');
+    // With the result itself: a node has no `agent.jobResult` to read it with.
+    expect(resumed.at(-1)).toContain('ran await sandbox.run(): exit 0');
 
     expect(run.report.status).toBe('completed');
     expect(run.reportedItself).toBe(true);

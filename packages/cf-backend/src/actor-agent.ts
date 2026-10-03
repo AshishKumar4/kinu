@@ -2635,7 +2635,6 @@ export abstract class ActorAgent extends Agent<Env> {
       ...own,
       ...this.workspaceJobPorts(owner),
       logActivity: (event, detail) => this.logActivity(event, detail),
-      clock: this.jobClock(),
       onSettled: (job) => {
         notifySettled?.(job);
         this.detachOwned(() => this.servingMoved());
@@ -2646,6 +2645,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The workspace's half of every runner here; output goes to the owner's sockets. */
   protected workspaceJobPorts(owner: string | null): WorkspaceJobPorts {
     return {
+      clock: this.jobClock(),
       jobOutput: (frame) => { this.broadcastToActor(owner, JSON.stringify(frame)); },
       // Transfer by request id, never by turn: only the detaching call's device work changes hands,
       // so parallel foreground commands stay reachable by Stop.

@@ -114,7 +114,7 @@ export interface BackgroundJobRunnerDeps {
 
 /** The workspace's half of every job runner in it. */
 export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutput'>>
-  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled'>;
+  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock'>;
 
 const SearchJobInputSchema = v.object({ task: v.string() });
 
@@ -150,15 +150,18 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
   return undefined;
 }
 
-/** Wake text differs by outcome because the agent's next action does. */
-function wakeText(job: BackgroundJob): string {
+/** By outcome; `inline` carries the result to an agent without `agent.jobResult`. */
+export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent'): string {
   const generation = job.resumeAttempts > 0
     ? ` (generation ${String(job.resumeAttempts + 1)}: it was interrupted and re-driven)`
     : '';
 
   if (job.status === 'completed') {
-    return `Background ${job.kind} job ${job.id} completed${generation}. Read the full result with `
-      + `agent.jobResult('${job.id}'), then synthesize it / continue the work you backgrounded. `
+    const read = reader === 'inline'
+      ? `Its result:\n${job.result ?? '(empty)'}\n\nSynthesize it / continue`
+      : `Read the full result with agent.jobResult('${job.id}'), then synthesize it / continue`;
+
+    return `Background ${job.kind} job ${job.id} completed${generation}. ${read} the work you backgrounded. `
       + `The result says whether it is COMPLETE or PARTIAL: say which when you report it.`;
   }
 
