@@ -4,6 +4,8 @@
  * via `owningJobId` (transferring them would race their own INSERT).
  */
 
+import * as v from 'valibot';
+
 /** The tool call's view: report issued ids, read the current owner. */
 export interface DeviceRequestChannel {
   /** The job this invocation becomes if it outlives its window. */
@@ -49,4 +51,24 @@ export class DeviceRequestOwnership implements DeviceRequestChannel {
 
     return issued;
   }
+}
+
+/** A program's `exec` call, its cancel and job merged into the options argument executors read; another shape is left as is. */
+export function execCallArgs(args: readonly unknown[], call: { readonly signal?: AbortSignal | undefined; readonly channel?: DeviceRequestChannel | undefined }): unknown[] {
+  const { signal, channel } = call;
+  const options = v.safeParse(v.looseObject({}), args[1]);
+
+  if ((signal === undefined && channel === undefined) || (args[1] !== undefined && !options.success)) return [...args];
+
+  const context = {
+    ...(signal !== undefined && { signal }),
+    ...(channel !== undefined && {
+      onDeviceRequest: (requestId: string) => { channel.report(requestId); },
+      deviceRequestOwner: () => channel.owningJobId,
+      job: channel.jobId,
+      detached: channel.detached,
+    }),
+  };
+
+  return [args[0], options.success ? { ...options.output, ...context } : context, ...args.slice(2)];
 }

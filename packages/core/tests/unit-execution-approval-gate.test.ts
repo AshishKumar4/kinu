@@ -585,8 +585,24 @@ describe('a named shell, judged from where it is', () => {
 
     const shell = withApprovalGatedShell({
       exec: async (command, options) => {
-        const { name, cwd } = shellExecOptions({ value: options });
+        const { name, cwd, signal } = shellExecOptions({ value: options });
         const start = cwd ?? (name === undefined ? WORKSPACE_ROOT : directories.get(name) ?? WORKSPACE_ROOT);
+        const held = /^cd (\S+) && sleep 600$/.exec(command);
+
+        // Held until cancelled; the box saves where its shell went only after the call has rejected.
+        if (held !== null) {
+          return await new Promise<never>((_resolve, reject) => {
+            const cancel = (): void => {
+              reject(new Error('stopped'));
+
+              if (name !== undefined) queueMicrotask(() => { directories.set(name, held[1] ?? start); });
+            };
+
+            if (signal?.aborted === true) cancel();
+            else signal?.addEventListener('abort', cancel, { once: true });
+          });
+        }
+
         const moved = command.startsWith('cd ') ? command.slice('cd '.length) : start;
         const end = moved === '~' ? WORKSPACE_ROOT : moved;
 
@@ -635,6 +651,19 @@ describe('a named shell, judged from where it is', () => {
     expect((await shell.exec('rm -rf build', { name: 'other' })).exitCode).toBe(0);
     expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
     expect(ran).toEqual([`${WORKSPACE_ROOT}$ rm -rf build`]);
+  });
+
+  test('a named call cancelled after going into the user\'s machine leaves its name judged as possibly there', async () => {
+    const { shell, asked, ran } = namedShells();
+    const stop = new AbortController();
+
+    const held = shell.exec('cd /pc/laptop/proj && sleep 600', { name: 'work', signal: stop.signal });
+    stop.abort();
+    await expect(held).rejects.toThrow('stopped');
+
+    expect((await shell.exec('rm -rf build', { name: 'work' })).exitCode).not.toBe(0);
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf build']);
+    expect(ran).toEqual([]);
   });
 
   test('calls on one name issued together are judged in turn, each from where the one before left it', async () => {
