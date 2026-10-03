@@ -123,6 +123,21 @@ against three slots does not explain the refusal. The Containers docs read
 counts toward `max_instances` nor how long a destroyed instance holds its
 place. Staging now takes production's 10 (D36).
 
+P8. The first containers to start from a snapshot all at once wait for the
+platform to fetch it; a second wave from the same snapshot does not.
+Measured 2026-10-03 (run `vb10030503dm`, `bench-artifacts/h2h/tail.ts`,
+`runs/tail.log`), Medium, one 10 GB snapshot per design, 20 boxes started
+together, two waves 15 s apart, wake timed to the end of the gate:
+
+| snapshot | first wave, ms | second wave, ms |
+|---|---|---|
+| the workspace on the root | 12,432 to 60,761, median 46,000 | 351 to 8,890, median 1,400 |
+| the workspace in a thin pool on the root | 9,118 to 54,877, median 36,000 | 330 to 1,956, median 610 |
+
+All 80 wakes succeeded. Single wakes from a snapshot measured 0.3 to 2 s
+in D64, so the first wave's 9 to 61 s is the fetch, and it lands on every
+design that wakes from a snapshot: nothing in a box can shorten it.
+
 ## Decisions
 
 D1. Admission is port-proven. The container-start path proves the control
@@ -3668,6 +3683,60 @@ the snapshot, so a wake restores in full. But the stamp now names a
 snapshot's lineage, not a container: a replacement started from the same
 snapshot without the box's start would not be seen. Not observed; the
 kernel's boot id would see it.
+
+D68. The hybrid stays; a thin-pool virtual disk, vblk alone and btrfs change
+detection are rejected (2026-10-03).
+Five arms on one workload (`bench-artifacts/h2h/`: `h2h.sh`, `h2hx`, the
+drivers and `table.md`), Medium, n=5 a figure unless the table says
+otherwise: A production's chain (2f660875cc), B platform snapshots alone, C
+the hybrid (this lane), D vblk alone (E's lost-snapshot path), E platform
+snapshots with vblk-T (ext4 on a dm-thin volume in a pool on the root, R2 by
+block). Rows at 0.25, 2, 10 and 18 GB and D63's long session.
+
+| at 2 GB | A | B | C | E |
+|---|---|---|---|---|
+| warm wake, ms | none | 594 | 386 | 495 |
+| snapshot lost, ms | 7,199 | none | 7,346 | 1,449 |
+| 3 KB save, ms (pause) | 142,338 (72) | 2,747 (775) | 980 (53) | 944 (74) |
+| 3 KB save moves | 1.5 GB | 20 KB | 10 KB | 8.5 MB |
+| 100 MiB save, ms | 173,272 | 4,707 | 6,585 | 1,934 |
+| session: R2 after 10 saves | 2.8 GB | none | 1.5 GB | 8.2 GB |
+
+Every arm restored exactly where it ran. E is rejected on reliability, not
+speed. It cannot hold 18 GB: with the pool sized to all the disk but 512 MiB
+and ext4 reserving nothing (18.2 GB free to ext4), the 18 GB tree still met
+ENOSPC, 3 of 3. The thin metadata is 16.5 MB and the pool file costs nothing
+beyond its size; the loss is ext4 in place of the root's btrfs, which
+compresses (zstd) and keeps small files inline. And a rewrite that a save's
+snapshot pins past the pool's free space fails ext4 with I/O errors, and the
+workspace goes read-only (2 GB under write pressure: 3 of 5 writable). B has
+no backup, a 600 to 1,100 ms pause, and fills the disk when rewrites follow
+snapshots. A takes minutes a save and fails saves on E2BIG (fixed on
+integration by 84525f638 and d4fa3062e).
+
+C's own failures, to fix next: at 10 to 18 GB a save meets ENOSPC staging or
+reading a delta back; and the fault soak (104 cycles,
+`h2h/runs/sbs10031343nsoak1-soak.jsonl`) found a box left terminal by a kill
+during its copy, the store mount failing after a kill, and one silent loss.
+The 10 GB base's failure, 4 of 4, was mksquashfs reading a duplicate back
+from an archive already punched (a7fb584b3).
+
+A btrfs-native backup (`btrfs send -p`) saves in 4 to 15 ms of pause and
+sends exact extents, but a send stream restores only by replay (`btrfs
+receive` at about 9 s a GB): no lazy restore. A platform snapshot keeps
+neither a nested subvolume nor a snapshot of the root (2 of 2), so btrfs can
+serve C only as change detection within one container's life (10 GB: 10 to
+22 ms snapshot and 4 to 53 ms `send --no-data`, against C's 518 to 604 ms
+walk). Backup stores, from a box through its gateway, 16 KiB GETs: R2 150 ms
+p50, the box's Durable Object 9.5 ms, KV 7 ms on a warm cache only; the
+object's 10 GB and 2 MB-row limits make it the place for indexes and hot
+blocks, R2 for the bulk. KV is not used: its writes took 167 to 382 ms and
+its cold reads were not measured.
+
+Decided: C. E and D are rejected for the reliability above. btrfs change
+detection is not built: it saves about 0.6 s a save at 10 GB, but loses its
+base snapshot at every wake (so the first save after one walks anyway) and its
+held snapshot pins rewritten blocks, which deepens C's ENOSPC at 10 to 18 GB.
 
 ## Measurement contract for a strategy comparison
 
