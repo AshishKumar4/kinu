@@ -11,7 +11,6 @@ import { seedTranscriptEntry, present, testActorHandle } from '@kinu.run/test-ut
 import {
   createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers';
-import { writeSoul } from '../src/identity/soul';
 import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -280,7 +279,7 @@ describe('agent status', () => {
     await seedTranscript(chatStore(w).history, [{ id: 'm1', role: 'user', content: 'hi' }]);
 
     // The row, not a file the main agent may have swapped, answers the owner's soul and mission.
-    await writeSoul(sql, '# Mine\n\n## Mission\n\nread the room and update it', (content) => writeWorkspaceSoul(bundle, content));
+    await writeWorkspaceSoul(bundle, '# Mine\n\n## Mission\n\nread the room and update it');
 
     try {
       await writeText(vfs, 'SOUL.md', 'forged');
@@ -296,6 +295,25 @@ describe('agent status', () => {
       messageCount: 1, scaffoldVersion: 0, reasoningEffort: 'high', forkLineage: null,
       soul: '# Mine\n\n## Mission\n\nread the room and update it', purpose: 'read the room and update it',
     });
+    db.close();
+  });
+
+  test('the scaffold version is the one the actor runs: not a pending proposal, not a rolled-back one', async () => {
+    const { db, sql, actor } = workspace();
+    const shown = async () => (await getAgentStatus({ sql, actor, model: '', reasoningEffort: null, name: 'jarvis', displayName: 'Jarvis' })).scaffoldVersion;
+
+    const version = (n: number, status: string) => {
+      void sql`INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (${actor.actorId}, ${n}, ${n}, ${'test'}, ${status})`;
+    };
+
+    version(0, 'rolled_back');
+    version(1, 'current');
+    version(2, 'pending');
+    expect(await shown()).toBe(1);
+
+    version(0, 'current');
+    version(1, 'rolled_back');
+    expect(await shown()).toBe(0);
     db.close();
   });
 
@@ -784,11 +802,11 @@ describe('config plane', () => {
     db.close();
   });
 
-  test('an evolution write answers with the EFFECTIVE config, clamps included', () => {
+  test('an evolution write answers with the EFFECTIVE config; live trials are off until turned on', () => {
     const { db, config } = workspace();
-    const effective = setEvolutionConfig(config, { autoPromoteScaffold: true, gepaEvalBudget: 1_000_000 });
-    expect(effective.autoPromoteScaffold).toBe(true);
-    expect(effective.gepaEvalBudget).toBeLessThan(1_000_000);
+    expect(getEvolutionConfig(config).liveTrials).toBe(false);
+    const effective = setEvolutionConfig(config, { liveTrials: true });
+    expect(effective.liveTrials).toBe(true);
     expect(getEvolutionConfig(config)).toEqual(effective);
     db.close();
   });

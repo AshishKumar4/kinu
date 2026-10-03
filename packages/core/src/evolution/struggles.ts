@@ -1,13 +1,12 @@
 /**
  * Struggles: where a turn fought its tools (docs/EVOLUTION-REDESIGN.md §2). The turn's steering detector owns what
- * counts as one; a struggle never decides satisfaction. Each completed turn records its struggles, tool errors and
- * steps (`turn_struggles`), and a turn that struggled with a tool teaches one lesson about it (`tool_lessons`), an
+ * counts as one; a struggle never decides satisfaction. A turn that struggled records its struggles, tool errors and
+ * steps (`turn_struggles`) and teaches one lesson about the tool it fought (`tool_lessons`), an
  * itemized bullet as in ACE's evolving playbooks (Zhang et al., arXiv:2510.04618): edited in place as a new revision,
  * scored by the later turns that were shown it and used its tool, retired when it hurts more than it helps.
  */
 
 import * as v from 'valibot';
-import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn } from './types';
@@ -76,15 +75,23 @@ export function initStruggleTables(execRaw: RawSqlExec): void {
 
 type ReviewedTurn = CompletedTurn & { readonly turnId: string };
 
-/** One row per reviewed turn, struggling or not: the turns without a struggle are the denominator. */
+/** Whether a turn has anything to learn from: a struggle, a shown lesson whose tool it used and so scores, or a live
+ *  trial's arm, whose guardrails read its errors and steps. A turn with none records nothing and owes no effect. */
+export function owesTurnLessons(turn: Pick<CompletedTurn, 'struggles' | 'shownLessons' | 'toolCalls' | 'trial'>): boolean {
+  return (turn.struggles ?? []).length > 0 || turn.trial !== undefined
+    || ((turn.shownLessons ?? []).length > 0 && turn.toolCalls.length > 0);
+}
+
+/** One row per struggling turn, and per turn a live trial ran. */
 export function recordTurnStruggles(sql: SqlExecutor, actor: ActorHandle, turn: ReviewedTurn, now = nowMs()): void {
   actor.assertCurrent();
+
+  if ((turn.struggles ?? []).length === 0 && turn.trial === undefined) return;
   const errors = turn.toolCalls.filter((call) => call.outcome?.success === false).length;
 
   void sql`INSERT INTO turn_struggles (actor_id, turn_id, errors, steps, struggles, created_at)
     VALUES (${actor.actorId}, ${turn.turnId}, ${errors}, ${turn.steps}, ${JSON.stringify(turn.struggles ?? [])}, ${now})
     ON CONFLICT(actor_id, turn_id) DO NOTHING`;
-  markStoreChanged(sql);
 }
 
 /** One lesson at one revision; a rewrite is a new revision with no evidence yet. */
@@ -144,8 +151,6 @@ export function scoreToolLessons(sql: SqlExecutor, actor: ActorHandle, turn: Rev
     void sql`UPDATE tool_lessons SET helpful = ${helpful}, harmful = ${harmful}, status = ${status}, updated_at = ${now}
       WHERE actor_id = ${actor.actorId} AND id = ${lesson.id} AND revision = ${lesson.revision}`;
   }
-
-  markStoreChanged(sql);
 }
 
 /** The tool struggle a turn teaches from: the longest, then by kind; a stall alone teaches nothing. */
@@ -220,7 +225,6 @@ export function applyStruggleLesson(sql: SqlExecutor, actor: ActorHandle, input:
     void sql`UPDATE tool_lessons SET text = ${text}, revision = ${target.revision + 1}, helpful = 0, harmful = 0,
       turn_ids = ${JSON.stringify(turnIds)}, updated_at = ${now}
       WHERE actor_id = ${actor.actorId} AND id = ${target.id}`;
-    markStoreChanged(sql);
 
     return target.id;
   }
@@ -230,7 +234,6 @@ export function applyStruggleLesson(sql: SqlExecutor, actor: ActorHandle, input:
   void sql`INSERT INTO tool_lessons (actor_id, id, tool, text, revision, helpful, harmful, turn_ids, status, created_at, updated_at)
     VALUES (${actor.actorId}, ${id}, ${input.tool}, ${text}, 1, 0, 0, ${JSON.stringify([input.turnId])}, 'active', ${now}, ${now})
     ON CONFLICT(actor_id, id) DO NOTHING`;
-  markStoreChanged(sql);
 
   return id;
 }

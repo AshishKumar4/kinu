@@ -64,7 +64,7 @@ function mcpWorkspace() {
     saveNoteFromMcp: unreached('saveNoteFromMcp'),
     getToolList: unreached('getToolList'),
     runScaffoldOnce: unreached('runScaffoldOnce'),
-    getShadowStatus: unreached('getShadowStatus'),
+    getEvolutionStatus: unreached('getEvolutionStatus'),
     listRuns: unreached('listRuns'),
     getRunEvents: unreached('getRunEvents'),
     getMemoryContent: unreached('getMemoryContent'),

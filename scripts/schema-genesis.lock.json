@@ -149,6 +149,31 @@
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "artifact_trials@packages/core/src/evolution/artifact-schema.ts": [
+    "actor_id TEXT NOT NULL",
+    "trial_id TEXT NOT NULL",
+    "artifact_id TEXT NOT NULL",
+    "version INTEGER NOT NULL",
+    "status TEXT NOT NULL CHECK (status IN (${sqlCheckList(TRIAL_STATUSES)}))",
+    "looks INTEGER NOT NULL DEFAULT 0",
+    "started_at INTEGER NOT NULL",
+    "decided_at INTEGER",
+    "verdict TEXT",
+    "PRIMARY KEY (actor_id, trial_id)"
+  ],
+  "artifact_versions@packages/core/src/evolution/artifact-schema.ts": [
+    "actor_id TEXT NOT NULL",
+    "artifact_id TEXT NOT NULL",
+    "version INTEGER NOT NULL",
+    "body TEXT NOT NULL",
+    "status TEXT NOT NULL CHECK (status IN (${sqlCheckList(ARTIFACT_STATUSES)}))",
+    "parent INTEGER",
+    "rationale TEXT NOT NULL",
+    "evidence TEXT",
+    "written_at INTEGER NOT NULL",
+    "decided_at INTEGER",
+    "PRIMARY KEY (actor_id, artifact_id, version)"
+  ],
   "background_job_serves@packages/core/src/jobs/store.ts": [
     "actor_id TEXT NOT NULL",
     "job_id TEXT NOT NULL",
@@ -619,7 +644,6 @@
     "head_source_name TEXT NOT NULL DEFAULT ''",
     "head_cut_message_id TEXT NOT NULL DEFAULT ''",
     "head_cut_created_at INTEGER NOT NULL DEFAULT 0",
-    "mission TEXT NOT NULL DEFAULT ''",
     "staged_agent_config INTEGER NOT NULL DEFAULT 0",
     "staged_crafted_tools INTEGER NOT NULL DEFAULT 0",
     "staged_memory_chunks INTEGER NOT NULL DEFAULT 0",
@@ -818,24 +842,6 @@
     "actor_id TEXT PRIMARY KEY",
     "text TEXT NOT NULL"
   ],
-  "outcome_ensemble_labels@packages/core/src/evolution/outcomes.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "outcome_id TEXT NOT NULL",
-    "model TEXT NOT NULL",
-    "label TEXT NOT NULL CHECK (label IN (${sqlCheckList(OUTCOME_LABELS)}))",
-    "created_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, id)"
-  ],
-  "outcome_labels@packages/core/src/evolution/outcomes.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "outcome_id TEXT NOT NULL",
-    "label TEXT NOT NULL CHECK (label IN (${sqlCheckList(OUTCOME_LABELS)}))",
-    "labeler TEXT NOT NULL",
-    "created_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, id)"
-  ],
   "pattern_extractions@packages/core/src/evolution/lessons.ts": [
     "actor_id TEXT NOT NULL",
     "effect_key TEXT NOT NULL",
@@ -875,21 +881,6 @@
     "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id, revision)"
   ],
-  "prompt_section_versions@packages/core/src/prompting/section-store.ts": [
-    "actor_id TEXT NOT NULL",
-    "section_id TEXT NOT NULL",
-    "version INTEGER NOT NULL",
-    "source TEXT NOT NULL",
-    "rationale TEXT NOT NULL",
-    "status TEXT NOT NULL CHECK (status IN ('current','pending','rolled_back','historical'))",
-    "incumbent_bytes INTEGER NOT NULL",
-    "written_at INTEGER NOT NULL",
-    "wins INTEGER NOT NULL DEFAULT 0",
-    "losses INTEGER NOT NULL DEFAULT 0",
-    "ties INTEGER NOT NULL DEFAULT 0",
-    "decided_at INTEGER",
-    "PRIMARY KEY (actor_id, section_id, version)"
-  ],
   "proposed_tasks@packages/core/src/curriculum/proposer.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -919,20 +910,6 @@
     "detail TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
     "updated_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, id)"
-  ],
-  "replay_evals@packages/core/src/evolution/replay.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "ran_at INTEGER NOT NULL",
-    "sample_size INTEGER NOT NULL",
-    "accepted_n INTEGER NOT NULL",
-    "negative_n INTEGER NOT NULL",
-    "mean_score REAL NOT NULL",
-    "scaffold_version INTEGER",
-    "details TEXT NOT NULL",
-    "score_lo REAL",
-    "score_hi REAL",
     "PRIMARY KEY (actor_id, id)"
   ],
   "reply_channels@packages/core/src/events/hub/schema.ts": [
@@ -971,28 +948,6 @@
     "first_seen_at INTEGER NOT NULL",
     "announced_at INTEGER",
     "outcome TEXT"
-  ],
-  "scaffold_evaluations@packages/core/src/scaffold/shadow.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "pending_version INTEGER NOT NULL",
-    "task TEXT NOT NULL",
-    "current_score REAL",
-    "pending_score REAL",
-    "winner TEXT",
-    "judge_rationale TEXT",
-    "evaluated_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, id)"
-  ],
-  "scaffold_trial_queue@packages/core/src/scaffold/shadow.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "pending_version INTEGER NOT NULL",
-    "task TEXT NOT NULL",
-    "current_output TEXT NOT NULL",
-    "context TEXT NOT NULL",
-    "queued_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, id)"
   ],
   "scaffold_versions@packages/core/src/scaffold/schemas.ts": [
     "actor_id TEXT NOT NULL",
@@ -1195,6 +1150,15 @@
     "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "trial_turns@packages/core/src/evolution/artifact-schema.ts": [
+    "actor_id TEXT NOT NULL",
+    "trial_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "segment_id TEXT NOT NULL",
+    "arm TEXT NOT NULL CHECK (arm IN (${sqlCheckList(ARMS)}))",
+    "at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, trial_id, turn_id)"
+  ],
   "triggers@packages/core/src/events/hub/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -1217,27 +1181,6 @@
     "message_id TEXT NOT NULL",
     "tool_names TEXT NOT NULL",
     "PRIMARY KEY (actor_id, message_id)"
-  ],
-  "turn_feedback@packages/cf-backend/src/orchestrator.ts": [
-    "actor_id TEXT NOT NULL",
-    "message_id TEXT NOT NULL",
-    "feedback TEXT NOT NULL CHECK (feedback IN ('positive','negative'))",
-    "PRIMARY KEY (actor_id, message_id)"
-  ],
-  "turn_outcomes@packages/core/src/evolution/outcomes.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "turn_id TEXT",
-    "outcome TEXT NOT NULL CHECK (outcome IN (${sqlCheckList(TURN_OUTCOMES)}))",
-    "confidence REAL NOT NULL",
-    "source TEXT NOT NULL CHECK (source IN (${sqlCheckList(TURN_OUTCOME_SOURCES)}))",
-    "user_message TEXT NOT NULL",
-    "assistant_response TEXT NOT NULL",
-    "followup TEXT",
-    "scaffold_version INTEGER",
-    "created_at INTEGER NOT NULL",
-    "evidence TEXT",
-    "PRIMARY KEY (actor_id, id)"
   ],
   "turn_ratings@packages/core/src/evolution/ratings.ts": [
     "actor_id TEXT NOT NULL",
@@ -1487,7 +1430,6 @@
     "id TEXT NOT NULL",
     "name TEXT NOT NULL",
     "owner_user_id TEXT NOT NULL DEFAULT ''",
-    "mission TEXT NOT NULL DEFAULT ''",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
   ],
   "workspace_overview_nudges@packages/core/src/state/user-schema.ts": [

@@ -38,7 +38,7 @@ export { OS_LEASE_PROCESS } from './agent-host/lease-process';
 
 export {
   createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,
-  defaultSpecForEndpoint, openAiCompatHeaders, stripProvider,
+  defaultSpecForEndpoint, stripProvider,
   type LocalModelResolver, type LocalCloudSession,
   type LocalProviderCredentials,
 } from './model-resolver';

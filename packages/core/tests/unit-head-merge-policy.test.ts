@@ -13,6 +13,9 @@ import { headMergeLLM } from '../src/heads/merge-policy';
 import { MergeOutputSchema } from '../src/heads/merge-schema';
 import type { ModelCallReport, ModelOperationEvent } from '../src/events/model-call';
 import type { ResolvedTurnProfile } from '../src/profiles/resolve';
+import { createChatModel } from '../src/llm';
+import { bindRoute } from '../src/profiles/model-lane';
+import { parseJsonObject } from '../src/utils/json';
 
 const GOOD_MERGE =
   '{"narrative":"Unified: both heads agree.","selected_decisions":[],"unresolved_questions":[],"recommendations":["ship it"]}';
@@ -139,6 +142,61 @@ describe('the head merge resolves one route, one effort, one spend label', () =>
 });
 
 describe('the binder is the whole of a backend\'s say', () => {
+  test('a refused merge primary hands over at once and prices the serving fallback', async () => {
+    const suffix = crypto.randomUUID();
+    const primary = `primary-${suffix}`;
+    const fallback = `fallback-${suffix}`;
+    const requests: Array<{ model: unknown; effort: unknown }> = [];
+    const reports: ModelCallReport[] = [];
+
+    const server = Bun.serve({
+      hostname: '127.0.0.1', port: 0,
+      async fetch(request) {
+        const body = parseJsonObject(await request.text());
+        requests.push({ model: body.model, effort: body.reasoning_effort });
+
+        if (body.model === primary || requests.filter((sent) => sent.model === fallback).length === 1) {
+          return new Response('limited', { status: 429, headers: { 'retry-after': '0' } });
+        }
+
+        return Response.json({
+          id: 'merge', object: 'chat.completion', created: 0, model: fallback,
+          choices: [{ index: 0, message: { role: 'assistant', content: GOOD_MERGE }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 },
+        });
+      },
+    });
+
+    const profile = mergePolicyProfile();
+
+    const merge = headMergeLLM({
+      profile: async () => ({ ...profile, retries: 1, tiers: { ...profile.tiers, deep: {
+        model: `openai-compat/${primary}`, reasoningEffort: 'high',
+        fallbacks: [{ model: `openai-compat/${fallback}`, reasoningEffort: 'low' }],
+      } } }),
+      bindMergeModel: (route) => bindRoute({
+        normalize: (spec) => spec,
+        // Named `openai`: that is the options namespace core's effort for an openai-compat spec writes.
+        resolve: (spec) => createChatModel({
+          kind: 'openai-compat', name: 'openai', baseURL: server.url.toString(), headers: {}, modelId: spec.slice('openai-compat/'.length),
+        }),
+      }, route),
+      reportModelCall: (report) => reports.push(report),
+    });
+
+    try {
+      expect((await merge('merge the findings', MergeOutputSchema)).narrative).toContain('Unified');
+      expect(requests).toEqual([
+        { model: primary, effort: 'high' }, { model: fallback, effort: 'low' }, { model: fallback, effort: 'low' },
+      ]);
+      expect(reports).toHaveLength(1);
+      expect(reports[0]?.spec).toBe(`openai-compat/${fallback}`);
+      expect(reports[0]?.source).toBe('judge');
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test('a merge whose profile cannot be resolved never reaches a model', async () => {
     const { asked, reports, operations, mergeLLM } = policyWith(GOOD_MERGE, async () => {
       throw new Error('the account profile could not be read');

@@ -63,7 +63,8 @@ export function startGepaRun(
   sql: SqlExecutor,
   actor: ActorHandle,
   opts: {
-    target: 'scaffold' | 'prompt_section';
+    /** The artifact searched: `scaffold` or an `artifact_versions` id. */
+    target: string;
     targetRef?: string | null;
   },
 ): string {
@@ -137,24 +138,6 @@ export function finishGepaRun(
             iterations   = ${args.iterations}
         WHERE actor_id = ${actor.actorId} AND run_id = ${args.runId}`;
   markStoreChanged(sql);
-}
-
-/**
- * When each `target_ref` under one target last had a pass started (running and aborted
- * passes count). Lets target rotation be derived from the durable ledger: an in-memory
- * cursor dies with DO eviction at 2-5 minutes idle (`do.facet.eviction_joint`).
- */
-export function lastGepaRunPerTarget(
-  sql: SqlExecutor, actor: ActorHandle, target: string,
-): Map<string, number> {
-  actor.assertCurrent();
-
-  const rows = sql<{ target_ref: string; started_at: number }>`
-    SELECT target_ref, MAX(started_at) AS started_at FROM gepa_runs
-    WHERE actor_id = ${actor.actorId} AND target = ${target} AND target_ref IS NOT NULL
-    GROUP BY target_ref`;
-
-  return new Map(rows.map((row) => [row.target_ref, row.started_at]));
 }
 
 export interface GepaRunSummary {

@@ -61,12 +61,10 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
     },
   },
   {
-    title: 'a scaffold optimisation with no labelled turns is refused before any model runs',
-    covers: ['runScaffoldGepaOptimization'],
+    title: 'an optimisation with no low-rated turns has nothing to learn from, and no model runs',
+    covers: ['runOptimization'],
     async run({ surface }) {
-      expect(await surface.runScaffoldGepaOptimization({ maxIterations: 1 })).toEqual({
-        ok: false, error: 'no outcome-labeled turns yet: chat with the agent first',
-      });
+      expect(await surface.runOptimization()).toEqual({ kind: 'idle' });
     },
   },
 ];

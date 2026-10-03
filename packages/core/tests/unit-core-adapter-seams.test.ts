@@ -282,7 +282,7 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
     reviewTurn: async (turn) => { recorded.push(turn); },
     runStoredTurnReview: async (rowId, turn) => { recorded.push(turn); void rowId; },
     onSessionComplete: async () => {},
-    runDueShadowTrials: async () => {},
+    runDueEvolution: async () => {},
     recordRecovery: () => {},
     deferTurnReview: () => 'queued',
     // With no follow-up turn, this drain runs the review the recording wrote onto the turn row, the

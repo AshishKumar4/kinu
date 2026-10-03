@@ -29,38 +29,16 @@ function recordingCreate(seen: RecordedCreate) {
 }
 
 describe('CLI mission workspace names', () => {
-  test('uses the model-proposed title, over a slug the model never chose', async () => {
-    const identity = await suggestAgentIdentityFromMission(
-      'Build a benchmark for Rust web frameworks',
-      {
-        id: 'abcdef123456',
-        generate: async () => JSON.stringify({ title: 'Rust Framework Benchmark' }),
-      },
-    );
-
-    expect(identity).toEqual({
-      name: workspaceSlug('abcdef123456'),
-      displayName: 'Rust Framework Benchmark',
-      nameOrigin: 'auto',
-    });
-  });
-
-  test('keeps a neutral address when model naming is unavailable', async () => {
-    // Mission text remains in the editable display name. The permanent URL
-    // stays neutral even when the title generator is offline.
-    const identity = await suggestAgentIdentityFromMission(
-      'Review the OAuth callback flow',
-      { id: '123456abcdef', generate: async () => { throw new Error('offline'); } },
-    );
-
-    expect(identity).toEqual({
+  test('a new workspace gets a neutral slug and the mission as its stand-in title, and no model is asked', () => {
+    // The stand-in is what the workspace's own first-turn `auto_title` effect names, down the fast tier's route.
+    expect(suggestAgentIdentityFromMission('Review the OAuth callback flow', '123456abcdef')).toEqual({
       name: 'ironwood-elm-56abcdef',
       displayName: 'Review the OAuth callback flow',
       nameOrigin: 'auto',
     });
   });
 
-  test('creates an unnamed cloud workspace with the generated name and display name', async () => {
+  test('creates an unnamed cloud workspace with the neutral slug and the stand-in title', async () => {
     const seen: RecordedCreate = {};
 
     const created = await createCloudAgentFromMission(
@@ -69,23 +47,19 @@ describe('CLI mission workspace names', () => {
         model: 'openai/gpt-5-mini',
         reasoningEffort: 'high',
       },
-      {
-        id: 'abcdef123456',
-        generate: async () => JSON.stringify({ title: 'Rust Framework Benchmark' }),
-        create: recordingCreate(seen),
-      },
+      { id: 'abcdef123456', create: recordingCreate(seen) },
     );
 
     expect(seen.input).toEqual({
       name: workspaceSlug('abcdef123456'),
-      displayName: 'Rust Framework Benchmark',
+      displayName: 'Build a benchmark for Rust web frameworks',
       purpose: 'Build a benchmark for Rust web frameworks',
       model: 'openai/gpt-5-mini',
       reasoningEffort: 'high',
     });
     expect(created).toMatchObject({
       name: workspaceSlug('abcdef123456'),
-      displayName: 'Rust Framework Benchmark',
+      displayName: 'Build a benchmark for Rust web frameworks',
     });
   });
 
@@ -98,10 +72,7 @@ describe('CLI mission workspace names', () => {
         nameOrigin: 'user',
         purpose: 'Manage my calendar',
       },
-      {
-        generate: async () => { throw new Error('explicit names must not be regenerated'); },
-        create: recordingCreate(seen),
-      },
+      { create: recordingCreate(seen) },
     );
 
     expect(seen.input).toEqual({

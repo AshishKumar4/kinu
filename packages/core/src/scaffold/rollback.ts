@@ -6,7 +6,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import { readScaffoldVersion } from './shadow';
+import { readScaffoldVersion } from './versions';
 
 export async function rollbackScaffold(
   rt: AgentRuntime,

@@ -25,7 +25,6 @@ const ALL_SECTIONS: SystemPromptOptions = {
   identity: { workspace: 'Budget workspace', agent: 'Budget actor' },
   roleSection: { id: 'task', label: 'Task', instructions: BUILTIN_ROLE_DEFINITIONS.task.instructions },
 
-  externalTools: [{ name: 'docs.search', source: 'mcp', description: 'Search connected documentation.' }],
   executors: full.opts.executors?.map((executor) => ({ ...executor, capabilities: ['net_inbound'] })),
 };
 

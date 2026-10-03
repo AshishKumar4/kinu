@@ -2,18 +2,18 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
 import {
-  MERGE_POLICY_BINDING, mergePolicyProfile, scriptedTurnModel, sqlOver, toolExecute,
+  MERGE_POLICY_BINDING, mergePolicyProfile, present, scriptedTurnModel, toolExecute,
 } from '@kinu.run/test-utils';
 import {
-  MergeOutputSchema, listQueuedShadowTrials, DEFAULT_WORKERS_AI_MODEL_SPEC, DYNAMIC_CONTEXT_OPEN_TAG,
+  MergeOutputSchema, DEFAULT_WORKERS_AI_MODEL_SPEC, DYNAMIC_CONTEXT_OPEN_TAG, mcpToolKey, type JsonValue,
   type ReasoningEffort, type ResolvedTurnProfile,
   LiveWorkers,
 } from '@kinu.run/core';
 import {
-  declareShadowCandidate, hostedExplorationHarness, hostedMainActor, improvementLanesRan,
+  hostedExplorationHarness, hostedMainActor, improvementLanesRan,
   orchestratorHarness, reactivateOrchestratorHarness, catalogTurn, gatewayWorkspace, GATEWAY_CATALOG,
   chatSessionTurns, driveUntil, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
-  workspaceMainActor,
+  workspaceMainActor, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
 import { answeringGateway, chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
@@ -189,17 +189,11 @@ describe('turn-pipeline correctness wiring', () => {
     expect(await file({
       action: 'edit', path: '/context/working.jsonl', edits: [{ old_text: 'OLD premise', new_text: 'NEW premise' }],
     })).toMatchObject({ ok: true });
-    declareShadowCandidate(harness.db);
-    workspaceMainActor(harness.db).config.setShadowSampleRate(1);
     const prepared = await chatSessionTurns(agent).prepare(turn([first, reply, next]));
     await chatSessionTurns(agent).settle({ messageId: 'edited-answer-2', text: 'second answer', requestId: 'edited-req-2' });
-    const trial = listQueuedShadowTrials(sqlOver(harness.db), workspaceMainActor(harness.db), 1)[0];
 
-    if (trial === undefined || prepared?.messages === undefined) throw new Error('the turn did not retain its request and trial');
+    if (prepared?.messages === undefined) throw new Error('the turn did not retain its request');
     expect(prepared.messages[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
-    // The trial retains the called request (history plus dynamic block); compared on role and text.
-    expect(spoken(trial.context)).toEqual(spoken(prepared.prompt));
-    expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
   });
 
   test('a catalog the turn cannot reach runs on builtins; any other failure is the turn\'s own', async () => {
@@ -451,6 +445,39 @@ describe('turn-pipeline correctness wiring', () => {
       const block = request?.prompt.find((message) => message.role === 'user' && JSON.stringify(message).includes(DYNAMIC_CONTEXT_OPEN_TAG));
       expect(/Mode: [a-z]+; submit_plan: [a-z]+\./u.exec(JSON.stringify(block ?? null))?.[0] ?? null).toBe(facts);
     }
+  });
+
+  // MCP tools differ per workspace, so as native definitions they split the tools prefix between workspaces.
+  test('an MCP tool is no native definition and no system prompt line: eval calls it, and the dynamic block declares it', async () => {
+    const mcp: NonNullable<RecordedUserPlaneCalls['mcp']> = {
+      descriptors: [{
+        serverId: 'srv-1', serverName: 'tracker', name: 'find_issue', toolKey: mcpToolKey('tracker', 'find_issue'),
+        description: 'Find an issue by title.', readOnly: true,
+        inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] },
+      }],
+      calls: [],
+      answer: { id: 'ISSUE-7' },
+    };
+
+    const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], turnCancels: [], mcp };
+    const { agent } = orchestratorHarness(userPlane);
+    const key = mcpToolKey('tracker', 'find_issue');
+    const prepared = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'find the login issue' }] });
+
+    if (!prepared) throw new Error('the turn must prepare a configuration');
+    expect(prepared.activeTools).toContain('eval');
+    expect(prepared.activeTools).not.toContain(key);
+    expect(JSON.stringify(prepared.system)).not.toContain(key);
+
+    const said = spoken(prepared.prompt ?? []).map((message) => message.text).join('\n');
+    expect(said).toContain(`- tools[${JSON.stringify(key)}](input): Find an issue by title. Input schema: {"type":"object","properties":{"title":{"type":"string"}},"required":["title"]}`);
+
+    const evaluated = await toolExecute<JsonValue, JsonValue>(present(prepared.tools.eval, 'eval'))({
+      code: `return await tools[${JSON.stringify(key)}]({ title: 'login' });`,
+    });
+
+    expect(JSON.stringify(evaluated)).toContain('ISSUE-7');
+    expect(mcp.calls).toEqual([{ tool: 'find_issue', args: { title: 'login' } }]);
   });
 
   // A body in the system prompt rewrote the cached prefix on the turn it arrived and again on the next.

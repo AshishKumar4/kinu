@@ -4,7 +4,7 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
  */
 
-import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, GenerateRequest, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
+import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell, shellCwd, createShellSession,
   observeWrites,
@@ -17,9 +17,9 @@ import {
   type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   type NimbusSandboxHandle,
-  createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, generateReported,
+  createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   decodeJsonValue,
-  createRoutedModelLane, routedCallOptions,
+  createRoutedModelLane, routedLlm, bindRoute,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
@@ -219,7 +219,6 @@ export function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
   return 'vectorStore' in runtime;
 }
 
-/** One box per workspace, whichever agent runs in it. */
 export interface WorkspaceBoxUse {
   used: boolean;
 }
@@ -667,20 +666,14 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
 
       return agent.registry.credentialFor(agent.normalizeSpecSync(spec), agent.deps);
     },
-    llm: route => ({
-      async *stream() { yield ""; },
-      async complete(prompt: string): Promise<string> {
-        const registry = actorProviderRegistry(options, `Kinu (${source})`);
+    llm: (route) => routedLlm((serving) => {
+      const registry = actorProviderRegistry(options, `Kinu (${source})`);
 
-        const request: GenerateRequest = {
-          model: registry.resolveModel(route.model, agentAffinityKey(options.agent.name)),
-          prompt,
-          ...routedCallOptions(route, route.model),
-        };
-
-        return (await generateReported(request, { spend: { source, report, operations: options.modelOperations }, spec: route.model })).text.trim();
-      },
-    }),
+      return bindRoute({
+        normalize: (spec) => registry.normalizeSpecSync(spec),
+        resolve: (spec) => registry.resolveModel(spec, agentAffinityKey(options.agent.name)),
+      }, serving);
+    }, route, { report, operations: options.modelOperations }),
   });
 }
 

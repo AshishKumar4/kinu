@@ -35,13 +35,6 @@ function isAdvisorNoteClass<Value>(value: Value): value is Value & AdvisorNoteCl
   return ADVISOR_NOTE_CLASSES.some((noteClass) => noteClass === value);
 }
 
-/** The phrase an eval instance carries, so a judge reads the kind and not the token. */
-export const ADVISOR_CLASS_LABEL = {
-  'wrong-work': 'the work did not do what was asked',
-  'missed-capability': 'a capability it had and did not use',
-  dissatisfaction: 'the user said they were unhappy',
-} as const satisfies Readonly<Record<AdvisorNoteClass, string>>;
-
 /** Also what makes the chat render the signal as a card instead of a user bubble. */
 export const ADVISOR_SIGNAL_KIND = 'advisor';
 

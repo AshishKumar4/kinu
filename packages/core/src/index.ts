@@ -10,7 +10,7 @@ export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, 
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
-  declareTerminalRoster, owesShadowTrial,
+  declareTerminalRoster,
   type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
@@ -23,8 +23,8 @@ export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
   branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
-  eventDrainTerminalEffect, shadowTrialTerminalEffect,
-  terminalEffectKey, keyedScope, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
+  eventDrainTerminalEffect,
+  terminalEffectKey, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
@@ -35,7 +35,7 @@ export {
 
 // Records that keyed work happened, kept after its row is retired.
 export {
-  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone, oncePerTick, type TickedPass,
+  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from './identity/effect-tombstones';
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
@@ -62,7 +62,6 @@ export {
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
-  writeSoul,
 } from './identity/soul';
 
 export { WORKSPACE_IDENTITY_DDL, WORKSPACE_SOUL_DDL } from './identity/schema';
@@ -148,16 +147,12 @@ export {
 
 export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
 
-export {
-  EvolutionEngine, buildScaffoldProposalPrompt,
-  type ProposalArchiveContext,
-} from './evolution/engine';
+export { EvolutionEngine } from './evolution/engine';
 
 export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
-  type ShadowTrialDrain, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialTurn,
 } from './evolution/types';
 
 export {
@@ -180,12 +175,6 @@ export {
   recordLesson, listLessons, corroborateLessonsForTurn, initLessonTables,
   type LessonRow, type LessonSource, type LessonStatus,
 } from './evolution/lessons';
-
-export {
-  buildOutcomeEvalSplit, describeSplitDegeneracy,
-  type AdvisorNegativeRow, type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
-  type EvalVerdict, type OutcomeSplitDegeneracy,
-} from './evolution/eval-split';
 
 export {
   recordRecoveryFinding, listRecoveryFindings, recoveryFindingText,
@@ -216,8 +205,7 @@ export { UNBOUNDED_STEPS } from './chat';
 export {
   createAgentConfigStore, initAgentConfigTable,
   canonicalConversationId,
-  AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
-  DEFAULT_GEPA_EVAL_BUDGET, clampGepaEvalBudget,
+  AGENT_CONFIG_KEYS,
   type AgentConfigStore, type ShellApprovalMode,
 } from './config/index';
 
@@ -743,7 +731,6 @@ export {
   uniquePromptExecutors,
   type PromptBackend,
   type PromptExecutorInfo,
-  type PromptExternalToolInfo,
   type PromptIdentity,
   type PromptSurface,
   type PromptSurfaceOptions,
@@ -917,17 +904,10 @@ export {
   type EvolvedArtifact, type MisevolutionSurface, type MisevolutionVerdict, type MisevolutionViolation,
 } from './safety/misevolution';
 
-// Variant archive over scaffold_versions/scaffold_evaluations (no parallel store).
-export {
-  listScaffoldArchive, listRejectedProposals, selectEvolutionBase, blendRealOutcomeRates,
-  type ScaffoldArchiveEntry, type EvolutionBaseSelection, type RealOutcomeRate,
-  type RejectedProposal, type RejectionKind,
-} from './scaffold/archive';
+export { listScaffoldArchive, type ScaffoldArchiveEntry, type ScaffoldStatus } from './scaffold/archive';
 
-// Shadow-mode rollout
 export {
   runScaffold, scaffoldProviders,
-  scaffoldEventText,
   type ScaffoldRunOptions,
   type ScaffoldRunResult, type ScaffoldRunReport, type ScaffoldJsonEvent, scaffoldRunReport,
   type ScaffoldDefaultInferenceChunk,
@@ -940,44 +920,9 @@ export { pumpScaffoldEvents } from './scaffold/event-pump';
 export { scaffoldChatTransform } from './scaffold/chat-transform';
 
 export {
-  initShadowTables,
-  getPendingScaffold,
-  getCurrentScaffoldVersion,
-  readScaffoldVersion,
-  readVersionedScaffoldSource,
-  readShadowVerdict,
-  recordShadowEvaluation, scoredShadowTrial, trimTrialContext,
-  decidePromotion,
-  applyPromotionDecision,
-  DEFAULT_SHADOW_CONFIG,
-  // Kept out of scaffold_evaluations so unrun trials can never walk the calibrated ladder.
-  queueShadowTrial,
-  listQueuedShadowTrials,
-  countQueuedShadowTrials,
-  dropQueuedShadowTrial,
-  purgeQueuedShadowTrials,
-  MAX_QUEUED_SHADOW_TRIALS,
-  SHADOW_TRIAL_CONTEXT_CHARS,
-  type PendingScaffold,
-  type QueuedShadowTrial,
-  type ShadowEvaluationRow,
-  type ShadowVerdict,
-  type ShadowVerdictTrial,
-  type ShadowConfig,
-  type ScaffoldStatus,
-  type ShadowTrialVerdict,
-} from './scaffold/shadow';
-
-// Auto-judge shadow evaluation
-export {
-  runAutoShadowEval,
-  DEFAULT_AUTO_JUDGE_CONFIG,
-  type AutoJudgeConfig,
-  type AutoShadowEvalResult,
-  type JudgeOutput,
-  type StructuredJudgeFn,
-  type RunAutoShadowEvalOpts,
-} from './scaffold/auto-judge';
+  getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource, getPendingScaffold, applyPromotionDecision,
+  type PendingScaffold, type ScaffoldDecisionEvents,
+} from './scaffold/versions';
 
 // CraftStore quality
 export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
@@ -1559,7 +1504,7 @@ export {
   MergeOutputSchema, DecisionSchema, type MergeOutput,
   // Resolved here so both backends resolve it identically.
   headMergeLLM,
-  type HeadMergeModelBinder, type HeadMergeModelBinding, type HeadMergePolicyDeps,
+  type HeadMergePolicyDeps,
   extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
@@ -1625,7 +1570,7 @@ export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type Actor
 
 export {
   ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
-  type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
+  type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
@@ -1685,7 +1630,9 @@ export { createScaffoldCandidateSurface, type ScaffoldCandidateBinding } from '.
 export { activeOperationProfile, captureOperationProfile, currentOperationProfile, resolveOperationProfile, runOperationProfile,
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
-export { completeOnRoute, createRoutedModelLane, routedCallOptions } from './profiles/model-lane';
+export {
+  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type RouteModelBinder, type RouteModelBinding,
+} from './profiles/model-lane';
 
 export { tierRefusals } from './profiles/tier-refusals';
 
@@ -1732,16 +1679,26 @@ export type {
 
 // GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
 export {
-  applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, shadowTrialPlan, runQueuedShadowTrials,
-  runScaffoldGepaOptimization, runScaffoldOnce,
-  advancePromptSectionLane, proposeMeasuredPromptSection,
-  type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface,
-  type ScaffoldVersionView, type ShadowStatus,
-  type PromptSectionOptimizationResult, type PromptSectionTrialResult,
-  type PromptSectionLaneStep, type MeasuredSectionProposal,
+  applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getEvolutionStatus, listScaffoldVersions,
+  previewScaffoldLive, proposeScaffold, runOptimization, runScaffoldOnce,
+  type EvolutionStatus, type JsonGenerator, type ScaffoldControl,
+  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
 } from './evolution/control';
+
+// The proposer, its artifact store and live trials (docs/EVOLUTION-REDESIGN.md §3-5).
+export {
+  artifactOverrides, artifactVersion, bundledArtifact, currentArtifacts, listArtifactVersions,
+  sectionArtifact, toolArtifact, writeCandidate,
+  type ArtifactStatus, type ArtifactVersion,
+} from './evolution/artifacts';
+
+export { judgeAuthoredEdit, runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './evolution/proposer';
+
+export { advanceTrial, runningTrial, startTrial, turnArtifactBodies } from './evolution/trials';
+
+export { drawArm, type LiveTrial, type TrialArm, type TrialTurn, type TrialVerdict } from './evolution/trial-rules';
+
+export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 
 // Continual refinement: each proposed edit routes to the authority that owns the artifact.
 export {
@@ -1768,8 +1725,7 @@ export {
 } from './evolution/refinement-skill';
 
 export {
-  runGepa, runScaffoldGepa, runSectionGepa,
-  PROMPT_SECTION_TARGETS, findPromptSectionTarget,
+  runGepa,
   DEFAULT_GEPA_BUDGET,
   initGepaTables, startGepaRun, finishGepaRun,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
@@ -1779,16 +1735,9 @@ export type {
   EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
   GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
   GepaIterationState, GepaProgressHooks, GepaResult,
-  RunScaffoldGepaOpts, RunScaffoldGepaResult,
-  RunSectionGepaOpts, RunSectionGepaResult,
   GepaRunSummary,
   GepaParetoEntry,
 } from './evolution/gepa/index';
-
-// Evolved prompt sections
-export {
-  activePromptSectionOverrides, firstPendingPromptSection,
-} from './prompting/section-store';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 
@@ -2015,7 +1964,6 @@ export {
   ADVISOR_EVENT_TYPE,
   ADVISOR_NOTE_MAX_CHARS,
   ADVISOR_SEVERITIES,
-  ADVISOR_CLASS_LABEL,
   AdvisorRowDataSchema,
   ADVISOR_SEVERITY_LABEL,
   ADVISOR_SEVERITY_METADATA_KEY,
@@ -2069,7 +2017,7 @@ export type {
 
 export {
   resolveModelRoute,
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, ancestorPins,
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource, type PinnedProfile,
   type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,

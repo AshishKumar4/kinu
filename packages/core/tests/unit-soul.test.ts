@@ -1,9 +1,9 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
-/** SOUL.md and its mission row cannot drift: `writeSoul` is the only writer of either. */
+/** One authority: SOUL.md's bytes. Its mission is read off them, so no copy can drift. */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  readSoul, readMission, writeSoul, seedSoul, summarizeSoul, SOUL_PATH, ownerMissionOf,
+  readSoul, readMission, seedSoul, summarizeSoul, SOUL_PATH, ownerMissionOf,
 } from '../src/identity/soul';
 import { initAllTables } from '../src/state/workspace-schema';
 import { createWorkspace } from '../src/workspace-birth';
@@ -24,9 +24,9 @@ function freshWorkspace() {
 }
 
 describe('the soul is a file', () => {
-  test('writeSoul round-trips through the workspace filesystem', async () => {
-    const { sql, vfs, seal } = freshWorkspace();
-    await writeSoul(sql, '# Atlas\n\n## Mission\n\nHelp with testing.', seal);
+  test('the owner\'s write round-trips through the workspace filesystem', async () => {
+    const { vfs, seal } = freshWorkspace();
+    await seal('# Atlas\n\n## Mission\n\nHelp with testing.');
 
     expect(await readSoul(vfs)).toBe('# Atlas\n\n## Mission\n\nHelp with testing.');
     expect(await readText(vfs, SOUL_PATH)).toContain('Help with testing.');
@@ -39,8 +39,8 @@ describe('the soul is a file', () => {
   });
 
   test('an empty document is no document', async () => {
-    const { sql, vfs, seal } = freshWorkspace();
-    await writeSoul(sql, '   \n  ', seal);
+    const { vfs, seal } = freshWorkspace();
+    await seal('   \n  ');
     expect(await readSoul(vfs)).toBeNull();
   });
 
@@ -48,17 +48,19 @@ describe('the soul is a file', () => {
 });
 
 describe('the mission a read-only listing reads', () => {
-  test('writeSoul maintains it, so the row cannot drift from the document', async () => {
+  // A copy written after the soul could fail between the two writes and leave listings on the old purpose.
+  test('it is read off the soul the owner wrote last, with no copy to drift', async () => {
     const { sql, vfs, seal } = freshWorkspace();
-    await writeSoul(sql, '# Atlas\n\n## Mission\n\nHelp with testing.', seal);
+    await seal('# Atlas\n\n## Mission\n\nHelp with testing.');
+    await seal('# Atlas\n\n## Mission\n\nShip the release.');
 
-    expect(readMission(sql)).toBe('Help with testing.');
+    expect(readMission(sql)).toBe('Ship the release.');
     expect(readMission(sql)).toBe(summarizeSoul(await readSoul(vfs)));
   });
 
   test('it is readable without opening a filesystem — the point of it existing', async () => {
-    const { db, sql, seal } = freshWorkspace();
-    await seedSoul(sql, { name: 'atlas', mission: 'ship the thing' }, seal);
+    const { db, seal } = freshWorkspace();
+    await seedSoul({ name: 'atlas', mission: 'ship the thing' }, seal);
 
     // A handle with no workspace filesystem, as `kinu list` has, so a listing never writes.
     const listing = makeSql(db);

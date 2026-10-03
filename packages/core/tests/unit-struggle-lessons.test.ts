@@ -76,12 +76,12 @@ describe('a struggling turn teaches one lesson about its tool', () => {
     expect({ asked: prompts.length, lessons: lessons().length }).toEqual({ asked: 1, lessons: 1 });
   });
 
-  test('a turn without a struggle is recorded and asks no model', async () => {
+  test('a turn without a struggle or a shown lesson records nothing and asks no model', async () => {
     const { rt, lessons, prompts, learn } = engine({ update: null, text: LESSON });
 
     await learn(turn('t-1', []));
 
-    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([{ turn_id: 't-1' }]);
+    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([]);
     expect({ lessons: lessons(), asked: prompts.length }).toEqual({ lessons: [], asked: 0 });
   });
 

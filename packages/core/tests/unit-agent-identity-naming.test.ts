@@ -141,12 +141,12 @@ describe('automatic workspace titling — the decision', () => {
     expect(nameOriginOf('provisional')).toBe('auto');
   });
 
-  test('a stand-in is replaced only by the pass its caller names as its naming', () => {
+  test('a stand-in, the title still the mission\'s own, is replaced only by the model\'s name, and never the owner\'s', () => {
     const standIn: WorkspaceTitleState = { ...slugNamed, displayName: 'Audit the OAuth callback flow' };
 
-    expect(planWorkspaceTitle({ ...standIn, standIn: true })).toEqual({ provisional: null, mission: MISSION });
-    expect(planWorkspaceTitle(standIn)).toBe(null);
-    expect(planWorkspaceTitle({ ...standIn, standIn: true, nameOrigin: 'user' })).toBe(null);
+    expect(planWorkspaceTitle(standIn)).toEqual({ provisional: null, mission: MISSION });
+    expect(planWorkspaceTitle({ ...standIn, displayName: 'OAuth Callback Audit' })).toBe(null);
+    expect(planWorkspaceTitle({ ...standIn, nameOrigin: 'user' })).toBe(null);
   });
 
   test('persistAutoTitle is the race check and the write: the owner\'s rename wins', () => {
@@ -214,7 +214,7 @@ describe('automatic workspace titling — applying it', () => {
     expect(persisted).toHaveLength(2);
   });
 
-  test('a failed generation leaves the stand-in, and only the pass that owes the naming asks again', async () => {
+  test('a failed generation leaves the stand-in, and the next pass asks again until a name lands', async () => {
     const { stored, persisted, persist } = workspace();
     let suggested = 0;
 
@@ -232,16 +232,14 @@ describe('automatic workspace titling — applying it', () => {
     expect(persisted).toEqual(['Audit the OAuth callback flow']);
     expect(stored).toMatchObject({ displayName: 'Audit the OAuth callback flow', nameOrigin: 'auto' });
 
-    expect(await applyWorkspaceTitle(stored, { persist, suggest })).toBe(null);
-    expect(suggested).toBe(0);
-
-    expect(await applyWorkspaceTitle({ ...stored, standIn: true }, { persist, suggest })).toBe('OAuth Callback Audit');
+    expect(await applyWorkspaceTitle(stored, { persist, suggest })).toBe('OAuth Callback Audit');
     expect(persisted).toEqual(['Audit the OAuth callback flow', 'OAuth Callback Audit']);
+    expect(await applyWorkspaceTitle(stored, { persist, suggest })).toBe(null);
     expect(suggested).toBe(1);
   });
 
   test('a name the operator chose is never overwritten, even by the naming it was owed, and no model is called', async () => {
-    const { stored, persisted, persist } = workspace({ displayName: 'Jarvis', nameOrigin: 'user', standIn: true });
+    const { stored, persisted, persist } = workspace({ displayName: 'Jarvis', nameOrigin: 'user' });
     let suggested = 0;
 
     expect(await applyWorkspaceTitle(stored, {
@@ -294,7 +292,7 @@ describe('automatic workspace titling — applying it', () => {
     await applyWorkspaceTitle(fresh.stored, { persist: fresh.persist, suggest: async () => '  ' });
     expect(fresh.persisted).toEqual(['Audit the OAuth callback flow']);
 
-    const named = workspace({ displayName: 'Audit the OAuth callback flow', standIn: true });
+    const named = workspace({ displayName: 'Audit the OAuth callback flow' });
     expect(await applyWorkspaceTitle(named.stored, { persist: named.persist, suggest: async () => 'Audit the OAuth callback flow' }))
       .toBe(null);
     expect(named.persisted).toEqual([]);
