@@ -10,7 +10,7 @@ import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
 import {
   NO_COUNT_ENDPOINT, openWorkspaceMainActor, profileCatalogDigest, type LLMProviderConfig, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
-import { initWorkspaceSchema } from '@kinu.run/core';
+import { initWorkspaceSchema, WORKSPACE_RUN_ID } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { createCLIRuntime, makeSql, type LocalModelResolver , makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
@@ -162,7 +162,10 @@ function gateSizes(client: LocalAgentClient): number[] {
   const sizes: number[] = [];
 
   client.subscribe((event) => {
-    if (event.type === 'run-event' && event.event.type === 'context_admitted' && event.event.tokens !== null) sizes.push(event.event.tokens);
+    // A turn's own measures; the interactive session's start-up measure is the workspace's row.
+    if (event.type === 'run-event' && event.event.type === 'context_admitted' && event.event.runId !== WORKSPACE_RUN_ID && event.event.tokens !== null) {
+      sizes.push(event.event.tokens);
+    }
   });
 
   return sizes;
@@ -247,7 +250,10 @@ describe('LocalAgentClient', () => {
     expect(result.text, JSON.stringify(events)).toBe('hello there');
     expect(result.hadError).toBe(false);
 
-    const types = events.map((event) => event.type);
+    // An interactive session records its start-up measure, the workspace's row, before it takes the message.
+    const types = events.flatMap((event) => (event.type === 'run-event' && event.event.runId === WORKSPACE_RUN_ID) || event.type === 'broadcast'
+      ? [] : [event.type]);
+
     expect(types[0]).toBe('turn-start');
     expect(types).toContain('text-delta');
     expect(types).toContain('turn-end');

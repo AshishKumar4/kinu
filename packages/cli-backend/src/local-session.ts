@@ -720,8 +720,9 @@ export class LocalAgentSession {
     // engine.maybeEvolveScaffold silently disables scaffold evolution. Idempotent; tracked for end().
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
-    // The next turn awaits this before admitting input.
-    this.actorSession.orchestrator.track(this.chat.restoreHistory().then(() => { this.chat.measureSessionStart(); }), 'restoring working history');
+    // The next turn awaits this before admitting input. A one-shot session opens with its first message in hand, so it
+    // takes no start-up measure; an interactive one records it before the pump admits input.
+    this.chat.measureSessionStart({ restored: this.chat.restoreHistory(), measure: !this.oneShot });
     this.ensureModelState();
     this.rearmLocalAlarm();
   }

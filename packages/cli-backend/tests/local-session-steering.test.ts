@@ -1228,7 +1228,8 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const streamed = events.items.filter((e): e is Extract<SessionEvent, { type: 'run-event' }> => e.type === 'run-event')
       .map((e) => e.event);
 
-    expect(streamed).toEqual(session.getRunEvents(runId));
+    // The start-up measure is the workspace's own row, recorded before the session takes the message.
+    expect(streamed).toEqual([...session.getRunEvents(WORKSPACE_RUN_ID), ...session.getRunEvents(runId)]);
 
     await session.end();
   });
@@ -1607,7 +1608,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(runId).not.toBe(WORKSPACE_RUN_ID);
     expect(session.getRunEvents(runId).filter((e) => e.type === 'model_call'))
       .toMatchObject([{ source: 'reflection', usage: { input: 3 } }]);
-    expect(session.getRunEvents(WORKSPACE_RUN_ID)).toEqual([]);
+    expect(session.getRunEvents(WORKSPACE_RUN_ID).filter((e) => e.type === 'model_call')).toEqual([]);
 
     await session.end();
   });

@@ -5,7 +5,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LLMProviderConfig, RunEvent } from '@kinu.run/core';
-import { initWorkspaceSchema } from '@kinu.run/core';
+import { initWorkspaceSchema, WORKSPACE_RUN_ID } from '@kinu.run/core';
 import { CRAFT_NEUTRAL_PRIOR } from '@kinu.run/core';
 import { createCLIRuntime, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -79,9 +79,9 @@ function craftScore(db: Database, name: string): { score: number; uses: number }
 
 function craftCycleRow(session: LocalAgentSession, rt: CLIRuntime, db: Database) {
   // `run_events` is actor-scoped, so the run id comes from this session's own actor.
-  const row = db.query<{ run_id: string }, [string]>(
-    'SELECT run_id FROM run_events WHERE actor_id = ? LIMIT 1',
-  ).get(rt.actor.actorId);
+  const row = db.query<{ run_id: string }, [string, string]>(
+    'SELECT run_id FROM run_events WHERE actor_id = ? AND run_id != ? LIMIT 1',
+  ).get(rt.actor.actorId, WORKSPACE_RUN_ID);
 
   if (!row) throw new Error('craft run-event row is missing');
   const runId = row.run_id;

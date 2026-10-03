@@ -3,7 +3,7 @@
  * stopping aborts an in-flight question and best-effort denies it so the blocked device RPC unblocks.
  */
 
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import type {
   DeviceConsentDecision,
   DeviceConsentSurface,
@@ -40,59 +40,50 @@ export function watchDeviceConsents(
   const abort = new AbortController();
   const handled = new Set<string>();
 
-  const tick = async () => {
-    try {
-      const pending = await consents.listPending();
+  const tick = (): Effect.Effect<void> => Effect.catchCause(Effect.gen(function* () {
+    const pending = yield* Effect.promise(() => consents.listPending());
 
-      if (abort.signal.aborted) return;
+    if (abort.signal.aborted) return;
 
-      // Ids that left the pending list never reappear; forgetting them keeps the set bounded.
-      const live = new Set(pending.map((item) => item.consentId));
+    // Ids that left the pending list never reappear; forgetting them keeps the set bounded.
+    const live = new Set(pending.map((item) => item.consentId));
 
-      for (const id of handled) if (!live.has(id)) handled.delete(id);
+    for (const id of handled) if (!live.has(id)) handled.delete(id);
 
-      const consent = pending.find((item) => !handled.has(item.consentId));
+    const consent = pending.find((item) => !handled.has(item.consentId));
 
-      if (!consent) return;
+    if (!consent) return;
 
-      const outcome = await opts.present(consent, abort.signal);
-      handled.add(consent.consentId);
+    const outcome = yield* Effect.promise(() => opts.present(consent, abort.signal));
+    handled.add(consent.consentId);
 
-      if (outcome === 'cancelled') {
-        // Deny so the blocked device RPC unblocks; reported here because the outer guard drops 'cancelled' failures.
-        try {
-          await consents.resolve(consent.consentId, 'deny');
-        } catch (err) {
-          opts.note('error', `Could not withdraw the request to use ${consent.deviceLabel}. It expires on its own: ${renderThrownChain({ cause: err })}`);
-        }
+    if (outcome === 'cancelled') {
+      // Deny so the blocked device RPC unblocks; reported here because the outer guard drops 'cancelled' failures.
+      yield* Effect.catchCause(Effect.promise(() => consents.resolve(consent.consentId, 'deny')), (failed) => Effect.sync(() => {
+        opts.note('error', `Could not withdraw the request to use ${consent.deviceLabel}. It expires on its own: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
+      }));
 
-        return;
-      }
-
-      if (outcome === null) return;
-      const result = await consents.resolve(consent.consentId, outcome);
-
-      if (abort.signal.aborted) return;
-
-      if (result.ok) opts.note('resolved', decisionFeedback(outcome));
-      else opts.note('stale', 'That request is no longer waiting for an answer.');
-    } catch (err) {
-      if (!abort.signal.aborted) {
-        opts.note('error', renderThrownChain({ cause: err }));
-      }
+      return;
     }
-  };
+
+    if (outcome === null) return;
+    const result = yield* Effect.promise(() => consents.resolve(consent.consentId, outcome));
+
+    if (abort.signal.aborted) return;
+
+    if (result.ok) opts.note('resolved', decisionFeedback(outcome));
+    else opts.note('stale', 'That request is no longer waiting for an answer.');
+  }), (failed) => Effect.sync(() => {
+    if (!abort.signal.aborted) {
+      opts.note('error', renderThrownChain({ cause: Cause.squash(failed) }));
+    }
+  }));
 
   // Runs until `stop`; a failure past the tick's own reporting ends the loop and is recorded, never an unhandled rejection.
-  const done = (async () => {
-    await settleLogged('consent.poll_failed', { doing: 'polling pending device consents', otherwise: 'io' }, async () => {
-      await waitForAnswer(async () => {
-        await tick();
-
-        return undefined;
-      }, { intervalMs: CONSENT_POLL_MS, signal: abort.signal });
-    });
-  })();
+  const done = settleLogged('consent.poll_failed', { doing: 'polling pending device consents', otherwise: 'io' }, () => waitForAnswer(
+    () => settle(Effect.as(tick(), undefined)),
+    { intervalMs: CONSENT_POLL_MS, signal: abort.signal },
+  ));
 
   return {
     stop() {

@@ -147,7 +147,7 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
   const opencodeBin = opts.opencodeBin ?? DEFAULT_OPENCODE_BIN;
   const fetchImpl = opts.fetch ?? fetch;
   const spawnFn = opts.spawn ?? ((args, spawnOptions) => spawnOpenCode(opencodeBin, args, spawnOptions));
-  const probeFn = opts.probe ?? (() => probeOpenCode(authPath, spawnFn));
+  const probeFn = opts.probe ?? (() => settle(probeOpenCode(authPath, spawnFn)));
 
   let availabilityCache: Promise<OpenCodeAvailability> | null = null;
   let configCache: { signature: string; loadedAt: number; config: ResolvedConfig } | null = null;
@@ -533,54 +533,49 @@ function jsonObjectEnd(text: string, start: number): number {
 
 
 
-async function probeOpenCode(
+function probeOpenCode(
   authPath: string,
   spawnFn: OpenCodeSpawn,
-): Promise<OpenCodeAvailability> {
-  // A failed read after a successful `--version` is not a missing binary.
-  const versionChild = spawnFn(['--version'], {});
-  versionChild.stdin?.end();
+): Effect.Effect<OpenCodeAvailability> {
+  return Effect.gen(function* () {
+    // A failed read after a successful `--version` is not a missing binary.
+    const versionChild = spawnFn(['--version'], {});
+    versionChild.stdin?.end();
 
-  const [versionRead, versionExit] = await Promise.all([
-    readAllOutcome(versionChild.stdout),
-    versionChild.exit,
-  ]);
+    const [versionRead, versionExit] = yield* Effect.promise(() => Promise.all([
+      readAllOutcome(versionChild.stdout),
+      versionChild.exit,
+    ]));
 
-  if (versionExit !== 0) return { binary: false, authenticated: false };
+    if (versionExit !== 0) return { binary: false, authenticated: false };
 
-  if ('error' in versionRead) {
-    throw new Error(
-      '`opencode --version` exited 0 but its output could not be read',
-      { cause: versionRead.error },
-    );
-  }
-
-  if (!existsSync(authPath)) return { binary: true, authenticated: false };
-
-  try {
-    const doc = v.parse(openCodeAuthSchema, JSON.parse(readFileSync(authPath, 'utf8')));
-    const entries = Object.entries(doc);
-
-    if (entries.length === 0) return { binary: true, authenticated: false };
-    const entry = entries[0];
-
-    if (!entry) return { binary: true, authenticated: false };
-    const [, cred] = entry;
-
-    if (cred.type !== 'wellknown' || !cred.token) {
-      return { binary: true, authenticated: false };
+    if ('error' in versionRead) {
+      return yield* Effect.die(new Error(
+        '`opencode --version` exited 0 but its output could not be read',
+        { cause: versionRead.error },
+      ));
     }
-  } catch (error) {
-    diagnostics.event('opencode.cred_unreadable', { error: renderThrownChain({ cause: error }) });
 
-    return { binary: true, authenticated: false };
-  }
+    if (!existsSync(authPath)) return { binary: true, authenticated: false };
 
-  return { binary: true, authenticated: true };
+    return yield* Effect.catchCause(Effect.sync((): OpenCodeAvailability => {
+      const doc = v.parse(openCodeAuthSchema, JSON.parse(readFileSync(authPath, 'utf8')));
+      const entry = Object.entries(doc)[0];
+
+      if (!entry) return { binary: true, authenticated: false };
+      const [, cred] = entry;
+
+      return { binary: true, authenticated: cred.type === 'wellknown' && Boolean(cred.token) };
+    }), (failed) => Effect.sync((): OpenCodeAvailability => {
+      diagnostics.event('opencode.cred_unreadable', { error: renderThrownChain({ cause: Cause.squash(failed) }) });
+
+      return { binary: true, authenticated: false };
+    }));
+  });
 }
 
 
 /** Probe with the real opencode binary and default auth path. */
 export async function checkOpenCodeAvailability(): Promise<OpenCodeAvailability> {
-  return probeOpenCode(DEFAULT_AUTH_PATH, defaultSpawn);
+  return settle(probeOpenCode(DEFAULT_AUTH_PATH, defaultSpawn));
 }

@@ -11,7 +11,8 @@ import type {
   JsonValue,
 } from '@kinu.run/core';
 import { stringifyOr } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
   decodeJsonValue, explainSandboxError, nativeToolFunctions,
@@ -88,7 +89,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
 
         const sandboxConsole = { log: capture, info: capture, warn: capture, error: capture, debug: capture, trace: capture, dir: capture };
 
-        try {
+        return settle(Effect.catchCause(Effect.gen(function* () {
           const signal = options.abortSignal;
           const context = signal ? { signal } : undefined;
           const toolBindings: Record<string, CodemodeExecute> = {};
@@ -112,7 +113,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
           }
 
           const workspace = providerBindings['workspace'] ?? {};
-          const node = await loadKinuNode();
+          const node = yield* Effect.promise(() => loadKinuNode());
           node.bindSlates(workspace);
 
           // Fixed names excluded: a duplicate `new Function` parameter crashes.
@@ -131,7 +132,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
             `${renderCraftedDefinitions(crafted)}\nreturn (\n${normalizeCode(args.code)}\n)()`,
           );
 
-          const rawResult = await fn(...argValues);
+          const rawResult: unknown = yield* Effect.promise(async () => fn(...argValues));
 
           const payload: ExecuteSuccess = {
             result: rawResult === undefined
@@ -142,11 +143,13 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
           if (logs.length > 0) payload.logs = logs;
 
           return payload;
-        } catch (error) {
+        }), (failed) => {
+          const error = Cause.squash(failed);
           // A bare native-tool call throws a plain ReferenceError; rewrite it into a correction.
           const message = explainSandboxError(renderThrownChain({ cause: error }));
-          throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
-        }
+
+          return Effect.die(new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error }));
+        }));
       }),
     }), () => surface.craftedTools().map(({ name, description }) => ({ name, description })));
   };

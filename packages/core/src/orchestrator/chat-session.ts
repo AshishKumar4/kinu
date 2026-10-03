@@ -9,7 +9,7 @@
 
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { Effect, Result } from 'effect';
+import { Effect, Exit, Result } from 'effect';
 import type { ChatEvent } from '../chat';
 import type { CompactionTrigger } from '../extension';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
@@ -660,18 +660,33 @@ export class ChatSession {
       );
   }
 
-  /** Uncounted, on an empty conversation, so it folds nothing. */
-  measureSessionStart(): void {
-    const { provider, gate } = this.eventRecorder.readContextMeasures();
+  /**
+   * Uncounted, on an empty conversation, so it folds nothing. A revision registered now, before the session takes input:
+   * the pump waits for it, so a message sent meanwhile never decides whether it is recorded. It runs once `restored`
+   * settles; a failed restore is reported where it is tracked and leaves nothing to measure. A session opened with its
+   * first message in hand (`measure: false`) only waits for the restore.
+   */
+  measureSessionStart(options: { readonly restored?: Promise<unknown>; readonly measure?: boolean } = {}): void {
+    const { restored = Promise.resolve(), measure = true } = options;
 
-    if (provider === null && gate === null && this.actorSession.history.length === 0) this.reviseContext({ counted: false });
+    this.actorSession.orchestrator.track(this.revise(() => settleEffect(Effect.gen({ self: this }, function* () {
+      if (Exit.isFailure(yield* Effect.exit(Effect.promise(() => restored))) || !measure) return;
+      const { provider, gate } = this.eventRecorder.readContextMeasures();
+
+      if (provider === null && gate === null && this.actorSession.history.length === 0) yield* this.revisionMeasure({ counted: false });
+    }))), 'measuring the start-up context');
   }
 
   measureContextRevision(options: { readonly counted: boolean }): Promise<void> {
-    return settleEffect(this.pumpActive || this.queue.length > 0 ? Effect.void : attempt(
+    return settleEffect(this.pumpActive || this.queue.length > 0 ? Effect.void : this.revisionMeasure(options));
+  }
+
+  /** Reports its own failure, so a revision a turn awaits never rejects. */
+  private revisionMeasure(options: { readonly counted: boolean }): Effect.Effect<void> {
+    return attempt(
       { doing: 'measuring the next request after the context changed', otherwise: 'unavailable' },
       () => this.measureNextRequest({ ...options, trigger: 'auto' }),
-    ).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('context.revision_measure_failed', failure); }))));
+    ).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('context.revision_measure_failed', failure); })));
   }
 
   private async measureNextRequest(options: { readonly counted: boolean; readonly trigger: CompactionTrigger }): Promise<void> {
