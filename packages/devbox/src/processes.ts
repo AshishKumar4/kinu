@@ -72,6 +72,25 @@ for dir in "$@"; do
   cat "$dir/process.json"; printf '\\n'
 done`;
 
+/** `end_tree PID`: its tree and the groups they lead, gone (D69). Status 3: none was alive. */
+export const END_TREE = `end_tree() {
+  tree() { for c in $(cat /proc/$1/task/$1/children 2>/dev/null); do tree "$c"; done; [ -d /proc/$1 ] && echo "$1"; }
+  first=$(tree "$1")
+  groups=$(ps -o pid=,pgid= -p "$(echo $first | tr ' ' ,)" 2>/dev/null | awk '$1 == $2 { print $1 }')
+  standing() {
+    ps -eo pid=,pgid=,stat= | awk -v pids=" $(echo $first $(tree "$1")) " -v groups=" $(echo $groups) " \\
+      '$3 !~ /^Z/ && (index(pids, " " $1 " ") || index(groups, " " $2 " ")) { print $1 }'
+  }
+  left=$(standing "$1")
+  [ -n "$left" ] || return 3
+  kill -s TERM $left 2>/dev/null
+  waited=0
+  while left=$(standing "$1"); [ -n "$left" ]; do
+    [ "$waited" -ge ${TERM_GRACE_MS / 100} ] && kill -s KILL $left 2>/dev/null
+    sleep 0.1; waited=$((waited + 1))
+  done
+}`;
+
 const directory = (id: string) => attemptSync('invalid-input', () => `${ROOT}/${v.parse(IdSchema, id)}`);
 
 export class Processes {
@@ -150,8 +169,6 @@ export class Processes {
     return settle(Effect.gen({ self: this }, function* () {
       const dir = yield* directory(id);
 
-      // TERM, then KILL whatever of the group outlives the grace; it returns when
-      // the group has exited, not at a deadline. `kill -0 -- -N` is a usage error in dash.
       const ended = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', `dir=$1
 [ -f "$dir/process.json" ] || exit 0
 set -- "$dir"
@@ -160,12 +177,8 @@ while [ ! -f "$dir/pid" ] && [ ! -f "$dir/exit" ]; do sleep 0.1; done
 [ -f "$dir/exit" ] && exit 0
 ${LIVE}
 pid=$(live "$dir") || exit 0
-kill -s TERM -- "-$pid" || exit $?
-waited=0
-while kill -s 0 -- "-$pid" 2>/dev/null; do
-  [ "$waited" -eq ${TERM_GRACE_MS / 100} ] && kill -s KILL -- "-$pid" 2>/dev/null
-  sleep 0.1; waited=$((waited + 1))
-done`, 'devbox-kill', dir]));
+${END_TREE}
+end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir]));
 
       const result = yield* attempt('process', () => ended.output());
 

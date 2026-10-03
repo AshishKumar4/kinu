@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, CONTAINER_TRUST_ENV } from "./processes";
+import { Processes, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, ListedFile, GatewayBindings } from './contracts';
 import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
@@ -95,22 +95,6 @@ interface UntimedOptions {
   readonly execId: string;
   readonly env?: Readonly<Record<string, string>>;
 }
-
-/** The SDK's `killCommand` (D37). */
-const KILL_TREE = `
-tree() { for c in $(cat /proc/$1/task/$1/children 2>/dev/null); do tree "$c"; done; [ -d /proc/$1 ] && echo "$1"; }
-alive() { for p in $1; do [ -d /proc/$p ] && ! grep -q '^State:[[:space:]]*Z' /proc/$p/status 2>/dev/null && return 0; done; return 1; }
-first=$(tree "$1")
-alive "$first" || exit 3
-kill -TERM $first 2>/dev/null
-i=0
-while [ $i -lt 50 ] && alive "$first"; do sleep 0.1; i=$((i + 1)); done
-alive "$first" || exit 0
-kill -KILL $first $(tree "$1") 2>/dev/null
-exit 0
-`;
-
-const KILL_TREE_GONE = 3;
 
 /** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
 const PORT_LISTENERS = `
@@ -1876,7 +1860,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         return execRecords(process, {
           exited: ended,
-          cancelled: async () => { await this.#endUntimed(options.execId); await gone.promise; },
+          cancelled: async () => { await this.killUntimed(options.execId); await gone.promise; },
         });
       }),
       Effect.onError(() => Effect.sync(ended)),
@@ -1888,7 +1872,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
 
       if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'sandbox exec cancelled before admission'));
-      const started = yield* attemptSync('process', () => launch(container, command, options));
+      // Its own group, which its kill ends (D69).
+      const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', '/bin/bash', '-c', command], options));
       pending.started = started;
 
       return yield* attempt('process', () => started);
@@ -1910,23 +1895,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** False when the command had already exited. */
   killUntimed(execId: string): Promise<boolean> {
-    return settle(attempt('io', () => this.#endUntimed(execId)));
-  }
+    return settle(Effect.gen({ self: this }, function* () {
+      const pending = this.#untimed.get(execId);
 
-  async #endUntimed(execId: string): Promise<boolean> {
-    const pending = this.#untimed.get(execId);
+      if (pending === undefined) return false;
+      pending.cancelled = true;
+      const started = pending.started;
 
-    if (pending === undefined) return false;
-    pending.cancelled = true;
+      if (started === undefined) return true;
+      const container = this.ctx.container;
 
-    if (pending.started === undefined) return true;
-    const container = this.ctx.container;
+      if (container?.running !== true) return false;
+      const { pid } = yield* attempt('process', () => started);
+      const ended = yield* attempt('process', async () => await (await container.exec(['sh', '-c', `${END_TREE}\nend_tree "$1"`, 'kill-tree', String(pid)])).output());
 
-    if (container?.running !== true) return false;
-    const { pid } = await pending.started;
-    const ended = await (await container.exec(['sh', '-c', KILL_TREE, 'kill-tree', String(pid)])).output();
+      if (ended.exitCode === 3) return false;
 
-    return ended.exitCode !== KILL_TREE_GONE;
+      if (ended.exitCode !== 0) return yield* Effect.fail(new DevboxError('process', `exec ${execId} was not ended: ${new TextDecoder().decode(ended.stderr)}`));
+
+      return true;
+    }));
   }
 
   readonly #untimed = new Map<string, UntimedExecution>();
@@ -2025,7 +2013,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (starting !== undefined) await Promise.allSettled([starting.run]);
 
-    if (ending) await Promise.allSettled([...this.#untimed.keys()].map((execId) => this.#endUntimed(execId)));
+    if (ending) await Promise.allSettled([...this.#untimed.keys()].map((execId) => this.killUntimed(execId)));
 
     if (this.#activeCallers !== 0) {
       this.#callersDrained = Promise.withResolvers<void>();
@@ -2989,7 +2977,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #processes(): Processes { return this.#processClient ??= new Processes(this.#container()); }
 
   async #execute(command: string, options: DevboxExecOptions = {}): Promise<ExecResult> {
-    return decoded(await (await launch(this.#container(), command, options)).output());
+    return decoded(await (await launch(this.#container(), ['/bin/bash', '-c', command], options)).output());
   }
 
   #renewContainer(): void {
@@ -3177,8 +3165,8 @@ async function firstExec(container: Container, signal: AbortSignal): Promise<voi
   if (result.exitCode !== 0) throw new DevboxError("io", `native container admission exited ${result.exitCode}`);
 }
 
-function launch(container: Container, command: string, options: DevboxExecOptions): Promise<ExecProcess> {
-  return container.exec(['/bin/bash', '-c', command], {
+function launch(container: Container, argv: readonly string[], options: DevboxExecOptions): Promise<ExecProcess> {
+  return container.exec([...argv], {
     cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_TRUST_ENV, ...options.env }, signal: options.signal,
   });
 }
