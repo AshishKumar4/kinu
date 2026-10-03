@@ -15,7 +15,7 @@ import {
 import { tierRefusals } from '../src/profiles/tier-refusals';
 import { readActivityLog } from '../src/identity/activity-log';
 import { KinuError } from '../src/obs/error';
-import { CLEF_BINDING_ANSWER } from './fixtures/clef-binding-answer';
+import { CLEF_BINDING_ANSWER } from '@kinu.run/test-utils/clef-binding-answer';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { requestUrl } from '../src/http/http';
@@ -179,7 +179,7 @@ describe('the decision model', () => {
 
     const port = createDecisionPort({
       run: async (modelId, body) => {
-        bodies.push({ modelId, keys: Object.keys(body) });
+        bodies.push({ modelId, keys: Object.keys(body), model: body['model'] });
 
         return { answers: { satisfaction: { type: 'score', score: 1 } }, usage: { input_tokens: 9, output_tokens: 0 } };
       },
@@ -189,7 +189,8 @@ describe('the decision model', () => {
     });
 
     await expect(port({ state: 's', questions: QUESTIONS })).rejects.toThrow('did not answer corrected, wrong');
-    expect(bodies).toEqual([{ modelId: '@cf/cloudflare/clef-flash', keys: ['model', 'state', 'questions'] }]);
+    // Bare, as Workers AI's body schema requires; the full id is refused.
+    expect(bodies).toEqual([{ modelId: '@cf/cloudflare/clef-flash', keys: ['model', 'state', 'questions'], model: 'clef-flash' }]);
   });
 
   test('a refusal only the owner can fix is said once, leaves the turn unrated, and fails no review', async () => {

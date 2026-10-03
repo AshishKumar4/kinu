@@ -85,9 +85,12 @@ export function createDecisionPort(opts: {
     const spec = yield* Effect.promise(() => opts.model());
     const modelId = spec.slice(`${WORKERS_AI_PROVIDER_ID}/`.length);
     const since = opts.refusals.changes();
+    // The body names the model bare: Workers AI refuses `@cf/cloudflare/clef` there (400, `^(clef|clef-flash)$`,
+    // measured on the binding 2026-10-03).
+    const model = modelId.slice(modelId.lastIndexOf('/') + 1);
 
     const raw = yield* Effect.tryPromise({
-      try: () => opts.run(modelId, { model: modelId, state: request.state, questions: { ...request.questions } }),
+      try: () => opts.run(modelId, { model, state: request.state, questions: { ...request.questions } }),
       catch: (cause) => toKinuError({ doing: `rating a turn with ${spec}`, cause, otherwise: 'unavailable' }),
     }).pipe(Effect.catch((failure) => OWNER_FIXABLE_REFUSALS.has(providerRefusalCode({ cause: failure }) ?? failure.code)
       ? Effect.sync(() => {

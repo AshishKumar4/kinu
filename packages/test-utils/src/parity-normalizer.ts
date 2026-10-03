@@ -6,10 +6,13 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
 
 const STEER = /\bsteer-[A-Za-z0-9_-]{12}\b/g;
 
+/** An event-log id (`evt-` and a 21-character nanoid), as a task to a subordinate is keyed. */
+const EVENT = /\bevt-[A-Za-z0-9_-]{21}\b/g;
+
 const CLOCK_KEY = /(?:At|Ms|_at|_ms|timestamp)$/;
 
 export interface ParityNormalizer {
-  /** Every uuid and steer id inside a string, by order of appearance. */
+  /** Every uuid, steer and event id inside a string, by order of appearance. */
   text(value: string): string;
   /** A JSON value walked: strings normalized, clock-named numbers blanked. */
   json(value: JsonValue): JsonValue;
@@ -31,7 +34,7 @@ export function parityNormalizer(): ParityNormalizer {
   };
 
   const text = (value: string): string =>
-    value.replace(UUID, (id) => name(id, 'uuid')).replace(STEER, (id) => name(id, 'steer'));
+    value.replace(UUID, (id) => name(id, 'uuid')).replace(STEER, (id) => name(id, 'steer')).replace(EVENT, (id) => name(id, 'evt'));
 
   const json = (value: JsonValue): JsonValue => {
     if (v.is(v.string(), value)) return text(value);

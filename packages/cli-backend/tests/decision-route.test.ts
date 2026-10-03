@@ -7,7 +7,7 @@ import { scratchPath } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 import { fakeModel } from './helpers/local-session';
-import { CLEF_BINDING_ANSWER } from '../../core/tests/fixtures/clef-binding-answer';
+import { CLEF_BINDING_ANSWER } from '@kinu.run/test-utils/clef-binding-answer';
 
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 
