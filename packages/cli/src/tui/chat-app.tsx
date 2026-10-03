@@ -92,7 +92,7 @@ import { agentDisplayLabel, clipText } from '@kinu.run/core/tui';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
   buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers, evolutionWork,
-  jobWork, lastPrinted, newerTail,
+  jobOwners, jobWork, lastPrinted, newerTail, type TuiJobOwner,
   type TuiHubData, type TuiHubRow, type TuiWorkEntry, type TuiHubView, type TuiSubagentChat,
 } from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
@@ -2279,8 +2279,12 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
 }
 
 async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError' | 'work' | 'workError' | 'helpers'>> {
-  const [subordinates, work, jobs] = await Promise.allSettled([readSubordinates(client), client.workspaceWork(), client.listJobs(20)]);
-  const evolution = [...jobs.status === 'fulfilled' ? jobWork(jobs.value) : [], ...subordinates.status === 'fulfilled' ? subordinates.value.evolution : []];
+  const [subordinates, work] = await Promise.allSettled([readSubordinates(client), client.workspaceWork()]);
+  const owners = subordinates.status === 'fulfilled' ? subordinates.value.owners : [];
+  // Each agent's own jobs, the workspace's first, each under the agent that runs it.
+  const jobs = await Promise.allSettled([client.listJobs(20), ...owners.map((owner) => client.listJobs(20, owner.name))]);
+  const jobRows = jobs.flatMap((listed, at) => (listed.status === 'fulfilled' ? jobWork(listed.value, owners[at - 1]) : []));
+  const evolution = [...jobRows, ...subordinates.status === 'fulfilled' ? subordinates.value.evolution : []];
 
   return {
     ...(subordinates.status === 'fulfilled'
@@ -2310,7 +2314,7 @@ async function readSubagentConversation(client: AgentClient, target: { path: str
   return pages.flat();
 }
 
-async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'> & { evolution: TuiWorkEntry[] }> {
+async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'> & { evolution: TuiWorkEntry[]; owners: TuiJobOwner[] }> {
   const entries: SubordinateChild[] = [];
   let cursor: SeekCursor | undefined;
 
@@ -2326,7 +2330,7 @@ async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, '
     ? [{ name: entry.name, actorId: entry.actorReference.actorId }]
     : []);
 
-  return { subordinates: subordinatesFromRoster(entries), helpers, evolution: evolutionWork(entries) };
+  return { subordinates: subordinatesFromRoster(entries), helpers, evolution: evolutionWork(entries), owners: jobOwners(entries) };
 }
 
 

@@ -318,7 +318,8 @@ export interface AgentClient {
   showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult>;
   readMemory(): Promise<string>;
   searchNodes(): Promise<AgentSearchNode[]>;
-  listJobs(limit?: number): Promise<AgentJobSummary[]>;
+  /** `actor` names a hire by its path of names, as the cloud's per-actor listing does; absent, this client's own. */
+  listJobs(limit?: number, actor?: string): Promise<AgentJobSummary[]>;
   /** Through the runner that holds it: its work ends, and its owner is woken. */
   cancelJob(jobId: string): Promise<{ ok: boolean }>;
   latestTakes(): Promise<AlternateTakeSet | null>;

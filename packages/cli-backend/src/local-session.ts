@@ -7,6 +7,7 @@ import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { ConversationSearchStore, sameActorReference, testModel, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
+import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
 import type { Database } from 'bun:sqlite';
@@ -38,7 +39,7 @@ import { TierIdSchema,
   recoverActorTurns,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
-  type BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type TaskListStore,
+  BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type TaskListStore,
   WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
@@ -149,7 +150,7 @@ import { TierIdSchema,
   type ChatTurnInput, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
-  diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
+  diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
@@ -981,8 +982,16 @@ export class LocalAgentSession {
     return jobResult(this.jobs, jobId);
   }
 
-  async listBackgroundJobs(limit = 20): Promise<ListedBackgroundJob[]> {
-    return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
+  /** `actor`: a `/`-joined path of names below this one, as the cloud names a hosted child; absent, this actor's own. */
+  async listBackgroundJobs(limit = 20, actor?: string): Promise<ListedBackgroundJob[]> {
+    if (actor === undefined) return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
+    const { directory } = localActorDirectory(this.rt.actor);
+    const owner = actor.split('/').reduce<ActorHandle | null>((parent, name) => (parent === null ? null : directory.resolveChild(parent, name)), this.rt.actor);
+
+    if (owner === null) return settleSync(Effect.fail(new KinuError('missing', `No agent named ${actor} in this workspace.`)));
+    const live = this.jobAuthorities.live(owner.actorId);
+
+    return listBackgroundJobs(new BackgroundJobStore(this.rt.storage.sql, owner), limit, (jobId) => live?.runner.output.tail(jobId));
   }
 
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
