@@ -2323,12 +2323,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return unreadyOf(this.#restoration, this.#gateRestore !== undefined);
   }
 
-  /** Answers without attaching storage. A poll may reactivate a stopped container so its
-   *  scheduled startup can run, but never drives that startup inline. */
+  /** A read: it starts, arms and wakes nothing. A running container an object reset left is adopted first,
+   *  so the report names the restoration it carries. */
   devboxState(): Promise<DevboxReport> {
     return settle(attempt('io', async () => {
-      await this.#armStartup();
-      await this.#resolveAdoption();
+      if (this.ctx.container?.running === true) await this.#resolveAdoption();
 
       const [supervised, ports, incidents] = await Promise.all([
         this.#procSpecs(),
