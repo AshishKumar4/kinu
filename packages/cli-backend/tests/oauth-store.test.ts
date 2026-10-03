@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { present, scratchDir } from '@kinu.run/test-utils';
 import { withConfigLock } from '../src/config-lock';
 import { createFileOAuthStore, signOutChatGptLogin } from '../src/oauth-store';
-import { asFetchFunction, CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, JsonObjectSchema, OAuthTokenError } from '@kinu.run/core';
+import { asFetchFunction, CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, JsonObjectSchema } from '@kinu.run/core';
+import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const savedConfigSchema = v.object({
@@ -61,7 +62,7 @@ describe('createFileOAuthStore', () => {
     expect(statSync(configPath).mode & 0o777).toBe(0o600);
   });
 
-  test('a spent ChatGPT refresh token surfaces as revoked, naming the code OpenAI sent', async () => {
+  test('a spent ChatGPT refresh token answers no login, and the failure names the code OpenAI sent', async () => {
     const configPath = join(scratchDir('oauth-store'), 'config.json');
     const stale = { accessToken: 'at-old', refreshToken: 'refresh-old', expiresAt: Date.now() - 1, metadata: REGISTRATION };
 
@@ -71,11 +72,14 @@ describe('createFileOAuthStore', () => {
       fetch: asFetchFunction(async () => Response.json({ error: 'refresh_token_expired' }, { status: 400 })),
     });
 
-    const refused = store.getAuth(CHATGPT_CRED_KEY);
+    const logger = createRecordingLogger();
+    const restore = setDiagnosticsSink(logger);
 
-    await expect(refused).rejects.toBeInstanceOf(OAuthTokenError);
-    await expect(refused).rejects.toHaveProperty('revoked', true);
-    await expect(refused).rejects.toThrow('refresh_token_expired');
+    try {
+      expect(await store.getAuth(CHATGPT_CRED_KEY)).toBeNull();
+    } finally { restore(); }
+
+    expect(JSON.stringify(logger.emitted.filter((row) => row.event === 'credential.refresh_revoked'))).toContain('refresh_token_expired');
   });
 
   // SIWC-05: the spent token stayed on disk, read as connected, and was resubmitted by every later call.
@@ -94,7 +98,7 @@ describe('createFileOAuthStore', () => {
       }),
     });
 
-    await expect(store.getAuth(CHATGPT_CRED_KEY)).rejects.toHaveProperty('revoked', true);
+    expect(await store.getAuth(CHATGPT_CRED_KEY)).toBeNull();
 
     expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({
       origin: 'https://kinu.example',
@@ -352,7 +356,8 @@ describe('createFileOAuthStore', () => {
     expect(saved.providers.claude.accounts.work).toEqual({ refreshToken: 'rt-new', metadata: { accountUuid: 'acct-1', orgUuid: 'org-1', orgName: 'Team' } });
   });
 
-  test('a refused Claude refresh token surfaces as revoked, and the stored login is left for a new sign-in', async () => {
+  // As a hosted account does: the revoked login is retired, so it reads as signed out and is never retried.
+  test('a refused Claude refresh token retires the login, which then reads as signed out', async () => {
     const configPath = join(scratchDir('oauth-store'), 'config.json');
     const stale = { accessToken: 'sk-ant-oat01-old', refreshToken: 'rt-old', expiresAt: Date.now() - 1 };
 
@@ -362,12 +367,32 @@ describe('createFileOAuthStore', () => {
       fetch: asFetchFunction(async () => Response.json({ error: 'invalid_grant', error_description: 'Refresh token expired' }, { status: 400 })),
     });
 
-    const refused = store.getAuth(CLAUDE_CRED_KEY);
+    expect(await store.getAuth(CLAUDE_CRED_KEY)).toBeNull();
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({ providers: {} });
+    expect(store.has(CLAUDE_CRED_KEY)).toBe(false);
+    expect(store.keys()).toEqual([]);
+  });
 
-    await expect(refused).rejects.toBeInstanceOf(OAuthTokenError);
-    await expect(refused).rejects.toHaveProperty('revoked', true);
-    await expect(refused).rejects.toThrow('Claude\'s token endpoint refused the sign-in: Refresh token expired');
-    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({ providers: { claude: stale } });
+  test('an unreachable issuer leaves the held login for the call, as a hosted account does', async () => {
+    const configPath = join(scratchDir('oauth-store'), 'config.json');
+    const near = { accessToken: 'sk-ant-oat01-held', refreshToken: 'rt-held', expiresAt: Date.now() + 1_000 };
+
+    writeFileSync(configPath, `${JSON.stringify({ providers: { claude: near } })}\n`);
+    const store = createFileOAuthStore(configPath, { fetch: asFetchFunction(async () => new Response('down', { status: 503 })) });
+
+    expect((await store.getAuth(CLAUDE_CRED_KEY))?.headers).toMatchObject({ Authorization: 'Bearer sk-ant-oat01-held' });
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({ providers: { claude: near } });
+  });
+
+  test('a login with no refresh token is no login: never advertised, never used', async () => {
+    const configPath = join(scratchDir('oauth-store'), 'config.json');
+
+    writeFileSync(configPath, `${JSON.stringify({ providers: { claude: { accessToken: 'sk-ant-oat01-bare' } } })}\n`);
+    const store = createFileOAuthStore(configPath);
+
+    expect(store.has(CLAUDE_CRED_KEY)).toBe(false);
+    expect(store.keys()).toEqual([]);
+    expect(await store.getAuth(CLAUDE_CRED_KEY)).toBeNull();
   });
 });
 
