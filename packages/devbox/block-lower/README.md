@@ -14,8 +14,8 @@ devbox-block-lower --base <dir> --layer <oldest> ... --layer <newest> --mount <d
 ```
 
 Each `--layer` is a delta's mount: `tree/`, and `.devbox-delta/manifest.json`
-(`v: 3`, one record per file: path, size, mode, owner, mtime and its index),
-the index files and `chunks/`. Every layer and the base must be squashfuse
+(`v: 4`, one record per file: path, size, mode, owner, mtime and its index),
+the index files and `chunks/<first two hex digits>/<sha256>`. Every layer and the base must be squashfuse
 mounts. Startup reads only the manifests and probes the newer layers' trees
 for the records' paths.
 

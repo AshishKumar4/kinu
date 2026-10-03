@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { DEVBOX_RUNTIME_DIR, DEVBOX_WORKDIR, type AttachOutcome, type CheckpointKind, type CheckpointOutcome, type DevboxStorage } from './storage';
 import { STORE_MOUNT } from './store-gateway';
-import { DISK_STREAM, normalizeArchiveExclude, shellPath, streamCommand } from './stream-archive';
+import { type ArchiveSource, DISK_STREAM, normalizeArchiveExclude, shellPath, streamCommand } from './stream-archive';
 
 /** What a save leaves out unless a box names its own: each regenerates from the rest. */
 export const DEFAULT_EXCLUDES = ['node_modules', '*.log', '.cache', '.bun', '__pycache__', '.venv', 'target', '.next', '.turbo', 'dist'] as const;
@@ -36,7 +36,9 @@ const INVENTORY_REV = `${RT}/disk-inventory.rev`;
 
 const NEXT_INVENTORY = `${RT}/disk-inventory.next`;
 
-const STAGE = `${RT}/disk-stage`;
+const CHANGES = `${RT}/disk-changes`;
+
+const STAGED_BY_AN_OLDER_IMAGE = `${RT}/disk-stage`;
 
 const PACK = `${RT}/disk-pack/layer.sqsh`;
 
@@ -96,25 +98,28 @@ function inventoryCommand(dir: string, excludes: readonly string[], to: string):
     + `| LC_ALL=C sort -z > ${shellPath(`${to}.tmp`)} && mv ${shellPath(`${to}.tmp`)} ${shellPath(to)}`;
 }
 
-/** Stages a delta's `tree/`, `.devbox-delta/` and `${BLOCKS}.next`. */
-function stageDeltaCommand(dir: string, before: string, after: string, cached: boolean): string {
-  const changed = `${STAGE}.changed`;
-  const deleted = `${STAGE}.deleted`;
+function changesCommand(before: string, after: string): string {
+  const changed = `${CHANGES}.changed`;
+  const deleted = `${CHANGES}.deleted`;
 
   return [
-    'set -e', `rm -rf ${shellPath(STAGE)} && mkdir -p ${shellPath(STAGE)}`,
+    'set -e', `rm -rf ${shellPath(STAGED_BY_AN_OLDER_IMAGE)}`,
     `LC_ALL=C comm -z -13 ${shellPath(before)} ${shellPath(after)} | cut -z -f1 > ${shellPath(changed)}`,
     `cut -z -f1 ${shellPath(before)} > ${shellPath(`${deleted}.before`)} && cut -z -f1 ${shellPath(after)} > ${shellPath(`${deleted}.after`)}`,
     `LC_ALL=C comm -z -23 ${shellPath(`${deleted}.before`)} ${shellPath(`${deleted}.after`)} > ${shellPath(deleted)}`,
-    `python3 -c ${shellPath(STAGE_SCRIPT)} ${shellPath(STAGE)} ${shellPath(changed)} ${shellPath(deleted)} ${shellPath(dir)} ${shellPath(BLOCKS)} ${cached ? '1' : '0'}`,
+    `printf '%s %s' "$(tr -cd '\\000' < ${shellPath(changed)} | wc -c)" "$(tr -cd '\\000' < ${shellPath(deleted)} | wc -c)"`,
   ].join('\n');
 }
 
-const STAGE_SCRIPT = `
-import hashlib, json, os, shlex, shutil, subprocess, sys
-stage, changed_path, deleted_path, workdir, blocks, blocks_ok = sys.argv[1:7]
+function deltaTarCommand(dir: string, cached: boolean): string {
+  return `python3 -c ${shellPath(DELTA_SCRIPT)} ${shellPath(`${CHANGES}.changed`)} ${shellPath(`${CHANGES}.deleted`)} ${shellPath(dir)} ${shellPath(BLOCKS)} ${cached ? '1' : '0'}`;
+}
+
+const DELTA_SCRIPT = `
+import hashlib, io, json, os, shutil, sys, tarfile, time
+changed_path, deleted_path, workdir, blocks, blocks_ok = sys.argv[1:6]
 BLOCK, BIG = 16384, 1048576
-tree, meta, nxt = os.path.join(stage, 'tree'), os.path.join(stage, '.devbox-delta'), blocks + '.next'
+nxt = blocks + '.next'
 def entries(path):
     return [item.decode('utf-8', 'surrogateescape') for item in open(path, 'rb').read().split(b'\\0') if item]
 def name(path):
@@ -137,24 +142,52 @@ def index(pages):
     root = build(0, len(pages)) if pages else hashlib.sha256(b'').digest()
     data = b''.join(built)
     return {'index': hashlib.sha256(data).hexdigest(), 'root': root.hex(), 'count': len(pages)}, data
+# Unbuffered, so a write the archiver no longer reads fails where it is made.
+out = tarfile.open(fileobj=open(1, 'wb', buffering=0, closefd=False), mode='w|', format=tarfile.PAX_FORMAT,
+                   encoding='utf-8', errors='surrogateescape', copybufsize=BLOCK)
+now, made = int(time.time()), set()
+def put(arcname, data=b'', kind=tarfile.REGTYPE):
+    parent = os.path.dirname(arcname)
+    if parent and parent not in made:
+        put(parent, kind=tarfile.DIRTYPE)
+    made.add(arcname)
+    info = tarfile.TarInfo(arcname)
+    info.type, info.size, info.mtime, info.mode = kind, len(data), now, 0o755 if kind == tarfile.DIRTYPE else 0o644
+    out.addfile(info, io.BytesIO(data) if data else None)
+class Promised:
+    """The \`size\` bytes its header promised, zero-padded if it shrank; each read is one 16 KiB block, digested."""
+    def __init__(self, source, size):
+        self.source, self.left, self.digests = source, size, bytearray()
+    def read(self, size):
+        want = min(size, self.left)
+        data = self.source.read(want)
+        while len(data) < want:
+            more = self.source.read(want - len(data))
+            if not more:
+                break
+            data += more
+        data += bytes(want - len(data))
+        self.left -= want
+        self.digests += hashlib.sha256(data).digest()
+        return data
 def blocks_of(path, before):
-    """One read: every block's digest, and a page for each block that differs from \`before\`."""
-    info, pages, digests, size = os.lstat(path), [], bytearray(), 0
+    """One read: every block's digest, and each block that differs from \`before\` into the delta."""
+    pages, digests, size = [], bytearray(), 0
     with open(path, 'rb') as source:
+        info = os.fstat(source.fileno())
         while True:
             data = source.read(BLOCK)
             if not data:
                 break
             digest = hashlib.sha256(data).digest()
             digests += digest
-            if before is not None and before[size // BLOCK * 32:size // BLOCK * 32 + 32] != digest:
+            if before[size // BLOCK * 32:size // BLOCK * 32 + 32] != digest:
                 if data.count(0) == len(data):
                     pages.append((size, None))
                 else:
-                    os.makedirs(os.path.join(meta, 'chunks'), exist_ok=True)
-                    chunk = os.path.join(meta, 'chunks', digest.hex())
-                    if not os.path.exists(chunk):
-                        open(chunk, 'wb').write(data)
+                    chunk = '.devbox-delta/chunks/' + digest.hex()[:2] + '/' + digest.hex()
+                    if chunk not in made:
+                        put(chunk, data)
                     pages.append((size, digest))
             size += len(data)
     return info, pages, bytes(digests), size
@@ -178,6 +211,7 @@ for path in list(known):
     if path in gone or path in changing or any(path.startswith(top + '/') for top in tops):
         known.discard(path)
         os.unlink(os.path.join(nxt, name(path)))
+put('tree', kind=tarfile.DIRTYPE)
 records, whole = [], []
 for path in changed:
     full = os.path.join(workdir, path)
@@ -186,38 +220,53 @@ for path in changed:
     if path in cached_before and info is not None and os.path.isfile(full) and not os.path.islink(full) and info.st_size >= BIG:
         info, pages, digests, size = blocks_of(full, open(cached, 'rb').read())
         over, data = index(pages)
-        os.makedirs(meta, exist_ok=True)
-        open(os.path.join(meta, over['index']), 'wb').write(data)
+        if '.devbox-delta/' + over['index'] not in made:
+            put('.devbox-delta/' + over['index'], data)
         records.append({'p': path, 's': size, 'mode': info.st_mode & 0o7777, 'uid': info.st_uid, 'gid': info.st_gid, 't': info.st_mtime_ns, 'over': over})
         open(os.path.join(nxt, name(path)), 'wb').write(digests)
         known.add(path)
     else:
         whole.append(path)
-wanted = set(whole)
+wanted, sent = set(whole), set(whole)
 for path in whole + tops:
     parts = path.split('/')
     wanted.update('/'.join(parts[:at]) for at in range(1, len(parts)))
+# Parents sort before what they hold; a path gone since the inventory is skipped, as tar's --ignore-failed-read did.
+for path in sorted(wanted):
+    full = os.path.join(workdir, path)
+    try:
+        info = out.gettarinfo(full, 'tree/' + path)
+    except OSError:
+        continue
+    if info is None:
+        continue
+    info.mtime, info.uname, info.gname = int(info.mtime), '', ''
+    if not info.isreg():
+        out.addfile(info)
+        continue
+    try:
+        source = open(full, 'rb')
+    except OSError:
+        continue
+    with source:
+        promised = Promised(source, info.size)
+        out.addfile(info, promised)
+    if path in sent and info.size >= BIG:
+        open(os.path.join(nxt, name(path)), 'wb').write(bytes(promised.digests))
+        known.add(path)
 for path in tops:
     parent, base = os.path.split(path)
-    os.makedirs(os.path.join(tree, parent), exist_ok=True)
-    open(os.path.join(tree, parent, '.wh.' + base), 'w').close()
-os.makedirs(tree, exist_ok=True)
-listing = os.path.join(stage + '.list')
-with open(listing, 'wb') as out:
-    for path in sorted(wanted):
-        out.write(path.encode('utf-8', 'surrogateescape') + b'\\0')
-subprocess.run(f"tar -C {shlex.quote(workdir)} --null --no-recursion --ignore-failed-read --warning=no-file-changed -T {shlex.quote(listing)} -cf - | tar -C {shlex.quote(tree)} -xpf -", shell=True, check=True)
-for path in whole:
-    staged = os.path.join(tree, path)
-    if os.path.isfile(staged) and not os.path.islink(staged) and os.lstat(staged).st_size >= BIG:
-        open(os.path.join(nxt, name(path)), 'wb').write(blocks_of(staged, None)[2])
-        known.add(path)
+    put(os.path.join('tree', parent, '.wh.' + base))
 if records:
-    open(os.path.join(meta, 'manifest.json'), 'w').write(json.dumps({'v': 3, 'files': records}))
-with open(os.path.join(nxt, 'paths'), 'wb') as out:
+    put('.devbox-delta/manifest.json', json.dumps({'v': 4, 'files': records}).encode())
+with open(os.path.join(nxt, 'paths'), 'wb') as listing:
     for path in sorted(known):
-        out.write(path.encode('utf-8', 'surrogateescape') + b'\\0')
-print(len(changed), len(tops), len(records), end='')
+        listing.write(path.encode('utf-8', 'surrogateescape') + b'\\0')
+try:
+    out.close()
+except BrokenPipeError:
+    # The archiver stops reading at the end-of-archive blocks; the record's padding after them has no reader.
+    pass
 `;
 
 /** Under one lock, so no cache carries a rev the inventory has moved past. */
@@ -304,10 +353,8 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
 
   const read = (path: string) => run(`reading ${path}`, `cat ${shellPath(path)} 2>/dev/null || true`);
 
-  const publish = (key: string, sourceDir: string, excludes: readonly string[]): Effect.Effect<number, DevboxError> => Effect.gen(function* () {
-    const command = streamCommand({
-      sourceDir, archivePath: PACK, excludeFile: `${RT}/disk-pack/excludes.txt`, excludes, objectUrl: ports.storeObjectUrl(key), profile: DISK_STREAM,
-    });
+  const publish = (key: string, source: ArchiveSource): Effect.Effect<number, DevboxError> => Effect.gen(function* () {
+    const command = streamCommand({ ...source, archivePath: PACK, objectUrl: ports.storeObjectUrl(key), profile: DISK_STREAM });
 
     const result = yield* attempt('io', () => ports.exec(command), `publishing ${key}`);
     const out = result.stdout.trim();
@@ -336,7 +383,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
   const commitBase = (prior: DiskChainState | null, at: number) => Effect.gen(function* () {
     const id = crypto.randomUUID();
     const key = `${ports.storeRoot()}/disk/${id}/base.sqsh`;
-    const bytes = yield* publish(key, DEVBOX_WORKDIR, ports.excludes());
+    const bytes = yield* publish(key, { sourceDir: DEVBOX_WORKDIR, excludeFile: `${RT}/disk-pack/excludes.txt`, excludes: ports.excludes() });
     const state: DiskChainState = { format: DISK_CHAIN_FORMAT, rev: (prior?.rev ?? 0) + 1, base: { key, bytes, committedAt: at }, deltas: [], committedAt: at };
     yield* advance(state, prior?.rev ?? null, false);
     yield* run('caching the base\'s block digests', blockCacheCommand(DEVBOX_WORKDIR, INVENTORY, state.rev, true)).pipe(
@@ -436,14 +483,14 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     }
 
     const cached = (yield* read(BLOCKS_REV)) === baseline;
-    const [changed = '0', deleted = '0'] = (yield* run('staging the changes', stageDeltaCommand(dir, INVENTORY, NEXT_INVENTORY, cached))).split(' ');
+    const [changed = '0', deleted = '0'] = (yield* run('listing the changes', changesCommand(INVENTORY, NEXT_INVENTORY))).split(' ');
 
     if (changed === '0' && deleted === '0') {
       return { kind: 'skipped', reason: 'nothing changed since the last save', bytes: heldBytes(state), movedBytes: 0 } satisfies CheckpointOutcome;
     }
 
     const key = `${state.base.key.slice(0, state.base.key.lastIndexOf('/'))}/delta-${String(state.deltas.length + 1)}-${crypto.randomUUID()}.sqsh`;
-    const bytes = yield* publish(key, STAGE, []);
+    const bytes = yield* publish(key, { tar: deltaTarCommand(dir, cached) });
     const next: DiskChainState = { ...state, rev: state.rev + 1, deltas: [...state.deltas, { key, bytes, committedAt: at }], committedAt: at };
     yield* advance(next, state.rev, true);
 

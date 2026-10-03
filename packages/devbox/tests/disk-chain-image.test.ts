@@ -87,15 +87,18 @@ const TREE = `cd ${WD} && find . -xdev ${PRUNE} ! -path . -printf '%P %y %m %l\\
 
 const tree = () => must(TREE);
 
+/** A container's end: the copy to disk's session stops first, as it holds the layers it reads, then every mount goes. */
+const UNMOUNT = `s=$(cat ${RT}/disk-hydrate.pid 2>/dev/null); if [ -n "$s" ]; then pkill -9 -s "$s"; while pgrep -s "$s" >/dev/null; do sleep 0.05; done; fi; `
+  + `for m in ${WD} ${RT}/disk-lowers ${RT}/disk-blk $(ls -d ${RT}/disk-layers/* 2>/dev/null); do mountpoint -q $m && fusermount3 -u $m; done`;
+
 /** The disk lost: everything but the store, as a replaced container leaves it. */
 function loseTheDisk(): void {
-  must(`for m in ${WD} ${RT}/disk-lowers ${RT}/disk-blk $(ls -d ${RT}/disk-layers/* 2>/dev/null); do mountpoint -q $m && fusermount3 -u $m; done; `
-    + `pkill -f '[c]p -a ${RT}/disk-lowers' || true; rm -rf ${RT}/disk-* && rm -rf ${WD} && mkdir -p ${WD}`);
+  must(`${UNMOUNT}; rm -rf ${RT}/disk-* && rm -rf ${WD} && mkdir -p ${WD}`);
 }
 
 /** A container stop: every mount goes and the disk stays, as a snapshot keeps it. */
 function stopTheContainer(): void {
-  must(`for m in ${WD} ${RT}/disk-lowers ${RT}/disk-blk $(ls -d ${RT}/disk-layers/* 2>/dev/null); do mountpoint -q $m && fusermount3 -u $m; done; true`);
+  must(`${UNMOUNT}; true`);
 }
 
 const commit = (kind: 'tick' | 'quiesce') => settle(chain.commit(kind));
@@ -250,4 +253,26 @@ test('a disk whose baseline is not the record\'s saves a whole base, never a del
   const saved = await commit('tick');
 
   expect({ kind: saved.kind, newBase: record()?.base.key !== before, deltas: record()?.deltas.length }).toEqual({ kind: 'committed', newBase: true, deltas: 0 });
+});
+
+test('a rewrite saves with its changed bytes on the disk once, as the archive streams, and recovers exactly', async () => {
+  // D68: a staged delta met ENOSPC at 18 GB; this disk holds the 64 MiB rewrite once, with 12 MiB spare.
+  loseTheDisk();
+  stored = null;
+  must(`set -e; mount -t tmpfs -o size=76m devbox-runtime ${RT}; head -c 67108864 /dev/urandom > ${WD}/db.bin; echo small > ${WD}/s.txt`);
+
+  try {
+    const base = await commit('tick');
+    must(`dd if=/dev/urandom of=${WD}/db.bin bs=1M count=64 conv=notrunc status=none`);
+    const rewrite = await commit('tick');
+    const expected = tree();
+    loseTheDisk();
+    await settle(chain.attach(false));
+
+    expect({ base: base.kind, rewrite: rewrite.kind, reason: rewrite.reason, exact: tree() === expected })
+      .toEqual({ base: 'committed', rewrite: 'committed', reason: undefined, exact: true });
+  } finally {
+    loseTheDisk();
+    must(`umount ${RT}`);
+  }
 });

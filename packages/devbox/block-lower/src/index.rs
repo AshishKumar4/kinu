@@ -33,6 +33,12 @@ pub fn hex(value: &Hash) -> String {
     value.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Sharded by the first byte: mksquashfs builds a tar's directory in time quadratic in its entries.
+pub fn chunk_name(value: &Hash) -> String {
+    let name = hex(value);
+    format!(".devbox-delta/chunks/{}/{name}", &name[..2])
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IndexRef {

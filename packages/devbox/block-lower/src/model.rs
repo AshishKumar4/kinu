@@ -41,7 +41,7 @@ pub fn ancestors(path: &str) -> impl Iterator<Item = &str> {
 
 impl Manifest {
     pub fn validate(&self) -> io::Result<()> {
-        if self.v != 3 {
+        if self.v != 4 {
             return Err(invalid("unsupported manifest version"));
         }
         let mut names = NameSet::new();
@@ -177,21 +177,21 @@ mod tests {
             serde_json::from_str(&format!(r#"{{"v":2,"files":[{}]}}"#, record("a"))).unwrap();
         assert!(old.validate().is_err());
         let twice: Manifest = serde_json::from_str(&format!(
-            r#"{{"v":3,"files":[{},{}]}}"#,
+            r#"{{"v":4,"files":[{},{}]}}"#,
             record("a"),
             record("a")
         ))
         .unwrap();
         assert!(twice.validate().is_err());
         let nested: Manifest = serde_json::from_str(&format!(
-            r#"{{"v":3,"files":[{},{}]}}"#,
+            r#"{{"v":4,"files":[{},{}]}}"#,
             record("a"),
             record("a/b")
         ))
         .unwrap();
         assert!(nested.validate().is_err());
         let sound: Manifest = serde_json::from_str(&format!(
-            r#"{{"v":3,"files":[{},{}]}}"#,
+            r#"{{"v":4,"files":[{},{}]}}"#,
             record("a/b"),
             record("a/c")
         ))

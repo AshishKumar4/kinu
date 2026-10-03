@@ -1,4 +1,4 @@
-use crate::index::{hash, hex, invalid, lookup, IndexRef, Source, BLOCK};
+use crate::index::{chunk_name, hash, hex, invalid, lookup, IndexRef, Source, BLOCK};
 use crate::model::{path_valid, Record};
 use crate::namespace::PathMap;
 use serde::Serialize;
@@ -344,8 +344,7 @@ impl Storage {
                         Source::Base => continue,
                         Source::Hole => out.fill(0),
                         Source::Chunk(digest) => {
-                            let chunk =
-                                meta.required(&format!(".devbox-delta/chunks/{}", hex(&digest)))?;
+                            let chunk = meta.required(&chunk_name(&digest))?;
                             let needed = (size - block).min(BLOCK);
                             if chunk.metadata()?.len() != needed {
                                 return Err(invalid("chunk length mismatch"));
@@ -447,16 +446,13 @@ mod tests {
         let meta = if blocks.is_empty() {
             None
         } else {
-            std::fs::create_dir_all(dir.join(".devbox-delta/chunks")).unwrap();
             let mut entries = Vec::new();
             for (at, bytes) in blocks {
                 let digest = bytes.as_ref().map(|bytes| {
                     let digest = hash(bytes);
-                    std::fs::write(
-                        dir.join(format!(".devbox-delta/chunks/{}", hex(&digest))),
-                        bytes,
-                    )
-                    .unwrap();
+                    let chunk = dir.join(chunk_name(&digest));
+                    std::fs::create_dir_all(chunk.parent().unwrap()).unwrap();
+                    std::fs::write(chunk, bytes).unwrap();
                     digest
                 });
                 entries.push((*at, digest));
@@ -609,9 +605,8 @@ mod tests {
             &[(0, Some(vec![66; 16384]))],
             2 * 16384,
         );
-        let digest = hex(&hash(&vec![66; 16384]));
         std::fs::write(
-            path.join(format!("again/.devbox-delta/chunks/{digest}")),
+            path.join("again").join(chunk_name(&hash(&vec![66; 16384]))),
             vec![67; 16384],
         )
         .unwrap();
