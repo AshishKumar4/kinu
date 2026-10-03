@@ -528,7 +528,7 @@ export const steerStatuses = (events: AwaitedList<SessionEvent>) => events.items
   event.type === 'broadcast' && event.event.type === 'steer_status' ? [event.event] : []);
 
 export function isDynamicBlock(text: string): boolean {
-  return /^<dynamic_context fingerprint="[0-9a-f]{16}" (?:kind="full"|kind="delta" state="[0-9a-f]{16}")>\n/.test(text)
+  return /^<dynamic_context fingerprint="[0-9a-f]{16}"(?: state="[0-9a-f]{16}")?>\n/.test(text)
     && text.endsWith('\n</dynamic_context>');
 }
 

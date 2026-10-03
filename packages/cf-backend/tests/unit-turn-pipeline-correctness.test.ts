@@ -417,13 +417,14 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('root mode facts describe submit_plan on the actual provider surface', async () => {
-    const cases: readonly { mode: 'build' | 'plan'; installed: boolean; available: boolean }[] = [
-      { mode: 'build', installed: true, available: false },
-      { mode: 'plan', installed: true, available: true },
-      { mode: 'plan', installed: false, available: false },
+    // A plain build turn is the static doctrine's default, so its block states no mode.
+    const cases: readonly { mode: 'build' | 'plan'; installed: boolean; available: boolean; facts: string | null }[] = [
+      { mode: 'build', installed: true, available: false, facts: null },
+      { mode: 'plan', installed: true, available: true, facts: 'Mode: plan; submit_plan: available.' },
+      { mode: 'plan', installed: false, available: false, facts: 'Mode: plan; submit_plan: unavailable.' },
     ];
 
-    for (const { mode, installed, available } of cases) {
+    for (const { mode, installed, available, facts } of cases) {
       const { agent } = orchestratorHarness();
       agent.harnessDrivingUserMessage(`Run the ${mode} turn`, { kinuMode: mode });
 
@@ -448,7 +449,7 @@ describe('turn-pipeline correctness wiring', () => {
       expect(request?.tools?.some((entry) => entry.name === 'submit_plan') ?? false).toBe(available);
       // The facts ride the turn's dynamic-context block, which sits before the person's request.
       const block = request?.prompt.find((message) => message.role === 'user' && JSON.stringify(message).includes(DYNAMIC_CONTEXT_OPEN_TAG));
-      expect(JSON.stringify(block)).toContain(`Mode: ${mode}; submit_plan: ${available ? 'available' : 'unavailable'}.`);
+      expect(/Mode: [a-z]+; submit_plan: [a-z]+\./u.exec(JSON.stringify(block ?? null))?.[0] ?? null).toBe(facts);
     }
   });
 

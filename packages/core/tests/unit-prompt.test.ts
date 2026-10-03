@@ -773,11 +773,11 @@ describe('buildSystemPromptSync', () => {
     expect(workModeForTurnMetadata(null)).toBe('build');
   });
 
-  test('the Build value belongs to the ledger, not the static prefix', () => {
+  test('a Build value other than the default belongs to the ledger, not the static prefix', () => {
     const { rt } = createTestRuntime();
     const base = { backend: 'cf' as const, model: { id: 'x' }, currentDate: '2026-01-01' };
-    expect(renderDynamicContextBlock({ mode: { workMode: 'build', planSubmission: false } }))
-      .toContain('Mode: build; submit_plan: unavailable.');
+    expect(renderDynamicContextBlock({ mode: { workMode: 'build', planSubmission: true } }))
+      .toContain('Mode: build; submit_plan: available.');
     expect(buildSystemPromptSync(rt, base)).not.toContain('Turn mode');
   });
 
@@ -948,7 +948,7 @@ describe('buildSystemPromptSync', () => {
     // Raise a ceiling only alongside an intentional content change.
     const BUDGETS = {
       'Runtime context': 160,
-      'Operating guidance': 878,
+      'Operating guidance': 910,
       'Tools available this turn': 1100,
       'Execution environments': 3555,
       'Persistence': 700,
@@ -986,7 +986,7 @@ describe('buildSystemPromptSync', () => {
       sectionOverrides: { 'guidance/operating': OPERATING_GUIDANCE.source + '\nX' },
     });
 
-    expect(problems(grown)).toEqual(['section "Operating guidance" is 880 chars — over its 878-char budget']);
+    expect(problems(grown)).toEqual(['section "Operating guidance" is 912 chars — over its 910-char budget']);
   });
 
   test('does NOT promise unimplemented or redundant strategies', () => {
