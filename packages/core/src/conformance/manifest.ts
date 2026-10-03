@@ -141,6 +141,8 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     scaffold_versions: EVERYWHERE,
 
     turn_ratings: EVERYWHERE,
+    turn_struggles: EVERYWHERE,
+    tool_lessons: EVERYWHERE,
     lessons: EVERYWHERE,
     proposed_tasks: EVERYWHERE,
 
