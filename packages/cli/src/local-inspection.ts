@@ -76,8 +76,11 @@ import {
   type SeekCursor,
   type WorkspaceSpend,
   type AccountSpend,
+  MEMORY_PATH,
+  WORKSPACE_ROOT,
 } from '@kinu.run/core';
-import { classify } from '@kinu.run/core/obs';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { classify, tolerateAsync } from '@kinu.run/core/obs';
 import {
   makeSql, makeSqlExec, schemaGenesisOf, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
   resolverModelPlane,
@@ -158,11 +161,13 @@ export interface LocalAgentState {
   executors: LocalExecutorInfo[];
 }
 
-export function getLocalAgentState(name: string): LocalAgentState {
+export async function getLocalAgentState(name: string): Promise<LocalAgentState> {
+  const memoryContent = await readLocalMemory(name);
+
   return withLocalDb(name, (db) => ({
     status: getLocalStatus(db),
     tools: getLocalToolSummary(db),
-    memoryContent: readLocalMemory(name),
+    memoryContent,
     mcts: listLocalMcts(name),
     timeline: listLocalTimeline(name, 250),
     executors: listLocalExecutors(),
@@ -227,16 +232,10 @@ export async function readLocalNextTurnTier(name: string): Promise<ResolvedTurnP
   });
 }
 
-/** Reassembled from `memory_chunks`, MemoryStore's index of `memory/MEMORY.md`; opening the file would write (see getLocalStatus). */
-export function readLocalMemory(name: string): string {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'memory_chunks')) return '';
-
-    return all<{ text: string }>(
-      db,
-      `SELECT text FROM memory_chunks WHERE path = 'memory/MEMORY.md' ORDER BY start_line ASC`,
-    ).map((row) => row.text).join('\n');
-  });
+/** The file itself, through the read-only plane; `memory_chunks` is the search index and can lag an edit. */
+export function readLocalMemory(name: string): Promise<string> {
+  return withLocalDbAsync(name, async (db) =>
+    await tolerateAsync(() => readText(inspectionFiles(db, null), `${WORKSPACE_ROOT}/${MEMORY_PATH}`), 'enoent') ?? '');
 }
 
 /** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */

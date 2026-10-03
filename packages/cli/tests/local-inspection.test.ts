@@ -4,10 +4,12 @@ import { Database } from 'bun:sqlite';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { CHAT_SESSION_ID, SessionHistory, WorkspaceActorDirectory, type ActorHandle } from '@kinu.run/core';
-import { makeSql } from '@kinu.run/cli-backend';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { MEMORY_PATH, WORKSPACE_ROOT } from '@kinu.run/core';
+import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import { AGENT_HOME, agentDbPath, updateConfigFile } from '../src/config';
-import { inspectLocalSubordinate } from '../src/local-inspection';
+import { inspectLocalSubordinate, readLocalMemory } from '../src/local-inspection';
 
 if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu')) || !resolve(AGENT_HOME).startsWith(resolve(tmpdir()))) {
   throw new Error(`local-inspection suite refuses to run against a real Kinu home (${AGENT_HOME}); scripts/test-preload.ts provides a throwaway one.`);
@@ -15,9 +17,14 @@ if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu')) || !resolve(AGENT_
 
 const NAME = `inspection-${Date.now()}`;
 
+const MEMORY_NAME = `inspection-memory-${Date.now()}`;
+
 afterAll(async () => {
   await updateConfigFile((config) => {
-    if (config.agents) delete config.agents[NAME];
+    if (config.agents) {
+      delete config.agents[NAME];
+      delete config.agents[MEMORY_NAME];
+    }
   });
 });
 
@@ -51,5 +58,25 @@ describe('local inspection of a subordinate', () => {
     const read = await inspectLocalSubordinate(NAME, { path: [], view: 'history', page: {}, actor: helper.actorId });
 
     expect(read).toMatchObject({ view: 'history', page: { items: [{ content: 'the refiner answered' }] } });
+  });
+});
+
+// The index is for search: a file edited through the file plane, or saved without indexing, is newer than its chunks.
+describe('local inspection of memory', () => {
+  test('reads MEMORY.md itself, never a reassembly of its search index', async () => {
+    await createCliAgent({
+      name: MEMORY_NAME, mode: 'local', purpose: 'keep notes',
+      baseUrl: 'http://localhost:0/v1', auth: 'Bearer offline', model: 'openai-compatible/offline-model',
+    });
+
+    const db = new Database(agentDbPath(MEMORY_NAME));
+    const rt = createCLIRuntime(db, { llm: { name: 'offline', baseURL: 'http://localhost:0', headers: {}, model: 'offline-model' } });
+    await rt.memory.write(MEMORY_PATH, '# Memory\n\nindexed note\n');
+    await writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/${MEMORY_PATH}`, '# Memory\n\nedited in the shell\n');
+    // The same file the agent's memory reads, not a second one beside it.
+    expect(await rt.memory.read(MEMORY_PATH)).toBe('# Memory\n\nedited in the shell\n');
+    db.close();
+
+    expect(await readLocalMemory(MEMORY_NAME)).toBe('# Memory\n\nedited in the shell\n');
   });
 });

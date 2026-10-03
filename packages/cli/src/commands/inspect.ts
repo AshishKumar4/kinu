@@ -140,7 +140,7 @@ export async function stateCommand(name: string, opts: InspectOpts = {}): Promis
 
   const data = await readTarget(target, {
     cloud: (auth) => cloudRead(auth, target, 'getWorkspaceSnapshot'),
-    local: () => decodeJsonValue({ value: getLocalAgentState(target.localName) }),
+    local: async () => decodeJsonValue({ value: await getLocalAgentState(target.localName) }),
   });
 
   printData(data, opts);
@@ -266,9 +266,9 @@ export async function memoryCommand(name: string, queryParts: string[] = [], opt
         method: 'getMemoryContent',
         schema: v.string(),
       }) },
-    local: () => query
+    local: async () => query
       ? decodeJsonValue({ value: searchLocalMemory(target.localName, query, limit) })
-      : { content: readLocalMemory(target.localName) },
+      : { content: await readLocalMemory(target.localName) },
   });
 
   if (opts.json || query) {
