@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-03",
-  "files": 2960,
-  "functions": 78016,
+  "files": 2963,
+  "functions": 78363,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -178,7 +178,7 @@
       "complexity": 31
     },
     {
-      "key": "packages/cli/src/chat-loop.ts#applySlashOutcome",
+      "key": "packages/cli/src/chat-loop.ts#applySlashOutcome>gen",
       "complexity": 31
     },
     {

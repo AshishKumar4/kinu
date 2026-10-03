@@ -3,13 +3,14 @@
  * stopping aborts an in-flight question and best-effort denies it so the blocked device RPC unblocks.
  */
 
+import { Effect } from 'effect';
 import type {
   DeviceConsentDecision,
   DeviceConsentSurface,
   PendingDeviceConsent,
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
-import { renderThrownChain, settleLogged } from '@kinu.run/core/obs';
+import { renderThrownChain, settle, settleLogged } from '@kinu.run/core/obs';
 import { waitForAnswer } from '@kinu.run/core';
 import { literalText } from '@kinu.run/core/tui';
 
@@ -107,8 +108,8 @@ function decisionFeedback(decision: DeviceConsentDecision): string {
   return decision === 'always' ? 'Approved (always).' : 'Approved once.';
 }
 
-/** Resolves null on EOF or abort. */
-type ConsentAskLine = (question: string, signal: AbortSignal) => Promise<string | null>;
+/** Answers null on EOF or abort. */
+type ConsentAskLine = (question: string, signal: AbortSignal) => Effect.Effect<string | null>;
 
 /** Interactive stdin gets a y/a/n prompt; non-interactive runs print instructions once per request so the turn never stalls silently. */
 export function watchTerminalConsents(
@@ -127,7 +128,7 @@ export function watchTerminalConsents(
         return Promise.resolve(null);
       }
 
-      return promptConsentDecision(consent, askLine, signal);
+      return settle(promptConsentDecision(consent, askLine, signal));
     },
     note: (kind, message) => {
       console.log(kind === 'error' ? `${ERR('error')} ${message}` : DIM(`  ${message}`));
@@ -170,31 +171,33 @@ export function watchHeadlessConsents(
   });
 }
 
-async function promptConsentDecision(
+function promptConsentDecision(
   consent: PendingDeviceConsent,
   askLine: ConsentAskLine,
   signal: AbortSignal,
-): Promise<DeviceConsentDecision | 'cancelled'> {
-  console.log(`\n${WARN(`This agent wants to use ${consent.deviceLabel}`)}`);
-  console.log(`  ${DIM('Device:')}  ${consent.deviceLabel}`);
-  console.log(`  ${DIM('Method:')}  ${consent.method}`);
-  console.log(`  ${DIM('Command:')} ${literalText(consent.command || '(command)')}`);
+): Effect.Effect<DeviceConsentDecision | 'cancelled'> {
+  return Effect.gen(function* () {
+    console.log(`\n${WARN(`This agent wants to use ${consent.deviceLabel}`)}`);
+    console.log(`  ${DIM('Device:')}  ${consent.deviceLabel}`);
+    console.log(`  ${DIM('Method:')}  ${consent.method}`);
+    console.log(`  ${DIM('Command:')} ${literalText(consent.command || '(command)')}`);
 
-  while (!signal.aborted) {
-    const answer = await askLine(`${DIM('[y] allow once · [a] always allow · [n] deny ›')} `, signal);
+    while (!signal.aborted) {
+      const answer = yield* askLine(`${DIM('[y] allow once · [a] always allow · [n] deny ›')} `, signal);
 
-    if (signal.aborted) return 'cancelled';
+      if (signal.aborted) return 'cancelled';
 
-    if (answer === null) return 'deny'; // EOF
-    const normalized = answer.trim().toLowerCase();
+      if (answer === null) return 'deny'; // EOF
+      const normalized = answer.trim().toLowerCase();
 
-    if (normalized === 'y' || normalized === 'yes' || normalized === 'o') return 'once';
+      if (normalized === 'y' || normalized === 'yes' || normalized === 'o') return 'once';
 
-    if (normalized === 'a' || normalized === 'always') return 'always';
+      if (normalized === 'a' || normalized === 'always') return 'always';
 
-    if (normalized === 'n' || normalized === 'no') return 'deny';
-    console.log(DIM('  Answer y, a or n.'));
-  }
+      if (normalized === 'n' || normalized === 'no') return 'deny';
+      console.log(DIM('  Answer y, a or n.'));
+    }
 
-  return 'cancelled';
+    return 'cancelled';
+  });
 }

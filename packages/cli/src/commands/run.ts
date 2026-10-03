@@ -220,8 +220,8 @@ function transcriptOptions(opts: TranscriptFlags): CliSessionOptions {
   };
 }
 
-function askLineOnce(question: string, signal: AbortSignal): Promise<string | null> {
-  return new Promise((resolve) => {
+function askLineOnce(question: string, signal: AbortSignal): Effect.Effect<string | null> {
+  return Effect.promise(() => new Promise<string | null>((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     let settled = false;
 
@@ -237,7 +237,7 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
     signal.addEventListener('abort', onAbort, { once: true });
     rl.once('close', () => finish(null));
     rl.question(question, finish);
-  });
+  }));
 }
 
 /** Both backends answer `model` through the AgentClient contract. */
