@@ -27,10 +27,21 @@ export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNo
     cred: node.cred,
   });
 
+  // Nothing that runs a command is carried over as it is: a member not bound here is absent, never run as someone else.
   const execution: NimbusSandboxHandle = {
-    ...box,
+    ready: () => box.ready(),
+    files: box.files,
+    ...(box.runtimes !== undefined && { runtimes: box.runtimes }),
+    ...(box.processes !== undefined && { processes: box.processes }),
+    ...(box.ports !== undefined && { ports: box.ports }),
+    ...(box.mountTable !== undefined && { mountTable: box.mountTable.bind(box) }),
     exec: (command, options) => box.exec(command, optionsFor(options)),
   };
+
+  if (box.execStream) {
+    const execStream = box.execStream;
+    execution.execStream = (command, options) => execStream(command, optionsFor(options));
+  }
 
   if (box.startProcess) {
     const startProcess = box.startProcess;
