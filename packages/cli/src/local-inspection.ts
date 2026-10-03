@@ -78,6 +78,8 @@ import {
   type AccountSpend,
   MEMORY_PATH,
   WORKSPACE_ROOT,
+  searchMemoryChunks,
+  type MemorySearchResult,
 } from '@kinu.run/core';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { classify, tolerateAsync } from '@kinu.run/core/obs';
@@ -239,22 +241,11 @@ export function readLocalMemory(name: string): Promise<string> {
 }
 
 /** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */
-export function searchLocalMemory(name: string, query: string, limit = 10): Array<{ path: string; text: string; score?: number; startLine?: number; endLine?: number }> {
-  const q = query.trim();
-
-  if (!q) return [];
+/** The agent's own ranked search over the same index. */
+export function searchLocalMemory(name: string, query: string, limit = 10): MemorySearchResult[] {
   const window = boundedInt(limit, 10, 1, Number.MAX_SAFE_INTEGER);
 
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'memory_chunks')) return [];
-
-    return all<{ path: string; text: string; start_line: number; end_line: number }>(
-      db,
-      `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY rowid DESC LIMIT ?`,
-      `%${q}%`,
-      window,
-    ).map((row) => ({ path: row.path, text: row.text, startLine: row.start_line, endLine: row.end_line }));
-  });
+  return withLocalDb(name, (db) => tableExists(db, 'memory_chunks_fts') ? searchMemoryChunks(makeSql(db), query, window) : []);
 }
 
 export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {

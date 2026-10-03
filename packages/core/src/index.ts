@@ -1088,6 +1088,8 @@ export { oneAtATime } from './utils/one-at-a-time';
 
 export { markStoreChanged, storeRevision } from '@kinu.run/agent-utils';
 
+export { searchMemoryChunks } from '@kinu.run/agent-utils/memory';
+
 export { ISOLATED_BUN_FLAGS, isolatedBunArgs } from './utils/bun-isolation';
 
 export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';

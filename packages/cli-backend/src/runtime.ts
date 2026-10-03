@@ -1,4 +1,4 @@
-import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Local CLI runtime factory. Two file planes: agent state always lives in the
  * Nimbus filesystem over SQLite; the workspace plane (`file`, `shell`, `eval`,
@@ -10,7 +10,7 @@ import type {
   AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome,
 } from '@kinu.run/core';
-import type { Schedule, Memory, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
+import type { Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
 import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'node:fs';
@@ -23,7 +23,7 @@ import {
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
-  withMountTable, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
+  withMountTable, adaptMemory, sharedDriveMount, SHARED_DRIVE_UNBOUND,
   withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, localContextTree, skillsMount,
@@ -38,7 +38,7 @@ import {
   workspaceGenerationStorage,
   workspaceToolchainCapabilities,
 } from '@kinu.run/core/workspace';
-import { tolerate, tolerateAsync } from '@kinu.run/core/obs';
+import { tolerate } from '@kinu.run/core/obs';
 import { localNodeRuntime } from './node-runtime';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import { localFacetHost } from '@nimbus-sh/core/runtime/local-facet-host.js';
@@ -193,27 +193,6 @@ export function makeSqlExec(db: Pick<Database, 'query'>): SqlExec {
 export function makeWorkspaceSchemaSql(db: LocalDb): WorkspaceSchemaSql {
   return { execRaw: makeExecRaw(db), sql: makeSql(db), exec: makeSqlExec(db), transactionSync: (write) => writeTransaction(db, write) };
 }
-
-/** The tail reads via the plane's stat + ranged read, which MemoryStore's seam lacks. */
-function adaptMemory(store: MemoryStore, vfs: VFS & Required<Pick<VFS, 'readRange'>>): Memory {
-  return {
-    write: (path, content) => store.writeFile(path, content),
-    append: (path, content) => store.appendToFile(path, content),
-    async index(path) {
-      const raw = await tolerateAsync(() => readText(vfs, path), 'enoent');
-
-      if (raw === undefined) return;
-      await store.indexFile(path, raw);
-    },
-    search(query, limit = 10) {
-      return Promise.resolve(store.search(query, limit));
-    },
-    read: (path) => store.readFile(path),
-    tail: (path, bytes) => readTailWithVfsOps(vfs, path, bytes),
-  };
-}
-
-
 
 /** A lock held longer than this is a hung opener, and the write fails naming the lock. */
 const SHARED_WRITE_WAIT_MS = 30_000;
