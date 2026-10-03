@@ -640,6 +640,28 @@ test('a turn shows its reasoning as it streams, its elapsed time and a token cou
   await screen.waitFor('the reasoning expanded', () => screen.frame().includes('The old table keeps its rows.'));
 });
 
+test('a restarted step retracts its partial text and reasoning but keeps the completed prefix', async () => {
+  const agent = fakeClient({ name: 'restart', mode: 'cloud' });
+  const screen = await mountChat(agent.client);
+
+  agent.emit({ type: 'turn-start', kind: 'user', text: 'continue the work' });
+  agent.emit({ type: 'text-delta', delta: 'Keep this completed step.' });
+  await screen.waitFor('the completed prefix drawn', () => screen.frame().includes('Keep this completed step.'));
+  agent.emit({ type: 'step-finish', stepIndex: 1 });
+  agent.emit({ type: 'reasoning-delta', delta: 'Discard this reasoning.' });
+  agent.emit({ type: 'text-delta', delta: 'cut draft' });
+  await screen.waitFor('the partial step drawn', () => screen.frame().includes('cut draft'));
+  agent.emit({ type: 'step-cut', stepIndex: 2 });
+  agent.emit({ type: 'text-delta', delta: 'Replacement answer.' });
+  agent.emit({ type: 'step-finish', stepIndex: 2 });
+  agent.emit({ type: 'turn-end', turn: { ...TURN, text: 'Keep this completed step.Replacement answer.', steps: 2 } });
+  await screen.waitFor('the re-run drawn', () => screen.frame().includes('Replacement answer.'));
+  expect(screen.frame()).toContain('Keep this completed step.');
+  expect(screen.frame().split('Replacement answer.')).toHaveLength(2);
+  expect(screen.frame()).not.toContain('cut draft');
+  expect(screen.frame()).not.toContain('Discard this reasoning.');
+});
+
 test('/clear empties the transcript on screen once the conversation is cleared', async () => {
   const agent = fakeClient({ name: 'clears' });
 

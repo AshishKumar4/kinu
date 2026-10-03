@@ -10,6 +10,7 @@ interface AssistantTurnMetadata {
 /** Flushes buffered text at each tool boundary so the JSONL replays text and tools in order. */
 export class SessionRecorder {
   private pendingText = '';
+  private stepText = 0;
 
   constructor(private readonly backend: AgentClientMode) {}
 
@@ -18,6 +19,7 @@ export class SessionRecorder {
       case 'turn-start':
         // Defensive: a dropped turn-end must not bleed text into the next turn.
         this.pendingText = '';
+        this.stepText = 0;
         break;
       case 'text-delta':
         this.pendingText += event.delta;
@@ -49,7 +51,12 @@ export class SessionRecorder {
         this.pendingText = '';
         session.append('error', { message: event.message, backend: this.backend });
         break;
+      case 'step-cut':
+        this.pendingText = this.pendingText.slice(0, this.stepText);
+        break;
       case 'step-finish':
+        this.stepText = this.pendingText.length;
+        break;
       case 'evolution':
       case 'broadcast':
       case 'run-event':
@@ -62,6 +69,7 @@ export class SessionRecorder {
   private flushText(session: CliSession, finalText?: string, meta?: AssistantTurnMetadata): void {
     const text = this.pendingText || (finalText ?? '');
     this.pendingText = '';
+    this.stepText = 0;
 
     if (!text.trim()) return;
     session.append('assistant', { text, backend: this.backend, ...meta });

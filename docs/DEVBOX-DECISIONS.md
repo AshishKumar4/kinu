@@ -969,6 +969,34 @@ turn by that id, and a tab that reconnects before the re-drive opens is told
 STREAM_PENDING (the SDK's #1784 frame) and RESUMING once it opens. A tab still sees
 the dead activation's steps only from the commit. Pins:
 `packages/cf-backend/tests/unit-chat-reopened-turn.test.ts`.
+(8) 2026-10-01 (lane/staging-fix-resume): that last gap is closed, on one path for
+every join. Measured through the actor harness on 35c5a634d with the shipped
+`useAgentChat`: a tab that redialled into the re-drive drew step 3 alone, and a
+tab reloading inside a normal turn was replayed the relay's chunks, never the ledger.
+A join's replay now restates from the ledger each finished step it records
+(`step_finish` messages, drawn by the transcript's own projection), marked
+`restated`, then the relay's chunks of the steps after them. At this revision the
+ledger writer consumed the full stream beside the relay's UI stream. A step was
+restated only once its row existed and the relay had sent its last chunk. The
+relay kept chunks with their step; no chunk store returned. A client skipped a
+restated step it held whole and a same-stream step as far as it had read. Following
+another activation silently cut its private accumulator at the re-run step; that
+did not retract text already emitted to a terminal or ACP client.
+
+(9) 2026-10-01: core announces a text or reasoning step that a restart retracts
+before the re-run's first delta. The wire carries transient `data-kinu-step-cut`
+with the one-based `stepIndex`; a restart between completed steps emits none.
+Web and TUI remove that step's partial output. CLI JSON emits `step_cut`. ACP
+keeps its append-only partial, emits one restart notice, then streams the re-run;
+plain CLI output uses the notice too, on stderr when stdout is a pipe. Live token
+streaming is unchanged. The same replay path serves normal reloads and re-drives,
+and an already-open client keeps completed steps rather than resetting them.
+The CLI archive and server publish together; the chat wire has no negotiated
+version check or compatibility path.
+Measured by `unit-chat-reopened-turn`, `cloud-agent-client`, `chat-app` and ACP
+suites, and a source CLI smoke with a real dropped socket: JSON emitted one cut
+between `tw` and `two`, with final text `one, two`; a pipe kept the model's text on
+stdout and the single notice on stderr.
 
 D23-N. Every instance of the host namespace answers `supervisorOp` with the
 hosted runtime (2026-09-21, this commit; the Nimbus upgrade to core 0.12.0,
@@ -1101,6 +1129,47 @@ stream-parts reads, and four open-container/part pre-reads. All 51 stream append
 remain; the working-context origin check and abandoned-stream recovery reads
 remain. The unchanged workerd chat-session parity fixture passes.
 A lone surrogate from a malformed provider stream now seals as streamed, not as bun's replacement characters; valid pairs remain byte-identical.
+
+2026-10-01: the owner-approved single writer commits a native step's seals,
+`tool_call_end` rows and `step_finish` usage and cost in the seal's transaction.
+The event consumer writes none of those rows for a native step; a cut
+step's collected results belong to its closing seal. Subscribers are notified
+after commit, and a rejected ledger write rolls back the seals as well. A re-drive
+restores the finished-step count and reported usage without debiting them again.
+The SDK's call-local response arrays are joined across fallback and output-limit
+calls before the seal and row share them, so a continuation cannot leave an empty
+step in the recorded prefix.
+The public-completion actor regression on the merged baseline `7d96877b9` lost
+step 2's tool and step rows, returned usage `1/1` rather than `3/3`, and kept two
+priced rows rather than three. With the single writer, the ledger and timeline
+hold all three steps in order and each cost once. A local output-limit turn
+previously recorded its second step without text; it now records both halves.
+The Workers restart suite checks conversation and per-run step-order invariants;
+its old whole-database golden pinned the resumed index reset and was removed,
+not re-recorded.
+
+2026-10-02: the native callback hands over one `StepRecord`, including its tool
+results and request, before the next model call. Internal `ChatEvent.source`
+marks the producer, not a consumer mode switch; scaffold-authored events remain
+the consumer's to record even after `defaultInference`. A local promoted
+scaffold that delegates, then runs its own tool step, retains both steps and
+the tool in order, with the native usage only once. Run-event indices come from
+the committed rows, so two recorders sharing a database cannot reuse a cached
+index after another writer or a rollback.
+
+The Workers restart check also exposed two model histories: request preparation
+classified a failed tool into `error-json`, but its seal kept the SDK's raw
+`error-text`. A re-drive had no SDK step metadata to reconstruct the envelope,
+lost `reason: missing` and changed the cached prefix. Error feedback now joins
+the `StepRecord` before the seal; live requests and re-drives use those recorded
+messages. The request-time reclassification is gone. The failed/success/image
+regression compares the live and re-driven tool-message bytes, not just the
+last answer or the error's words.
+
+Provenance is stamped where each event is produced. An extra async-generator
+wrapper had delayed consumption enough for the model's fourth request to miss
+the nudge after three failed tools; removing that hop restores the nudge at
+that request without delaying live output or adding a consumer mode switch.
 
 D25. A wake proves a recycle only after the stop confirms (`b6a6ace00`,
 2026-09-04). The 2026-09-04 rerun (`kinu-devbox-bench-20260904142724`) saw

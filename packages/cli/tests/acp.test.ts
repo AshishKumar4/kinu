@@ -16,6 +16,7 @@ import {
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import { missingSubordinateHistory, type ShellApprovalOutcome, type ShellApprovalRequest } from '@kinu.run/core';
 import { createAcpAgent } from '../src/acp/agent';
+import { CloudTurnStream } from '../src/cloud-turn-stream';
 import { createCliSession } from '../src/session';
 import type { AgentClient, AgentClientEvent, AgentPrompt, AgentSendResult } from '../src/agent-client';
 import * as v from 'valibot';
@@ -241,6 +242,29 @@ describe('kinu acp — prompt turn', () => {
     expect(chunks.map((chunk) => v.parse(v.object({ text: v.string() }), chunk.content).text))
       .toEqual(['Hello', ' world']);
     expect(fake.sent).toEqual([{ prompt: 'hi', cwd: '/work' }]);
+  });
+
+  test('a mid-step restart over ACP keeps the partial, one notice, and the re-run in emitted order', async () => {
+    const events: AgentClientEvent[] = [];
+    const stream = new CloudTurnStream((event) => events.push(event), () => {});
+    stream.apply({ body: JSON.stringify({ type: 'text-delta', delta: 'one, ' }) });
+    stream.apply({ body: JSON.stringify({ type: 'finish-step' }) });
+    stream.apply({ body: JSON.stringify({ type: 'text-delta', delta: 'tw' }) });
+    stream.follow();
+    stream.beginReplay();
+    stream.apply({ body: JSON.stringify({ type: 'text-delta', delta: 'one, ' }), replay: true, restated: true });
+    stream.apply({ body: JSON.stringify({ type: 'finish-step' }), replay: true, restated: true });
+    stream.apply({ body: JSON.stringify({ type: 'data-kinu-step-cut', data: { stepIndex: 2 }, transient: true }), replay: true });
+    stream.apply({ body: JSON.stringify({ type: 'text-delta', delta: 'two' }), replay: true });
+    stream.apply({ replayComplete: true });
+    stream.settle();
+
+    const updates = await promptUpdates(fakeClient({ events }));
+
+    const text = updates.flatMap((update) => update.sessionUpdate === 'agent_message_chunk'
+      ? [v.parse(v.object({ text: v.string() }), update.content).text] : []);
+
+    expect(text).toEqual(['one, ', 'tw', expect.stringContaining('restarted'), 'two']);
   });
 
   test('a tool call is reported with its id, kind and title, then settled as completed', async () => {

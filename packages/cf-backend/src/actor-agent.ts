@@ -16,7 +16,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
-  isSubordinateOrigin, WORKSPACE_ROOT,
+  isSubordinateOrigin, drawnStep, WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -1201,7 +1201,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** True when an open turn or undrained acknowledged send exists; the loop is then built under
    *  a wake, never inside the init gate, because a turn is external work. */
   protected chatLoopOwesWork(): boolean {
-    return this.eventRecorder.openTurn() !== null || this.pendingSends.restore().length > 0;
+    return this.eventRecorder.openRun() !== null || this.pendingSends.restore().length > 0;
   }
 
   /** Constructing the loop re-opens the last open turn and reruns acknowledged sends. */
@@ -1759,6 +1759,7 @@ export abstract class ActorAgent extends Agent<Env> {
       installedBuild: this.installedBuildIdentity(),
       workspace: this.workspaceName(),
       events: this.stores.eventRecorder,
+      recording: this.stores.eventRecorder,
       orchestration: this.orchestrationDeps(),
       advisorPort: () => this.temporaryAgentPort(),
       // While the completion gate waits for its answer, the advisor records its note silently.
@@ -1833,6 +1834,11 @@ export abstract class ActorAgent extends Agent<Env> {
     this._chatTransport ??= new ChatWireTransport({
       resumes: true,
       turnOwed: () => this.chatLoopOwesWork(),
+      steps: () => {
+        const run = this.eventRecorder.openRun();
+
+        return run === null ? [] : this.eventRecorder.finishedSteps(run).map(({ messages }) => drawnStep(messages));
+      },
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
       history: (limit) => this.chatTranscript.history(limit),
@@ -1968,9 +1974,15 @@ export abstract class ActorAgent extends Agent<Env> {
               durationMs: ev.durationMs ?? 0,
             });
 
-            this.emitRunEvent({ type: 'tool_call_end', ...ev });
+            const runId = this._currentRunId;
+
+            if (runId) this.eventRecorder.emit(runId, { type: 'tool_call_end', ...ev });
           },
-          onStepEvent: (ev) => this.emitRunEvent({ type: 'step_finish', ...ev }),
+          onStepEvent: (ev) => {
+            const runId = this._currentRunId;
+
+            if (runId) this.eventRecorder.emit(runId, { type: 'step_finish', ...ev });
+          },
         },
       };
     }

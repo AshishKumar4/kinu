@@ -212,6 +212,7 @@ function frontendView(event: SessionEvent): JsonValue {
     case 'turn-start': return { type: event.type, kind: event.kind, text: event.text, workMode: event.workMode, ...(event.event !== undefined && { event: event.event }) };
     case 'text-delta':
     case 'reasoning-delta': return { type: event.type, delta: event.delta };
+    case 'step-cut': return { type: event.type, stepIndex: event.stepIndex };
     case 'tool-call': return { type: event.type, toolName: event.toolName, toolCallId: event.toolCallId };
     case 'tool-result': return { type: event.type, toolName: event.toolName, toolCallId: event.toolCallId, success: event.success };
     case 'turn-end': return {

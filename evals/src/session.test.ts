@@ -28,6 +28,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import type { Server, ServerWebSocket } from 'bun';
 import * as v from 'valibot';
+import type { UIMessageChunk } from 'ai';
 
 import {
   BUILTIN_PROFILE_CATALOG, isAgentRpcMethod, JOB_OUTPUT_EVENT, profileCatalogDigest, READS_CHANGED_EVENT, renderSoulMarkdown,
@@ -41,10 +42,9 @@ import {
   HeardStreams, KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS,
 } from './session';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import type { UIMessageChunk } from 'ai';
 import {
   BROADCAST_FRAME, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID,
-  RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatTerminalFrame, chatTurnFrames, rpcReplyFrame,
+  RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatTerminalFrame, chatTurnFrames, replayCompleteFrame, rpcReplyFrame,
   streamResumingFrame,
 } from './fixtures/session-frames';
 
@@ -654,17 +654,15 @@ test("a working helper is heard in its own room, on a socket that closes when th
   } finally { await session.teardown(); await server.stop(true); }
 });
 
-test('a turn survives an ended activation: the redial follows it onto the stream the next activation re-opened', async () => {
-  // F2 on staging a4e564ce1 (2026-09-30): the object's activation ended after step 1 and its wake re-drove the turn
-  // under a request id the new activation minted. The redial is told the turn is pending, then resuming under that id,
-  // named for the turn by the message the request carried. Unfixed, the session ignored it and failed at the run's end:
-  // "the turn's run ended before its stream could be resumed, so its answer was never observed".
+/**
+ * A turn whose activation ends once per script: connection 1 takes the request and streams FILE_TURN_CHUNKS up to
+ * `cut`, then each later connection is a later activation's. It tells the redial the turn is pending, then resuming
+ * under the stream that activation re-opened it under, then sends its script; every activation but the last ends there.
+ */
+async function turnAcrossEndedActivations(cut: number, scripts: readonly ((stream: string) => readonly string[])[]) {
   let upgrades = 0;
-  let requestId = '';
   let messageId = '';
   const resumed = Promise.withResolvers<void>();
-  const cut = 5;
-  const reopened = 'stream-of-the-next-activation';
 
   const start: RunEvent = {
     type: 'run_start', runId: 'turn-run', eventIndex: 0, timestamp: '2000-01-01T00:00:00.000Z', agentId: 'root',
@@ -673,9 +671,6 @@ test('a turn survives an ended activation: the redial follows it onto the stream
   const end: RunEvent = {
     type: 'run_end', runId: 'turn-run', eventIndex: 1, timestamp: '9999-01-01T00:00:00.000Z', reason: 'completed',
   };
-
-  // Step 1 streamed before the cut; the next activation's own stream opens with its first call's `start`.
-  const rest = [{ type: 'start' } as const, ...FILE_TURN_CHUNKS.slice(cut)];
 
   const server = Bun.serve<{ connection: number }>({ port: 0, hostname: '127.0.0.1',
     async fetch(request, upgrading) {
@@ -687,7 +682,7 @@ test('a turn survives an ended activation: the redial follows it onto the stream
         return;
       }
 
-      // The ledger answers only once the next activation's stream went out, so the turn settles from the stream.
+      // The ledger answers only once the last activation's stream went out, so the turn settles from the stream.
       await resumed.promise;
       const path = new URL(request.url).pathname;
 
@@ -699,26 +694,24 @@ test('a turn survives an ended activation: the redial follows it onto the stream
     },
     websocket: {
       open(socket) {
-        if (socket.data.connection !== 2) return;
-        // What a following client hears: the replay its ack is answered with, then the live chunks and the end. The
-        // replay is as long as the first stream was, so a count the two streams shared would swallow all of it.
+        const script = scripts[socket.data.connection - 2];
+
+        if (script === undefined) return;
+        const stream = `stream-of-activation-${String(socket.data.connection)}`;
         socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_PENDING }));
-        socket.send(streamResumingFrame(reopened, messageId));
+        socket.send(streamResumingFrame(stream, messageId));
 
-        for (const chunk of rest.slice(0, cut)) socket.send(chatChunkFrame({ requestId: reopened, chunk, replay: true }));
-        socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: reopened, body: '', done: false, replay: true, replayComplete: true }));
+        for (const frame of script(stream)) socket.send(frame);
 
-        for (const chunk of rest.slice(cut)) socket.send(chatChunkFrame({ requestId: reopened, chunk }));
-        socket.send(chatTerminalFrame({ requestId: reopened }));
-        resumed.resolve();
+        if (socket.data.connection === scripts.length + 1) resumed.resolve();
+        else socket.close(1012, 'the activation ended');
       },
       message(socket, message) {
         if (socket.data.connection !== 1) return;
         const frame = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString()));
-        requestId = frame.id;
         messageId = v.parse(v.object({ messages: v.tuple([v.object({ id: v.string() })]) }), JSON.parse(frame.init.body)).messages[0].id;
 
-        for (const chunk of FILE_TURN_CHUNKS.slice(0, cut)) socket.send(chatChunkFrame({ requestId, chunk }));
+        for (const chunk of FILE_TURN_CHUNKS.slice(0, cut)) socket.send(chatChunkFrame({ requestId: frame.id, chunk }));
         socket.close(1012, 'the activation ended');
       },
     },
@@ -731,13 +724,57 @@ test('a turn survives an ended activation: the redial follows it onto the stream
 
   try {
     await session.connect();
-    const result = await session.submit('Write note.txt.').settled;
+    const turn = await session.submit('Write note.txt.').settled;
 
-    if (result.landed !== 'turn') throw new Error('expected the turn itself to land');
-    expect({ text: result.text, tools: result.toolCalls.map((call) => [call.name, call.result]), steps: result.steps })
-      .toEqual({ text: 'Wrote note.txt.', tools: [['file', 'Wrote note.txt']], steps: 2 });
-    expect(upgrades).toBe(2);
+    if (turn.landed !== 'turn') throw new Error('expected the turn itself to land');
+
+    return { text: turn.text, tools: turn.toolCalls.map((call) => [call.name, call.result]), steps: turn.steps, upgrades };
   } finally { await session.teardown(); await server.stop(true); }
+}
+
+/** A replay's frames as the DO sends them: the message opened, `restated` chunks from the ledger, the relay's chunks. */
+function replayFrames(stream: string, restated: readonly UIMessageChunk[], relayed: readonly UIMessageChunk[]): string[] {
+  return [
+    chatChunkFrame({ requestId: stream, chunk: { type: 'start' }, replay: true }),
+    ...restated.map((chunk) => chatChunkFrame({ requestId: stream, chunk, replay: true, restated: true })),
+    ...relayed.map((chunk) => chatChunkFrame({ requestId: stream, chunk, replay: true })),
+    replayCompleteFrame(stream),
+  ];
+}
+
+const STEP_ONE_CHUNKS = FILE_TURN_CHUNKS.slice(1, 5);
+
+test('a turn survives an ended activation: the redial follows it onto the stream the next activation re-opened', async () => {
+  // F2 on staging a4e564ce1 (2026-09-30): the object's activation ended after step 1 and its wake re-drove the turn
+  // under a request id the new activation minted. The redial is told the turn is pending, then resuming under that id,
+  // named for the turn by the message the request carried. Unfixed, the session ignored it and failed at the run's end:
+  // "the turn's run ended before its stream could be resumed, so its answer was never observed". Its replay restates
+  // step 1 from the ledger (2026-10-01), which this session streamed before the cut and must not hold twice.
+  const turn = await turnAcrossEndedActivations(5, [(stream) => [
+    ...replayFrames(stream, STEP_ONE_CHUNKS, FILE_TURN_CHUNKS.slice(5, 8)),
+    ...FILE_TURN_CHUNKS.slice(8).map((chunk) => chatChunkFrame({ requestId: stream, chunk })),
+    chatTerminalFrame({ requestId: stream }),
+  ]]);
+
+  expect(turn).toEqual({ text: 'Wrote note.txt.', tools: [['file', 'Wrote note.txt']], steps: 2, upgrades: 2 });
+});
+
+test('a turn survives two ended activations on one open session: each step held once, the cut one replaced by its re-run', async () => {
+  // The second activation streams `Wrote ` of step 2 and ends inside it; the third restates step 1 and runs step 2
+  // again whole. A follower that appended what each replay restates would hold step 1 three times.
+  const turn = await turnAcrossEndedActivations(5, [
+    (stream) => replayFrames(stream, STEP_ONE_CHUNKS, FILE_TURN_CHUNKS.slice(5, 8)),
+    (stream) => [
+      ...replayFrames(stream, STEP_ONE_CHUNKS, [
+        { type: 'data-kinu-step-cut', data: { stepIndex: 2 }, transient: true },
+        ...FILE_TURN_CHUNKS.slice(5, 11),
+      ]),
+      chatChunkFrame({ requestId: stream, chunk: { type: 'finish' } }),
+      chatTerminalFrame({ requestId: stream }),
+    ],
+  ]);
+
+  expect(turn).toEqual({ text: 'Wrote note.txt.', tools: [['file', 'Wrote note.txt']], steps: 2, upgrades: 3 });
 });
 
 /** The run that absorbs a spliced send: it starts before the send lands and ends after. */
@@ -1052,6 +1089,9 @@ describe('the public session speaks the frames the web client speaks', () => {
     const replayed = chatTurnFrames({
       requestId: FIXTURE_REQUEST_ID, chunks: FILE_TURN_CHUNKS, replay: true,
     });
+
+    // The replay answers an ack, which the session marks as it sends it.
+    recorder.beginReplay();
 
     for (const raw of replayed) {
       const frame = decodeFrame(raw);

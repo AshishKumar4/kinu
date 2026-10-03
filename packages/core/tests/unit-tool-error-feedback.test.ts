@@ -3,11 +3,12 @@ import { tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import type { LanguageModelV3ToolResultOutput } from '@ai-sdk/provider';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { runChat, type ChatEvent } from '../src/chat';
+import { INTERRUPTED_TURN, runChat, type ChatEvent, type StepRecord } from '../src/chat';
 import { KinuError } from '../src/obs/error';
 import { FileRefusalError } from '../src/types/file-edits';
 import { McpToolError } from '../src/tools/mcp-error';
 import type { JsonValue } from '../src/utils/json';
+import { imageModelOutput } from '../src/tools/image-results';
 
 async function drive(results: readonly (Error | JsonValue)[], history: ModelMessage[] = []) {
   let step = 0;
@@ -100,4 +101,54 @@ test('successful error-shaped data is never projected, even beside a failed call
     { type: 'json', value: data },
   ]);
   expect(run.events.filter(event => event.type === 'tool-result').map(event => event.success)).toEqual([false, true]);
+});
+
+test('a re-drive sends the recorded failed, successful and image tool messages byte for byte', async () => {
+  let request = 0;
+  const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH90AAAAASUVORK5CYII=';
+
+  const model = scriptedTurnModel({ doGenerate: () => {
+    const at = request++;
+
+    return { content: at === 0 ? ['failed', 'succeeded', 'image'].map((toolName) => ({
+      type: 'tool-call' as const, toolCallId: `call-${toolName}`, toolName, input: '{}',
+    })) : [{ type: 'text', text: at === 1 ? 'cut here' : 'done' }],
+    finishReason: { unified: at === 0 ? 'tool-calls' : 'stop', raw: undefined },
+    usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [] };
+  } });
+
+  const tools = {
+    failed: tool({ inputSchema: z.object({}), execute: async (): Promise<JsonValue> => { throw new KinuError('missing', 'the note is absent'); } }),
+    succeeded: tool({ inputSchema: z.object({}), execute: async () => ({ found: 7 }) }),
+    image: tool({ inputSchema: z.object({}), execute: async () => ({ output: 'the screenshot', images: [{ data: image, mediaType: 'image/png' }] }), toModelOutput: imageModelOutput }),
+  };
+
+  const abort = new AbortController();
+
+  const history: ModelMessage[] = [{ role: 'user', content: 'Read the note and inspect the screenshot.' }];
+  let recorded: StepRecord | undefined;
+
+  const interrupted = async () => {
+    for await (const event of runChat({ model, system: 'sys', history, tools, signal: abort.signal,
+      persistStep: async (record) => { if (record.step?.stepIndex === 1) recorded = record; },
+    })) if (event.type === 'text-delta') abort.abort();
+  };
+
+  await expect(interrupted()).rejects.toThrow(INTERRUPTED_TURN);
+
+  if (recorded === undefined) throw new Error('the turn reached its next request without recording the tool step');
+  const live = model.doStreamCalls[1]?.prompt;
+
+  if (live === undefined) throw new Error('the turn never requested its next step');
+
+  for await (const _ of runChat({ model, system: 'sys', history: [...history, ...recorded.messages], tools }));
+  const resumed = model.doStreamCalls[2]?.prompt;
+
+  if (resumed === undefined) throw new Error('the re-driven turn never requested its next step');
+  const liveTools = live.filter((message) => message.role === 'tool');
+
+  expect(liveTools.flatMap((message) => message.content.flatMap((part) => part.type === 'tool-result' ? [part.toolName] : []))).toEqual(['failed', 'succeeded', 'image']);
+  expect(JSON.stringify(resumed.filter((message) => message.role === 'tool'))).toBe(JSON.stringify(liveTools));
+  expect(resumed.filter((message) => message.role === 'user')).toEqual(live.filter((message) => message.role === 'user'));
 });
