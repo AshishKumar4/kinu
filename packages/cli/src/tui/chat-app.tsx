@@ -333,8 +333,8 @@ function ChatScene({
   const modelRequestRef = useRef(0);
   // Effects cannot return their tasks; these refs hold scene-owned work until cleanup.
   const hubRefreshTaskRef = useRef<Promise<Exit.Exit<void>> | null>(null);
-  const connectionTaskRef = useRef<Promise<void> | null>(null);
-  const metadataTaskRef = useRef<Promise<void> | null>(null);
+  const connectionTaskRef = useRef<Promise<Exit.Exit<void>> | null>(null);
+  const metadataTaskRef = useRef<Promise<Exit.Exit<void>> | null>(null);
   const rosterTaskRef = useRef<Promise<void> | null>(null);
   const subagentTaskRef = useRef<Promise<Exit.Exit<void>> | null>(null);
   const commands = useMemo(() => commandsForClient(client), [client]);
@@ -1535,66 +1535,52 @@ function ChatScene({
       })();
     }
 
-    let task: Promise<void> | null = null;
+    let task: Promise<Exit.Exit<void>> | null = null;
     let settled = false;
-    task = (async () => {
-      try {
-        if (!skipHydrationRef.current) {
-          try {
-            const history = await client.history();
 
-            if (!abort.signal.aborted && history.length > 0) {
-              setMessages([welcomeMessage(client.agentName), ...history]);
-            }
-          } catch (historyError) {
-            if (!abort.signal.aborted) {
-              addMessage({ role: 'system', content: errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: historyError })}`) });
-            }
+    task = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      if (!skipHydrationRef.current) {
+        yield* Effect.catchCause(Effect.gen(function* () {
+          const history = yield* Effect.promise(() => client.history());
+
+          if (!abort.signal.aborted && history.length > 0) {
+            setMessages([welcomeMessage(client.agentName), ...history]);
           }
-        }
-
-        skipHydrationRef.current = false;
-        let connected = true;
-
-        try {
-          if (!preconnected) await client.connect();
-        } catch (error) {
-          connected = false;
-
+        }), (failed) => Effect.sync(() => {
           if (!abort.signal.aborted) {
-            addError({ cause: error });
-            setConnectFailed(true);
+            addMessage({ role: 'system', content: errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: Cause.squash(failed) })}`) });
           }
-        }
-
-        if (!connected || abort.signal.aborted) return;
-        setConnectFailed(false);
-        setReady(true);
-
-        if (client.mode !== 'cloud') return;
-
-        try {
-          await deviceConnect.offerIfUnconnected();
-        } catch (cause) {
-          // A courtesy offer: failure is a diagnostic, not a conversation line.
-          diagnostics.failure(
-            'tui.device_connect_offer_failed',
-            toKinuError({ doing: 'offering the device-connect prompt', cause, otherwise: 'unavailable' }),
-            { workspace: client.agentName },
-          );
-        }
-      } catch (cause) {
-        if (!abort.signal.aborted) addError({ cause });
-      } finally {
-        try {
-          if (replayTask) await replayTask;
-        } finally {
-          settled = true;
-
-          if (task !== null && connectionTaskRef.current === task) connectionTaskRef.current = null;
-        }
+        }));
       }
-    })();
+
+      skipHydrationRef.current = false;
+
+      const connected = yield* Effect.catchCause(Effect.as(Effect.promise(async () => { if (!preconnected) await client.connect(); }), true), (failed) => Effect.sync(() => {
+        if (!abort.signal.aborted) {
+          addError({ cause: Cause.squash(failed) });
+          setConnectFailed(true);
+        }
+
+        return false;
+      }));
+
+      if (!connected || abort.signal.aborted) return;
+      setConnectFailed(false);
+      setReady(true);
+
+      if (client.mode !== 'cloud') return;
+
+      // A courtesy offer: failure is a diagnostic, not a conversation line.
+      yield* Effect.catchCause(Effect.promise(() => deviceConnect.offerIfUnconnected()), recording({ doing: 'offering the device-connect prompt', otherwise: 'unavailable' }, (failure) => {
+        diagnostics.failure('tui.device_connect_offer_failed', failure, { workspace: client.agentName });
+      }));
+    }), (failed) => Effect.sync(() => {
+      if (!abort.signal.aborted) addError({ cause: Cause.squash(failed) });
+    })), Effect.ensuring(Effect.promise(async () => { if (replayTask) await replayTask; }), Effect.sync(() => {
+      settled = true;
+
+      if (task !== null && connectionTaskRef.current === task) connectionTaskRef.current = null;
+    }))));
     connectionTaskRef.current = task;
 
     if (settled && connectionTaskRef.current === task) connectionTaskRef.current = null;
@@ -1607,48 +1593,33 @@ function ChatScene({
 
   useEffect(() => {
     const abort = new AbortController();
-    let task: Promise<void> | null = null;
+    let task: Promise<Exit.Exit<void>> | null = null;
     let settled = false;
-    task = (async () => {
-      try {
-        await Promise.all([
-          (async () => {
-            try {
-              const next = await client.status();
 
-              if (abort.signal.aborted) return;
-              setStatus(next);
-              setModelSpec((current) => current || (next.model ?? ''));
-            } catch (cause) {
-              if (!abort.signal.aborted) {
-                addMessage({
-                  role: 'system',
-                  content: errorLine(`Workspace status could not be read: ${renderThrownChain({ cause })}`),
-                });
-              }
-            }
-          })(),
-          (async () => {
-            try {
-              const menu = await client.listModels();
-
-              if (!abort.signal.aborted) setModelCatalog(menu.models);
-            } catch (cause) {
-              if (!abort.signal.aborted) {
-                addMessage({
-                  role: 'system',
-                  content: errorLine(`The model catalog could not be read: ${renderThrownChain({ cause })}`),
-                });
-              }
-            }
-          })(),
-        ]);
-      } finally {
-        settled = true;
-
-        if (task !== null && metadataTaskRef.current === task) metadataTaskRef.current = null;
+    const shownUnlessAborted = (what: string) => (failed: Cause.Cause<unknown>) => Effect.sync(() => {
+      if (!abort.signal.aborted) {
+        addMessage({ role: 'system', content: errorLine(`${what} could not be read: ${renderThrownChain({ cause: Cause.squash(failed) })}`) });
       }
-    })();
+    });
+
+    task = hold(Effect.ensuring(Effect.all([
+      Effect.catchCause(Effect.gen(function* () {
+        const next = yield* Effect.promise(() => client.status());
+
+        if (abort.signal.aborted) return;
+        setStatus(next);
+        setModelSpec((current) => current || (next.model ?? ''));
+      }), shownUnlessAborted('Workspace status')),
+      Effect.catchCause(Effect.gen(function* () {
+        const menu = yield* Effect.promise(() => client.listModels());
+
+        if (!abort.signal.aborted) setModelCatalog(menu.models);
+      }), shownUnlessAborted('The model catalog')),
+    ], { concurrency: 'unbounded', discard: true }), Effect.sync(() => {
+      settled = true;
+
+      if (task !== null && metadataTaskRef.current === task) metadataTaskRef.current = null;
+    })));
     metadataTaskRef.current = task;
 
     if (settled && metadataTaskRef.current === task) metadataTaskRef.current = null;
