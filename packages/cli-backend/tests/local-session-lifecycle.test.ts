@@ -16,9 +16,10 @@ import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
+import { staticModelPlane } from '../src/profile-authority';
 import { OS_LEASE_PROCESS } from '../src/agent-host/lease-process';
 import * as v from 'valibot';
-import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, } from './helpers/local-session';
+import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, swarmsOn, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, } from './helpers/local-session';
 
 const jobStatus = (db: Database, id: string) => jobColumn(db, id, 'status');
 
@@ -1252,6 +1253,25 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('remember this', { id: crypto.randomUUID() });
     const result = events.items.find((event) => event.type === 'tool-result');
     expect(JSON.stringify(result?.result)).toContain('found');
+  });
+
+  // Rank 36: the CLI narrowed eval's extra namespaces by the role, never its workspace one, so a revoked reach came back.
+  test("eval binds only the namespaces the role admits: a role without shell, file or slate reaches no workspace", async () => {
+    const analyst = { description: 'Reads memory.', instructions: 'Answer from memory.', tier: 'default', preset: 'audit', allowedTools: ['eval', 'memory'] } as const;
+
+    const { rt, session, events } = setup('unused', codemodeModel('return `${typeof workspace.exec} ${typeof memory}`'), {
+      profileAuthority: async () => {
+        const { catalog } = present(await swarmsOn(rt, staticModelPlane())(), "the workspace's own catalog");
+        const withAnalyst = { ...catalog, roles: { ...catalog.roles, analyst } };
+
+        return { authority: { kind: 'local' }, version: 0, digest: profileCatalogDigest(withAnalyst), catalog: withAnalyst };
+      },
+    });
+
+    rt.actor.config.setRoleSelection('analyst');
+    await session.send('look', { id: crypto.randomUUID() });
+    const result = events.items.find((event) => event.type === 'tool-result');
+    expect(JSON.stringify(result?.result)).toContain('undefined object');
   });
 
   test('the same call detaches once it crosses the policy threshold', async () => {

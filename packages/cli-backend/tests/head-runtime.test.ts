@@ -392,6 +392,17 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     ]));
   });
 
+  // Rank 36: a Plan head was told to inspect through eval and run, and both refuse in Plan here.
+  test('a Plan head is told only of the tools that can run in Plan', async () => {
+    let prompt = '';
+    const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('done', () => {}, (text) => { prompt = text; })));
+    await (await runtime.spawnHead(aHeadInput({ mode: 'plan' }))).run();
+
+    expect(prompt).toContain('file is available for reading');
+    expect(prompt).not.toContain('use eval only for read-only inspection');
+    expect(prompt).not.toContain('run only read-only inspection commands');
+  });
+
   test('a head advertises and invokes the workspace\'s crafted tools, as every actor does', async () => {
     const parent = makeParent();
     parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-wide doubler', code: '(input) => input.n * 2' });
