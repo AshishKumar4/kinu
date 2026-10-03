@@ -1,4 +1,5 @@
 // developers.openai.com/siwc, ADR P1.
+import { authenticatedSend } from './authenticated-send';
 import { createOpenAI } from '@ai-sdk/openai';
 import { EventSourceParserStream, type EventSourceMessage } from '@ai-sdk/provider-utils';
 import type { JSONObject, LanguageModelV3CallOptions, LanguageModelV3Message } from '@ai-sdk/provider';
@@ -8,10 +9,9 @@ import * as v from 'valibot';
 import { attempt, diagnostics, KinuError, settle, tolerate, type ErrorCode } from '../obs/index';
 import { chatgptCatalogRows } from './codex';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
-import { OAuthTokenError } from './oauth-token-error';
 import { withCallAccount } from './quota';
 import { withRateLimitRetry } from './rate-limit-retry';
-import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
+import type { AuthRequest, AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { StaleModelList, statelessResponses } from './util';
 import { JsonObjectSchema } from '../utils/json';
 
@@ -324,12 +324,10 @@ function planRequest(init: RequestInit | undefined): PlanCall {
   return { init: { ...init, body: JSON.stringify({ ...body, stream: true }) }, streamed: parsed.output.stream === true };
 }
 
-function resolvedAuth(deps: ProviderDeps, rejected?: Readonly<Record<string, string>>): Effect.Effect<AuthResolution | null, KinuError> {
+function resolvedAuth(deps: ProviderDeps): Effect.Effect<AuthResolution | null, KinuError> {
   return Effect.tryPromise({
-    try: () => deps.getAuth(CHATGPT_CRED_KEY, rejected === undefined ? undefined : { rejected }),
-    catch: (cause) => (cause instanceof OAuthTokenError && cause.revoked
-      ? new KinuError('denied', `ChatGPT ended this machine's sign-in (${cause.oauthError})`, { cause })
-      : new KinuError('unavailable', 'the ChatGPT sign-in could not be read', { cause })),
+    try: () => deps.getAuth(CHATGPT_CRED_KEY),
+    catch: (cause) => new KinuError('unavailable', 'the ChatGPT sign-in could not be read', { cause }),
   });
 }
 
@@ -394,26 +392,25 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         const { init, streamed } = planRequest(requested);
         const url = requestUrl(input);
 
-        const sending = (headers: Readonly<Record<string, string>>) => Effect.promise(() => {
+        // A device's own sign-in renews nowhere from here: its 401 is the answer.
+        const deviceLogin = async (_key: string, request?: AuthRequest): Promise<AuthResolution | null> => (request === undefined ? { headers: {} } : null);
+
+        const sendWith = (auth: AuthResolution): Promise<Response> => {
           const merged = copyHeaders(init?.headers);
 
-          for (const [name, value] of Object.entries(headers)) merged.set(name, value);
+          for (const [name, value] of Object.entries(auth.headers)) merged.set(name, value);
 
           return send(input, { ...init, headers: merged });
-        });
+        };
 
         return settle(Effect.gen(function* () {
-          const auth = yield* unsigned(deps);
+          // A refusal the transport raised is the owner's answer and passes through unchanged.
+          const answer = yield* Effect.promise(() => authenticatedSend({
+            key: CHATGPT_CRED_KEY, getAuth: device === undefined ? deps.getAuth : deviceLogin, send: sendWith,
+          }));
 
-          if (auth === null) return yield* Effect.fail(new KinuError('missing', 'No ChatGPT sign-in with plan usage on this machine'));
-          let res = yield* sending(auth.headers);
-
-          if (res.status === 401 && device === undefined) {
-            const refreshed = yield* resolvedAuth(deps, auth.headers);
-
-            if (refreshed !== null) res = yield* sending(refreshed.headers);
-          }
-
+          if (answer.kind === 'absent') return yield* Effect.fail(new KinuError('missing', 'No ChatGPT sign-in with plan usage on this machine'));
+          const res = answer.response;
           const refusal = yield* refusalOf(res, url);
 
           if (refusal !== null) return yield* Effect.die(refusal);

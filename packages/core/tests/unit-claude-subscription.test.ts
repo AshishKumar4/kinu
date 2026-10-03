@@ -15,7 +15,6 @@ import * as v from 'valibot';
 import { createClaudeProvider, CLAUDE_CRED_KEY } from '../src/providers/claude';
 import { cacheableSystem, resolvePromptCacheStrategy } from '../src/prompting/cache-breakpoints';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
-import { OAuthTokenError } from '../src/providers/oauth-token-error';
 import type { AuthResolution, ModelCallDeps, ProviderWaitInfo } from '../src/providers/types';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { parseJsonObject, type JsonObject } from '../src/utils/json';
@@ -95,7 +94,7 @@ function only(sent: readonly Sent[], index = 0): Sent {
 }
 
 /** `asked`: per call, the Authorization it named as refused, or null for a plain read. */
-function deps(fetchFn: typeof fetch, logins: (AuthResolution | 'revoked')[], affinity = 'kinu-agent-1'): ModelCallDeps & { asked: (string | null)[] } {
+function deps(fetchFn: typeof fetch, logins: AuthResolution[], affinity = 'kinu-agent-1'): ModelCallDeps & { asked: (string | null)[] } {
   const asked: (string | null)[] = [];
 
   return {
@@ -107,8 +106,6 @@ function deps(fetchFn: typeof fetch, logins: (AuthResolution | 'revoked')[], aff
       expect(key).toBe(CLAUDE_CRED_KEY);
       asked.push(opts?.rejected?.Authorization ?? null);
       const next = logins.length > 1 ? logins.shift() : logins[0];
-
-      if (next === 'revoked') throw new OAuthTokenError('codex', 'invalid_grant', 'refresh token revoked');
 
       return next ?? null;
     },
@@ -425,13 +422,6 @@ describe('the Claude subscription wire', () => {
     await expect(failed).rejects.toThrow('Claude usage limit reached on the account main: Usage credits are required for this model.');
     await expect(failed).rejects.toHaveProperty('cause.code', 'budget');
     expect(sent.length).toBe(1);
-  });
-
-  test('a revoked refresh token is the same remedy, with nothing sent', async () => {
-    const { sent, fetchFn } = wire([]);
-
-    await expect(turn(createClaudeProvider(), deps(fetchFn, ['revoked']))).rejects.toThrow('Your Claude login is no longer valid.');
-    expect(sent).toEqual([]);
   });
 
   test('a model name the retired claude binary made up is refused before anything is sent, pointing to /model', () => {

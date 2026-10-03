@@ -1,4 +1,5 @@
 // Shared wire path to the user's Cloudflare AI endpoint (workers-ai, my-gateway, /api/user/ai/v1 proxy).
+import { authenticatedSend } from './authenticated-send';
 import type { AuthResolution, AuthResolver, ProviderWaitInfo } from './types';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
@@ -73,18 +74,18 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
       return baseFetch(url, { ...init, headers });
     };
 
-    // A token revoked mid-flight comes back 401 despite UserDO's proactive refresh: force one refresh, retry once.
-    let resolved = auth;
-    let res = await send(resolved);
+    // A token revoked mid-flight comes back 401 despite the proactive refresh. A renewal without an endpoint is no login.
+    const answer = await authenticatedSend({
+      key: opts.credKey, auth, send,
+      getAuth: async (key, request) => {
+        const renewed = await opts.getAuth(key, request);
 
-    if (res.status === 401) {
-      const refreshed = await opts.getAuth(opts.credKey, { rejected: resolved.headers });
+        return renewed?.baseURL ? renewed : null;
+      },
+    });
 
-      if (refreshed?.baseURL) {
-        resolved = refreshed;
-        res = await send(resolved);
-      }
-    }
+    const res = answer.kind === 'absent' ? errorResponse(401, opts.missingCredentialMessage) : answer.response;
+    const resolved = answer.kind === 'answered' ? answer.auth : auth;
 
     if (!res.ok) {
       // Counted before mapping: status and credential-key name only, never the credential or body
