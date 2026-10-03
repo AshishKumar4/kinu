@@ -72,25 +72,25 @@ export function notifyWorkspacesModelSettingsChanged<Id>(
   userDO: Pick<UserDO, 'listActiveWorkspaces'>,
   ctx: Pick<ExecutionContext, 'waitUntil'>,
 ): void {
-  ctx.waitUntil((async (): Promise<void> => {
-    let workspaces: Array<{ name: string }> | null;
+  ctx.waitUntil(settle(Effect.gen(function* () {
+    const workspaces = yield* Effect.catchCause(
+      Effect.promise(async (): Promise<Array<{ name: string }> | null> => userDO.listActiveWorkspaces(await ownerCaller(env))),
+      (failed) => Effect.sync(() => {
+        diagnostics.failure('workspace.model_settings_fanout_failed', toKinuError({
+          doing: 'notifying the user\'s workspaces of a model settings change',
+          cause: Cause.squash(failed),
+          otherwise: 'unavailable',
+        }));
 
-    try {
-      workspaces = await userDO.listActiveWorkspaces(await ownerCaller(env));
-    } catch (cause) {
-      diagnostics.failure('workspace.model_settings_fanout_failed', toKinuError({
-        doing: 'notifying the user\'s workspaces of a model settings change',
-        cause,
-        otherwise: 'unavailable',
-      }));
-      workspaces = null;
-    }
+        return null;
+      }),
+    );
 
     // Unreadable roster: skip; the write landed and each workspace reconciles on next use.
     if (workspaces === null) return;
 
-    const settled = await Promise.allSettled(workspaces
-      .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onModelSettingsChanged()));
+    const settled = yield* Effect.promise(() => Promise.allSettled(workspaces
+      .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onModelSettingsChanged())));
 
     for (const [index, outcome] of settled.entries()) {
       if (outcome.status === 'fulfilled') continue;
@@ -100,5 +100,5 @@ export function notifyWorkspacesModelSettingsChanged<Id>(
         otherwise: 'unavailable',
       }), { workspace: workspaces[index].name });
     }
-  })());
+  })));
 }

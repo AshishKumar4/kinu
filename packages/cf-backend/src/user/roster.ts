@@ -1,6 +1,7 @@
 /** The owner's roster, paged in SQL, and the socket its changes arrive on. */
 import * as v from 'valibot';
-import { KinuError } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { KinuError, settleSync } from '@kinu.run/core/obs';
 import { rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type RosterBucket, type SqlExec, type WorkspaceOverview } from '@kinu.run/core';
 import type { WorkspaceEntry } from './user-do';
 
@@ -82,21 +83,18 @@ function encodeRosterCursor(entry: Pick<WorkspaceEntry, 'name' | 'lastVisited'>)
 
 const RosterCursorSchema = v.strictObject({ v: v.number(), n: v.string() });
 
-function decodeRosterCursor(cursor?: string | null): { v: number; n: string } | null {
-  if (cursor == null || cursor === '') return null;
-  let raw: unknown;
+function decodeRosterCursor(cursor?: string | null): Effect.Effect<{ v: number; n: string } | null, KinuError> {
+  return Effect.gen(function* () {
+    if (cursor == null || cursor === '') return null;
 
-  try {
-    raw = JSON.parse(decodeURIComponent(cursor));
-  } catch (e) {
-    throw new KinuError('bad_input', 'Invalid workspace roster cursor; start from page one.', { cause: e });
-  }
+    const parsed = yield* Effect.catchCause(Effect.sync(() => v.safeParse(RosterCursorSchema, JSON.parse(decodeURIComponent(cursor)))), (failed) => Effect.fail(
+      new KinuError('bad_input', 'Invalid workspace roster cursor; start from page one.', { cause: Cause.squash(failed) }),
+    ));
 
-  const parsed = v.safeParse(RosterCursorSchema, raw);
+    if (!parsed.success) return yield* new KinuError('bad_input', 'Invalid workspace roster cursor; start from page one.');
 
-  if (!parsed.success) throw new KinuError('bad_input', 'Invalid workspace roster cursor; start from page one.');
-
-  return parsed.output;
+    return parsed.output;
+  });
 }
 
 /** A tile a later schema cannot read shows as none until the workspace pushes again. */
@@ -161,37 +159,39 @@ function pageRows(sql: SqlExec, query: RosterQuery, cursor: { v: number; n: stri
 
 /** A chunk short of matches reads on past its last row. */
 export function rosterPage(sql: SqlExec, query: RosterQuery = {}): RosterPage {
-  const limit = Math.min(query.limit ?? WORKSPACE_LIST_LIMIT, WORKSPACE_LIST_LIMIT);
-  const entries: RosterEntry[] = [];
-  let cursor = decodeRosterCursor(query.cursor);
-  let more = false;
+  return settleSync(Effect.gen(function* () {
+    const limit = Math.min(query.limit ?? WORKSPACE_LIST_LIMIT, WORKSPACE_LIST_LIMIT);
+    const entries: RosterEntry[] = [];
+    let cursor = yield* decodeRosterCursor(query.cursor);
+    let more = false;
 
-  for (;;) {
-    const rows = pageRows(sql, query, cursor, limit + 1);
+    for (;;) {
+      const rows = pageRows(sql, query, cursor, limit + 1);
 
-    for (const row of rows) {
-      if (!rosterMatches(row, query.query ?? '')) continue;
+      for (const row of rows) {
+        if (!rosterMatches(row, query.query ?? '')) continue;
 
-      if (entries.length === limit) {
-        more = true;
-        break;
+        if (entries.length === limit) {
+          more = true;
+          break;
+        }
+
+        entries.push(rosterEntry(row));
       }
 
-      entries.push(rosterEntry(row));
+      const last = rows.at(-1);
+
+      if (more || rows.length <= limit || last === undefined) break;
+      cursor = { v: last.lastVisited, n: last.name };
     }
 
-    const last = rows.at(-1);
+    const counts = rosterCounts(sql);
+    const lastEntry = entries.at(-1);
 
-    if (more || rows.length <= limit || last === undefined) break;
-    cursor = { v: last.lastVisited, n: last.name };
-  }
-
-  const counts = rosterCounts(sql);
-  const lastEntry = entries.at(-1);
-
-  return {
-    entries, total: rosterTotal(sql, query, counts), nextCursor: more && lastEntry !== undefined ? encodeRosterCursor(lastEntry) : null, counts,
-  };
+    return {
+      entries, total: rosterTotal(sql, query, counts), nextCursor: more && lastEntry !== undefined ? encodeRosterCursor(lastEntry) : null, counts,
+    };
+  }));
 }
 
 function rosterTotal(sql: SqlExec, query: RosterQuery, counts: RosterCounts): number {

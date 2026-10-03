@@ -1,5 +1,5 @@
 /** `/api/user/*`, behind the session gate. `GET /credentials` never returns a secret. */
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { Hono, type Context } from 'hono';
 import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
@@ -9,7 +9,7 @@ import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
-import { diagnostics, authoredRefusal, toKinuError, settle } from '@kinu.run/core/obs';
+import { diagnostics, authoredRefusal, toKinuError, settle, type KinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listAvailableModels, listProviderCatalog, testAvailableModel } from './available-models';
 import { readUserAccountUsage } from './account-usage';
@@ -64,7 +64,7 @@ const warmedMcpUsers = new Set<string>();
 const RosterBucketSchema = v.optional(v.picklist(['needs', 'working', 'idle']));
 
 /** GET /api/user/workspaces: one roster page; a garbage cursor maps to 400. */
-async function listWorkspaceRoster(c: UserContext): Promise<Response> {
+function listWorkspaceRoster(c: UserContext): Effect.Effect<Response, KinuError> {
   const url = new URL(c.req.url);
   const cursor = url.searchParams.get('cursor');
   const limitRaw = url.searchParams.get('limit');
@@ -73,16 +73,14 @@ async function listWorkspaceRoster(c: UserContext): Promise<Response> {
   const query = url.searchParams.get('q') ?? undefined;
 
   if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
-    return err(400, 'Workspace roster limit must be a positive integer.');
+    return Effect.succeed(err(400, 'Workspace roster limit must be a positive integer.'));
   }
 
-  if (!bucket.success) return err(400, 'Workspace roster bucket must be needs, working or idle.');
+  if (!bucket.success) return Effect.succeed(err(400, 'Workspace roster bucket must be needs, working or idle.'));
 
-  try {
-    return json({ body: await c.get('stub').listWorkspaces(c.get('owner'), { cursor, limit, bucket: bucket.output, query }) });
-  } catch (cause) {
-    throw authoredRefusal({ doing: 'listing your workspaces', cause });
-  }
+  return Effect.catchCause(Effect.gen(function* () {
+    return json({ body: yield* Effect.promise(() => c.get('stub').listWorkspaces(c.get('owner'), { cursor, limit, bucket: bucket.output, query })) });
+  }), (failed) => Effect.fail(authoredRefusal({ doing: 'listing your workspaces', cause: Cause.squash(failed) })));
 }
 
 function cliOriginFor(c: UserContext): string {
@@ -151,20 +149,14 @@ userRoutes.use('/api/user/*', ownerGate(), async (c, next) => {
   if (!warmedMcpUsers.has(identity.userId)) {
     warmedMcpUsers.add(identity.userId);
 
-    const warmMcp = async (): Promise<void> => {
-      try {
-        await stub.userMcp_warmConnections(owner);
-      } catch (cause) {
-        warmedMcpUsers.delete(identity.userId);
-        diagnostics.failure('user.bootstrap_failed', toKinuError({
-          doing: 'bootstrapping the user on first hit in this isolate',
-          cause,
-          otherwise: 'unavailable',
-        }), { step: 'mcp_warm', userId: identity.userId });
-      }
-    };
-
-    c.executionCtx.waitUntil(warmMcp());
+    c.executionCtx.waitUntil(settle(Effect.catchCause(Effect.promise(() => stub.userMcp_warmConnections(owner)), (failed) => Effect.sync(() => {
+      warmedMcpUsers.delete(identity.userId);
+      diagnostics.failure('user.bootstrap_failed', toKinuError({
+        doing: 'bootstrapping the user on first hit in this isolate',
+        cause: Cause.squash(failed),
+        otherwise: 'unavailable',
+      }), { step: 'mcp_warm', userId: identity.userId });
+    }))));
   }
 
   c.set('stub', stub);
@@ -199,7 +191,7 @@ userRoutes.get('/api/user/cli', async (c) => {
   });
 });
 
-userRoutes.get('/api/user/workspaces', listWorkspaceRoster);
+userRoutes.get('/api/user/workspaces', (c) => settle(listWorkspaceRoster(c)));
 
 // A socket cannot cross RPC; its upgrade request can.
 userRoutes.get('/api/user/workspaces/live', async (c) => c.get('stub').fetch(new Request(new URL(ROSTER_SOCKET_PATH, c.req.url), c.req.raw)));

@@ -8,7 +8,7 @@ import {
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderThrownChain, toKinuError, settleLogged, settle } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, logged, renderThrownChain, toKinuError, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from '@kinu.run/core';
@@ -129,7 +129,7 @@ export function createCloudWorkspaceForUser<Id>(
       const err = Cause.squash(failed);
       // Only reached for a row this create inserted (`active` returned above), so undo is safe.
       // A rollback failure is recorded separately; the original fault still propagates.
-      yield* Effect.promise(async () => settleLogged('workspace.create_rollback_unexpected', { doing: 'undoing a failed workspace create', otherwise: 'unavailable' }, () => rollbackRegistration({ env, userId, userDO, caller, entry, cause: err }), { workspace: entry.name }));
+      yield* logged('workspace.create_rollback_unexpected', { doing: 'undoing a failed workspace create', otherwise: 'unavailable' }, rollbackRegistration({ env, userId, userDO, caller, entry, cause: err }), { workspace: entry.name });
 
       return yield* Effect.failCause(failed);
     }));
@@ -141,42 +141,46 @@ export function createCloudWorkspaceForUser<Id>(
  * `releaseWorkspaceReservation` (never contacts it); otherwise `removeWorkspace`, which fails
  * closed and leaves the rows standing (recorded, tolerated). A release failure propagates.
  */
-async function rollbackRegistration<Id>(input: {
+function rollbackRegistration<Id>(input: {
   env: CreateCloudWorkspaceEnv<Id>;
   userId: string;
   userDO: CloudWorkspaceRegistry;
   caller: UserCaller;
   entry: WorkspaceEntry;
   cause: unknown;
-}): Promise<void> {
-  const { env, userId, userDO, caller, entry } = input;
-  const contested = OWNED_BY_ANOTHER.test(renderThrownChain({ cause: input.cause }));
+}): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    const { env, userId, userDO, caller, entry } = input;
+    const contested = OWNED_BY_ANOTHER.test(renderThrownChain({ cause: input.cause }));
 
-  try {
-    if (contested) {
-      await userDO.releaseWorkspaceReservation(caller, entry.name, entry.createdAt);
-    } else {
-      await userDO.removeWorkspace(caller, entry.name, userId);
-    }
-  } catch (cause) {
-    const failure = toKinuError({
-      doing: contested
-        ? 'releasing the roster row a failed create reserved'
-        : 'tearing down the workspace a failed create registered',
-      cause,
-      otherwise: 'unavailable',
+    const undo = contested
+      ? Effect.promise(() => userDO.releaseWorkspaceReservation(caller, entry.name, entry.createdAt))
+      : Effect.promise(() => userDO.removeWorkspace(caller, entry.name, userId));
+
+    const undone = yield* Effect.catchCause(Effect.as(undo, true), (failed) => {
+      const failure = toKinuError({
+        doing: contested
+          ? 'releasing the roster row a failed create reserved'
+          : 'tearing down the workspace a failed create registered',
+        cause: Cause.squash(failed),
+        otherwise: 'unavailable',
+      });
+
+      if (contested) return Effect.fail(failure);
+
+      return Effect.sync(() => {
+        diagnostics.failure('workspace.create_rollback_failed', failure, {
+          workspace: entry.name, contested,
+        });
+
+        return false;
+      });
     });
 
-    if (contested) throw failure;
-    diagnostics.failure('workspace.create_rollback_failed', failure, {
-      workspace: entry.name, contested,
-    });
-
-    return;
-  }
-
-  // Unconditional: tombstoning a row that was never written is a no-op.
-  await unindexWorkspace(env, { userId, name: entry.name });
+    if (!undone) return;
+    // Unconditional: tombstoning a row that was never written is a no-op.
+    yield* Effect.promise(() => unindexWorkspace(env, { userId, name: entry.name }));
+  });
 }
 
 /** `claimOwner`'s refusal for another account's name. Matched by message because error classes
