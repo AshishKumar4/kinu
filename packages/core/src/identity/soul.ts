@@ -142,7 +142,10 @@ export async function readSoul(vfs: VFS): Promise<string | null> {
 
 /** The mission every listing shows: summarized from the owner's soul, readable without opening a filesystem. */
 export function readMission(sql: SqlExecutor): string | null {
-  return ownerMissionOf(soulReadsSql(sql));
+  // A turn reads this: the soul table exists from schema init, so no probe of sqlite_master.
+  const [row] = sql<SqlRow>`SELECT markdown FROM workspace_soul WHERE id = 1`;
+
+  return missionOf(row === undefined ? null : soulText(row));
 }
 
 /** The first soul, from the workspace's name and stated purpose; `seal` is `writeWorkspaceSoul`, the one writer. */
@@ -223,8 +226,8 @@ function recordKernelSoul(db: SqlDatabase, markdown: string): void {
 }
 
 /** Summarized from the soul the owner wrote: null before one is written, or when it says nothing a summary keeps. */
-export function ownerMissionOf(reads: SoulReads): string | null {
-  const mission = summarizeSoul(reads.soul);
+export function missionOf(soul: string | null): string | null {
+  const mission = summarizeSoul(soul);
 
   return mission === '' ? null : mission;
 }
