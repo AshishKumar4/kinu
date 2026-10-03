@@ -530,7 +530,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     db.close();
   });
 
-  test('a turn produced with auto-evolution ON is recorded by a recovery that has it off', async () => {
+  test('a turn produced with learning ON is recorded by a recovery after it was turned off', async () => {
     const { db, rt } = workspace();
     const { model } = scriptedModel('answered');
     const events: SessionEvent[] = [];
@@ -540,10 +540,9 @@ describe('a recovery reads the record, not the session that finds it', () => {
     await session.send('write the migration', { id: crypto.randomUUID() });
     expect(completedTurns(rt)).toBe(0);
 
-    // `--no-auto-evolve` on the recovering process does not un-owe a window row earned with evolution on.
-    const next = new ProbeSession({
-      rt, db, model, noAutoEvolve: true, onEvent: (e) => events.push(e),
-    });
+    // Turning learning off before the recovery does not un-owe a row earned with it on.
+    rt.actor.config.setLearning(false);
+    const next = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
 
     next.skipBackoff();
     await next.recoverBackgroundJobs();
@@ -555,17 +554,17 @@ describe('a recovery reads the record, not the session that finds it', () => {
     db.close();
   });
 
-  test('a turn produced with auto-evolution OFF is recorded by no later session', async () => {
+  test('a turn produced with learning OFF is recorded by no later session, even once it is back on', async () => {
     const { db, rt } = workspace();
     const { model } = scriptedModel('answered');
     const events: SessionEvent[] = [];
 
-    const session = new ProbeSession({
-      rt, db, model, noAutoEvolve: true, onEvent: (e) => events.push(e),
-    });
+    rt.actor.config.setLearning(false);
+    const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
 
     session.cutAt('turn_record', 'before');
     await session.send('write the migration', { id: crypto.randomUUID() });
+    rt.actor.config.setLearning(true);
 
     // The inverse: a turn that owed no evolution state must not acquire one from the recovering host.
     const next = await restart({ rt, db, model, events });

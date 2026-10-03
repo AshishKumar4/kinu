@@ -98,7 +98,8 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     const gate = Promise.withResolvers<void>();
     const asked: string[] = [];
     const events = new AwaitedList<SessionEvent>();
-    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => events.push(event) });
+    rt.actor.config.setLearning(false);
+    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), onEvent: (event) => events.push(event) });
 
     const userTurn = session.send('hold the slot', { id: crypto.randomUUID() });
     await events.until((frames) => frames.some((event) => event.type === 'text-delta'));
@@ -148,7 +149,8 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     gate.resolve();
     const asked: string[] = [];
     const events = new AwaitedList<SessionEvent>();
-    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => events.push(event) });
+    rt.actor.config.setLearning(false);
+    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), onEvent: (event) => events.push(event) });
     await session.flushPendingDrains();
     await events.until((frames) => frames.some((event) => event.type === 'turn-end'));
 

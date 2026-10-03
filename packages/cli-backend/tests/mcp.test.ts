@@ -69,8 +69,10 @@ function sessionWithModel(model: LanguageModel) {
 
   const events: SessionEvent[] = [];
 
+  rt.actor.config.setLearning(false);
+
   const session = new LocalAgentSession({
-    rt, db, model, onEvent: (e) => events.push(e), noAutoEvolve: true,
+    rt, db, model, onEvent: (e) => events.push(e),
   });
 
   return { session, events };

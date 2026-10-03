@@ -167,12 +167,13 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
       });
 
       const evs: SessionEvent[] = [];
+      rt.actor.config.setLearning(false);
 
       return {
         db: dbOff,
         events: evs,
         session: new LocalAgentSession({
-          rt, db: dbOff, noAutoEvolve: true, onEvent: (e) => evs.push(e),
+          rt, db: dbOff, onEvent: (e) => evs.push(e),
           model: scriptedEpisode([CREATE_DOUBLE, 'return await tools.doubleIt(21);']),
         }),
       };

@@ -29,7 +29,8 @@ function struggler(prompts: string[]) {
 test('a turn learns from its schema-refused file call before any reply rates it, and the next turn is shown the lesson', async () => {
   const prompts: string[] = [];
   const model = struggler(prompts);
-  const { db, rt, session } = setup('unused', model, { noAutoEvolve: false });
+  const { db, rt, session } = setup('unused', model);
+  rt.actor.config.setLearning(true);
 
   // The session ends on this turn: no reply will ever rate it.
   await session.send('read the README', { id: crypto.randomUUID() });

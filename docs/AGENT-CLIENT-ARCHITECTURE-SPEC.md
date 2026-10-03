@@ -19,8 +19,9 @@ One contract covers both: `AgentClient` (`packages/cli/src/agent-client.ts`).
 `CloudAgentClient` (`packages/cli/src/cloud-agent-client.ts`) or to the client
 `openLocalAgentClient` opens (`packages/cli/src/local-agent-client.ts`). A cloud
 turn runs in the Durable Object; the CLI keeps no model loop for it.
-`rejectLocalLlmFlags` refuses `--model`, `--base-url`, `--auth` and
-`--no-auto-evolve` on cloud targets, and points `--model` at `kinu model`. The
+`rejectLocalLlmFlags` refuses `--model`, `--base-url` and `--auth` on cloud
+targets, and points `--model` at `kinu model`. `--no-auto-evolve` turns the
+agent's `learning` setting off on either target. The
 web UI is the canonical cloud client through `useAgent` and `useAgentChat`
 (`packages/cf-backend/src/hooks/use-kinu.ts`).
 

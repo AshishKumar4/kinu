@@ -148,8 +148,10 @@ async function main(): Promise<void> {
   // seating session for the whole panel: one host, a seat per member. Sharing
   // one actor across the panel would give every arm one ledger and make the
   // comparison meaningless.
+  rt.actor.config.setLearning(false);
+
   const seating = new LocalAgentSession({
-    rt, db, model: benchChatModel(analyst), onEvent: () => {}, noAutoEvolve: true, oneShot: true,
+    rt, db, model: benchChatModel(analyst), onEvent: () => {}, oneShot: true,
   });
 
   const headRuntime = createCLIHeadRuntime({

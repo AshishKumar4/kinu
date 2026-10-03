@@ -64,6 +64,8 @@ sequenceDiagram
 
 ## Turn-level evolution
 
+One per-agent setting, `learning` (`AgentConfigStore.getLearning`, on by default), decides whether an agent learns at all, on both backends: off, its turns record no ratings, struggles or lessons and the cadence lane proposes and trials nothing. `--no-auto-evolve` and `setEvolutionConfig({ learning: false })` set it; the engine reads it at each turn, so a change applies to the next one. A row a turn already owes is still settled.
+
 A turn is reviewed when the next user message arrives. `AgentOrchestrator.observeUserTurn` claims the previous turn from the durable window and dispatches `reviewTurn()` (`packages/core/src/evolution/engine.ts`) with the new message as its follow-up, but only when that message continues the conversation. An interactive host or the Durable Object runs the review detached, so it never holds the turn queue. A one-shot host writes a durable row instead (`deferTurnReview`), and the next host that opens the workspace drains it through the same `reviewTurn` path.
 
 No length, duration or tool exit rates a turn. A turn's rating is the user's reply to it, recorded in `turn_ratings` (`packages/core/src/evolution/ratings.ts`; design in [EVOLUTION-REDESIGN.md](./EVOLUTION-REDESIGN.md) §1). A rating is a satisfaction score from 1 to 5, the probability that the reply corrected the turn, and what went wrong. Three sources write one, strongest first in `RATING_SOURCES`:

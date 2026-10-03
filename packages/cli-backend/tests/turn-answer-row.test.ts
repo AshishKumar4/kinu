@@ -130,8 +130,10 @@ describe('an interrupted turn', () => {
     const silent = openSession('silent');
     const opened = Promise.withResolvers<void>();
 
+    silent.rt.actor.config.setLearning(false);
+
     const a = new LocalAgentSession({
-      rt: silent.rt, db: silent.db, model: silentModel(), noAutoEvolve: true,
+      rt: silent.rt, db: silent.db, model: silentModel(),
       onEvent: (event) => { if (event.type === 'run-event' && event.event.type === 'model_operation') opened.resolve(); },
     });
 
@@ -147,8 +149,10 @@ describe('an interrupted turn', () => {
     const cut = openSession('cut');
     const streamed = Promise.withResolvers<void>();
 
+    cut.rt.actor.config.setLearning(false);
+
     const b = new LocalAgentSession({
-      rt: cut.rt, db: cut.db, model: parkedModel('part-'), noAutoEvolve: true,
+      rt: cut.rt, db: cut.db, model: parkedModel('part-'),
       onEvent: (event) => { if (event.type === 'text-delta') streamed.resolve(); },
     });
 
@@ -165,8 +169,10 @@ describe('an interrupted turn', () => {
     const opened = openSession('stopped-narrated');
     const streamed = Promise.withResolvers<void>();
 
+    opened.rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
-      rt: opened.rt, db: opened.db, model: narratedThenParked('Checking the fact first.', 'The fact is'), noAutoEvolve: true,
+      rt: opened.rt, db: opened.db, model: narratedThenParked('Checking the fact first.', 'The fact is'),
       onEvent: (event) => { if (event.type === 'text-delta' && event.delta === 'The fact is') streamed.resolve(); },
     });
 
@@ -187,8 +193,10 @@ describe('the assistant row holds the answer', () => {
     const { db, rt } = opened;
     const events: SessionEvent[] = [];
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
-      rt, db, model: narratedModel('Running the test in the sandbox:', 'FAIL'), noAutoEvolve: true, onEvent: (event) => events.push(event),
+      rt, db, model: narratedModel('Running the test in the sandbox:', 'FAIL'), onEvent: (event) => events.push(event),
     });
 
     await session.send('Run the test and reply with only PASS or FAIL.', { id: crypto.randomUUID() });
@@ -207,8 +215,10 @@ describe('the assistant row holds the answer', () => {
     const { db, rt } = opened;
     const streamedA = Promise.withResolvers<void>();
 
+    rt.actor.config.setLearning(false);
+
     const a = new LocalAgentSession({
-      rt, db, model: parkedModel('Looking at it: '), noAutoEvolve: true,
+      rt, db, model: parkedModel('Looking at it: '),
       onEvent: (event) => { if (event.type === 'text-delta') streamedA.resolve(); },
     });
 
@@ -218,8 +228,10 @@ describe('the assistant row holds the answer', () => {
     const eventsB: SessionEvent[] = [];
     const ended = Promise.withResolvers<void>();
 
+    rt.actor.config.setLearning(false);
+
     const b = new LocalAgentSession({
-      rt, db, model: narratedModel('', 'FAIL'), noAutoEvolve: true,
+      rt, db, model: narratedModel('', 'FAIL'),
       onEvent: (event) => { eventsB.push(event);
 
  if (event.type === 'turn-end') ended.resolve(); },
@@ -242,8 +254,10 @@ describe('the assistant row holds the answer', () => {
     const { db, rt } = opened;
     const streamedA = Promise.withResolvers<void>();
 
+    rt.actor.config.setLearning(false);
+
     const a = new LocalAgentSession({
-      rt, db, model: parkedModel('part-'), noAutoEvolve: true,
+      rt, db, model: parkedModel('part-'),
       onEvent: (event) => { if (event.type === 'text-delta') streamedA.resolve(); },
     });
 
@@ -269,8 +283,10 @@ describe('the assistant row holds the answer', () => {
       }),
     });
 
+    rt.actor.config.setLearning(false);
+
     const b = new LocalAgentSession({
-      rt, db, model: finishing, noAutoEvolve: true,
+      rt, db, model: finishing,
       onEvent: (event) => { if (event.type === 'turn-end') ended.resolve(); },
     });
 

@@ -260,8 +260,10 @@ export function setup(answer = 'hello there', model?: LanguageModel, extra?: Par
   const { db, rt } = workspaceRuntime();
   const events = new AwaitedList<SessionEvent>();
 
+  rt.actor.config.setLearning(false);
+
   const session = new LocalAgentSession({
-    rt, db, model: model ?? fakeModel(answer), onEvent: (event) => events.push(event), noAutoEvolve: true,
+    rt, db, model: model ?? fakeModel(answer), onEvent: (event) => events.push(event),
     profileAuthority: swarmsOn(rt, staticModelPlane()),
     ...extra,
   });
@@ -463,9 +465,11 @@ export function setupWithResolver(
   const { db, rt } = workspaceRuntime();
   const events = new AwaitedList<SessionEvent>();
 
+  rt.actor.config.setLearning(false);
+
   const session = new LocalAgentSession({
     rt, db, model: fakeModel('fallback'), modelResolver: resolver,
-    onEvent: (event) => events.push(event), noAutoEvolve: true,
+    onEvent: (event) => events.push(event),
     profileAuthority: swarmsOn(rt, resolverModelPlane(resolver)),
     ...extra,
   });

@@ -175,6 +175,7 @@ function setup(model: LanguageModel, profileAuthority: CliProfileSource = async 
   // The production initializer, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  rt.actor.config.setLearning(false);
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
@@ -192,7 +193,6 @@ function setup(model: LanguageModel, profileAuthority: CliProfileSource = async 
     modelResolver: fakeResolver(model),
     profileAuthority,
     mcpServers: {},
-    noAutoEvolve: true,
     transcript: { transcriptDir: join(home, 'sessions') },
     surface: 'interactive',
   });
@@ -209,6 +209,7 @@ function openPersistentClient(
   const db = new Database(dbPath);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  rt.actor.config.setLearning(false);
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
@@ -226,7 +227,6 @@ function openPersistentClient(
     modelResolver: fakeResolver(model),
     profileAuthority: async () => null,
     mcpServers: {},
-    noAutoEvolve: true,
     transcript: transcriptOptions,
     surface: 'interactive',
   });
