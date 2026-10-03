@@ -1093,7 +1093,7 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
   test('omits the AGENTS.md block when no file exists up the tree', async () => {
     const root = scratchDir('local-session-noagents');
 
-    const chain = discoverAgentsMd(
+    const chain = await discoverAgentsMd(
       root, { contextWindow: 400_000, modelOutputLimit: 32_000 }, () => 'unverified',
     );
 

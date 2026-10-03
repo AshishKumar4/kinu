@@ -29,7 +29,7 @@ function makeTree(): string {
 }
 
 describe('discoverAgentsMd', () => {
-  test('collects the walk-up chain ordered root-most first, nearest last', () => {
+  test('collects the walk-up chain ordered root-most first, nearest last', async () => {
     const root = makeTree();
     const nested = join(root, 'packages', 'app');
     mkdirSync(nested, { recursive: true });
@@ -37,34 +37,34 @@ describe('discoverAgentsMd', () => {
     writeFileSync(join(root, 'packages', 'AGENTS.md'), 'packages rules');
     writeFileSync(join(nested, 'AGENTS.md'), 'app rules');
 
-    const sources = discoverAgentsMd(nested, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(nested, WIDE, APPROVED);
     const inTree = sources.admitted.filter((f) => f.path.startsWith(root));
     expect(inTree.map((f) => f.content)).toEqual(['root rules', 'packages rules', 'app rules']);
     expect(inTree.at(-1)?.path).toBe(join(nested, 'AGENTS.md'));
     expect(sources.referenced.filter((ref) => ref.path.startsWith(root))).toEqual([]);
   });
 
-  test('skips levels without a file, and an empty file is neither admitted nor referenced', () => {
+  test('skips levels without a file, and an empty file is neither admitted nor referenced', async () => {
     const root = makeTree();
     const nested = join(root, 'a', 'b');
     mkdirSync(nested, { recursive: true });
     writeFileSync(join(root, 'AGENTS.md'), 'only root');
     writeFileSync(join(root, 'a', 'AGENTS.md'), '   \n');
 
-    const sources = discoverAgentsMd(nested, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(nested, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root)).map((f) => f.content))
       .toEqual(['only root']);
     expect(sources.referenced.filter((ref) => ref.path.startsWith(root))).toEqual([]);
   });
 
-  test('returns an empty chain when no AGENTS.md exists anywhere up the tree', () => {
+  test('returns an empty chain when no AGENTS.md exists anywhere up the tree', async () => {
     const root = makeTree();
-    const sources = discoverAgentsMd(root, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(root, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root))).toEqual([]);
     expect(sources.referenced.filter((ref) => ref.path.startsWith(root))).toEqual([]);
   });
 
-  test('an oversized AGENTS.md is sized, never read, and rendered as a sized reference', () => {
+  test('an oversized AGENTS.md is sized, never read, and rendered as a sized reference', async () => {
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     const oversized = 'B'.repeat(budgetOf(NARROW) + 1);
@@ -72,7 +72,7 @@ describe('discoverAgentsMd', () => {
     // lstat still sizes an unreadable file, but readFileSync throws EACCES: a read-before-admit discoverer fails here.
     chmodSync(path, 0o000);
 
-    const sources = discoverAgentsMd(root, NARROW, APPROVED);
+    const sources = await discoverAgentsMd(root, NARROW, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root))).toEqual([]);
     expect(sources.referenced.filter((ref) => ref.path.startsWith(root)))
       .toEqual([{ path, bytes: oversized.length }]);
@@ -82,7 +82,7 @@ describe('discoverAgentsMd', () => {
     expect(section).not.toContain('BBBB');
   });
 
-  test('the budget is spent nearest-first: a giant root file is referenced, the nearest is read whole', () => {
+  test('the budget is spent nearest-first: a giant root file is referenced, the nearest is read whole', async () => {
     const root = makeTree();
     const nested = join(root, 'pkg');
     mkdirSync(nested, { recursive: true });
@@ -90,7 +90,7 @@ describe('discoverAgentsMd', () => {
     writeFileSync(giant, 'R'.repeat(budgetOf(NARROW)));
     writeFileSync(join(nested, 'AGENTS.md'), 'nearest instructions win');
 
-    const sources = discoverAgentsMd(nested, NARROW, APPROVED);
+    const sources = await discoverAgentsMd(nested, NARROW, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root)).map((f) => f.content))
       .toEqual(['nearest instructions win']);
     expect(sources.referenced.filter((ref) => ref.path.startsWith(root)).map((ref) => ref.path))
@@ -101,16 +101,16 @@ describe('discoverAgentsMd', () => {
     expect(section).not.toContain('RRRR');
   });
 
-  test('a wider window admits the file a narrow one only references', () => {
+  test('a wider window admits the file a narrow one only references', async () => {
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     const content = 'A'.repeat(budgetOf(NARROW) + 1);
     writeFileSync(path, content);
     expect(content.length).toBeLessThan(budgetOf(WIDE));
 
-    expect(discoverAgentsMd(root, NARROW, APPROVED).referenced.map((ref) => ref.path))
+    expect((await discoverAgentsMd(root, NARROW, APPROVED)).referenced.map((ref) => ref.path))
       .toContain(path);
-    expect(discoverAgentsMd(root, WIDE, APPROVED).admitted.map((f) => f.content))
+    expect((await discoverAgentsMd(root, WIDE, APPROVED)).admitted.map((f) => f.content))
       .toContain(content);
   });
 });
@@ -118,14 +118,14 @@ describe('discoverAgentsMd', () => {
 describe('discoverAgentsMd — containment', () => {
   const SECRET = 'ssh-rsa AAAA-exfiltrated-private-key';
 
-  test('an AGENTS.md symlinked to a file outside its directory is not admitted', () => {
+  test('an AGENTS.md symlinked to a file outside its directory is not admitted', async () => {
     const root = makeTree();
     const outside = makeTree();
     const evil = join(outside, 'evil.md');
     writeFileSync(evil, SECRET);
     symlinkSync(evil, join(root, 'AGENTS.md'));
 
-    const sources = discoverAgentsMd(root, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(root, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root))).toEqual([]);
     expect(sources.referenced.filter((ref) => ref.path.startsWith(root))).toEqual([]);
     expect(JSON.stringify(sources)).not.toContain('exfiltrated');
@@ -133,7 +133,7 @@ describe('discoverAgentsMd — containment', () => {
     expect(renderAgentsMdSection(sources, 'unverified')).not.toContain('exfiltrated');
   });
 
-  test('an escaping symlink does not disturb the plain files above and below it', () => {
+  test('an escaping symlink does not disturb the plain files above and below it', async () => {
     const root = makeTree();
     const outside = makeTree();
     const nested = join(root, 'pkg', 'app');
@@ -143,26 +143,26 @@ describe('discoverAgentsMd — containment', () => {
     symlinkSync(join(outside, 'evil.md'), join(root, 'pkg', 'AGENTS.md'));
     writeFileSync(join(nested, 'AGENTS.md'), 'app rules');
 
-    const sources = discoverAgentsMd(nested, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(nested, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root)).map((f) => f.content))
       .toEqual(['root rules', 'app rules']);
     expect(JSON.stringify(sources)).not.toContain('exfiltrated');
   });
 
-  test('an AGENTS.md symlinked to a file inside its own directory is admitted', () => {
+  test('an AGENTS.md symlinked to a file inside its own directory is admitted', async () => {
     const root = makeTree();
     mkdirSync(join(root, 'rules'));
     writeFileSync(join(root, 'rules', 'shared.md'), 'shared monorepo rules');
     // Legal: packages share one rule file this way.
     symlinkSync(join(root, 'rules', 'shared.md'), join(root, 'AGENTS.md'));
 
-    const sources = discoverAgentsMd(root, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(root, WIDE, APPROVED);
     const inTree = sources.admitted.filter((f) => f.path.startsWith(root));
     expect(inTree.map((f) => f.content)).toEqual(['shared monorepo rules']);
     expect(inTree[0]?.path).toBe(join(root, 'AGENTS.md'));
   });
 
-  test('a symlink up to an ancestor escapes its own directory and is refused', () => {
+  test('a symlink up to an ancestor escapes its own directory and is refused', async () => {
     const root = makeTree();
     const nested = join(root, 'pkg');
     mkdirSync(nested);
@@ -170,38 +170,38 @@ describe('discoverAgentsMd — containment', () => {
     // `pkg/AGENTS.md -> ../AGENTS.md` leaves `pkg`; the walk reaches the root file on its own.
     symlinkSync(join(root, 'AGENTS.md'), join(nested, 'AGENTS.md'));
 
-    const sources = discoverAgentsMd(nested, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(nested, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root)).map((f) => f.path))
       .toEqual([join(root, 'AGENTS.md')]);
   });
 
-  test('a directory named AGENTS.md contributes nothing', () => {
+  test('a directory named AGENTS.md contributes nothing', async () => {
     const root = makeTree();
     mkdirSync(join(root, 'AGENTS.md'));
-    const sources = discoverAgentsMd(root, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(root, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root))).toEqual([]);
     expect(sources.referenced.filter((ref) => ref.path.startsWith(root))).toEqual([]);
   });
 });
 
 describe('discoverAgentsMd — trust classification', () => {
-  test('an admitted file with no approval is unverified', () => {
+  test('an admitted file with no approval is unverified', async () => {
     const root = makeTree();
     writeFileSync(join(root, 'AGENTS.md'), 'root rules');
-    const sources = discoverAgentsMd(root, WIDE, UNVERIFIED);
+    const sources = await discoverAgentsMd(root, WIDE, UNVERIFIED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root)).map((f) => f.trust))
       .toEqual(['unverified']);
   });
 
-  test('an admitted file the resolver approves is approved', () => {
+  test('an admitted file the resolver approves is approved', async () => {
     const root = makeTree();
     writeFileSync(join(root, 'AGENTS.md'), 'root rules');
-    const sources = discoverAgentsMd(root, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(root, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root)).map((f) => f.trust))
       .toEqual(['approved']);
   });
 
-  test('the resolver is asked about the exact bytes that were read, at that path', () => {
+  test('the resolver is asked about the exact bytes that were read, at that path', async () => {
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     const content = 'root rules';
@@ -209,7 +209,7 @@ describe('discoverAgentsMd — trust classification', () => {
 
     const asked: Array<{ path: string; content: string }> = [];
 
-    const sources = discoverAgentsMd(root, WIDE, (p, c) => {
+    const sources = await discoverAgentsMd(root, WIDE, (p, c) => {
       asked.push({ path: p, content: c });
 
       return 'approved';
@@ -219,7 +219,7 @@ describe('discoverAgentsMd — trust classification', () => {
     expect(asked).toContainEqual({ path, content });
   });
 
-  test('editing an approved file changes what the resolver is asked about', () => {
+  test('editing an approved file changes what the resolver is asked about', async () => {
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     writeFileSync(path, 'first rules');
@@ -231,19 +231,19 @@ describe('discoverAgentsMd — trust classification', () => {
       return 'approved';
     };
 
-    discoverAgentsMd(root, WIDE, capture);
+    await discoverAgentsMd(root, WIDE, capture);
     writeFileSync(path, 'second rules');
-    discoverAgentsMd(root, WIDE, capture);
+    await discoverAgentsMd(root, WIDE, capture);
 
     expect(seen).toEqual(['first rules', 'second rules']);
   });
 
-  test('a referenced-but-unread file is never handed to the resolver', () => {
+  test('a referenced-but-unread file is never handed to the resolver', async () => {
     const root = makeTree();
     writeFileSync(join(root, 'AGENTS.md'), 'C'.repeat(budgetOf(NARROW) + 1));
     const asked: string[] = [];
 
-    const sources = discoverAgentsMd(root, NARROW, (p) => {
+    const sources = await discoverAgentsMd(root, NARROW, (p) => {
       asked.push(p);
 
       return 'approved';
@@ -255,18 +255,18 @@ describe('discoverAgentsMd — trust classification', () => {
 });
 
 describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
-  test('a self-referential AGENTS.md is reported unavailable, not thrown', () => {
+  test('a self-referential AGENTS.md is reported unavailable, not thrown', async () => {
     // A self-link makes statSync and realpathSync throw ELOOP; escaping discovery would be a one-command DoS.
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     symlinkSync(path, path);
 
-    const sources = discoverAgentsMd(root, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(root, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path === path)).toEqual([]);
     expect(sources.unavailable).toContainEqual({ path, reason: 'symlink cycle' });
   });
 
-  test('a two-link cycle between two AGENTS.md files is reported, not thrown', () => {
+  test('a two-link cycle between two AGENTS.md files is reported, not thrown', async () => {
     const root = makeTree();
     const nested = join(root, 'pkg');
     mkdirSync(nested, { recursive: true });
@@ -275,12 +275,12 @@ describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
     symlinkSync(b, a);
     symlinkSync(a, b);
 
-    const sources = discoverAgentsMd(nested, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(nested, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path === a || f.path === b)).toEqual([]);
     expect(sources.unavailable?.map((u) => u.reason)).toContain('symlink cycle');
   });
 
-  test('a cycle does not stop the real files in the chain from being carried', () => {
+  test('a cycle does not stop the real files in the chain from being carried', async () => {
     const root = makeTree();
     const nested = join(root, 'app');
     mkdirSync(nested, { recursive: true });
@@ -288,18 +288,18 @@ describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
     symlinkSync(broken, broken);
     writeFileSync(join(root, 'AGENTS.md'), 'root rules');
 
-    const sources = discoverAgentsMd(nested, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(nested, WIDE, APPROVED);
     expect(sources.admitted.map((f) => f.content)).toContain('root rules');
     expect(sources.unavailable?.map((u) => u.path)).toContain(broken);
   });
 
-  test('an unavailable path is never handed to the resolver', () => {
+  test('an unavailable path is never handed to the resolver', async () => {
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     symlinkSync(path, path);
     const asked: string[] = [];
 
-    discoverAgentsMd(root, WIDE, (p) => {
+    await discoverAgentsMd(root, WIDE, (p) => {
       asked.push(p);
 
       return 'approved';
@@ -307,14 +307,14 @@ describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
     expect(asked).not.toContain(path);
   });
 
-  test('an escaping symlink is reported with a reason that names no target', () => {
+  test('an escaping symlink is reported with a reason that names no target', async () => {
     const root = makeTree();
     const outside = join(scratchDir('outside'), 'secret.md');
     writeFileSync(outside, 'SECRET-BYTES');
     const path = join(root, 'AGENTS.md');
     symlinkSync(outside, path);
 
-    const sources = discoverAgentsMd(root, WIDE, APPROVED);
+    const sources = await discoverAgentsMd(root, WIDE, APPROVED);
     const entry = sources.unavailable?.find((u) => u.path === path);
     expect(entry?.reason).toBe('symlink points outside its own directory');
     expect(JSON.stringify(sources)).not.toContain('SECRET-BYTES');
@@ -323,7 +323,7 @@ describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
 });
 
 describe('discoverAgentsMd — containment survives a post-admission swap', () => {
-  test('reads no out-of-tree bytes when the validated target becomes a symlink', () => {
+  test('reads no out-of-tree bytes when the validated target becomes a symlink', async () => {
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     const target = join(root, 'shared.md');
@@ -332,7 +332,7 @@ describe('discoverAgentsMd — containment survives a post-admission swap', () =
     writeFileSync(outside, 'OUTSIDE-POISON-MUST-NEVER-REACH-THE-PROMPT');
     symlinkSync(target, path);
 
-    const sources = discoverAgentsMd(root, WIDE, APPROVED, () => {
+    const sources = await discoverAgentsMd(root, WIDE, APPROVED, () => {
       renameSync(target, `${target}.old`);
       symlinkSync(outside, target);
     });
