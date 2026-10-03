@@ -71,6 +71,14 @@ export function refusing(doing: string, otherwise: ErrorCode): (failed: Cause.Ca
   return (failed) => Effect.sync(() => refusalOf(toKinuError({ doing, cause: Cause.squash(failed), otherwise })));
 }
 
+/** A failure nothing awaits, classified and handed to `record` (a diagnostic, a span): the work goes on. */
+export function recording(
+  failure: { readonly doing: string; readonly otherwise: ErrorCode },
+  record: (error: KinuError) => void,
+): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
+  return (failed) => Effect.sync(() => { record(toKinuError({ ...failure, cause: Cause.squash(failed) })); });
+}
+
 export function showing(show: (chain: string) => void): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
   return (failed) => Effect.sync(() => { show(renderThrownChain({ cause: Cause.squash(failed) })); });
 }

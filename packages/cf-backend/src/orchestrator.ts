@@ -233,7 +233,7 @@ import {
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect } from 'effect';
-import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, refusing, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type Refusal, settleLogged } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, refusing, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { ownerContainer, type CodexContainer } from "./egress/codex-egress-route";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
@@ -377,6 +377,26 @@ function clampLimit(requested: number | undefined, max: number): number {
 
 /** agents 0.24's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
 const PERSISTED_NAME_KEY = '__ps_name';
+
+/** An alarm phase's failure: marked on its span and recorded, so the tick goes on to its next phase. */
+function phaseFailed(
+  span: ScopedSpan,
+  doing: { readonly doing: string; readonly otherwise: ErrorCode },
+  record: (failure: KinuError) => void,
+): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
+  return recording(doing, (failure) => {
+    span.fail(failure);
+    record(failure);
+  });
+}
+
+/** A terminal step's refusal as the pane reads it, or null once the step is done. */
+function terminalStep(step: Effect.Effect<unknown>, doing: string): Effect.Effect<{ error: string } | null> {
+  return Effect.matchCause(step, {
+    onSuccess: () => null,
+    onFailure: (failed) => ({ error: terminalRefusal({ doing, cause: Cause.squash(failed) }) }),
+  });
+}
 
 /** A terminal that cannot open: the owner's pane reads the whole chain. */
 function terminalRefusal(failure: { doing: string; cause: unknown }): string {
@@ -1435,7 +1455,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (below.length === 0) return;
 
-    this.detachOwned(async () => {
+    this.detachOwned(Effect.promise(async () => {
       for (const actor of below) {
         const reference = actorReferenceOf(actor);
         const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
@@ -1459,7 +1479,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           await this.actorHost().retire(actorReferenceOf(hirer), actorRetirementFor({ reference, name: actor.name, keepHistory: true, interrupt: true }));
         }
       }
-    });
+    }));
   }
 
   /** A waiting hired agent holds no transcript; its rows reopen it. */
@@ -1854,9 +1874,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private armOwedWorkWake(reason: keyof typeof WAKE_ARM_FAILURE): void {
     const failure = WAKE_ARM_FAILURE[reason];
 
-    this.detachOwned(async () => {
-      await settleLogged(failure.event, { doing: failure.doing, otherwise: 'io' }, () => this.scheduleTerminalRetry(Date.now()), { workspace: this.name });
-    });
+    this.detachOwned(logged(failure.event, { doing: failure.doing, otherwise: 'io' }, () => this.scheduleTerminalRetry(Date.now()), { workspace: this.name }));
   }
 
   /**
@@ -1871,9 +1889,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const next = this.nextWakeAt(Date.now());
 
     if (next === null) return;
-    this.detachOwned(async () => {
-      await settleLogged('schedule.durable_wake_arm_failed', { doing: 'arming the wake a pending reaction needs', otherwise: 'io' }, () => this.wakes.arm(KINU_TIMER_JOB, next), { workspace: this.name });
-    });
+    this.detachOwned(logged('schedule.durable_wake_arm_failed', { doing: 'arming the wake a pending reaction needs', otherwise: 'io' }, () => this.wakes.arm(KINU_TIMER_JOB, next), { workspace: this.name }));
   }
 
   /** Every pass runs (no short-circuit): each owns a different table and is budgeted and idempotent. */
@@ -2121,7 +2137,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       admitted: (id) => this.agentStores(actorId).admitted(id),
       send: (input) => whenActorTakesInput(this.boundSql, actorId, () => sendNow(input)),
       interrupt: () => {
-        this.detachOwned(() => this.agentTurns.interrupt(actorId));
+        this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));
         this.stopSubtree(actorId);
       },
       clear: async () => { await (await facet()).clear(snapshot()); },
@@ -2246,7 +2262,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         yield* Effect.promise(async () => this.ensureOwnedScaffold());
 
         // Detached: the loop is never built inside the init gate.
-        if (exists.length === 0) this.detachOwned(async () => { this.chatLoop.measureSessionStart(); });
+        if (exists.length === 0) this.detachOwned(Effect.sync(() => { this.chatLoop.measureSessionStart(); }));
 
         return { owner: userId, capabilityHash };
       }
@@ -2561,33 +2577,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (namespace === undefined) return;
 
     if (this.config.get(SANDBOX_STARTING) == null && this.config.get(SANDBOX_REFUSED) == null) return;
-    this.detachOwned(async () => {
-      await settleLogged('sandbox.restore_recheck_failed', { doing: "reading the sandbox's restore state", otherwise: 'unavailable' }, async () => {
-        await this.sandboxRestore(await namespace.getByName(sandboxIdForWorkspace(this.name)).restoreStatus());
-      }, { workspace: this.name });
-    });
+    this.detachOwned(logged('sandbox.restore_recheck_failed', { doing: "reading the sandbox's restore state", otherwise: 'unavailable' }, async () => {
+      await this.sandboxRestore(await namespace.getByName(sandboxIdForWorkspace(this.name)).restoreStatus());
+    }, { workspace: this.name }));
   }
 
   /** Every open re-registers, so an object that hibernated or lost its row is told again. */
   private watchDeviceStatus(watching: boolean): void {
     if (this.getOwnerUserId() === null) return;
-    this.detachOwned(async () => {
-      try {
-        const { stub, caller } = await this.userHub();
-        await stub.watchDeviceStatus(caller, watching);
+    this.detachOwned(Effect.catchCause(Effect.gen({ self: this }, function* () {
+      const { stub, caller } = yield* Effect.promise(() => this.userHub());
+      yield* Effect.promise(() => stub.watchDeviceStatus(caller, watching));
 
-        if (!watching) return;
-        const opened = this.rt.deviceTransport.status();
+      if (!watching) return;
+      const opened = this.rt.deviceTransport.status();
 
-        if (!sameDeviceStatus(await this.rt.deviceTransport.refreshStatus(), opened)) {
-          this.liveReadsMoved(['getExecutors', 'getToolDescriptions']);
-        }
-      } catch (cause) {
-        diagnostics.failure('device.watch_failed', toKinuError({
-          doing: watching ? 'asking to hear device changes' : 'leaving the device-change list', cause, otherwise: 'unavailable',
-        }), { workspace: this.name });
+      if (!sameDeviceStatus(yield* Effect.promise(() => this.rt.deviceTransport.refreshStatus()), opened)) {
+        this.liveReadsMoved(['getExecutors', 'getToolDescriptions']);
       }
-    });
+    }), (failed) => Effect.sync(() => {
+      diagnostics.failure('device.watch_failed', toKinuError({
+        doing: watching ? 'asking to hear device changes' : 'leaving the device-change list', cause: Cause.squash(failed), otherwise: 'unavailable',
+      }), { workspace: this.name });
+    })));
   }
 
   async sandboxStopped(): Promise<void> {
@@ -2607,7 +2619,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Detached: the re-read calls back into a UserDO that may be mid socket handler. */
   async devicesMoved(): Promise<{ watching: boolean }> {
     if ([...this.getConnections()].length === 0) return { watching: false };
-    this.detachOwned(async () => { await this.rt.deviceTransport.refreshStatus(); });
+    this.detachOwned(Effect.asVoid(Effect.promise(() => this.rt.deviceTransport.refreshStatus())));
 
     return { watching: true };
   }
@@ -3247,22 +3259,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async _kinuTimerTick(): Promise<void> {
     const now = Date.now();
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
-      await tick.span('alarm.due_triggers', async (span) => {
-        try {
-          const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
-          span.setAttribute('kinu.triggers_fired', fired);
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 'firing the triggers due on this wake',
-            cause: err,
-            otherwise: 'io',
-          });
-
-          // `fail`, not rethrow: the tick continues to the next phase, so the span must be marked failed.
-          span.fail(failure);
-          diagnostics.failure('schedule.due_triggers_failed', failure);
-        }
-      });
+      // A phase's failure is `fail`ed on its span, not rethrown: the tick continues to the next phase.
+      await tick.span('alarm.due_triggers', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const { fired } = yield* Effect.promise(() => fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now));
+        span.setAttribute('kinu.triggers_fired', fired);
+      }), phaseFailed(span, { doing: 'firing the triggers due on this wake', otherwise: 'io' }, (failure) => {
+        diagnostics.failure('schedule.due_triggers_failed', failure);
+      }))));
 
       // `nextWakeAt` folds `nextPendingDrainAt`, so pending events owe a drain here (D6). The condition
       // uses the same reader and clock as the re-arm so the two cannot disagree about whether it was due.
@@ -3295,120 +3298,78 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       // Durable re-drive of pending outbound peer messages (eviction recovery and backoff retries).
-      await tick.span('alarm.peer_dispatch', async (span) => {
-        try {
-          await this.peerHub.dispatchOutbox(now);
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 're-driving the pending outbound peer messages',
-            cause: err,
-            otherwise: 'unavailable',
-          });
-
-          span.fail(failure);
+      await tick.span('alarm.peer_dispatch', (span) => settle(Effect.catchCause(
+        Effect.promise(() => this.peerHub.dispatchOutbox(now)),
+        phaseFailed(span, { doing: 're-driving the pending outbound peer messages', otherwise: 'unavailable' }, (failure) => {
           diagnostics.failure('peer.outbox_dispatch_failed', failure);
-        }
-      });
+        }),
+      )));
 
       // Re-drive `pending` outbound email; the stored Message-ID makes re-send idempotent (SPEC §7.4).
-      await tick.span('alarm.email_reconcile', async (span) => {
-        try {
+      await tick.span('alarm.email_reconcile', (span) => settle(Effect.catchCause(
+        Effect.promise(async () => {
           if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 'reconciling indeterminate outbound email',
-            cause: err,
-            otherwise: 'unavailable',
-          });
-
-          span.fail(failure);
+        }),
+        phaseFailed(span, { doing: 'reconciling indeterminate outbound email', otherwise: 'unavailable' }, (failure) => {
           diagnostics.failure('email.outbox_reconcile_failed', failure);
-        }
-      });
+        }),
+      )));
 
       // Sibling phase because `nextWakeAt` folds the warm row. The lane re-checks the request counter,
       // so a turn started after the arm suppresses the refresh.
-      await tick.span('alarm.cache_warm', async (span) => {
-        try {
-          const warmed = await this.cacheWarming.runDue(now);
-          span.setAttribute('kinu.cache_warmed', warmed !== null);
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 'refreshing the prompt-cache prefix this wake was armed for',
-            cause: err,
-            otherwise: 'unavailable',
-          });
-
-          span.fail(failure);
-          diagnostics.failure('cache.warm_failed', failure);
-        }
-      });
+      await tick.span('alarm.cache_warm', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const warmed = yield* Effect.promise(() => this.cacheWarming.runDue(now));
+        span.setAttribute('kinu.cache_warmed', warmed !== null);
+      }), phaseFailed(span, { doing: 'refreshing the prompt-cache prefix this wake was armed for', otherwise: 'unavailable' }, (failure) => {
+        diagnostics.failure('cache.warm_failed', failure);
+      }))));
 
       // A failed sleep-time run is not retried by this chain; the settled instant is released first so
       // it cannot answer due on every re-arm. The next completed turn re-arms.
-      await tick.span('alarm.sleep_time', async (span) => {
-        try {
-          const ran = await this.runSleepTimeIfDue(now);
-          span.setAttribute('kinu.sleep_time_ran', ran);
-        } catch (err) {
-          this.config.delete(SLEEP_TIME_SETTLED_AT);
+      await tick.span('alarm.sleep_time', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const ran = yield* Effect.promise(() => this.runSleepTimeIfDue(now));
+        span.setAttribute('kinu.sleep_time_ran', ran);
+      }), (failed) => Effect.suspend(() => {
+        this.config.delete(SLEEP_TIME_SETTLED_AT);
 
-          const failure = toKinuError({
-            doing: 'running the sleep-time compute this wake was armed for',
-            cause: err,
-            otherwise: 'unavailable',
-          });
-
-          span.fail(failure);
-
+        return phaseFailed(span, { doing: 'running the sleep-time compute this wake was armed for', otherwise: 'unavailable' }, (failure) => {
           if (isDefinitiveTerminalFailure(failure.code)) {
             this.logActivity('terminal_effect_abandoned', `memory compression failed: ${failure.message}, so it is not retried`);
           }
 
           diagnostics.failure('memory.sleep_time_wake_failed', failure);
-        }
-      });
+        })(failed);
+      }))));
 
       // Soonest-wins arm, so it never clobbers a sooner wake armed during dispatch. Awaited: this link
       // keeps the timer chain alive.
-      await tick.span('alarm.timer_rearm', async (span) => {
-        try {
-          const next = this.nextWakeAt(now);
-          span.setAttribute('kinu.rearmed', next !== null);
+      await tick.span('alarm.timer_rearm', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const next = this.nextWakeAt(now);
+        span.setAttribute('kinu.rearmed', next !== null);
 
-          if (next !== null) await this.wakes.arm(KINU_TIMER_JOB, next);
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 're-arming the wake that keeps the timer chain alive',
-            cause: err,
-            otherwise: 'io',
-          });
+        if (next !== null) yield* Effect.promise(() => this.wakes.arm(KINU_TIMER_JOB, next));
+      }), (failed) => {
+        const failure = toKinuError({ doing: 're-arming the wake that keeps the timer chain alive', cause: Cause.squash(failed), otherwise: 'io' });
 
-          span.fail(failure);
-          diagnostics.failure('schedule.timer_rearm_failed', failure);
-          // Rethrown: this failure loses the next wake. An uncaught alarm throw makes the runtime redeliver
-          // it (tests/workerd/do-alarm.test.ts), and the redelivered tick re-arms from durable state.
-          throw failure;
-        }
-      });
+        span.fail(failure);
+        diagnostics.failure('schedule.timer_rearm_failed', failure);
 
-      await tick.span('alarm.slate_pictures', async (span) => {
+        // Rethrown: this failure loses the next wake. An uncaught alarm throw makes the runtime redeliver
+        // it (tests/workerd/do-alarm.test.ts), and the redelivered tick re-arms from durable state.
+        return Effect.fail(failure);
+      })));
+
+      await tick.span('alarm.slate_pictures', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
         const capture = this.pictureCapture();
 
         if (capture === null) return;
+        const changed = yield* Effect.promise(() => this.pictures.captureDue(capture, now));
+        span.setAttribute('kinu.pictures_changed', changed);
 
-        try {
-          const changed = await this.pictures.captureDue(capture, now);
-          span.setAttribute('kinu.pictures_changed', changed);
-
-          if (changed) this.overviewChanged();
-        } catch (err) {
-          const failure = toKinuError({ doing: 'photographing the slates due a picture', cause: err, otherwise: 'unavailable' });
-
-          span.fail(failure);
-          diagnostics.failure('slate.pictures_failed', failure);
-        }
-      });
+        if (changed) this.overviewChanged();
+      }), phaseFailed(span, { doing: 'photographing the slates due a picture', otherwise: 'unavailable' }, (failure) => {
+        diagnostics.failure('slate.pictures_failed', failure);
+      }))));
     });
   }
 
@@ -4616,9 +4577,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!signal) return { started: false };
     // The send admits the turn before its first await; only the wait is detached.
     const sent = this.orch.inbox.send(signal);
-    this.detachOwned(async () => {
-      await settleLogged('genesis.turn_failed', { doing: "taking the workspace's first turn", otherwise: 'unavailable' }, async () => { await this.keepAliveWhile(() => sent); }, { workspace: this.name });
-    });
+    this.detachOwned(logged('genesis.turn_failed', { doing: "taking the workspace's first turn", otherwise: 'unavailable' }, async () => { await this.keepAliveWhile(() => sent); }, { workspace: this.name }));
 
     return { started: true };
   }
@@ -4959,46 +4918,45 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // In flight, it owes the wake a failure would arm.
     if (retry !== null) this.overviewRetry = { at: Date.now() + recoveryBackoffMs(retry.attempts + 1), attempts: retry.attempts };
-    this.detachOwned(async () => {
-      let failed: KinuError | null = null;
+    let failed: KinuError | null = null;
 
-      try {
-        while (this.overviewDirty) {
-          this.overviewDirty = false;
-          const overview = await this.foldOverview();
-          const pushed = JSON.stringify(overview);
+    this.detachOwned(Effect.ensuring(Effect.catchCause(Effect.gen({ self: this }, function* () {
+      while (this.overviewDirty) {
+        this.overviewDirty = false;
+        const overview = yield* Effect.promise(() => this.foldOverview());
+        const pushed = JSON.stringify(overview);
 
-          if (pushed === this.pushedOverview) continue;
+        if (pushed === this.pushedOverview) continue;
 
-          // Installing a token pushes.
-          if (this.workspaceCapabilityToken() === null) {
-            this.overviewDirty = true;
-            break;
-          }
-
-          const { stub, caller } = await this.userHub();
-          await stub.putWorkspaceOverview(caller, this.name, overview);
-          this.pushedOverview = pushed;
+        // Installing a token pushes.
+        if (this.workspaceCapabilityToken() === null) {
+          this.overviewDirty = true;
+          break;
         }
 
-        this.overviewRetry = null;
-      } catch (cause) {
-        this.overviewDirty = true;
-        const failure = toKinuError({ doing: "pushing this workspace's tile to its owner's roster", cause, otherwise: 'unavailable' });
-        const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
-        // A refusal meets the next push.
-        const retrying = failure.code === 'unavailable' || failure.code === 'timeout';
-        failed = failure;
-        this.overviewRetry = retrying ? { at: Date.now() + recoveryBackoffMs(attempts), attempts } : null;
-        diagnostics.failure('workspace.overview_push_failed', failure, { workspace: this.name, attempts, retrying });
-
-        if (this.overviewRetry !== null) await this.scheduleTerminalRetry(this.overviewRetry.at);
-      } finally {
-        this.overviewPushing = false;
-
-        for (const settleWaiter of this.overviewSettlers.splice(0)) settleWaiter(failed);
+        const { stub, caller } = yield* Effect.promise(() => this.userHub());
+        yield* Effect.promise(() => stub.putWorkspaceOverview(caller, this.name, overview));
+        this.pushedOverview = pushed;
       }
-    });
+
+      this.overviewRetry = null;
+    }), (cause) => Effect.gen({ self: this }, function* () {
+      this.overviewDirty = true;
+      const failure = toKinuError({ doing: "pushing this workspace's tile to its owner's roster", cause: Cause.squash(cause), otherwise: 'unavailable' });
+      const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
+      // A refusal meets the next push.
+      const retrying = failure.code === 'unavailable' || failure.code === 'timeout';
+      failed = failure;
+      const next = retrying ? { at: Date.now() + recoveryBackoffMs(attempts), attempts } : null;
+      this.overviewRetry = next;
+      diagnostics.failure('workspace.overview_push_failed', failure, { workspace: this.name, attempts, retrying });
+
+      if (next !== null) yield* Effect.promise(() => this.scheduleTerminalRetry(next.at));
+    })), Effect.sync(() => {
+      this.overviewPushing = false;
+
+      for (const settleWaiter of this.overviewSettlers.splice(0)) settleWaiter(failed);
+    })));
   }
 
   /** Once its card moved, or the failure that left the list behind. */
@@ -5185,63 +5143,52 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Terminal preflight via the sandbox lane's own `ensureReady` (egress grants, /workspace).
    * Not @callable: called by the terminal HTTP route (see terminal-route.ts). */
-  async prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
+  prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
     // The owner's machine has no container to warm; it only needs to be attached.
-    if (executorId === 'device') {
-      const device = this.rt.deviceTransport.status();
+      if (executorId === 'device') {
+        const device = this.rt.deviceTransport.status();
 
-      if (device.connected) return { ok: true };
+        if (device.connected) return { ok: true };
 
-      if (device.registered) return { error: 'That machine is offline. Run `kinu connect` on it.' };
+        if (device.registered) return { error: 'That machine is offline. Run `kinu connect` on it.' };
 
-      return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
-    }
-
-    if (executorId === 'workspace') {
-      try {
-        await this.hostedWorkspace().terminal();
-
-        return { ok: true };
-      } catch (cause) {
-        return { error: terminalRefusal({ doing: 'composing the workspace runtime for a terminal', cause }) };
+        return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
       }
-    }
 
-    if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
-    const handle = this.rt.sandboxHandle;
+      if (executorId === 'workspace') {
+        return (yield* terminalStep(Effect.promise(async () => this.hostedWorkspace().terminal()), 'composing the workspace runtime for a terminal')) ?? { ok: true };
+      }
 
-    if (!handle) return { error: 'the sandbox container is not configured for this workspace' };
+      if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
+      const handle = this.rt.sandboxHandle;
 
-    try {
-      await handle.ensureReady();
+      if (!handle) return { error: 'the sandbox container is not configured for this workspace' };
 
-      return { ok: true };
-    } catch (cause) {
-      return { error: terminalRefusal({ doing: 'preparing the sandbox container for a terminal', cause }) };
-    }
+      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the sandbox container for a terminal')) ?? { ok: true };
+    }));
   }
 
   /**
    * Opens via this object because only it holds the workspace capability token the hub needs.
    * `user` is the object holding both sockets; the route sends the pane's upgrade there.
    */
-  async openDeviceTerminal(
+  openDeviceTerminal(
     window: { cols: number; rows: number },
   ): Promise<{ session: string; user: string } | { error: string }> {
-    const user = this.getOwnerUserId();
+    return settle(Effect.suspend(() => {
+      const user = this.getOwnerUserId();
 
-    if (!user) return { error: 'this workspace has no owner yet' };
+      if (!user) return Effect.succeed({ error: 'this workspace has no owner yet' });
 
-    try {
-      const opened = await this.requireOwnerUserDO().openDeviceTerminal(
-        await this.userCaller(), this.workspaceName(), window,
-      );
-
-      return { session: opened.session, user };
-    } catch (cause) {
       // Each refusal the user object authors (no device, an older daemon, consent) reaches the pane as written.
-      return { error: terminalRefusal({ doing: 'opening a terminal on this machine', cause }) };
-    }
+      return Effect.matchCause(Effect.promise(async () => this.requireOwnerUserDO().openDeviceTerminal(
+        await this.userCaller(), this.workspaceName(), window,
+      )), {
+        onSuccess: (opened) => ({ session: opened.session, user }),
+        onFailure: (failed) => ({ error: terminalRefusal({ doing: 'opening a terminal on this machine', cause: Cause.squash(failed) }) }),
+      });
+    }));
   }
 
   /** Workspace port registrations live in Nimbus, so they stay authoritative after a restart. */
@@ -5272,18 +5219,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return { ports: [], error: `${executorId} cannot list exposed ports` };
     }
 
-    try {
-      const ports = await provider.listExposedPorts();
+    const listing = provider.listExposedPorts;
 
-      return { ports: ports.map(({ port, name, url }) => ({ port, url, name })) };
-    } catch (error) {
-      return {
-        ports: [],
-        error: error instanceof Error && error.message
-          ? error.message
-          : `Couldn't list ${executorId} preview ports`,
-      };
-    }
+    return settle(Effect.matchCause(Effect.promise(() => listing.call(provider)), {
+      onSuccess: (ports) => ({ ports: ports.map(({ port, name, url }) => ({ port, url, name })) }),
+      onFailure: (failed) => {
+        const error = Cause.squash(failed);
+
+        return {
+          ports: [],
+          error: error instanceof Error && error.message
+            ? error.message
+            : `Couldn't list ${executorId} preview ports`,
+        };
+      },
+    }));
   }
 
   /** `actor` names a child of this workspace: the read is its own config. */

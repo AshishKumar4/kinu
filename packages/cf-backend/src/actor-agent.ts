@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Actor-agnostic substrate beneath every full-loop Kinu actor on the Cloudflare backend.
@@ -43,7 +43,7 @@ import {
 import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { createAgentTracing, renderThrownChain, type AgentTracing, settle, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { createAgentTracing, hold, logged, recording, renderThrownChain, type AgentTracing, settle, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createCompactionExtension, createSharedPrefixCompactor, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer, COMPACTION_PRESETS,
@@ -309,7 +309,7 @@ interface ComposedTurn {
 }
 
 interface AsyncTaskOwner {
-  promise: Promise<void> | null;
+  promise: Promise<Exit.Exit<void>> | null;
 }
 
 /** Only RPC methods rpc-surface.ts declares reachable; any other is a compile error. */
@@ -882,11 +882,11 @@ export abstract class ActorAgent extends Agent<Env> {
       return createTemporaryAgentPort({
         roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
         afterTurn: (child, work) => {
-          this.detachOwned(async () => {
+          this.detachOwned(Effect.promise(async () => {
             await this.agentTurnSettled(child);
             await this.actorHost().run(child, () => Promise.resolve());
             await work();
-          });
+          }));
         },
       });
     });
@@ -1463,7 +1463,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * The terminal sequence this actor started most recently, resolved once its disposition is written.
    * Retained because the close is detached; an unnamed detached chain could never be joined.
    */
-  protected _terminalReported: Promise<void> = Promise.resolve();
+  protected _terminalReported: Promise<Exit.Exit<void>> = Promise.resolve(Exit.void);
   private _terminalReportedOwner: AsyncTaskOwner | null = null;
 
   /** A settled turn's detached leftovers are still closing in this isolate. */
@@ -1480,26 +1480,22 @@ export abstract class ActorAgent extends Agent<Env> {
     const owner: AsyncTaskOwner = { promise: null };
     this._terminalReportedOwner = owner;
 
-    const task = (async () => {
-      try {
-        // Chain closes so the latest owner retains every earlier close instead of overwriting a live fiber.
-        await prior;
-        await this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
-          ctx.stash({ lane: TERMINAL_LANE_FIBER });
-          await close();
-        });
-      } catch (cause) {
-        // An eviction needs no cleanup; a rejection that leaves this isolate alive does.
-        await this.terminal.closeFailed(transition, { cause });
-      } finally {
-        if (this._terminalReportedOwner === owner) {
-          this._terminalReportedOwner = null;
-          this._terminalReported = Promise.resolve();
-        }
-
-        this.overviewChanged();
+    const task = hold(Effect.ensuring(Effect.catchCause(Effect.gen({ self: this }, function* () {
+      // Chain closes so the latest owner retains every earlier close instead of overwriting a live fiber.
+      yield* (yield* Effect.promise(() => prior));
+      yield* Effect.promise(() => this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
+        ctx.stash({ lane: TERMINAL_LANE_FIBER });
+        await close();
+      }));
+    }), (failed) => Effect.promise(() => this.terminal.closeFailed(transition, { cause: Cause.squash(failed) }))), Effect.sync(() => {
+      // An eviction needs no cleanup; a rejection that leaves this isolate alive does (above).
+      if (this._terminalReportedOwner === owner) {
+        this._terminalReportedOwner = null;
+        this._terminalReported = Promise.resolve(Exit.void);
       }
-    })();
+
+      this.overviewChanged();
+    })));
 
     owner.promise = task;
     this._terminalReported = task;
@@ -1818,7 +1814,7 @@ export abstract class ActorAgent extends Agent<Env> {
             this.liveReadsMoved(['listWorkspaceAgents']);
             this.chatTransport.quiet();
             this.overviewChanged();
-            this.detachOwned(() => this.restWhenIdle());
+            this.detachOwned(Effect.promise(() => this.restWhenIdle()));
           },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
@@ -2074,23 +2070,15 @@ export abstract class ActorAgent extends Agent<Env> {
     if (this._evolutionSettling !== null) return;
     const owner: AsyncTaskOwner = { promise: null };
     this._evolutionSettling = owner;
-    owner.promise = (async () => {
-      try {
-        await this.runFiber(EVOLUTION_LANE_FIBER, async (ctx) => {
-          ctx.stash({ lane: EVOLUTION_LANE_FIBER });
-          await this.orch.settleEvolution();
-          await this.orch.runDueSessionEvolution();
-        });
-      } catch (cause) {
-        diagnostics.failure('evolution.settle_failed', toKinuError({
-          doing: 'settling the turn and session evolution lanes',
-          cause,
-          otherwise: 'unavailable',
-        }));
-      } finally {
-        if (this._evolutionSettling === owner) this._evolutionSettling = null;
-      }
-    })();
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.runFiber(EVOLUTION_LANE_FIBER, async (ctx) => {
+      ctx.stash({ lane: EVOLUTION_LANE_FIBER });
+      await this.orch.settleEvolution();
+      await this.orch.runDueSessionEvolution();
+    })), recording({ doing: 'settling the turn and session evolution lanes', otherwise: 'unavailable' }, (failure) => {
+      diagnostics.failure('evolution.settle_failed', failure);
+    })), Effect.sync(() => {
+      if (this._evolutionSettling === owner) this._evolutionSettling = null;
+    })));
   }
 
   /**
@@ -2104,27 +2092,19 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this.getOwnerUserId() || this._mcpWarmTask !== null) return;
     const owner: AsyncTaskOwner = { promise: null };
     this._mcpWarmTask = owner;
-    owner.promise = (async () => {
-      try {
-        await this.runFiber(MCP_WARM_LANE_FIBER, async (ctx) => {
-          ctx.stash({ lane: MCP_WARM_LANE_FIBER });
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.runFiber(MCP_WARM_LANE_FIBER, async (ctx) => {
+      ctx.stash({ lane: MCP_WARM_LANE_FIBER });
 
-          // Same gate as `buildUserMcpTools`: no capability token yet is an ordinary state, not a failure.
-          // Checked rather than caught so real read failures still propagate.
-          if (!this.workspaceCapabilityToken()) return;
-          const { stub, caller } = await this.userHub();
-          await stub.userMcp_warmConnections(caller);
-        });
-      } catch (cause) {
-        diagnostics.failure('mcp.settle_warmup_failed', toKinuError({
-          doing: 'establishing the user MCP connections after a settled turn',
-          cause,
-          otherwise: 'unavailable',
-        }));
-      } finally {
-        if (this._mcpWarmTask === owner) this._mcpWarmTask = null;
-      }
-    })();
+      // Same gate as `buildUserMcpTools`: no capability token yet is an ordinary state, not a failure.
+      // Checked rather than caught so real read failures still propagate.
+      if (!this.workspaceCapabilityToken()) return;
+      const { stub, caller } = await this.userHub();
+      await stub.userMcp_warmConnections(caller);
+    })), recording({ doing: 'establishing the user MCP connections after a settled turn', otherwise: 'unavailable' }, (failure) => {
+      diagnostics.failure('mcp.settle_warmup_failed', failure);
+    })), Effect.sync(() => {
+      if (this._mcpWarmTask === owner) this._mcpWarmTask = null;
+    })));
   }
 
   /** The advisor's input, recorded while the turn is in memory so a cold re-drive reviews the same
@@ -2242,27 +2222,19 @@ export abstract class ActorAgent extends Agent<Env> {
           const timerKey = nanoid();
           const owner: AsyncTaskOwner = { promise: null };
           this._drainTimerTasks.set(timerKey, owner);
-          owner.promise = (async () => {
-            try {
-              await this.keepAliveWhile(async () => {
-                await new Promise<void>((resolve) => {
-                  setTimeout(resolve, ms);
-                });
+          owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.keepAliveWhile(async () => {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, ms);
+            });
 
-                await settleLogged('drain.timer_callback_failed', { doing: 'running the debounced event drain', otherwise: 'io' }, () => fn());
-              });
-            } catch (cause) {
-              diagnostics.failure('drain.timer_keepalive_failed', toKinuError({
-                doing: 'holding the actor alive across the drain debounce window',
-                cause,
-                otherwise: 'io',
-              }));
-            } finally {
-              if (this._drainTimerTasks.get(timerKey) === owner) {
-                this._drainTimerTasks.delete(timerKey);
-              }
+            await settleLogged('drain.timer_callback_failed', { doing: 'running the debounced event drain', otherwise: 'io' }, () => fn());
+          })), recording({ doing: 'holding the actor alive across the drain debounce window', otherwise: 'io' }, (failure) => {
+            diagnostics.failure('drain.timer_keepalive_failed', failure);
+          })), Effect.sync(() => {
+            if (this._drainTimerTasks.get(timerKey) === owner) {
+              this._drainTimerTasks.delete(timerKey);
             }
-          })();
+          })));
         },
       };
 
@@ -2582,7 +2554,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // Transfer by request id, never by turn: only the detaching call's device work changes hands,
       // so parallel foreground commands stay reachable by Stop.
       onDetached: (jobId, requestIds) => {
-        this.detachOwned(() => this.servingMoved());
+        this.detachOwned(Effect.promise(() => this.servingMoved()));
 
         return this.transferDeviceRequests(jobId, requestIds);
       },
@@ -2593,7 +2565,7 @@ export abstract class ActorAgent extends Agent<Env> {
       onSettled: (job) => {
         const notice = backgroundJobNotice(job);
         this.notifyOwner(notice.subject, notice.body);
-        this.detachOwned(() => this.servingMoved());
+        this.detachOwned(Effect.promise(() => this.servingMoved()));
       },
       // Evict-resume (B6): re-drive from the durable checkpoint. Side-effecting kinds (eval / run)
       // decline and fall back to the eviction failure.
@@ -4644,20 +4616,14 @@ export abstract class ActorAgent extends Agent<Env> {
    * Owns a detached task so it can be joined; a reset cancels promises silently
    * (`do.background_task.cancelled_on_reset`). Not durable; the body names its own failures.
    */
-  protected detachOwned(body: () => Promise<void>): void {
+  protected detachOwned(body: Effect.Effect<void>): void {
     const owner: AsyncTaskOwner = { promise: null };
     this._backgroundTasks.add(owner);
-    owner.promise = (async () => {
-      try {
-        await body();
-      } catch (cause) {
-        diagnostics.failure('actor.detached_task_unclassified', toKinuError({
-          doing: 'running a detached activation task', cause, otherwise: 'io',
-        }), { workspace: this.name });
-      } finally {
-        this._backgroundTasks.delete(owner);
-      }
-    })();
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(body, recording({ doing: 'running a detached activation task', otherwise: 'io' }, (failure) => {
+      diagnostics.failure('actor.detached_task_unclassified', failure, { workspace: this.name });
+    })), Effect.sync(() => {
+      this._backgroundTasks.delete(owner);
+    })));
   }
 
   /**
@@ -4690,15 +4656,13 @@ export abstract class ActorAgent extends Agent<Env> {
   protected redriveRecoveredLane(
     lane: string, checkpoint: JsonValue, body: () => Promise<void>,
   ): void {
-    this.detachOwned(async () => {
-      await settleLogged('fiber.lane_redrive_failed', { doing: `re-driving the "${lane}" lane an interruption left behind`, otherwise: 'unavailable' }, async () => {
-        // The stash wrapper writes `initialSnapshot` in the same synchronous prefix as the row insert,
-        // so a reset never finds a recoverable lane with a null payload.
-        await this._runFiberWithStashWrapper(lane, async () => { await body(); }, {
-          initialSnapshot: checkpoint,
-        });
-      }, { workspace: this.name, lane });
-    });
+    this.detachOwned(logged('fiber.lane_redrive_failed', { doing: `re-driving the "${lane}" lane an interruption left behind`, otherwise: 'unavailable' }, async () => {
+      // The stash wrapper writes `initialSnapshot` in the same synchronous prefix as the row insert,
+      // so a reset never finds a recoverable lane with a null payload.
+      await this._runFiberWithStashWrapper(lane, async () => { await body(); }, {
+        initialSnapshot: checkpoint,
+      });
+    }, { workspace: this.name, lane }));
   }
 
   protected invalidateModelCaches(): void {

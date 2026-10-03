@@ -28,7 +28,7 @@ import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
 import { looksLikeSecretField, parseMemoryNotes, type InlineSteer } from "@kinu.run/core";
-import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate, settleLogged, settle, detach, hold } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate, settleLogged, settle, detach, hold, recording } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -652,9 +652,7 @@ export interface LiveResourceRead<Value> {
 
 /** A live-data task's failure, recorded: nothing awaits the task, and its next run reads again. */
 function recordingLiveFailure(record: (error: KinuError) => void): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
-  return (failed) => Effect.sync(() => {
-    record(toKinuError({ doing: 'refreshing live workspace data', cause: Cause.squash(failed), otherwise: 'io' }));
-  });
+  return recording({ doing: 'refreshing live workspace data', otherwise: 'io' }, record);
 }
 
 export function refreshLiveResource<Value>(
