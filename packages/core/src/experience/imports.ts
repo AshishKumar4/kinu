@@ -7,7 +7,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { sqlCheckList } from '../identity/schema';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { modifyScaffold } from '../scaffold/modify';
-import { getPendingScaffold } from '../scaffold/shadow';
+import { getPendingScaffold } from '../scaffold/versions';
 import { upsertCraftedTool } from '../craft/conflict';
 import { createFactsStore } from '../memory/facts';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
@@ -15,7 +15,7 @@ import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import * as v from 'valibot';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
-import { recordLesson } from '../evolution/outcomes';
+import { recordLesson } from '../evolution/lessons';
 import {
   EXPERIENCE_KINDS,
   misevolutionSourceOf,

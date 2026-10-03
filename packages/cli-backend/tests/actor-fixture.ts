@@ -3,12 +3,11 @@ import {
   ActorSession, EventLog, EvolutionEngine, WorkspaceActorDirectory,
   BUILTIN_PROFILE_CATALOG, actorReferenceOf, createAgentStores, profileCatalogDigest,
   collectDynamicContext, createActorHost, defaultLoopOrigin, explorationActorKey,
-  facetHomeReleaser, headAgentName, resolveAgentTurnProfile,
+  facetHomeReleaser, resolveAgentTurnProfile,
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedNodeSeat,
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs,
   type SqlExec, type SqlValue, type WriteObserver,
-  DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT,
-} from '@kinu.run/core';
+  DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
 import { ConversationSearchStore, bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import { resolveModelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
@@ -80,7 +79,7 @@ export function headSeatFactory(
       name: explorationActorKey(input.id), creationId: input.id, origin: 'swarm', lifetime: 'task',
     });
 
-    const agentName = headAgentName(binding.storageKey);
+    const agentName = actorHomeName({ origin: 'swarm', storageKey: binding.storageKey });
     writes?.set(binding.reference.actorId, observer);
     const actor = await host.acquire(binding.reference);
 
@@ -110,12 +109,15 @@ export function headSeatFactory(
         stores: actor.stores,
         profile,
         tools,
+        runtime: { backend: 'cli-vfs', model: { id: profile.tier.model }, date: '2026-01-01' },
         memoryTail: undefined,
         missingCapabilities: [],
         subordinateDelegates: () => [],
         approvals: () => ({ items: [], total: 0 }),
       }),
       windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
+      // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
+      jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
       release: async () => {
         host.release(binding.reference);
         writes?.delete(binding.reference.actorId);
@@ -205,6 +207,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
       stores,
       profile,
       tools,
+      runtime: { backend: 'cli-vfs', model: { id: profile.tier.model }, date: '2026-01-01' },
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => [],
@@ -214,6 +217,8 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
     // No catalog in a fixture: every spec is admitted against the static table.
     windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
     window: resolveModelWindow('', null),
+    // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
+    jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
   } satisfies Omit<HeadSeat, 'release'> & Pick<HeadInferenceDeps, 'window'>;
 }
 
@@ -225,6 +230,9 @@ export function nodeSeatFactory(rt: CLIRuntime, runId = 'fixture-run'): (node: N
     const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, undefined, true);
     const seams = headLoopSeams(rt, runId, handle, runtime);
 
-    return { actor: seams.actor, runId: seams.runId, profile: seams.profile, dynamic: seams.dynamic, conversations: seams.conversations, windowOf: seams.windowOf };
+    return {
+      actor: seams.actor, runId: seams.runId, profile: seams.profile, dynamic: seams.dynamic, conversations: seams.conversations,
+      windowOf: seams.windowOf, jobs: seams.jobs,
+    };
   };
 }

@@ -4,7 +4,7 @@ import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
   'getMemoryContent', 'getExecutors', 'listBackgroundJobs', 'getWorkspaceTabPresence', 'getActivePlanReview',
-  'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates',
+  'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates', 'getQuality',
 ] as const;
 
 export type LiveRead = typeof LIVE_READS[number];
@@ -33,12 +33,13 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['agent_facts', LEDGER],
   ['crafted_tools', ['getToolDescriptions', ...LEDGER]],
   ['gepa_runs', LEDGER],
-  ['prompt_section_versions', LEDGER],
+  ['artifact_versions', LEDGER],
+  ['artifact_trials', LEDGER],
   ['refinement_requests', LEDGER],
-  ['replay_evals', LEDGER],
-  ['scaffold_evaluations', LEDGER],
   ['scaffold_versions', LEDGER],
-  ['turn_outcomes', LEDGER],
+  ['turn_ratings', [...LEDGER, 'getQuality']],
+  // A review's `turn_complete` is the quality read's count of turns.
+  ['evolution_events', ['getQuality']],
   ['deferred_approvals', QUEUE],
   ['proposed_tasks', QUEUE],
   ['plan_reviews', ['getActivePlanReview', 'getToolDescriptions', ...QUEUE, 'listWorkspaceWork']],

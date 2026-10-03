@@ -16,3 +16,17 @@ export interface ActiveRoster<T> {
   readonly items: readonly T[];
   readonly total: number;
 }
+
+/** A tool lesson as a step lists it; the turn keeps the id and revision it was shown. */
+export interface ShownLesson {
+  readonly id: string;
+  readonly revision: number;
+  readonly line: string;
+}
+
+/** The roles and tiers this actor's `agents` tool takes, which stay out of the tool's own bytes. */
+export interface DelegationChoices {
+  /** `id: description`. */
+  readonly roles: readonly string[];
+  readonly tiers: readonly string[];
+}

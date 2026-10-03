@@ -4,12 +4,13 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from './agent-stores';
 import {
-  agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MissingCapability,
+  agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MissingCapability, type RuntimeFacts,
 } from '../prompting/volatile-context';
 import type { ActiveRoster } from '../types/dynamic-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
-import { craftedToolDeclarations } from '../tools/sandbox-contract';
+import { listToolLessons, MAX_TOOL_LESSONS, shownLesson } from '../evolution/struggles';
+import { craftedToolDeclarations, externalToolDeclarations } from '../tools/sandbox-contract';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { ActiveSkillSet } from '../skills/types';
@@ -21,6 +22,9 @@ export interface DynamicContextInput {
   readonly stores: AgentStores;
   readonly profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>;
   readonly tools: ToolSet;
+  /** The turn's MCP and extension tools, which only `eval` reaches. */
+  readonly externalTools?: ToolSet;
+  readonly runtime: RuntimeFacts;
   readonly turn?: TurnReason;
   readonly activeSkills?: ActiveSkillSet;
   /** Read once per turn by the caller (the only await in this plane). */
@@ -46,12 +50,13 @@ export function subordinateDelegatesOf(
   }));
 }
 
-/** Nothing clock-derived: a wall-clock field would re-fingerprint the block every step. */
+/** Nothing finer than the caller's date: a wall-clock field would re-fingerprint the block every step. */
 export function collectDynamicContext(input: DynamicContextInput): DynamicContext {
   const { rt, stores } = input;
   const { profile } = input;
 
   return agentDynamicContext({
+    runtime: input.runtime,
     ...(input.turn !== undefined && { turn: input.turn }),
     ...(input.activeSkills !== undefined && { activeSkills: input.activeSkills }),
     mode: {
@@ -59,9 +64,11 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
       planSubmission: profile.allowedTools.includes(SUBMIT_PLAN_TOOL) && input.tools[SUBMIT_PLAN_TOOL] !== undefined,
     },
     craftedTools: craftedToolDeclarations(input.tools, profile),
+    externalTools: externalToolDeclarations(input.tools, input.externalTools ?? {}, profile),
     factsBlock: renderFactsForTurn(stores.facts),
     memoryTail: input.memoryTail,
     recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),
+    toolLessons: listToolLessons(rt.storage.sql, rt.actor, Object.keys(input.tools), MAX_TOOL_LESSONS).map(shownLesson),
     executors: rt.executionRouter?.listExecutors() ?? [],
     // Same cached snapshot the executor row reads, so the two agree.
     devices: rt.deviceTransport?.status().devices,

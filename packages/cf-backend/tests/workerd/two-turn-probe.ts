@@ -1,19 +1,13 @@
 /**
- * Two-turn probe: the real OrchestratorAgent drives two full Think turns against a
- * fake `AI` WorkerEntrypoint, answering each lane (turn, sleep-time judge, title) by
- * request shape, never prompt text. Defends (2026-09-08): a transcript count naming a
- * missing column, and the second turn's request dropping the message that started it.
+ * Two-turn probe: the real OrchestratorAgent drives two full Think turns over the HTTP model fake, with the installed
+ * Workers AI binding answering the lanes that call it (rating, title, sleep-time judge) by request shape, never prompt
+ * text. Defends (2026-09-08): a transcript count naming a missing column, and the second turn's request dropping the
+ * message that started it.
  */
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
-import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
-import {
-  SleepTimeUpdateSchema,
-  SLEEP_TIME_CADENCE,
-  parseWorkspaceTitle,
-  hostedActorSocketPath, JsonValueSchema,
-} from '@kinu.run/core';
+import { SLEEP_TIME_CADENCE, hostedActorSocketPath, JsonValueSchema } from '@kinu.run/core';
 import {
   createCompositeLogger,
   createConsoleLogger,
@@ -48,6 +42,7 @@ import type {
   ReactorWake,
 } from './two-turn-shapes';
 import {
+  CallRecordSchema,
   DriveOnceInputSchema,
   DriveOnceResultSchema,
   ExerciseResultSchema,
@@ -522,138 +517,12 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
 export { ObservedOrchestrator as OrchestratorAgent };
 
-/** The shape `bindingInputs` hands the binding (direct-workers-ai-fetch.ts:209-227):
- *  a turn carries `stream: true`; completion lanes `stream: false`. */
-const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
-
-const MessageContentSchema = v.union([v.string(), v.array(v.unknown())]);
-
-type MessageContent = v.InferOutput<typeof MessageContentSchema>;
-
-const RunInputsSchema = v.object({
-  messages: v.optional(v.array(v.object({
-    role: v.optional(v.string()),
-    content: v.optional(v.unknown()),
-  }))),
-  prompt: v.optional(v.unknown()),
-  system: v.optional(v.unknown()),
-  stream: v.optional(v.boolean()),
-});
-
-type RunInputs = v.InferOutput<typeof RunInputsSchema>;
-
-/** `signal` stays `unknown` because what it arrives as is the spike's measurement. */
-interface RunOptions {
-  readonly signal?: unknown;
-  readonly returnRawResponse?: boolean;
-  readonly extraHeaders?: Record<string, string>;
-}
-
-interface AIRunner {
-  run(model: string, inputs: RunInputs, options?: RunOptions): Promise<Response | ReadableStream<Uint8Array> | object>;
-}
-
-
-const recordedCalls: CallRecord[] = [];
-
-function messageText(content: MessageContent): string {
-  return v.is(v.string(), content)
-    ? content
-    : content.flatMap((part) => {
-      const text = v.safeParse(TextPartSchema, part);
-
-      return text.success ? [text.output.text] : [];
-    }).join('');
-}
-
-/** Parsed against the lane's own imported schema. */
-function sleepTimeAnswer(): string {
-  return JSON.stringify(v.parse(SleepTimeUpdateSchema, { upserts: [], decay: [] }));
-}
-
-/** Admitted by `parseWorkspaceTitle` at build time, so the fake fails loudly, not the turn. */
-function titleAnswer(): string {
-  const answer = JSON.stringify({ title: 'Two Turn Probe' });
-
-  if (parseWorkspaceTitle(answer) === null) {
-    throw new Error('FakeAI: built a title answer the product title parse rejects');
-  }
-
-  return answer;
-}
-
-/** Keyed on request shape: streamed is the turn; a leading system message is the title
- *  (actor-agent.ts:5609-5615); user-only is the sleep-time judge (orchestrator.ts:2698). */
-function laneOf(stream: boolean, messages: readonly { role?: string }[]): CallRecord['lane'] {
-  if (stream) return 'turn';
-
-  if (messages[0]?.role === 'system') return 'title';
-
-  return 'sleep';
-}
-
-export class FakeAI extends WorkerEntrypoint {
-  /** The one method `createDirectWorkersAIFetch` calls on the binding. */
-  async run(model: string, inputs: RunInputs, options?: RunOptions): Promise<Response> {
-    const signal = options?.signal;
-
-    // Absent and null stay distinct: only one means the adapter never passed a signal.
-    let signalKind = 'foreign';
-
-    if (signal === undefined) signalKind = 'undefined';
-    else if (signal === null) signalKind = 'null';
-    else if (signal instanceof AbortSignal) signalKind = 'AbortSignal';
-
-    const parsed = v.parse(RunInputsSchema, inputs);
-    const stream = parsed.stream ?? false;
-    const messages = parsed.messages ?? [];
-
-    // Turns travel the HTTP seam; the only streamed calls here are the probe's own `signalProbe`.
-    const users = messages
-      .filter((m) => m.role === 'user')
-      .map((m) => messageText(v.parse(MessageContentSchema, m.content ?? '')));
-
-    // The layer normalizes every call to `messages`, so the lane key reads the stream flag and leading role.
-    const lane = laneOf(stream, messages);
-
-    recordedCalls.push({ model, users, signalKind, stream, lane });
-
-    if (lane === 'turn') {
-      // Echo the last typed line (harness rows ride after it). A buffered body: `streamedResponse`
-      // needs one to forward (direct-workers-ai-fetch.ts:253).
-
-      const text = users.filter((u) => !u.startsWith('<')).at(-1) ?? '';
-
-      const body =
-        `data: ${JSON.stringify({ response: `echo:${text}`, usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 } })}\n\n`
-        + 'data: [DONE]\n\n';
-
-      return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
-    }
-
-    if (lane === 'title') {
-      return Response.json({ response: titleAnswer() });
-    }
-
-    if (lane === 'sleep' && messages.length > 0) {
-      return Response.json({ response: sleepTimeAnswer() });
-    }
-
-    throw new Error(
-      `FakeAI: unrecognized non-stream request shape (keys: ${Object.keys(parsed).join(',')}) — `
-      + 'a lane the probe does not satisfy; extend the fake or report the lane',
-    );
-  }
-}
-
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 /** `durableObjects` installs `ObservedOrchestrator` under the `OrchestratorAgent` name,
  *  so every stub the namespace returns carries the fixture reads. */
-interface ProbeRootEnv extends Omit<ProbeEnv, 'AI' | 'OrchestratorAgent'> {
+interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
   readonly OrchestratorAgent: DurableObjectNamespace<ObservedOrchestrator>;
-  /** `vitest.config.ts` binds `AI` to this worker's own `FakeAI` entrypoint. */
-  readonly AI?: AIRunner;
 }
 
 /** Named member by member: `DurableObjectStub<OrchestratorAgent>` over `getChatHistoryPage`
@@ -774,29 +643,6 @@ async function evictionOf(call: Promise<void>): Promise<ReactorEviction> {
 
 
 export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
-  /** Returns the recorded kind or the throw's message, separating "no signal" from serialization failure. */
-  async signalProbe(): Promise<{ signalKind: string } | { threw: string }> {
-    try {
-      const binding = this.env.AI;
-      const controller = new AbortController();
-
-      await binding?.run(
-        'probe',
-        { messages: [], stream: true },
-        { signal: controller.signal, returnRawResponse: true },
-      );
-
-      const recorded = recordedCalls.pop();
-
-      return { signalKind: recorded?.signalKind ?? 'no-call-recorded' };
-    } catch (cause) {
-      return { threw: cause instanceof Error ? cause.message : String(cause) };
-    }
-  }
-
-  calls(): CallRecord[] {
-    return recordedCalls;
-  }
 
   /** Another workspace's sleep-time wakes, run inside a drive's recording window. */
   private async sleepSibling(workspace: string): Promise<void> {
@@ -865,7 +711,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       // Parsed at the boundary, so the RPC declaration (InferOutput) cannot drift from the wire.
       return v.parse(ExerciseResultSchema, {
         register, claim, model, turnA, turnB, snapshot, history,
-        calls: recordedCalls,
+        calls: (await this.probeLog()).ai,
         http: await this.httpCalls(),
         failures: recording.of('two-turn-workspace')
           .filter((e) => e.code !== null)
@@ -915,6 +761,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await awaitSleepTimeSettled(recording, workspace, 21);
     await awaitSettled(target);
 
+    // A lost binding call is retried by its owed effect inside the window: a fixture fault, never a cost.
+    const lost = recording.of(workspace).filter((event) => event.event === 'workers_ai.direct_call_failed');
+
+    if (lost.length > 0) throw new Error(`long cost: the AI binding lost ${String(lost.length)} call(s): ${lost[0]?.cause ?? ''}`);
+
     return await target.meterEnd();
   }
 
@@ -923,10 +774,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     return (await this.probeLog()).calls;
   }
 
-  async probeLog(): Promise<{ calls: HttpCall[]; catalogHits: number }> {
+  async probeLog(): Promise<{ calls: HttpCall[]; catalogHits: number; ai: CallRecord[] }> {
     const response = await fetch('http://probe-control.invalid/log');
 
-    return v.parse(v.object({ calls: v.array(HttpCallSchema), catalogHits: v.number() }), await response.json());
+    return v.parse(v.object({ calls: v.array(HttpCallSchema), catalogHits: v.number(), ai: v.array(CallRecordSchema) }), await response.json());
   }
 
   async httpReset(): Promise<void> {
@@ -2017,7 +1868,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
       return v.parse(DriveOnceResultSchema, {
         turn, snapshot, history,
-        calls: recordedCalls,
+        calls: (await this.probeLog()).ai,
         http: await this.httpCalls(),
         failures: recording.of(drive.workspace)
           .filter((e) => e.code !== null)

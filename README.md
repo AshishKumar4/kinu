@@ -232,7 +232,7 @@ live workspace state between model steps.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">
-  <img alt="A serialized turn assembles typed Markdown prompt sections with runtime context last, transforms history, and reads dynamic context between model and tool steps. Signals reach a compatible live turn or queue another. Terminal effects handle eligible turn recording, improvement lanes and event draining, without a generic step cap or silence deadline." src="docs/diagrams/turn.svg" width="900">
+  <img alt="A serialized turn assembles typed Markdown prompt sections, the core every workspace shares first, transforms history, and reads dynamic context between model and tool steps. Signals reach a compatible live turn or queue another. Terminal effects handle eligible turn recording, improvement lanes and event draining, without a generic step cap or silence deadline." src="docs/diagrams/turn.svg" width="900">
 </picture>
 
 Inside that loop you can add an actor kind, a `ModelProvider`, or a new
@@ -261,6 +261,7 @@ from the command registry, and [Configuration](docs/CONFIG.md) documents every
 | [Tools](docs/TOOLS.md) | The eight built-ins, the file plane, the `agents` surface, the codemode sandbox |
 | [Live UI](docs/LIVE-UI.md) | Slates: authoring, the one codemode operation, bindings, and the resident preview |
 | [Execution layer](docs/EXECUTION-LAYER-SPEC.md) | The four executors, mounts, device consent, what runs where |
+| [Context window](docs/CONTEXT-WINDOW.md) | One request in order, where each provider caches, how it grows, what a hire and a swarm node see |
 | [Context budget](docs/CONTEXT-BUDGET.md) | Where bulk spills, the turn-cumulative clamp, the trip counters |
 | [Observability](docs/OBSERVABILITY.md) | Failure classification, the typed logger, what is wired and what is not |
 | [Storage](docs/STORAGE.md) | Data model, workspace files over the Nimbus VFS, MemoryStore FTS5, table schemas |

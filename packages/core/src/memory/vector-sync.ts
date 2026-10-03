@@ -17,13 +17,19 @@ function invalidateSemanticIndex(config: AgentConfigStore): void {
   config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor, '');
 }
 
+/** A semantic index beside FTS5, and the config whose backfill marker a failed sync clears. */
+export interface MemoryVectors {
+  readonly store: VectorStore;
+  readonly config: AgentConfigStore;
+}
+
 /**
- * FTS5 is the source of truth: vector failures are recorded, never fail the write, and clear the backfill
- * marker so chunks are re-embedded. Vector calls are awaited so embeddings are durable before the turn continues.
+ * Every backend's memory. FTS5 is the source of truth: vector failures are recorded, never fail the write, and clear
+ * the backfill marker so chunks are re-embedded. Vector calls are awaited so embeddings are durable before the turn
+ * continues. Without `vectors` (the CLI, workspace birth) the index is FTS5 alone.
  */
 export function adaptMemory(
-  store: MemoryStore, files: VFS & Required<Pick<VFS, 'readRange'>>,
-  vectorStore: VectorStore, config: AgentConfigStore,
+  store: MemoryStore, files: VFS & Required<Pick<VFS, 'readRange'>>, vectors?: MemoryVectors,
 ): Memory {
   return {
     write: (path, content) => store.writeFile(path, content),
@@ -32,10 +38,12 @@ export function adaptMemory(
       return settle(Effect.gen(function* () {
         const content = yield* Effect.promise(() => store.readFile(path));
 
-        if (!content) return;
+        // Only a missing file is skipped: an emptied one indexes to no chunks, and its old ones leave.
+        if (content === null) return;
         const delta = yield* Effect.promise(() => store.indexFile(path, content));
 
-        if (!vectorStore.available) return;
+        if (vectors === undefined || !vectors.store.available) return;
+        const vectorStore = vectors.store;
 
         yield* Effect.tryPromise({
           try: async () => {
@@ -46,7 +54,7 @@ export function adaptMemory(
           catch: (cause) => toKinuError({ doing: 'syncing the memory chunk delta into the vector index', cause, otherwise: 'unavailable' }),
         }).pipe(Effect.catch((failure) => Effect.sync(() => {
           diagnostics.failure('memory.vector_sync_failed', failure, { path });
-          invalidateSemanticIndex(config);
+          invalidateSemanticIndex(vectors.config);
         })));
       }));
     },

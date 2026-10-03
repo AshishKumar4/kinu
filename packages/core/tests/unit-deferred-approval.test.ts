@@ -599,7 +599,7 @@ describe('"always" grants the rules the owner was shown', () => {
       kind: 'workspace',
       capabilities: new Set(['shell']),
       filesOwner: 'agent',
-      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'], keepsCwd: true }),
+      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'] }),
       homeDir: async () => WORKSPACE_ROOT,
       isAvailable: () => true,
       connect: async () => {},

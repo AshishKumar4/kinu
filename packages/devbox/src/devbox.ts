@@ -2702,7 +2702,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** Maintenance renews native inactivity but is not caller use; only callers stamp idle time. */
+  /** Maintenance renews inactivity but is not use; only callers stamp idle time. */
   protected stampInteraction(): void {
     this.#renewContainer();
     const now = Date.now();

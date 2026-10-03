@@ -17,8 +17,8 @@ import { initEventsHubTables } from '../src/events/hub/schema';
 import { initRunEventTables } from '../src/events/recorder';
 import { initActorClaimTables } from '../src/orchestrator/actor-claims';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
-import { initTurnOutcomeTables } from '../src/evolution/outcomes';
-import { initReplayTables } from '../src/evolution/replay';
+import { initLessonTables } from '../src/evolution/lessons';
+import { initTurnRatingTables } from '../src/evolution/ratings';
 import { initRefinementTables } from '../src/evolution/refinement';
 import { initImportedExperienceTable } from '../src/experience/imports';
 import { initHeadsTables } from '../src/heads/schema';
@@ -32,9 +32,8 @@ import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initFactsTable } from '../src/memory/facts';
-import { initShadowTables } from '../src/scaffold/shadow';
 import { initTaskListTable } from '../src/tools/task-store';
-import { initPromptSectionTables } from '../src/prompting/section-store';
+import { initArtifactTables, initTrialTables } from '../src/evolution/artifact-schema';
 import { initExplorationRecordsTable } from '../src/strategy/records';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
 import { initCodemodeStateTable } from '../src/identity/program-state';
@@ -50,12 +49,11 @@ const OWNED = {
   initAlternateTakesTable: (db) => initAlternateTakesTable(db.execRaw),
   initExplorationRecordsTable: (db) => initExplorationRecordsTable(db.execRaw),
   initSwarmNodeRecords: (db) => initSwarmNodeRecords(db.execRaw),
-  initTurnOutcomeTables: (db) => initTurnOutcomeTables(db.execRaw),
-  initReplayTables: (db) => initReplayTables(db.execRaw),
+  initLessonTables: (db) => initLessonTables(db.execRaw),
+  initTurnRatingTables: (db) => initTurnRatingTables(db.execRaw),
   initRefinementTables: (db) => initRefinementTables(db.execRaw),
   initEventsHubTables: (db) => initEventsHubTables(db.exec),
   initHeadsTables: (db) => initHeadsTables(db.execRaw),
-  initShadowTables: (db) => initShadowTables(db.execRaw),
   initRunEventTables: (db) => initRunEventTables(db.execRaw),
   initActorClaimTables: (db) => initActorClaimTables(db.execRaw),
   initFactsTable: (db) => initFactsTable(db.execRaw),
@@ -70,14 +68,15 @@ const OWNED = {
   initTaskListTable: (db) => initTaskListTable(db.execRaw),
   initMctsSearchTable: (db) => initMctsSearchTable(db.execRaw),
   initImportedExperienceTable: (db) => initImportedExperienceTable(db.execRaw),
-  initPromptSectionTables: (db) => initPromptSectionTables(db.execRaw),
+  initArtifactTables: (db) => initArtifactTables(db.execRaw),
+  initTrialTables: (db) => initTrialTables(db.execRaw),
   initAgentConfigTable: (db) => initAgentConfigTable(db.execRaw),
   initMemoryChunkTables: (db) => initMemoryChunkTables(db.sql),
 } satisfies Record<string, (db: WorkspaceSchemaSql) => void>;
 
 /** The surface a workspace root has and an actor scope does not. */
 const ROOT_ONLY_TABLES = [
-  'agent_open_turns', 'fork_lineage', 'fork_staged_files', 'fork_transfer',
+  'agent_figures', 'agent_open_turns', 'fork_lineage', 'fork_staged_files', 'fork_transfer',
   'slate_file_manifest', 'slate_live_share_users', 'slate_live_shares', 'slate_publications',
   'slate_share_users', 'slate_shares', 'slate_state', 'slate_versions',
   'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity', 'workspace_soul',

@@ -106,6 +106,7 @@ export const FIRST_RUN_CASES = [
   'account-settings',
   'workspace-settings',
   'machine-consent',
+  'device-job-output',
   'workspace-panes',
   'delegation-tree',
   'exploration',
@@ -113,6 +114,7 @@ export const FIRST_RUN_CASES = [
   'capability-isolation',
   'steer-correction',
   'multi-account',
+  'turn-rated',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -502,6 +504,18 @@ export const FIRST_RUN_DEFECTS = {
     redDirection: 'Planted on a loopback `vite dev` build of this tree: a device call that skips the '
       + 'owner\'s consent leaves `consent-requested` missed.',
   },
+  'device-job-output': {
+    id: 'device-job-output',
+    found: '2026-10-02: a command on the owner\'s machine that outlasted its call\'s foreground window became a job '
+      + 'whose output reached the workspace only as its settled result, so a build that ran for minutes showed nothing.',
+    missedBecause: 'machine-consent and two-machines run `hostname`, which answers inside the window, so no device '
+      + 'job ever formed; the device suites drive the daemon, the hub and the tunnel in-process against doubles.',
+    provedRedAt: null,
+    redDirection: 'Run on a loopback `vite dev` build of this tree with the daemon from 0be36f6fa^, before the device '
+      + 'leg streamed: the job reads completed with all 45 ticks in its result, but no job_output frame arrives, so '
+      + '`frames-in-order`, `every-tick-heard` and `heard-before-settle` are missed; the current daemon reaches all five '
+      + 'with 15 frames.',
+  },
   'workspace-panes': {
     id: 'workspace-panes',
     found: 'The Diffs and Supervise panes read a workspace\'s review baseline, run list and '
@@ -612,6 +626,19 @@ export const FIRST_RUN_DEFECTS = {
       + 'removed; the CLI menu carries no accounts; `setProviderAccount` is no agent RPC method; and '
       + '`setModel` refuses `openai@<name>/gpt-5.5`. Green needs the build with account keys (b29279646) '
       + 'and a workspace\'s own account choice (61db52a07).',
+  },
+  'turn-rated': {
+    id: 'turn-rated',
+    found: 'The review of b53b8db77 (2026-10-02): production and staging rate turns through the Workers AI binding, '
+      + 'and the answer shape that path assumed ("bare, no usage") was never measured. Measured on a throwaway Worker '
+      + 'the same day, the binding answers `{ model, answers, usage }`.',
+    missedBecause: 'every rating test hands the decision port an answer the TEST author wrote, so a binding that '
+      + 'answers another shape, or refuses, rates nothing while every gate stays green.',
+    provedRedAt: null,
+    redDirection: 'Not yet run on a deployment: no build that rates turns is deployed. The red direction is any '
+      + 'deployed build before b53b8db77, where getQuality is no RPC, and a binding answer the port cannot read, '
+      + 'which leaves today\'s `rated` at 0 when the budget ends. The case waits on the `reads_changed` frame naming '
+      + 'getQuality, so a build that rates without announcing it is red the same way.',
   },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
@@ -732,6 +759,7 @@ const SHORT_SUBJECT = {
   'account-settings': 'account',
   'workspace-settings': 'settings',
   'machine-consent': 'consent',
+  'device-job-output': 'devjob',
   'workspace-panes': 'panes',
   'delegation-tree': 'tree',
   'exploration': 'swarm',
@@ -739,6 +767,7 @@ const SHORT_SUBJECT = {
   'capability-isolation': 'isolation',
   'steer-correction': 'steer',
   'multi-account': 'accounts',
+  'turn-rated': 'rated',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

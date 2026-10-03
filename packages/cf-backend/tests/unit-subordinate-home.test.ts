@@ -4,7 +4,8 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  * (kept on an archive), all through the production seams.
  */
 import { describe, expect, test } from 'bun:test';
-import { agentHome, agentTmpRoot, buildBuiltinTools, subordinateAgentName } from '@kinu.run/core';
+import * as v from 'valibot';
+import { agentHome, agentTmpRoot, buildBuiltinTools, actorHomeName } from '@kinu.run/core';
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { conversationsFor } from '../../core/tests/helpers';
 import { hostedSubordinateHarness, orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
@@ -13,6 +14,8 @@ import { hostedSubordinateHarness, orchestratorHarness, type ActorHarness, type 
 const SOUL = '# Kinu\n\n## Mission\n\nBuild the thing.\n';
 
 const DIRECTORY = { type: 'directory' };
+
+const SHELL_OUTPUT = v.object({ stdout: v.string() });
 
 /** An agent the owner added, as the browser adds one, and the home name its directory row gives it. */
 async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorAgent>; name: string; agentName: string }> {
@@ -26,7 +29,7 @@ async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorA
 
   if (row === null) throw new Error(`no directory row names ${name}`);
 
-  return { parent, name, agentName: subordinateAgentName(row.storage_key) };
+  return { parent, name, agentName: actorHomeName({ origin: 'agent', storageKey: row.storage_key }) };
 }
 
 const hire = {
@@ -40,7 +43,7 @@ describe('a hosted subordinate runs as its own home', () => {
   test('hiring provisions the home on the workspace and the runtime acts as that uid', async () => {
     const parent = orchestratorHarness();
     const child = await hostedSubordinateHarness(parent, { ...hire, name: 'builder-1' });
-    const agentName = subordinateAgentName(child.actor.handle.storageKey);
+    const agentName = actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey });
 
     const home = await parent.agent.statWorkspaceFile(agentHome(agentName));
     expect(home).toMatchObject(DIRECTORY);
@@ -57,6 +60,27 @@ describe('a hosted subordinate runs as its own home', () => {
     expect(await parent.agent.statWorkspaceFile('/tmp/x')).toBeNull();
   });
 
+  // A call that may outlive its window streams its output, and ran as the session user: the actor's identity was put
+  // on the box's buffered calls only.
+  test('a call that streams its output runs as the subordinate too', async () => {
+    const parent = orchestratorHarness();
+    const child = await hostedSubordinateHarness(parent, { ...hire, name: 'builder-3' });
+    const agentName = actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey });
+    const shell = present(child.actor.runtime.shell, 'a hosted subordinate runtime carries a shell');
+    const heard: string[] = [];
+    const decoder = new TextDecoder();
+
+    const identity = await shell.exec('printf "%s %s %s" "$HOME" "$TMPDIR" "$(id -u)"', {
+      output: { write: (_stream, data) => { heard.push(v.is(v.string(), data) ? data : decoder.decode(data)); }, lost: () => {} },
+    });
+
+    expect(identity.exitCode).toBe(0);
+    expect(identity.stdout.split(' ').slice(0, 2)).toEqual([agentHome(agentName), agentTmpRoot(agentName)]);
+    expect(heard.join('')).toBe(identity.stdout);
+    // Not the session user's uid, which the parent's own shell runs as.
+    expect(identity.stdout.split(' ')[2]).not.toBe(v.parse(SHELL_OUTPUT, await parent.agent.executeInExecutor('workspace', 'id -u')).stdout.trim());
+  });
+
   // A relative path names the actor's own working directory, its home, as its shell's cwd does.
   test("a large result of its shell is saved in its own home, and the marker's path reads back from its file tool and any shell cwd", async () => {
     const parent = orchestratorHarness();
@@ -69,7 +93,7 @@ describe('a hosted subordinate runs as its own home', () => {
     const saved = present(/full result at ([^\]]+)\]/u.exec(clamped)?.[1], 'the saved path');
 
     expect(clamped).not.toContain('the full result was not saved');
-    expect(saved).toStartWith(`${agentHome(subordinateAgentName(child.actor.handle.storageKey))}/.kinu/tool-output/`);
+    expect(saved).toStartWith(`${agentHome(actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }))}/.kinu/tool-output/`);
     expect(await file({ action: 'read', path: saved, offset: 19_999, limit: 2 })).toContain('20000');
     expect(await shell({ command: `cd /tmp && tail -n 1 ${saved}` })).toContain('20000');
   });

@@ -121,7 +121,6 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
       models: ['fake-model', 'big-model', 'pinned-model'].map((id) => ({ id, label: id, provider: 'fake' })), failures: [],
     }),
     modelInfo: async () => null,
-    judgeCandidates: async () => [],
     getAuth: async () => null,
     // The fake vendor has no count endpoint, so the turn is assembled ungated.
     countInputTokens: async () => ({
@@ -195,7 +194,6 @@ function setup(model: LanguageModel, profileAuthority: CliProfileSource = async 
     mcpServers: {},
     noAutoEvolve: true,
     transcript: { transcriptDir: join(home, 'sessions') },
-    naming: { generate: async () => JSON.stringify({ title: 'Named By Test' }) },
     surface: 'interactive',
   });
 
@@ -230,7 +228,6 @@ function openPersistentClient(
     mcpServers: {},
     noAutoEvolve: true,
     transcript: transcriptOptions,
-    naming: { generate: async () => JSON.stringify({ title: 'Named By Test' }) },
     surface: 'interactive',
   });
 }
@@ -961,11 +958,11 @@ describe('/takes — Alternate Takes over a real local client', () => {
     if (picked.kind !== 'text') throw new Error(`expected text outcome, got ${picked.kind}`);
     expect(picked.text).toContain('Take 2 picked');
 
-    const row = rt.storage.sql<{ outcome: string; source: string; turn_id: string }>`
-      SELECT outcome, source, turn_id FROM turn_outcomes`[0];
+    const row = rt.storage.sql<{ score: number; source: string; turn_id: string }>`
+      SELECT score, source, turn_id FROM turn_ratings`[0];
 
-    if (row === undefined) throw new Error('expected a take_pick outcome row');
-    expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', turn_id: set.turnId });
+    if (row === undefined) throw new Error('expected a take_pick rating row');
+    expect(row).toMatchObject({ score: 2, source: 'take_pick', turn_id: set.turnId });
 
     await observed.until((items) => items.some((event) => event.type === 'turn-start' && event.kind === 'programmatic' && event.event === 'take_pick')
       && items.filter((event) => event.type === 'turn-end').length >= 2);

@@ -1,21 +1,19 @@
 import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
-  agentAffinityKey,
   BackgroundJobStore,
+  runOnExecutor,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOLS,
   EventLog,
   HeadJournal,
   MctsSearchStore,
   RunEventRecorder,
-  unpricedLedgerSink,
-  type ModelCallSink,
   TriggerRegistry,
   type AlarmScheduler,
   openWorkspaceMainActor,
   WorkspaceActorDirectory,
-  createAgentConfigStore,
+  createAgentConfigStore, getCurrentScaffoldVersion,
   type ActorHandle,
   type SqlExecutor,
   type WorkspaceActor,
@@ -24,16 +22,12 @@ import {
   createFactsStore,
   initEventsHubTables,
   initAgentConfigTable,
-  alignmentConvergence,
-  calibrationReport,
-  createCompletionLLM,
-  ensembleReport,
   getChatHistoryPage, readSessionTranscript, CHAT_SESSION_ID,
   missingSubordinateHistory, inspectDescendant, readSubordinateInspection, SubordinateInspectionRequestSchema,
   type SubordinateInspectionRequest, type SubordinateInspectionResult,
   getEvolutionChangelog,
-  ingestOutcomeLabels,
-  initTurnOutcomeTables,
+  qualitySeries,
+  type QualityDay,
   listGepaRuns,
   listRuns,
   listScaffoldVersions,
@@ -41,31 +35,16 @@ import {
   createTimerTrigger,
   tableExists as coreTableExists,
   workspaceSpend,
-  runCorpusEval,
-  runEnsemble,
-  sampleForLabeling,
-  selectEnsembleJudges,
-  type AlignmentConvergence,
-  type CalibrationReport,
   type BackgroundJob,
   type ChatHistoryEntry,
-  type CorpusEvalReport,
-  type CorpusTurn,
-  type EnsembleJudge,
   type EvolutionChangelogView,
   type GepaCandidate,
   type RunListEntry,
   type GepaRunSummary,
   type HeadRunView,
-  type WeakLabel,
-  type EnsembleReport,
-  type EnsembleRunResult,
-  type LabelIngestResult,
-  type LabelingItem,
   type JsonObject,
   type JsonValue,
   type ResolvedTurnProfile,
-  type OutcomeLabel,
   type EventVariant,
   type KinuEvent,
   type QueryFilter,
@@ -98,11 +77,17 @@ import {
   type SeekCursor,
   type WorkspaceSpend,
   type AccountSpend,
+  MEMORY_PATH,
+  WORKSPACE_ROOT,
+  readMission,
+  searchMemoryChunks,
+  type MemorySearchResult,
 } from '@kinu.run/core';
-import { classify } from '@kinu.run/core/obs';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { classify, tolerateAsync } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, schemaGenesisOf, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
-  resolverModelPlane, type LocalModelResolver,
+  makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
+  openWorkspaceCLI, resolverModelPlane,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveAgentRef } from './config';
@@ -141,6 +126,8 @@ export interface LocalExecResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  /** Set when the executor refused or failed before producing output. */
+  error?: string;
 }
 
 export interface LocalAgentInfoSnapshot {
@@ -180,11 +167,13 @@ export interface LocalAgentState {
   executors: LocalExecutorInfo[];
 }
 
-export function getLocalAgentState(name: string): LocalAgentState {
+export async function getLocalAgentState(name: string): Promise<LocalAgentState> {
+  const memoryContent = await readLocalMemory(name);
+
   return withLocalDb(name, (db) => ({
     status: getLocalStatus(db),
     tools: getLocalToolSummary(db),
-    memoryContent: readLocalMemory(name),
+    memoryContent,
     mcts: listLocalMcts(name),
     timeline: listLocalTimeline(name, 250),
     executors: listLocalExecutors(),
@@ -249,35 +238,18 @@ export async function readLocalNextTurnTier(name: string): Promise<ResolvedTurnP
   });
 }
 
-/** Reassembled from `memory_chunks`, MemoryStore's index of `memory/MEMORY.md`; opening the file would write (see getLocalStatus). */
-export function readLocalMemory(name: string): string {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'memory_chunks')) return '';
-
-    return all<{ text: string }>(
-      db,
-      `SELECT text FROM memory_chunks WHERE path = 'memory/MEMORY.md' ORDER BY start_line ASC`,
-    ).map((row) => row.text).join('\n');
-  });
+/** The file itself, through the read-only plane; `memory_chunks` is the search index and can lag an edit. */
+export function readLocalMemory(name: string): Promise<string> {
+  return withLocalDbAsync(name, async (db) =>
+    await tolerateAsync(() => readText(inspectionFiles(db, null), `${WORKSPACE_ROOT}/${MEMORY_PATH}`), 'enoent') ?? '');
 }
 
 /** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */
-export function searchLocalMemory(name: string, query: string, limit = 10): Array<{ path: string; text: string; score?: number; startLine?: number; endLine?: number }> {
-  const q = query.trim();
-
-  if (!q) return [];
+/** The agent's own ranked search over the same index. */
+export function searchLocalMemory(name: string, query: string, limit = 10): MemorySearchResult[] {
   const window = boundedInt(limit, 10, 1, Number.MAX_SAFE_INTEGER);
 
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'memory_chunks')) return [];
-
-    return all<{ path: string; text: string; start_line: number; end_line: number }>(
-      db,
-      `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY rowid DESC LIMIT ?`,
-      `%${q}%`,
-      window,
-    ).map((row) => ({ path: row.path, text: row.text, startLine: row.start_line, endLine: row.end_line }));
-  });
+  return withLocalDb(name, (db) => tableExists(db, 'memory_chunks_fts') ? searchMemoryChunks(makeSql(db), query, window) : []);
 }
 
 export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {
@@ -530,112 +502,8 @@ export function getLocalFacts(name: string, limit = 100): Array<{
   });
 }
 
-export function getLocalAlignment(name: string): AlignmentConvergence {
-  return withLocalDb(name, (db) => alignmentConvergence(makeSql(db), requireMainActor(db)));
-}
-
-export function getLocalCalibration(name: string): CalibrationReport {
-  return withLocalDb(name, (db) => calibrationReport(makeSql(db), requireMainActor(db)));
-}
-
-export function sampleLocalLabeling(name: string, size: number): LabelingItem[] {
-  return withLocalDb(name, (db) => sampleForLabeling(makeSql(db), requireMainActor(db), { size }));
-}
-
-/** Tables are ensured first: a workspace can predate the label table. */
-export async function recordLocalOutcomeLabels(
-  name: string,
-  input: { labeler: string; labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }> },
-): Promise<LabelIngestResult> {
-  return withLocalWritableDb(name, (db) => {
-    const sql = makeSql(db);
-    initTurnOutcomeTables((ddl) => { db.exec(ddl); });
-
-    return ingestOutcomeLabels(sql, openWorkspaceMainActor(sql), input);
-  });
-}
-
-export function getLocalEnsemble(name: string): EnsembleReport {
-  return withLocalDb(name, (db) => ensembleReport(makeSql(db), requireMainActor(db)));
-}
-
-/** Resolving costs credentials, so `runEnsemble` takes this as a callback rather than resolving up front. */
-function localJudge(resolver: LocalModelResolver, named: string, workspace: string, report: ModelCallSink): EnsembleJudge {
-  const spec = resolver.normalizeSpecSync(named);
-
-  return {
-    spec,
-    llm: createCompletionLLM({ model: resolver.resolveModel(spec, agentAffinityKey(workspace)), spec, stage: 'judge', spend: { source: 'judge', report } }),
-  };
-}
-
-/** Holds the database open for the whole pass: verdicts are written as they land, so an interrupted run keeps paid calls. */
-export async function runLocalOutcomeEnsemble(
-  name: string,
-  specs: string[] | null,
-): Promise<EnsembleRunResult> {
-  ensureLocalAgent(name);
-  const db = new Database(agentDbPath(name));
-
-  try {
-    const sql = makeSql(db);
-    initTurnOutcomeTables((ddl) => { db.exec(ddl); });
-    // Choosing judges reads the catalog; resolving one needs credentials. Deferred so a label-less workspace is told that, not "unauthenticated".
-    const { resolver } = createConfiguredLocalModelResolver();
-    const actor = openWorkspaceMainActor(sql);
-    const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
-
-    return await runEnsemble(sql, actor, {
-      specs: async () => (await selectEnsembleJudges({
-        specs,
-        chatSpec: () => resolver.normalizeSpecSync(actor.config.getModel()),
-        candidates: () => resolver.judgeCandidates(),
-      })).specs,
-      judge: (named) => localJudge(resolver, named, name, report),
-    });
-  } finally {
-    db.close();
-  }
-}
-
-/** The corpus is not this agent's history: no outcome row is written. */
-export async function runLocalCorpusEval(name: string, input: {
-  turns: ReadonlyArray<CorpusTurn>;
-  labels: ReadonlyArray<WeakLabel>;
-  specs: string[] | null;
-}): Promise<CorpusEvalReport> {
-  ensureLocalAgent(name);
-  const { resolver } = createConfiguredLocalModelResolver();
-  const db = new Database(agentDbPath(name));
-
-  try {
-    const sql = makeSql(db);
-    const actor = openWorkspaceMainActor(sql);
-    const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
-    const chatSpec = resolver.normalizeSpecSync(actor.config.getModel());
-
-    const selection = await selectEnsembleJudges({
-      specs: input.specs,
-      chatSpec: () => chatSpec,
-      candidates: () => resolver.judgeCandidates(),
-    });
-
-    const judges = selection.specs.map((named) => localJudge(resolver, named, name, report));
-
-    return await runCorpusEval({
-      turns: input.turns,
-      labels: input.labels,
-      classifier: {
-        name: `${chatSpec} (turn-outcome classifier)`,
-        llm: createCompletionLLM({
-          model: resolver.resolveModel(chatSpec, agentAffinityKey(name)), spec: chatSpec, stage: 'chat', spend: { source: 'fast', report },
-        }),
-      },
-      judges,
-    });
-  } finally {
-    db.close();
-  }
+export function getLocalQuality(name: string, days?: number): QualityDay[] {
+  return withLocalDb(name, (db) => qualitySeries(makeSql(db), requireMainActor(db), days === undefined ? {} : { days }));
 }
 
 export interface LocalGepaRunDetail {
@@ -754,18 +622,25 @@ export async function cancelLocalJob(name: string, id: string): Promise<{ ok: bo
   });
 }
 
+/** The addressed workspace's own registered executor runs the command, as the cloud's executeInExecutor does. */
 export async function executeLocalExecutor(name: string, executorId: string, command: string): Promise<LocalExecResult> {
   ensureLocalAgent(name);
-  const normalized = executorId.toLowerCase();
+  const dbPath = agentDbPath(name);
+  const db = new Database(dbPath);
 
-  if (!['workspace', 'device', 'local', 'your-pc'].includes(normalized)) {
-    throw new Error(`Executor "${executorId}" is not available for local agents.`);
+  try {
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: null, cwd: resolveAgentRef(name)?.cwd ?? null });
+
+    const run = rt.executionRouter
+      ? await runOnExecutor(rt.executionRouter, executorId, command)
+      : { kind: 'refused' as const, error: `Workspace "${name}" has no execution router` };
+
+    return run.kind === 'ran'
+      ? { executor: executorId, command, stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode }
+      : { executor: executorId, command, stdout: '', stderr: '', exitCode: 1, error: run.error };
+  } finally {
+    db.close();
   }
-
-  // createHostShell owns group kill on abort and settles when the command exits, not when a grandchild closes the pipe.
-  const result = await createHostShell(process.cwd()).exec(command);
-
-  return { executor: executorId, command, ...result };
 }
 
 export async function markLocalBackgroundJobsCancelled(name: string): Promise<string[]> {
@@ -860,17 +735,6 @@ function countOf(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): numb
   return all<{ c: number }>(db, sql, ...params).at(0)?.c ?? 0;
 }
 
-function currentScaffoldVersion(db: SqliteDb, actorId: string): number {
-  const current = all<{ version: number }>(
-    db,
-    `SELECT version FROM scaffold_versions
-     WHERE actor_id = ? AND status = 'current' ORDER BY version DESC LIMIT 1`,
-    actorId,
-  ).at(0);
-
-  return current?.version ?? 0;
-}
-
 function tableExists(db: SqliteDb, name: string): boolean {
   return coreTableExists(makeSql(db), name);
 }
@@ -961,20 +825,16 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
 
     if (!row) return null;
 
-    const config = tableExists(db, 'actor_config')
-      ? createAgentConfigStore(makeSql(db), actorId, () => {
-        if (!directory?.retained(actorId)) {
-          throw new Error(`actor ${actorId} is no longer retained in this workspace`);
-        }
-      })
-      : null;
+    const assertCurrent = () => {
+      if (!directory?.retained(actorId)) throw new Error(`actor ${actorId} is no longer retained in this workspace`);
+    };
+
+    const config = tableExists(db, 'actor_config') ? createAgentConfigStore(makeSql(db), actorId, assertCurrent) : null;
 
     return {
       name: row.name,
       purpose: '',
-      scaffoldVersion: tableExists(db, 'scaffold_versions')
-        ? currentScaffoldVersion(db, actorId)
-        : 0,
+      scaffoldVersion: tableExists(db, 'scaffold_versions') ? getCurrentScaffoldVersion(makeSql(db), { actorId, assertCurrent }) ?? 0 : 0,
       searchNodeCount: tableExists(db, 'search_nodes')
         ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId)
         : 0,
@@ -999,19 +859,14 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
       db, `SELECT name, created_at FROM workspace_identity LIMIT 1`).at(0)
     : null;
 
-  // From the identity row, not SOUL.md: opening the workspace filesystem writes. `writeSoul` keeps it current (identity/soul.ts).
-  const mission = hasIdentity
-    ? all<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`).at(0)?.mission?.trim() ?? null
-    : null;
+  // Off the soul's row, not SOUL.md: opening the workspace filesystem writes.
+  const mission = readMission(makeSql(db));
 
   return {
     name: identity?.name ?? null,
     purpose: mission ?? '',
     createdAt: identity?.created_at ?? null,
-    // The live version, not MAX(version), which would include a pending proposal.
-    scaffoldVersion: actor && tableExists(db, 'scaffold_versions')
-      ? currentScaffoldVersion(db, actor.actorId)
-      : 0,
+    scaffoldVersion: actor && tableExists(db, 'scaffold_versions') ? getCurrentScaffoldVersion(makeSql(db), actor) ?? 0 : 0,
     searchNodeCount: actor && tableExists(db, 'search_nodes')
       ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actor.actorId)
       : 0,

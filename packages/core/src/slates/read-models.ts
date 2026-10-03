@@ -1,10 +1,9 @@
 export const SLATE_READ_MODELS = [
-  'getAlignmentConvergence',
   'getExecutors',
   'getGepaRuns',
   'getHeadRuns',
   'getMctsTree',
-  'getOutcomeCalibration',
+  'getQuality',
   'getRunTimeline',
   'getToolDescriptions',
   'getWorkspaceSnapshot',

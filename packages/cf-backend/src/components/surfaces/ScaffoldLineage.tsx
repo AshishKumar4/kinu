@@ -1,7 +1,7 @@
 import { useState, useCallback, type ReactNode } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
-import { ScalesIcon, PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
+import { PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
@@ -11,16 +11,6 @@ import { renderThrownChain } from "@kinu.run/core/obs";
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
 
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: Array<{ kind: "add" | "del" | "ctx"; text: string }> }
-
-interface ShadowTrial { id: string; task: string; currentScore: number | null; pendingScore: number | null; winner: "current" | "pending" | "tie" | null; rationale: string | null; evaluatedAt: number }
-
-interface ShadowVerdict { version: number | null; trials: ShadowTrial[]; summary: { trials: number; pendingWins: number; currentWins: number; ties: number; winRate: number } }
-
-const WINNER_DOT: Record<"current" | "pending" | "tie", string> = {
-  pending: "p-dot-success",
-  current: "p-dot-danger",
-  tie: "p-dot-neutral",
-};
 
 function statusTone(status: string): string {
   switch (status) {
@@ -44,40 +34,12 @@ function DiffView({ diff }: { diff: ScaffoldDiff }) {
   );
 }
 
-function VerdictGrid({ verdict }: { verdict: ShadowVerdict }) {
-  if (verdict.trials.length === 0) return null;
-  const s = verdict.summary;
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-xs">
-        <ScalesIcon size={13} className="p-text-2" />
-        <span className="p-text-2">Shadow eval</span>
-        <span className="p-success">{s.pendingWins} pending</span>
-        <span className="p-danger">{s.currentWins} regressions</span>
-        <span className="p-text-3">{s.ties} ties · win-rate {(s.winRate * 100).toFixed(0)}%</span>
-      </div>
-      <div className="rounded-md border p-border overflow-hidden p-row-text">
-        {verdict.trials.map((t) => (
-          <div key={t.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-            <span className={`shrink-0 size-1.5 rounded-full ${t.winner === null ? "p-dot-neutral" : WINNER_DOT[t.winner]}`} />
-            <span className="p-text-2 truncate flex-1" title={t.task}>{t.task}</span>
-            <span className="font-mono p-text-3 tabular-nums">{t.currentScore?.toFixed(2) ?? "—"}</span>
-            <span className="p-text-3">vs</span>
-            <span className={`font-mono tabular-nums ${t.winner === "pending" ? "p-success" : "p-text-3"}`}>{t.pendingScore?.toFixed(2) ?? "—"}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function VersionDiff({ detail, version, onRetry }: {
-  detail: AsyncResource<{ diff: ScaffoldDiff; verdict: ShadowVerdict }>;
+  detail: AsyncResource<ScaffoldDiff>;
   version: number;
   onRetry: () => void;
 }) {
-  if (detail.status === "ready") return <DiffView diff={detail.value.diff} />;
+  if (detail.status === "ready") return <DiffView diff={detail.value} />;
 
   if (detail.status === "error") {
     return <LoadFailure what={`the v${version} diff`} message={detail.message} onRetry={onRetry} />;
@@ -93,7 +55,7 @@ export interface ScaffoldLineageProps {
 
 export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const [selected, setSelected] = useState<number | null>(null);
-  const [detail, setDetail] = useState<AsyncResource<{ diff: ScaffoldDiff; verdict: ShadowVerdict }>>({ status: "loading" });
+  const [detail, setDetail] = useState<AsyncResource<ScaffoldDiff>>({ status: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
   const [decideErr, setDecideErr] = useState<string | null>(null);
   const [previewTask, setPreviewTask] = useState("");
@@ -107,14 +69,8 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const loadDetail = useCallback(async (version: number) => {
     setDetail({ status: "loading" });
 
-    // An absent verdict is an empty result, not a failure.
     try {
-      const [diff, verdict] = await Promise.all([
-        rpc<ScaffoldDiff>("getScaffoldDiff", [version]),
-        rpc<ShadowVerdict>("getShadowVerdict", [version]),
-      ]);
-
-      setDetail(loadSucceeded({ diff, verdict }));
+      setDetail(loadSucceeded(await rpc<ScaffoldDiff>("getScaffoldDiff", [version])));
     } catch (cause) {
       setDetail((prev) => loadFailed(prev, { cause }));
     }
@@ -187,9 +143,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
 
           {selected != null && (
             <div className="space-y-3 pt-1">
-              {detail.status === "ready" && detail.value.verdict.trials.length > 0 && (
-                <VerdictGrid verdict={detail.value.verdict} />
-              )}
               <VersionDiff detail={detail} version={selected} onRetry={() => loadDetail(selected)} />
 
               <div className="space-y-1.5">

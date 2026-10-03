@@ -182,13 +182,17 @@ export function useGrowingScroll({
   const lastLoading = useRef(loading);
   const lastFetched = useRef(fetched);
 
+  const writeTop = useCallback((node: GrowingScrollHost, top: number) => {
+    node.scrollTop = top;
+    motion.current.top = node.scrollTop;
+    written.current = node.scrollTop;
+  }, []);
+
   const hold = useCallback((node: GrowingScrollHost) => {
     if (pendingRestore.current !== null) return;
 
     if (grows === "up" && pinned.current) {
-      node.scrollTop = node.scrollHeight;
-      motion.current.top = node.scrollTop;
-      written.current = node.scrollTop;
+      writeTop(node, node.scrollHeight);
 
       return;
     }
@@ -208,9 +212,7 @@ export function useGrowingScroll({
       const top = Math.round(held.share * reservedAbove(node));
 
       if (top === Math.round(node.scrollTop)) return;
-      node.scrollTop = top;
-      motion.current.top = node.scrollTop;
-      written.current = node.scrollTop;
+      writeTop(node, top);
 
       return;
     }
@@ -224,25 +226,24 @@ export function useGrowingScroll({
     const drift = held.row.getBoundingClientRect().top - node.getBoundingClientRect().top - held.offset;
 
     if (drift === 0) return;
-    node.scrollTop += drift;
-    motion.current.top = node.scrollTop;
-    written.current = node.scrollTop;
-  }, [grows]);
+    writeTop(node, node.scrollTop + drift);
+  }, [grows, writeTop]);
 
   const tryRestore = useCallback((node: GrowingScrollHost) => {
     const target = pendingRestore.current;
 
     if (target === null || !latestSettled.current) return;
 
-    const maxScrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
+    const reserved = reservedAbove(node);
+    const maxLoadedTop = Math.max(0, node.scrollHeight - node.clientHeight - reserved);
 
     pendingRestore.current = null;
-    node.scrollTop = target <= maxScrollTop ? target : node.scrollHeight;
+    writeTop(node, target >= 0 && target <= maxLoadedTop ? target + reserved : node.scrollHeight);
     pinned.current = grows === "up"
       && node.scrollHeight - node.scrollTop - node.clientHeight < PIN_THRESHOLD;
     anchor.current = findAnchor(node);
-    reportPosition.current?.(pinned.current ? "pinned" : node.scrollTop);
-  }, [grows]);
+    reportPosition.current?.(pinned.current ? "pinned" : node.scrollTop - reserved);
+  }, [grows, writeTop]);
 
   const maybeLoadMore = useCallback((node: GrowingScrollHost) => {
     const ahead = node.clientHeight * AHEAD_SCREENS + motion.current.speed * fetchMs.current * AHEAD_MARGIN;
@@ -268,6 +269,7 @@ export function useGrowingScroll({
 
     if (written.current !== null && Math.abs(node.scrollTop - written.current) < 1) {
       written.current = null;
+      hold(node);
       maybeLoadMore(node);
 
       return;
@@ -292,11 +294,11 @@ export function useGrowingScroll({
 
     // A pending restore must not be overwritten by the mount's own bottom-jump.
     if (pendingRestore.current === null) {
-      reportPosition.current?.(pinned.current ? "pinned" : node.scrollTop);
+      reportPosition.current?.(pinned.current ? "pinned" : node.scrollTop - reservedAbove(node));
     }
 
     maybeLoadMore(node);
-  }, [grows, maybeLoadMore]);
+  }, [grows, hold, maybeLoadMore]);
 
   const observers = useRef<{ resize: ResizeObserver; rows: MutationObserver } | null>(null);
 
@@ -313,7 +315,7 @@ export function useGrowingScroll({
     // Safari has no native anchoring, and the others' would correct the same growth twice.
     node.style.overflowAnchor = "none";
     pinned.current = grows === "up";
-    node.scrollTop = grows === "up" ? node.scrollHeight : 0;
+    writeTop(node, grows === "up" ? node.scrollHeight : 0);
     const saved = latestInitialScroll.current;
     pendingRestore.current = grows === "up" && saved !== undefined && saved !== "pinned" ? saved : null;
     tryRestore(node);
@@ -338,7 +340,7 @@ export function useGrowingScroll({
     }
 
     maybeLoadMore(node);
-  }, [grows, onScroll, maybeLoadMore, tryRestore, hold]);
+  }, [grows, onScroll, maybeLoadMore, tryRestore, hold, writeTop]);
 
   useEffect(() => () => {
     observers.current?.resize.disconnect();

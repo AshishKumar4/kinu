@@ -18,13 +18,15 @@ import {
 } from '../src/strategy/node-agent';
 import type { NodeAgentDeps, NodeAgentInput, NodeRun } from '../src/strategy/node-agent';
 import { BUILTIN_TOOLS } from '../src/tools/registry';
+import { readCallJob } from '../src/tools/call-job';
+import type { JobOutputFrame } from '../src/jobs/live-output';
 
 const DETACH_MS = 60;
 
 const SETTLE_MS = 200;
 
-/** A `prebuiltCodemodeTool` whose work outlives the detach threshold; the test calls `settle`. */
-function slowExecuteTool() {
+/** A `prebuiltCodemodeTool` whose work outlives the detach threshold, printing `printed` first; the test calls `settle`. */
+function slowExecuteTool(printed = '') {
   let release!: () => void;
   const done = new Promise<void>((resolve) => { release = resolve; });
   let starts = 0;
@@ -35,8 +37,10 @@ function slowExecuteTool() {
       inputSchema: jsonSchema<{ code: string }>({
         type: 'object', required: ['code'], properties: { code: { type: 'string' } },
       }),
-      execute: async ({ code }) => {
+      execute: async ({ code }, options) => {
         starts += 1;
+
+        if (printed !== '') readCallJob(options)?.output.write('stdout', printed);
         await done;
 
         return `ran ${code}: exit 0`;
@@ -159,6 +163,8 @@ interface Fixture {
   /** Jobs in flight in the workspace registry. */
   readonly detached: () => number;
   readonly jobStarted: () => Promise<void>;
+  /** What the workspace was sent of the node's jobs' output, as the seat's port heard it. */
+  readonly frames: readonly JobOutputFrame[];
 }
 
 function fixture(over: {
@@ -183,6 +189,7 @@ function fixture(over: {
   };
 
   const seats = hostedSeatsOver({ rt, db });
+  const frames: JobOutputFrame[] = [];
   /** The node's own actor, which keys its detached job; counting under `rt.actor` stalls the wait. */
   let nodeActorId: string | null = null;
 
@@ -206,7 +213,7 @@ function fixture(over: {
       const seat = await seats.hostNode(node);
       nodeActorId = seat.actor.handle.actorId;
 
-      return seat;
+      return { ...seat, jobs: { ...seat.jobs, ports: { jobOutput: (frame) => { frames.push(frame); } } } };
     },
     model: over.model, journal,
     logger,
@@ -231,7 +238,7 @@ function fixture(over: {
     return rows[0]?.n ?? 0;
   };
 
-  return { input, deps, journal, detached, jobStarted };
+  return { input, deps, journal, detached, jobStarted, frames };
 }
 
 describe('a node backgrounds work, ends its turn, and is woken to finish', () => {
@@ -270,6 +277,8 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     expect(resumed.slice(0, firstTurn.length)).toEqual(firstTurn);
     expect(resumed.at(-1)).toContain('Background eval job');
     expect(resumed.at(-1)).toContain('completed');
+    // With the result itself: a node has no `agent.jobResult` to read it with.
+    expect(resumed.at(-1)).toContain('ran await sandbox.run(): exit 0');
 
     expect(run.report.status).toBe('completed');
     expect(run.reportedItself).toBe(true);
@@ -310,6 +319,23 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     expect(afterLaunch).toContain('eval');
     expect(afterLaunch).not.toContain('exit 0');
     expect(slow.started()).toBe(1);
+  });
+
+  test("a detached job's output goes out through the workspace's port, as every actor's does", async () => {
+    const slow = slowExecuteTool('compiling\n');
+    const prompts: string[][] = [];
+
+    const { input, deps, frames, jobStarted } = fixture({
+      model: detachThenReport(prompts), codemodeTool: () => slow.entry,
+    });
+
+    const running = runNodeAgent(input, deps);
+    await jobStarted();
+    slow.settle();
+    expect((await running).report.status).toBe('completed');
+
+    // Sent by the time the job has ended, whichever flush carried it.
+    expect(frames.flatMap((frame) => frame.chunks.map((chunk) => chunk.text)).join('')).toBe('compiling\n');
   });
 
   test('ending a turn without calling report is a NORMAL outcome', async () => {

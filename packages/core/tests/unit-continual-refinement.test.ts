@@ -11,19 +11,21 @@ import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 
 import {
-  activePromptSectionOverrides, advancePromptSectionLane, buildSystemPromptSync,
-  createFactsStore, findPromptSectionTarget, recordTurnOutcome,
+  buildSystemPromptSync, createFactsStore, recordTurnRating,
   type FactsStore, type ScaffoldControl,
 } from '../src/index';
 import { initAllTables } from '../src/state/workspace-schema';
 import { EvolutionEngine } from '../src/evolution/engine';
-import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
 import type { SessionHistory } from '../src/session/history';
-import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
-import { initTurnOutcomeTables } from '../src/evolution/outcomes';
+import { initLessonTables } from '../src/evolution/lessons';
+import { initTurnRatingTables } from '../src/evolution/ratings';
 import { buildChangelog } from '../src/evolution/changelog';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
-import { initPromptSectionTables, listPromptSectionVersions } from '../src/prompting/section-store';
+import {
+  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, settleArtifact,
+} from '../src/evolution/artifacts';
+import { initArtifactTables } from '../src/evolution/artifact-schema';
+import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import {
   InstructionApprovalStore, initInstructionApprovalsTable, instructionDigest,
 } from '../src/safety/instruction-trust';
@@ -68,11 +70,9 @@ import {
 import { buildDrainBatch } from '../src/events/hub/drain';
 import { createTestActor, createTestRuntime, makeExecRaw, makeSql, makeSqlExec } from './helpers';
 
-const EVAL_SIZE = 8;
-
 const TARGET_ID = 'state/output-format';
 
-const target = findPromptSectionTarget(TARGET_ID);
+const target = PROMPT_SECTIONS.find((section) => section.id === TARGET_ID);
 
 if (!target) throw new Error(`${TARGET_ID} is not registered`);
 
@@ -81,11 +81,11 @@ const INCUMBENT = target.source;
 /** Same size as the incumbent, so the anti-bloat size rule is never under test here. */
 const CANDIDATE = `${INCUMBENT.slice(0, -6)}ASKED.`;
 
-const config: ScaffoldControl['config'] = {
-  getShadowSampleRate: () => 1,
-  getAutoPromoteScaffold: () => false,
-  getGepaEvalBudget: () => EVAL_SIZE,
-};
+const ARTIFACT = sectionArtifact(TARGET_ID);
+
+const overrides = (rt: AgentRuntime) => artifactOverrides(currentArtifacts(rt.storage.sql, rt.actor)).sections;
+
+const sectionVersions = (rt: AgentRuntime) => listArtifactVersions(rt.storage.sql, rt.actor, ARTIFACT);
 
 function promptText(prompt: LanguageModelV3Prompt): string {
   const text: string[] = [];
@@ -112,7 +112,6 @@ function scriptedControl(rt: AgentRuntime, history: SessionHistory, score: (cand
     rt,
     sql: rt.storage.sql,
     history,
-    config,
     surface: () => { throw new Error('a refinement pass must not roll out a scaffold'); },
     model: () => new MockLanguageModelV3({
       provider: 'fake',
@@ -238,9 +237,10 @@ interface Fixture {
 function fixture(): Fixture {
   const { rt, db, stores } = createTestRuntime();
   initAllTables(rt.storage.execRaw, rt.storage.sql);
-  initTurnOutcomeTables(rt.storage.execRaw);
+  initLessonTables(rt.storage.execRaw);
+  initTurnRatingTables(rt.storage.execRaw);
   initGepaTables(rt.storage.execRaw);
-  initPromptSectionTables(rt.storage.execRaw);
+  initArtifactTables(rt.storage.execRaw);
   initInstructionApprovalsTable(rt.storage.execRaw);
   initRefinementTables(rt.storage.execRaw);
   const facts = createFactsStore(rt.storage.sql, rt.actor);
@@ -255,12 +255,16 @@ function fixture(): Fixture {
     stores,
     facts,
     approvals,
-    deps: (refiner, score = (candidate) => (candidate === CANDIDATE ? 0.9 : 0.4)) => ({
-      control: scriptedControl(rt, stores.history, score),
-      facts,
-      refiner,
-      approvals,
-    }),
+    deps: (refiner, score = (candidate) => (candidate === CANDIDATE ? 0.9 : 0.4)) => {
+      // The judge-only comparison: a candidate scoring above the incumbent fixes every bad turn and harms no good one.
+      rt.decide = async () => {
+        const better = score(CANDIDATE) > score(INCUMBENT);
+
+        return { answers: { fixes: { type: 'noul', noul: better ? 0.9 : 0.1 }, harms: { type: 'noul', noul: better ? 0.1 : 0.9 } }, usage: { input: 1, output: 1 } };
+      };
+
+      return { control: scriptedControl(rt, stores.history, score), facts, refiner, approvals };
+    },
   };
 }
 
@@ -278,15 +282,13 @@ function seedGradedTurns(rt: AgentRuntime, negatives: number, accepted = 2) {
 
   for (let i = 0; i < negatives; i += 1) {
     const turnId = `neg-${String((seeded += 1))}`;
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
+    recordTurnRating(rt.storage.sql, rt.actor, {
       turnId,
-      outcome: 'corrected',
-      confidence: 0.9,
-      source: 'classifier',
-      userMessage: `fix ${turnId}. always answer in one line.`,
-      assistantResponse: 'a long rambling answer',
+      score: 1.5, corrected: 1, wrong: null,
+      source: 'model',
+      request: `fix ${turnId}. always answer in one line.`,
+      answer: 'a long rambling answer',
       followup: 'no, shorter please',
-      evidence: 'the user re-asked for brevity',
       now: SEED_EPOCH + seeded,
     });
     seededNegatives.push(turnId);
@@ -294,13 +296,12 @@ function seedGradedTurns(rt: AgentRuntime, negatives: number, accepted = 2) {
 
   for (let i = 0; i < accepted; i += 1) {
     const turnId = `ok-${String((seeded += 1))}`;
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
+    recordTurnRating(rt.storage.sql, rt.actor, {
       turnId,
-      outcome: 'accepted',
-      confidence: 0.9,
-      source: 'classifier',
-      userMessage: `fine task ${turnId}`,
-      assistantResponse: 'done',
+      score: 4.5, corrected: 0, wrong: null,
+      source: 'model',
+      request: `fine task ${turnId}`,
+      answer: 'done',
       followup: 'thanks',
       now: SEED_EPOCH + seeded,
     });
@@ -453,7 +454,7 @@ describe('refinement request — durable, and behaviourally inert', () => {
     seedGradedTurns(fx.rt, 3);
     const { port } = scriptedRefiner('{}');
 
-    const before = activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor);
+    const before = overrides(fx.rt);
 
     const opened = await requestRefinement(fx.deps(port), {
       trigger: 'explicit', scope: 'workspace',
@@ -463,7 +464,7 @@ describe('refinement request — durable, and behaviourally inert', () => {
     expect(opened.id).toMatch(/^refine-/);
     expect(opened.turnIds.length).toBeGreaterThan(0);
     // No artifact moved, and no model was called.
-    expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)).toEqual(before);
+    expect(overrides(fx.rt)).toEqual(before);
     expect(fx.facts.all()).toEqual([]);
 
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
@@ -762,18 +763,16 @@ describe('routing — every typed edit lands in the store that already owns it',
     const row = present(store.get(opened.id), 'the refinement row');
     const route = routeFor(row.routes, 'prompt_section');
     expect(route.disposition).toBe('pending_trials');
-    expect(route.owner).toBe('prompt_section_versions');
-    expect(route.target).toBe(`${TARGET_ID}:1`);
+    expect(route.owner).toBe('artifact_versions');
+    expect(route.target).toBe(`${ARTIFACT}@1`);
     expect(row.stage).toBe('evaluating');
 
     // The live prompt is untouched.
-    expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)[TARGET_ID]).toBeUndefined();
-    expect(buildSystemPromptSync(fx.rt, {
-      sectionOverrides: activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor),
-    })).not.toContain('ASKED.');
+    expect(overrides(fx.rt)[TARGET_ID]).toBeUndefined();
+    expect(buildSystemPromptSync(fx.rt, { sectionOverrides: overrides(fx.rt) })).not.toContain('ASKED.');
   });
 
-  test('a section proposal needs measured behavioural evidence — degeneracy refuses it', async () => {
+  test('a section proposal needs a judged improvement on its low-rated turns — with none it is refused', async () => {
     const fx = fixture();
     // Accepted turns only: no failure to optimise toward.
     const { accepted } = seedGradedTurns(fx.rt, 0, 3);
@@ -800,7 +799,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
     const route = routeFor(row.routes, 'prompt_section');
     expect(route.disposition).toBe('refused');
-    expect(route.reason).toContain('no corrected/frustrated turns');
+    expect(route.reason).toContain('the judge-only comparison refused it');
     expect(row.stage).toBe('refused');
   });
 
@@ -1043,7 +1042,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     store.open({ trigger: 'explicit', scope: 'workspace', turnIds: negatives });
 
-    // The row holds ids; turn text stays in `turn_outcomes`.
+    // The row holds ids; turn text stays in `turn_ratings`.
     const stored = fx.rt.storage.sql<{ turn_ids: string }>`
       SELECT turn_ids FROM refinement_requests`;
 
@@ -1233,7 +1232,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
       expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
       expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity')))
         .toBe(BREVITY_SKILL);
-      expect(listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50)).toHaveLength(1);
+      expect(sectionVersions(fx.rt)).toHaveLength(1);
     }
   });
 
@@ -1282,7 +1281,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(row.routes).toHaveLength(3);
     expect(row.stage).toBe('evaluating');
     expect(fx.facts.all()).toHaveLength(1);
-    expect(listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50)).toHaveLength(1);
+    expect(sectionVersions(fx.rt)).toHaveLength(1);
     expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity')))
       .toBe(BREVITY_SKILL);
     // Nothing went live off a proposal.
@@ -1315,7 +1314,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(fx.facts.all()).toHaveLength(1);
     expect(present(store.get(opened.id), 'the refinement row').routes).toHaveLength(3);
-    expect(listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50)).toHaveLength(1);
+    expect(sectionVersions(fx.rt)).toHaveLength(1);
   });
 
   test('a claim another process re-queued writes nothing behind its successor', async () => {
@@ -1348,9 +1347,9 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(fx.facts.all()).toHaveLength(1);
     expect(fx.facts.recall('user.answer_shape')?.value).toBe('one line');
     expect(fx.facts.recall('user.answer_length')).toBeNull();
-    const versions = listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50);
+    const versions = sectionVersions(fx.rt);
     expect(versions).toHaveLength(1);
-    expect(versions[0].source).toBe(`${INCUMBENT.slice(0, -6)}BRIEF.`);
+    expect(versions[0]?.body).toBe(`${INCUMBENT.slice(0, -6)}BRIEF.`);
     expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity')))
       .toBe(`${BREVITY_SKILL}\nName the ask.`);
   });
@@ -1386,7 +1385,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(row.stage).toBe('evaluating');
     expect(row.routes).toHaveLength(3);
     expect(fx.facts.all()).toHaveLength(1);
-    expect(listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50)).toHaveLength(1);
+    expect(sectionVersions(fx.rt)).toHaveLength(1);
   });
 
   test('a claim is live until the pass ends, and never for a length of time', () => {
@@ -1414,8 +1413,8 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
   });
 });
 
-describe('promotion — the existing evaluated lane is the only thing that applies', () => {
-  test('the section promotes on trial evidence, and only then does the request apply', async () => {
+describe('promotion — a live trial is the only thing that applies', () => {
+  test('the section promotes when its trial keeps it, and only then does the request apply', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 4);
 
@@ -1437,14 +1436,9 @@ describe('promotion — the existing evaluated lane is the only thing that appli
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
-    // The existing lane runs trials and decides; refinement promotes nothing.
-    for (let i = 0; i < 20; i += 1) {
-      const step = await advancePromptSectionLane(deps.control);
-
-      if (step.step === 'trials' && step.trials.action) break;
-    }
-
-    expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)[TARGET_ID]).toBe(CANDIDATE);
+    // The live trial decides; refinement promotes nothing.
+    settleArtifact(fx.rt.storage.sql, fx.rt.actor, { artifactId: ARTIFACT, version: 1, status: 'current' });
+    expect(overrides(fx.rt)[TARGET_ID]).toBe(CANDIDATE);
 
     const settled = await advanceRefinementLane(deps);
     expect(settled.step).toBe('settled');
@@ -1466,29 +1460,17 @@ describe('promotion — the existing evaluated lane is the only thing that appli
       }],
     }));
 
-    // The candidate trials badly: the incumbent wins every paired comparison.
-    let proposed = false;
-
-    const deps = fx.deps(port, (candidate) => {
-      if (!proposed) return candidate === CANDIDATE ? 0.9 : 0.4;
-
-      return candidate === CANDIDATE ? 0.1 : 0.9;
-    });
+    const deps = fx.deps(port);
 
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
-    proposed = true;
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
-    for (let i = 0; i < 20; i += 1) {
-      const step = await advancePromptSectionLane(deps.control);
-
-      if (step.step === 'trials' && step.trials.action) break;
-    }
-
-    expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)[TARGET_ID]).toBeUndefined();
+    // The candidate trials badly: the live trial reverts it.
+    revertArtifact(fx.rt.storage.sql, fx.rt.actor, ARTIFACT, 1);
+    expect(overrides(fx.rt)[TARGET_ID]).toBeUndefined();
 
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('rolled_back');
@@ -1696,28 +1678,16 @@ describe('mixed outcomes settle honestly', () => {
       ],
     };
 
-    let proposed = false;
-
-    const deps = fx.deps(scriptedRefiner(proposalText(proposal)).port, (candidate) => {
-      if (!proposed) return candidate === CANDIDATE ? 0.9 : 0.4;
-
-      return candidate === CANDIDATE ? 0.1 : 0.9;
-    });
-
+    const deps = fx.deps(scriptedRefiner(proposalText(proposal)).port);
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
-    proposed = true;
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
-    for (let i = 0; i < 20; i += 1) {
-      const step = await advancePromptSectionLane(deps.control);
-
-      if (step.step === 'trials' && step.trials.action) break;
-    }
-
-    expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)[TARGET_ID]).toBeUndefined();
+    // The section loses its live trial.
+    revertArtifact(fx.rt.storage.sql, fx.rt.actor, ARTIFACT, 1);
+    expect(overrides(fx.rt)[TARGET_ID]).toBeUndefined();
 
     await advanceRefinementLane(deps);
     const settled = present(store.get(opened.id), 'the refinement row');
@@ -1726,36 +1696,6 @@ describe('mixed outcomes settle honestly', () => {
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(settled.detail).toContain('1 edit in effect');
     expect(settled.detail).toContain('1 rolled back');
-  });
-});
-
-describe('the refiner never sees the set its proposal is scored on', () => {
-  test('held-out turns are withheld from the brief and named as withheld', async () => {
-    const fx = fixture();
-    seedGradedTurns(fx.rt, 6);
-
-    const { port, requests } = scriptedRefiner(proposalText({
-      scope: 'workspace', summary: 'none', edits: [],
-    }));
-
-    const deps = fx.deps(port);
-
-    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
-    await advanceRefinementLane(deps);
-    const brief = requests[0].task;
-
-    const split = await buildOutcomeEvalSplit(fx.rt.storage.sql, fx.rt.actor, fx.stores.history.transcript(CHAT_SESSION_ID), EVAL_SIZE);
-    expect(split.heldOutNegatives).toBeGreaterThan(0);
-
-    // No val instance may appear in the brief.
-    for (const instance of split.val) {
-      expect(brief).not.toContain(instance.input);
-    }
-
-    // The train half is shown.
-    expect(split.train.length).toBeGreaterThan(0);
-    expect(brief).toContain(split.train[0].input);
-    expect(brief).toContain('WITHHELD');
   });
 });
 
@@ -2277,7 +2217,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
     assign: async () => handoff,
     status: async () => ({ lastActivity: null, recentSteps: [] }),
     message: async () => handoff,
-    dismiss: async () => undefined,
+    dismiss: async () => ({ stoppedJobs: [] }),
     rename: async () => undefined,
   };
 
@@ -2397,13 +2337,13 @@ describe('a refiner answer returns to the lane, never to the root', () => {
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
 
     // The reviewed turns are read synchronously, after the answer is taken and before any route.
-    void fx.rt.storage.sql`ALTER TABLE turn_outcomes RENAME TO turn_outcomes_away`;
+    void fx.rt.storage.sql`ALTER TABLE turn_ratings RENAME TO turn_ratings_away`;
     await advanceRefinementLane(fx.deps(resumed));
-    void fx.rt.storage.sql`ALTER TABLE turn_outcomes_away RENAME TO turn_outcomes`;
+    void fx.rt.storage.sql`ALTER TABLE turn_ratings_away RENAME TO turn_ratings`;
 
     const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
     expect(row.stage).toBe('refused');
-    expect(row.detail).toContain('turn_outcomes');
+    expect(row.detail).toContain('turn_ratings');
     expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
   });
 
@@ -2438,15 +2378,15 @@ describe('a refiner answer returns to the lane, never to the root', () => {
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
     const stuck = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 }).request;
     void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'gated' WHERE id = ${stuck.id}`;
-    void fx.rt.storage.sql`ALTER TABLE prompt_section_versions RENAME TO prompt_section_versions_away`;
+    void fx.rt.storage.sql`ALTER TABLE artifact_versions RENAME TO artifact_versions_away`;
     expect(owed()).not.toBeNull();
 
     expect((await refinementPass(fx.deps(resumed))).step).toBe('idle');
-    expect(store.get(stuck.id)?.detail).toContain('prompt_section_versions');
+    expect(store.get(stuck.id)?.detail).toContain('artifact_versions');
     expect(owed()).toBeNull();
     expect(store.get(answered.id)?.stage).not.toBe('applied');
 
-    void fx.rt.storage.sql`ALTER TABLE prompt_section_versions_away RENAME TO prompt_section_versions`;
+    void fx.rt.storage.sql`ALTER TABLE artifact_versions_away RENAME TO artifact_versions`;
     await refinementPass(fx.deps(resumed));
     await refinementPass(fx.deps(resumed));
     expect(store.get(answered.id)?.stage).toBe('applied');

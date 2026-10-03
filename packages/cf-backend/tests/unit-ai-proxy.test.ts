@@ -326,6 +326,30 @@ describe('AI proxy model → upstream selection', () => {
     expect(message).not.toContain('never-replayed');
   });
 
+  test('the REST route spends the caller\'s retry allowance and carries its cancel', async () => {
+    const { env } = setupEnv({ token: 'cf-user-token' });
+    const signals: Array<AbortSignal | null | undefined> = [];
+    let sent = 0;
+
+    globalThis.fetch = asFetchFunction(async (_input, init) => {
+      sent++;
+      signals.push(init?.signal);
+
+      return new Response('limited', { status: 429, headers: { 'retry-after': '0' } });
+    });
+
+    for (const retries of [0, 1]) {
+      sent = 0;
+      const cancel = new AbortController();
+      const request = chatRequest(SESSION_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }, { 'x-kinu-retries': String(retries) });
+      await aiProxy(new Request(request, { signal: cancel.signal }), env);
+
+      expect(sent).toBe(retries + 1);
+      cancel.abort();
+      expect(signals.at(-1)?.aborted).toBe(true);
+    }
+  });
+
   test('{author}/{model} ids ride the AI Gateway credential with cf-aig-gateway-id', async () => {
     const { env } = setupEnv({ gatewayId: 'prod-gw', token: 'cf-user-token' });
     const captured = captureUpstream(() => completionResponse('openai/gpt-4.1'));
@@ -464,5 +488,42 @@ describe('AI proxy model listing', () => {
     for (const model of body.data) {
       expect(model.id.startsWith('@cf/') || model.id.includes('/')).toBe(true);
     }
+  });
+});
+
+describe('the decision models through the proxy (/api/user/ai/run)', () => {
+  /** Clef's answer shape (`providers/decision-model.ts`). */
+  const ANSWER = { result: { answers: { corrected: { type: 'noul', noul: 0.9 } }, usage: { input_tokens: 12 } }, success: true };
+
+  function runRequest(token: string | null, model: string): Request {
+    const headers = new Headers({ 'content-type': 'application/json' });
+
+    if (token) headers.set('authorization', `Bearer ${token}`);
+
+    return new Request(`https://kinu.example.com/api/user/ai/run/${model}`, {
+      method: 'POST', headers, body: JSON.stringify({ model: 'clef', state: 's', questions: {} }),
+    });
+  }
+
+  test('a signed-in CLI rates through the owner\'s Cloudflare login at /ai/run', async () => {
+    const { env } = setupEnv({ token: 'cf-user-token' });
+    const captured = captureUpstream(() => Response.json(ANSWER));
+
+    const res = await aiProxy(runRequest(AI_TOKEN, '@cf/cloudflare/clef'), env);
+
+    expect(res?.status).toBe(200);
+    expect(parseJsonObject(await handled(res).text())).toEqual(ANSWER);
+    expect(captured.map((seen) => [seen.url, seen.headers.get('authorization')]))
+      .toEqual([[`${ACCOUNT_ROOT}/ai/run/@cf/cloudflare/clef`, 'Bearer cf-user-token']]);
+  });
+
+  test('refuses anonymous callers, and runs only the decision models', async () => {
+    const { env } = setupEnv();
+    const captured = captureUpstream(() => Response.json(ANSWER));
+
+    expect((await aiProxy(runRequest(null, '@cf/cloudflare/clef'), env))?.status).toBe(401);
+    expect((await aiProxy(runRequest(READ_TOKEN, '@cf/cloudflare/clef'), env))?.status).toBe(403);
+    expect((await aiProxy(runRequest(AI_TOKEN, '@cf/moonshotai/kimi-k2.6'), env))?.status).toBe(404);
+    expect(captured).toEqual([]);
   });
 });

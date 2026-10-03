@@ -66,7 +66,10 @@ function keepNewest(chunks: OutputChunk[], chunk: OutputChunk, cap: number): voi
       shed += (first.omitted ?? 0) + encoder.encode(first.text).byteLength;
       over -= first.text.length;
     } else {
-      chunks[0] = withOmitted({ stream: first.stream, text: first.text.slice(over) }, (first.omitted ?? 0) + encoder.encode(first.text.slice(0, over)).byteLength);
+      // Past a high surrogate, the whole character goes.
+      const unit = first.text.charCodeAt(over - 1);
+      const cut = unit >= 0xd800 && unit <= 0xdbff ? over + 1 : over;
+      chunks[0] = withOmitted({ stream: first.stream, text: first.text.slice(cut) }, (first.omitted ?? 0) + encoder.encode(first.text.slice(0, cut)).byteLength);
       over = 0;
     }
   }

@@ -6,7 +6,7 @@ import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import { initWorkspaceSchema } from '@kinu.run/core';
-import { scratchDir } from '@kinu.run/test-utils';
+import { spawnTest, scratchDir } from '@kinu.run/test-utils'
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src';
 
 test('a write while another process holds the database waits for it instead of failing', async () => {
@@ -16,7 +16,7 @@ test('a write while another process holds the database waits for it instead of f
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { llm: { name: 'openai-compat', baseURL: 'http://localhost:0', headers: {}, model: 'm' } });
 
-  const holder = Bun.spawn(['bun', '-e', `
+  const holder = spawnTest(['bun', '-e', `
     const { Database } = require('bun:sqlite');
     const db = new Database(${JSON.stringify(dbPath)});
     db.exec('BEGIN IMMEDIATE');

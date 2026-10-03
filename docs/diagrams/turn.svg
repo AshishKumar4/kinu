@@ -4,7 +4,7 @@
        between the two with <picture>. Everything below the palette block must
        stay byte-identical in both, so edit them together. -->
   <title id="t">Life of a turn in Kinu</title>
-  <desc id="d">A user message or programmatic wake starts a serialized turn. The system prompt uses typed Markdown sections with runtime context last. Transformed history and per-step dynamic context feed the model and tools. Signals reach a compatible live turn or queue another turn. Terminal effects handle eligible turn recording, improvement lanes and event draining. There is no generic step cap or silence deadline.</desc>
+  <desc id="d">A user message or programmatic wake starts a serialized turn. The system prompt uses typed Markdown sections, the core every workspace shares first. Transformed history and per-step dynamic context feed the model and tools. Signals reach a compatible live turn or queue another turn. Terminal effects handle eligible turn recording, improvement lanes and event draining. There is no generic step cap or silence deadline.</desc>
   <style>
     :root {
       --fg: #1f2328;
@@ -80,7 +80,7 @@
   <text class="band" x="58" y="240">ASSEMBLED ONCE PER TURN</text>
   <rect x="58" y="252" width="412" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b mono" x="70" y="273" text-anchor="start">buildSystemPromptSync()</text>
-  <text class="s" x="70" y="288" text-anchor="start">typed Markdown sections; runtime context last</text>
+  <text class="s" x="70" y="288" text-anchor="start">typed Markdown sections; shared core first</text>
   <path d="M264 298 L264 318" fill="none" stroke="var(--ruleStrong)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a)"/>
   <rect x="58" y="318" width="412" height="94" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b mono" x="70" y="339" text-anchor="start">assembleTurnMessages()</text>
@@ -126,16 +126,16 @@
   <text class="xs" x="9" y="488" text-anchor="middle" transform="rotate(-90 9 488)" fill="var(--purple)">the reactor — a turn can wake the next one</text>
   <rect x="500" y="255" width="384" height="186" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="512" y="275" text-anchor="start">System prompt — Markdown sections</text>
-  <text class="xs" x="512" y="291" text-anchor="start">SOUL.md — workspace identity, then agent names</text>
-  <text class="xs" x="512" y="307" text-anchor="start">role — task or an admitted specialist</text>
-  <text class="xs" x="512" y="323" text-anchor="start">operating guidance — house rules + model family</text>
-  <text class="xs" x="512" y="339" text-anchor="start">executors, then tools</text>
-  <text class="xs" x="512" y="355" text-anchor="start">persistence, codemode and delegation</text>
-  <text class="xs" x="512" y="371" text-anchor="start">background work, verification and output format</text>
-  <text class="xs" x="512" y="387" text-anchor="start">lead instructions when the actor coordinates hires</text>
-  <text class="xs" x="512" y="403" text-anchor="start">approved AGENTS.md and skill instructions</text>
-  <text class="xs" x="512" y="419" text-anchor="start">available skills index; unverified-instruction policy</text>
-  <text class="xs" x="512" y="435" text-anchor="start">runtime context last — backend, model, cwd, date</text>
+  <text class="xs" x="512" y="291" text-anchor="start">operating guidance — house rules + model family</text>
+  <text class="xs" x="512" y="307" text-anchor="start">executors, then tools</text>
+  <text class="xs" x="512" y="323" text-anchor="start">persistence, codemode and delegation</text>
+  <text class="xs" x="512" y="339" text-anchor="start">background work, verification and output format</text>
+  <text class="xs" x="512" y="355" text-anchor="start">lead instructions when the actor coordinates hires</text>
+  <text class="xs" x="512" y="371" text-anchor="start">SOUL.md — workspace identity</text>
+  <text class="xs" x="512" y="387" text-anchor="start">approved AGENTS.md, skills index, pinned skills</text>
+  <text class="xs" x="512" y="403" text-anchor="start">unverified-instruction policy</text>
+  <text class="xs" x="512" y="419" text-anchor="start">agent names, then the role</text>
+  <text class="xs" x="512" y="435" text-anchor="start">shared core first; live facts ride dynamic context</text>
   <path d="M472 275 L476 275 L476 271 L497 271" class="edge-lite" stroke-dasharray="3 3" marker-end="url(#a)"/>
   <rect x="500" y="457" width="384" height="218" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="b" x="512" y="477" text-anchor="start" fill="var(--orange)">Compaction ladder</text>
@@ -171,9 +171,9 @@
   <path d="M472 515 L490 515 L490 707 L497 707" class="edge-lite" stroke-dasharray="3 3" marker-end="url(#a)"/>
   <rect x="500" y="829" width="384" height="138" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
   <text class="b" x="512" y="849" text-anchor="start" fill="var(--blue)">Dynamic context</text>
-  <text class="xs" x="512" y="865" text-anchor="start">Re-rendered every step from live state: facts, memory</text>
-  <text class="xs" x="512" y="881" text-anchor="start">tail, executor availability, running jobs, delegates,</text>
-  <text class="xs" x="512" y="897" text-anchor="start">pending approvals. Nothing clock-derived.</text>
+  <text class="xs" x="512" y="865" text-anchor="start">Re-rendered every step from live state: backend, model,</text>
+  <text class="xs" x="512" y="881" text-anchor="start">cwd, date, facts, memory tail, executor status, jobs,</text>
+  <text class="xs" x="512" y="897" text-anchor="start">delegates, approvals. Nothing finer than the date.</text>
   <text class="xs" x="512" y="913" text-anchor="start"></text>
   <text class="xs" x="512" y="929" text-anchor="start">Appended only when its bytes change, and frozen at the</text>
   <text class="xs" x="512" y="945" text-anchor="start">index where it first appeared — so no earlier cache</text>

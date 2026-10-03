@@ -2,6 +2,8 @@
 // provider no longer lists runs on the account default, then Kinu's; an unlisted pin is an error.
 
 import * as v from 'valibot';
+import { Effect } from 'effect';
+import { KinuError, settleSync } from '../obs/index';
 
 import { isWorkMode, type WorkMode } from '../types/turn';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
@@ -9,6 +11,7 @@ import { JsonValueSchema } from '../utils/json';
 import { REASONING_EFFORT_FOR_STAGE, REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
 import type { NamedSwarmPreset } from '../types/swarm';
 import { DEFAULT_PROVIDER_RETRIES, ROLE_ID_RE, isValidRoleId } from '../types/profile';
+import { DEFAULT_DECISION_MODEL, type DecisionModel } from '../providers/decision-model';
 import { TierIdSchema, tierIdsOf,
   BUILTIN_PROFILE_CATALOG, SYSTEM_ROLE_DEFINITIONS, deriveRoleLabel, effectiveRoleCatalog,
   profileCatalogDigest, validateProfileCatalogEnvelope,
@@ -139,6 +142,8 @@ export interface ResolvedTurnProfile {
   };
   readonly tiers: Readonly<Record<TierId, TierRoute>>;
   readonly retries: number;
+  /** The decision model that rates this actor's turns. */
+  readonly decisionModel: DecisionModel;
   readonly workMode: WorkMode;
   readonly skills: readonly string[];
   readonly allowedTools: readonly string[];
@@ -380,6 +385,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     providerRevision: provider.revision,
     tiers: Object.freeze(tiers),
     retries: envelope.catalog.retries ?? DEFAULT_PROVIDER_RETRIES,
+    decisionModel: envelope.catalog.decisionModel ?? DEFAULT_DECISION_MODEL,
   };
 
   const profileDigest = sha256Hex(stableStringify(v.parse(JsonValueSchema, resolved)));
@@ -442,15 +448,41 @@ export function parentReasoningEffort(authority: ProfileAuthorityInputs, ancesto
   return inherited;
 }
 
+/** A hosted actor's ancestors' pins, nearest first, ending at the root's; `parentOf` reads one registered actor. */
+export function ancestorPins(
+  parentActorId: string | null,
+  root: { readonly actorId: string; readonly pins: PinnedProfile },
+  parentOf: (actorId: string) => { readonly parentActorId: string | null; readonly pins: PinnedProfile } | null,
+): PinnedProfile[] {
+  return settleSync(Effect.suspend(() => {
+    const ancestors: PinnedProfile[] = [];
+
+    for (let id = parentActorId; id !== null && id !== root.actorId;) {
+      const parent = parentOf(id);
+
+      if (parent === null) return Effect.fail(new KinuError('missing', `the hosted actor's parent ${id} is not registered`));
+      ancestors.push(parent.pins);
+      id = parent.parentActorId;
+    }
+
+    return Effect.succeed([...ancestors, root.pins]);
+  }));
+}
+
 export function ownProfileChoices(
   config: PinnedProfile,
   authority: ProfileAuthorityInputs,
   ancestors?: readonly PinnedProfile[],
-): Pick<ResolveTurnProfileInput, 'explicitTier' | 'workspaceModel' | 'explicitEffort' | 'inheritedEffort'> {
+  request: Pick<ResolveTurnProfileInput, 'explicitTier' | 'explicitEffort'> = {},
+): Pick<ResolveAgentTurnProfileInput, 'activeRoleId' | 'explicitTier' | 'workspaceModel' | 'actorModel' | 'explicitEffort' | 'inheritedEffort'> {
+  const root = ancestors?.at(-1);
+
   return {
-    explicitTier: config.getAssignedTier() ?? undefined,
-    workspaceModel: config.getModel(),
-    explicitEffort: config.getReasoningEffort(),
+    activeRoleId: config.getRoleSelection(),
+    explicitTier: request.explicitTier ?? config.getAssignedTier() ?? undefined,
+    workspaceModel: root === undefined ? config.getModel() : root.getModel(),
+    actorModel: root === undefined ? null : config.getModel(),
+    explicitEffort: request.explicitEffort ?? config.getReasoningEffort(),
     inheritedEffort: ancestors === undefined ? null : parentReasoningEffort(authority, ancestors),
   };
 }

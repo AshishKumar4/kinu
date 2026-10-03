@@ -10,7 +10,7 @@ export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, 
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
-  declareTerminalRoster, owesShadowTrial,
+  declareTerminalRoster,
   type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
@@ -22,9 +22,9 @@ export {
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  branchesTerminalEffect, turnRecordTerminalEffect,
-  eventDrainTerminalEffect, shadowTrialTerminalEffect,
-  terminalEffectKey, keyedScope, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
+  branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
+  eventDrainTerminalEffect,
+  terminalEffectKey, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
@@ -35,7 +35,7 @@ export {
 
 // Records that keyed work happened, kept after its row is retired.
 export {
-  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone, oncePerTick, type TickedPass,
+  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from './identity/effect-tombstones';
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
@@ -62,7 +62,6 @@ export {
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
-  writeSoul,
 } from './identity/soul';
 
 export { WORKSPACE_IDENTITY_DDL, WORKSPACE_SOUL_DDL } from './identity/schema';
@@ -148,16 +147,12 @@ export {
 
 export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
 
-export {
-  EvolutionEngine, buildScaffoldProposalPrompt,
-  type ProposalArchiveContext,
-} from './evolution/engine';
+export { EvolutionEngine } from './evolution/engine';
 
 export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
-  type ShadowTrialDrain, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialTurn,
 } from './evolution/types';
 
 export {
@@ -165,73 +160,26 @@ export {
   type DelegationFeatures, type ExecutionPathSignals,
 } from './evolution/delegation-features';
 
-// K_align: corrections per 100 graded turns per scaffold version, with 95% Wilson intervals.
-export {
-  alignmentConvergence, renderAlignmentConvergence, type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
-  type AlignmentTrend, type RateInterval,
-} from './evolution/alignment';
+export { QualityDaySchema, type QualityDay } from './types/quality';
 
-// Turn outcomes and lessons: the ledgers every evolution surface reads.
+// Turn ratings: the one signal evolution decides by.
 export {
-  outcomeToFeedback, outcomeQuality, feedbackToQuality, isTrivialTurn,
-  initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, takePickOutcome,
-  realOutcomeScaffoldRates, blendRealOutcomeRates,
-  describeSplitDegeneracy,
-  recordLesson, recordedTurnVerdict, listLessons, corroborateLessonsForTurn,
-  isNegativeOutcome, isUserVerdictSource, executionVerdict, executionVerdictOutcome,
-  isPureLookupCall, TURN_OUTCOME_SOURCES,
-  recordOutcomeLabels, listOutcomeLabels, goldLabels,
-  recordEnsembleLabels, ensembleLabels, type EnsembleLabelRow,
-  type OutcomeLabel, type OutcomeLabelRow,
-  type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow, type ExecutionVerdict,
-  type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
-  type OutcomeSplitDegeneracy,
-  type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
-} from './evolution/outcomes';
+  RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
+  listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
+  retractThumbs, listThumbs, satisfactionInterval, qualitySeries, renderQualitySeries, isTrivialTurn,
+  type RatingSource, type WrongReason, type RatingVerdict, type TurnRating, type RatingQuery,
+  type RecordTurnRatingInput,
+} from './evolution/ratings';
 
-export { buildOutcomeEvalSplit, type AdvisorNegativeRow } from './evolution/eval-split';
+export {
+  recordLesson, listLessons, corroborateLessonsForTurn, initLessonTables,
+  type LessonRow, type LessonSource, type LessonStatus,
+} from './evolution/lessons';
 
 export {
   recordRecoveryFinding, listRecoveryFindings, recoveryFindingText,
   MAX_RECOVERY_FINDINGS, type RecoveryFinding,
 } from './evolution/recovery';
-
-// C8/C11 calibration: uncalibrated rates are reported as such, never approximated.
-export {
-  sampleForLabeling, renderLabelingFile, parseLabelingFile, allocateLabelBudget,
-  ingestOutcomeLabels, type LabelIngestResult,
-  calibrationReport, renderCalibrationReport, DEFAULT_LABEL_BUDGET,
-  type LabelingItem, type ParsedLabelFile, type CalibrationReport,
-  type CalibrationStratum, type CalibratedSegment,
-} from './evolution/calibration';
-
-export {
-  classifierAccuracy, correctedRate, designWeightedKappa, describeCalibrationGap,
-  type CalibrationGap, type ClassifierAccuracy, type CorrectedRate, type CorrectedRateResult,
-  type ClassifierAccuracyResult, type GoldStratum, type KappaEstimate,
-  type MeasuredProportion, type PredictionStratum,
-} from './evolution/ppi';
-
-// The panel must clear STAND_IN_THRESHOLDS before a recalibration may lean on it.
-export {
-  runEnsemble, ensembleReport, renderEnsembleReport, describeEnsembleGap,
-  buildEnsembleJudgePrompt, panelVerdict, STAND_IN_THRESHOLDS,
-  type EnsembleJudge, type EnsembleRun, type EnsembleRunResult, type EnsembleGap,
-  type EnsembleReport, type EnsembleMember, type StandInCondition,
-} from './evolution/ensemble';
-
-// Behavioural weak labels complement the calibration set; they never replace it.
-export {
-  BEHAVIOR_RULES, weakLabel, corpusStats, runCorpusEval, renderCorpusReport,
-  type BehaviorRule, type CorpusTurn, type TurnSignals, type WeakLabel,
-  type CorpusStats, type CorpusEvalInput, type CorpusEvalReport, type RaterScore,
-  type RaterCost,
-} from './evolution/behavior-labels';
-
-export {
-  initReplayTables, runReplayEval, listReplayEvals, DEFAULT_QUALITY_THRESHOLD,
-  type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
-} from './evolution/replay';
 
 // One row per turn, owned by EvolutionEngine.
 export {
@@ -243,7 +191,7 @@ export {
 } from './evolution/session-window';
 
 export {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog, CHANGELOG_ENTRY_KINDS,
   executeChangelogRevert, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
   type ChangelogRevertAction,
@@ -257,8 +205,7 @@ export { UNBOUNDED_STEPS } from './chat';
 export {
   createAgentConfigStore, initAgentConfigTable,
   canonicalConversationId,
-  AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
-  DEFAULT_GEPA_EVAL_BUDGET, clampGepaEvalBudget,
+  AGENT_CONFIG_KEYS,
   type AgentConfigStore, type ShellApprovalMode,
 } from './config/index';
 
@@ -441,12 +388,12 @@ export {
 } from './turn-failure';
 
 export {
-  createVercelAILLM, collectStepText, createChatModel, createCompletionLLM, estimateTokens,
+  createVercelAILLM, collectStepText, createChatModel, estimateTokens,
   // Surfaces import this instead of retyping the number.
   CHARS_PER_TOKEN,
 } from './llm';
 
-export type { LLMProviderConfig, ChatModelConfig, LLMUsage } from './llm';
+export type { LLMProviderConfig, ChatModelConfig } from './llm';
 
 export {
   createWorkersAIEmbedder, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
@@ -605,7 +552,7 @@ export {
 
 export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
-  parseAgentsToolInput, agentsProfileContext,
+  parseAgentsToolInput, agentsProfileContext, delegationChoices,
   AGENTS_ACTION_FIELDS, AGENTS_FIELD_TS_TYPES,
   type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
 } from './delegation/agents-tool';
@@ -684,10 +631,10 @@ export {
 // An actor surface is buildBuiltinTools plus `agents`; see delegation/actor-tools.ts.
 export {
   buildActorTools, PEER_REPLY_TOPIC,
-  type ActorToolsetDeps,
+  type ActorToolsetDeps, type ActorToolsets,
   type AgentsToolDeps, type AgentsSwarmDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
-  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
+  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff, type SubordinateDismissal,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './delegation/actor-tools';
@@ -779,13 +726,11 @@ export { isWorkMode, WorkModeSchema, type TurnReason, type WorkMode } from './ty
 
 export {
   compilePromptSurface,
-  executorIsSelectable,
   turnReasonForMetadata,
   workModeForTurnMetadata,
   uniquePromptExecutors,
   type PromptBackend,
   type PromptExecutorInfo,
-  type PromptExternalToolInfo,
   type PromptIdentity,
   type PromptSurface,
   type PromptSurfaceOptions,
@@ -806,8 +751,12 @@ export {
   collectWorkspaceAgentsMd,
   admitAgentsMd,
   advisorWorkspaceGuidance,
+  discoverInstructionFiles,
   renderInstructionOmission,
   type AdvisorWorkspace,
+  type InstructionCandidate,
+  type InstructionFileProbe,
+  type InstructionFileRead,
   type AgentsMdFile,
   type AgentsMdReference,
   type AgentsMdSources,
@@ -823,7 +772,7 @@ export {
 } from './prompting/attachment-sanitizer';
 
 export {
-  DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type DynamicTask, type MissingCapability,
+  DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type RuntimeFacts, type DynamicTask, type MissingCapability,
 } from './prompting/volatile-context';
 
 export type { ActiveRoster } from './types/dynamic-context';
@@ -955,17 +904,10 @@ export {
   type EvolvedArtifact, type MisevolutionSurface, type MisevolutionVerdict, type MisevolutionViolation,
 } from './safety/misevolution';
 
-// Variant archive over scaffold_versions/scaffold_evaluations (no parallel store).
-export {
-  listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
-  type ScaffoldArchiveEntry, type EvolutionBaseSelection,
-  type RejectedProposal, type RejectionKind,
-} from './scaffold/archive';
+export { listScaffoldArchive, type ScaffoldArchiveEntry, type ScaffoldStatus } from './scaffold/archive';
 
-// Shadow-mode rollout
 export {
   runScaffold, scaffoldProviders,
-  scaffoldEventText,
   type ScaffoldRunOptions,
   type ScaffoldRunResult, type ScaffoldRunReport, type ScaffoldJsonEvent, scaffoldRunReport,
   type ScaffoldDefaultInferenceChunk,
@@ -978,44 +920,9 @@ export { pumpScaffoldEvents } from './scaffold/event-pump';
 export { scaffoldChatTransform } from './scaffold/chat-transform';
 
 export {
-  initShadowTables,
-  getPendingScaffold,
-  getCurrentScaffoldVersion,
-  readScaffoldVersion,
-  readVersionedScaffoldSource,
-  readShadowVerdict,
-  recordShadowEvaluation, scoredShadowTrial, trimTrialContext,
-  decidePromotion,
-  applyPromotionDecision,
-  DEFAULT_SHADOW_CONFIG,
-  // Kept out of scaffold_evaluations so unrun trials can never walk the calibrated ladder.
-  queueShadowTrial,
-  listQueuedShadowTrials,
-  countQueuedShadowTrials,
-  dropQueuedShadowTrial,
-  purgeQueuedShadowTrials,
-  MAX_QUEUED_SHADOW_TRIALS,
-  SHADOW_TRIAL_CONTEXT_CHARS,
-  type PendingScaffold,
-  type QueuedShadowTrial,
-  type ShadowEvaluationRow,
-  type ShadowVerdict,
-  type ShadowVerdictTrial,
-  type ShadowConfig,
-  type ScaffoldStatus,
-  type ShadowTrialVerdict,
-} from './scaffold/shadow';
-
-// Auto-judge shadow evaluation
-export {
-  runAutoShadowEval,
-  DEFAULT_AUTO_JUDGE_CONFIG,
-  type AutoJudgeConfig,
-  type AutoShadowEvalResult,
-  type JudgeOutput,
-  type StructuredJudgeFn,
-  type RunAutoShadowEvalOpts,
-} from './scaffold/auto-judge';
+  getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource, getPendingScaffold, applyPromotionDecision,
+  type PendingScaffold, type ScaffoldDecisionEvents,
+} from './scaffold/versions';
 
 // CraftStore quality
 export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
@@ -1028,8 +935,10 @@ export { periodicCraftConsolidation } from './craft/consolidation';
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict';
 
 export {
-  DefaultExecutionRouter,
-  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach,
+  DefaultExecutionRouter, runOnExecutor, type ExecutorRun,
+  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach, type ShellReach,
+  busyShell, callJob, createBashShell, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
+  type MachineShells,
   createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending, sandboxSizeLabel,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
@@ -1103,7 +1012,7 @@ export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates,
-  subordinateAgentName, headAgentName,
+  actorHomeName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
   type AgentIdentity, type HomeRootVfs, type RootMoveVfs, type SlatesMoveVfs, type TmpConfiner,
 } from './vfs/agent-home';
@@ -1128,6 +1037,8 @@ export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 export { oneAtATime } from './utils/one-at-a-time';
 
 export { markStoreChanged, storeRevision } from '@kinu.run/agent-utils';
+
+export { searchMemoryChunks } from '@kinu.run/agent-utils/memory';
 
 export { ISOLATED_BUN_FLAGS, isolatedBunArgs } from './utils/bun-isolation';
 
@@ -1562,7 +1473,7 @@ export { labelSigner, type LabelSigner, type LabelSignerEnv } from './utils/labe
 export { shellQuote } from './utils/shell';
 
 export {
-  wilsonInterval, scoreInterval, lossInterval, formatScoreInterval, seededRandom,
+  wilsonInterval, scoreInterval, formatScoreInterval, seededRandom,
   type ScoreInterval,
 } from './utils/stats';
 
@@ -1595,7 +1506,7 @@ export {
   MergeOutputSchema, DecisionSchema, type MergeOutput,
   // Resolved here so both backends resolve it identically.
   headMergeLLM,
-  type HeadMergeModelBinder, type HeadMergeModelBinding, type HeadMergePolicyDeps,
+  type HeadMergePolicyDeps,
   extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
@@ -1610,13 +1521,14 @@ export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
   backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
-  DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership,
+  DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership, execCallArgs,
   BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
-  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel,
+  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
+  WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,
   JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, lastOutputLines, jobName, shortJobId, type JobName,
   type JobOutputFrame, type JobOutputTail,
 } from './jobs/index';
@@ -1646,7 +1558,7 @@ export {
   type PanelAgent, type AgentCategory, type AgentActivity, type AgentOpening,
 } from './read-models/workspace-agents';
 
-export { readAgentFigures, NO_FIGURES, type AgentFigures } from './read-models/agent-figures';
+export { readAgentFigures, recordAgentFigures, reportedAgentFigures, NO_FIGURES, type AgentFigures } from './read-models/agent-figures';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 
@@ -1660,7 +1572,7 @@ export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type Actor
 
 export {
   ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
-  type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
+  type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
@@ -1720,20 +1632,24 @@ export { createScaffoldCandidateSurface, type ScaffoldCandidateBinding } from '.
 export { activeOperationProfile, captureOperationProfile, currentOperationProfile, resolveOperationProfile, runOperationProfile,
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
-export { completeOnRoute, createRoutedModelLane, routedCallOptions } from './profiles/model-lane';
+export {
+  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type RouteModelBinder, type RouteModelBinding,
+} from './profiles/model-lane';
 
-export { tierRefusals, type TierRefusals } from './profiles/tier-refusals';
+export { tierRefusals } from './profiles/tier-refusals';
+
+export type { TierRefusals } from './types/refusals';
 
 export {
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type SwarmHarvestDeps,
 } from './orchestrator/background-tools';
 
 export {
-  wrapToolsForBackground, CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool,
+  CONFINED_BACKGROUNDABLE_TOOLS, type ActorJobs, type BackgroundableTool,
 } from './jobs/background-wrap';
 
 export {
-  resolveTurnSkills, steerSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
+  resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 
@@ -1765,16 +1681,26 @@ export type {
 
 // GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
 export {
-  applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, shadowTrialPlan, runQueuedShadowTrials,
-  runScaffoldCaptureText, runScaffoldGepaOptimization, runScaffoldOnce,
-  advancePromptSectionLane, proposeMeasuredPromptSection,
-  type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface,
-  type ScaffoldVersionView, type ShadowStatus,
-  type PromptSectionOptimizationResult, type PromptSectionTrialResult,
-  type PromptSectionLaneStep, type MeasuredSectionProposal,
+  applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getEvolutionStatus, listScaffoldVersions,
+  previewScaffoldLive, proposeScaffold, runOptimization, runScaffoldOnce,
+  type EvolutionStatus, type JsonGenerator, type ScaffoldControl,
+  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
 } from './evolution/control';
+
+// The proposer, its artifact store and live trials (docs/EVOLUTION-REDESIGN.md §3-5).
+export {
+  artifactOverrides, artifactVersion, bundledArtifact, currentArtifacts, listArtifactVersions,
+  sectionArtifact, toolArtifact, writeCandidate,
+  type ArtifactStatus, type ArtifactVersion,
+} from './evolution/artifacts';
+
+export { judgeAuthoredEdit, runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './evolution/proposer';
+
+export { advanceTrial, runningTrial, startTrial, turnArtifactBodies } from './evolution/trials';
+
+export { drawArm, type LiveTrial, type TrialArm, type TrialTurn, type TrialVerdict } from './evolution/trial-rules';
+
+export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 
 // Continual refinement: each proposed edit routes to the authority that owns the artifact.
 export {
@@ -1801,8 +1727,7 @@ export {
 } from './evolution/refinement-skill';
 
 export {
-  runGepa, runScaffoldGepa, runSectionGepa,
-  PROMPT_SECTION_TARGETS, findPromptSectionTarget,
+  runGepa,
   DEFAULT_GEPA_BUDGET,
   initGepaTables, startGepaRun, finishGepaRun,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
@@ -1812,16 +1737,9 @@ export type {
   EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
   GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
   GepaIterationState, GepaProgressHooks, GepaResult,
-  RunScaffoldGepaOpts, RunScaffoldGepaResult,
-  RunSectionGepaOpts, RunSectionGepaResult,
   GepaRunSummary,
   GepaParetoEntry,
 } from './evolution/gepa/index';
-
-// Evolved prompt sections
-export {
-  activePromptSectionOverrides, firstPendingPromptSection,
-} from './prompting/section-store';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 
@@ -2048,7 +1966,6 @@ export {
   ADVISOR_EVENT_TYPE,
   ADVISOR_NOTE_MAX_CHARS,
   ADVISOR_SEVERITIES,
-  ADVISOR_CLASS_LABEL,
   AdvisorRowDataSchema,
   ADVISOR_SEVERITY_LABEL,
   ADVISOR_SEVERITY_METADATA_KEY,
@@ -2091,7 +2008,7 @@ export {
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
-  ProfileCatalogEnvelopeSchema,
+  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING,
 } from './profiles';
 
 export type {
@@ -2102,7 +2019,7 @@ export type {
 
 export {
   resolveModelRoute,
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, ancestorPins,
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource, type PinnedProfile,
   type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
@@ -2509,6 +2426,7 @@ export {
   type PcIngressEnv,
   handlePcConnect,
   handlePcConnectTicket,
+  handlePcUpdateRefused,
 } from './http/pc-ingress';
 
 export {

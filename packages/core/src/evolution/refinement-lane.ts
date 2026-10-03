@@ -15,11 +15,9 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 
-import { controlTranscript, proposeMeasuredPromptSection } from './control';
-import { buildOutcomeEvalSplit } from './eval-split';
-import {
-  describeSplitDegeneracy, listTurnOutcomes, type TurnOutcomeRow,
-} from './outcomes';
+import { judgeAuthoredEdit } from './proposer';
+import { listArtifactVersions, sectionArtifact, type ArtifactVersion } from './artifacts';
+import { listTurnRatings, type TurnRating } from './ratings';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, REFINEMENT_PROPOSAL_EXAMPLE,
   RefinementProposalSchema, createRefinementStore, evolutionDebt, holdRefinementLane, refinementAnswerStored,
@@ -29,8 +27,6 @@ import {
   type RefinementRequestView, type RefinementRoute, type RefinementScope, type RefinementStage,
   type RefinementTrigger, type SettleRefinementPatch,
 } from './refinement';
-import { clampGepaEvalBudget } from '../config/store';
-import { getPendingPromptSection, listPromptSectionVersions } from '../prompting/section-store';
 import { PROMPT_SECTIONS } from '../prompting/section-templates';
 import { routeSkill, settleSkillApproval } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
@@ -52,7 +48,7 @@ export interface RequestRefinementInput {
 /** Shared by request-time and claim-time refusal so the owner reads one sentence. */
 const ACCOUNT_SCOPE_REFUSAL =
   'account scope is refused: every authority reachable from a workspace database '
-  + '(agent_facts, prompt_section_versions, instruction_approvals) is scoped to THIS '
+  + '(agent_facts, artifact_versions, instruction_approvals) is scoped to THIS '
   + 'workspace, so there is nothing here that can write account-wide state. Applying '
   + 'it to one workspace instead would put a preference somewhere the owner did not ask for.';
 
@@ -70,12 +66,8 @@ export async function requestRefinement(
   const store = createRefinementStore(sql, actor);
   const turnIds = input.turnIds ?? evolutionDebt(sql, actor).turnIds;
 
-  // Keep the caller's (reading) order; the ledger only filters to graded turns.
-  const graded = new Set(
-    listTurnOutcomes(sql, actor, { turnIds })
-      .map((row) => row.turnId)
-      .filter((id): id is string => id !== null),
-  );
+  // Keep the caller's (reading) order; the ledger only filters to rated turns.
+  const graded = new Set(listTurnRatings(sql, actor, { turnIds }).map((row) => row.turnId));
 
   const reviewed = turnIds.filter((id) => graded.has(id));
 
@@ -101,8 +93,8 @@ export async function requestRefinement(
 
   if (reviewed.length === 0) {
     return refuse(turnIds.length === 0
-      ? describeSplitDegeneracy('no_labeled_turns')
-      : `${describeSplitDegeneracy('no_labeled_turns')}; none of the ${String(turnIds.length)} `
+      ? 'no outcome-labeled turns yet: chat with the agent first'
+      : `${'no outcome-labeled turns yet: chat with the agent first'}; none of the ${String(turnIds.length)} `
         + 'named turns carries an outcome');
   }
 
@@ -213,18 +205,15 @@ function ownerHasDecided(route: RefinementRoute): boolean {
   return route.disposition === 'applied' || route.disposition === 'rejected';
 }
 
-/** Reading order; `listTurnOutcomes` is newest-first. */
+/** Reading order; `listTurnRatings` is newest-first. */
 function reviewedTrajectory(
   sql: SqlExecutor, actor: ActorHandle, request: RefinementRequest,
-): TurnOutcomeRow[] {
-  const byId = new Map(
-    listTurnOutcomes(sql, actor, { turnIds: request.turnIds })
-      .map((row) => [row.turnId, row] as const),
-  );
+): TurnRating[] {
+  const byId = new Map(listTurnRatings(sql, actor, { turnIds: request.turnIds }).map((row) => [row.turnId, row] as const));
 
   return request.turnIds
     .map((id) => byId.get(id))
-    .filter((row): row is TurnOutcomeRow => row !== undefined);
+    .filter((row): row is TurnRating => row !== undefined);
 }
 
 /**
@@ -402,25 +391,14 @@ async function askRefiner(
 /**
  * The refiner's brief: trajectory, addressable artifacts, prior refinements, and the answer shape.
  *
- * Held-out (val) turns from `buildOutcomeEvalSplit` are withheld: section trials score on them, so showing them
- * would let a proposal memorise its exam (GEPA keeps the same split). Turns are bounded by `EVIDENCE_BUDGETS`. The
- * answer shape is printed from `REFINEMENT_PROPOSAL_EXAMPLE`, so brief and schema cannot disagree.
+ * Turns are bounded by `EVIDENCE_BUDGETS`. The answer shape is printed from `REFINEMENT_PROPOSAL_EXAMPLE`, so brief and
+ * schema cannot disagree.
  */
 async function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, contextRefs: readonly string[]): Promise<string> {
   const sql = deps.control.sql;
   const actor = deps.control.rt.actor;
 
-  const split = await buildOutcomeEvalSplit(
-    sql, actor, controlTranscript(deps.control), clampGepaEvalBudget(deps.control.config.getGepaEvalBudget()),
-  );
-
-  // `input` (the user message) is the only handle shared with ledger rows.
-  const heldOut = new Set(split.val.map((instance) => instance.input));
-
-  const reviewed = reviewedTrajectory(sql, actor, request)
-    .filter((row) => !heldOut.has(row.userMessage));
-
-  const withheld = request.turnIds.length - reviewed.length;
+  const reviewed = reviewedTrajectory(sql, actor, request);
   const trajectory = reviewed.map((row, index) => renderReviewedTurn(row, index)).join('\n\n');
 
   const sections = PROMPT_SECTIONS
@@ -451,11 +429,6 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     `## The trajectory under review (${String(reviewed.length)} graded turns)`,
     '',
     trajectory || '(no graded turns you may reflect on)',
-    ...(withheld > 0
-      ? ['', `${String(withheld)} further graded turn${withheld === 1 ? ' is' : 's are'} WITHHELD: `
-        + 'they are the held-out set your proposal will be scored against, and showing them to you '
-        + 'would let a proposal memorise its own exam.']
-      : []),
     '',
     '## The artifacts you may address, and their owners',
     '',
@@ -506,17 +479,15 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
   ].join('\n');
 }
 
-function renderReviewedTurn(row: TurnOutcomeRow, index: number): string {
+function renderReviewedTurn(row: TurnRating, index: number): string {
   return [
-    `### Turn ${String(index + 1)}: ${row.outcome} (${row.source})`,
-    `User asked: ${evidenceWindow(row.userMessage, EVIDENCE_BUDGETS.refinerUserMessage)}`,
-    `Agent answered: ${evidenceWindow(row.assistantResponse, EVIDENCE_BUDGETS.refinerAssistantResponse)}`,
+    `### Turn ${String(index + 1)}: rated ${row.score.toFixed(1)}/5 (${row.source})`
+      + (row.wrong !== null && row.wrong !== 'nothing' ? `: ${row.wrong.replaceAll('_', ' ')}` : ''),
+    `User asked: ${evidenceWindow(row.request, EVIDENCE_BUDGETS.refinerUserMessage)}`,
+    `Agent answered: ${evidenceWindow(row.answer, EVIDENCE_BUDGETS.refinerAssistantResponse)}`,
     row.followup === null
       ? 'User follow-up: (none)'
       : `User follow-up: ${evidenceWindow(row.followup, EVIDENCE_BUDGETS.refinerFollowup)}`,
-    row.evidence === null
-      ? ''
-      : `Why it was graded so: ${evidenceWindow(row.evidence, EVIDENCE_BUDGETS.storedEvidence)}`,
   ].filter((line) => line !== '').join('\n');
 }
 
@@ -527,7 +498,7 @@ function routeEdit(
   input: {
     edit: RefinementEdit;
     request: RefinementRequest;
-    reviewed: readonly TurnOutcomeRow[];
+    reviewed: readonly TurnRating[];
   },
 ): Effect.Effect<RefinementRoute> {
   const { edit } = input;
@@ -544,7 +515,7 @@ function routeEdit(
 function editOwnerAndTarget(edit: RefinementEdit): readonly [string, string] {
   switch (edit.kind) {
     case 'fact': return ['agent_facts', edit.key];
-    case 'prompt_section': return ['prompt_section_versions', edit.sectionId];
+    case 'prompt_section': return ['artifact_versions', sectionArtifact(edit.sectionId)];
     case 'skill': return ['instruction_approvals', edit.path];
     case 'subagent_spec': return ['', edit.role];
   }
@@ -560,7 +531,7 @@ async function routeEditOnce(
     case 'fact':
       return routeFact(deps, edit, input.request, input.reviewed);
     case 'prompt_section':
-      return routePromptSection(deps, edit);
+      return routePromptSection(deps, edit, input.request.turnIds);
     case 'skill':
       return routeSkill(deps, edit, input.request);
     case 'subagent_spec':
@@ -584,13 +555,13 @@ const MIN_QUOTE_WORDS = 4;
 
 /** User words only (message and follow-up): an agent-sourced preference would
  *  be the agent writing its own instructions. */
-function userEvidence(row: TurnOutcomeRow): string {
-  return `${row.userMessage}\n${row.followup ?? ''}`;
+function userEvidence(row: TurnRating): string {
+  return `${row.request}\n${row.followup ?? ''}`;
 }
 
 type QuoteVerdict = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
-function checkQuote(quote: string, reviewed: readonly TurnOutcomeRow[]): QuoteVerdict {
+function checkQuote(quote: string, reviewed: readonly TurnRating[]): QuoteVerdict {
   const trimmed = quote.trim();
   const words = trimmed.split(/\s+/u).filter((word) => word !== '');
 
@@ -632,7 +603,7 @@ function routeFact(
   deps: RefinementDeps,
   edit: Extract<RefinementEdit, { kind: 'fact' }>,
   request: RefinementRequest,
-  reviewed: readonly TurnOutcomeRow[],
+  reviewed: readonly TurnRating[],
 ): RefinementRoute {
   const verdict = checkQuote(edit.quote, reviewed);
 
@@ -656,50 +627,37 @@ function routeFact(
 }
 
 /**
- * Measured section proposal. One pending version per section, so a resumed
- * pass adopts a pending row with identical source instead of reporting
- * `already_pending` for its own earlier write.
+ * A section edit takes the pre-live tests and waits for a live trial. A resumed pass adopts a waiting version with the
+ * same words instead of writing a second one.
  */
 async function routePromptSection(
   deps: RefinementDeps,
   edit: Extract<RefinementEdit, { kind: 'prompt_section' }>,
+  turns: readonly string[],
 ): Promise<RefinementRoute> {
-  const owner = 'prompt_section_versions';
+  const owner = 'artifact_versions';
+  const artifactId = sectionArtifact(edit.sectionId);
 
-  const pendingReason = (version: number, note: string): RefinementRoute => ({
-    kind: 'prompt_section',
-    owner,
-    target: `${edit.sectionId}:${String(version)}`,
-    disposition: 'pending_trials',
-    reason: `${note}; the live prompt does not move until the section lane's calibrated rule `
-      + 'promotes it',
+  const waiting = (version: number, note: string): RefinementRoute => ({
+    kind: 'prompt_section', owner, target: `${artifactId}@${String(version)}`, disposition: 'pending_trials',
+    reason: `${note}; the live prompt does not move until a live trial keeps it`,
   });
 
-  // Adoption first: identical pending bytes are this route's own earlier write.
-  const already = getPendingPromptSection(deps.control.sql, deps.control.rt.actor, edit.sectionId);
+  const already = listArtifactVersions(deps.control.sql, deps.control.rt.actor, artifactId)
+    .find((version) => (version.status === 'candidate' || version.status === 'trial') && version.body === edit.source);
 
-  if (already && already.source === edit.source) {
-    return pendingReason(already.version, 'pending held-out trials (adopted from an earlier pass)');
+  if (already !== undefined) return waiting(already.version, 'waiting for a live trial (adopted from an earlier pass)');
+  const decide = deps.control.rt.decide;
+
+  if (decide === undefined) {
+    return { kind: 'prompt_section', owner, target: artifactId, disposition: 'refused', reason: 'no decision model is wired to judge the edit' };
   }
 
-  const measured = await proposeMeasuredPromptSection(deps.control, {
-    sectionId: edit.sectionId,
-    source: edit.source,
-    rationale: edit.rationale,
-  });
+  const judged = await judgeAuthoredEdit({ rt: deps.control.rt, decide }, { artifactId, body: edit.source, rationale: edit.rationale, turns });
 
-  if (!measured.ok) {
-    return {
-      kind: 'prompt_section', owner, target: edit.sectionId,
-      disposition: 'refused', reason: `${measured.code}: ${measured.error}`,
-    };
-  }
+  if ('refused' in judged) return { kind: 'prompt_section', owner, target: artifactId, disposition: 'refused', reason: judged.refused };
 
-  return pendingReason(
-    measured.version,
-    `pending held-out trials: candidate ${measured.candidateScore.mean.toFixed(3)} against `
-      + `incumbent ${measured.incumbentScore.mean.toFixed(3)}`,
-  );
+  return waiting(judged.version, 'passed the pre-live tests');
 }
 
 /** Applied when any artifact is in effect: a live fact plus a lost section
@@ -717,11 +675,20 @@ function settledStage(landed: number, undone: number): RefinementStage {
  * from callbacks, so it cannot drift. Null while anything is pending or when
  * the guarded transition finds the row already moved.
  */
+/** A section edit is pending until a live trial keeps or reverts it. */
+function sectionRouteState(versions: readonly ArtifactVersion[], target: string): 'pending' | 'rolled_back' | 'promoted' {
+  const row = versions.find((candidate) => `${candidate.artifactId}@${String(candidate.version)}` === target);
+
+  if (row === undefined || row.decidedAt === null) return 'pending';
+
+  return row.status === 'rolled_back' ? 'rolled_back' : 'promoted';
+}
+
 async function settleRoutes(
   deps: RefinementDeps,
   request: RefinementRequest,
 ): Promise<RefinementRequestView | null> {
-  const versions = listPromptSectionVersions(deps.control.sql, deps.control.rt.actor, 200);
+  const versions = listArtifactVersions(deps.control.sql, deps.control.rt.actor);
   let promoted = 0;
   let rolledBack = 0;
   let rejected = 0;
@@ -734,14 +701,10 @@ async function settleRoutes(
 
   for (const route of request.routes) {
     if (route.disposition === 'pending_trials' && route.kind === 'prompt_section') {
-      const [sectionId, version] = route.target.split(':');
+      const state = sectionRouteState(versions, route.target);
 
-      const row = versions.find((candidate) =>
-        candidate.sectionId === sectionId && String(candidate.version) === version);
-
-      if (!row || row.status === 'pending') { pending += 1; continue; }
-
-      if (row.status === 'rolled_back') rolledBack += 1;
+      if (state === 'pending') pending += 1;
+      else if (state === 'rolled_back') rolledBack += 1;
       else promoted += 1;
       continue;
     }

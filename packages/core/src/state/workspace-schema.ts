@@ -2,6 +2,7 @@
 // declared in `conformance/manifest.ts`, which checks `sqlite_master` against this.
 
 import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
+import { initAgentFiguresTable } from '../read-models/agent-figures';
 import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
@@ -20,8 +21,9 @@ import { initRunEventTables } from '../events/recorder';
 import { initActorClaimTables } from '../orchestrator/actor-claims';
 import { resetGuardedExec } from './store-reset';
 import { initGepaTables } from '../evolution/gepa/persistence';
-import { initTurnOutcomeTables } from '../evolution/outcomes';
-import { initReplayTables } from '../evolution/replay';
+import { initLessonTables } from '../evolution/lessons';
+import { initTurnRatingTables } from '../evolution/ratings';
+import { initStruggleTables } from '../evolution/struggles';
 import { initRefinementTables } from '../evolution/refinement';
 import { initImportedExperienceTable } from '../experience/imports';
 import { initHeadsTables } from '../heads/schema';
@@ -34,9 +36,8 @@ import { initPlanReviewTable } from '../plans/review';
 import { initAlternateTakesTable } from '../mcts/takes';
 import { initMctsSearchTable } from '../mcts/search-store';
 import { initFactsTable } from '../memory/facts';
-import { initShadowTables } from '../scaffold/shadow';
 import { initTaskListTable } from '../tools/task-store';
-import { initPromptSectionTables } from '../prompting/section-store';
+import { initArtifactTables, initTrialTables } from '../evolution/artifact-schema';
 import { initSlateStateTable } from '../slates/state';
 import { initExplorationRecordsTable } from '../strategy/records';
 import { initSwarmNodeRecords } from '../strategy/swarm-resume';
@@ -103,6 +104,7 @@ function createWorkspaceTables(db: WorkspaceSchemaSql): void {
   initWorkspaceOwnershipTables(execRaw);
   initWorkspaceActorTable(execRaw);
   initAgentOpenTurnsTable(execRaw);
+  initAgentFiguresTable(execRaw);
   initActorStateSchema(db);
   execRaw(`CREATE TABLE IF NOT EXISTS slates (
     id TEXT NOT NULL, workspace_id TEXT NOT NULL, revision INTEGER NOT NULL, bytes BLOB NOT NULL,
@@ -137,13 +139,13 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initExplorationRecordsTable(execRaw);
   initSwarmNodeRecords(execRaw);
   // A woken actor can record outcomes before any turn constructs EvolutionEngine.
-  initTurnOutcomeTables(execRaw);
-  initReplayTables(execRaw);
+  initLessonTables(execRaw);
+  initTurnRatingTables(execRaw);
+  initStruggleTables(execRaw);
   initRefinementTables(execRaw);
   // Spec: docs/ARCHITECTURE.md, "Events and ingress".
   initEventsHubTables(exec);
   initHeadsTables(execRaw);
-  initShadowTables(execRaw);
   initRunEventTables(execRaw);
   initActorClaimTables(resetGuardedExec(execRaw, exec));
   initFactsTable(execRaw);
@@ -160,7 +162,8 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initTaskListTable(execRaw);
   initMctsSearchTable(execRaw);
   initImportedExperienceTable(execRaw);
-  initPromptSectionTables(execRaw);
+  initArtifactTables(execRaw);
+  initTrialTables(execRaw);
   initCompactionStateTables(execRaw);
   initAgentConfigTable(execRaw);
   // Durable, not in-memory: a DO hibernates soon after going idle.

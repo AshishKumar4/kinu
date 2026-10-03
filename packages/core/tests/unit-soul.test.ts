@@ -1,12 +1,14 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
-/** SOUL.md and its mission row cannot drift: `writeSoul` is the only writer of either. */
+/** One authority: SOUL.md's bytes. Its mission is read off them, so no copy can drift. */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  readSoul, readMission, writeSoul, seedSoul, summarizeSoul, SOUL_PATH, ownerMissionOf,
+  readSoul, readMission, seedSoul, summarizeSoul, SOUL_PATH, missionOf,
 } from '../src/identity/soul';
 import { initAllTables } from '../src/state/workspace-schema';
 import { createWorkspace } from '../src/workspace-birth';
+import { bootstrapScaffold } from '../src/scaffold/bootstrap';
+import { getCurrentScaffoldVersion, readScaffoldVersion } from '../src/scaffold/versions';
 import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers';
 import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 
@@ -24,9 +26,9 @@ function freshWorkspace() {
 }
 
 describe('the soul is a file', () => {
-  test('writeSoul round-trips through the workspace filesystem', async () => {
-    const { sql, vfs, seal } = freshWorkspace();
-    await writeSoul(sql, '# Atlas\n\n## Mission\n\nHelp with testing.', seal);
+  test('the owner\'s write round-trips through the workspace filesystem', async () => {
+    const { vfs, seal } = freshWorkspace();
+    await seal('# Atlas\n\n## Mission\n\nHelp with testing.');
 
     expect(await readSoul(vfs)).toBe('# Atlas\n\n## Mission\n\nHelp with testing.');
     expect(await readText(vfs, SOUL_PATH)).toContain('Help with testing.');
@@ -39,8 +41,8 @@ describe('the soul is a file', () => {
   });
 
   test('an empty document is no document', async () => {
-    const { sql, vfs, seal } = freshWorkspace();
-    await writeSoul(sql, '   \n  ', seal);
+    const { vfs, seal } = freshWorkspace();
+    await seal('   \n  ');
     expect(await readSoul(vfs)).toBeNull();
   });
 
@@ -48,17 +50,19 @@ describe('the soul is a file', () => {
 });
 
 describe('the mission a read-only listing reads', () => {
-  test('writeSoul maintains it, so the row cannot drift from the document', async () => {
+  // A copy written after the soul could fail between the two writes and leave listings on the old purpose.
+  test('it is read off the soul the owner wrote last, with no copy to drift', async () => {
     const { sql, vfs, seal } = freshWorkspace();
-    await writeSoul(sql, '# Atlas\n\n## Mission\n\nHelp with testing.', seal);
+    await seal('# Atlas\n\n## Mission\n\nHelp with testing.');
+    await seal('# Atlas\n\n## Mission\n\nShip the release.');
 
-    expect(readMission(sql)).toBe('Help with testing.');
+    expect(readMission(sql)).toBe('Ship the release.');
     expect(readMission(sql)).toBe(summarizeSoul(await readSoul(vfs)));
   });
 
   test('it is readable without opening a filesystem — the point of it existing', async () => {
-    const { db, sql, seal } = freshWorkspace();
-    await seedSoul(sql, { name: 'atlas', mission: 'ship the thing' }, seal);
+    const { db, seal } = freshWorkspace();
+    await seedSoul({ name: 'atlas', mission: 'ship the thing' }, seal);
 
     // A handle with no workspace filesystem, as `kinu list` has, so a listing never writes.
     const listing = makeSql(db);
@@ -72,10 +76,10 @@ describe('the mission a read-only listing reads', () => {
 
   test('a soul that says nothing a summary keeps is no mission, so a caller can fall back', () => {
     for (const soul of ['# Atlas\n', '  \n\n']) {
-      expect(ownerMissionOf({ soulTable: true, soul, identity: null })).toBeNull();
+      expect(missionOf(soul)).toBeNull();
     }
 
-    expect(ownerMissionOf({ soulTable: true, soul: '# Atlas\n\n## Mission\n\nShip it.', identity: null })).toBe('Ship it.');
+    expect(missionOf('# Atlas\n\n## Mission\n\nShip it.')).toBe('Ship it.');
   });
 });
 
@@ -102,6 +106,21 @@ describe('workspace birth', () => {
 
     expect(await readText(rt.storage.vfs, 'scaffold/agent.js')).toContain('async');
     expect(await readText(rt.storage.vfs, 'memory/MEMORY.md')).toContain('Atlas');
+  });
+
+  test('a custom first loop is born as v0 through the one writer: source, pointer and live view agree, and a reopen keeps them', async () => {
+    const custom = 'async function* run(rt, task) { yield { type: "chunk", data: "custom" }; }';
+    const rt = await createWorkspace(new Database(':memory:'), { name: 'atlas', purpose: 'Help.', llm: TEST_LLM, scaffold: custom });
+
+    const agree = async () => ({
+      pointer: getCurrentScaffoldVersion(rt.storage.sql, rt.actor),
+      source: await readScaffoldVersion(rt, 0),
+      live: await rt.identity.scaffold.read(),
+    });
+
+    expect(await agree()).toEqual({ pointer: 0, source: custom, live: custom });
+    await bootstrapScaffold(rt);
+    expect(await agree()).toEqual({ pointer: 0, source: custom, live: custom });
   });
 
   /** `name` is the address and `title` is the name; a workspace is born untitled. */

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { stepCountIs } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import {
-  ExtensionHost, runChat, TurnAccumulator, executionVerdict,
+  ExtensionHost, runChat, TurnAccumulator,
   type CodemodeProvider, type ChatEvent,
 } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
@@ -26,7 +26,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
   });
 
   const tool = createNodeCodemodeToolFactory({ extraProviders: providers })({
-    native: {}, craftedTools: () => [], providers: [],
+    native: {}, external: () => ({}), craftedTools: () => [], providers: [],
   });
 
   const accumulator = new TurnAccumulator();
@@ -58,7 +58,7 @@ test('arbitrary error-shaped program values remain successful data through SDK a
   const { result, accumulator } = await invoke('return { reason: "denied", error: "historical incident", exitCode: 7 };');
   expect(result).toMatchObject({ success: true });
   expect(JSON.parse(result.result)).toEqual({ result: { reason: 'denied', error: 'historical incident', exitCode: 7 } });
-  expect(executionVerdict(accumulator)).toBe('succeeded');
+  expect(accumulator.toolCalls.at(-1)?.outcome?.success).toBe(true);
 });
 
 test('a handled nested command refusal does not fail its enclosing program', async () => {
@@ -80,7 +80,7 @@ test('a handled nested command refusal does not fail its enclosing program', asy
     failures: [{ tool: 'shell', action: null, success: false, reason: 'denied', error: 'not run' }],
   });
   expect(calls).toBe(1);
-  expect(executionVerdict(accumulator)).toBe('succeeded');
+  expect(accumulator.toolCalls.at(-1)?.outcome?.success).toBe(true);
 });
 
 test('unhandled program failures retain producer class, cause text, logs and one execution', async () => {
@@ -99,5 +99,5 @@ test('unhandled program failures retain producer class, cause text, logs and one
   expect(result.result).toContain('underlying cause');
   expect(result.result).toContain('before failure');
   expect(calls).toBe(1);
-  expect(executionVerdict(accumulator)).toBe('failed');
+  expect(accumulator.toolCalls.at(-1)?.outcome?.success).toBe(false);
 });

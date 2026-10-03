@@ -2,7 +2,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The hosted workspace is the agent's own, but its shell serves the actor's mount table: the user's machine at
 // /pc and their Drive at /shared. A local-harm command there waits for the owner; one in the agent's home does not.
 import { expect, test } from 'bun:test';
-import type { ExecutorProvider } from '@kinu.run/core';
+import { WORKSPACE_ROOT, type ExecutorProvider } from '@kinu.run/core';
 import { createMemoryVfs, present } from '@kinu.run/test-utils';
 import { hostedMainActor, orchestratorHarness } from './helpers/actor-harness';
 
@@ -13,13 +13,12 @@ test('on the hosted workspace shell, deleting under /pc or /shared waits for the
 
   expect((await shell.exec('rm -rf /pc/x')).refusal).toBeDefined();
   expect((await shell.exec('rm -rf /shared/notes')).refusal).toBeDefined();
+  expect((await shell.exec('rm -rf build', { cwd: '/pc/proj' })).refusal).toBeDefined();
 
-  await shell.exec('cd /pc/proj');
-  expect((await shell.exec('rm -rf .')).refusal).toBeDefined();
-
-  expect((await shell.exec('cd ~')).exitCode).toBe(0);
+  // A `cd` lasts only its own call: the next starts at home.
+  await shell.exec('cd /shared');
   const own = await shell.exec('mkdir -p scratch/x && rm -rf scratch');
-  expect({ refusal: own.refusal, exitCode: own.exitCode }).toEqual({ refusal: undefined, exitCode: 0 });
+  expect({ refusal: own.refusal, exitCode: own.exitCode, cwd: own.cwd }).toEqual({ refusal: undefined, exitCode: 0, cwd: WORKSPACE_ROOT });
 });
 
 /** The main actor with a connected machine whose project is at /pc/proj, so a `cd` there succeeds. */
@@ -44,26 +43,30 @@ async function withDevice() {
 
 const ASKED = { error: expect.stringContaining('rm-recursive') };
 
-test('a `cd` into /pc through the shell tool carries to the process or shell program codemode starts next', async () => {
+// The stateless shell: a name keeps its directory, read back from the shell itself, and is judged from there.
+test('a name that went into /pc is judged there until it comes back; nothing else follows it there', async () => {
   const { shell, tools, files } = await withDevice();
+  const work = { name: 'work' };
 
-  expect((await shell.exec('cd /pc/proj')).exitCode).toBe(0);
-  expect(await tools.startProcess?.execute('rm -rf build')).toMatchObject(ASKED);
-  expect(await tools.runCode?.execute('rm -rf build', { language: 'shell' })).toMatchObject(ASKED);
+  expect(await shell.exec('cd /pc/proj', work)).toMatchObject({ exitCode: 0, finalCwd: '/pc/proj' });
+  expect((await shell.exec('rm -rf build', work)).refusal).toMatchObject(ASKED);
 
-  expect((await shell.exec('cd ~')).exitCode).toBe(0);
+  // An unnamed call, a process and a shell program start at home, not where the name is.
+  const own = await shell.exec('mkdir -p scratch && rm -rf scratch');
+  expect({ refusal: own.refusal, exitCode: own.exitCode }).toEqual({ refusal: undefined, exitCode: 0 });
   expect(await tools.runCode?.execute('mkdir -p scratch && rm -rf scratch', { language: 'shell' })).toBe('(no output)');
+
+  expect((await shell.exec('cd ~', work)).exitCode).toBe(0);
+  const back = await shell.exec('mkdir -p scratch && rm -rf scratch', work);
+  expect({ refusal: back.refusal, exitCode: back.exitCode }).toEqual({ refusal: undefined, exitCode: 0 });
   expect([...files.keys()]).toEqual(['/proj/kept.txt']);
 });
 
-test('a `cd` into /pc through a shell program carries to the shell tool\u2019s next command', async () => {
+test('a shell program\u2019s `cd` into /pc lasts only that program', async () => {
   const { shell, tools, files } = await withDevice();
 
   expect(await tools.runCode?.execute('cd /pc/proj', { language: 'shell' })).toBe('(no output)');
-  expect((await shell.exec('rm -rf build')).refusal).toMatchObject({ error: expect.stringContaining('rm-recursive') });
-
-  expect(await tools.runCode?.execute('cd ~', { language: 'shell' })).toBe('(no output)');
   const own = await shell.exec('mkdir -p scratch && rm -rf scratch');
-  expect({ refusal: own.refusal, exitCode: own.exitCode }).toEqual({ refusal: undefined, exitCode: 0 });
+  expect({ refusal: own.refusal, exitCode: own.exitCode, cwd: own.cwd }).toEqual({ refusal: undefined, exitCode: 0, cwd: WORKSPACE_ROOT });
   expect([...files.keys()]).toEqual(['/proj/kept.txt']);
 });

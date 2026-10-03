@@ -4,7 +4,11 @@ import type {
   ExecutorInfo,
   ExecutorProviderSurface,
 } from './types';
+import * as v from 'valibot';
 import { gateProviderExec } from './approval';
+import { CommandResultSchema } from './exec-result';
+import { Effect } from 'effect';
+import { attempt, KinuError, refusalOf, settle, type Refusal } from '../obs/index';
 import { STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 
 export class DefaultExecutionRouter implements ExecutionRouter {
@@ -81,4 +85,35 @@ export class DefaultExecutionRouter implements ExecutionRouter {
       return info;
     });
   }
+}
+
+/** An owner's command on a registered executor: refused before it ran, ran (a non-zero exit carries its refusal), or failed. */
+export type ExecutorRun =
+  | { readonly kind: 'refused'; readonly error: string; readonly refusal: Refusal }
+  | { readonly kind: 'ran'; readonly stdout: string; readonly stderr: string; readonly exitCode: number; readonly refusal?: Refusal }
+  | { readonly kind: 'failed'; readonly error: string; readonly refusal: Refusal };
+
+/** Both backends run an owner's command here, through the workspace's own registered provider and its approval gate. */
+export async function runOnExecutor(router: ExecutionRouter, executorId: string, command: string, device?: string): Promise<ExecutorRun> {
+  const refused = (error: KinuError): ExecutorRun => ({ kind: 'refused', error: error.message, refusal: refusalOf(error) });
+  const provider = router.getProvider(executorId);
+
+  if (!provider) return refused(new KinuError('missing', `Executor "${executorId}" not found`));
+
+  if (!provider.isAvailable()) return refused(new KinuError('unavailable', `Executor "${executorId}" is not available`));
+  const execTool = provider.tools.exec;
+
+  if (!execTool) return refused(new KinuError('unsupported', `Executor "${executorId}" has no exec tool`));
+
+  // Device rides as tool context read by readDeviceSelection; with none, the call keeps the unnamed default.
+  const executed = attempt({ doing: 'execute on ' + executorId, otherwise: 'io' }, async () => v.parse(
+    CommandResultSchema, device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device }),
+  ));
+
+  return settle(Effect.match(executed, {
+    onFailure: (error): ExecutorRun => ({ kind: 'failed', error: refusalOf(error).error, refusal: refusalOf(error) }),
+    onSuccess: (result): ExecutorRun => (v.is(v.string(), result)
+      ? { kind: 'ran', stdout: result, stderr: '', exitCode: 0 }
+      : { kind: 'ran', stdout: result.error, stderr: result.error, exitCode: 1, refusal: result }),
+  }));
 }

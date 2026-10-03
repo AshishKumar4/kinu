@@ -25,7 +25,7 @@ export const ADVISOR_SEVERITY_LABEL = {
   blocker: 'Blocker',
 } as const satisfies Readonly<Record<AdvisorSeverity, string>>;
 
-/** Order matches {@link buildAdvisorPrompt}. `missed-capability` is the signal `turn_outcomes` cannot carry:
+/** Order matches {@link buildAdvisorPrompt}. `missed-capability` is the signal `turn_ratings` cannot carry:
  *  a capability the turn had and did not use. */
 const ADVISOR_NOTE_CLASSES = ['wrong-work', 'missed-capability', 'dissatisfaction'] as const;
 
@@ -34,13 +34,6 @@ export type AdvisorNoteClass = (typeof ADVISOR_NOTE_CLASSES)[number];
 function isAdvisorNoteClass<Value>(value: Value): value is Value & AdvisorNoteClass {
   return ADVISOR_NOTE_CLASSES.some((noteClass) => noteClass === value);
 }
-
-/** The phrase an eval instance carries, so a judge reads the kind and not the token. */
-export const ADVISOR_CLASS_LABEL = {
-  'wrong-work': 'the work did not do what was asked',
-  'missed-capability': 'a capability it had and did not use',
-  dissatisfaction: 'the user said they were unhappy',
-} as const satisfies Readonly<Record<AdvisorNoteClass, string>>;
 
 /** Also what makes the chat render the signal as a card instead of a user bubble. */
 export const ADVISOR_SIGNAL_KIND = 'advisor';

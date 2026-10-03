@@ -3,7 +3,3 @@ Call the tools listed here and in this turn's model tool schema. That list is li
 
 ### Built-in tools
 {{builtins}}
-{{#if hasExternal}}
-### External tools
-Connected external providers expose these tools for this turn. When their names/descriptions match the task, use them.
-{{externalLines}}{{/if}}

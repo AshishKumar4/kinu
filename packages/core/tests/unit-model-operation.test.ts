@@ -4,14 +4,14 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
-  beginModelOperation, createCompletionLLM, createVercelAILLM,
+  beginModelOperation, createVercelAILLM,
   initRunEventTables, recordModelOperations, RunEventRecorder,
   WORKSPACE_RUN_ID,
   type RunEvent,
 } from '../src/index';
 import { present, testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
-import { KinuError } from '../src/obs/error';
+import { generateReported } from '../src/providers/model-invocation';
 
 function setup() {
   const db = new Database(':memory:');
@@ -151,51 +151,6 @@ describe('the production seams open the frame before the request', () => {
     });
   }
 
-  test('createCompletionLLM writes the pair, with the resolved spec on both rows', async () => {
-    const { recorder } = setup();
-    const sink = recordModelOperations(recorder, () => WORKSPACE_RUN_ID);
-
-    const llm = createCompletionLLM({
-      model: textModel(),
-      spec: 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813',
-      stage: 'judge',
-      spend: { source: 'judge', report: () => {}, operations: sink },
-    });
-
-    await llm.complete('grade this');
-
-    const rows = operationsOf(recorder, WORKSPACE_RUN_ID);
-    expect(rows.map((row) => row.phase)).toEqual(['start', 'end']);
-    expect(rows.every((row) => row.spec === 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813')).toBe(true);
-    expect(rows[1].usage).toEqual({ input: 41, output: 7 });
-  });
-
-  test('createCompletionLLM has no stream: asking for one throws unsupported, and writes no operation row', () => {
-    const { recorder } = setup();
-    const sink = recordModelOperations(recorder, () => WORKSPACE_RUN_ID);
-
-    const llm = createCompletionLLM({
-      model: textModel(),
-      spec: 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813',
-      stage: 'judge',
-      spend: { source: 'judge', report: () => {}, operations: sink },
-    });
-
-    let thrown: unknown;
-
-    try {
-      llm.stream({ system: '', messages: [] });
-    } catch (error) {
-      thrown = error;
-    }
-
-    expect(thrown).toBeInstanceOf(Error);
-    expect(thrown).toBeInstanceOf(KinuError);
-    expect(thrown).toMatchObject({ code: 'unsupported' });
-    expect(thrown).toMatchObject({ message: 'createCompletionLLM(workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813) has no streaming path' });
-    expect(operationsOf(recorder, WORKSPACE_RUN_ID)).toEqual([]);
-  });
-
   test('createVercelAILLM.complete closes the frame as failed when the endpoint dies', async () => {
     // This factory really dials its baseURL, so an unroutable stub makes this the transport-failure case.
     const { recorder } = setup();
@@ -220,14 +175,10 @@ describe('the production seams open the frame before the request', () => {
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => WORKSPACE_RUN_ID);
 
-    const llm = createCompletionLLM({
-      model: textModel({ throwError: 'socket hung up' }),
-      spec: 'openai/gpt-x',
-      stage: 'reflection',
-      spend: { source: 'fast', report: () => {}, operations: sink },
-    });
-
-    await expect(llm.complete('classify')).rejects.toThrow('socket hung up');
+    await expect(generateReported(
+      { model: textModel({ throwError: 'socket hung up' }), prompt: 'classify' },
+      { spend: { source: 'fast', report: () => {}, operations: sink }, spec: 'openai/gpt-x' },
+    )).rejects.toThrow('socket hung up');
 
     const rows = operationsOf(recorder, WORKSPACE_RUN_ID);
     expect(rows[0].phase).toBe('start');

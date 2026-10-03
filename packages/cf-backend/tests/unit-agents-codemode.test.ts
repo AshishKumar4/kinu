@@ -130,7 +130,7 @@ function searchOnlyDeps(): AgentsToolDeps {
   // would otherwise share one claim ledger and loop pointer.
   const seats = hostedSeatsOver({ rt, db: testSql.db });
 
-  return { mode: 'build', swarm: { rt, hostNode: seats.hostNode, model: expandingModel(), ...unobservedSearchSeams() } };
+  return { mode: 'build', swarms: true, swarm: { rt, hostNode: seats.hostNode, model: expandingModel(), ...unobservedSearchSeams() } };
 }
 
 function fullDeps(): AgentsToolDeps {
@@ -157,7 +157,7 @@ function fullDeps(): AgentsToolDeps {
       knows: async () => true,
       status: async () => ({}),
       message: async () => ({ ok: true as const, name: 'n', ...codemodeHandoff }),
-      dismiss: async () => ({ ok: true, name: 'n', historyKept: true }),
+      dismiss: async () => ({ ok: true, name: 'n', historyKept: true, stoppedJobs: [] }),
     },
     peers: {
       listPeers: async () => [],

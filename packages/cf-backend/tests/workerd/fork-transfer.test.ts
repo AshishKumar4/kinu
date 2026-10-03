@@ -42,7 +42,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(staged.markers).toBe(0);
     expect(staged.displayName).toBeNull();
     expect(staged.identity?.name).toBe('unpublished-target');
-    expect(staged.identity?.mission ?? '').toBe('');
+    expect(staged.identity?.mission).not.toBe(PROBE_SOUL_MISSION);
     expect(staged.files).toEqual([]);
 
     const cursorBefore = await target(name).cursor();
@@ -64,7 +64,8 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(beforeCommit.lineage).toBeNull();
     expect(beforeCommit.markers).toBe(0);
     expect(beforeCommit.displayName).toBeNull();
-    expect(beforeCommit.identity?.mission ?? '').toBe('');
+    // The mission is read off the soul, so it is the fork's from the moment its SOUL.md lands.
+    expect(beforeCommit.identity?.mission).toBe(PROBE_SOUL_MISSION);
     expect(await target(name).cursor()).toMatchObject({
       expectedSeq: files.nextSeq, stream: files.stream, published: false, importing: null,
     });

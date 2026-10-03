@@ -19,8 +19,8 @@ import type { ObjectNamespace } from '@kinu.run/core';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
   /** The account's `default` tier is the single source of the default model, for new workspaces
-   *  and every turn. */
-  getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope>;
+   *  and every turn. A workspace creating another reads it with its own authority. */
+  getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope>;
   registerWorkspace(
     caller: UserCaller,
     name: string,
@@ -75,7 +75,7 @@ export async function createCloudWorkspaceForUser<Id>(
   // Refused when no first turn could run (`defaultSpecFor`). Only a named model is pinned: an unpinned workspace
   // follows the account's default tier, as on the CLI. The error copy is surface-specific.
   const servable = defaultSpecFor(
-    input.model ?? (await userDO.getProfileCatalog(caller)).catalog.tiers.default.model,
+    input.model ?? (await userDO.getWorkspaceProfileCatalog(caller)).catalog.tiers.default.model,
     menu.models.map((entry) => entry.spec),
   );
 

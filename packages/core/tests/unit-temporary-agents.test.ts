@@ -156,6 +156,8 @@ function makeScene(options: {
       calls.push(`dismiss:${name}:${keepHistory}`);
 
       if (options.failRelease) throw new Error('the release failed');
+
+      return { stoppedJobs: [] };
     },
     async rename() { /* not reached by this rung */ },
   };
@@ -193,6 +195,7 @@ function makeScene(options: {
 
   const deps: AgentsToolDeps = {
     mode: 'build' satisfies WorkMode,
+    swarms: true,
     team,
     profile: () => testProfile(),
   };
@@ -803,7 +806,7 @@ describe('the rung is structural, and so is its absence', () => {
       expect(agentsActionsFor(child.deps)).toContain('hire');
     }
 
-    const leaf: AgentsToolDeps = { mode: 'build' };
+    const leaf: AgentsToolDeps = { mode: 'build', swarms: true };
     expect(agentsActionsFor(leaf)).not.toContain('hire');
   });
 

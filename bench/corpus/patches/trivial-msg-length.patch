@@ -1,8 +1,8 @@
-diff --git a/packages/core/src/evolution/outcomes.ts b/packages/core/src/evolution/outcomes.ts
-index 719ec5f2c..706682036 100644
---- a/packages/core/src/evolution/outcomes.ts
-+++ b/packages/core/src/evolution/outcomes.ts
-@@ -91,7 +91,7 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
+diff --git a/packages/core/src/evolution/ratings.ts b/packages/core/src/evolution/ratings.ts
+index 9b33b968a..8b1a72a13 100644
+--- a/packages/core/src/evolution/ratings.ts
++++ b/packages/core/src/evolution/ratings.ts
+@@ -35,7 +35,7 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
  
    if (TRIVIAL_MESSAGE.test(msg)) return true;
  
@@ -10,4 +10,4 @@ index 719ec5f2c..706682036 100644
 +  return msg.length < 120 && !msg.includes('?');
  }
  
- /** Read-only calls prove nothing about whether the turn's work landed; the
+ /** Strongest first; the effective rating of a turn is its strongest source's newest row. */

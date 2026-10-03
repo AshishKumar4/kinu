@@ -132,40 +132,44 @@ export class MemoryStore {
 		return rows.map((r) => ({ id: r.id, path: r.path, startLine: r.start_line, endLine: r.end_line, text: r.text }));
 	}
 
-	/** Ranked hits: strict all-term page, then partial matches up to `limit` (see {@link fillToCapacity}). */
 	search(query: string, limit = 10): MemorySearchResult[] {
-		if (!query.trim()) return [];
-
-		const safeQuery = sanitizeFtsQuery(query);
-		const strict = this.runFtsQuery(safeQuery, limit);
-		const relaxed = strict.length >= limit ? null : relaxFtsQuery(safeQuery);
-
-		const rows = relaxed === null
-			? strict
-			: fillToCapacity(strict, this.runFtsQuery(relaxed, limit), limit, (row) => row.id);
-
-		// bm25() is more negative for better matches; |rank|/(1+|rank|) keeps the score monotone with relevance.
-		return rows.map((r) => ({
-			path: r.path,
-			startLine: r.start_line,
-			endLine: r.end_line,
-			snippet: r.text.length > SNIPPET_MAX_CHARS
-				? r.text.slice(0, SNIPPET_MAX_CHARS) + "..."
-				: r.text,
-			score: Math.abs(r.rank) / (1 + Math.abs(r.rank)),
-		}));
+		return searchMemoryChunks(this.sql, query, limit);
 	}
+}
 
-	private runFtsQuery(ftsQuery: string, limit: number): FtsRow[] {
-		return this.sql<FtsRow>`
-			SELECT mc.id, mc.path, mc.start_line, mc.end_line, mc.text, bm25(memory_chunks_fts) AS rank
-			FROM memory_chunks_fts
-			JOIN memory_chunks mc ON mc.rowid = memory_chunks_fts.rowid
-			WHERE memory_chunks_fts MATCH ${ftsQuery}
-			ORDER BY rank ASC, mc.rowid ASC
-			LIMIT ${limit}
-		`;
-	}
+/** Ranked hits: strict all-term page, then partial matches up to `limit` (see {@link fillToCapacity}). */
+export function searchMemoryChunks(sql: SqlExecutor, query: string, limit = 10): MemorySearchResult[] {
+	if (!query.trim()) return [];
+
+	const safeQuery = sanitizeFtsQuery(query);
+	const strict = runFtsQuery(sql, safeQuery, limit);
+	const relaxed = strict.length >= limit ? null : relaxFtsQuery(safeQuery);
+
+	const rows = relaxed === null
+		? strict
+		: fillToCapacity(strict, runFtsQuery(sql, relaxed, limit), limit, (row) => row.id);
+
+	// bm25() is more negative for better matches; |rank|/(1+|rank|) keeps the score monotone with relevance.
+	return rows.map((r) => ({
+		path: r.path,
+		startLine: r.start_line,
+		endLine: r.end_line,
+		snippet: r.text.length > SNIPPET_MAX_CHARS
+			? r.text.slice(0, SNIPPET_MAX_CHARS) + "..."
+			: r.text,
+		score: Math.abs(r.rank) / (1 + Math.abs(r.rank)),
+	}));
+}
+
+function runFtsQuery(sql: SqlExecutor, ftsQuery: string, limit: number): FtsRow[] {
+	return sql<FtsRow>`
+		SELECT mc.id, mc.path, mc.start_line, mc.end_line, mc.text, bm25(memory_chunks_fts) AS rank
+		FROM memory_chunks_fts
+		JOIN memory_chunks mc ON mc.rowid = memory_chunks_fts.rowid
+		WHERE memory_chunks_fts MATCH ${ftsQuery}
+		ORDER BY rank ASC, mc.rowid ASC
+		LIMIT ${limit}
+	`;
 }
 
 function isMissingFileError<Failure>(failure: Failure): failure is Failure & Error & { code: "ENOENT" } {

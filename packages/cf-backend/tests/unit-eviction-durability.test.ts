@@ -419,6 +419,27 @@ describe('a sandbox lifecycle failure', () => {
     expect(text).toContain('inc-2');
   });
 
+  test('a restore that lost unsaved work is told as a recovery the agent can act on, not a failure', async () => {
+    const harness = orchestratorHarness();
+    const { agent } = harness;
+
+    await agent.acceptSandboxLifecycleIncident({
+      version: ENVELOPE_VERSION,
+      incidentId: 'inc-4',
+      stage: 'recovered',
+      reason: 'The container stopped before its latest work was saved: the workspace was restored from its backup to 2026-10-03T12:00:00.000Z, and anything written after that is lost.',
+      attempts: 1,
+    });
+
+    const text = (await programmaticTurns(harness)).map((turn) => turn.text).join('\n');
+    expect({
+      when: text.includes('2026-10-03T12:00:00.000Z'),
+      redo: text.includes('redo any edit made after that time'),
+      failure: text.includes('failed at the'),
+      id: text.includes('inc-4'),
+    }).toEqual({ when: true, redo: true, failure: false, id: true });
+  });
+
   test('an envelope that invents a field is REFUSED, not silently stripped', async () => {
     const harness = orchestratorHarness();
     const { agent } = harness;

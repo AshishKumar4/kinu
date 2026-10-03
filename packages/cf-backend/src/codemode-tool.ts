@@ -6,8 +6,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
-import { type Tool } from 'ai';
-import type { ActorHandle, AgentsToolDeps, CodemodeSurface, DeviceRequestChannel, ExecutionRouter } from "@kinu.run/core";
+import { type Tool, type ToolSet } from 'ai';
+import { execCallArgs, readDeviceRequestChannel, type ActorHandle, type AgentsToolDeps, type CodemodeSurface, type DeviceRequestChannel, type ExecutionRouter } from "@kinu.run/core";
 import { createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
@@ -26,27 +26,7 @@ export interface CodemodeFactoryOptions {
   agents?: () => AgentsToolDeps;
   extraProviders?: () => CodemodeProvider[];
   onExecutorUsed?: (name: string) => void;
-  /** Read per provider call: the tool is built once per DO lifetime, but the owning job changes on each detach. */
-  deviceRequests?: () => DeviceRequestChannel | undefined;
   reach?: ToolSurfaceNarrowing;
-}
-
-function withDeviceOwnership(args: unknown[], channel: DeviceRequestChannel | undefined): unknown[] {
-  if (!channel) return args;
-  const context = args[1];
-  // An unpredicted context shape wins over ownership reporting.
-  const parsedContext = v.safeParse(v.looseObject({}), context);
-
-  if (context !== undefined && !parsedContext.success) return args;
-
-  const ownership = {
-    onDeviceRequest: (requestId: string) => { channel.report(requestId); },
-    deviceRequestOwner: () => channel.owningJobId,
-  };
-
-  const merged = parsedContext.success ? { ...parsedContext.output, ...ownership } : ownership;
-
-  return [args[0], merged, ...args.slice(2)];
 }
 
 export interface CodemodeFactory {
@@ -56,6 +36,8 @@ export interface CodemodeFactory {
 
 export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
   const { rt, webSearch } = options;
+  // The running program's channel, read per provider call: a detach changes the owning job mid-program.
+  let deviceRequests: DeviceRequestChannel | undefined;
   const stateProvider = createStateCodemodeProvider(rt.actor.programState);
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
 
@@ -72,9 +54,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       wrapped[name] = {
         ...entry,
         execute: async (...args) => {
-          const result = await entry.execute(
-            ...(carriesOwnership ? withDeviceOwnership(args, options.deviceRequests?.()) : args),
-          );
+          const result = await entry.execute(...(carriesOwnership ? execCallArgs(args, { channel: deviceRequests }) : args));
 
           options.onExecutorUsed?.(p.name);
 
@@ -120,8 +100,10 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       return call(input);
     },
     toolFor(surface) {
-      const reachable = options.reach === undefined ? surface.native
-        : Object.fromEntries(Object.entries(surface.native).filter(([name]) => options.reach?.allowsTool(name)));
+      const reach = (tools: ToolSet): ToolSet => options.reach === undefined ? tools
+        : Object.fromEntries(Object.entries(tools).filter(([name]) => options.reach?.allowsTool(name)));
+
+      const reachable = reach(surface.native);
 
       const build = (mode: WorkMode): Tool => {
         const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'));
@@ -153,10 +135,13 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
               const crafted = surface.craftedTools();
               const failures = Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute]));
 
+              const external = Object.fromEntries(Object.entries(nativeToolFunctions(toolsInWorkMode(mode, reach(surface.external()))))
+                .map(([name, entry]) => [name, entry.execute]));
+
               const live = Array.isArray(resolved)
                 ? resolved.map((provider) => {
                   if (provider.name === CRAFTED_TOOL_NAMESPACE) {
-                    return { name: provider.name, fns: { ...provider.fns, ...failures }, prelude: renderToolsPrelude(crafted, { workspace: options.workspace }) };
+                    return { name: provider.name, fns: { ...external, ...provider.fns, ...failures }, prelude: renderToolsPrelude(crafted, { workspace: options.workspace }) };
                   }
 
                   const prelude = bound.find((declared) => declared.name === provider.name)?.prelude;
@@ -184,10 +169,19 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
           const execute = selected.execute;
 
           if (execute === undefined) throw new Error('Codemode executor is not callable');
+          const channel = readDeviceRequestChannel({ toolOptions: context });
 
-          return withCodemodeProgram(async () => v.parse(v.object({
-            result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())),
-          }), await execute(input, context)));
+          return withCodemodeProgram(async () => {
+            const outer = deviceRequests;
+
+            if (channel !== undefined) deviceRequests = channel;
+
+            try {
+              return v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), await execute(input, context));
+            } finally {
+              deviceRequests = outer;
+            }
+          });
         },
       }), surface.craftedTools);
     },

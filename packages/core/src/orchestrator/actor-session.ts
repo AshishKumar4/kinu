@@ -6,6 +6,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
 import type { WorkMode } from '../types/turn';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
+import { agentsProfileContext, delegationChoices } from '../delegation/agents-tool';
 import { promptCacheWarm, PromptCacheRouteSchema, type CachedRequest } from '../prompting/cache-breakpoints';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
@@ -90,6 +91,8 @@ export interface ActorExecutionInput {
   readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   /** The turn's unapproved workspace files as one message, null for none. */
   readonly instructions?: string | null;
+  /** What the turn's input activates (`activatedSkillsBlock`), spliced before it for this turn only. */
+  readonly activated?: string | null;
   readonly scaffoldSpend?: ModelCallSpend;
   /** Re-checked before each model call, for kinds whose liveness is owned elsewhere (heads, swarm nodes). */
   readonly assertActive?: () => void;
@@ -259,6 +262,13 @@ export class ActorSession {
 
   lastRequestAt(): number | null {
     return this.canonical.requests.lastStep()?.recordedAt ?? null;
+  }
+
+  /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and a live trial's segment both use. */
+  promptCacheCold(keptAliveUntil: number | null): boolean {
+    const last = this.canonical.requests.lastStep();
+
+    return !promptCacheWarm(last === null ? null : cachedRequestOf(last), Date.now(), keptAliveUntil);
   }
   /** A host settles the claim under the outcome it named. */
   get turnClaim(): ActorTurnClaim | null { return this.active?.claim ?? null; }
@@ -767,8 +777,17 @@ export class ActorSession {
 
     return measureTurnRequest({
       ...input.chat, tools, history: messages, extensions,
-      dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
+      dynamicContext: { ledger: this.dynamic, snapshot: () => this.stepContext(input.dynamic, profile, tools), instructions: input.instructions },
     });
+  }
+
+  /** A step's live state: the backend's, plus what core owns, the roles and tiers the `agents` tool takes, kept out
+   *  of its bytes so accounts share one definition. */
+  stepContext(dynamic: ActorExecutionInput['dynamic'], profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
+    const context = dynamic(profile, tools);
+    const delegation = tools.agents === undefined ? null : delegationChoices(agentsProfileContext(profile, this.profileInputs));
+
+    return delegation === null ? context : { ...context, delegation };
   }
 
   private turnEvents(turn: {
@@ -799,7 +818,19 @@ export class ActorSession {
         measureContext: true, ...(active.trace !== null && { trace: active.trace }),
         persistStreamPart: part => stream.nativePart(part),
         persistStep: messages => stream.nativeStep(messages),
-        dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
+        dynamicContext: {
+          ledger: this.dynamic,
+          snapshot: () => {
+            const context = this.stepContext(input.dynamic, profile, tools);
+
+            // The turn scores only the lessons it was shown.
+            this.orchestrator.acc.noteLessonsShown(context.toolLessons ?? []);
+
+            return context;
+          },
+          instructions: input.instructions,
+          activated: input.activated,
+        },
         stepContext: {
           base: async () => {
             const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null, active.context);
@@ -810,9 +841,8 @@ export class ActorSession {
             // A cold cache makes rewriting free: the stored blocks collapse into one.
             if (!turnOpened) {
               turnOpened = true;
-              const last = this.canonical.requests.lastStep();
 
-              if (!promptCacheWarm(last === null ? null : cachedRequestOf(last), Date.now(), input.cacheKeptAliveUntil ?? null)) this.dynamic.reset();
+              if (this.promptCacheCold(input.cacheKeptAliveUntil ?? null)) this.dynamic.reset();
             }
 
             this.dynamic.adopt(base.rendered.map(render => ({ text: v.parse(v.string(), render.message.content), before: render.before, after: render.after })));

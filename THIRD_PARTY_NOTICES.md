@@ -54,8 +54,11 @@ The eval task `evals/tasks/true-myth-combinators.eval.ts` is DeepSWE v1.1's
 `true-myth-iterable-collection-combinators`, from
 [DeepSWE](https://github.com/datacurve-ai/deep-swe) at commit `0b9fabbb63b9`
 (2026-08-26), Datacurve AI Inc., under the Apache License 2.0. The task's
-prompt is that task's `instruction.md`, changed: its toolbelt paragraph is a
-later turn of its own. Its grader is that task's `tests/` (`test.sh`,
+library prompt is that task's `instruction.md`, changed: its toolbelt paragraph
+is a later turn of its own. Kinu adds four release-handoff turns in the same
+workspace (live reports, previews, a reusable calculator, independent review,
+web provenance, archive export and memory); these are not DeepSWE material.
+The library grader is that task's `tests/` (`test.sh`,
 `grader.py`, `config.json`, `test.patch`), fetched unchanged at that commit
 when a check runs, and the first turn grades with `config.json` less its
 toolbelt node ids. The license text sits in

@@ -3,10 +3,9 @@ import { expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  DEFAULT_WORKERS_AI_MODEL_SPEC, agentCred, agentHome, agentIdentity, subordinateAgentName, nativeToolFunctions,
+  DEFAULT_WORKERS_AI_MODEL_SPEC, agentCred, agentHome, agentIdentity, nativeToolFunctions,
   openWorkspaceMainActor, RunEventRecorder, SESSION_UID, WORKSPACE_RUN_ID,
-  type JsonValue, type SlateCallResult,
-} from '@kinu.run/core';
+  type JsonValue, type SlateCallResult, actorHomeName } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import {
@@ -20,7 +19,7 @@ import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 import { SlateId } from '@agent-core/core/slates';
 import { slateDirectory } from '@kinu.run/core/slates';
 import type { SqlDatabase, SqlRow, SqlValue as VendorSqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { toolExecute } from '@kinu.run/test-utils';
+import { present, toolExecute } from '@kinu.run/test-utils';
 
 /** The credential is the child's provisioned identity, looked up (hiring provisioned it), never allocated here. */
 async function childCaller(db: Database, agentName: string, actorName: string): Promise<SlateCaller> {
@@ -50,7 +49,7 @@ async function childCaller(db: Database, agentName: string, actorName: string): 
   return { path: [{ name: actorName }], cred: agentCred(identity), workMode: 'build' };
 }
 
-test('native MCP protocol failures reject while namespace responses retain their envelope', async () => {
+test('an MCP tool called through eval answers its data whole, fails on a protocol failure, and obeys the allowlist', async () => {
   resetRecordedMcp();
   const ownerUserId = '0123456789abcdef0123456789abcdef';
   const workspace = 'native-mcp';
@@ -71,26 +70,19 @@ test('native MCP protocol failures reject while namespace responses retain their
 
     const turn = await chatSessionTurns(actor.agent).prepare({ messages: [{ role: 'user', content: 'Read the issue.' }] });
 
-    const native = turn.tools.mcp_github_read_issue;
-
-    if (native === undefined) throw new Error('the native MCP tool was not admitted');
-    const invoke = toolExecute<Record<string, never>, JsonValue>(native);
+    // Only `eval` reaches an MCP tool: no native definition carries it.
+    expect(turn.activeTools).not.toContain('mcp_github_read_issue');
+    const run = toolExecute<{ code: string }, JsonValue>(present(turn.tools.eval, 'eval'));
+    // Distinct programs: an identical `eval` within one turn replays its first answer from the durable claim.
+    const call = (attempt: number) => ({ code: `const attempt = ${attempt};\nreturn await tools["mcp_github_read_issue"]({});` });
     const data = { isError: false, content: [{ type: 'text', text: '{"error":"data"}' }], structuredContent: { isError: true, reason: 'data-only' }, reason: 'denied', error: 'historical incident' } satisfies Parameters<typeof seedMcpAnswer>[0];
     seedMcpAnswer(data);
-    expect(await invoke({})).toEqual(data);
+    expect(await run(call(1))).toMatchObject({ result: data });
     const protocolFailure = { isError: true, content: [{ type: 'text', text: 'remote execution failed' }], structuredContent: { reason: 'remote-code', error: 'remote evidence' } } satisfies Parameters<typeof seedMcpAnswer>[0];
     seedMcpAnswer(protocolFailure);
-    const failed = invoke({});
-    await expect(failed).rejects.toThrow('remote execution failed');
-    await expect(failed).rejects.toThrow('remote evidence');
-    await expect(failed).rejects.not.toHaveProperty('execution');
-    seedMcpAnswer(protocolFailure);
-    const namespace = nativeToolFunctions({ mcp_github_read_issue: native });
-    expect(await namespace.mcp_github_read_issue?.execute({})).toEqual({
-      success: false, reason: null, error: expect.stringContaining('remote execution failed'),
-    });
+    await expect(run(call(2))).rejects.toThrow('remote execution failed');
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
-    await expect(invoke({})).rejects.toThrow('not in the allowed_tools list');
+    await expect(run(call(3))).rejects.toThrow('not in the allowed_tools list');
   } finally { user.close(); resetRecordedMcp(); }
 });
 
@@ -159,7 +151,7 @@ test('an MCP binding follows connection identity, binding scope and the owner al
       name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', roleId: 'task', mission: 'Read issues',
     });
 
-    const asChild = await childCaller(actor.db, subordinateAgentName(child.actor.handle.storageKey), 'issue-reader');
+    const asChild = await childCaller(actor.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'issue-reader');
     const childCall = (tool: string) => actor.agent.slateBindingCallAs(asChild, 'issues', 'GITHUB', { member: tool, args: [{}], invocation: null });
     expect(await childCall('read_issue')).toMatchObject({ ok: false, reason: 'denied' });
   } finally {
@@ -285,7 +277,7 @@ test('a hired agent makes a slate where slates live, restores it with the main a
   await own.mkdir(dir, { recursive: true });
   await writeText(own, `${dir}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: 'Widgets', runtime: 'worker' } }));
   await writeText(own, `${dir}/server.ts`, first);
-  const asChild = await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'builder');
+  const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'builder');
   const committed = await parent.agent.slateAs(asChild, { op: 'commit', id: 'widgets' });
 
   if (!committed.ok) throw new Error(committed.reason + ': ' + committed.error);
@@ -331,7 +323,7 @@ test('a hosted actor cannot restore source that its own filesystem authority can
   // Same uid as the binding below, so an EACCES here and a denial there are one fact.
   await expect(writeText(child.actor.runtime.storage.vfs, path, 'blocked'))
     .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-  const asChild = await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'slate-author');
+  const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'slate-author');
   const restored = await reopened.agent.slateAs(asChild, { op: 'restore', id: 'root-app', version: version.id });
   expect(await readText(workspaceFiles(reopened.agent), path)).toBe(current);
   expect(restored).toMatchObject({ ok: false, reason: 'denied' });
@@ -351,7 +343,7 @@ test('a binding held by a hosted actor reaches its own files and role, never the
     roleId: 'task', mission: 'Read what you may',
   });
 
-  const agentName = subordinateAgentName(child.actor.handle.storageKey);
+  const agentName = actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey });
   const childHome = agentHome(agentName);
   const asChild = await childCaller(parent.db, agentName, 'reader-1');
 
@@ -401,7 +393,7 @@ test('native tool bindings use the caller file plane and lose reach immediately 
     name: 'native-reader', displayName: 'Native reader', nameOrigin: 'user', roleId: 'task', mission: 'Read',
   });
 
-  const caller = await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'native-reader');
+  const caller = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'native-reader');
 
   const call = () => parent.agent.slateBindingCallAs(caller, 'native-reader', 'FILE', {
     member: 'call', args: [{ action: 'read', path: '/home/main/slate-note.txt' }], invocation: null,
@@ -499,7 +491,7 @@ test('workspace read models are the root\'s own reads; a hosted actor holds none
 
   const call = (caller: SlateCaller) => parent.agent.slateBindingCallAs(caller, 'status', 'DATA', { member: 'getExecutors', args: [], invocation: null });
   expect(await call(ROOT_SLATE_CALLER)).toMatchObject({ ok: true, value: expect.any(Array) });
-  expect(await call(await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'peeker'))).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await call(await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'peeker'))).toMatchObject({ ok: false, reason: 'denied' });
 });
 
 test('source capture does not retain a previous caller supplementary group', async () => {
@@ -624,7 +616,7 @@ test('a slate agent binding delivers one inbox signal naming the slate', async (
     name: 'pager-1', displayName: 'Pager', nameOrigin: 'user', roleId: 'task', mission: 'Page',
   });
 
-  const asChild = await childCaller(actor.db, subordinateAgentName(child.actor.handle.storageKey), 'pager-1');
+  const asChild = await childCaller(actor.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'pager-1');
 
   expect(await actor.agent.slateBindingCallAs(asChild, 'pager', 'AGENT', { member: 'send', args: [{ text: 'x' }], invocation: null }))
     .toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('no inbox of its own') });

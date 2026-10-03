@@ -1,4 +1,4 @@
-/** Alternate Takes: a steer branch's take set and the pick written to turn_outcomes ('take_pick'). */
+/** Alternate Takes: a steer branch's take set and the pick rated in turn_ratings ('take_pick'). */
 import { describe, test, expect } from 'bun:test';
 import { makeSql, createTestActor, createTestWorkspace } from './helpers';
 import { SessionHistory } from '../src/session/history';
@@ -7,11 +7,8 @@ import {
   initAlternateTakesTable, recordBranchTakeSet, latestAlternateTakeSet, recordTakePick,
   buildTakeContinuationPrompt,
 } from '../src/mcts/takes';
-import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
 import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
-import {
-  listTurnOutcomes, realOutcomeScaffoldRates,
-} from '../src/evolution/outcomes';
+import { listTurnRatings } from '../src/evolution/ratings';
 
 /** Production schema: the eval split reconstructs evidence from the message and run-event ledgers. */
 function setup() {
@@ -45,42 +42,41 @@ async function capturedSet(sql: ReturnType<typeof makeSql>, actor: ReturnType<ty
 }
 
 describe('recordTakePick — the preference signal', () => {
-  test('picking the answered winner records an accepted take_pick row and moves nothing', async () => {
+  test('picking the answered winner rates it high and moves nothing', async () => {
     const { sql, actor, history, transcript } = setup();
     const { set, win } = await capturedSet(sql, actor, history);
     const result = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: win, scaffoldVersion: 3 });
-    expect(result).toMatchObject({ outcome: 'accepted', changedAnswer: false });
+    expect(result).toMatchObject({ changedAnswer: false });
 
-    const rows = listTurnOutcomes(sql, actor);
+    const rows = listTurnRatings(sql, actor);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      turnId: 'msg-9', outcome: 'accepted', source: 'take_pick', confidence: 1,
-      userMessage: 'please solve it', assistantResponse: 'I used the winning approach',
-      followup: null, scaffoldVersion: 3,
+      turnId: 'msg-9', score: 4, corrected: 0, source: 'take_pick',
+      request: 'please solve it', answer: 'I used the winning approach', followup: null, scaffoldVersion: 3,
     });
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: win, winnerNodeId: win });
   });
 
-  test('picking the branch records the correction and re-points the set', async () => {
+  test('picking the branch rates the delivered answer low and re-points the set', async () => {
     const { sql, actor, history, transcript } = setup();
     const { set, alt } = await capturedSet(sql, actor, history);
     const result = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
-    expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true });
+    expect(result).toMatchObject({ changedAnswer: true });
     expect(result.chosen.text).toBe('alternative approach');
 
-    const row = listTurnOutcomes(sql, actor)[0];
-    expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', confidence: 1 });
+    const row = present(listTurnRatings(sql, actor)[0], 'the pick rating');
+    expect(row).toMatchObject({ score: 2, corrected: 1, source: 'take_pick' });
     // The chosen take is the correction follow-up GEPA optimizes toward.
     expect(row.followup).toBe('alternative approach');
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: alt, winnerNodeId: alt });
   });
 
-  test('a re-pick replaces the previous ledger row (one outcome per turn)', async () => {
+  test('a re-pick leaves one effective rating per turn', async () => {
     const { sql, actor, history, transcript } = setup();
     const { set, alt } = await capturedSet(sql, actor, history);
     await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
     await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
-    expect(listTurnOutcomes(sql, actor)).toHaveLength(1);
+    expect(listTurnRatings(sql, actor)).toHaveLength(1);
   });
 
   test('switching the pick re-points the set to the newly chosen take', async () => {
@@ -88,9 +84,9 @@ describe('recordTakePick — the preference signal', () => {
     const { set, win, alt } = await capturedSet(sql, actor, history);
     await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
     const switched = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: win });
-    expect(switched).toMatchObject({ outcome: 'corrected', changedAnswer: true });
+    expect(switched).toMatchObject({ changedAnswer: true });
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: win, winnerNodeId: win });
-    expect(listTurnOutcomes(sql, actor)).toHaveLength(1);
+    expect(listTurnRatings(sql, actor)).toHaveLength(1);
   });
 
   test('rejects unknown take sets and non-candidate nodes', async () => {
@@ -111,17 +107,3 @@ describe('recordTakePick — the preference signal', () => {
   });
 });
 
-describe('the take_pick signal feeds R3’s routes for free', () => {
-  test('GEPA eval split and scaffold priors consume the pick row', async () => {
-    const { sql, actor, history, transcript } = setup();
-    const { set, alt } = await capturedSet(sql, actor, history);
-    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt, scaffoldVersion: 5 });
-
-    const split = await buildOutcomeEvalSplit(sql, actor, transcript, 4);
-    expect(split.train).toHaveLength(1);
-    expect(split.train[0].expected).toMatchObject({ outcome: 'corrected', followup: 'alternative approach' });
-
-    const rates = realOutcomeScaffoldRates(sql, actor);
-    expect(rates.get(5)).toEqual({ accepted: 0, negative: 1 });
-  });
-});

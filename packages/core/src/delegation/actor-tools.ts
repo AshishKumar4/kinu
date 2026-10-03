@@ -7,6 +7,7 @@ import type { ToolSet } from 'ai';
 import { buildToolSurface, type BuiltinToolDeps, type CodemodeBuilder } from '../tools/builtins';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool';
 import { withEffectClaims, type EffectClaimDeps } from '../tools/effect-claim';
+import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
 
 // Not `ActorToolDeps`: cf-backend's actor-agent.ts already owns that name.
 export interface ActorToolsetDeps extends BuiltinToolDeps {
@@ -16,24 +17,32 @@ export interface ActorToolsetDeps extends BuiltinToolDeps {
   effectClaims: EffectClaimDeps;
   /** Builds `eval` over the finished surface (builtins plus `agents`); runs before the effect-claim wrap. */
   codemode?: CodemodeBuilder;
+  jobs: ActorJobs;
+}
+
+export interface ActorToolsets {
+  readonly turn: ToolSet;
+  readonly raw: ToolSet;
 }
 
 /** Every builtin, plus `agents` when any delegation group is wired, each behind its replay policy (tools/effect-claim.ts). */
-export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
+export function buildActorTools(deps: ActorToolsetDeps): ActorToolsets {
   let extra: ToolSet | undefined;
 
   if (deps.agents && (deps.agents.swarm || deps.agents.team || deps.agents.peers)) {
     extra = { agents: createAgentsTool(deps.agents) };
   }
 
-  return withEffectClaims(buildToolSurface({ ...deps, extra }), deps.effectClaims);
+  const raw = withEffectClaims(buildToolSurface({ ...deps, extra }), deps.effectClaims);
+
+  return { raw, turn: wrapToolsForBackground(raw, deps.jobs) };
 }
 
 export {
   PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsSwarmDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
-  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
+  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff, type SubordinateDismissal,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './agents-tool';

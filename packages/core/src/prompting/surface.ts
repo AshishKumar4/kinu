@@ -5,7 +5,6 @@ import {
   type AgentsToolAction,
   type BuiltinToolName,
 } from '../tools/registry';
-import { isMcpToolKey } from '../tools/mcp-naming';
 import type { ExecutorInfo } from '../execution/types';
 import {
   resolvePromptModelProfile,
@@ -27,13 +26,6 @@ const KinuEventSchema = v.object({ kinuEvent: v.pipe(v.string(), v.nonEmpty()) }
 
 /** A background job's wake (jobs/runner.ts). */
 const JobWakeSchema = v.object({ jobId: v.string(), kind: v.string(), status: v.string() });
-
-const ExternalToolSchema = v.object({
-  name: v.string(),
-  source: v.optional(v.picklist(['mcp', 'crafted', 'external'])),
-  description: v.optional(v.string()),
-});
-
 
 /** From `kinuEvent` metadata alone: the `kinuMode` stamped beside it (never null for jobs) must not win. */
 export function turnReasonForMetadata(metadata: JsonObject | null | undefined): TurnReason {
@@ -62,12 +54,6 @@ export type PromptExecutorInfo =
   & Omit<ExecutorInfo, 'kind' | 'capabilities' | 'available' | 'configured' | 'active' | 'status'>
   & { status?: string };
 
-export interface PromptExternalToolInfo {
-  name: string;
-  source?: 'mcp' | 'crafted' | 'external';
-  description?: string;
-}
-
 /**
  * Titles, never slugs: a slug is an address (URL, DO name, directory).
  * Either may be absent: a workspace is untitled until its first prompt, and a
@@ -90,7 +76,6 @@ export interface PromptSurfaceOptions {
   agentsActions?: readonly AgentsToolAction[];
   /** Whether `ask` can target a role (temporary rung); gates decomposition guidance so it is never advertised where refused. */
   temporaryAsk?: boolean;
-  externalTools?: readonly (PromptExternalToolInfo | string)[];
   backend?: PromptBackend;
   /** Absent renders nothing. */
   roleSection?: { id: string; label: string; instructions: string };
@@ -102,9 +87,8 @@ export interface PromptSurface {
   builtinTools: BuiltinToolName[];
   agentsActions: AgentsToolAction[];
   temporaryAsk: boolean;
-  externalTools: PromptExternalToolInfo[];
   executors: PromptExecutorInfo[];
-  selectableExecutors: PromptExecutorInfo[];
+  configuredExecutors: PromptExecutorInfo[];
   model: PromptModelProfile;
   backend?: PromptBackend;
   roleSection: { id: string; label: string; instructions: string } | null;
@@ -157,12 +141,11 @@ export function uniquePromptExecutors(opts: Pick<PromptSurfaceOptions, 'executor
   return sortExecutors([...out.values()]);
 }
 
-export function executorIsSelectable(exec: PromptExecutorInfo): boolean {
-  if (exec.name === 'workspace') return exec.available !== false;
+/** A runtime this workspace has, reachable or not right now: the system prompt describes it, the live state says which. */
+export function executorIsConfigured(exec: PromptExecutorInfo): boolean {
+  if (exec.name === 'workspace') return true;
 
-  if (exec.available === false) return false;
-
-  if (exec.status === 'not_configured' || exec.status === 'disconnected' || exec.status === 'error') return false;
+  if (exec.status === 'not_configured') return false;
 
   return exec.available === true || exec.configured === true || exec.active === true;
 }
@@ -179,47 +162,6 @@ function uniqueBuiltinTools(tools: readonly BuiltinToolName[] | undefined): Buil
   }
 
   return out;
-}
-
-function normalizeExternalTool(tool: PromptExternalToolInfo | string): PromptExternalToolInfo | null {
-  const toolName = v.safeParse(v.string(), tool);
-
-  if (toolName.success) {
-    const name = toolName.output.trim();
-
-    if (!name || BUILTIN_TOOL_NAMES.has(name)) return null;
-
-    return { name, source: isMcpToolKey(name) ? 'mcp' : 'external' };
-  }
-
-  const parsed = v.safeParse(ExternalToolSchema, tool);
-
-  if (!parsed.success) return null;
-  const raw = parsed.output;
-  const name = raw.name.trim();
-
-  if (!name || BUILTIN_TOOL_NAMES.has(name)) return null;
-
-  const normalized: PromptExternalToolInfo = {
-    name,
-    source: raw.source ?? (isMcpToolKey(name) ? 'mcp' : 'external'),
-  };
-
-  if (raw.description) normalized.description = raw.description.trim();
-
-  return normalized;
-}
-
-function uniqueExternalTools(tools: readonly (PromptExternalToolInfo | string)[] | undefined): PromptExternalToolInfo[] {
-  const out = new Map<string, PromptExternalToolInfo>();
-
-  for (const raw of tools ?? []) {
-    const tool = normalizeExternalTool(raw);
-
-    if (tool) out.set(tool.name, tool);
-  }
-
-  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function uniqueAgentsActions(
@@ -242,9 +184,8 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     builtinTools,
     temporaryAsk: opts.temporaryAsk ?? false,
     agentsActions: uniqueAgentsActions(opts.agentsActions, builtinTools),
-    externalTools: uniqueExternalTools(opts.externalTools),
     executors,
-    selectableExecutors: executors.filter(executorIsSelectable),
+    configuredExecutors: executors.filter(executorIsConfigured),
     model: resolvePromptModelProfile(opts.model),
     roleSection: opts.roleSection ?? null,
     backend: opts.backend,

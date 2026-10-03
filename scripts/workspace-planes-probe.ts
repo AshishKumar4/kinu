@@ -1,6 +1,6 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { Database } from 'bun:sqlite';
-import { explorationActorKey, facetHomeProvisioner, headAgentName, subordinateAgentName, type AgentRuntime } from '@kinu.run/core';
+import { actorHomeName, explorationActorKey, facetHomeProvisioner, type AgentRuntime } from '@kinu.run/core';
 import { createCLIRuntime } from '../packages/cli-backend/src/runtime';
 import { bindLocalActor, registerLocalActor, registerLocalNode } from '@kinu.run/core';
 
@@ -39,9 +39,9 @@ try {
     const subordinate = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: 'sub-probe', creationId: 'sub-probe', origin: 'user', lifetime: 'durable' }));
 
     const identities = [
-      { name: 'node', actor: node, workspace: await provision(headAgentName(node.storageKey)) },
-      { name: 'head', actor: head, workspace: await provision(headAgentName(head.storageKey)) },
-      { name: 'subordinate', actor: subordinate, workspace: await provision(subordinateAgentName(subordinate.storageKey)) },
+      { name: 'node', actor: node, workspace: await provision(actorHomeName({ origin: 'swarm', storageKey: node.storageKey })) },
+      { name: 'head', actor: head, workspace: await provision(actorHomeName({ origin: 'swarm', storageKey: head.storageKey })) },
+      { name: 'subordinate', actor: subordinate, workspace: await provision(actorHomeName({ origin: 'agent', storageKey: subordinate.storageKey })) },
     ];
 
     if (generation === 1) await writeText(runtime.storage.vfs, '/home/main/shared.txt', 'one workspace');

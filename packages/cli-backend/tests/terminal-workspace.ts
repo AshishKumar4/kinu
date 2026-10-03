@@ -4,12 +4,11 @@ import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   initAgentConfigTable,
   initAlternateTakesTable, initScaffoldTables, initSearchTables,
-  INITIAL_SCAFFOLD_SOURCE,
   type LLMProviderConfig,
 } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { TestLanguageModelV2 } from './test-language-model';
-import { createCLIRuntime, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
+import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -31,15 +30,6 @@ export function openTerminalWorkspace(dbPath: string) {
   if (rt.actor.config.getNameOrigin() === null) rt.actor.config.setDisplayNameOrigin('', 'auto');
 
   return { db, rt };
-}
-
-export async function armShadowTrials(rt: CLIRuntime): Promise<void> {
-  await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
-  void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
-    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'initial bootstrap'})`;
-  void rt.storage.sql`INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status)
-    VALUES (${rt.actor.actorId}, 1, ${Date.now()}, ${'candidate'}, ${'pending'})`;
-  rt.actor.config.setShadowSampleRate(1);
 }
 
 /**

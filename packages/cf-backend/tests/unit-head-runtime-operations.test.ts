@@ -83,6 +83,8 @@ const neverHost: HostedActorSeams = {
   announce() { throw new Error('mergeLLM announced a roster change'); },
   scheduleDrain() { throw new Error('mergeLLM scheduled a drain'); },
   armWake() { throw new Error('mergeLLM armed a wake'); },
+  jobSeat() { throw new Error("mergeLLM reached a job runner's seat"); },
+  retireJobs() { throw new Error("mergeLLM retired an actor's jobs"); },
   temporary() { throw new Error('mergeLLM reached the task-hire port'); },
   rederiveWake() { throw new Error('mergeLLM re-derived the wake'); },
   oweAdvice() { throw new Error('mergeLLM owed advisor advice'); },
@@ -124,8 +126,9 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
     expect(operations.every((e) => e.source === 'judge' && e.op === 'generate_json')).toBe(true);
     expect(operations[1].outcome).toBe('ok');
     expect(operations[1].usage).toEqual({ input: 41, output: 7 });
+    // The serving spec is priced: the merge walks the deep tier's chain like any fixed-tier call.
     expect(reports).toEqual([{
-      source: 'judge', usage: { input: 41, output: 7 }, modelId: 'mock-model-id',
+      source: 'judge', usage: { input: 41, output: 7 }, modelId: 'mock-model-id', spec: 'fake/deep-grader', account: undefined,
     }]);
   });
 

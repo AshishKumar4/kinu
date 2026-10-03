@@ -1,20 +1,13 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
-// Lessons live only in the ledger, so wiping MEMORY.md hides nothing; observations
-// are append-only and readers resolve one effective verdict per turn by source
-// precedence, keeping the classifier row the calibration set labels by id.
+// Lessons live only in the ledger, so wiping MEMORY.md hides nothing; ratings
+// are append-only and readers resolve one effective rating per turn by source
+// precedence, keeping the model's row beneath the user's.
 import { describe, test, expect } from 'bun:test';
-import { present } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
-import {
-  recordTurnOutcome, recordOutcomeLabels, goldLabels, listLessons,
-  renderRecentLessons, listTurnOutcomes,
-  realOutcomeScaffoldRates, hasNegativeOutcome, initTurnOutcomeTables,
-} from '../src/evolution/outcomes';
-import { calibrationUniverse } from '../src/evolution/calibration';
-
-const CLASSIFY = 'Classify what the follow-up reveals';
+import { listLessons, renderRecentLessons } from '../src/evolution/lessons';
+import { hasLowRating, listTurnRatings, recordTurnRating } from '../src/evolution/ratings';
 
 function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   return {
@@ -34,16 +27,15 @@ function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
 
 describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () => {
   test('prompt tail, search and session reflection all derive from the ledger', async () => {
-    const { rt, stores } = createTestRuntime({
-      llmResponses: {
-        [CLASSIFY]: '{"outcome":"corrected","confidence":0.9,"evidence":"test"}',
-        'In one sentence': 'check the cluster name before rotating keys',
-      },
-    });
+    const { rt, stores } = createTestRuntime({ llmResponses: { 'In one sentence': 'check the cluster name before rotating keys' } });
+    rt.decide = async () => ({ answers: {
+      satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 },
+      wrong: { type: 'choice', choice: 'misunderstood' },
+    }, usage: { input: 0, output: 0 } });
 
     const engine = new EvolutionEngine(rt, stores.history);
 
-    // A lesson graded by the user's reply is born corroborated, as a ledger row.
+    // A lesson rated by the user's reply is born corroborated, as a ledger row.
     await engine.reviewTurn(makeTurn(), 'no — you rotated production, not staging');
     const lessons = listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' });
     expect(lessons).toHaveLength(1);
@@ -58,9 +50,8 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
     expect(listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' })
       .filter((lesson) => lesson.text.includes('cluster'))).toHaveLength(1);
     // 3. The session-reflection pass reads the same rows.
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      turnId: 'msg-1', outcome: 'corrected', confidence: 0.9, source: 'explicit',
-      userMessage: 'u', assistantResponse: 'a',
+    recordTurnRating(rt.storage.sql, rt.actor, {
+      turnId: 'msg-1', score: 1, corrected: 1, wrong: null, source: 'thumbs', request: 'u', answer: 'a',
     });
     const prompts: string[] = [];
     const complete = rt.llm.complete.bind(rt.llm);
@@ -82,61 +73,20 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
   });
 });
 
-describe('S8 — an explicit verdict overrules the classifier without erasing it', () => {
-  function setup() {
-    const rt = createTestRuntime().rt;
-    initTurnOutcomeTables(rt.storage.execRaw);
-
-    return rt;
-  }
-
-  test('the effective reader resolves one verdict per turn, explicit wins', () => {
-    const rt = setup();
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      turnId: 't1', outcome: 'accepted', confidence: 0.9, source: 'classifier',
-      userMessage: 'u', assistantResponse: 'a', scaffoldVersion: 3,
+describe("S8 — the user's rating overrules the model's without erasing it", () => {
+  test('the effective reader resolves one rating per turn, the thumb wins', () => {
+    const { rt } = createTestRuntime();
+    recordTurnRating(rt.storage.sql, rt.actor, {
+      turnId: 't1', score: 4.5, corrected: 0, wrong: 'nothing', source: 'model', request: 'u', answer: 'a', scaffoldVersion: 3,
     });
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      turnId: 't1', outcome: 'corrected', confidence: 1, source: 'explicit',
-      userMessage: 'u', assistantResponse: 'a', scaffoldVersion: 3,
+    recordTurnRating(rt.storage.sql, rt.actor, {
+      turnId: 't1', score: 1, corrected: 1, wrong: null, source: 'thumbs', request: 'u', answer: 'a', scaffoldVersion: 3,
     });
 
-    // One effective verdict per identified turn.
-    const rows = listTurnOutcomes(rt.storage.sql, rt.actor);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ turnId: 't1', outcome: 'corrected', source: 'explicit' });
-    // Downstream gates read the effective verdict too.
-    expect(hasNegativeOutcome(rt.storage.sql, rt.actor, ['t1'])).toBe(true);
-    const rates = realOutcomeScaffoldRates(rt.storage.sql, rt.actor);
-    expect(rates.get(3)).toEqual({ accepted: 0, negative: 1 }); // counted once
-  });
-
-  test('calibration still addresses the classifier row its label was spent on', () => {
-    const rt = setup();
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      turnId: 't1', outcome: 'accepted', confidence: 0.9, source: 'classifier',
-      userMessage: 'u', assistantResponse: 'a',
-    });
-    const [classifierRow] = listTurnOutcomes(rt.storage.sql, rt.actor, { outcomes: ['accepted'] });
-    expect(classifierRow.source).toBe('classifier');
-
-    // The gold label lands on that row, by id.
-    const written = recordOutcomeLabels(rt.storage.sql, rt.actor, {
-      labeler: 'owner', labels: [{ outcomeId: classifierRow.id, label: 'corrected' }],
-    });
-
-    expect(written).toBe(1);
-    const gold = goldLabels(rt.storage.sql, rt.actor);
-    expect(present(gold.get(classifierRow.id), 'the gold label for the classifier row').label).toBe('corrected');
-
-    // The universe is classifier rows only, so a later explicit verdict neither dilutes nor deletes it.
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      turnId: 't1', outcome: 'corrected', confidence: 1, source: 'explicit',
-      userMessage: 'u', assistantResponse: 'a',
-    });
-    const universe = calibrationUniverse(rt.storage.sql, rt.actor);
-    expect(universe.map(r => r.id)).toEqual([classifierRow.id]);
-    expect(universe[0].predicted).toBe('accepted'); // what the model GUESSED
-    expect(listLessons(rt.storage.sql, rt.actor)).toHaveLength(0); // untouched lane
+    // One effective rating per turn; the model's row stays beneath it.
+    expect(listTurnRatings(rt.storage.sql, rt.actor)).toMatchObject([{ turnId: 't1', score: 1, source: 'thumbs' }]);
+    expect(rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM turn_ratings`[0]?.n).toBe(2);
+    // Downstream gates read the effective rating too.
+    expect(hasLowRating(rt.storage.sql, rt.actor, ['t1'])).toBe(true);
   });
 });

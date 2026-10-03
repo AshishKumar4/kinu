@@ -11,24 +11,18 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { FactsStore } from '../memory/facts';
 import { listScaffoldArchive, type ScaffoldStatus } from '../scaffold/archive';
-import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/shadow';
+import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/versions';
 import { rollbackScaffold } from '../scaffold/rollback';
 import { listGepaRuns } from './gepa/persistence';
-import {
-  applyPromptSectionDecision, getPendingPromptSection,
-  listPromptSectionVersions,
-} from '../prompting/section-store';
-import { listReplayEvals } from './replay';
-import {
-  listTurnOutcomes, TURN_OUTCOMES, TURN_OUTCOME_SOURCES,
-  type TurnOutcomeSource, type TurnOutcomeRow,
-} from './outcomes';
+import { artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
+import { parseTrialVerdict } from './trial-rules';
+import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
   createRefinementStore,
   type RefinementDisposition, type RefinementStage,
 } from './refinement';
 import { describePathology } from './pathology';
-import { formatScoreInterval, lossInterval, type ScoreInterval } from '../utils/stats';
+import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
 import { renderThrownChain, tolerate } from '../obs/index';
 
@@ -37,16 +31,18 @@ const ScaffoldRunEventSchema = v.object({
   toVersion: v.optional(v.number()),
 });
 
-export type ChangelogEntryKind =
-  'scaffold' | 'tool' | 'fact' | 'gepa' | 'replay' | 'outcomes' | 'prompt_section'
-  | 'refinement';
+export const CHANGELOG_ENTRY_KINDS = [
+  'scaffold', 'tool', 'fact', 'gepa', 'ratings', 'artifact', 'refinement',
+] as const;
+
+export type ChangelogEntryKind = (typeof CHANGELOG_ENTRY_KINDS)[number];
 
 export type ChangelogRevertAction =
   | { type: 'scaffold_rollback'; target: string }
   | { type: 'fact_forget'; target: string }
   | { type: 'fact_forget_many'; targets: string[] }
-  /** `<sectionId>:<version>`; versions are numbered per section. */
-  | { type: 'prompt_section_rollback'; target: string };
+  /** `<artifactId>@<version>`; versions are numbered per artifact. */
+  | { type: 'artifact_revert'; target: string };
 
 export interface ChangelogEntry {
   /** Derived from the source ledger row; safe for revert-by-id. */
@@ -55,7 +51,7 @@ export interface ChangelogEntry {
   /** Epoch ms; drives ordering and the unseen count. */
   at: number;
   summary: string;
-  /** Evidence numbers: shadow win-rate, EMA score, counts. */
+  /** Evidence numbers: the trial's interval, the judge's counts. */
   evidence: string;
   /** Only when a real revert path exists and the change is still in effect. */
   revert?: ChangelogRevertAction;
@@ -75,7 +71,7 @@ export interface BuildChangelogOptions {
   since?: number;
   /** Default 50. */
   limit?: number;
-  /** Drop measurements ('outcomes', 'replay') and `noChange` runs before the
+  /** Drop measurements ('ratings') and `noChange` runs before the
    *  limit, so bookkeeping cannot push a real change off the page. */
   changesOnly?: boolean;
   now?: number;
@@ -135,11 +131,7 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
   const changedAt = scaffoldStatusChangeAt(sql, actor);
 
   return archive.map((e) => {
-    const record = e.trials > 0
-      ? `shadow ${e.wins}W-${e.losses}L-${e.ties}T${e.winRate != null ? ` · win-rate ${pct(e.winRate)}` : ''}`
-      : 'shadow untried';
-
-    const trial = e.status === 'pending' ? ' (shadow trial in progress)' : '';
+    const trial = e.status === 'pending' ? ' (waiting for your decision)' : '';
 
     // Re-derived from the stamped cell id; no label store.
     const targeting = e.pathology !== null
@@ -148,14 +140,12 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
 
     const revertable = e.status === 'current' || e.status === 'pending';
 
-    const won = e.status === 'current' && e.trials > 0 ? ` (won ${e.wins} of ${e.trials} trial runs)` : '';
-
     const entry: ChangelogEntry = {
       id: `scaffold:v${e.version}:${e.status}`,
       kind: 'scaffold',
       at: Math.max(e.writtenAt, changedAt.get(e.version) ?? 0),
-      summary: `${SCAFFOLD_SUMMARY[e.status]}${won}`,
-      evidence: `${SCAFFOLD_VERB[e.status]} v${e.version}${trial}: ${e.rationale} · ${record}${targeting}`,
+      summary: SCAFFOLD_SUMMARY[e.status],
+      evidence: `${SCAFFOLD_VERB[e.status]} v${e.version}${trial}: ${e.rationale}${targeting}`,
       scaffoldVersion: e.version,
     };
 
@@ -289,44 +279,40 @@ function gepaEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): Chang
     }));
 }
 
-const SECTION_VERB: Record<ScaffoldStatus, string> = {
-  current: 'Promoted',
-  pending: 'Proposed',
-  rolled_back: 'Rolled back',
-  historical: 'Superseded',
-};
-
-const SECTION_SUMMARY: Record<ScaffoldStatus, string> = {
+const ARTIFACT_SUMMARY: Record<ArtifactStatus, string> = {
   current: 'I reworded my own',
-  pending: 'I am testing new wording for my',
+  candidate: 'I have new wording waiting for a trial of my',
+  trial: 'I am trialling new wording for my',
   rolled_back: 'I reverted new wording for my',
   historical: 'I replaced earlier wording for my',
 };
 
-/** Evidence leads with the byte trade, since sections are read every turn. */
-function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  return listPromptSectionVersions(sql, actor, limit).map((row) => {
-    const bytes = Buffer.byteLength(row.source, 'utf8');
-    const delta = bytes - row.incumbentBytes;
-    const size = `${delta >= 0 ? '+' : ''}${String(delta)} bytes (${String(row.incumbentBytes)} -> ${String(bytes)})`;
+/** One entry per version: its turns and judge numbers, and once decided, the trial's arms and interval. */
+function artifactEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  const verdicts = new Map(sql<{ artifact_id: string; version: number; verdict: string | null }>`
+    SELECT artifact_id, version, verdict FROM artifact_trials WHERE actor_id = ${actor.actorId} AND verdict IS NOT NULL`
+    .map((row) => [`${row.artifact_id}@${String(row.version)}`, row.verdict === null ? null : parseTrialVerdict(row.verdict)]));
 
-    const trial = row.wins + row.losses + row.ties > 0
-      ? `shadow ${String(row.wins)}W-${String(row.losses)}L-${String(row.ties)}T`
-      : 'shadow untried';
+  return listArtifactVersions(sql, actor).slice(0, limit).map((row) => {
+    const key = `${row.artifactId}@${String(row.version)}`;
+    const verdict = verdicts.get(key);
+    const judged = row.evidence === null ? '' : ` · ${String(row.evidence.turns.length)} turns (${row.evidence.reason})`;
+
+    const trial = verdict === undefined || verdict === null ? '' : ` · trial ${verdict.decision}: ${verdict.why}, satisfaction `
+      + `${verdict.satisfaction.diff.toFixed(2)} [${verdict.satisfaction.lo.toFixed(2)}, ${verdict.satisfaction.hi.toFixed(2)}] over `
+      + `${String(verdict.segments.candidate)}/${String(verdict.segments.incumbent)} segments, corrected `
+      + `${verdict.corrected.candidate.toFixed(2)} vs ${verdict.corrected.incumbent.toFixed(2)}`;
 
     const entry: ChangelogEntry = {
-      id: `prompt_section:${row.sectionId}:v${String(row.version)}:${row.status}`,
-      kind: 'prompt_section',
+      id: `artifact:${key}:${row.status}`,
+      kind: 'artifact',
       at: row.decidedAt ?? row.writtenAt,
-      summary: `${SECTION_SUMMARY[row.status]} ${row.sectionId} guidance`,
-      evidence:
-        `${SECTION_VERB[row.status]} ${row.sectionId} v${String(row.version)}: ${row.rationale} · ${size} · ${trial}`,
+      summary: `${ARTIFACT_SUMMARY[row.status]} ${row.artifactId}`,
+      evidence: `v${String(row.version)}: ${row.rationale}${judged}${trial}`,
     };
 
-    // Rolled-back and historical rows are not in the prompt; nothing to revert.
-    if (row.status === 'current' || row.status === 'pending') {
-      entry.revert = { type: 'prompt_section_rollback', target: `${row.sectionId}:${String(row.version)}` };
-    }
+    // Only a version a turn can still read has something to undo.
+    if (row.status === 'current' || row.status === 'candidate' || row.status === 'trial') entry.revert = { type: 'artifact_revert', target: key };
 
     return entry;
   });
@@ -355,15 +341,15 @@ const REFINEMENT_DISPOSITION_PROSE = {
 
 /**
  * An aggregate card per refinement; children carry the reverts through each
- * artifact's own path (`fact_forget`, `prompt_section_rollback`).
+ * artifact's own path (`fact_forget`, `artifact_revert`).
  */
 function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
   return createRefinementStore(sql, actor).list(limit).map((request) => {
     const trigger = request.trigger === 'explicit'
       ? 'you asked for it'
-      : 'unresolved corrections accumulated';
+      : 'unresolved low-rated turns accumulated';
 
-    const turns = `${String(request.turnIds.length)} graded turn${request.turnIds.length === 1 ? '' : 's'}`;
+    const turns = `${String(request.turnIds.length)} rated turn${request.turnIds.length === 1 ? '' : 's'}`;
 
     const items: ChangelogEntry[] = request.routes.map((route, index) => {
       // An excerpt; the full file comes only from `showRefinement`.
@@ -398,7 +384,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
       }
 
       if (route.disposition === 'pending_trials' && route.kind === 'prompt_section') {
-        item.revert = { type: 'prompt_section_rollback', target: route.target };
+        item.revert = { type: 'artifact_revert', target: route.target };
       }
 
       return item;
@@ -421,109 +407,57 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
   });
 }
 
-type ReplayDirection = 'improved' | 'declined' | 'held' | 'reached';
+/** Per-source phrasing for a batch of ratings. */
+const RATING_BATCH_PHRASE = {
+  thumbs: "by the user's thumbs",
+  take_pick: "by the user's picks between takes",
+  model: 'by the decision model from the user\'s reply',
+} satisfies Record<RatingSource, string>;
 
-/** Improved/declined only when the intervals don't overlap. */
-function replayDirection(current: ScoreInterval, previous: ScoreInterval | undefined): ReplayDirection {
-  if (previous === undefined) return 'reached';
-
-  if (current.lo > previous.hi) return 'improved';
-
-  if (current.hi < previous.lo) return 'declined';
-
-  return 'held';
-}
-
-const REPLAY_MOVE: Record<ReplayDirection, string> = {
-  improved: 'improved to',
-  declined: 'declined to',
-  held: 'held within noise at',
-  reached: 'reached',
-};
-
-function replayEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  const rows = listReplayEvals(sql, actor, limit + 1);
-
-  return rows.slice(0, limit).map((r, index) => {
-    const direction = replayDirection(r.interval, rows.at(index + 1)?.interval);
-
-    return {
-      id: `replay:${r.id}`,
-      kind: 'replay' as const,
-      at: r.ranAt,
-      summary: `Self-test score ${REPLAY_MOVE[direction]} ${formatScoreInterval(r.interval)}`,
-      evidence: `Replay eval: score ${formatScoreInterval(r.interval)} · ` +
-        `loss ${formatScoreInterval(lossInterval(r.interval))}` +
-        (r.scaffoldVersion != null ? ` on scaffold v${r.scaffoldVersion}` : '') +
-        ` · ${r.sampleSize} labeled turns · ${r.acceptedCount} accepted / ${r.negativeCount} corrected`,
-    };
-  });
-}
-
-/** Per-source phrasing, so `execution` and `session_end` rows never claim a user reply. */
-const OUTCOME_BATCH_PHRASE = {
-  explicit: "from the user's thumbs",
-  classifier: 'from how the user replied',
-  session_end: 'from sessions ending unanswered',
-  take_pick: "from the user's picks between takes",
-  execution: 'by whether their tool calls ran',
-} satisfies Record<TurnOutcomeSource, string>;
-
-/** Why one verdict was reached; rows without `evidence` phrase from their source. */
-function outcomeItemEvidence(row: TurnOutcomeRow): string {
-  switch (row.source) {
-    case 'classifier':
-      return `the user's reply read as ${row.outcome}`
-        + (row.evidence ? `: ${row.evidence}` : '')
-        + ` · confidence ${pct(row.confidence)}`;
-    case 'execution':
-      return row.evidence
-        ?? `the turn's tool calls ${row.outcome === 'accepted' ? 'ran clean' : 'hit an error'}`;
-    case 'explicit':
-      return row.outcome === 'accepted' ? 'thumbs up from the user' : 'thumbs down from the user';
+function ratingItemEvidence(rating: TurnRating): string {
+  switch (rating.source) {
+    case 'thumbs':
+      return rating.score >= 3 ? 'thumbs up from the user' : 'thumbs down from the user';
     case 'take_pick':
-      return row.evidence ?? "the user's pick between alternate takes";
-    case 'session_end':
-      return 'the session ended with no reply to grade';
+      return rating.score >= 3 ? 'the user re-picked the delivered answer' : 'the user picked an alternate take';
+    case 'model':
+      return `the user's reply read as ${rating.score.toFixed(1)}/5`
+        + (rating.wrong !== null && rating.wrong !== 'nothing' ? `, ${rating.wrong.replaceAll('_', ' ')}` : '')
+        + ` · corrected ${pct(rating.corrected)}`;
   }
 }
 
-function outcomeEntry(
+function ratingEntry(
   sql: SqlExecutor, actor: ActorHandle, since: number | undefined, limit: number,
 ): ChangelogEntry | null {
-  const rows = listTurnOutcomes(sql, actor, { limit: 200 })
-    .filter((r) => since === undefined || r.createdAt > since);
+  const rows = listTurnRatings(sql, actor, { limit: 200, ...(since !== undefined && { since: since + 1 }) });
 
   if (rows.length === 0) return null;
-  const count = (k: string) => rows.filter((r) => r.outcome === k).length;
   const newest = rows.reduce((acc, r) => Math.max(acc, r.createdAt), 0);
+  const satisfaction = satisfactionInterval(rows.map((r) => r.score));
+  const corrected = rows.reduce((sum, r) => sum + r.corrected, 0) / rows.length;
 
-  const parts = TURN_OUTCOMES
-    .map((k) => [k, count(k)] as const)
+  const provenance = RATING_SOURCES
+    .map((source) => [source, rows.filter((r) => r.source === source).length] as const)
     .filter(([, n]) => n > 0)
-    .map(([k, n]) => `${n} ${k}`);
-
-  const provenance = TURN_OUTCOME_SOURCES
-    .map((s) => [s, rows.filter((r) => r.source === s).length] as const)
-    .filter(([, n]) => n > 0)
-    .map(([s, n]) => `${n} ${OUTCOME_BATCH_PHRASE[s]}`);
+    .map(([source, n]) => `${n} ${RATING_BATCH_PHRASE[source]}`);
 
   return {
-    id: `outcomes:${newest}:${rows.length}`,
-    kind: 'outcomes',
+    id: `ratings:${newest}:${rows.length}`,
+    kind: 'ratings',
     at: newest,
-    summary: `Graded ${rows.length} turn${rows.length === 1 ? '' : 's'} · ${provenance.join(' · ')}`,
-    evidence: parts.join(' · '),
+    summary: `Rated ${rows.length} turn${rows.length === 1 ? '' : 's'} · ${provenance.join(' · ')}`,
+    evidence: `satisfaction ${formatScoreInterval(satisfaction, 1)} of 5 · corrected ${pct(corrected)}`,
     // Bounded by the digest limit; the 200-row read is for counting only.
     items: rows.slice(0, limit).map((row) => {
-      const request = row.userMessage.trim().replace(/\s+/gu, ' ');
+      const request = row.request.trim().replace(/\s+/gu, ' ');
 
       return {
-        id: `outcome:${row.id}`,
-        kind: 'outcomes' as const,
+        id: `rating:${row.id}`,
+        kind: 'ratings' as const,
         at: row.createdAt,
-        summary: `${row.outcome}: "${request.length > 90 ? `${request.slice(0, 90)}...` : request || '(no recorded request)'}"`,
-        evidence: outcomeItemEvidence(row),
+        summary: `${row.score.toFixed(1)}/5: "${request.length > 90 ? `${request.slice(0, 90)}...` : request || '(no recorded request)'}"`,
+        evidence: ratingItemEvidence(row),
       };
     }),
   };
@@ -539,21 +473,20 @@ export function buildChangelog(
     ...scaffoldEntries(sql, actor),
     ...toolEntries(sql, limit),
     ...gepaEntries(sql, actor, limit),
-    ...replayEntries(sql, actor, limit),
-    ...promptSectionEntries(sql, actor, limit),
+    ...artifactEntries(sql, actor, limit),
     ...refinementEntries(sql, actor, limit),
   ].filter((e) => opts.since === undefined || e.at > opts.since);
 
   const facts = factAggregate(sql, actor, limit, opts.since);
 
   if (facts) entries.push(facts);
-  const outcomes = outcomeEntry(sql, actor, opts.since, limit);
+  const ratings = ratingEntry(sql, actor, opts.since, limit);
 
-  if (outcomes) entries.push(outcomes);
+  if (ratings) entries.push(ratings);
   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
 
   const kept = opts.changesOnly === true
-    ? entries.filter((e) => e.kind !== 'outcomes' && e.kind !== 'replay' && e.noChange !== true)
+    ? entries.filter((e) => e.kind !== 'ratings' && e.noChange !== true)
     : entries;
 
   return kept.slice(0, limit);
@@ -628,54 +561,25 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
   return { ok: true, detail: `rolled back to v${prev.version}` };
 }
 
-/**
- * Pending: discarded via the decision machinery. Promoted: falls back to the
- * superseded version, or to the bundled template when none (the row is the source).
- */
-function revertPromptSection(
-  sql: SqlExecutor,
-  actor: ActorHandle,
-  sectionId: string,
-  version: number,
-): ChangelogRevertResult {
-  const row = sql<{ status: string }>`
-    SELECT status FROM prompt_section_versions
-    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
-      AND version = ${version} LIMIT 1`[0];
+/** A candidate or trial is discarded; a promoted version falls back to the one it replaced, or to the bundled text. */
+function revertArtifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId: string, version: number): ChangelogRevertResult {
+  const row = artifactVersion(sql, actor, artifactId, version);
 
-  if (!row) return { ok: false, error: `prompt section ${sectionId} v${String(version)} not found` };
+  if (row === null) return { ok: false, error: `${artifactId} v${String(version)} not found` };
 
-  if (row.status === 'pending') {
-    const pending = getPendingPromptSection(sql, actor, sectionId);
-
-    if (!pending || pending.version !== version) {
-      return { ok: false, error: `${sectionId} v${String(version)} is no longer the pending under trial` };
-    }
-
-    applyPromptSectionDecision(sql, actor, pending, 'rollback');
-
-    return { ok: true, detail: `discarded pending ${sectionId} v${String(version)}` };
+  if (row.status === 'rolled_back' || row.status === 'historical') {
+    return { ok: false, error: `${artifactId} v${String(version)} is already ${row.status}: nothing to revert` };
   }
 
-  if (row.status !== 'current') {
-    return { ok: false, error: `${sectionId} v${String(version)} is already ${row.status}: nothing to revert` };
+  if (row.status === 'trial') {
+    void sql`UPDATE artifact_trials SET status = 'reverted', decided_at = ${Date.now()}
+      WHERE actor_id = ${actor.actorId} AND artifact_id = ${artifactId} AND version = ${version} AND status = 'running'`;
   }
 
-  const prev = sql<{ version: number }>`
-    SELECT version FROM prompt_section_versions
-    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
-      AND version < ${version} AND status = 'historical'
-    ORDER BY version DESC LIMIT 1`[0];
-
-  void sql`UPDATE prompt_section_versions SET status = 'rolled_back'
-    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${version}`;
+  revertArtifact(sql, actor, artifactId, version);
   markStoreChanged(sql);
 
-  if (!prev) return { ok: true, detail: `${sectionId} is back on its built-in wording` };
-  void sql`UPDATE prompt_section_versions SET status = 'current'
-    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${prev.version}`;
-
-  return { ok: true, detail: `rolled ${sectionId} back to v${String(prev.version)}` };
+  return { ok: true, detail: row.status === 'current' && row.parent === null ? `${artifactId} is back on its built-in wording` : `reverted ${artifactId} v${String(version)}` };
 }
 
 export async function executeChangelogRevert(
@@ -693,15 +597,13 @@ export async function executeChangelogRevert(
       return revertScaffoldVersion(ctx.rt, version, ctx.events);
     }
 
-    case 'prompt_section_rollback': {
-      const [sectionId, raw] = action.target.split(':');
-      const version = Number(raw);
+    case 'artifact_revert': {
+      const at = action.target.lastIndexOf('@');
+      const version = Number(action.target.slice(at + 1));
 
-      if (!sectionId || !Number.isInteger(version) || version <= 0) {
-        return { ok: false, error: `invalid prompt-section target: ${action.target}` };
-      }
+      if (at <= 0 || !Number.isInteger(version) || version <= 0) return { ok: false, error: `invalid artifact target: ${action.target}` };
 
-      return revertPromptSection(ctx.rt.storage.sql, ctx.rt.actor, sectionId, version);
+      return revertArtifactVersion(ctx.rt.storage.sql, ctx.rt.actor, action.target.slice(0, at), version);
     }
 
     case 'fact_forget': {

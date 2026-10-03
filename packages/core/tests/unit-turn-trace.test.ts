@@ -49,7 +49,7 @@ function team() {
     recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName }),
     spawn: async () => ({ name: roster.name, displayName: 'Researcher' }),
     status: async () => ({ roster: [roster] }),
-    dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
+    dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),
     assign: async (input) => ({ ok: true, name: input.name, ...handoff }),
     message: async (input) => {
       messages.push(input.content);
@@ -71,7 +71,7 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
 
   const tools = {
     file: tool({ description: 'Write a file', inputSchema: jsonSchema({ type: 'object' }), execute: async () => FILE_RESULT }),
-    agents: createAgentsTool({ mode: 'build', team: deps }),
+    agents: createAgentsTool({ mode: 'build', swarms: true, team: deps }),
   };
 
   const catalog = { roles: { planner: { description: 'Plan', instructions: 'Plan.',

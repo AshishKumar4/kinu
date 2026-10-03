@@ -5,28 +5,13 @@
  * message to a transport that could have killed the work.
  */
 import * as v from 'valibot';
-import { OutputSinkSchema, type OutputSink } from '../types/primitives';
 
-const ExecContextSchema = v.object({
-  signal: v.optional(v.instance(AbortSignal)), job: v.optional(v.string()), output: v.optional(OutputSinkSchema),
-});
+const ExecContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal)) });
 
 export function readExecSignal(input: { context: unknown }): AbortSignal | undefined {
   const parsed = v.safeParse(ExecContextSchema, input.context);
 
   return parsed.success ? parsed.output.signal : undefined;
-}
-
-export function readExecJob(input: { context: unknown }): string | undefined {
-  const parsed = v.safeParse(ExecContextSchema, input.context);
-
-  return parsed.success ? parsed.output.job : undefined;
-}
-
-export function readExecOutput(input: { context: unknown }): OutputSink | undefined {
-  const parsed = v.safeParse(ExecContextSchema, input.context);
-
-  return parsed.success ? parsed.output.output : undefined;
 }
 
 /**

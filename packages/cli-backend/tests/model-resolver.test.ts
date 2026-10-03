@@ -14,10 +14,70 @@ import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir
 import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
+import { LocalAgentSession } from '../src/local-session';
 
 const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
 describe('createLocalModelResolver', () => {
+  test('a cloud model relays the retry allowance without consuming it on the CLI', async () => {
+    const received: Array<string | null> = [];
+
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      received.push(request.headers.get('x-kinu-retries'));
+
+      return Response.json({ error: { message: 'limited' } }, { status: 429, headers: { 'retry-after': '0' } });
+    } });
+
+    const resolver = createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_transport' } });
+
+    try {
+      for (const retries of [0, 1]) {
+        received.length = 0;
+        await expect(generateText({
+          model: resolver.resolveModel('workers-ai/@cf/test/relay', 'relay'), prompt: 'test',
+          maxRetries: 0, headers: { 'x-kinu-retries': String(retries) },
+        })).rejects.toThrow();
+        expect(received).toEqual([String(retries)]);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test('a session lane and a session-less lane spend the same route retry allowance', async () => {
+    let requests = 0;
+
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch() {
+      requests++;
+
+      return new Response('limited', { status: 429, headers: { 'retry-after': '0' } });
+    } });
+
+    const llm = { name: 'workers-ai', baseURL: server.url.toString(), headers: { Authorization: 'Bearer test' }, model: '@cf/test/session-retries' };
+    const db = new Database(scratchPath('session-retries', 'agent.db'));
+    const rt = createCLIRuntime(db, { llm });
+    let session: LocalAgentSession | undefined;
+
+    try {
+      for (const withSession of [false, true]) {
+        if (withSession) session = new LocalAgentSession({ rt, db, modelResolver: createLocalModelResolver({ llm }), noAutoEvolve: true, onEvent: () => {} });
+
+        for (const retries of [0, 1]) {
+          requests = 0;
+          const lane = rt.modelForRoute?.({ source: 'fast', tier: 'fast', model: `workers-ai/${llm.model}`, reasoningEffort: 'high', fallbacks: [], retries });
+
+          if (lane === undefined) throw new Error('the runtime must bind the fast lane');
+          await expect(lane.complete('title this workspace')).rejects.toThrow('is rate-limiting this account');
+          expect(requests).toBe(retries + 1);
+        }
+      }
+    } finally {
+      await session?.end();
+      db.close();
+      await server.stop(true);
+    }
+  });
+
   /** Neither lane may set an output cap, and a config object still carrying one must be inert. */
   test('neither lane this seam builds carries an output cap, whatever the config holds', async () => {
     const bodies: JsonObject[] = [];
@@ -283,7 +343,7 @@ describe('createLocalModelResolver', () => {
         anthropicApiKey: 'sk-ant',
         openrouterApiKey: 'sk-or',
         openaiCompat: {
-          groq: { baseURL: 'https://api.groq.com/openai/v1', apiKey: 'gsk' },
+          groq: { kind: 'openai-compat', baseURL: 'https://api.groq.com/openai/v1', apiKey: 'gsk' },
         },
       },
       fetch: asFetchFunction(async () => new Response(JSON.stringify({ data: [] }))),
@@ -325,7 +385,7 @@ describe('createLocalModelResolver', () => {
   });
 
   test('a stored key sends the headers core maps for the hosted backend', async () => {
-    const compat = { baseURL: 'https://api.example.com/v1', apiKey: 'sk-compat', extraHeaders: { Authorization: 'Bearer gateway' } };
+    const compat = { kind: 'openai-compat' as const, baseURL: 'https://api.example.com/v1', apiKey: 'sk-compat', extraHeaders: { Authorization: 'Bearer gateway' } };
 
     const resolver = createLocalModelResolver({
       llm: null,
@@ -335,7 +395,7 @@ describe('createLocalModelResolver', () => {
     expect((await resolver.getAuth('openai.bearer'))?.headers)
       .toEqual(credentialToHeaders('openai.bearer', { kind: 'bearer', token: 'sk-openai' }));
     expect((await resolver.getAuth('openai-compat.groq'))?.headers)
-      .toEqual(credentialToHeaders('openai-compat.groq', { kind: 'openai-compat', ...compat }));
+      .toEqual(credentialToHeaders('openai-compat.groq', compat));
   });
 
   test('uses Anthropic as the default provider when the resolved local config is direct Anthropic', async () => {
@@ -464,6 +524,34 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
     expect(providers.find((provider) => provider.id === 'my-gateway')?.unavailableReason).toBe('account unavailable');
   });
 
+  test('a menu the account could not serve says why, and a provider sweep asks the account again', async () => {
+    let menus = 0;
+    let down = true;
+
+    const resolver = createLocalModelResolver({
+      llm: proxyLLMConfig(),
+      credentials: {},
+      cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
+      fetch: asFetchFunction(async (input) => {
+        if (!(input instanceof Request ? input.url : input.toString()).endsWith('/api/cli/models')) return Response.json({ credentials: [] });
+        menus += 1;
+
+        return down ? new Response('down', { status: 503 }) : Response.json({ models: [{ spec: DEFAULT_WORKERS_AI_MODEL_SPEC, provider: 'workers-ai' }], failures: [] });
+      }),
+    });
+
+    expect((await resolver.listProviders()).find((provider) => provider.id === 'workers-ai')?.unavailableReason).toContain('HTTP 503');
+
+    down = false;
+    await resolver.listModels();
+    const swept = menus;
+    // A call reads the listing as it stands; only the sweep, which an invalidation runs, asks again.
+    await resolver.listProviders();
+    expect(menus).toBe(swept);
+    await resolver.listModels();
+    expect(menus).toBe(swept + 1);
+  });
+
   test('a credential the account holds and cannot read fails its provider, and only that one', async () => {
     const resolver = createLocalModelResolver({
       llm: proxyLLMConfig(),
@@ -535,10 +623,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
         wireCalls++;
         const body = v.parse(JsonObjectSchema, await request.json());
 
-        if (wireCalls === 1) {
-          return new Response('limited', { status: 429, headers: { 'Retry-After': '0' } });
-        }
-
         seen.push({
           path: new URL(request.url).pathname,
           auth: request.headers.get('authorization'),
@@ -575,7 +659,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       expect(viaGateway.text).toBe('ok');
 
       expect(seen.map((s) => s.path)).toEqual(['/api/user/ai/v1/chat/completions', '/api/user/ai/v1/chat/completions']);
-      expect(wireCalls).toBe(3);
+      expect(wireCalls).toBe(2);
       expect(seen.map((s) => s.model)).toEqual([DEFAULT_WORKERS_AI_MODEL_ID, 'openai/gpt-4.1']);
 
       for (const request of seen) {

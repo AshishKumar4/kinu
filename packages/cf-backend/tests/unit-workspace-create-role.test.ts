@@ -7,9 +7,9 @@ import {
   resolveTurnProfile, workspaceSlug, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest, type CreateWorkspaceEnv } from '../src/user/workspace-access';
-import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
+import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
 import { acrossRpc } from './helpers/jsrpc-stub';
-import type { CloudWorkspaceRegistry } from '../src/user/workspace-create';
+import { createCloudWorkspaceForUser, type CloudWorkspaceRegistry } from '../src/user/workspace-create';
 import { Hono } from 'hono';
 import type { FamilyEnv } from '../src/api/context';
 import { serveFamily } from './helpers/api';
@@ -52,7 +52,7 @@ async function postCreate(
   const registered: string[] = [];
 
   const userDO = userAccount({
-    async getProfileCatalog(_caller: UserCaller) { return envelope; },
+    async getWorkspaceProfileCatalog(_caller: UserCaller) { return envelope; },
     async getAuth(_caller: UserCaller) {
       return authHeaders === null ? null : { headers: authHeaders, baseURL: 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1' };
     },
@@ -147,6 +147,54 @@ describe('a name whose teardown is still pending', () => {
     expect(created.status).toBe(503);
     expect(created.error).toContain('still being deleted');
     harness.close();
+  });
+});
+
+describe('a workspace that hires a new workspace', () => {
+  test('reads the account default with its own authority, never the owner\'s', async () => {
+    // Staging 85a438698, launch-prep: a workspace-scope hire was refused as owner-only.
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const hirer: UserCaller = { workspaceToken: await provisionTestWorkspace(harness, 'launch-prep') };
+
+    // Real authority checks; the menu and the new object are faked as in `postCreate`.
+    const userDO = userAccount({
+      getProfileCatalog: (caller: UserCaller) => harness.userDO.getProfileCatalog(caller),
+      getWorkspaceProfileCatalog: (caller: UserCaller) => harness.userDO.getWorkspaceProfileCatalog(caller),
+      registerWorkspace: (caller: UserCaller, name: string, displayName?: string, options?: Parameters<CloudWorkspaceRegistry['registerWorkspace']>[3]) =>
+        harness.userDO.registerWorkspace(caller, name, displayName, options),
+      async getAuth() { return { headers: CONNECTED, baseURL: 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1' }; },
+      async listCredentials() { return []; },
+      async ensureWorkspaceCapability() {},
+      async releaseWorkspaceReservation() { return true; },
+      async removeWorkspace() {},
+    });
+
+    const born = workspaceObject({
+      async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
+      async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) { return { displayName, nameOrigin }; },
+      async setSoul(soul: string) { return { soul, purpose: '' }; },
+      async resetWorkspaceBaseline() { return { ok: true as const, capturedAt: 0, cleanupFailures: [] }; },
+      async beginGenesisTurn() { return { started: true }; },
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+
+    try {
+      const entry = await createCloudWorkspaceForUser({
+        env: {
+          UserDO: { idFromName: (name) => name, get: () => userDO },
+          OrchestratorAgent: { idFromName: (name) => name, get: () => born },
+          CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+        },
+        userId: USER_ID, userDO, caller: hirer, input: { purpose: 'Draft the launch notes.' },
+      });
+
+      expect((await harness.userDO.listActiveWorkspaces(await testOwner())).map((workspace) => workspace.name)).toContain(entry.name);
+    } finally {
+      globalThis.fetch = originalFetch;
+      harness.close();
+    }
   });
 });
 

@@ -177,6 +177,18 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
     expect(local).toMatchObject({ name: "openai-compat", baseURL: "http://localhost:11434/v1", model: "gpt-oss:20b" });
   });
 
+  test("an openai-compatible endpoint's headers: the key's Authorization over `headers`, `extraHeaders` over both", async () => {
+    const sends = async (compat: JsonObject, headers: Record<string, string>) => expect(await runResolveLLM({
+      providers: { openaiCompat: { default: { baseURL: "http://localhost:11434/v1", ...compat } } },
+    }, { defaultModel: "openai-compat/gpt-oss:20b" })).toEqual({ name: "openai-compat", baseURL: "http://localhost:11434/v1", headers, model: "gpt-oss:20b" });
+
+    const base = { Authorization: "Bearer base", "X-Base": "b" };
+
+    await sends({ headers: base }, base);
+    await sends({ headers: base, apiKey: "k" }, { Authorization: "Bearer k", "X-Base": "b" });
+    await sends({ headers: base, apiKey: "k", extraHeaders: { Authorization: "Bearer extra" } }, { Authorization: "Bearer extra", "X-Base": "b" });
+  });
+
   test("a default tier on a BYO provider overrides the signed-in proxy", async () => {
     const out = await runResolveLLM({
       origin: CLOUD_ORIGIN,

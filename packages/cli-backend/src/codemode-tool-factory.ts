@@ -16,7 +16,7 @@ import {
   decodeJsonValue, explainSandboxError, nativeToolFunctions,
   renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram,
+  codemodeFunction, withCodemodeProgram, currentWorkMode, toolsInWorkMode, execCallArgs, readDeviceRequestChannel,
 } from '@kinu.run/core';
 import { tool } from 'ai';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
@@ -90,11 +90,14 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
         try {
           const signal = options.abortSignal;
           const context = signal ? { signal } : undefined;
+          const channel = readDeviceRequestChannel({ toolOptions: options });
           const toolBindings: Record<string, CodemodeExecute> = {};
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
 
-          for (const [name, entry] of Object.entries({ ...nativeBindings, ...craftedFailureFunctions(crafted) })) {
+          const external = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.external()));
+
+          for (const [name, entry] of Object.entries({ ...external, ...nativeBindings, ...craftedFailureFunctions(crafted) })) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 
@@ -104,7 +107,8 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
             const nsp: Record<string, CodemodeExecute> = {};
 
             for (const [toolName, t] of Object.entries(p.tools)) {
-              nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...toolArgs, context));
+              const exec = toolName === 'exec' && p.positionalArgs === true;
+              nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...(exec ? execCallArgs(toolArgs, { signal, channel }) : [...toolArgs, context])));
             }
 
             providerBindings[p.name] = nsp;

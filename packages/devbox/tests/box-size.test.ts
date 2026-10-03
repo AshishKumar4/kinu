@@ -25,7 +25,8 @@ class TestBox extends Devbox<unknown> {
 }
 
 const localExec: Container['exec'] = async (argv, options) => {
-  const child = Bun.spawn(argv, { cwd: options?.cwd, stdout: 'pipe', stderr: 'pipe' });
+  // devbox depends on no workspace package, so it passes the scratch environment itself.
+  const child = Bun.spawn(argv, { cwd: options?.cwd, env: process.env, stdout: 'pipe', stderr: 'pipe' });
   const exitCode = child.exited;
 
   return {

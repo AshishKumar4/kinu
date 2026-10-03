@@ -6,7 +6,7 @@
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { agentHome, headAgentName, parseActorKey } from '@kinu.run/core';
+import { actorHomeName, agentHome } from '@kinu.run/core';
 import { chatSessionTurns, gatewayWorkspace } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
@@ -60,7 +60,7 @@ test('two heads writing at the same time each report only their own file', async
       .get(`${branch.branchId}-head`);
 
     if (seat === null) throw new Error(`branch ${branch.branchId} seated no head`);
-    homes.set(task, agentHome(headAgentName(parseActorKey(seat.storage_key).id)));
+    homes.set(task, agentHome(actorHomeName({ origin: 'swarm', storageKey: seat.storage_key })));
 
     return { task, head: `${branch.branchId}-head` };
   }));

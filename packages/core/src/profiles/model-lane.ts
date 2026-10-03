@@ -1,9 +1,12 @@
+import type { LanguageModel } from 'ai';
 import type { ActorReference } from '../identity/actor-handle';
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, toKinuError } from '../obs/index';
 import { accountOf, MAIN_ACCOUNT } from '../credentials/accounts';
 import { credentialOrUnknown, FallbackRoute, type CallFailure } from '../providers/fallback-route';
-import { reasoningEffortOptions, type ReasoningEffort } from '../providers/effort';
+import { reasoningEffortOptions, type ProviderOptions, type ReasoningEffort } from '../providers/effort';
+import { generateReported, type GenerateRequest } from '../providers/model-invocation';
+import type { ModelCallSpend } from '../events/model-call';
 import { PROVIDER_RETRIES_HEADER } from '../providers/rate-limit-retry';
 import { formatModelSpec, parseModelSpec } from '../providers/types';
 import { describeProviderError, OWNER_FIXABLE_REFUSALS, providerRefusalCode, toProviderError } from '../providers/util';
@@ -11,12 +14,36 @@ import type { LLM } from '../types/primitives';
 import type { ResolvedTurnProfile } from './resolve';
 import { resolveModelRoute, type ModelRouteResolution, type ProfileRoutedSource } from './model-route';
 import { currentOperationProfile, operationProfileStream, resolveOperationProfile, runOperationProfile } from './operation';
-import type { TierRefusal, TierRefusals } from './tier-refusals';
+import type { TierRefusal, TierRefusals } from '../types/refusals';
 
-export interface RouteCallComponents {
-  llm(resolution: ModelRouteResolution): LLM;
+/** What a route walk reads besides the route: which credential pays a spec, and where owner-fixable refusals are said. */
+export interface RouteWalk {
   readonly credentialOf?: (spec: string) => Promise<string | null>;
   readonly refusals?: TierRefusals;
+}
+
+export interface RouteCallComponents extends RouteWalk {
+  llm(resolution: ModelRouteResolution): LLM;
+}
+
+/** A backend's whole say in a routed call: the client and effort options for one (spec, effort), the spec normalised against its registry. */
+export interface RouteModelBinding {
+  readonly model: LanguageModel;
+  readonly providerOptions?: ProviderOptions;
+}
+
+export type RouteModelBinder = (route: ModelRouteResolution) => RouteModelBinding;
+
+/** A registry's binding: the effort options are the provider's the spec names once normalised. */
+export function bindRoute(
+  registry: { normalize(spec: string): string; resolve(spec: string): LanguageModel },
+  route: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>,
+): RouteModelBinding {
+  const spec = registry.normalize(route.model);
+  const model = registry.resolve(spec);
+  const providerOptions = reasoningEffortOptions(route.reasoningEffort, parseModelSpec(spec).provider);
+
+  return providerOptions === undefined ? { model } : { model, providerOptions };
 }
 
 export interface ModelLaneComponents extends RouteCallComponents {
@@ -40,18 +67,40 @@ function asCalled(spec: string, credentialOf: RouteCallComponents['credentialOf'
   }));
 }
 
+/** The route's retry allowance, at the SDK and at the transport. */
+export function routeRetryOptions(call: Pick<ModelRouteResolution, 'retries'>) {
+  return { maxRetries: call.retries, headers: { [PROVIDER_RETRIES_HEADER]: String(call.retries) } };
+}
+
 export function routedCallOptions(call: Pick<ModelRouteResolution, 'reasoningEffort' | 'retries'>, spec: string) {
   const providerOptions = reasoningEffortOptions(call.reasoningEffort, parseModelSpec(spec).provider);
 
+  return { ...routeRetryOptions(call), ...(providerOptions !== undefined && { providerOptions }) };
+}
+
+/** One routed call as an {@link LLM}, billed under the route's source once it completes. */
+export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, spend: Omit<ModelCallSpend, 'source'>, system?: string): LLM {
   return {
-    maxRetries: call.retries,
-    headers: { [PROVIDER_RETRIES_HEADER]: String(call.retries) },
-    ...(providerOptions !== undefined && { providerOptions }),
+    async *stream() { yield ''; },
+    async complete(prompt) {
+      const { model, providerOptions } = bind(route);
+      const request: GenerateRequest = { model, prompt, ...routeRetryOptions(route) };
+
+      if (providerOptions !== undefined) request.providerOptions = providerOptions;
+
+      if (system !== undefined) request.system = system;
+
+      return (await generateReported(request, { spend: { ...spend, source: route.source }, spec: route.model })).text.trim();
+    },
   };
 }
 
-/** The route's model, then its configured chain, as a turn walks it. */
-export async function completeOnRoute(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string): Promise<string> {
+export function completeOnRoute(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string): Promise<string> {
+  return onRoute(route, lane, (serving) => lane.llm(serving).complete(prompt));
+}
+
+/** The route's model, then its configured chain, as a turn walks it; `invoke` is one call on the serving entry. */
+export async function onRoute<T>(route: ModelRouteResolution, lane: RouteWalk, invoke: (serving: ModelRouteResolution) => Promise<T>): Promise<T> {
   const chain = new FallbackRoute<ChainEntry>({
     modelSpec: route.model,
     fallbacks: route.fallbacks.map((fallback) => ({ spec: fallback.model, reasoningEffort: fallback.reasoningEffort })),
@@ -67,8 +116,8 @@ export async function completeOnRoute(route: ModelRouteResolution, lane: RouteCa
   const notices = lane.refusals;
   const since = notices?.changes() ?? 0;
 
-  const call = (serving: ChainEntry): Effect.Effect<string, KinuError> => Effect.tryPromise({
-    try: () => lane.llm({ ...route, model: serving.spec, reasoningEffort: serving.reasoningEffort, retries: chain.callRetries }).complete(prompt),
+  const call = (serving: ChainEntry): Effect.Effect<T, KinuError> => Effect.tryPromise({
+    try: () => invoke({ ...route, model: serving.spec, reasoningEffort: serving.reasoningEffort, retries: chain.callRetries }),
     catch: (cause) => toProviderError({ doing: `calling the ${route.tier} tier`, cause, provider: serving.spec }),
   }).pipe(
     Effect.tap(() => Effect.sync(() => { lane.refusals?.answered(route.tier); })),

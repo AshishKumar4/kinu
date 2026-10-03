@@ -3,9 +3,6 @@ import { nodesOf, parseEvolvedCode } from '../safety/evolved-code';
 const FORBIDDEN_NAMES: ReadonlySet<string> = new Set(['require', 'globalThis', 'eval', 'Function']);
 
 /** Prose list of the forbidden constructs for LLM prompts. */
-export const SCAFFOLD_FORBIDDEN_DESCRIPTION =
-  'require/import, globalThis, eval(), and Function()';
-
 /** Why `code` is not a scaffold the sandbox may run, or null: it must parse, declare
  *  `async function* run(rt, task)` at the top level, and reach none of the forbidden constructs. */
 export function scaffoldRefusal(code: string): string | null {

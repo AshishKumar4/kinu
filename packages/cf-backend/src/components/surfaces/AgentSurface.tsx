@@ -7,7 +7,7 @@ import { Badge, Loader } from "@cloudflare/kumo";
 import {
   FingerprintIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon, GitBranchIcon,
 } from "@phosphor-icons/react";
-import type { AgentStatus } from "@/hooks/use-kinu";
+import type { AgentStatus, ReadMoves } from "@/hooks/use-kinu";
 import type { MemoryEntry, Rpc } from "@kinu.run/core";
 import { MarkdownContent, EmptyState, Section } from "./shared";
 import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
@@ -27,10 +27,12 @@ export interface AgentSurfaceProps {
   onSearchMemory: (q: string) => void;
   onRetryLoad: () => void;
   rpc: Rpc;
+  /** `reads_changed` frames per live read, as WorkTab takes them. */
+  readMoves?: ReadMoves;
 }
 
 export function AgentSurface(
-  { snapshot, memory, memoryContent, onSearchMemory, onRetryLoad, rpc }: AgentSurfaceProps,
+  { snapshot, memory, memoryContent, onSearchMemory, onRetryLoad, rpc, readMoves = {} }: AgentSurfaceProps,
 ) {
   const [memorySearch, setMemorySearch] = useState("");
   // "No world model" may only be claimed about a listing that came back.
@@ -141,8 +143,8 @@ export function AgentSurface(
           <EvolutionBlock title="Self-tuning" hint="GEPA passes propose candidates for the next scaffold version.">
             <GepaView rpc={rpc} />
           </EvolutionBlock>
-          <EvolutionBlock title="Quality" hint="Replay loss, correction rate and calibration, per scaffold version.">
-            <QualityView rpc={rpc} />
+          <EvolutionBlock title="Quality" hint="How satisfied you were with its turns, per day, rated from your replies and thumbs.">
+            <QualityView rpc={rpc} moved={readMoves.getQuality ?? 0} />
           </EvolutionBlock>
         </div>
       </Section>

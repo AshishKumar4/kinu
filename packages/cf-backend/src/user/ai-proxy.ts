@@ -1,16 +1,16 @@
 /** OpenAI-compatible proxy for CLI clients: `@cf/...` via Workers AI (direct under `WORKERS_AI_VIA_BINDING`), `{author}/{model}` via the user's gateway. */
 import { Hono } from 'hono';
-import { createUserDOAuthResolver, type UserCredentialClient } from '../providers/agent-registry';
+import { createUserDOAuthResolver, decisionRunOf, type UserCredentialClient } from '../providers/agent-registry';
 import type { OwnerCapabilityEnv, ProviderEnv } from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
-import { MY_GATEWAY_PROVIDER_ID, SESSION_AFFINITY_HEADER, sessionAffinityOf } from '@kinu.run/core';
-import { createDirectWorkersAIFetch } from '@kinu.run/core';
+import { MY_GATEWAY_PROVIDER_ID, SESSION_AFFINITY_HEADER, sessionAffinityOf, workersAiSpec, DECISION_MODELS, USER_AI_RUN_PATH, decodeJsonValue } from '@kinu.run/core';
+import { createDirectWorkersAIFetch, transportControls } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import { json } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
-import { JsonObjectSchema, USER_AI_PROXY_PATH, type JsonObject } from '@kinu.run/core';
-import { classify } from '@kinu.run/core/obs';
+import { JsonObjectSchema, USER_AI_PROXY_PATH, parseJsonObject, type JsonObject } from '@kinu.run/core';
+import { classify, tolerate } from '@kinu.run/core/obs';
 import { beneath } from '../api/context';
 import { inferenceProxyGate, type CliEnv } from '../cli/routes';
 import * as v from 'valibot';
@@ -29,6 +29,25 @@ export interface UserAIProxyEnv<Id> extends AvailableModelsEnv<Id>, OwnerCapabil
 export const aiProxyRoutes = new Hono<CliEnv>();
 
 aiProxyRoutes.use(`${USER_AI_PROXY_PATH}/*`, beneath(USER_AI_PROXY_PATH, inferenceProxyGate));
+
+aiProxyRoutes.use(`${USER_AI_RUN_PATH}/*`, beneath(USER_AI_RUN_PATH, inferenceProxyGate));
+
+/** A decision model's rating for a CLI with no Cloudflare token of its own; only the decision models are run. */
+aiProxyRoutes.post(`${USER_AI_RUN_PATH}/*`, async (c) => {
+  const spec = workersAiSpec(c.req.path.slice(USER_AI_RUN_PATH.length + 1));
+
+  if (!DECISION_MODELS.some((model) => model === spec)) {
+    return errorResponse(404, `This proxy runs only the decision models (${DECISION_MODELS.join(', ')}), not ${spec}.`);
+  }
+
+  const text = await c.req.text();
+  const body = tolerate(() => parseJsonObject(text), 'malformed-input') ?? null;
+
+  if (body === null) return errorResponse(400, 'Body must be a JSON object.');
+  const run = decisionRunOf({ env: c.env, userDO: { stub: c.get('cli').userDO, caller: await ownerCaller(c.env) } });
+
+  return json({ body: decodeJsonValue({ value: await run(spec.slice('workers-ai/'.length), body) }) });
+});
 
 aiProxyRoutes.get(`${USER_AI_PROXY_PATH}/models`, async (c) => {
   const menu = await listAvailableModels(c.env, c.get('cli').userId, await ownerCaller(c.env));
@@ -94,10 +113,13 @@ async function proxyChatCompletion<Id>(
     mapError: (res, resolved) => mapGatewayError(res, model, resolved.headers['cf-aig-gateway-id']),
   });
 
+  const controls = transportControls(request);
+
   return aiFetch(`${PROXY_PLACEHOLDER}/chat/completions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...controls.headers },
     body,
+    signal: controls.signal,
   });
 }
 

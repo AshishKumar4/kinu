@@ -2,15 +2,13 @@
  * EvolutionEngine: self-evolution at four timescales (docs/EVOLUTION.md).
  *
  * 0 In-episode: craft ledger and execution-recovery findings, no model call.
- * 1 Turn: turn N is graded from user message N+1 in the same conversation. A turn
- *   no follow-up can grade records no outcome, never an inferred `accepted`.
+ * 1 Turn: turn N is rated from user message N+1 in the same conversation (evolution/ratings.ts). A turn no
+ *   follow-up answers stays unrated.
  * 2 Session: reflect when a closed window carries negative signal. The every-N-turns
  *   cadence lives only in AgentOrchestrator over the durable window (session-window.ts).
- * 3 Lifetime: craft consolidation. Replay eval is on demand only.
+ * 3 Lifetime: craft consolidation.
  */
 
-import type { ShadowTrialPlan, ShadowTrialQueueOutcome } from './types';
-import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { parseJsonValue } from '../utils/json';
 
@@ -19,12 +17,13 @@ import type { LLM } from '../types/primitives';
 import type {
   CompletedTurn,
   CompletedSession,
+  ToolCallRecord,
   EvolutionEvent,
   EvolutionListener,
   EvolutionConfig,
 } from './types';
 import { DEFAULT_EVOLUTION_CONFIG } from './types';
-import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../providers/structured';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
@@ -39,20 +38,21 @@ import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, AdvisorRowDataSchema, normalizeNote,
   type AdvisorNote, type AdvisorRowData,
 } from '../advisor/review';
+import { initLessonTables, recordLesson, corroborateLessonsForTurn, renderRecentLessons } from './lessons';
 import {
-  type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
-  initTurnOutcomeTables, isTrivialTurn, isNegativeOutcome, classifyTurnOutcome,
-  executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall, promotesProcedure,
-  outcomeToFeedback, outcomeQuality,
-  recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
-  listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
-  recordLesson, recordedTurnVerdict, corroborateLessonsForTurn, renderRecentLessons,
-  realOutcomeScaffoldRates, blendRealOutcomeRates,
-} from './outcomes';
+  applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, owesTurnLessons, recordTurnStruggles,
+  scoreToolLessons, StruggleLessonSchema, struggleLessonPrompt, teachingStruggle,
+} from './struggles';
+import {
+  initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf, hasLowRating,
+  isLowRating, isHighRating, feedbackOf, ratingQuality, thumbsRating, retractThumbs,
+  isTrivialTurn,
+  type RatingVerdict, type TurnRating,
+} from './ratings';
+import type { DecisionPort } from '../providers/decision-model';
 import {
   bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
 } from '../experience/imports';
-import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay';
 import {
   initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore,
   MAX_TURN_REVIEWS_PER_OPEN,
@@ -60,25 +60,11 @@ import {
 } from './session-window';
 import { initRefinementTables } from './refinement';
 import { MissionBudgetExhausted } from '../mission-budget';
-import { formatScoreInterval, lossInterval } from '../utils/stats';
 import { buildChangelog } from './changelog';
 import { DELEGATION_RUBRIC, delegationFeatures, renderDelegationFeatures } from './delegation-features';
-import { renderScaffoldHandbook } from './scaffold-handbook';
-import {
-  clusterPathologies, labelPathologyClusters, renderPathologyBlock,
-  describePathology, parsePathologyTag, PATHOLOGY_TAG_EXAMPLE,
-  type PathologyCluster,
-} from './pathology';
-
-import { modifyScaffold } from '../scaffold/modify';
-import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor';
-import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns';
-import {
-  listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
-  type EvolutionBaseSelection, type ScaffoldArchiveEntry,
-} from '../scaffold/archive';
-import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow';
-import { tableExists } from '../identity/schema';
+import { getCurrentScaffoldVersion } from '../scaffold/versions';
+import { advanceTrial, runningTrial, startTrial } from './trials';
+import { runProposer } from './proposer';
 
 const GeneralizedToolSchema = v.object({
   name: v.optional(v.string()),
@@ -90,85 +76,6 @@ import type { SessionHistory } from '../session/history';
 import type { AgentConfigStore } from '../config/store';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
 
-/** The version a proposal branches from and the variants it may cite. */
-export interface ProposalArchiveContext {
-  base: EvolutionBaseSelection;
-  entries: ReadonlyArray<ScaffoldArchiveEntry>;
-  realRates?: ReadonlyMap<number, { accepted: number; negative: number }>;
-  /** Why each refused version was refused, so a proposal can see what already failed. */
-  rejections?: ReadonlyMap<number, string>;
-}
-
-function renderArchiveBlock(archive: ProposalArchiveContext): string {
-  const lines = archive.entries.slice(0, 8).map((e) => {
-    const lineage = e.parentVersion != null ? `parent v${e.parentVersion}` : 'root';
-    const record = e.trials > 0 ? `${e.wins}-${e.losses}-${e.ties} W-L-T` : 'untried';
-    const real = archive.realRates?.get(e.version);
-
-    const realNote = real && real.accepted + real.negative > 0
-      ? `, real ${real.accepted} accepted/${real.negative} negative`
-      : '';
-
-    const targeted = e.pathology !== null ? `, for ${e.pathology}` : '';
-    const rejection = archive.rejections?.get(e.version);
-    const why = rejection ? `\n    refused: ${rejection}` : '';
-
-    return `  v${e.version} [${e.status}, ${lineage}, ${record}${realNote}${targeted}]: ${e.rationale.slice(0, 80)}${why}`;
-  });
-
-  const baseNote = archive.base.mode === 'explore'
-    ? `You are branching from ARCHIVED v${archive.base.version} (a stepping stone, not the live current): its code is shown above.`
-    : `You are branching from the live current v${archive.base.version}.`;
-
-  return (
-    `Scaffold archive (your prior variants: lineage + shadow record):\n` +
-    `${lines.join('\n')}\n` +
-    `${baseNote} You may take ideas from any archived variant; cite its version when you do.\n\n`
-  );
-}
-
-/**
- * The scaffold-proposal prompt, documenting the real sandbox contract
- * (scaffold/executor.ts): host interaction goes only through the `host.*` bridge,
- * and both `run(rt, task)` parameters receive the task string. When pathologies are
- * mined, the proposal must name the one it targets; with none, the requirement is absent.
- */
-export function buildScaffoldProposalPrompt(
-  baseScaffold: string,
-  reflection: string,
-  archive?: ProposalArchiveContext,
-  pathologies: ReadonlyArray<PathologyCluster> = [],
-): string {
-  return (
-    `${renderScaffoldHandbook(baseScaffold)}\n` +
-    `Current agent scaffold (your agentic loop: it runs inside a sandboxed worker):\n` +
-    `\`\`\`js\n${baseScaffold}\n\`\`\`\n\n` +
-    (archive ? renderArchiveBlock(archive) : '') +
-    (pathologies.length > 0 ? renderPathologyBlock(pathologies) : '') +
-    `Based on these session patterns:\n${evidenceWindow(reflection, EVIDENCE_BUDGETS.reflection)}\n\n` +
-    `Propose an improved scaffold. The scaffold MUST:\n` +
-    `1. Export exactly \`async function* run(rt, task)\`. There is NO host runtime object in the ` +
-    `sandbox: BOTH parameters receive the task STRING; read the task from either, e.g. ` +
-    `\`const prompt = task;\`. Neither parameter carries members to reach through.\n` +
-    `2. Reach the host ONLY through the global \`host\` bridge:\n` +
-    `\`\`\`ts\n${SCAFFOLD_HOST_TYPES}\n\`\`\`\n` +
-    `\`await host.defaultInference()\` runs the standard inference loop: build on it or replace it ` +
-    `with your own strategy via host.llmStream / host.callTool.\n` +
-    `3. Stream text to the user by yielding { type: 'chunk', data: '<text>' }.\n` +
-    `4. NOT use ${SCAFFOLD_FORBIDDEN_DESCRIPTION}. Also never reference raw network globals ` +
-    `(fetch/WebSocket: use host.callTool for I/O), the scaffold version files/tables, ` +
-    `promotion/rollout config keys, or shell-approval/consent settings: any of these is a hard ` +
-    `misevolution veto.\n` +
-    `5. Be a self-contained agentic loop.\n` +
-    (pathologies.length > 0
-      ? `6. Name the failure pathology it targets, as a tag line in the code: ` +
-        `\`${PATHOLOGY_TAG_EXAMPLE}\`, using one of the ids listed above. The archive is ` +
-        `read by pathology: a version that names none cannot be compared with the ones ` +
-        `that do, and cannot show whether that failure ever went away.\n`
-      : '') +
-    `\nReturn ONLY the JavaScript code, no explanation.`
-  );
-}
 
 /** Bounded because the lesson reaches every later turn once corroborated. */
 const TURN_REFLECTION_MAX_CHARS = 240;
@@ -179,18 +86,18 @@ const TURN_REFLECTION_MAX_CHARS = 240;
  */
 function buildTurnReflectionPrompt(input: {
   turn: CompletedTurn;
-  outcome: TurnOutcome | null;
-  quality: number;
+  rating: RatingVerdict;
   followup: string | null;
 }): string {
-  const { turn, outcome, quality, followup } = input;
+  const { turn, rating, followup } = input;
 
   const toolSummary = turn.toolCalls.length > 0
     ? `Tools used: ${turn.toolCalls.map((call) => call.name).join(', ')}`
     : 'No tools used';
 
   return (
-    `A recent interaction landed ${outcome ?? 'unobserved'} at ${quality.toFixed(2)}/1.0 quality.\n` +
+    `A recent interaction was rated ${rating.score.toFixed(1)}/5 by the user's reply` +
+    `${rating.wrong !== null && rating.wrong !== 'nothing' ? `; what went wrong: ${rating.wrong.replaceAll('_', ' ')}` : ''}.\n` +
     `User asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n` +
     `Response: "${evidenceWindow(turn.assistantResponse, EVIDENCE_BUDGETS.outcomeAssistantResponse)}"\n` +
     `${toolSummary}\n` +
@@ -208,7 +115,7 @@ function buildTurnReflectionPrompt(input: {
   );
 }
 
-/** Tombstone scope for one turn's two durable grading writes (`turn_outcomes` row
+/** Tombstone scope for one turn's two durable rating writes (`turn_ratings` row
  *  and craft EMA). Distinct from `turn_review`: a refusal after these writes retries
  *  the rest, not the writes. */
 const TURN_GRADED_SCOPE = 'turn_graded';
@@ -217,14 +124,18 @@ const TURN_GRADED_SCOPE = 'turn_graded';
  * pattern), so a refusal between them resumes rather than repeats. */
 const TURN_REVIEW_STEP_SCOPE = 'turn_review_step';
 
-/** An errored abandonment is the one case the error decides; a clean one stays
- *  neutral. Ungraded turns are priced only when they errored. */
-function turnQuality(outcome: TurnOutcome | null, source: TurnOutcomeSource, hadError: boolean): number | null {
-  if (outcome === null) return hadError ? 0.1 : null;
+/** A reply the model reads this surely as a correction is the user's own negative, as a thumbs-down is. */
+const CORROBORATING_CORRECTION = 0.8;
 
-  if (outcome === 'abandoned' && hadError) return 0.1;
+/** The rating the review decides by: the ledger's effective row, or an unkeyed turn's own reading. */
+type EffectiveRating = Pick<TurnRating, 'score' | 'corrected' | 'wrong' | 'source'>;
 
-  return outcomeQuality(outcome, source);
+/** Read-only calls prove nothing about whether the turn's work landed, so the
+ *  pattern extractor skips them. `fact` and `memory` name the same recall. */
+function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'args'>): boolean {
+  if (call.name === 'memory') return call.args.action === 'search' || call.args.action === 'recall';
+
+  return call.name === 'fact' && call.args.action === 'recall';
 }
 
 export class EvolutionEngine {
@@ -232,7 +143,6 @@ export class EvolutionEngine {
   private readonly history: SessionHistory;
   private readonly config: EvolutionConfig;
   private readonly listeners: EvolutionListener[] = [];
-  private feedbackTable: boolean | undefined;
   /** Also holds the durable closed-window count the lifetime timescale paces by. */
   private readonly agentConfig: AgentConfigStore;
   /** Every completed turn still owed evolution work, one row per turn.
@@ -265,8 +175,9 @@ export class EvolutionEngine {
     this.craftLedger = { names: () => craft().names(), observe: (names, quality) => craft().observe(names, quality) };
 
     // Created here so every backend gets the engine's ledgers without schema wiring.
-    initTurnOutcomeTables(rt.storage.execRaw);
-    initReplayTables(rt.storage.execRaw);
+    initLessonTables(rt.storage.execRaw);
+    initTurnRatingTables(rt.storage.execRaw);
+    initStruggleTables(rt.storage.execRaw);
     this.agentConfig = rt.actor.config;
     initCompletedTurnTable(rt.storage.execRaw);
     this.sessionWindow = createCompletedTurnStore(rt.storage.sql, rt.actor);
@@ -298,6 +209,16 @@ export class EvolutionEngine {
     return labels.length === 0
       ? this.fastLlm
       : this.config.governor?.govern(this.fastLlm, labels) ?? this.fastLlm;
+  }
+
+  /** The decision model under the turn's mission, as `reviewLlm` is. */
+  private reviewDecide(turn: CompletedTurn): DecisionPort | undefined {
+    const labels = turn.missionLabels ?? [];
+    const decide = this.rt.decide;
+
+    return decide === undefined || labels.length === 0
+      ? decide
+      : this.config.governor?.governDecision(decide, labels) ?? decide;
   }
 
   /** Inline where the backend supplies no transaction seam (a synchronous run is
@@ -390,163 +311,111 @@ export class EvolutionEngine {
     return (rows[0]?.n ?? 0) > 0;
   }
 
+  private announceReview(turn: CompletedTurn, rating: EffectiveRating | null): void {
+    this.emit({
+      type: 'turn_complete',
+      message: `Turn ${rating === null ? 'unrated' : `rated ${rating.score.toFixed(1)}/5 by ${rating.source}`}` +
+        ` | ${turn.toolCalls.length} tool calls | ${turn.steps} steps | ${turn.hadError ? 'had errors' : 'clean'}`,
+      data: {
+        rated: rating !== null,
+        score: rating?.score ?? null,
+        corrected: rating?.corrected ?? null,
+        wrong: rating?.wrong ?? null,
+        source: rating?.source ?? null,
+        quality: rating === null ? null : ratingQuality(rating.score),
+        toolCount: turn.toolCalls.length, steps: turn.steps, durationMs: turn.durationMs,
+      },
+    });
+  }
+
   /**
-     * Grade turn N from the user's follow-up and run turn-level evolution. `followup`
-     * null means no conversational follow-up can grade the turn (programmatic wakes,
-     * `kinu exec`). Explicit thumbs beat the classifier; trivial turns skip it; a
-     * classifier failure records nothing. `turn.hadError` still drives quality and a
-     * provisional reflection.
+     * Rate turn N from the user's follow-up and run turn-level evolution. `followup` null means no
+     * conversational follow-up exists (programmatic wakes, `kinu exec`), so only a thumb or pick can rate the
+     * turn. Either wins over the decision model's reading; trivial turns are not reviewed.
      */
   async reviewTurn(turn: CompletedTurn, followup: string | null): Promise<void> {
-    if (!this.config.enabled) return;
+    if (!this.config.enabled || isTrivialTurn(turn)) return;
 
-    let outcome: TurnOutcome | null = null;
-    let source: TurnOutcomeSource = 'classifier';
-    let confidence = 1;
-    let evidence = '';
-    // An Alternate Takes pick already wrote the ledger row; adopt it without letting
-    // the classifier overwrite it.
-    let preRecorded = false;
-
-    // Keyed on the turn so a retry after eviction or a later refusal does not repeat
-    // the grading writes. An empty id is not an identity.
+    // Keyed on the turn so a retry after eviction or a later refusal does not repeat the rating writes.
     const gradedKey = turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
 
-    // Checked before the classifier so a resumed review spends no model call. The
-    // tombstone, not the row, is the signal: an ungraded errored turn writes no row.
+    // Checked before the model so a resumed review spends no call. The tombstone, not the row, is the signal:
+    // an unrated turn writes no row.
     const graded = gradedKey !== null
       && effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_GRADED_SCOPE, gradedKey);
 
-    const recorded = graded ? recordedTurnVerdict(this.rt.storage.sql, this.rt.actor, gradedKey) : null;
+    const decide = this.reviewDecide(turn);
 
-    if (recorded) {
-      outcome = recorded.outcome;
-      source = recorded.source;
-      confidence = recorded.confidence;
-    }
+    // An answered turn's reading is recorded even under a thumb: the ledger's precedence decides which rating
+    // counts, so a thumb cleared later falls back to it.
+    const reading = graded || followup === null || decide === undefined ? null : await rateTurn(decide, {
+      request: turn.userMessage, actions: renderActions(turn.toolCalls), answer: turn.assistantResponse, followup,
+    }, turn.toolCalls.length);
 
-    const explicit = graded ? null : this.readExplicitFeedback(turn.turnId);
-    const pickedOutcome = graded || explicit ? null : takePickOutcome(this.rt.storage.sql, this.rt.actor, turn.turnId);
+    const effective = (): EffectiveRating | null => {
+      if (gradedKey !== null) return ratingOf(this.rt.storage.sql, this.rt.actor, gradedKey);
 
-    if (graded) {
-      // Resumed: the suffix below is what is still owed.
-    } else if (explicit) {
-      outcome = explicit === 'positive' ? 'accepted' : 'corrected';
-      source = 'explicit';
-    } else if (pickedOutcome) {
-      outcome = pickedOutcome;
-      source = 'take_pick';
-      preRecorded = true;
-    } else if (isTrivialTurn(turn)) {
-      return; // pre-filter: nothing to accept or correct, no LLM call
-    } else if (followup !== null) {
-      const c: OutcomeClassification | null = await classifyTurnOutcome(this.reviewLlm(turn), {
-        userMessage: turn.userMessage,
-        assistantResponse: turn.assistantResponse,
-        followup,
-      });
+      return reading === null ? null : { ...reading, source: 'model' };
+    };
 
-      if (!c) return; // classifier unusable — no signal beats a guessed one
-      outcome = c.outcome;
-      confidence = c.confidence;
-      evidence = c.evidence;
-    } else {
-      // No user signal, but the environment may still have a verdict on what the turn did.
-      const verdict = executionVerdict(turn);
-
-      if (verdict) {
-        outcome = executionVerdictOutcome(verdict);
-        source = 'execution';
-        evidence = verdict === 'succeeded'
-          ? 'every tool call this turn ran completed'
-          : 'the turn ended in an error';
-        // `source: 'execution'` and EXECUTION_QUALITY already discount the proxy.
-        confidence = 1;
-      }
-      // Not written as 'abandoned': a follow-up may still come, and the neutral 0.5
-      // would pull the craft EMA on no evidence. It is still announced with `graded: false`.
-    }
-
-    // Computed before the writes so all of them fit in one commit.
-    const quality = turnQuality(outcome, source, turn.hadError);
-
-    // Crafted tools are codemode-only, so they come from the turn record, not from
-    // the non-builtin tool names.
+    // Crafted tools are codemode-only, so they come from the turn record, not from the non-builtin tool names.
     const craftedToolNames = turn.craftedToolsUsed ?? [];
 
-    // `source`/`confidence` describe a verdict, so they are null on an ungraded turn.
-    // Announced once, last inside the commit, so a death cannot replay the writes.
-    const announce = (): void => { if (!graded) this.emit({
-      type: 'turn_complete',
-      message: `Turn outcome: ${outcome ?? 'ungraded (no follow-up)'}` +
-        (quality !== null ? ` | quality ${quality.toFixed(2)}` : '') +
-        ` | ${turn.toolCalls.length} tool calls | ${turn.steps} steps | ${turn.hadError ? 'had errors' : 'clean'}`,
-      data: {
-        outcome, graded: outcome !== null,
-        source: outcome ? source : null,
-        confidence: outcome ? confidence : null,
-        evidence, quality,
-        toolCount: turn.toolCalls.length, steps: turn.steps, durationMs: turn.durationMs,
-      },
-    }); };
-
-    // One commit for the verdict row, craft scores, tombstone and announcement: a
-    // synchronous run is atomic inside a Durable Object but not against a CLI kill.
+    // One commit for the rating row, craft scores, tombstone and announcement: a synchronous run is atomic
+    // inside a Durable Object but not against a CLI kill. Announced last, so a death cannot replay the writes.
     this.commit(() => {
-      if (outcome && !graded && !preRecorded) {
-        recordTurnOutcome(this.rt.storage.sql, this.rt.actor, {
-          turnId: turn.turnId ?? null,
-          outcome, confidence, source,
-          userMessage: turn.userMessage,
-          assistantResponse: turn.assistantResponse,
+      if (graded) return;
+
+      if (reading !== null && gradedKey !== null) {
+        recordTurnRating(this.rt.storage.sql, this.rt.actor, {
+          ...reading,
+          turnId: gradedKey,
+          source: 'model',
+          request: turn.userMessage,
+          actions: renderActions(turn.toolCalls),
+          answer: turn.assistantResponse,
           followup,
           scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
-          // The classifier's reason or the execution verdict's observation.
-          evidence,
         });
       }
 
+      const rated = effective();
+
       // A failed EMA write silences the retirement signal, so it is not swallowed.
-      if (quality !== null && craftedToolNames.length > 0 && !graded) {
-        updateCraftScores(this.rt.storage.sql, craftedToolNames, quality);
+      if (rated !== null && craftedToolNames.length > 0) {
+        updateCraftScores(this.rt.storage.sql, craftedToolNames, ratingQuality(rated.score));
       }
 
-      if (gradedKey !== null && !graded) {
+      if (gradedKey !== null) {
         recordEffectDone(this.rt.storage.sql, this.rt.actor, { scope: TURN_GRADED_SCOPE, key: gradedKey });
       }
 
-      announce();
+      this.announceReview(turn, rated);
     });
 
-    if (outcome && !graded) turn.feedback = outcomeToFeedback(outcome);
+    const rating = effective();
 
+    if (rating === null) return;
 
-    if (quality === null) {
-      // Programmatic and clean: the announcement is the whole output, so the marker
-      // is written here.
-      return;
-    }
+    const low = isLowRating(rating.score);
 
+    if (!graded) turn.feedback = feedbackOf(rating.score);
 
-    const negative = isNegativeOutcome(outcome);
-    // Only a person's negative verdict corroborates provisional lessons; an error is
-    // not a reader confirming the lesson, though it still warrants a provisional reflection.
-    const corroborated = negative && isUserVerdictSource(source);
+    // Only the user's own negative corroborates provisional lessons: a thumb, a pick, or a reply the model reads
+    // as a clear correction.
+    const corroborated = low && (rating.source !== 'model' || rating.corrected >= CORROBORATING_CORRECTION);
 
     if (corroborated) this.corroborateLessons(turn.turnId);
 
-    // Only a user verdict settles imported experience: a command exiting zero is not
-    // the corroboration that trust boundary requires.
-    if (isUserVerdictSource(source)) await this.settleImports(turn.turnId, outcome);
+    await this.settleImports(turn.turnId, rating.score);
 
-    // Negative signal of any provenance, or an error on an ungraded turn.
-    if (negative || ((outcome === 'abandoned' || outcome === null) && turn.hadError)) {
+    if (low) {
       // The lesson's own tombstone stops a retry from writing a second copy.
       const reflectionKey = gradedKey === null ? null : `${gradedKey}:reflection`;
 
       if (reflectionKey === null
         || !effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, reflectionKey)) {
-        const reflection = await this.generateTurnReflection(turn, outcome, quality, followup);
+        const reflection = await this.generateTurnReflection(turn, rating, followup);
 
         const lesson = {
           turnIds: turn.turnId ? [turn.turnId] : [],
@@ -569,15 +438,53 @@ export class EvolutionEngine {
       }
     }
 
-    if (promotesProcedure({ outcome, source, toolCalls: turn.toolCalls.length })) {
+    if (isHighRating(rating.score) && turn.toolCalls.length > 0) {
       // The key travels into the body so the marker lands beside the writes.
       const patternKey = gradedKey === null ? null : `${gradedKey}:pattern`;
 
       if (patternKey === null
         || !effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, patternKey)) {
-        await this.extractPattern(turn, quality, patternKey);
+        await this.extractPattern(turn, ratingQuality(rating.score), patternKey);
       }
     }
+  }
+
+  /**
+   * The `turn_lessons` terminal effect's body, apart from the turn's rating, which may wait on a reply that never
+   * comes: records its struggles and scores the lessons it was shown, then has the fast tier write one lesson about
+   * the tool it struggled with most. Each part has its tombstone, so a retry neither rescores nor asks again; a
+   * refusal throws, for the ledger to retry or park. A turn with no id has none to key them by.
+   */
+  async learnFromTurn(completed: CompletedTurn): Promise<void> {
+    if (!this.config.enabled || completed.turnId === undefined || completed.turnId === '' || !owesTurnLessons(completed)) return;
+    const turn = { ...completed, turnId: completed.turnId };
+    const { sql } = this.rt.storage;
+    const { actor } = this.rt;
+    const recordKey = `${turn.turnId}:struggles`;
+
+    if (!effectAlreadyDone(sql, actor, TURN_REVIEW_STEP_SCOPE, recordKey)) {
+      this.commit(() => {
+        recordTurnStruggles(sql, actor, turn);
+        scoreToolLessons(sql, actor, turn);
+        recordEffectDone(sql, actor, { scope: TURN_REVIEW_STEP_SCOPE, key: recordKey });
+      });
+    }
+
+    const struggle = teachingStruggle(turn.struggles ?? []);
+    const lessonKey = `${turn.turnId}:struggle-lesson`;
+
+    if (struggle === null || effectAlreadyDone(sql, actor, TURN_REVIEW_STEP_SCOPE, lessonKey)) return;
+    const prompt = struggleLessonPrompt(turn, struggle, listToolLessons(sql, actor, [struggle.tool], MAX_TOOL_LESSONS));
+    const said = await this.reviewLlm(turn).complete(prompt);
+    const answer = v.safeParse(StruggleLessonSchema, tolerate(() => extractJsonObject(said), 'malformed-input'));
+
+    // Unusable output is not asked for again.
+    this.commit(() => {
+      if (answer.success) applyStruggleLesson(sql, actor, { turnId: turn.turnId, tool: struggle.tool, answer: answer.output });
+      recordEffectDone(sql, actor, { scope: TURN_REVIEW_STEP_SCOPE, key: lessonKey });
+    });
+
+    if (answer.success) this.emit({ type: 'reflection', message: `Lesson for \`${struggle.tool}\`: ${answer.output.text}` });
   }
 
   /**
@@ -663,43 +570,33 @@ export class EvolutionEngine {
   }
 
   /**
-     * Explicit thumbs from setTurnFeedback. Upserts the turn_outcomes ledger
-     * (explicit overrides the classifier); a negative corroborates provisional lessons.
+     * A thumb from setTurnFeedback is the user's own rating: it wins over the model's, and a thumbs-down
+     * corroborates provisional lessons. Cleared, the turn falls back to the model's rating.
      */
-  async applyExplicitFeedback(messageId: string, feedback: 'positive' | 'negative'): Promise<void> {
-    // A failed read is a fault: a row with blank texts would poison downstream evals.
+  async applyExplicitFeedback(messageId: string, feedback: 'positive' | 'negative' | null): Promise<void> {
+    if (feedback === null) {
+      retractThumbs(this.rt.storage.sql, this.rt.actor, messageId);
+
+      return;
+    }
+
+    // A failed read is a fault: a row with blank texts would poison the bad and good turn sets.
     const pair = await conversationTurnPair(this.history.transcript(CHAT_SESSION_ID), messageId);
-    recordTurnOutcome(this.rt.storage.sql, this.rt.actor, {
+    recordTurnRating(this.rt.storage.sql, this.rt.actor, {
+      ...thumbsRating(feedback),
       turnId: messageId,
-      outcome: feedback === 'positive' ? 'accepted' : 'corrected',
-      confidence: 1,
-      source: 'explicit',
-      userMessage: pair?.request ?? '',
-      assistantResponse: pair?.response ?? '',
-      followup: null,
+      source: 'thumbs',
+      request: pair?.request ?? '',
+      answer: pair?.response ?? '',
       scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
     });
 
     if (feedback === 'negative') this.corroborateLessons(messageId);
   }
 
-  /** The ledger row is already written by recordTakePick; a correction
-     *  corroborates provisional lessons like a thumbs-down. */
-  applyTakePick(turnId: string | null, outcome: 'accepted' | 'corrected'): void {
-    if (outcome === 'corrected' && turnId) this.corroborateLessons(turnId);
-  }
-
-  /** turn_feedback is cf-backend-only (conformance/manifest.ts), so its absence is
-     *  checked explicitly rather than inferred from an exception. */
-  private readExplicitFeedback(turnId?: string): 'positive' | 'negative' | null {
-    this.feedbackTable ??= tableExists(this.rt.storage.sql, 'turn_feedback');
-
-    if (!turnId || !this.feedbackTable) return null;
-
-    // Scoped: message ids are minted per actor, so an unscoped read can return a sibling's row.
-    return this.rt.storage.sql<{ feedback: 'positive' | 'negative' }>`
-      SELECT feedback FROM turn_feedback
-      WHERE actor_id = ${this.rt.actor.actorId} AND message_id = ${turnId} LIMIT 1`[0]?.feedback ?? null;
+  /** The rating is already written by recordTakePick; picking an alternate corroborates like a thumbs-down. */
+  applyTakePick(turnId: string | null, delivered: boolean): void {
+    if (!delivered && turnId) this.corroborateLessons(turnId);
   }
 
   /** A row-status change only; readers derive from that status. */
@@ -711,15 +608,16 @@ export class EvolutionEngine {
      * The only path by which another workspace's imported experience joins this one,
      * settled by a graded turn's verdict. An ungraded turn settles nothing.
      */
-  private async settleImports(turnId: string | undefined, outcome: TurnOutcome | null): Promise<void> {
-    if (!turnId || outcome === null || outcome === 'abandoned') return;
+  private async settleImports(turnId: string | undefined, score: number): Promise<void> {
+    const feedback = feedbackOf(score);
+
+    if (!turnId || feedback === null) return;
+    const verdict = feedback === 'positive' ? 'accepted' : 'rejected';
     // Not caught: a wide catch would also absorb a failed adoption and leave the
     // import staged forever.
     bindPendingImports(this.rt.storage.sql, this.rt.actor, turnId);
 
-    const settled = await settleImportsForTurn(
-      this.rt, turnId, outcome === 'accepted' ? 'accepted' : 'rejected',
-    );
+    const settled = await settleImportsForTurn(this.rt, turnId, verdict);
 
     if (settled.corroborated.length === 0 && settled.discarded.length === 0) return;
 
@@ -729,10 +627,10 @@ export class EvolutionEngine {
     this.emit({
       type: 'experience_import',
       message: settled.corroborated.length > 0
-        ? `Adopted imported experience after an accepted turn: ${describe(settled.corroborated)}`
-        : `Discarded imported experience after a ${outcome} turn: ${describe(settled.discarded)}`,
+        ? `Adopted imported experience after a turn rated ${score.toFixed(1)}/5: ${describe(settled.corroborated)}`
+        : `Discarded imported experience after a turn rated ${score.toFixed(1)}/5: ${describe(settled.discarded)}`,
       data: {
-        outcome,
+        score,
         corroborated: settled.corroborated.map((r) => r.libraryId),
         discarded: settled.discarded.map((r) => r.libraryId),
       },
@@ -749,7 +647,7 @@ export class EvolutionEngine {
     const windowsClosed = this.agentConfig.countClosedTurnWindow();
 
     if (session.turns.length >= 3 && this.sessionWarrantsReflection(session)) {
-      await this.onSessionReflection(session, windowsClosed);
+      await this.onSessionReflection(session);
     }
 
     if (windowsClosed % this.config.lifetimeEvolutionInterval === 0) {
@@ -761,37 +659,28 @@ export class EvolutionEngine {
   }
 
   /**
-     * Record a completed turn as shadow evidence: one row, no inference. `plan` is
-     * the caller's sampling decision (`shadowTrialPlan`), so a replay records the same trial.
+     * The cadence lane's evolution pass: a look at the live trial, then a waiting candidate's trial when the owner
+     * has trials on, then, with no trial running, one proposer search if a trigger holds. Never rejects: each step's
+     * rows are durable, so a failure is said and the next pass resumes.
      */
-  queueShadowTrial(
-    turn: CompletedTurn, context: readonly ModelMessage[], plan: ShadowTrialPlan,
-  ): ShadowTrialQueueOutcome {
-    if (!this.config.enabled) return 'not_sampled';
-
-    return this.config.shadowTrialQueue?.({
-      task: turn.userMessage,
-      currentOutput: turn.assistantResponse,
-      context,
-    }, plan) ?? 'not_sampled';
-  }
-
-  /**
-     * Run queued trials for the pending scaffold. Due whenever a capable host asks,
-     * not on the session window: `maybeEvolveScaffold` refuses to propose while one is
-     * pending, so gating it there would stall the loop. Absorbs its own failures.
-     * Gated on `enabled`; the queue is durable for the next enabled host.
-     */
-  async runDueShadowTrials(): Promise<void> {
-    if (!this.config.enabled || !this.config.shadowTrialRunner) return;
+  async runDueEvolution(): Promise<void> {
+    if (!this.recordsTurns || this.rt.actor.parentActorId !== null) return;
+    const { sql } = this.rt.storage;
+    const { actor } = this.rt;
 
     try {
-      await this.config.shadowTrialRunner();
+      advanceTrial(sql, actor);
+
+      if (this.agentConfig.getLiveTrials()) startTrial(sql, actor);
+
+      if (runningTrial(sql, actor) !== null || this.rt.decide === undefined) return;
+      const outcome = await runProposer({ rt: this.rt, decide: this.rt.decide, reflect: this.rt.judgeModel ?? this.rt.llm, now: Date.now() });
+
+      if (outcome.kind === 'searched') {
+        this.emit({ type: 'reflection', message: `Proposer searched ${outcome.artifactId}: ${outcome.detail}` });
+      }
     } catch (err) {
-      diagnostics.failure(
-        'evolution.shadow_trial_drain_failed',
-        toKinuError({ doing: 'drain the due shadow trials', cause: err, otherwise: 'unavailable' }),
-      );
+      diagnostics.failure('evolution.proposer_failed', toKinuError({ doing: 'run the evolution pass', cause: err, otherwise: 'unavailable' }));
     }
   }
 
@@ -810,17 +699,17 @@ export class EvolutionEngine {
     });
   }
 
-  /** An error, negative feedback, or a recorded corrected/frustrated outcome. */
+  /** An error, or a turn rated low. */
   private sessionWarrantsReflection(session: CompletedSession): boolean {
     if (session.turns.some(t => t.hadError || t.feedback === 'negative')) return true;
     const turnIds = session.turns.map(t => t.turnId).filter((id): id is string => id !== undefined && id !== '');
 
-    return hasNegativeOutcome(this.rt.storage.sql, this.rt.actor, turnIds);
+    return hasLowRating(this.rt.storage.sql, this.rt.actor, turnIds);
   }
 
   /** Self-scored prose enters corroborated lessons only when a recorded outcome
      *  already backs the window; otherwise it stays provisional. */
-  private async onSessionReflection(session: CompletedSession, windowsClosed: number): Promise<void> {
+  private async onSessionReflection(session: CompletedSession): Promise<void> {
     // Input is the ledger's corroborated lessons, not a memory file's contents.
     const recentLessons = renderRecentLessons(this.rt.storage.sql, this.rt.actor, 5);
 
@@ -834,7 +723,7 @@ export class EvolutionEngine {
     );
 
     const turnIds = session.turns.map(t => t.turnId).filter((id): id is string => id !== undefined && id !== '');
-    const corroborated = hasNegativeOutcome(this.rt.storage.sql, this.rt.actor, turnIds);
+    const corroborated = hasLowRating(this.rt.storage.sql, this.rt.actor, turnIds);
     recordLesson(this.rt.storage.sql, this.rt.actor, {
       turnIds,
       text: reflection,
@@ -843,149 +732,20 @@ export class EvolutionEngine {
     });
 
     this.emit({ type: 'reflection', message: `Session reflection${corroborated ? '' : ' [provisional]'}: ${reflection.slice(0, 100)}...` });
-
-    if (windowsClosed >= 3) {
-      await this.maybeEvolveScaffold(reflection);
-    }
   }
 
-  /** Only an archived stepping stone needs the versioned-backup read (v0 has no backup). */
-  private async readBaseScaffold(base: EvolutionBaseSelection | null, currentScaffold: string): Promise<string | null> {
-    if (base === null) return null;
-
-    if (base.mode === 'current') return currentScaffold;
-
-    return readScaffoldVersion(this.rt, base.version);
-  }
-
-  /** A rejected proposal is a returned value, so nothing here is wrapped in a catch
-     *  that would also swallow real faults. */
-  private async maybeEvolveScaffold(reflection: string): Promise<void> {
-    const scaffoldExists = await this.rt.identity.scaffold.exists();
-
-    if (!scaffoldExists) return;
-
-    // One proposal in flight at a time; consecutive windows would orphan pending versions.
-    const pending = this.rt.storage.sql<{ version: number }>`
-      SELECT version FROM scaffold_versions
-      WHERE actor_id = ${this.rt.actor.actorId} AND status = 'pending' LIMIT 1
-    `;
-
-    if (pending.length > 0) {
-      this.emit({
-        type: 'scaffold_proposed',
-        message: `Skipped: scaffold v${pending[0].version} is still pending shadow evaluation`,
-      });
-
-      return;
-    }
-
-    const currentScaffold = await this.rt.identity.scaffold.read();
-
-    if (!currentScaffold || currentScaffold.length < 50) return;
-
-    // DGM archive branching (scaffold/archive.ts selectEvolutionBase), weighted by
-    // shadow record and real turn outcomes, aggregated over descendant lineage.
-    const archive = listScaffoldArchive(this.rt.storage.sql, this.rt.actor, 12);
-    const realRates = realOutcomeScaffoldRates(this.rt.storage.sql, this.rt.actor);
-
-    const base = selectEvolutionBase(blendRealOutcomeRates(archive, realRates), {
-      exploreShare: this.agentConfig.getScaffoldExploreShare(),
-    });
-
-    const baseCode = await this.readBaseScaffold(base, currentScaffold);
-
-    // Cells are deterministic (evolution/pathology.ts); the model only phrases titles.
-    const pathologies = await labelPathologyClusters(this.fastLlm, clusterPathologies(
-      listTurnOutcomes(this.rt.storage.sql, this.rt.actor, { limit: 60, outcomes: NEGATIVE_TURN_OUTCOMES }),
-    ));
-
-    const rejections = new Map(
-      listRejectedProposals(this.rt.storage.sql, this.rt.actor, 12)
-        .flatMap((r) => (r.version === null ? [] : [[r.version, r.reason] as const])),
-    );
-
-    const proposed = await this.rt.llm.complete(
-      buildScaffoldProposalPrompt(
-        baseCode ?? currentScaffold,
-        reflection,
-        base && baseCode ? { base, entries: archive, realRates, rejections } : undefined,
-        pathologies,
-      ),
-    );
-
-    if (!proposed.includes('async function* run')) return;
-
-    const code = stripMarkdownFences(proposed);
-
-    const branchNote = base && baseCode
-      ? `branched from v${base.version}${base.mode === 'explore' ? ' (archive stepping stone)' : ''}`
-      : 'branched from the live scaffold';
-
-    const rationale = `Session reflection, ${branchNote}: ${reflection.slice(0, 100)}`;
-
-    const result = await modifyScaffold(
-      this.rt, rationale, code,
-      base && baseCode ? { baseVersion: base.version } : undefined,
-    );
-
-    if (!result.ok) return;
-    // The same parse modifyScaffold stamped the row with, so event and row agree.
-    const targeted = parsePathologyTag(code);
-    this.emit({
-      type: 'scaffold_proposed',
-      message: `Scaffold evolved to v${result.version} (${branchNote}): ${reflection.slice(0, 60)}` +
-        (targeted ? `: targets ${describePathology(targeted)}` : ''),
-    });
-  }
-
-  /** Lifetime cycle, automatic every N windows. No replay eval here: GEPA's seed scoring already
-   *  re-executes the same ledger, and no decision reads the replay curve. */
+  /** Lifetime cycle, automatic every N windows. */
   async onLifetimeEvolution(): Promise<void> {
     await periodicCraftConsolidation(this.rt);
     this.emit({ type: 'consolidation', message: 'CraftStore consolidation complete' });
   }
 
-  /**
-     * Re-run a sample of outcome-labeled turns against the current config and score
-     * against the recorded outcome, persisted to replay_evals. On demand only. Null
-     * without a runner or labeled turns. A failed re-run or verdict scores 0.
-     */
-  async runReplayEval(sampleSize?: number): Promise<ReplayEvalSummary | null> {
-    const runTask = this.config.replayTaskRunner;
-
-    if (!runTask) return null;
-
-    const summary = await runReplayEval({
-      sql: this.rt.storage.sql,
-      actor: this.rt.actor,
-      judge: this.rt.judgeModel ?? this.rt.llm,
-      runTask,
-      sampleSize,
-      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
-    });
-
-    if (summary) {
-      this.emit({
-        type: 'replay_eval',
-        message: `Replay eval: loss ${formatScoreInterval(lossInterval(summary.interval))} ` +
-          `over ${summary.sampleSize} labeled turns ` +
-          `(${summary.acceptedCount} accepted / ${summary.negativeCount} corrected)`,
-        data: summary,
-      });
-    }
-
-    return summary;
-  }
-
   /** The user's correction is the strongest context when present. The answer is
      *  truncated rather than rejected (as in advisor/review.ts). */
   private async generateTurnReflection(
-    turn: CompletedTurn, outcome: TurnOutcome | null, quality: number, followup: string | null,
+    turn: CompletedTurn, rating: RatingVerdict, followup: string | null,
   ): Promise<string> {
-    const raw = await this.reviewLlm(turn).complete(
-      buildTurnReflectionPrompt({ turn, outcome, quality, followup }),
-    );
+    const raw = await this.reviewLlm(turn).complete(buildTurnReflectionPrompt({ turn, rating, followup }));
 
     return raw.trim().slice(0, TURN_REFLECTION_MAX_CHARS);
   }

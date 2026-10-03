@@ -58,7 +58,9 @@ export {
   type ClaudeOAuthClient, type ClaudeSignIn,
 } from './claude-oauth';
 
-export { CLAUDE_LOGIN_ISSUER, subscriptionIssuer, type SubscriptionIssuer } from './subscription-login';
+export {
+  CLAUDE_LOGIN_ISSUER, rotateLogin, subscriptionIssuer, usableLogin, type LoginRenewal, type SubscriptionIssuer,
+} from './subscription-login';
 
 export * from './fetch-shim';
 
@@ -75,7 +77,7 @@ export {
   type CallAccount, type QuotaSnapshot, type QuotaWindow,
 } from './quota';
 
-export * from './judge-model';
+export * from './decision-model';
 
 export * from './workers-ai-catalog';
 

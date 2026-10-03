@@ -3,7 +3,7 @@
 import type { ForkFileSink } from '../identity/fork-sink';
 import type { ForkFileSource } from '../identity/fork';
 import type { ArchiveFileSource, ArchiveFileTarget, ArchivePinnedStore, ArchiveStoreSource, ArchiveStoreTarget } from '../identity/archive';
-import { isWorkspaceSoul, storeDurableSoulDb, summarizeSoul } from '../identity/soul';
+import { isWorkspaceSoul, storeDurableSoulDb } from '../identity/soul';
 import { tolerate } from '../obs/index';
 import { resealWorkspaceSoul, sealWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
@@ -83,8 +83,6 @@ function forkSinkOver(
     },
     async publishSoul(bytes) {
       await publishSoul(bytes);
-
-      return { mission: summarizeSoul(new TextDecoder().decode(bytes)) };
     },
     async remove(paths) {
       const plane = (await store()).as(CRED_SESSION_USER);

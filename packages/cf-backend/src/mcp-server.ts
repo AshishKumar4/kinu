@@ -21,7 +21,7 @@ import type {
   RunEventQuery,
   RunListEntry,
   ScaffoldRunReport,
-  ShadowStatus,
+  EvolutionStatus,
   ToolListEntry,
 } from "@kinu.run/core";
 import { RUN_EVENT_LIMIT_MAX } from "@kinu.run/core";
@@ -62,7 +62,7 @@ export interface McpAgentClient {
   saveNoteFromMcp(content: string): Promise<{ ok: true }>;
   getToolList(): Promise<{ builtIn: string[]; crafted: ToolListEntry[] }>;
   runScaffoldOnce(task: string, opts?: { useShadowOverride?: boolean }): Promise<ScaffoldRunReport>;
-  getShadowStatus(): Promise<ShadowStatus>;
+  getEvolutionStatus(): Promise<EvolutionStatus>;
   listRuns(request: PageRequest): Promise<Page<RunListEntry>>;
   getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]>;
   runTaskFromMcp(text: string): Promise<EnqueueTurnResult>;
@@ -172,10 +172,10 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
   server.registerTool(
     "run_scaffold_once",
     {
-      description: "Execute the agent's current scaffold (or its pending shadow) for a one-shot test task. Returns captured events.",
+      description: "Execute the agent's current scaffold (or its pending proposal) for a one-shot test task. Returns captured events.",
       inputSchema: {
         task: z.string(),
-        useShadowOverride: z.boolean().optional().describe("If true, runs the pending shadow scaffold instead of the current one."),
+        useShadowOverride: z.boolean().optional().describe("If true, runs the pending proposed scaffold instead of the current one."),
       },
     },
     async ({ task, useShadowOverride }) => {
@@ -200,19 +200,19 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
   );
 
   server.registerTool(
-    "get_shadow_status",
+    "get_evolution_status",
     {
-      description: "Return the current scaffold shadow-rollout state: pending version, trial counts, recommendation.",
+      description: "Return what evolution has in flight: the scaffold proposal awaiting the owner, the live trial, and the edits waiting for one.",
       inputSchema: {},
     },
     async () => {
       try {
         const agent = await resolveAgent(agentName);
-        const status = await agent.getShadowStatus();
+        const status = await agent.getEvolutionStatus();
 
         return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `get_shadow_status error: ${mcpToolFailure({ tool: "get_shadow_status", cause: err })}` }] };
+        return { content: [{ type: "text", text: `get_evolution_status error: ${mcpToolFailure({ tool: "get_evolution_status", cause: err })}` }] };
       }
     },
   );

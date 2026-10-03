@@ -31,7 +31,7 @@ const TWINS = {
   revokeInstruction: SHARED, listDeferredApprovals: SHARED, decideDeferredApprovals: SHARED,
   listBackgroundJobs: SHARED, jobResult: SHARED, cancelBackgroundJob: SHARED,
   createTimerTrigger: SHARED, cancelTrigger: SHARED, listRuns: SHARED, getRunEvents: SHARED,
-  getShadowStatus: SHARED, applyScaffoldDecision: SHARED, runScaffoldGepaOptimization: SHARED,
+  getEvolutionStatus: SHARED, applyScaffoldDecision: SHARED, runOptimization: SHARED,
   getEvolutionChangelog: SHARED, revertChangelogEntry: SHARED, markChangelogSeen: SHARED,
   latestAlternateTakes: SHARED, pickAlternateTake: SHARED,
   getActivePlanReview: SHARED, savePlanReviewAnnotations: SHARED, decidePlanReview: SHARED,

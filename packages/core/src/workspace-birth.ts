@@ -1,15 +1,16 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
-import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { AgentRuntime } from './types/agent-runtime';
 import type { RawSqlExec, SqlExecutor, Storage } from './types/primitives';
 import type { LLMProviderConfig } from './llm';
 import { initAllTables } from './state/workspace-schema';
 import { seedSoul, UNTITLED_WORKSPACE_NAME } from './identity/soul';
 import {
-  createInlineCraftStore, createInlineExecutor, createInlineMemory,
+  createInlineCraftStore, createInlineExecutor,
   createInlineWorkspace, wrapDatabase, type AgentDatabase,
 } from './identity/inline-primitives';
-import { INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap';
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
+import { adaptMemory } from './memory/vector-sync';
+import { bootstrapScaffold } from './scaffold/bootstrap';
 import { nanoid } from './utils/nanoid';
 import { nowMs } from './utils/date';
 import { createVercelAILLM } from './llm';
@@ -46,7 +47,9 @@ interface WorkspaceComponents {
 function buildComponents(components: WorkspaceComponents) {
   const { db, sql, execRaw, transactionSync, workspace, actor } = components;
   const vfs = workspace.vfs;
-  const memory = createInlineMemory(db, vfs);
+  const memoryStore = new MemoryStore(vfs, sql);
+  memoryStore.ensureSchema();
+  const memory = adaptMemory(memoryStore, vfs);
   const craftStore = createInlineCraftStore(db);
   const executor = createInlineExecutor();
   initRunEventTables(execRaw);
@@ -88,19 +91,14 @@ export async function createWorkspace(
   const titled = config.title?.trim();
   const heading = titled === undefined || titled === '' ? UNTITLED_WORKSPACE_NAME : titled;
 
-  await seedSoul(sql, { name: heading, mission: config.purpose }, (content) => writeWorkspaceSoul(workspace, content));
-
-  await workspace.vfs.mkdir('scaffold', { recursive: true });
-  // The versioned source is authoritative; agent.js is its rebuildable view.
-  const scaffoldSource = config.scaffold ?? INITIAL_SCAFFOLD_SOURCE;
-  await writeText(workspace.vfs, 'scaffold/agent.js.v0', scaffoldSource);
-  void sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
-    VALUES (${actor.actorId}, 0, ${nowMs()}, ${'initial bootstrap'})`;
-  markStoreChanged(sql);
-  await writeText(workspace.vfs, 'scaffold/agent.js', scaffoldSource);
+  await seedSoul({ name: heading, mission: config.purpose }, (content) => writeWorkspaceSoul(workspace, content));
 
   await workspace.vfs.mkdir('memory', { recursive: true });
   await writeText(workspace.vfs, 'memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
+  const rt = buildComponents({ db, sql, execRaw, transactionSync, workspace, actor, llm: config.llm });
 
-  return buildComponents({ db, sql, execRaw, transactionSync, workspace, actor, llm: config.llm });
+  // The loop's versioned source, its pointer and its live view, through the one writer every reopen heals with.
+  await bootstrapScaffold(rt, config.scaffold);
+
+  return rt;
 }

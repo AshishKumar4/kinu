@@ -323,10 +323,7 @@ describe('/undo command surface', () => {
 describe('/advisor command surface', () => {
   function advisorClient(): AgentClient {
     const config: EvolutionConfigView = {
-      autoPromoteScaffold: false,
-      gepaEvalBudget: 0,
-      shadowSampleRate: 0,
-      scaffoldExploreShare: 0,
+      liveTrials: false,
       advisorEnabled: false,
       advisorMinSeverity: DEFAULT_ADVISOR_MIN_SEVERITY,
     };

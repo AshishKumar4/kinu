@@ -227,8 +227,9 @@ function makeFs(workspace, cwd) {
 function makeChildProcess(workspace) {
   function exec(command, optionsOrCallback, maybeCallback) {
     const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
+    const options = typeof optionsOrCallback === 'object' && optionsOrCallback !== null ? optionsOrCallback : {};
     const promise = (async () => {
-      const outcome = parseExec(await workspace.exec(String(command)));
+      const outcome = parseExec(await workspace.exec(String(command), options.cwd === undefined ? {} : { cwd: String(options.cwd) }));
       if (outcome.exitCode !== 0) {
         const error = new Error('Command failed: ' + command + '\n' + outcome.stderr);
         error.code = outcome.exitCode;
@@ -245,7 +246,8 @@ function makeChildProcess(workspace) {
   function execFile(file, args, optionsOrCallback, maybeCallback) {
     const argv = Array.isArray(args) ? args : [];
     const callback = typeof args === 'function' ? args : (typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback);
-    return exec([file, ...argv].map(shellQuote).join(' '), callback);
+    const options = typeof optionsOrCallback === 'object' && optionsOrCallback !== null ? optionsOrCallback : {};
+    return exec([file, ...argv].map(shellQuote).join(' '), options, callback);
   }
   const viaExec = (args) => 'const { stdout } = await require("child_process").exec(' + JSON.stringify(String(args[0])) + ')';
   const viaExecFile = (args) => 'const { stdout } = await require("child_process").execFile(' + JSON.stringify(String(args[0])) + ', ' + JSON.stringify(Array.isArray(args[1]) ? args[1].map(String) : []) + ')';

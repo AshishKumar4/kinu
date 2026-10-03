@@ -1,7 +1,10 @@
 /** A real hosted actor per head and node over the caller's one workspace database, via the production
  *  directory, `createActorHost` and `seedActorLoop`; a mocked session would pass while writing no claim. */
 import type { Database } from 'bun:sqlite';
-import { makeSqlExec } from './helpers';
+import { makeSqlExec, storesFor } from './helpers';
+import { WorkspaceJobAuthorities } from '../src/jobs/authorities';
+import { BackgroundJobRunner } from '../src/jobs/runner';
+import { initBackgroundJobsTable } from '../src/jobs/store';
 import { KinuError } from '../src/obs/error';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
@@ -61,6 +64,8 @@ export interface HostedSeats {
   seat(name: string, origin: 'agent' | 'swarm'): Promise<FixtureSeat>;
   /** `hostNode` over these seats: one actor per node id, all over the one database. */
   readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
+  /** The workspace's job registry every seat's loop attaches to; its root is the caller's runtime's actor. */
+  readonly jobs: WorkspaceJobAuthorities;
 }
 
 /** Host logical actors as children of the caller's runtime. `db` is needed because the retirement
@@ -94,6 +99,15 @@ export function hostedSeatsOver(input: {
   /** Timers the orchestration scheduled, held rather than fired. */
   const timers: Array<{ readonly fn: () => Promise<void>; readonly ms: number }> = [];
   const seats = new Map<string, FixtureSeat>();
+  initBackgroundJobsTable(execRaw);
+  const rootStore = storesFor(rt).jobs;
+
+  const rootJobs = {
+    kind: 'root', actorId: rt.actor.actorId, store: rootStore,
+    runner: new BackgroundJobRunner({ store: rootStore, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'queued' } }),
+  } as const;
+
+  const jobs = new WorkspaceJobAuthorities({ root: () => rootJobs, revive: () => null });
 
   /** The caller's runtime, re-addressed: same database and executor, but its own handle and SCAFFOLD path,
    *  since `seedActorLoop` writes a per-actor version file. */
@@ -189,6 +203,7 @@ export function hostedSeatsOver(input: {
         inputs: { envelope: ENVELOPE, provider: PROVIDER },
       }),
       dynamic: () => ({}),
+      jobs: { ports: { jobOutput: () => {} }, attach: (authority) => jobs.attach(authority) },
     };
 
     seats.set(name, seated);
@@ -203,6 +218,7 @@ export function hostedSeatsOver(input: {
     enqueued,
     seat,
     hostNode: (node) => seat(node.nodeId, 'swarm'),
+    jobs,
   };
 }
 

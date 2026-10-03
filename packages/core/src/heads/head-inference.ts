@@ -490,7 +490,7 @@ interface CompletedTurnReview {
 
 /** Hires the turn's advisor and returns: its note reaches this actor when it answers, after this turn. */
 async function adviseCompletedTurn({ session, input, deps, lease, outcome }: CompletedTurnReview): Promise<void> {
-  const turn = snapshotCompletedTurn(session.orchestrator.acc, {
+  const turn = snapshotCompletedTurn(session.orchestrator, {
     userMessage: input.task, assistantResponse: outcome.text,
     turnId: `${deps.runId}:${lease.turnId}`, sessionId: input.id, origin: 'programmatic',
   });

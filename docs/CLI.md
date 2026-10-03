@@ -73,9 +73,8 @@ kinu <command> [options]
 | [`kinu swarm <name> [nodeId]`](#kinu-swarm-name-nodeid) | Show a workspace's swarm search history |
 | [`kinu heads <name>`](#kinu-heads-name) | Show parallel reasoning branch runs |
 | [`kinu debug <name>`](#kinu-debug-name) | Save everything about a workspace to one file: identity, messages, runs and their events, heads, swarm searches, background jobs, evolution state, memory and facts |
-| [`kinu gepa <name> [runId]`](#kinu-gepa-name-runid) | Show GEPA optimisation runs, or run one pass with --run |
-| [`kinu alignment <name>`](#kinu-alignment-name) | Show K_align: corrections per 100 graded turns for each scaffold version, with 95% intervals |
-| [`kinu label [action] [name] [file]`](#kinu-label-action-name-file) | Label turn outcomes by hand to measure and correct the classifier (export, ingest, ensemble, report), or build a corpus from Claude Code transcripts (mine, score) |
+| [`kinu gepa <name> [runId]`](#kinu-gepa-name-runid) | Show GEPA searches, or run one over the scaffold with --run |
+| [`kinu quality <name>`](#kinu-quality-name) | Show satisfaction per day: the mean rating of the turns users answered, with 95% intervals |
 
 ### This computer
 
@@ -603,50 +602,29 @@ kinu debug jarvis -o jarvis.debug.jsonl
 
 ### kinu gepa <name> [runId]
 
-Show GEPA optimisation runs, or run one pass with --run.
+Show GEPA searches, or run one over the scaffold with --run.
 
 | Option | What it does |
 | --- | --- |
-| `--run` | Run one optimisation pass over the scaffold |
-| `--iterations <n>` | Reflection iterations (--run) |
-| `--eval-size <n>` | Labeled turns to draw the split from (--run) |
-| `--metric-calls <n>` | Most metric calls to make (--run) |
+| `--run` | Run one proposer search over the scaffold, judged on recent turns without running it |
 | `--limit <n>` | Run limit |
 | `--json` | Print raw JSON |
 
 ```bash
-kinu gepa jarvis --run --iterations 3
+kinu gepa jarvis --run
 ```
 
-### kinu alignment <name>
+### kinu quality <name>
 
-Show K_align: corrections per 100 graded turns for each scaffold version, with 95% intervals.
+Show satisfaction per day: the mean rating of the turns users answered, with 95% intervals.
 
 | Option | What it does |
 | --- | --- |
+| `--days <n>` | Days to show (default: 30) |
 | `--json` | Print raw JSON |
 
 ```bash
-kinu alignment jarvis
-```
-
-### kinu label [action] [name] [file]
-
-Label turn outcomes by hand to measure and correct the classifier (export, ingest, ensemble, report), or build a corpus from Claude Code transcripts (mine, score).
-
-| Option | What it does |
-| --- | --- |
-| `--out <file>` | Where to write the labeling file (export) or the corpus report (mine, score) |
-| `--size <n>` | Turns to draw (export) |
-| `--labeler <name>` | Who is labeling (ingest) |
-| `--models <a,b>` | Judges to run, comma-separated (ensemble, score; default: one per connected vendor) |
-| `--root <dir>` | Claude Code transcript root (mine, score; default: ~/.claude/projects) |
-| `--projects <a,b>` | Only projects whose directory name contains one of these (mine, score) |
-| `--limit <n>` | Labeled turns to put to the raters (score; default: 25) |
-| `--json` | Print raw JSON |
-
-```bash
-kinu label export jarvis --size 20
+kinu quality jarvis
 ```
 
 ### kinu connect

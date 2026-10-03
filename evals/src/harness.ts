@@ -217,12 +217,16 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
   if (outcome.status !== 'completed') return { outcome, checks: [], turnWallMs, verificationWallMs: 0 };
 
   const replies = repliesTo(history, turn.prompt);
+  const firstStart = events.find((event) => event.type === 'run_start' && !before.has(event.runId));
+
+  if (firstStart === undefined) throw new Error('a completed turn has no new public run_start');
+  const runStartedAt = Date.parse(firstStart.timestamp);
   const verifiedAt = Date.now();
   const cut = cutButCompleted(events, before);
   const checks: EvalCheck[] = cut.length === 0 ? [] : [{ id: CUT_REPORTED_COMPLETED, pass: false, evidence: { runs: cut } }];
   const verify = turn.verify;
 
-  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies).collect(verify)));
+  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies, runStartedAt).collect(verify)));
   const afterEviction = turn.verifyAfterEviction;
 
   if (afterEviction !== undefined && checks.every((check) => check.pass)) {
@@ -231,7 +235,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
       session.disconnect();
       await session.connect();
 
-      return new EvalVerifier(session, replies).collect(afterEviction);
+      return new EvalVerifier(session, replies, runStartedAt).collect(afterEviction);
     }));
   }
 

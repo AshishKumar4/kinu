@@ -7,6 +7,7 @@
  * once, under the run it was open in.
  */
 
+import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
@@ -159,6 +160,14 @@ export interface PreparedTurn {
   readonly sessionKey: string;
   readonly contextWindow: number;
   readonly historyLength: number;
+  /** The live trial's arm this turn ran (`turnArtifactBodies`), recorded with the completed turn. */
+  readonly trial?: TrialTurn | null;
+}
+
+/** What a backend's turn assembly knows of the turn it opens: the answer's id and whether the prompt cache is cold. */
+export interface TurnOpening {
+  readonly answerId: string;
+  readonly cacheCold: boolean;
 }
 
 /** Taken while the turn is still in memory. */
@@ -201,7 +210,7 @@ export interface ComposedRequest {
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
-  prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
+  prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn>;
   /** Never consumes an armed compaction. */
   composeRequest(): Promise<ComposedRequest>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
@@ -302,6 +311,7 @@ export class ChatSession {
   /** Null for a user turn, whose row is durable from admission. */
   private openingRow: PreparedConversationEntry | null = null;
   private messageId = '';
+  private turnTrial: TrialTurn | null = null;
   /** Armed only by a one-shot task turn (completion-gate.ts). */
   readonly completionGate = new CompletionGate();
   private readonly taskReminders = new TaskReminders();
@@ -968,8 +978,9 @@ export class ChatSession {
     };
 
     if (turnId) completedTurn.turnId = turnId;
+    const snapshot = snapshotCompletedTurn(this.actorSession.orchestrator, completedTurn);
 
-    return snapshotCompletedTurn(this.actorSession.orchestrator.acc, completedTurn);
+    return this.turnTrial === null ? snapshot : { ...snapshot, trial: this.turnTrial };
   }
 
   private recordModelFallback(event: Extract<ChatEvent, { type: 'model-fallback' }>): void {
@@ -987,7 +998,15 @@ export class ChatSession {
       birthContext: async (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
     });
 
-    const prepared = await this.ports.prepareTurn(input, lease);
+    // Before this turn's request voids the lane.
+    const lastRequestAt = this.actorSession.lastRequestAt();
+    const cacheKeptAliveUntil = lastRequestAt === null ? null : this.ports.cacheWarming?.keptAliveUntil(lastRequestAt) ?? null;
+
+    const prepared = await this.ports.prepareTurn(input, lease, {
+      answerId: this.messageId, cacheCold: this.actorSession.promptCacheCold(cacheKeptAliveUntil),
+    });
+
+    this.turnTrial = prepared.trial ?? null;
 
     const partial = item.continuation === undefined ? null : await this.actorSession.canonical.cutStep(item.continuation.openOutputs);
 
@@ -997,10 +1016,6 @@ export class ChatSession {
 
     /** A Stop before any output leaves the operator's row alone. */
     let streamed = partial !== null;
-
-    // Before this turn's request voids the lane.
-    const lastRequestAt = this.actorSession.lastRequestAt();
-    const cacheKeptAliveUntil = lastRequestAt === null ? null : this.ports.cacheWarming?.keptAliveUntil(lastRequestAt) ?? null;
 
     // A real request voids any armed warm; the durable counter stops a mid-turn wake from adding a refresh.
     this.ports.cacheWarming?.noteRequest();

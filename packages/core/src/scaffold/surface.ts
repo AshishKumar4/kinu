@@ -7,7 +7,7 @@ import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.j
 
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { getCurrentScaffoldVersion } from './shadow';
+import { getCurrentScaffoldVersion } from './versions';
 
 export interface ScaffoldSurfaceOpts {
   vfs: VFS;

@@ -23,6 +23,7 @@ export const SPEND_SOURCES = [
   'slate',
   'warming',
   'test',
+  'rating',
 ] as const;
 
 export type SpendSource = (typeof SPEND_SOURCES)[number];
@@ -42,14 +43,15 @@ export const SPEND_SOURCE_LABEL = {
   slate: 'Slates',
   warming: 'Cache warming',
   test: 'Model tests',
+  rating: 'Turn ratings',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 export const SPEND_SOURCE_DETAIL = {
   agent: 'every step of every turn (chat, wake, reactor drain) of the main agent and every agent it hired',
   scaffold: 'an evolved scaffold driving its own inference loop',
   compaction: 'folding history when the context window fills',
-  judge: 'grading this agent\'s own work: ensemble, replay, branch scores, merge narrative',
-  fast: 'the mechanical tier: outcome classification, extraction, titles, summaries',
+  judge: 'grading this agent\'s own work: branch scores, merge narrative',
+  fast: 'the mechanical tier: extraction, titles, summaries',
   reflection: 'the evolution engine\'s own reasoning, and GEPA',
   head: 'exploration heads, one loop per fork',
   swarm: 'the expansion candidates of a configured search, and the measurements that '
@@ -62,6 +64,7 @@ export const SPEND_SOURCE_DETAIL = {
   warming: 'keeping an idle prompt-cache prefix alive: one zero-output replay of the last request, '
     + 'at most three per idle stretch (providers/cache-warming.ts)',
   test: 'a model\'s Test button: one request asking for one word through the path a turn takes',
+  rating: 'the decision model reading the user\'s reply to a turn: one call per answered turn',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 /**

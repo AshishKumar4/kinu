@@ -968,6 +968,59 @@ describe('LocalAgentHost', () => {
     }
   });
 
+  test("a hire's shell answers to its root's standing approval mode, never its own", async () => {
+    const brief = 'Check the env file.';
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let afterTool = '';
+    let asked = false;
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doGenerate: async () => textAnswer('acknowledged', usage),
+      doStream: async (options) => {
+        const prompt = JSON.stringify(options.prompt);
+
+        if (prompt.includes(brief) && !asked && (options.tools ?? []).some((tool) => tool.name === 'shell')) {
+          asked = true;
+
+          return {
+            stream: new ReadableStream<LanguageModelV2StreamPart>({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({ type: 'tool-call', toolCallId: 'call_env', toolName: 'shell', input: JSON.stringify({ command: 'cat .env' }) });
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+                controller.close();
+              },
+            }),
+          };
+        }
+
+        if (asked && prompt.includes('"tool-result"')) afterTool = prompt;
+
+        return { stream: textStream('ok', usage) };
+      },
+    });
+
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const { host, runtimes } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+
+    try {
+      const team = await host.team('root');
+      await team.create({ name: 'auditor', role: 'researcher', mission: 'Watch the ledger.' });
+      // A secret read is a warn: the hire's own default (strict) runs it; the root's deny_all refuses it.
+      present(runtimes.get('root'), 'the root runtime').actor.config.setShellApprovalMode('deny_all');
+      const turned = awaitTurns(host, 'root/auditor', 1);
+      await team.assign({ name: 'auditor', task: brief, mode: 'build' });
+      await turned;
+
+      expect(afterTool).toContain('deny_all');
+    } finally {
+      await host.close();
+    }
+  });
+
   test('a hire runs at the effort its parent runs at', async () => {
     // Before, a local hire resolved only its own setting and ran at the default whatever `/effort` the owner set.
     const { state, project } = makeRoots();
@@ -994,7 +1047,6 @@ describe('LocalAgentHost', () => {
         failures: [],
       }),
       modelInfo: async () => null,
-      judgeCandidates: async () => [],
       getAuth: async () => null,
       credentialFor: async () => null,
       countInputTokens: async () => ({ kind: 'unsupported', provider: 'fake', reason: 'no endpoint behind the fake' }),
@@ -1242,7 +1294,7 @@ describe('LocalAgentHost', () => {
     expect(requests[0]).not.toContain(note);
     expect(requests.some((prompt) => prompt.includes(note))).toBe(true);
     expect((await userMessages(dbPath, actorId)).some((message) => message.includes(note))).toBe(true);
-    expect(evolutionRows(dbPath, actorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
+    expect(evolutionRows(dbPath, actorId)).toEqual({ window: 0, ratings: [], lessons: [] });
     const db = new Database(dbPath, { readonly: true });
 
     try {
@@ -1285,6 +1337,29 @@ describe('LocalAgentHost', () => {
     expect(hirerCopies(false)).toEqual([]);
   });
 
+  // As on the cloud, a hire is framed with its workspace's soul, never a SOUL.md of its own.
+  test('a hire is framed with its workspace\'s soul, not one written for it', async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const systems: string[] = [];
+
+    const model = streamingModel('Checked.', (options) => {
+      if (!isReview(options)) systems.push(JSON.stringify(options.prompt.filter((message) => message.role === 'system')));
+    });
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const hireRan = Promise.withResolvers<void>();
+    host.subscribe((agent, event) => { if (agent !== 'root' && event.type === 'turn-end') hireRan.resolve(); });
+    const team = await host.team('root');
+    await team.spawn({ role: 'researcher', mission: 'Check the probe.', mode: 'build' });
+    await hireRan.promise;
+    await host.close();
+
+    const hire = present(systems.find((system) => system.includes('## Role: Researcher')), "the hire's system prompt");
+    expect(hire).toContain('Test agent root');
+    expect(hire).not.toContain('Check the probe.');
+  });
+
   test('no hosted child records a turn into the evolution window, whatever its lifetime', async () => {
     const ask = makeRoots();
     const askDb = await seedAgent(ask.state, 'root');
@@ -1303,7 +1378,7 @@ describe('LocalAgentHost', () => {
     await asking.host.close();
     const askActorId = childActorId(askDb, asked);
     expect(actorLifecycle(askDb, askActorId)).toBe('retained');
-    expect(evolutionRows(askDb, askActorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
+    expect(evolutionRows(askDb, askActorId)).toEqual({ window: 0, ratings: [], lessons: [] });
     expect(askChild.reflections()).toBe(0);
 
     const hire = makeRoots();
@@ -1327,7 +1402,7 @@ describe('LocalAgentHost', () => {
     await hiring.host.close();
 
     // Matches cf, where a subordinate runs `runHeadInference` and never reaches `recordTurn`.
-    expect(evolutionRows(hireDb, childActorId(hireDb, hired.name))).toEqual({ window: 0, outcomes: [], lessons: [] });
+    expect(evolutionRows(hireDb, childActorId(hireDb, hired.name))).toEqual({ window: 0, ratings: [], lessons: [] });
     expect(hireChild.reflections()).toBe(0);
   });
 
@@ -1357,7 +1432,7 @@ describe('LocalAgentHost', () => {
     await host.close();
     expect(report).toMatchObject({ status: 'completed', errorMessage: undefined });
     expect(reviews).toEqual([false]);
-    expect(evolutionRows(dbPath, seat.actor.handle.actorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
+    expect(evolutionRows(dbPath, seat.actor.handle.actorId)).toEqual({ window: 0, ratings: [], lessons: [] });
   });
 
   /** A progress note sets the durable relay's "spoke this turn" bit, which must not suppress the terminal answer. */
@@ -2068,8 +2143,8 @@ function evolutionRows(dbPath: string, actorId: string) {
   try {
     return {
       window: db.query<{ c: number }, [string]>('SELECT COUNT(*) AS c FROM completed_turns WHERE actor_id = ?').get(actorId)?.c ?? 0,
-      outcomes: db.query<{ outcome: string; source: string }, [string]>(
-        'SELECT outcome, source FROM turn_outcomes WHERE actor_id = ? ORDER BY created_at',
+      ratings: db.query<{ score: number; source: string }, [string]>(
+        'SELECT score, source FROM turn_ratings WHERE actor_id = ? ORDER BY created_at',
       ).all(actorId),
       lessons: db.query<{ source: string; status: string }, [string]>(
         'SELECT source, status FROM lessons WHERE actor_id = ? ORDER BY created_at',

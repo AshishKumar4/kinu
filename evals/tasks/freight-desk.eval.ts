@@ -1,9 +1,9 @@
-import * as v from 'valibot';
-import { infraBoundary } from '@kinu.run/test-utils';
+
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
 import { Seeded } from './seeded';
+import { published } from './npm';
 
 // A freight co-op's month at its desk: the agent builds itself a tool for the manifests that come in and uses it; a
 // month later the forwarder's manifests arrive as a zip, one of them September's again under an October name, which it
@@ -130,21 +130,6 @@ async function checkTotals(verifier: EvalVerifier, id: string, lines: readonly L
 
 const PACKAGES = ['valibot', 'hono', 'zod'] as const;
 
-const LatestSchema = v.object({ version: v.string() });
-
-/** The registry's answer now. It failing is nothing the agent did, so it fails the trial as infrastructure. */
-function published(name: string): Promise<string> {
-  const url = `https://registry.npmjs.org/${name}/latest`;
-
-  return infraBoundary(`GET ${url}`, async () => {
-    const response = await fetch(url);
-
-    if (!response.ok) throw new Error(`the registry answered ${String(response.status)}`);
-
-    return v.parse(LatestSchema, await response.json()).version;
-  });
-}
-
 /** The version a reply gives for `name`: the last line naming the package, then a version. */
 function answered(replies: readonly string[], name: string): string | null {
   const line = new RegExp(`(?:^|[\\s*\`'"(])${name}[\\s*\`'":@=-]+v?(\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?)`, 'u');
@@ -175,7 +160,8 @@ reply with one line: the total quantity, a space, and the total weight.`,
       await verifier.check('the-tool-is-listed', async () => {
         const tools = await verifier.tools();
 
-        return { pass: tools.some((tool) => tool.name === TOOL), evidence: { tools: tools.map((tool) => tool.name) } };
+        return { pass: tools.some((tool) => tool.name === TOOL),
+          evidence: { tools: tools.map((tool) => tool.name) } };
       });
 
       await checkTotals(verifier, 'answers-with-the-totals', SEPTEMBER);
@@ -201,13 +187,13 @@ total quantity across them, a space, and its total weight.`,
 
       await checkTotals(verifier, 'answers-with-octobers-totals', OCTOBER.flatMap((file) => file.lines));
 
-      // One tool of that name, used on all three manifests: a rebuilt tool starts its count again.
       await verifier.check('reuses-the-tool-it-built', async () => {
         const named = (await verifier.tools()).filter((tool) => tool.name === TOOL);
+        const invoked = await verifier.toolInvoked(TOOL);
 
         return {
-          pass: named.length === 1 && (named[0]?.usageCount ?? 0) >= 3,
-          evidence: { tools: named.map((tool) => ({ name: tool.name, uses: tool.usageCount ?? null })) },
+          pass: named.length === 1 && invoked,
+          evidence: { tools: named.map((tool) => tool.name), invoked },
         };
       });
     },
@@ -217,7 +203,7 @@ now rather than recalling them. Reply with one line per package: the package nam
     verify: async (verifier) => {
       for (const name of PACKAGES) {
         await verifier.check(`gives-the-registrys-latest-${name}`, async () => {
-          const expected = await published(name);
+          const expected = (await published(name)).version;
           const answer = answered(verifier.replies, name);
 
           return { pass: answer === expected, evidence: { answer, expected, replies: verifier.recentReplies() } };

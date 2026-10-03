@@ -1,6 +1,7 @@
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   ADVISOR_SEVERITIES,
+  CHANGELOG_ENTRY_KINDS,
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
   PlanReviewSchema,
@@ -72,11 +73,7 @@ import * as v from 'valibot';
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
 
 const EvolutionConfigSchema: v.GenericSchema<EvolutionConfigView> = v.object({
-  reviewModel: v.nullable(v.string()),
-  autoPromoteScaffold: v.boolean(),
-  gepaEvalBudget: v.number(),
-  shadowSampleRate: v.number(),
-  scaffoldExploreShare: v.number(),
+  liveTrials: v.boolean(),
   advisorEnabled: v.boolean(),
   advisorMinSeverity: v.picklist(ADVISOR_SEVERITIES),
 });
@@ -124,7 +121,7 @@ const ChangelogRevertActionSchema = v.variant('type', [
 
 const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() => v.object({
   id: v.string(),
-  kind: v.picklist(['scaffold', 'tool', 'fact', 'gepa', 'replay', 'outcomes']),
+  kind: v.picklist(CHANGELOG_ENTRY_KINDS),
   at: v.number(),
   summary: v.string(),
   evidence: v.string(),

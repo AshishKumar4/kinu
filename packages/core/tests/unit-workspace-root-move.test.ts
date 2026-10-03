@@ -11,8 +11,7 @@ import { Database } from 'bun:sqlite';
 import { CRED_KERNEL, CRED_SESSION_USER, type SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import {
-  SESSION_UID, agentCred, agentIdentity, provisionAgentHome, settleWorkspaceRoot, subordinateAgentName, type RootMoveVfs,
-} from '../src/vfs/agent-home';
+  SESSION_UID, agentCred, agentIdentity, provisionAgentHome, settleWorkspaceRoot, type RootMoveVfs, actorHomeName } from '../src/vfs/agent-home';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 
@@ -78,7 +77,7 @@ describe('Nimbus home initialization', () => {
     const { bundle, user } = await boot(await nimbusSeededWorkspace());
 
     expect(user.isSymlink('/home/user')).toBe(true);
-    expect(user.readlink('/home/user')).toBe('/home/main');
+    expect(user.readlink('/home/user')).toBe('main');
     expect(user.readFileString('/home/user/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
     expect(await readText(bundle.vfs, '/home/user/notes.md')).toBe('# coupon regression\n');
 
@@ -110,7 +109,7 @@ describe('a new workspace', () => {
     const { kernel, bundle } = await boot(new Database(':memory:'));
 
     expect(kernel.isDirectory('/home/main')).toBe(true);
-    expect(kernel.readlink('/home/user')).toBe('/home/main');
+    expect(kernel.readlink('/home/user')).toBe('main');
     await writeText(bundle.vfs, 'notes.md', 'fresh');
     expect(kernel.readFileString('/home/main/notes.md')).toBe('fresh');
   });
@@ -121,7 +120,7 @@ describe('the link', () => {
     const { bundle } = await boot(new Database(':memory:'));
 
     expect(await bundle.vfs.stat('/home/user', { follow: false })).toMatchObject({ type: 'symlink' });
-    expect(await bundle.vfs.readlink('/home/user')).toBe('/home/main');
+    expect(await bundle.vfs.readlink('/home/user')).toBe('main');
   });
 
   for (const operation of ['unlink', 'rename', 'removeRecursive'] as const) {
@@ -136,7 +135,7 @@ describe('the link', () => {
       expect(await readText(bundle.vfs, '/home/main/notes.md')).toBe('keep the home');
       expect(kernel.exists('/home/user')).toBe(false);
 
-      if (operation === 'rename') expect(kernel.readlink('/home/nimbus-link')).toBe('/home/main');
+      if (operation === 'rename') expect(kernel.readlink('/home/nimbus-link')).toBe('main');
     });
   }
 
@@ -148,7 +147,7 @@ describe('the link', () => {
     expect(() => user.unlink('/home/user')).toThrow('EACCES');
     expect(() => user.rename('/home/main/notes.md', '/home/user')).toThrow('EACCES');
     expect((await bundle.shell.exec('rm /home/user')).exitCode).not.toBe(0);
-    expect(kernel.readlink('/home/user')).toBe('/home/main');
+    expect(kernel.readlink('/home/user')).toBe('main');
   });
 
   test("a workspace settled while /home was its agent's takes /home back on its next boot", async () => {
@@ -167,7 +166,7 @@ describe('a subagent', () => {
   test('keeps its own home at /home/<name>, beside the main agent\'s', async () => {
     const database = await nimbusSeededWorkspace();
     const { kernel } = await boot(database);
-    const name = subordinateAgentName('reviewer');
+    const name = actorHomeName({ origin: 'agent', storageKey: 'reviewer' });
 
     const home = provisionAgentHome(kernel, name, agentIdentity(workspaceSql(database), name));
 
@@ -190,7 +189,7 @@ describe('a move cut short', () => {
     expect(booted.readFileString('/home/main/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
     expect(booted.readFileString('/slates/queue/package.json')).toBe('{"name":"queue"}');
     expect(booted.readFileString('/home/main/SOUL.md')).toBe(SOUL);
-    expect(booted.readlink('/home/user')).toBe('/home/main');
+    expect(booted.readlink('/home/user')).toBe('main');
   });
 
   test('finishes on the next boot when /home/user holds only what was not yet retired', async () => {
@@ -206,7 +205,7 @@ describe('a move cut short', () => {
     const booted = (await boot(database)).kernel;
 
     expect(booted.readFileString('/home/main/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
-    expect(booted.readlink('/home/user')).toBe('/home/main');
+    expect(booted.readlink('/home/user')).toBe('main');
   });
 
   test('a boot that stops before the link leaves /home to the agent, so the next boot still starts', async () => {
@@ -219,7 +218,7 @@ describe('a move cut short', () => {
 
     const booted = (await boot(database)).kernel;
 
-    expect(booted.readlink('/home/user')).toBe('/home/main');
+    expect(booted.readlink('/home/user')).toBe('main');
     expect(booted.readFileString('/home/main/notes.md')).toBe('# coupon regression\n');
   });
 
@@ -232,7 +231,21 @@ describe('a move cut short', () => {
 
     const booted = (await boot(database)).kernel;
 
-    expect(booted.readlink('/home/user')).toBe('/home/main');
+    expect(booted.readlink('/home/user')).toBe('main');
+    expect(booted.readFileString('/home/user/notes.md')).toBe('# coupon regression\n');
+  });
+
+  // Python runs on WASI, which refuses an absolute link target (ENOTCAPABLE) and so ran `cd /home/user/x && python3`
+  // in `/`: a static server listed the root, not the site. A relative target is followed.
+  test('an absolute link from an earlier boot is made relative on the next one', async () => {
+    const database = await nimbusSeededWorkspace();
+    const { kernel } = await boot(database);
+    kernel.unlink('/home/user');
+    kernel.symlink('/home/main', '/home/user');
+
+    const booted = (await boot(database)).kernel;
+
+    expect(booted.readlink('/home/user')).toBe('main');
     expect(booted.readFileString('/home/user/notes.md')).toBe('# coupon regression\n');
   });
 });
@@ -240,7 +253,7 @@ describe('a move cut short', () => {
 /** One boot with an agent hired into the workspace, and the plane as each credential reaches it. */
 async function withHire(database: Database) {
   const { bundle, kernel, user } = await boot(database);
-  const agent = subordinateAgentName('builder');
+  const agent = actorHomeName({ origin: 'agent', storageKey: 'builder' });
   const identity = agentIdentity(workspaceSql(database), agent);
   const home = provisionAgentHome(kernel, agent, identity);
   const builder = (await bundle.session()).vfs.as(agentCred(identity));

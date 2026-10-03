@@ -19,6 +19,9 @@ async function hashText(text: string): Promise<string> {
 
 /** Line-aware sliding window chunking, matching OpenClaw's algorithm. */
 export async function chunkMarkdown(content: string): Promise<Chunk[]> {
+	// No text, no chunk: re-indexing an emptied note deletes its old ones.
+	if (content.trim() === "") return [];
+
 	const lines = content.split("\n");
 	const maxChars = CHUNK_TARGET_CHARS;
 	const overlapChars = CHUNK_OVERLAP_CHARS;

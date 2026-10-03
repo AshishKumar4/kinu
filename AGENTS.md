@@ -61,7 +61,7 @@ The main agent orchestrates; lanes build. Main plans each change in a loop with 
 - First-party first. Where Cloudflare, the Agents SDK, Nimbus or another upstream covers something we built, use theirs and delete ours. Upgrade dependencies and drop patches upstream has fixed. A post or project the owner shares is a source of patterns, not a dependency to adopt.
 - No speculative machinery: no check, guard, cap, timeout, validation, retry or fallback for an imagined case. Find the cause or the platform limit and design for it. Every state field, type, check, seam and argument earns its place, or goes. A schema carries no redundant or derivable column or table.
 - Reuse a recorded measurement (platform catalog, decision logs, `kinu-logs`) before running a new probe.
-- A provider failure retries as the user set it (default 3), then walks the user's fallback chain for that model or role. The user sees the provider's own words and is never handed a fix command.
+- A provider failure fails over at once along the user's fallback chain for that model or role, parking the refused model until its Retry-After; the last entry retries as the user set it (default 3), OMP style (7a0a9820c). The user sees the provider's own words and is never handed a fix command.
 - An architecture change the owner did not ask for goes to the owner before it lands.
 
 ## Docs

@@ -48,8 +48,8 @@ function linesFor(logger: { emitted: readonly RecordedLog[] }, event: string): r
   return logger.emitted.filter((line) => line.event === event);
 }
 
-function agentsTool(deps: Omit<AgentsToolDeps, 'mode'>) {
-  const entry = createAgentsTool({ mode: 'build', ...deps });
+function agentsTool(deps: Omit<AgentsToolDeps, 'mode' | 'swarms'>) {
+  const entry = createAgentsTool({ mode: 'build', swarms: true, ...deps });
 
   return toolExecute<AgentsToolInput, ToolResult>(entry);
 }
@@ -117,7 +117,7 @@ function makeTeam(delivery: SubordinateDelivery) {
     recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName }),
     spawn: async () => ({ name: rosterEntry.name, displayName: 'Researcher' }),
     status: async () => ({ roster: [rosterEntry] }),
-    dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
+    dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),
     assign: recordHandoff('assign'),
     message: recordHandoff('message'),
   };

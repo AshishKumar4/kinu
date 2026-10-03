@@ -116,7 +116,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     const origin = [{ role: 'user' as const, content: 'ORIGIN-CONTEXT-MARKER' }];
 
     const tool = agentsTool({
-      mode: 'build',
+      mode: 'build', swarms: true,
       // Without the barrier's compactor the grandchild request is refused at admission.
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), {
         originContext: async () => origin,
@@ -143,7 +143,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     };
 
     const tool = agentsTool({
-      mode: 'build',
+      mode: 'build', swarms: true,
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), { compactShared }),
     });
 
@@ -174,7 +174,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     };
 
     const tool = agentsTool({
-      mode: 'build',
+      mode: 'build', swarms: true,
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), { compactShared }),
     });
 
@@ -210,7 +210,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     };
 
     const tool = agentsTool({
-      mode: 'build',
+      mode: 'build', swarms: true,
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), { compactShared }),
     });
 

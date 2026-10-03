@@ -3477,16 +3477,52 @@ function recordHostedMeasurements(path: string, runUrl: string | undefined): num
 }
 
 /** CI planning, collection and the deploy's one Actions proof path. No artifact means refusal, never a local rerun. */
+function ciFind(find: string, sha: string, runFile: string): number {
+  if (find !== sha) throw new Error('the deployed revision is not HEAD');
+  const run = findPushCI(root, sha);
+
+  writeCIRun(runFile, run);
+  console.log('CI: ' + run.html_url + ' for ' + sha);
+
+  return 0;
+}
+
+function ciCollect(directory: string, sha: string, verdicts: string): number {
+  const file = collectVerdicts({ directory, sha, attempt: Number(process.env['GITHUB_RUN_ATTEMPT'] ?? '1'), parts: ciParts() });
+
+  checkFileCoverage(file, ciUnits().filter((unit) => unit.gate.ciShards !== undefined).map((unit) => ({ run: unit.gate.run, files: claims(unit.gate.run, trackedTestFiles()) })));
+  writeVerdicts(verdicts, file);
+
+  return file.rows.some((row) => row.exitCode !== 0) ? 1 : 0;
+}
+
+async function ciVerdicts(sha: string, request: { readonly runFile: string; readonly upload: boolean; readonly take: boolean; readonly report: string }, seen: { url: string }): Promise<number> {
+  const { upload, take, report } = request;
+  const run = readCIRun(request.runFile, sha);
+
+  seen.url = run.html_url;
+
+  if (upload) await awaitUploadCI(root, run);
+  const ended = take ? awaitCI(root, run) : run;
+  const part = upload ? 'upload' : 'all';
+  const file = downloadVerdicts(root, run, part, resolve(report, 'ci', part));
+  const expected = upload ? ciParts().find((candidate) => candidate.name === 'upload')?.runs ?? [] : ciUnits().map((unit) => unit.gate.run);
+
+  checkCoverage(file, sha, expected);
+  // The upload proof was already reported before publishing, and this machine's preflight is its own prerequisite.
+  const rows = file.rows.filter((row) => !take || LADDER.find((gate) => gate.run === row.run)?.phase !== 'upload');
+  const green = reportCIVerdicts({ ...file, rows }, seen.url, report);
+
+  if (take) requireCIGreen(ended);
+
+  return green ? 0 : 1;
+}
+
 async function ciCommand(): Promise<number | undefined> {
   const option = (name: string): string | undefined => process.argv.find((argument) => argument.startsWith('--' + name + '='))?.slice(name.length + 3);
   const measurements = option('ci-record-costs');
 
   if (measurements !== undefined) return recordHostedMeasurements(measurements, option('ci-run-url'));
-
-  const find = option('ci-find');
-  const collect = option('ci-collect');
-  const upload = process.argv.includes('--ci-upload');
-  const take = process.argv.includes('--ci-await');
 
   if (process.argv.includes('--ci-matrix')) {
     console.log(JSON.stringify({ include: ciParts().map((part) => ({ part: part.name })) }));
@@ -3494,56 +3530,29 @@ async function ciCommand(): Promise<number | undefined> {
     return 0;
   }
 
+  const find = option('ci-find');
+  const collect = option('ci-collect');
+  const upload = process.argv.includes('--ci-upload');
+  const take = process.argv.includes('--ci-await');
+
   if (find === undefined && collect === undefined && !upload && !take) return undefined;
   const report = process.env['KINU_DEPLOY_REPORT'] ?? '';
-  let url = '';
+  const seen = { url: '' };
 
   try {
     const sha = fullRevision();
 
-    if (find !== undefined) {
-      if (find !== sha) throw new Error('the deployed revision is not HEAD');
-      const run = findPushCI(root, sha);
+    if (find !== undefined) return ciFind(find, sha, option('ci-run') ?? '');
 
-      writeCIRun(option('ci-run') ?? '', run);
-      console.log('CI: ' + run.html_url + ' for ' + sha);
+    if (collect !== undefined) return ciCollect(collect, sha, option('verdicts') ?? '');
 
-      return 0;
-    }
-
-    if (collect !== undefined) {
-      const file = collectVerdicts({ directory: collect, sha, attempt: Number(process.env['GITHUB_RUN_ATTEMPT'] ?? '1'), parts: ciParts() });
-
-      checkFileCoverage(file, ciUnits().filter((unit) => unit.gate.ciShards !== undefined).map((unit) => ({ run: unit.gate.run, files: claims(unit.gate.run, trackedTestFiles()) })));
-      writeVerdicts(option('verdicts') ?? '', file);
-
-      return file.rows.some((row) => row.exitCode !== 0) ? 1 : 0;
-    }
-
-    const run = readCIRun(option('ci-run') ?? '', sha);
-
-    url = run.html_url;
-
-    if (upload) await awaitUploadCI(root, run);
-    const ended = take ? awaitCI(root, run) : run;
-    const part = upload ? 'upload' : 'all';
-    const file = downloadVerdicts(root, run, part, resolve(report, 'ci', part));
-    const expected = upload ? ciParts().find((candidate) => candidate.name === 'upload')?.runs ?? [] : ciUnits().map((unit) => unit.gate.run);
-
-    checkCoverage(file, sha, expected);
-    // The upload proof was already reported before publishing, and this machine's preflight is its own prerequisite.
-    const rows = file.rows.filter((row) => !take || LADDER.find((gate) => gate.run === row.run)?.phase !== 'upload');
-    const green = reportCIVerdicts({ ...file, rows }, url, report);
-
-    if (take) requireCIGreen(ended);
-
-    return green ? 0 : 1;
+    return await ciVerdicts(sha, { runFile: option('ci-run') ?? '', upload, take, report }, seen);
   } catch (cause) {
     const found = cause instanceof Error ? cause.message : String(cause);
 
     console.error('CI refused: ' + found);
 
-    if (report !== '') recordStep(report, { phase: 'ci', what: 'CI proof', finding: found + (url === '' ? '' : ' — ' + url) });
+    if (report !== '') recordStep(report, { phase: 'ci', what: 'CI proof', finding: found + (seen.url === '' ? '' : ' — ' + seen.url) });
 
     return 1;
   }

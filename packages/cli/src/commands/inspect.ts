@@ -1,14 +1,13 @@
 import {
-  decodeJsonValue, formatScoreInterval, JsonArraySchema, JsonValueSchema,
-  renderAlignmentConvergence, renderCalibrationReport, SPEND_SOURCE_LABEL, usageTotal,
-  type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue,
+  decodeJsonValue, JsonArraySchema, JsonValueSchema,
+  QualityDaySchema, renderQualitySeries, SPEND_SOURCE_LABEL, usageTotal,
+  type ProposerOutcome, type JsonObject, type JsonValue,
   type MissionBudgetLimits, type SearchNode, type Usage, type WorkspaceSpend,
   type AgentRpcMethod,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
-import { fetchReport } from './label';
-import { runLocalGepa } from '../local-agent-client';
+import { runLocalOptimization } from '../local-agent-client';
 import { requireAuthConfig } from '../config';
 import {
   ActivitySpendSchema, callAgentRpc, createCloudWebhookTrigger,
@@ -20,7 +19,7 @@ import {
   executeLocalExecutor,
   getLocalAgentState,
   getLocalWorkspaceSpend,
-  getLocalAlignment,
+  getLocalQuality,
   getLocalGepaRun,
   getLocalMctsNode,
   getLocalActorInfo,
@@ -45,38 +44,12 @@ interface InspectOpts {
 
 interface GepaOpts extends InspectOpts {
   run?: boolean;
-  iterations?: string;
-  evalSize?: string;
-  metricCalls?: string;
 }
 
-const ScoreIntervalSchema = v.object({ mean: v.number(), lo: v.number(), hi: v.number(), n: v.number() });
-
-const GepaOptimizationResultSchema: v.GenericSchema<GepaOptimizationResult> = v.object({
-  ok: v.boolean(), error: v.optional(v.string()), runId: v.optional(v.string()), proposed: v.optional(v.boolean()),
-  pendingVersion: v.optional(v.nullable(v.number())), skipReason: v.optional(v.string()),
-  bestScore: v.optional(ScoreIntervalSchema), seedScore: v.optional(ScoreIntervalSchema), iterations: v.optional(v.number()),
-  selection: v.optional(v.object({ heldOutNegatives: v.number(), guards: v.number() })),
-  selectionWarning: v.optional(v.string()),
-});
-
-const RateIntervalSchema = v.object({
-  per100: v.number(), lowPer100: v.number(), highPer100: v.number(), reliable: v.boolean(),
-});
-
-const AlignmentTotalsSchema = v.object({
-  turns: v.number(), negatives: v.number(), abandoned: v.number(), executionGraded: v.number(),
-  rate: RateIntervalSchema, firstAt: v.number(), lastAt: v.number(),
-});
-
-const AlignmentConvergenceSchema: v.GenericSchema<AlignmentConvergence> = v.object({
-  segments: v.array(v.object({ ...AlignmentTotalsSchema.entries, scaffoldVersion: v.nullable(v.number()) })),
-  overall: AlignmentTotalsSchema,
-  trend: v.picklist(['improving', 'worsening', 'flat', 'insufficient']),
-  deltaPer100: v.nullable(v.number()),
-  comparedVersions: v.nullable(v.object({ from: v.nullable(v.number()), to: v.nullable(v.number()) })),
-  note: v.string(),
-});
+const ProposerOutcomeSchema: v.GenericSchema<ProposerOutcome> = v.variant('kind', [
+  v.object({ kind: v.literal('idle') }),
+  v.object({ kind: v.literal('searched'), artifactId: v.string(), version: v.nullable(v.number()), detail: v.string() }),
+]);
 
 const SearchNodeSchema: v.GenericSchema<SearchNode> = v.object({
   id: v.string(), parent_id: v.nullable(v.string()), root_id: v.string(),
@@ -159,7 +132,7 @@ export async function stateCommand(name: string, opts: InspectOpts = {}): Promis
 
   const data = await readTarget(target, {
     cloud: (auth) => cloudRead(auth, target, 'getWorkspaceSnapshot'),
-    local: () => decodeJsonValue({ value: getLocalAgentState(target.localName) }),
+    local: async () => decodeJsonValue({ value: await getLocalAgentState(target.localName) }),
   });
 
   printData(data, opts);
@@ -285,9 +258,9 @@ export async function memoryCommand(name: string, queryParts: string[] = [], opt
         method: 'getMemoryContent',
         schema: v.string(),
       }) },
-    local: () => query
+    local: async () => query
       ? decodeJsonValue({ value: searchLocalMemory(target.localName, query, limit) })
-      : { content: readLocalMemory(target.localName) },
+      : { content: await readLocalMemory(target.localName) },
   });
 
   if (opts.json || query) {
@@ -392,47 +365,26 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
 
 async function runGepaPass(name: string, opts: GepaOpts): Promise<void> {
   const target = resolveAgentTarget(name);
-  const budget: Parameters<typeof runLocalGepa>[1] = {};
-
-  if (opts.iterations) budget.maxIterations = Number(opts.iterations);
-
-  if (opts.evalSize) budget.evalSize = Number(opts.evalSize);
-
-  if (opts.metricCalls) budget.maxMetricCalls = Number(opts.metricCalls);
 
   const result = await readTarget(target, {
     cloud: (auth) => callAgentRpc({
-      origin: auth.origin,
-      token: auth.token,
-      name: target.cloudName,
-      method: 'runScaffoldGepaOptimization',
-      schema: GepaOptimizationResultSchema,
-      args: [decodeJsonValue({ value: budget })],
+      origin: auth.origin, token: auth.token, name: target.cloudName,
+      method: 'runOptimization', schema: ProposerOutcomeSchema, args: [],
     }),
-    local: () => runLocalGepa(target.localName, budget),
+    local: () => runLocalOptimization(target.localName),
   });
 
   if (opts.json) return printJson(decodeJsonValue({ value: result }));
 
-  if (!result.ok) {
-    console.log(`${ERR('GEPA did not run')} ${result.error ?? ''}`);
+  if (result.kind === 'idle') {
+    console.log(DIM('  nothing to search: no low-rated turns in the last 14 days'));
 
     return;
   }
 
-  console.log(`${OK('GEPA run')} ${ACCENT(result.runId ?? '')}  ${result.iterations ?? 0} iteration(s)`);
-  const score = (i: typeof result.seedScore): string => (i ? formatScoreInterval(i) : 'not scored');
-  console.log(`  seed  ${score(result.seedScore)}`);
-  console.log(`  best  ${score(result.bestScore)}`);
-
-  if (result.selection) {
-    console.log(DIM(`  selected on ${result.selection.heldOutNegatives} held-out failure(s) + ${result.selection.guards} guard(s)`));
-  }
-
-  if (result.selectionWarning) console.log(`${WARN('exploratory')} ${result.selectionWarning}`);
-  console.log(result.proposed
-    ? `${OK('proposed')} scaffold v${result.pendingVersion}, resolved by the shadow eval`
-    : DIM(`  no proposal: ${result.skipReason ?? 'no strictly better candidate'}`));
+  console.log(result.version === null
+    ? `${WARN('no edit passed')} ${result.artifactId}: ${result.detail}`
+    : `${OK('proposed')} ${result.artifactId} v${String(result.version)} (${result.detail}), waiting for your decision`);
 }
 
 export async function executorsCommand(
@@ -490,32 +442,30 @@ async function runExecutorCommand(name: string, executor: string, commandParts: 
   if (data.exitCode !== undefined && data.exitCode !== 0) process.exitCode = data.exitCode;
 }
 
-/** K_align: user corrections per 100 graded turns, by scaffold version. Always printed with calibration: the rate is the classifier's count. */
-export async function alignmentCommand(name: string, opts: InspectOpts = {}): Promise<void> {
+/** Satisfaction per day: the mean rating of the turns users answered, with its interval. */
+export async function qualityCommand(name: string, opts: InspectOpts & { days?: string } = {}): Promise<void> {
   const target = resolveAgentTarget(name);
+  const days = opts.days === undefined ? 30 : parsePositiveInt(opts.days, '--days');
 
   const data = await readTarget(target, {
     cloud: (auth) => callAgentRpc({
       origin: auth.origin,
       token: auth.token,
       name: target.cloudName,
-      method: 'getAlignmentConvergence',
-      schema: AlignmentConvergenceSchema,
+      method: 'getQuality',
+      args: [days],
+      schema: v.array(QualityDaySchema),
     }),
-    local: () => getLocalAlignment(target.localName),
+    local: () => getLocalQuality(target.localName, days),
   });
 
-  const calibration = await fetchReport(target);
-
   if (opts.json) {
-    printJson(decodeJsonValue({ value: { alignment: data, calibration } }));
+    printJson(decodeJsonValue({ value: data }));
 
     return;
   }
 
-  console.log(renderAlignmentConvergence(data));
-  console.log('');
-  console.log(renderCalibrationReport(calibration));
+  console.log(renderQualitySeries(data));
 }
 
 export async function webhookCommand(name: string, label: string | undefined, opts: InspectOpts & {

@@ -1,15 +1,15 @@
 // Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
 import { createOpenAI } from '@ai-sdk/openai';
 import { APICallError, wrapLanguageModel, type LanguageModel } from 'ai';
-import type { AuthRequest, AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
+import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
+import { authenticatedSend } from './authenticated-send';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { authCacheKey, cloneModelInfos, positiveInteger, StaleModelList, statelessResponses } from './util';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
-import { OAuthTokenError } from './oauth-token-error';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { classify, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
@@ -136,16 +136,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
       });
 
       const customFetch = asFetchFunction(async (input, init) => {
-        // A dead login (resolver refusal, or 401 after forced refresh) gets the remedy on a 401 the SDK carries.
-        const resolveAuth = async (refresh?: AuthRequest): Promise<AuthResolution | 'revoked' | null> => {
-          try {
-            return await deps.getAuth(CODEX_CRED_KEY, refresh);
-          } catch (cause) {
-            if (cause instanceof OAuthTokenError && cause.revoked) return 'revoked';
-            throw cause;
-          }
-        };
-
+        // A dead login (401 after the forced renewal) gets the remedy on a 401 the SDK carries.
         const refusedLoginResponse = (): Response => {
           diagnostics.failure(
             'provider.codex_dead_login',
@@ -159,11 +150,21 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           );
         };
 
-        const auth = await resolveAuth();
+        const requestInit = normalizeCodexResponsesRequest(init);
 
-        if (auth === 'revoked') return refusedLoginResponse();
+        const send = async (auth: AuthResolution) => {
+          const merged = copyHeaders(init?.headers);
 
-        if (!auth) {
+          for (const [name, value] of Object.entries(auth.headers)) merged.set(name, value);
+
+          return retrying(auth.credentialKey ?? CODEX_CRED_KEY)(input, { ...requestInit, headers: merged });
+        };
+
+        const answer = await authenticatedSend({ key: CODEX_CRED_KEY, getAuth: deps.getAuth, send });
+
+        if (answer.kind === 'refused') return refusedLoginResponse();
+
+        if (answer.kind === 'absent') {
           diagnostics.failure(
             'credential.codex_absent',
             new KinuError('missing', 'no Codex credentials; the model call was refused before it left'),
@@ -176,31 +177,9 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           );
         }
 
-        const requestInit = normalizeCodexResponsesRequest(init);
+        const res = answer.response;
 
-        const paid = auth.credentialKey ?? CODEX_CRED_KEY;
-
-        const send = async (headers: Record<string, string>) => {
-          const merged = copyHeaders(init?.headers);
-
-          for (const [name, value] of Object.entries(headers)) merged.set(name, value);
-
-          return retrying(paid)(input, { ...requestInit, headers: merged });
-        };
-
-        let res = await send(auth.headers);
-
-        if (res.status === 401) {
-          const refreshed = await resolveAuth({ rejected: auth.headers });
-
-          if (refreshed === 'revoked') return refusedLoginResponse();
-
-          if (refreshed) {
-            res = await send(refreshed.headers);
-          }
-        }
-
-if (networkRefused(res)) {
+        if (networkRefused(res)) {
           const refused = new KinuError('unavailable', NETWORK_REFUSED);
 
           diagnostics.failure('provider.codex_network_refused', refused, { model: modelId });
@@ -215,11 +194,7 @@ if (networkRefused(res)) {
           });
         }
 
-        if (res.status === 401) {
-          return refusedLoginResponse();
-        }
-
-        return withCallAccount(res, 'codex', paid);
+        return withCallAccount(res, 'codex', answer.auth.credentialKey ?? CODEX_CRED_KEY);
       });
 
       const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });

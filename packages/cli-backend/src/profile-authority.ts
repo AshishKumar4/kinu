@@ -167,15 +167,14 @@ export function createLocalProfileAuthority(deps: {
     envelope,
     inputs,
     async resolvePreTurn(availableTools = []) {
-      const role = deps.config.getRoleSelection();
+      const authority = await inputs();
 
       return resolveAgentTurnProfile({
-        ...(await inputs()),
-        activeRoleId: role,
+        ...authority,
+        ...ownProfileChoices(deps.config, authority),
         workMode: 'build',
         availableTools,
         activeSkills: [],
-        explicitTier: deps.config.getAssignedTier() ?? undefined,
       });
     },
     async nextTurnTier({ workMode, ancestors }) {
@@ -184,7 +183,6 @@ export function createLocalProfileAuthority(deps: {
       return resolveAgentTurnProfile({
         ...authority,
         ...ownProfileChoices(deps.config, authority, ancestors),
-        activeRoleId: deps.config.getRoleSelection(),
         workMode,
         availableTools: [],
         activeSkills: [],
