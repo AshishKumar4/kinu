@@ -3,8 +3,7 @@ import * as v from 'valibot';
 
 export const DevboxErrorCode = v.picklist([
   'io', 'configuration', 'invalid-input', 'not-ready', 'cancelled', 'missing',
-  'file', 'process', 'start-overrun', 'start-interrupted', 'container-changed',
-  'layer-unreadable', 'chain-advanced', 'delta-namespace', 'mount-marker', 'refused', 'indeterminate',
+  'file', 'process', 'start-overrun', 'start-interrupted', 'chain-advanced', 'mount-marker', 'refused', 'indeterminate',
 ]);
 
 export type DevboxErrorCode = v.InferOutput<typeof DevboxErrorCode>;
@@ -109,16 +108,4 @@ export function startInterrupted(): DevboxError {
 
 export function chainAdvanced(expectedRev: number | null, storedRev: number | null): DevboxError {
   return new DevboxError('chain-advanced', `another writer advanced the chain record to rev ${storedRev ?? 'none'} after this one read rev ${expectedRev ?? 'none'}`, { expectedRev, storedRev });
-}
-
-export function containerChanged(): DevboxError {
-  return new DevboxError('container-changed', 'the container generation changed while snapshot-chain attached its lower layers');
-}
-
-export function layerUnreadable(layer: string, generation: string, thrown: ErrorOptions): DevboxError {
-  return new DevboxError('layer-unreadable', `the ${layer} layer of generation ${generation} could not be read`, thrown);
-}
-
-export function deltaNamespaceFailed(code: string): DevboxError {
-  return new DevboxError('delta-namespace', `opaque-directory namespace could not be observed (probe ${code})`);
 }

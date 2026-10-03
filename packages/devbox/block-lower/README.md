@@ -1,25 +1,35 @@
 # Read-only block lower
 
-This process composes chunked files from a lazy base squashfs and one v2 delta
-squashfs. It never reads an index or a file payload while mounting. Only the
-manifest's namespace records and source mount identities are read at startup.
-Whole records are served by the separate `.devbox-delta/tree` overlay lower.
+This process serves the files the disk chain's deltas hold as blocks (D55,
+D63). A save sends a large file changed in place as the 16 KiB blocks that
+changed since the last save. At a recovery, every layer is a lazy squashfs
+mount; each delta's `tree/` is an overlay lower and this mount sits above them
+all. It serves a file whose newest version is a block record, reading each
+block from the newest layer that holds it, down to the file's last whole copy
+in a layer's `tree/` or the base. A file a newer layer replaced or removed is
+not served here, so the overlay reads that layer instead.
+
+```sh
+devbox-block-lower --base <dir> --layer <oldest> ... --layer <newest> --mount <dir> --stats <file>
+```
+
+Each `--layer` is a delta's mount: `tree/`, and `.devbox-delta/manifest.json`
+(`v: 4`, one record per file: path, size, mode, owner, mtime and its index),
+the index files and `chunks/<first two hex digits>/<sha256>`. Every layer and the base must be squashfuse
+mounts. Startup reads only the manifests and probes the newer layers' trees
+for the records' paths.
 
 Build: `cargo build --release --locked`. Test: `cargo test --locked`.
 The image build uses the pinned Rust Alpine image to produce a static musl
 binary that runs on the pinned upstream Sandbox image without a libc upgrade.
 
-The image also carries the container's backup sync (D30), bundled from
-`packages/devbox/src/sync-main.ts` before the Docker build and pinned in
-`upstream.json` like the binaries. `tests/block-image.test.ts` bundles it again,
-so a change to the sync's code fails until the image is rebuilt and re-pinned:
+The image is built from this directory alone and pinned in `upstream.json`:
 
 ```sh
-bun packages/devbox/block-lower/bundle-sync.ts
-docker build -t kinu-devbox-block-layer:<date> packages/devbox/block-lower
+docker build -t kinu-devbox-native:<date> packages/devbox/block-lower
 ```
 
-Run the bundle step with the Bun version in the root `package.json`; local preflight checks it against the running binary. The runtime image pins that Bun version too. On 2026-10-02, Bun 1.4.2 built `sync.js` with digest `d57ec595…`, and the pushed image `518fa86d…` restored a saved marker after a real stop and wake through the bench fixture. Its resource cleanup passed.
+The runtime image pins the Bun version in the root `package.json`.
 
 ## Format and reads
 
@@ -48,8 +58,9 @@ search path: source tags, padding, child shape, aligned strictly increasing
 offset bounds, page digests, chunk lengths and chunk digests. It detects
 off-path corruption when that path is demanded, not by scanning at attach.
 Corruption returns EIO, including errors in an index for an otherwise absent
-override. An authenticated missing override reads the base range, zero-extended
-past its EOF. A hole is all zero. The declared file size clips every response.
+override. An authenticated missing override reads the same range of the layer
+below, zero-extended past that version's EOF; a record with no earlier version
+beneath it is EIO, never zeros. A hole is all zero. The declared file size clips every response.
 All source paths resolve beneath anchored directory descriptors with no symlink
 following. Namespace conflicts, hostile names and unsupported metadata fail
 before the mount; an absent source chunk never becomes base fallback.
@@ -57,7 +68,8 @@ before the mount; an absent source chunk never becomes base fallback.
 Namespace tables are byte-radix trees: each branching table has at most 256
 entries, and path lengths are platform-bounded. Startup does not sort an
 unbounded set of names or depend on hash-table collision behaviour. It visits
-only the manifest's M+H records and constructs their ancestor directories.
+only the manifests' records and constructs their ancestor directories, whose
+attributes come from the newest layer holding each one.
 
 ## Concurrency and overlay semantics
 

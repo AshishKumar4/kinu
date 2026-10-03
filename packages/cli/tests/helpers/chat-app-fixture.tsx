@@ -19,6 +19,7 @@ import type { TuiAgentSource } from '../../src/tui/tui-shell';
 import { createMemoryTuiPreferenceStore } from './tui-preferences';
 
 const EVOLUTION: EvolutionConfigView = {
+  learning: true,
   liveTrials: false,
   advisorEnabled: false,
   advisorMinSeverity: 'concern',

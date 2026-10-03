@@ -2884,7 +2884,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Core's derivation of the gate (`AgentOrchestrator.beginTurn`); the harness needs it for suites
    * that drive `onChatResponse` with no turn to open. */
   protected turnRecordsEvolution(): boolean {
-    return this.engine.enabled && this.turnWorkMode() !== 'plan';
+    return this.engine.recordsTurns && this.turnWorkMode() !== 'plan';
   }
 
   protected readonly extensions = new ExtensionHost();

@@ -192,7 +192,6 @@ export interface LocalOrchestrationInput {
   readonly session: () => LocalAgentSession;
   /** This host runs one task turn and exits; it never starts the cadence. */
   readonly oneShot: boolean;
-  readonly noAutoEvolve?: boolean;
 }
 
 type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
@@ -219,7 +218,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
   });
 
   const engine = new EvolutionEngine(input.runtime, input.history, {
-    enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
   });
@@ -316,7 +314,6 @@ export interface LocalAgentSessionOpts {
    */
   providerRevision?: () => number;
   onEvent: (event: SessionEvent) => void;
-  noAutoEvolve?: boolean;
   /** One task turn then exit (`kinu exec`/`kinu run`): the next prompt never grades the previous
    *  turn, and the evolution pass is left to the scheduler daemon. */
   oneShot?: boolean;
@@ -454,6 +451,8 @@ export class LocalAgentSession {
     (path, content) => this.instructionApprovals.trustOf(path, content);
   /** Whether this turn came from the parent; gates the `report` surface. */
   private turnIsParentAssigned = false;
+  /** The learning setting where the turn opened, as cf reads it: a change applies from the next turn. */
+  private turnLearns = false;
 
   /** The running turn's author-stamped metadata: plan submission is refused to a harness turn. */
   private turnDriving: JsonObject | undefined;
@@ -516,7 +515,6 @@ export class LocalAgentSession {
       eventLog: new EventLog(hubSql, this.rt.actor),
       session: () => this,
       oneShot: this.oneShot,
-      noAutoEvolve: opts.noAutoEvolve === true,
     });
 
     this.host = orchestration.deps.host;
@@ -722,8 +720,7 @@ export class LocalAgentSession {
       root: () => ({ kind: 'root', actorId: this.rt.actor.actorId, store: this.jobs, runner: this.jobRunner }),
       revive: (actorId) => this.endedLoopJobs(actorId),
     });
-    // Scaffold cold-start heal (DO onStart parity): without scaffold/agent.js,
-    // engine.maybeEvolveScaffold silently disables scaffold evolution. Idempotent; tracked for end().
+    // Scaffold cold-start heal (DO onStart parity): the proposer edits scaffold/agent.js, so it must exist. Idempotent; tracked for end().
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
     // The next turn awaits this before admitting input.
@@ -1623,6 +1620,7 @@ export class LocalAgentSession {
     this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnIsParentAssigned = item.kind === 'programmatic';
+    this.turnLearns = this.engine.recordsTurns;
     this.turnDriving = authoredTurnMetadata(item);
 
     // A user message grades the previous turn, unless this is a one-shot process.
@@ -1858,7 +1856,7 @@ export class LocalAgentSession {
       scopedTurn: projectJsonValue({ value: scoped }),
       recordedAt: Date.now(),
       // Frozen beside the turn so a replay records what the producing run had.
-      evolutionEnabled: this.engine.recordsTurns,
+      evolutionEnabled: this.turnLearns,
     };
 
     const parts: Writable<TerminalTurnParts> = {};
@@ -2440,7 +2438,6 @@ export class LocalAgentSession {
         // Heads and nodes run in this process, so this session is their fan-out and queue.
         session: () => this,
         oneShot: this.oneShot,
-        noAutoEvolve: !this.engine.enabled,
       }).deps,
       // A head inherits the parent's promoted program, making it a fork of this agent.
       loopFor: (bound) => ({

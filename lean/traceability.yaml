@@ -80,7 +80,7 @@ requirements:
       - Kinu.Evolution.Scaffold.append_increases_length
     tsRefs:
       - packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn
-      - packages/core/src/evolution/engine.ts#EvolutionEngine.maybeEvolveScaffold
+      - packages/core/src/evolution/engine.ts#EvolutionEngine.runDueEvolution
       - packages/core/src/orchestrator/agent-orchestrator.ts#AgentOrchestrator.sessionTurnIndex
       - packages/core/src/scaffold/rollback.ts#rollbackScaffold
       - packages/core/src/scaffold/modify.ts#modifyScaffold

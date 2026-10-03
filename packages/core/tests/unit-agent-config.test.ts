@@ -240,6 +240,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'device' }]),
     (c) => c.setSleepTimeComputeEnabled(false),
     (c) => c.setLiveTrials(true),
+    (c) => c.setLearning(false),
     (c) => c.setAdvisorEnabled(true),
     (c) => c.setAdvisorMinSeverity('blocker'),
     (c) => c.setAlwaysActiveSkills(['research']),

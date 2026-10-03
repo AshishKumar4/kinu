@@ -72,6 +72,7 @@ interface LocalAgentClientOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
+  /** `--no-auto-evolve`: turns this agent's learning setting off before the session opens. */
   noAutoEvolve?: boolean;
   oneShot?: boolean;
   transcript?: CliSessionOptions;
@@ -103,6 +104,8 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
 
   const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);
 
+  if (opts.noAutoEvolve === true) rt.actor.config.setLearning(false);
+
   const client = new LocalAgentClient({
     agentName: name,
     rt,
@@ -112,7 +115,6 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     refreshInfo: async () => (await openWorkspaceCLI(db, dbPath, openConfig)).info,
     modelResolver: resolver,
     mcpServers: resolveMcpServers(),
-    noAutoEvolve: opts.noAutoEvolve ?? false,
     transcript: opts.transcript ?? {},
     surface: opts.surface ?? 'interactive',
   });
@@ -139,8 +141,7 @@ export function cancelLocalJob(name: string, id: string, daemonPid: number | nul
 
 /** Core's proposer, the same one the cloud backend drives: one search on `target` (default the scaffold). */
 export async function runLocalOptimization(name: string, target?: string): Promise<ProposerOutcome> {
-  // Auto-evolution must not race the search.
-  const client = await openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true });
+  const client = await openLocalAgentClient(name, { surface: 'one-shot' });
 
   try {
     return await client.runOptimization(target);
@@ -163,7 +164,6 @@ interface LocalAgentClientDeps {
   /** Override only at composition/test boundaries. */
   profileAuthority?: LocalAgentSessionOpts['profileAuthority'];
   mcpServers: Record<string, McpServerConfig>;
-  noAutoEvolve: boolean;
   transcript: CliSessionOptions;
   /** 'one-shot' selects the background detach policy and marks turn continuity for the outcome ledger. */
   surface: InvocationSurface;
@@ -407,7 +407,7 @@ export class LocalAgentClient implements AgentClient {
       memorySize: info.memorySize,
       dbSize: statSync(this.deps.dbPath).size,
       toolCount: this.session.toolNames().length,
-      autoEvolve: !this.deps.noAutoEvolve,
+      autoEvolve: this.deps.rt.actor.config.getLearning(),
       context: this.session.contextFill(),
     };
   }
@@ -546,7 +546,6 @@ export class LocalAgentClient implements AgentClient {
       db: this.deps.db,
       model: this.deps.model,
       modelResolver: this.deps.modelResolver,
-      noAutoEvolve: this.deps.noAutoEvolve,
       backgroundPolicy: BACKGROUND_POLICY[this.deps.surface],
       oneShot: this.deps.surface === 'one-shot',
       onEvent: (event) => this.handleSessionEvent(event),

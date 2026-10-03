@@ -10,7 +10,7 @@ import {
 } from '@kinu.run/core/obs';
 import type { AgentSignal, JsonValue, SendOutcome } from '@kinu.run/core';
 import {
-  SANDBOX_LIFECYCLE_ENVELOPE_VERSION, acceptSandboxLifecycleIncident,
+  acceptSandboxLifecycleIncident, lifecycleIncident,
   initSandboxLifecycleTable, type SandboxLifecycleDeps,
 } from '../src/sandbox-lifecycle';
 import {
@@ -18,6 +18,9 @@ import {
 } from '@kinu.run/devbox/incidents';
 import type { RecoveryRowInput } from '@kinu.run/core/analytics';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+
+/** The envelope version the box's restatement sends. */
+const ENVELOPE_VERSION = lifecycleIncident({ incidentId: 'version', stage: 'attach', reason: '', processId: undefined, port: undefined, at: 0 }, 1).version;
 
 /** Everything but the caller's own workspace, the one dimension the module cannot know. */
 type Settlement = Omit<RecoveryRowInput, 'workspace'>;
@@ -68,7 +71,7 @@ function ledger(script: Partial<LedgerScript> = {}): Ledger {
 type Envelope = Readonly<Record<string, JsonValue>>;
 
 const SENT = {
-  version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
+  version: ENVELOPE_VERSION,
   incidentId: 'inc-1',
   stage: 'checkpoint',
   reason: 'mksquashfs exited 1',
@@ -290,7 +293,7 @@ describe('the answer the box acts on', () => {
   async function pass(store: IncidentStore, deps: SandboxLifecycleDeps, now: number) {
     return await deliverIncidents(store, async (incident, attempt) => {
       const answer = await acceptSandboxLifecycleIncident(deps, {
-        version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
+        version: ENVELOPE_VERSION,
         incidentId: incident.incidentId,
         stage: incident.stage,
         reason: incident.reason,
@@ -374,7 +377,7 @@ function acceptSubmissions(agent: HarnessOrchestratorAgent): void {
 
 describe('an auxiliary log failure', () => {
   const incident = {
-    version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
+    version: ENVELOPE_VERSION,
     incidentId: 'inc-log',
     stage: 'attach' as const,
     reason: 'archive size 0 did not match the declared 918_224',

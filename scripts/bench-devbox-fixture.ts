@@ -838,12 +838,13 @@ interface DeployedFixture {
 export async function deployFixture(
   token: string,
   fixture: ArmFixture,
-  boot: { readonly productionSync?: boolean; readonly size?: string } = {},
+  boot: { readonly productionSync?: boolean; readonly size?: string; readonly faults?: boolean } = {},
 ): Promise<DeployedFixture> {
   const output = wrangler([
     'deploy', '--config', fixture.configPath, '--var', `BENCH_TOKEN:${token}`,
     ...(boot.productionSync === true ? ['--var', 'BENCH_PRODUCTION_SYNC:1'] : []),
     ...(boot.size === undefined ? [] : ['--var', `BENCH_SIZE:${boot.size}`]),
+    ...(boot.faults === true ? ['--var', 'BENCH_FAULTS:1'] : []),
   ]);
 
   const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
@@ -1190,10 +1191,12 @@ interface AttachPoll {
   readonly operation: string;
   readonly allowedKinds: readonly string[];
   readonly bounds?: StartupBounds;
+  /** A wake whose service cannot come back settles in `repair`; a run that arranged that accepts it. */
+  readonly acceptRepair?: boolean;
 }
 
 async function pollForAttach(
-  { fixture, box, operation, allowedKinds, bounds = {} }: AttachPoll,
+  { fixture, box, operation, allowedKinds, bounds = {}, acceptRepair = false }: AttachPoll,
 ): Promise<StartupPoll> {
   const limits = { deadlineMs: CELL_STARTUP_MS, ...bounds };
   const deadline = Date.now() + (limits.deadlineMs ?? CELL_STARTUP_MS);
@@ -1235,7 +1238,7 @@ async function pollForAttach(
     lastReading = `${verdict.kind}${'detail' in verdict ? `: ${verdict.detail}` : ''}`
       + `${'reason' in verdict ? `: ${verdict.reason}` : ''} — ${describeStartupState(reply)}`;
 
-    if (verdict.kind === 'attached') {
+    if (verdict.kind === 'attached' || (verdict.kind === 'repair' && acceptRepair)) {
       if (allowedKinds.includes(verdict.attach.kind)) {
         return { attach: verdict.attach, state: reply, redrives };
       }
@@ -1303,10 +1306,11 @@ interface StartupRequest {
   readonly operation: string;
   readonly allowedKinds: readonly string[];
   readonly bounds?: StartupBounds;
+  readonly acceptRepair?: boolean;
 }
 
 export async function startupOperation(
-  { fixture, box, path, operation, allowedKinds, bounds = {} }: StartupRequest,
+  { fixture, box, path, operation, allowedKinds, bounds = {}, acceptRepair = false }: StartupRequest,
 ): Promise<StartupCompletion> {
   const started = Date.now();
   const limits = { deadlineMs: CELL_STARTUP_MS, ...bounds };
@@ -1350,6 +1354,7 @@ export async function startupOperation(
     box,
     operation,
     allowedKinds,
+    acceptRepair,
     bounds: { ...limits, deadlineMs: Math.max(0, (deadline ?? started + CELL_STARTUP_MS) - Date.now()) },
   });
 

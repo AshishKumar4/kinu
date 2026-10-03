@@ -217,7 +217,7 @@ test('clearing a conversation waits for the clear the deployment tells another s
     const clear = session.clearConversation().then(() => { cleared = true; });
 
     await requested.promise;
-    expect(await session.history()).toEqual([{ role: 'user', text: 'previous conversation' }]);
+    expect(await session.history()).toEqual([{ id: 'old', role: 'user', text: 'previous conversation' }]);
     expect(cleared).toBe(false);
     release.resolve();
     await clear;

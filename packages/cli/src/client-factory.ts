@@ -10,6 +10,7 @@ export interface AgentClientFlags {
   model?: string;
   baseUrl?: string;
   auth?: string;
+  /** `--no-auto-evolve`: turns the agent's learning setting off. */
   noAutoEvolve?: boolean;
   /** One task turn, then exit. The outcome ledger needs it: the next prompt is a fresh task, not a verdict on
    *  the previous answer. */
@@ -29,7 +30,7 @@ export async function createAgentClient(
     rejectLocalLlmFlags(opts);
     const auth = requireAuthConfig();
 
-    return new CloudAgentClient({
+    const client = new CloudAgentClient({
       origin: auth.origin,
       token: auth.token,
       agentName: target.name,
@@ -37,6 +38,11 @@ export async function createAgentClient(
       transcript: opts,
       oneShot: opts.oneShot,
     });
+
+    // The agent's own learning setting, the one switch both backends honour.
+    if (opts.noAutoEvolve === true) await client.setEvolutionConfig({ learning: false });
+
+    return client;
   }
 
   // Bind the planes to the recorded placement, not the invocation directory.
@@ -64,9 +70,5 @@ function rejectLocalLlmFlags(opts: AgentClientFlags): void {
 
   if (opts.baseUrl || opts.auth) {
     throw new Error('--base-url and --auth apply to local workspaces only.');
-  }
-
-  if (opts.noAutoEvolve) {
-    throw new Error('--no-auto-evolve applies to local workspaces; cloud turns run under the workspace\'s own evolution settings.');
   }
 }

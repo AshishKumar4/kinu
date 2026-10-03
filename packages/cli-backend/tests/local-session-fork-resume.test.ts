@@ -78,8 +78,10 @@ describe('resuming a workspace whose fork was interrupted', () => {
     const { db, rt, journal } = interruptedWorkspace();
     const events: SessionEvent[] = [];
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
-      rt, db, model: fakeModel(), onEvent: (e) => events.push(e), noAutoEvolve: true,
+      rt, db, model: fakeModel(), onEvent: (e) => events.push(e),
     });
 
     expect(journal.listLive()).toEqual({
@@ -115,8 +117,10 @@ describe('resuming a workspace whose fork was interrupted', () => {
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
     const events: SessionEvent[] = [];
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
-      rt, db, model: fakeModel(), onEvent: (e) => events.push(e), noAutoEvolve: true,
+      rt, db, model: fakeModel(), onEvent: (e) => events.push(e),
     });
 
     await session.recoverBackgroundJobs();

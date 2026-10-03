@@ -7,15 +7,12 @@ export { Devbox };
 
 import { createHash } from 'node:crypto';
 
-import { snapshotChainStorage } from '../../src/snapshot-chain';
-import { DEVBOX_RUNTIME_DIR, type StoredValue } from '../../src/storage';
-import {
-  DEVBOX_SYNC_HOST, containerChainPorts, decodeSyncConfig, parseCheckpointKind, syncCaller,
-  syncWorker, type SyncAnswer,
-} from '../../src/sync';
+import type { StoredValue } from '../../src/storage';
+import { TOOLS_STAMP } from '../../src/tools';
 import { shellSyntaxError } from "./container-shell";
+import { DEVBOX_SCRATCH_PREFIX } from './scratch';
 import * as v from 'valibot';
-import type { ExecResult } from '../../src/contracts';
+import type { ExecResult, GatewayBindings } from '../../src/contracts';
 
 /** Models `@cloudflare/sandbox` errors: `code` is a getter on an unexported `SandboxError` class,
  *  not an own property; a plain-field stand-in would pass checks the shipped SDK fails. */
@@ -351,10 +348,6 @@ export class FakeSandbox {
   readonly s3fsMounts = new Set<string>();
   /** Hosts the box bound to a named outbound handler (`setOutboundByHost`). */
   readonly outboundHosts = new Map<string, string>();
-  /** The image's sync program, as `# devbox-sync-start-v1` leaves it; the heartbeat reads it. */
-  syncRunning = false;
-  /** The box's sync host, which `harness` wires to the box it built; the flush reaches it. */
-  syncHost: ((body: string) => Promise<SyncAnswer>) | undefined = undefined;
   /** s3fs runs under exactly these options; an option absent here is s3fs's own default. */
   readonly s3fsOptionsByMount = new Map<string, readonly string[]>();
   /** A fresh container holds only the image's dirs; `/var/tmp/devbox` is made by whatever runs
@@ -373,6 +366,8 @@ export class FakeSandbox {
   readonly getFaults: Error[] = [];
   readonly killFaults: Error[] = [];
   readonly stampFaults: (Error | undefined)[] = [];
+  /** Thrown by the next reads of the boot-id file, as an exec the container drops. */
+  readonly bootReadFaults: Error[] = [];
   startGate: Gate | undefined;
   /** Parks the container's own admission probe, `start()`, awaited before a generation is captured.
    *  Distinct from `startGate` (the process start): two different calls and windows. */
@@ -398,27 +393,26 @@ export class FakeSandbox {
   readonly startWaitOptions: unknown[] = [];
   /** Each platform start's options (D50). */
   readonly startOptions: (ContainerStartupOptions | undefined)[] = [];
+  /** Each snapshot the platform holds, and how a start from it behaves: `hang` never admits a command. */
+  readonly snapshots = new Map<string, 'ok' | 'hang'>();
+  /** Every signal a native exec was given: the platform may act on one long after the exec settled. */
+  readonly execSignals: AbortSignal[] = [];
+  /** Ids never repeat, as the platform's do not: a deleted snapshot's id is not handed out again. */
+  #snapshotsTaken = 0;
+  /** What each snapshot holds: the container's disk as it was when it was taken. */
+  readonly #snapshotDisks = new Map<string, { readonly files: Map<string, string>; readonly binaryFiles: Map<string, Uint8Array>; readonly directories: Set<string> }>();
+  /** A snapshot taken elsewhere (the golden), holding `files`. */
+  addSnapshot(id: string, files: ReadonlyMap<string, string>): void {
+    this.snapshots.set(id, 'ok');
+    this.#snapshotDisks.set(id, { files: new Map(files), binaryFiles: new Map(), directories: new Set() });
+  }
+
+  /** Thrown by the next `snapshotContainer`, as a refused snapshot is. */
+  snapshotFault: Error | undefined;
   readonly files = new Map<string, string>();
   /** Files whose bytes are not UTF-8 text, which `files` cannot hold; the SDK's file reads serve them as bytes. */
   readonly binaryFiles = new Map<string, Uint8Array>();
   readonly fileFaults = new Map<string, { readonly errno: number; readonly message: string }>();
-  /** Recorded by the box's own `fuse-overlayfs` command and reported via `cat /proc/mounts`,
-   *  which `isOverlayMounted` reads; termination clears them with the local filesystem (P1). */
-  readonly overlayMounts = new Set<string>();
-  /** Recorded when the box's own `squashfuse` command runs and read back via `/proc/mounts`;
-   *  a stop clears them with the local filesystem, like `overlayMounts`. */
-  readonly layerMounts = new Set<string>();
-  /** Each layer mount's `fsname`: the archive it serves, which `/proc/mounts` reports as its source. */
-  readonly #layerSources = new Map<string, string>();
-  /** Must be the bucket `objectFacts` reads and `chainStoreRoot` derives, so a `dd` through the
-   *  store mount lands where the next attach looks. Unset, no chain command reaches the store. */
-  chainStore: { readonly objects: Map<string, Uint8Array>; readonly root: string;
-    /** Every object-store write attempt a publication makes, in order. s3fs `dd` costs three
-     *  (marker, empty placeholder, payload); the egress PUT costs one. */
-    attempts?: { operation: 'put' | 'uploadPart' | 'complete'; key: string; bytes: number }[] } | undefined;
-  /** Local files keyed by container path: what the box's `mksquashfs` produced, which a later
-   *  `dd` of that path publishes. Not the remote objects in chainStore. */
-  readonly stagedArchives = new Map<string, Uint8Array>();
   /** The SDK's start block (D26): set while the start hook runs, so `deliver` holds every
    *  operation that arrives during the restore until the hook settles. */
   initGate: Promise<void> | undefined;
@@ -460,213 +454,6 @@ export class FakeSandbox {
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
-  /** The holder release as a container with no process on the mount answers it. Matched on the
-   *  `/proc/$pid/fd` scan, not the command prefix, which an ancestor walk changes. */
-  #execHolderRelease(command: string): ExecResult | null {
-    return command.includes('/proc/$pid/fd') ? { stdout: 'none', stderr: '', exitCode: 0 } : null;
-  }
-  #hydrateLayer(source: string, mountPoint: string): void {
-    const relative = source.startsWith('/backups/') ? source.slice('/backups/'.length) : undefined;
-
-    const bytes = relative === undefined ? this.stagedArchives.get(source)
-      : this.chainStore?.objects.get(this.chainStore.root + '/' + relative);
-
-    if (bytes === undefined) return;
-    const archive = new TextDecoder().decode(bytes);
-    const rootEnd = archive.indexOf('\0');
-
-    if (rootEnd < 0) return;
-    const root = archive.slice(0, rootEnd) + '/';
-    let at = rootEnd + 1;
-
-    while (at < archive.length) {
-      const nameEnd = archive.indexOf('\0', at);
-      const sizeEnd = archive.indexOf('\0', nameEnd + 1);
-
-      if (nameEnd < 0 || sizeEnd < 0) throw new Error('the modeled archive has an incomplete file header');
-      const name = archive.slice(at, nameEnd);
-      const size = Number(archive.slice(nameEnd + 1, sizeEnd));
-
-      if (!Number.isInteger(size) || size < 0 || !name.startsWith(root)) throw new Error('the modeled archive has an invalid file header');
-      at = sizeEnd + 1;
-      this.files.set(mountPoint + '/' + name.slice(root.length), archive.slice(at, at + size));
-      at += size;
-    }
-  }
-
-  #unmountWorkdir(path: string): ExecResult {
-    for (const process of this.processes.values()) {
-      if (process.status !== 'running' && process.status !== 'starting') continue;
-
-      for (let at = this.starts.length - 1; at >= 0; at--) {
-        const start = this.starts[at];
-
-        if (start?.processId !== process.id) continue;
-
-        if (start.cwd === path || start.cwd?.startsWith(path + '/') === true) {
-          return { stdout: '', stderr: 'fusermount3: failed to unmount ' + path + ': Device or resource busy', exitCode: 1 };
-        }
-
-        break;
-      }
-    }
-
-    for (const file of this.files.keys()) if (file.startsWith(path + '/')) this.files.delete(file);
-    this.overlayMounts.delete(path);
-    this.layerMounts.delete(path);
-    this.#layerSources.delete(path);
-    this.s3fsMounts.delete(path);
-
-    return { stdout: '', stderr: '', exitCode: 0 };
-  }
-  #mountOverlay(command: string): ExecResult {
-    const target = quotedSegments(command).at(-1);
-
-    if (target !== undefined) {
-      this.overlayMounts.add(target);
-      const lowers = /lowerdir='([^']+)'/.exec(command)?.[1]?.split(':').reverse() ?? [];
-      const upper = /upperdir='([^']+)'/.exec(command)?.[1];
-
-      if (upper !== undefined) lowers.push(upper);
-
-      for (const layer of lowers) {
-        for (const [path, content] of Array.from(this.files)) if (path.startsWith(layer + '/')) this.files.set(target + path.slice(layer.length), content);
-      }
-    }
-
-    return { stdout: '', stderr: '', exitCode: 0 };
-  }
-
-  /** Answers snapshot-chain commands as the container does; matched on the binary each runs,
-   *  the one part of the template the strategy's builders own. Null for any other command. */
-  #execChainCommand(command: string): ExecResult | null {
-    const unmount = /\/usr\/bin\/fusermount3 -u '([^']+)'/.exec(command)?.[1];
-
-    if (unmount !== undefined) return this.#unmountWorkdir(unmount);
-
-    if (command.includes('/usr/bin/fuse-overlayfs')) return this.#mountOverlay(command);
-
-    if (command.includes('/usr/local/bin/devbox-squashfuse')) {
-      const quoted = quotedSegments(command.slice(command.indexOf('/usr/local/bin/devbox-squashfuse')));
-      const [source, mountPoint] = quoted;
-
-      if (mountPoint !== undefined) this.layerMounts.add(mountPoint);
-
-      if (mountPoint !== undefined && source !== undefined) {
-        this.#layerSources.set(mountPoint, source);
-        this.#hydrateLayer(source, mountPoint);
-      }
-
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
-
-    if (command.includes('devbox-stream.mjs')) return this.#execStream(command);
-
-    if (command.includes('/usr/bin/mksquashfs')) {
-      const tail = command.slice(command.indexOf('/usr/bin/mksquashfs'));
-      const quoted = quotedSegments(tail);
-      const sourceDir = quoted[0];
-      const archivePath = quoted[1];
-
-      if (sourceDir === undefined || archivePath === undefined) {
-        throw new Error(`the archiver command names no source and target: ${command}`);
-      }
-
-      const bytes = this.synthesizeArchive(sourceDir);
-      this.stagedArchives.set(archivePath, bytes);
-
-      return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
-    }
-
-    if (command.includes('conv=fsync')) return this.#execPublish(command);
-
-    if (command.startsWith('bash -o pipefail -c ') && command.includes('/var/tmp/devbox/upper')) {
-      return { stdout: this.#upperMark(), stderr: '', exitCode: 0 };
-    }
-
-    if (command.includes('then seen=1; break; fi')) {
-      // The layer-visibility probe: `ready` exactly when the store holds the
-      // object, which is what a re-list through the mount would find.
-      const seen = /test -e '([^']+)'/.exec(command)?.[1];
-      const store = this.chainStore;
-      const relative = seen?.startsWith('/backups/') === true ? seen.slice('/backups/'.length) : undefined;
-      const held = relative !== undefined && store?.objects.has(`${store.root}/${relative}`) === true;
-
-      if (held) return { stdout: 'ready', stderr: '', exitCode: 0 };
-
-      const holds = store === undefined
-        ? ''
-        : [...store.objects.keys()].filter((key) => key.startsWith(`${store.root}/`)).join(' ');
-
-      return { stdout: `missing ${holds}`.trimEnd(), stderr: '', exitCode: 0 };
-    }
-
-    return null;
-  }
-
-  /** Models an s3fs publish as three object attempts: `mkdir -p` PUTs the marker, `create` PUTs
-   *  an empty object, then the flush PUTs the payload (measured shape of `b20260914045438`). */
-  #execPublish(command: string) {
-    const archivePath = /if='([^']+)'/.exec(command)?.[1];
-    const mountedPath = /of='([^']+)'/.exec(command)?.[1];
-    const store = this.chainStore;
-
-    if (archivePath === undefined || mountedPath === undefined || store === undefined) {
-      throw new Error(`the publish command names no archive, target or store: ${command}`);
-    }
-
-    const bytes = this.stagedArchives.get(archivePath);
-
-    if (bytes === undefined) throw new Error(`the publish reads an archive nothing staged: ${archivePath}`);
-
-    // The store mount exposes the chain root: shipped `mountedLayerPath` joins `/backups` and
-    // the root-relative key, so this same join fails loudly below if the two drift.
-    const relative = mountedPath.startsWith('/backups/')
-      ? mountedPath.slice('/backups/'.length)
-      : undefined;
-
-    if (relative === undefined) throw new Error(`the publish target is outside the store mount: ${mountedPath}`);
-
-    const key = `${store.root}/${relative}`;
-    const parent = key.slice(0, key.lastIndexOf('/') + 1);
-
-    store.attempts?.push({ operation: 'put', key: parent, bytes: 0 });
-    store.attempts?.push({ operation: 'put', key, bytes: 0 });
-    store.attempts?.push({ operation: 'put', key, bytes: bytes.byteLength });
-    store.objects.set(key, bytes.slice());
-
-    return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
-  }
-
-  /** Models D15 and D57: the archive streams to the store as it is built, in ONE object attempt
-   *  (s3fs `dd` cannot); the store lands it under the mount's prefix plus the URL's key. */
-  #execStream(command: string) {
-    const objectUrl = /devbox-stream\.mjs' '([^']+)'/.exec(command)?.[1];
-    const sourceDir = quotedSegments(command.slice(command.indexOf('/usr/bin/mksquashfs')))[0];
-    const store = this.chainStore;
-
-    if (sourceDir === undefined || objectUrl === undefined || store === undefined) {
-      throw new Error(`the stream command names no source, URL or store: ${command}`);
-    }
-
-    if (this.s3fsMounts.size === 0) {
-      return { stdout: '1 ', stderr: 'Access to R2 bucket is not permitted. Call mountBucket() with this bucket before accessing it.', exitCode: 0 };
-    }
-
-    const relative = /^https?:\/\/[^/]+\/[^/]+\/(.+)$/.exec(objectUrl)?.[1];
-
-    if (relative === undefined) {
-      return { stdout: '1 ', stderr: `PUT answered 403 for ${objectUrl}`, exitCode: 0 };
-    }
-
-    const bytes = this.synthesizeArchive(sourceDir);
-    const key = `${store.root}/${decodeURIComponent(relative)}`;
-    store.attempts?.push({ operation: 'put', key, bytes: bytes.byteLength });
-    store.objects.set(key, bytes.slice());
-
-    return { stdout: `0 ${String(bytes.byteLength)} "etag"`, stderr: '', exitCode: 0 };
-  }
-
   /** Lists every path the box's `mountBucket` holds, as `/proc/mounts` does in a container,
    *  so a strategy's read-back observes the fake's changes, not test-staged state. */
   #procMounts(): string {
@@ -675,24 +462,9 @@ export class FakeSandbox {
       ...[...this.s3fsMounts].map(
         (path) => `s3fs ${path} fuse.s3fs rw,nosuid,nodev,relatime,user_id=0 0 0`,
       ),
-      // Present until a stop takes the FUSE daemons down; the fstype must match the container's
-      // because `isOverlayMounted` reads it while `findMount` reads the mount point.
-      ...[...this.overlayMounts].map(
-        (path) => `fuse-overlayfs ${path} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
-      ),
-      ...[...this.layerMounts].map(
-        (path) => `${this.#layerSources.get(path) ?? 'squashfuse'} ${path} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
-      ),
     ];
 
     return `${lines.join('\n')}\n`;
-  }
-
-  /** Content-hashed, not metadata-hashed: this stand-in keeps no inodes or times, and a
-   *  fingerprint moving without a byte change would commit where the box skips. The shipped
-   *  caller fingerprints only the overlay upper. */
-  #upperMark(): string {
-    return createHash('sha256').update(this.synthesizeArchive('/var/tmp/devbox/upper')).digest('hex');
   }
 
   async exec(
@@ -722,9 +494,7 @@ export class FakeSandbox {
     const marker = /^# (devbox-[\w-]+)\n/.exec(command)?.[1];
     // The scan and the marked programs get fixed names, not their first word: ordering assertions
     // read these rows and must not silently stop matching when a template's first word changes.
-    this.sequence.push(command.includes('/proc/$pid/fd')
-      ? 'exec:release-workdir-holders'
-      : `exec:${marker ?? command.split(' ')[0]}`);
+    this.sequence.push(`exec:${marker ?? command.split(' ')[0]}`);
     const held = this.execGate;
 
     if (held !== undefined) {
@@ -779,47 +549,38 @@ export class FakeSandbox {
       if (bootId !== null) this.bootId = bootId[1];
     }
 
-    // Lazy detach (`MNT_DETACH`) removes the mount even while something holds it.
-    if (command.includes('fusermount -uz')) {
-      this.sequence.push('exec:lazy-unmount');
-      this.s3fsMounts.delete('/workspace');
-
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
-
-    const release = this.#execHolderRelease(command);
-
-    if (release !== null) return release;
-
-    const chain = this.#execChainCommand(command);
-
-    if (chain !== null) return chain;
-
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
   /** The box's own programs and probes, answered from this container's state with the bytes bash
    *  writes; the session path hands them back as the container server does. Null for any other. */
   async #execBoxProgram(command: string): Promise<ExecResult | null> {
-    if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
+    if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') {
+      const fault = this.bootReadFaults.shift();
 
-    if (command.startsWith('# devbox-beat-v1\n')) {
-      return { stdout: `${this.bootId ?? ''}\n${this.syncRunning ? 'alive' : ''}`, stderr: '', exitCode: 0 };
+      if (fault !== undefined) throw fault;
+
+      return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
     }
 
     if (command === 'cat /proc/mounts') return { stdout: this.#procMounts(), stderr: '', exitCode: 0 };
 
-    if (command.startsWith('# devbox-tick-probe-v2\n')) {
-      return { stdout: `${this.#upperMark()}\n${this.#procMounts()}`, stderr: '', exitCode: 0 };
+    if (command.startsWith(`cat ${TOOLS_STAMP}`)) return { stdout: this.files.get(TOOLS_STAMP) ?? '', stderr: '', exitCode: 0 };
+
+    // The tools install: the archive must have arrived, and the stamp names what it installed.
+    if (command.includes(`> ${TOOLS_STAMP}`)) {
+      this.sequence.push('exec:tools-install');
+      const archive = /tar -C \/ -xzf '([^']+)'/.exec(command)?.[1] ?? '';
+
+      if (!this.binaryFiles.has(archive)) return { stdout: 'no archive', stderr: '', exitCode: 2 };
+      this.files.set(TOOLS_STAMP, /printf %s '([^']+)' > /.exec(command)?.[1] ?? '');
+
+      return { stdout: 'installMs=1 changed=1', stderr: '', exitCode: 0 };
     }
 
-    if (command.startsWith('# devbox-sync-flush-v1\n')) return await this.#flushSync(command);
+    const probed = /^mountpoint -q (\S+)$/.exec(command)?.[1];
 
-    if (command.startsWith('# devbox-sync-start-v1\n') || command.startsWith('# devbox-sync-stop-v1\n')) {
-      this.syncRunning = command.startsWith('# devbox-sync-start-v1\n');
-
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
+    if (probed !== undefined) return { stdout: '', stderr: '', exitCode: this.s3fsMounts.has(probed) ? 0 : 1 };
 
     const counted = /^find '([^']*)' -mindepth 1 -maxdepth 1 \| wc -l$/.exec(command);
 
@@ -829,36 +590,6 @@ export class FakeSandbox {
 
     return { stdout: `${String(count)}\n`, stderr: '', exitCode: 0 };
   }
-
-  /** The flush as the image's program takes it: the same chain checkpoint, run on this container's
-   *  own shell, asking the box through `devboxSync` for what the container cannot reach (D30). */
-  async #flushSync(command: string): Promise<ExecResult> {
-    const flush = /DEVBOX_SYNC_CONFIG=(\S+) bun \S+ flush (\w+)/.exec(command);
-
-    if (flush === null) return { stdout: '', stderr: `unparsed flush: ${command}`, exitCode: 2 };
-    const host = this.syncHost;
-
-    if (host === undefined) return { stdout: '', stderr: 'no box serves this container\'s sync', exitCode: 2 };
-    const generation = async (): Promise<string | undefined> => await Promise.resolve(this.bootId);
-
-    const transport = async (body: string): Promise<{ status: number; text: string }> => {
-      // `.internal` resolves nowhere: without the box's binding the request never leaves the container.
-      if (!this.outboundHosts.has(DEVBOX_SYNC_HOST)) throw new Error('Unable to connect. Is the computer able to access the url?');
-      const answer = await host(body);
-
-      return { status: answer.status, text: answer.body };
-    };
-
-    const worker = syncWorker(snapshotChainStorage(containerChainPorts(decodeSyncConfig(flush[1]), {
-      exec: async (inner) => await this.#execIn(inner, { cwd: DEVBOX_RUNTIME_DIR }),
-      call: syncCaller(transport, generation),
-      generation,
-      log: () => undefined,
-    })));
-
-    return { stdout: JSON.stringify(await worker.run(parseCheckpointKind(flush[2]))), stderr: '', exitCode: 0 };
-  }
-
 
   async mountBucket(
     _binding: string, mountPath: string, options?: { readonly s3fsOptions?: readonly string[] },
@@ -933,7 +664,6 @@ export class FakeSandbox {
     for (const key of this.binaryFiles.keys()) if (key === path || key.startsWith(path + '/')) this.binaryFiles.delete(key);
 
     for (const key of this.directories) if (key === path || key.startsWith(path + '/')) this.directories.delete(key);
-    this.stagedArchives.delete(path);
   }
 
   /** The files this container holds under one directory, as the SDK lists
@@ -976,38 +706,6 @@ export class FakeSandbox {
     return { success: true, path, files, count: files.length, timestamp: now };
   }
 
-  /** Deterministic stand-in for squashfs bytes: unchanged files measure identically, any write
-   *  changes the measure. Workload files match no `CHAIN_EXCLUDES`, so exclusion is skipped. */
-  synthesizeArchive(sourceDir: string): Uint8Array {
-    const prefix = sourceDir.endsWith('/') ? sourceDir : `${sourceDir}/`;
-
-    const entries = [...this.files.entries()]
-      .filter(([entry]) => entry.startsWith(prefix))
-      .sort(([left], [right]) => {
-        if (left < right) return -1;
-
-        return left > right ? 1 : 0;
-      });
-
-    const encoded = new TextEncoder();
-    const parts: Uint8Array[] = [encoded.encode(sourceDir.replace(/\/$/, '') + '\0')];
-
-    for (const [entry, content] of entries) {
-      parts.push(encoded.encode(`${entry}\0${String(content.length)}\0`), encoded.encode(content));
-    }
-
-    const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
-    const out = new Uint8Array(total);
-    let at = 0;
-
-    for (const part of parts) {
-      out.set(part, at);
-      at += part.byteLength;
-    }
-
-    return out;
-  }
-
   getProcess(id: string): Promise<FakeProcessRow | null> {
     const fault = this.getFaults.shift();
 
@@ -1047,11 +745,7 @@ export class FakeSandbox {
 
     for (const path of IMAGE_DIRECTORIES) this.directories.add(path);
     this.bootId = undefined;
-    this.stagedArchives.clear();
     this.processes.clear();
-    this.overlayMounts.clear();
-    this.layerMounts.clear();
-    this.#layerSources.clear();
     this.s3fsMounts.clear();
   }
   /** Starting a running container is a health probe, not a new instance: it adds no start,
@@ -1141,7 +835,7 @@ export class FakeSandbox {
         // As the platform does without an image.
         if (options?.image === '') throw new TypeError('ctx.container.start(): image must not be empty');
         this.#ended = Promise.withResolvers<void>();
-        this.#opening = Promise.allSettled([this.start(options)]);
+        this.#opening = Promise.allSettled([this.#open(options)]);
       },
       monitor: () => this.#ended.promise,
       destroy: async () => { await this.destroy(); this.#ended.resolve(); },
@@ -1152,17 +846,52 @@ export class FakeSandbox {
       }),
       setInactivityTimeout: async () => { this.activityRenewals++; },
       interceptOutboundHttp: async (host) => { this.outboundHosts.set(host, host); },
-      interceptAllOutboundHttp: async () => { this.outboundHosts.set(DEVBOX_SYNC_HOST, DEVBOX_SYNC_HOST); },
+      interceptAllOutboundHttp: async () => undefined,
       interceptOutboundHttps: async () => { this.sequence.push('intercept:https'); },
-      snapshotContainer: () => unreached('container.snapshotContainer'),
+      snapshotContainer: async (options) => {
+        const fault = this.snapshotFault;
+        this.snapshotFault = undefined;
+
+        if (fault !== undefined) throw fault;
+        this.#snapshotsTaken += 1;
+        const id = `snapshot-${String(this.#snapshotsTaken)}`;
+        this.snapshots.set(id, 'ok');
+        this.#snapshotDisks.set(id, { files: new Map(this.files), binaryFiles: new Map(this.binaryFiles), directories: new Set(this.directories) });
+
+        return { id, size: 1, name: options?.name };
+      },
       inspect: () => unreached('container.inspect'),
       exec: (args, options) => this.#native(args, options),
     };
   }
 
+  /** A start from a snapshot the platform no longer holds fails; one marked `hang` never comes up. */
+  #open(options: ContainerStartupOptions | undefined): Promise<void> {
+    const snapshot = options?.containerSnapshot?.id;
+
+    if (snapshot === undefined) return this.start(options);
+    const behaviour = this.snapshots.get(snapshot);
+
+    if (behaviour === 'hang') return new Promise<void>(() => undefined);
+
+    if (behaviour === undefined) return Promise.reject(new Error(`snapshot ${snapshot} not found`));
+
+    return this.start(options).then(() => {
+      const disk = this.#snapshotDisks.get(snapshot);
+
+      for (const [path, content] of disk?.files ?? []) this.files.set(path, content);
+
+      for (const [path, bytes] of disk?.binaryFiles ?? []) this.binaryFiles.set(path, bytes);
+
+      for (const path of disk?.directories ?? []) this.directories.add(path);
+    });
+  }
+
   /** What the platform does before a native exec runs: the start it is behind, then the running check. */
   async #admitNative(options: ContainerExecOptions): Promise<void> {
-    const [opened] = await this.#opening ?? [];
+    const signal = options.signal;
+    const aborted = new Promise<never>((_, reject) => signal?.addEventListener('abort', () => { reject(signal.reason); }, { once: true }));
+    const [opened] = await Promise.race([this.#opening ?? Promise.resolve([]), aborted]);
 
     this.#opening = undefined;
 
@@ -1177,9 +906,28 @@ export class FakeSandbox {
   }
 
   async #native(args: string[], options: ContainerExecOptions = {}): Promise<ExecProcess> {
+    if (options.signal !== undefined) this.execSignals.push(options.signal);
     await this.#admitNative(options);
 
-    if (this.nativeExec !== undefined && (args[0] === "bash" || args[3] === "kill-tree" || args[3] === "port-listeners")) return this.nativeExec(args, options);
+    const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[3] === "kill-tree" || args[3] === "port-listeners";
+
+    if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
+
+    // `cat > <path>` fed on stdin: the bytes land in the file once the writer closes.
+    if (options.stdin === 'pipe' && args[0] === '/bin/sh') {
+      const target = /^cat > '([^']+)'$/.exec(args[2] ?? '')?.[1] ?? '';
+      const chunks: Uint8Array[] = [];
+      const closed = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
+
+      const stdin = new WritableStream<Uint8Array>({
+        write: (chunk) => { chunks.push(chunk); },
+        close: () => { this.binaryFiles.set(target, Buffer.concat(chunks)); closed.resolve({ stdout: '', stderr: '', exitCode: 0 }); },
+      });
+
+      this.sequence.push(`exec:stdin ${target}`);
+
+      return { ...processResult(closed.promise, this.#pid++), stdin };
+    }
 
     if (args[0] === '/usr/local/bin/sandbox-shim') {
       this.shimCalls.push(args.slice(1, 3).join(' '));
@@ -1338,7 +1086,17 @@ export interface BoxStateParts {
   readonly id: string;
   readonly container?: { running: boolean };
   readonly blockConcurrencyWhile: <T>(closure: () => Promise<T>) => Promise<T>;
-  readonly sync?: (body: string) => Promise<SyncAnswer>;
+}
+
+/** The Worker's exports as a box reaches them: its two gateways, and nothing of the host Worker it is
+ *  compiled with (another package's tests use this harness, under that package's own exports). */
+function gatewayExports(): BoxState['exports'] {
+  const gateways: GatewayBindings = {
+    DevboxStoreGateway: () => ({ fetch: async () => unreached('store gateway network'), connect: () => unreached('store gateway TCP') }),
+    DevboxOutbound: () => ({ fetch: async () => unreached('outbound network'), connect: () => unreached('outbound TCP') }),
+  };
+
+  return new Proxy(Object.create(null), { get: (_target, key) => (key === 'DevboxStoreGateway' || key === 'DevboxOutbound' ? gateways[key] : undefined) });
 }
 
 /** The whole `DurableObjectState`: the SDK `Sandbox` constructor takes the full handle.
@@ -1349,20 +1107,7 @@ export function boxState(parts: BoxStateParts): BoxState {
     storage: parts.storage,
     container: parts.container === undefined ? undefined : containerHandle(parts.container),
     blockConcurrencyWhile: parts.blockConcurrencyWhile,
-    exports: {
-      DevboxStoreGateway: () => ({ fetch: async () => unreached('store gateway network'), connect: () => unreached('store gateway TCP') }),
-      DevboxOutbound: () => ({ fetch: async () => unreached('outbound network'), connect: () => unreached('outbound TCP') }),
-      DevboxSyncGateway: () => ({
-        fetch: async (input: RequestInfo | URL) => {
-          if (parts.sync === undefined) return unreached('unbound sync host');
-          const request = input instanceof Request ? input : new Request(input.toString());
-          const reply = await parts.sync(await request.text());
-
-          return new Response(reply.body, { status: reply.status });
-        },
-        connect: () => unreached('sync host TCP'),
-      }),
-    },
+    exports: gatewayExports(),
     props: {},
     waitUntil: () => unreached('state.waitUntil'),
     get facets(): DurableObjectFacets { return unreached('state.facets'); },
@@ -1423,14 +1168,13 @@ export interface Harness<Box> {
 
 /** `id` defaults to `TEST_BOX_ID`; pass `deriveBoxId` output to model production identity.
  *  Starts stopped; a running-but-unsettled fixture is refused by readiness until the hook runs. */
-/** The box side of the container's sync: its outbound handler's target (D30). */
-interface SyncServing {
-  devboxSync(body: string): Promise<SyncAnswer>;
+/** What the fake platform calls on the object it built. */
+interface PlatformServed {
   alarm(): Promise<void>;
   onStop(): Promise<void>;
 }
 
-export function harness<Box extends SyncServing>(
+export function harness<Box extends PlatformServed>(
   Box: new (state: BoxState, env: TestEnv) => Box,
   id: string = TEST_BOX_ID,
   exec?: Container['exec'],
@@ -1439,7 +1183,6 @@ export function harness<Box extends SyncServing>(
 
   const state = boxState({
     storage: storage.handle, id,
-    sync: body => container.syncHost === undefined ? Promise.reject(new Error('unbound sync')) : container.syncHost(body),
     blockConcurrencyWhile: <T>(closure: () => Promise<T>): Promise<T> => {
       const previous = container.initGate;
       const completed = Promise.withResolvers<void>();
@@ -1459,7 +1202,6 @@ export function harness<Box extends SyncServing>(
   container.nativeExec = exec;
   const box = new Box(state, {});
   container.owner = box;
-  container.syncHost = body => box.devboxSync(body);
 
   return { box, container, rows: storage.rows, storage, state };
 }

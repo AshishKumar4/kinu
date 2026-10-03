@@ -186,3 +186,34 @@ test('a route answers nothing outside the bucket, host and access S3Mount record
   });
   expect((await send('chain/x', { method: 'HEAD' })).status).toBe(404);
 });
+
+test('a multipart upload completes whatever order a client lists each part\'s fields in, and refuses a list it cannot read', async () => {
+  // S3 does not order a part's elements; the AWS SDKs send each part's checksum and ETag before its number.
+  const halves = [new Uint8Array(randomBytes(5 * 1024 * 1024)), new Uint8Array(randomBytes(1_234))];
+
+  const complete = async (key: string, part: (number: number, etag: string) => string): Promise<{ status: number; stored: string | null }> => {
+    const opened = await (await send(`${key}?uploads`, { method: 'POST' })).text();
+    const uploadId = /<UploadId>([^<]+)<\/UploadId>/.exec(opened)?.[1] ?? '';
+    const etags: string[] = [];
+
+    for (const [index, bytes] of halves.entries()) {
+      etags.push((await send(`${key}?partNumber=${String(index + 1)}&uploadId=${encodeURIComponent(uploadId)}`, { method: 'PUT', body: bytes })).headers.get('etag') ?? '');
+    }
+
+    const body = new TextEncoder().encode(`<CompleteMultipartUpload xmlns="http://s3.amazonaws.com/doc/2006-03-01/">${etags.map((etag, index) => part(index + 1, etag)).join('')}</CompleteMultipartUpload>`);
+    const done = await send(`${key}?uploadId=${encodeURIComponent(uploadId)}`, { method: 'POST', body });
+    const read = await send(key);
+
+    return { status: done.status, stored: read.status === 200 ? sha(new Uint8Array(await read.arrayBuffer())) : null };
+  };
+
+  const whole = new Uint8Array([...halves[0] ?? [], ...halves[1] ?? []]);
+
+  const numberFirst = await complete('chain/number-first.sqsh', (number, etag) => `<Part><PartNumber>${String(number)}</PartNumber><ETag>${etag}</ETag></Part>`);
+  const etagFirst = await complete('chain/etag-first.sqsh', (number, etag) => `<Part><ChecksumCRC32>AAAAAA==</ChecksumCRC32><ETag>${etag}</ETag><PartNumber>${String(number)}</PartNumber></Part>`);
+  const unreadable = await complete('chain/unreadable.sqsh', (number) => `<Part><PartNumber>${String(number)}</PartNumber></Part>`);
+
+  expect({ numberFirst, etagFirst, unreadable }).toEqual({
+    numberFirst: { status: 200, stored: sha(whole) }, etagFirst: { status: 200, stored: sha(whole) }, unreadable: { status: 400, stored: null },
+  });
+});

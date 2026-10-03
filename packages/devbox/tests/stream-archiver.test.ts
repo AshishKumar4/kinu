@@ -134,3 +134,25 @@ test('small files that duplicate ones already uploaded stream like any others', 
   expect({ ...published, tree: listing(target.object(), 'duplicates') })
     .toEqual({ code: '0', stderr: '', tree: listing(new Uint8Array(await Bun.file(direct).arrayBuffer()), 'duplicates-direct') });
 });
+
+test('an input that fails after part of its tar is reported in its own words, and no object is kept', async () => {
+  // A tar cut short between members can read as whole, so the input's exit counts: one member, no end, exit 1.
+  const producer = `python3 -c 'import io,sys,tarfile
+held = io.BytesIO(); out = tarfile.open(fileobj=held, mode="w")
+info = tarfile.TarInfo("tree/a.txt"); info.size = 2; out.addfile(info, io.BytesIO(b"a\\n"))
+sys.stdout.buffer.write(held.getvalue()); sys.stdout.buffer.flush()
+sys.stderr.write("the inventory moved\\n"); sys.exit(1)'`;
+
+  const target = store(Promise.resolve());
+
+  const command = streamCommand({ tar: producer, archivePath: archive, objectUrl: target.url, profile: PROFILE })
+    .replaceAll(`'${DEVBOX_RUNTIME_DIR}/devbox-stream.mjs'`, `'${join(root, 'devbox-stream.mjs')}'`);
+
+  const child = Bun.spawn(['bash', '-c', command], { stdout: 'pipe', stderr: 'pipe' });
+  const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+
+  await target.stop();
+
+  expect({ code: stdout.split(' ')[0], words: stderr.includes('its input exited 1: the inventory moved'), object: target.object() })
+    .toEqual({ code: '4', words: true, object: undefined });
+});

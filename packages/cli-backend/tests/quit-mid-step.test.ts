@@ -58,15 +58,18 @@ test('a turn whose slow first call was cut by two quits is resumed and answers',
     },
   });
 
-  const first = new LocalAgentSession({ rt, db, model, noAutoEvolve: true, onEvent: () => {} });
+  rt.actor.config.setLearning(false);
+  const first = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
   const cut = first.send('rebuild the index', { id: crypto.randomUUID() });
   await until(() => calls === 1);
 
-  const second = new LocalAgentSession({ rt, db, model, noAutoEvolve: true, onEvent: () => {} });
+  rt.actor.config.setLearning(false);
+  const second = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
   await until(() => calls === 2);
 
   const events: SessionEvent[] = [];
-  const third = new LocalAgentSession({ rt, db, model, noAutoEvolve: true, onEvent: (event) => events.push(event) });
+  rt.actor.config.setLearning(false);
+  const third = new LocalAgentSession({ rt, db, model, onEvent: (event) => events.push(event) });
   await until(() => events.some((event) => event.type === 'turn-end'));
 
   expect(calls).toBe(3);

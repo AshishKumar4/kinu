@@ -28,12 +28,15 @@ function mcpServers() {
   };
 }
 
-function capturingModel(sink: (toolNames: string[]) => void): LanguageModel {
+/** What one request carried: its native tool names, and its prompt, where `eval`'s external tools are declared. */
+interface CapturedRequest { readonly native: string[]; readonly prompt: string }
+
+function capturingModel(sink: (request: CapturedRequest) => void): LanguageModel {
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
     doStream: async (options) => {
-      sink((options.tools ?? []).map((t) => t.name));
+      sink({ native: (options.tools ?? []).map((t) => t.name), prompt: JSON.stringify(options.prompt) });
 
       return {
         stream: new ReadableStream({
@@ -66,8 +69,10 @@ function sessionWithModel(model: LanguageModel) {
 
   const events: SessionEvent[] = [];
 
+  rt.actor.config.setLearning(false);
+
   const session = new LocalAgentSession({
-    rt, db, model, onEvent: (e) => events.push(e), noAutoEvolve: true,
+    rt, db, model, onEvent: (e) => events.push(e),
   });
 
   return { session, events };
@@ -153,13 +158,14 @@ describe('connectMcpServers', () => {
 });
 
 describe('LocalAgentSession MCP surface', () => {
-  test.each([false, true])('MCP isError=%s determines the native SDK outcome, not content fields', async (fail) => {
+  test.each([false, true])('MCP isError=%s decides the eval call outcome, not content fields', async (fail) => {
     const text = '{"reason":"denied","error":"historical incident"}';
+    const code = `return await tools["mcp_echo_echo"](${JSON.stringify({ text, fail })});`;
     let step = 0;
 
     const model = scriptedTurnModel({ doGenerate: () => ({
       content: ++step === 1
-        ? [{ type: 'tool-call', toolCallId: 'mcp-outcome', toolName: 'mcp_echo_echo', input: JSON.stringify({ text, fail }) }]
+        ? [{ type: 'tool-call', toolCallId: 'mcp-outcome', toolName: 'eval', input: JSON.stringify({ code }) }]
         : [{ type: 'text', text: 'done' }],
       finishReason: { unified: step === 1 ? 'tool-calls' : 'stop', raw: undefined },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
@@ -171,20 +177,19 @@ describe('LocalAgentSession MCP surface', () => {
     try {
       await session.connectMcp(mcpServers());
       await session.send('Call the MCP tool.', { id: crypto.randomUUID() });
-      const result = events.find((event) => event.type === 'tool-result' && event.toolName === 'mcp_echo_echo');
+      const result = events.find((event) => event.type === 'tool-result' && event.toolName === 'eval');
 
       if (fail) {
-        expect(result).toMatchObject({ success: false, reason: null, result: expect.stringContaining('remote failure') });
-        expect(result).not.toHaveProperty('execution');
+        expect(result).toMatchObject({ success: false, result: expect.stringContaining('remote failure') });
       } else {
-        expect(result).toMatchObject({ success: true, result: 'echo: ' + text });
+        expect(result).toMatchObject({ success: true, output: { result: 'echo: ' + text } });
       }
     } finally { await session.end(); }
   });
 
-  test('connected MCP tools appear in /tools and in the next model turn', async () => {
-    let captured: string[] = [];
-    const { session } = sessionWithModel(capturingModel((tools) => { captured = tools; }));
+  test('connected MCP tools appear in /tools and reach the next turn through eval, not as native tools', async () => {
+    let captured: CapturedRequest = { native: [], prompt: '' };
+    const { session } = sessionWithModel(capturingModel((request) => { captured = request; }));
 
     try {
       await session.connectMcp(mcpServers());
@@ -192,7 +197,9 @@ describe('LocalAgentSession MCP surface', () => {
       expect(session.describeTools().some((t) => t.name === 'mcp_echo_echo' && t.description.includes('Echo'))).toBe(true);
 
       await session.send('which tools can you see?', { id: crypto.randomUUID() });
-      expect(captured).toContain('mcp_echo_echo');
+      expect(captured.native).toContain('eval');
+      expect(captured.native).not.toContain('mcp_echo_echo');
+      expect(captured.prompt).toContain('tools[\\"mcp_echo_echo\\"]');
     } finally {
       await session.end();
     }
@@ -203,8 +210,8 @@ describe('LocalAgentSession MCP admission', () => {
   test('a tool larger than the session step allocation is deferred with its arithmetic', async () => {
     // `huge` carries ~600KB each of description and schema against a ~117k-token step remainder;
     // schemas are never truncated, so it defers whole.
-    let captured: string[] = [];
-    const { session, events } = sessionWithModel(capturingModel((tools) => { captured = tools; }));
+    let captured: CapturedRequest = { native: [], prompt: '' };
+    const { session, events } = sessionWithModel(capturingModel((request) => { captured = request; }));
 
     try {
       await session.connectMcp(mcpServers());
@@ -212,8 +219,8 @@ describe('LocalAgentSession MCP admission', () => {
       expect(session.toolNames()).not.toContain('mcp_echo_huge');
 
       await session.send('which tools can you see?', { id: crypto.randomUUID() });
-      expect(captured).toContain('mcp_echo_echo');
-      expect(captured).not.toContain('mcp_echo_huge');
+      expect(captured.prompt).toContain('tools[\\"mcp_echo_echo\\"]');
+      expect(captured.prompt).not.toContain('mcp_echo_huge');
 
       const deferrals: string[] = [];
 

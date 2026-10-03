@@ -50,19 +50,17 @@ import {
   BoxSizeSchema,
   Devbox,
   describeThrown,
-  parseDevboxStrategyName,
+  GOLDEN_NAME,
+  type BoxPeers,
   type BoxSize,
   type CheckpointKind,
   type CheckpointOutcome,
   type DevboxPolicy,
   type DevboxStore,
-  type DevboxStrategyName,
   type RestoreClockPhase,
 } from '../src/index';
 import type { RestorePhaseStamps } from '../src/durability/contracts';
 import { DEFAULT_DEVBOX_POLICY, type LateStartFailure } from '../src/lifecycle';
-import { upperFingerprintCommand } from '../src/snapshot-chain';
-import { DEVBOX_RUNTIME_DIR } from '../src/storage';
 import {
   R2_CLASS_A_OPERATIONS as CLASS_A,
   R2_CLASS_B_OPERATIONS as CLASS_B,
@@ -78,7 +76,7 @@ import { settle } from '../src/errors';
 import { serveStore, type StoreGatewayProps } from '../src/store-gateway';
 import { meterPublicationBucket, observePublicationRequest, type PublicationFinish } from './publication-transport';
 
-export { DevboxSyncGateway, DevboxOutbound } from "../src/index";
+export { DevboxOutbound } from "../src/index";
 
 interface BenchEnv {
   BACKUP_BUCKET: R2Bucket;
@@ -91,18 +89,16 @@ interface BenchEnv {
   BENCH_SELECTED_ARMS?: string;
   /** This run's box size, from `wrangler deploy --var`; absent is Devbox's default (D50). */
   BENCH_SIZE?: string;
+  /** `1` arms `POST /fault`: the soak's refused and stalled store writes. Absent, no write consults it. */
+  BENCH_FAULTS?: string;
   BENCH_INTERNET?: string;
   /** 'none' keeps every path, as a snapshot does (D55's head to head). */
   BENCH_EXCLUDES?: string;
-  /** '1' runs the container's own sync at the shipped period, as production does, for the
-   *  loss-window measurement (`scripts/bench-devbox-sync-window.ts`); absent, `checkpointNow`
-   *  is the only tick source. */
+  /** A secret: boxes delete their dead snapshots (D65). */
+  DEVBOX_REGISTRY_TOKEN?: string;
+  /** '1' runs the box's own checkpoints at the shipped period, as production does; absent,
+   *  `checkpointNow` is the only tick source. */
   BENCH_PRODUCTION_SYNC?: string;
-  /** Set to '1' ONLY for a local `wrangler dev` run, where there is no container
-   *  outbound interception and therefore no store mount. Absent on every deploy,
-   *  which is what stops a deployed arm from measuring extraction and reporting
-   *  it as a chain. */
-  ALLOW_EXTRACTION?: string;
 }
 
 // ── object-store op counting ────────────────────────────────────────────────
@@ -145,8 +141,6 @@ const pendingBytes: ByteTally = {};
 
 let pendingCount = 0;
 
-let inFlight: Promise<void> | undefined;
-
 let flushEnv: BenchEnv | undefined;
 
 function countOp(name: OpName): void {
@@ -170,14 +164,14 @@ function servedBytes(object: R2ObjectBody): number {
   return range.length ?? object.size - (range.offset ?? 0);
 }
 
-/** Push the tally to the counter object, coalesced to one write in flight.
+/** Push the tally to the counter object.
  *
  *  The proxy entrypoint and the fetch handler have no guarantee of sharing an
  *  isolate, so module state alone reads short from the other side and the
- *  counter object is what joins them. */
+ *  counter object is what joins them. Each caller awaits only its own push: a
+ *  cancelled request's push never settles, and in the D68 soak every later
+ *  store request that awaited one hung. */
 async function flushOps(env: BenchEnv): Promise<void> {
-  if (inFlight !== undefined) await inFlight;
-
   if (pendingCount === 0) return;
   const batch = { ...pending } satisfies OpTally;
   const bytes = { ...pendingBytes } satisfies ByteTally;
@@ -186,17 +180,7 @@ async function flushOps(env: BenchEnv): Promise<void> {
 
   for (const cls of BYTE_CLASSES) delete pendingBytes[cls];
   pendingCount = 0;
-
-  const run = (async () => {
-    try {
-      await env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops')).bump(batch, bytes);
-    } finally {
-      inFlight = undefined;
-    }
-  })();
-
-  inFlight = run;
-  await run;
+  await env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops')).bump(batch, bytes);
 }
 
 /** Push once the batch is large enough. Called after each counted call, and
@@ -209,6 +193,17 @@ async function maybeFlush(): Promise<void> {
 /** The existing meter wraps the boot-selected object store. */
 function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
   const counter = env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops'));
+
+  // The soak's store faults: the next armed write is refused, or held two minutes first.
+  const faulted = async (): Promise<void> => {
+    if (env.BENCH_FAULTS !== '1') return;
+
+    const fault = await counter.takeFault();
+
+    if (fault === 'refuse') throw new Error('bench fault: the store refused this write');
+
+    if (fault === 'stall') await new Promise((resolve) => { setTimeout(resolve, 120_000); });
+  };
 
   const observed = meterPublicationBucket(bucket, {
     begin: async (key, operation, uploadId) => await counter.beginPublicationAttempt(key, operation, uploadId),
@@ -238,12 +233,12 @@ function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
       countOp('createMultipartUpload');
       await maybeFlush();
 
-      return countingMultipart(await observed.createMultipartUpload(key, options));
+      return countingMultipart(await observed.createMultipartUpload(key, options), faulted);
     },
     resumeMultipartUpload: (key, uploadId) => {
       countOp('resumeMultipartUpload');
 
-      return countingMultipart(observed.resumeMultipartUpload(key, uploadId));
+      return countingMultipart(observed.resumeMultipartUpload(key, uploadId), faulted);
     },
   };
 
@@ -276,6 +271,7 @@ function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
     ) => {
       countOp('put');
       await maybeFlush();
+      await faulted();
 
       return await observed.put(key, value, options);
     },
@@ -285,13 +281,14 @@ function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
 /** The multipart handle. `uploadPart` and `complete` are calls on THIS object,
  *  not on the bucket, so a wrapper that stopped at the bucket would miss every
  *  byte of a large write. */
-function countingMultipart(upload: R2MultipartUpload): R2MultipartUpload {
+function countingMultipart(upload: R2MultipartUpload, faulted: () => Promise<void>): R2MultipartUpload {
   return {
     key: upload.key,
     uploadId: upload.uploadId,
     uploadPart: async (partNumber, value) => {
       countOp('uploadPart');
       await maybeFlush();
+      await faulted();
 
       return await upload.uploadPart(partNumber, value);
     },
@@ -346,6 +343,20 @@ export interface OpCounts {
 }
 
 export class BenchOpCounter extends DurableObject<BenchEnv> {
+  /** Arms the next `count` store writes to fail as `kind` (the soak's R2 faults). */
+  armFault(kind: 'refuse' | 'stall', count: number): void {
+    this.ctx.storage.kv.put('bench-fault', { kind, left: count });
+  }
+
+  takeFault(): 'refuse' | 'stall' | null {
+    const armed = v.safeParse(v.object({ kind: v.picklist(['refuse', 'stall']), left: v.number() }), this.ctx.storage.kv.get('bench-fault'));
+
+    if (!armed.success || armed.output.left <= 0) return null;
+    this.ctx.storage.kv.put('bench-fault', { ...armed.output, left: armed.output.left - 1 });
+
+    return armed.output.kind;
+  }
+
   async openPublicationWindow(token: string, prefix: string): Promise<PublicationWindow> {
     if (token === '' || prefix === '') throw new Error('a publication window requires its token and box prefix');
 
@@ -567,6 +578,17 @@ class BenchBox extends Devbox<BenchEnv> {
     flushEnv = args[1];
   }
 
+  protected override get registryToken(): string | undefined {
+    return this.env.DEVBOX_REGISTRY_TOKEN;
+  }
+
+  protected override get peers(): BoxPeers | undefined {
+    const boxes = this.env.SnapshotChainBox;
+
+    // Named as the router names every box, so `/golden?box=devbox-golden` reaches the same object.
+    return boxes === undefined ? undefined : { golden: () => boxes.get(boxes.idFromName(`${BENCH_ARM}:${GOLDEN_NAME}`)), box: (id) => boxes.get(boxes.idFromString(id)) };
+  }
+
   protected override get archiveExcludes(): readonly string[] {
     return this.env.BENCH_EXCLUDES === 'none' ? [] : super.archiveExcludes;
   }
@@ -760,6 +782,20 @@ class BenchBox extends Devbox<BenchEnv> {
     this.ctx.abort('bench eviction');
   }
 
+  forgetGoldenForBench(): boolean {
+    return this.ctx.storage.kv.delete('devbox:golden');
+  }
+
+  /** A lost or expired snapshot, as the platform answers one (D64). */
+  loseSnapshotForBench(): boolean {
+    const held = v.safeParse(v.looseObject({ id: v.string(), lineage: v.optional(v.array(v.string()), []) }), this.ctx.storage.kv.get('devbox:snapshot'));
+
+    if (!held.success) return false;
+    this.ctx.storage.kv.put('devbox:snapshot', { ...held.output, id: crypto.randomUUID(), lineage: [...held.output.lineage, held.output.id] });
+
+    return true;
+  }
+
   /**
    * Force a container reset for the benchmark. Actual container stop, sleep,
    * or restart loses container-local disk. A stable sandbox or Durable Object
@@ -800,14 +836,6 @@ class BenchBox extends Devbox<BenchEnv> {
     return { binding: "BACKUP_BUCKET", bucket: countingBucket(this.env.BACKUP_BUCKET, this.env) };
   }
 
-  /** Local `wrangler dev` has no outbound interception, so the chain cannot
-   *  mount there and extraction is the only way the fixture runs at all. A
-   *  DEPLOY must never set this: an arm that silently measured extraction would
-   *  report a fixed-cost attach it never performed. */
-  protected override get allowExtraction(): boolean {
-    return this.env.ALLOW_EXTRACTION === '1';
-  }
-
   /** Shortened from the shipped defaults so an arm does not sit for half an hour
    *  waiting to be allowed to quiesce. The gate ORDER is what is under test; the
    *  waiting is not. */
@@ -842,10 +870,15 @@ class BenchBox extends Devbox<BenchEnv> {
   }
 }
 
-export class SnapshotChainBox extends BenchBox {
-  protected override get strategy(): DevboxStrategyName {
-    return 'snapshot-chain';
-  }
+export class SnapshotChainBox extends BenchBox {}
+
+/** The one arm the fixture deploys; the name drivers address it by. */
+const BENCH_ARM = 'snapshot-chain';
+
+type BenchArm = typeof BENCH_ARM;
+
+function benchArm(requested: string | null | undefined): BenchArm | null {
+  return requested === BENCH_ARM ? BENCH_ARM : null;
 }
 
 
@@ -893,7 +926,7 @@ type BenchStub = DurableObjectStub<SnapshotChainBox>;
 
 function boxOf(
   env: BenchEnv,
-  strategy: DevboxStrategyName,
+  strategy: BenchArm,
   name: string,
 ): BenchStub {
   const binding = env.SnapshotChainBox;
@@ -908,7 +941,7 @@ function boxOf(
  *  declared, and a payload that disagrees is refused with its reason instead of
  *  producing a silent default. */
 const DriverBodySchema = v.object({
-  strategy: v.optional(v.picklist(['snapshot-chain'])),
+  strategy: v.optional(v.picklist([BENCH_ARM])),
   command: v.optional(v.string()),
   cwd: v.optional(v.string()),
   path: v.optional(v.string()),
@@ -920,6 +953,10 @@ const DriverBodySchema = v.object({
   purge: v.optional(v.boolean()),
   prefix: v.optional(v.string()),
   whole: v.optional(v.boolean()),
+  processId: v.optional(v.string()),
+  port: v.optional(v.number()),
+  kill: v.optional(v.boolean()),
+  fault: v.optional(v.picklist(['refuse', 'stall'])),
 });
 
 type DriverBody = v.InferOutput<typeof DriverBodySchema>;
@@ -967,24 +1004,52 @@ function benchCheckpointIntervalMs(env: BenchEnv): number {
 interface InstrumentRequest {
   readonly route: string;
   readonly env: BenchEnv;
-  readonly strategy: DevboxStrategyName;
+  readonly strategy: BenchArm;
   readonly box: BenchStub;
   readonly name: string;
   /** When the driver call opened, for the durations these routes report. */
   readonly started: number;
   readonly url: URL;
   readonly counter: DurableObjectStub<BenchOpCounter>;
+  readonly input: DriverBody;
 }
 
 /** Diagnostic reads share the instrument route boundary. */
 async function serveInstrumentRoutes(
-  { route, env, strategy, box, name, started, url, counter }: InstrumentRequest,
+  { route, env, strategy, box, name, started, url, counter, input }: InstrumentRequest,
 ): Promise<Response | null> {
   switch (route) {
+    case 'POST /fault': {
+      if (env.BENCH_FAULTS !== '1' || input.fault === undefined) return json({ status: 400, payload: { ok: false, error: 'this run arms no faults' } });
+      await env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops')).armFault(input.fault, 1);
+
+      return json({ payload: { ok: true, fault: input.fault, ms: Date.now() - started } });
+    }
+
     case 'POST /evict': {
       const [evicted] = await Promise.allSettled([box.evictForBench()]);
 
       return json({ payload: { ok: evicted.status === 'rejected', strategy, box: name, ms: Date.now() - started } });
+    }
+
+    // The golden object of this run's boxes (D65): built and verified, or forgotten as if the
+    // platform had lost every golden it held.
+    case 'POST /golden': {
+      const id = await box.ensureGolden();
+
+      return json({ payload: { ok: id !== '', id, strategy, box: name, ms: Date.now() - started } });
+    }
+
+    case 'POST /golden-forget': {
+      await box.forgetGoldenForBench();
+
+      return json({ payload: { ok: true, strategy, box: name, ms: Date.now() - started } });
+    }
+
+    case 'POST /lose-snapshot': {
+      const lost = await box.loseSnapshotForBench();
+
+      return json({ payload: { ok: lost, strategy, box: name, ms: Date.now() - started } });
     }
 
     case 'GET /state': {
@@ -994,20 +1059,11 @@ async function serveInstrumentRoutes(
         ok: true,
         strategy,
         box: name,
-        extractionAllowed: env.ALLOW_EXTRACTION === '1',
         storePrefix: storePrefixOf(env, strategy, name),
         checkpointIntervalMs: benchCheckpointIntervalMs(env),
         state,
         ms: Date.now() - started,
       } });
-    }
-
-    case 'GET /upper-mark': {
-      // The upper's fingerprint as the checkpoint gate reads it, which a commit records as its
-      // `upperMark`: the loss-window driver's witness that a commit holds a write.
-      const read = await box.exec(upperFingerprintCommand(`${DEVBOX_RUNTIME_DIR}/upper`));
-
-      return json({ payload: { ok: read.exitCode === 0, mark: read.stdout.trim(), error: read.stderr.trim() } });
     }
 
     case 'GET /restore-probe': {
@@ -1039,7 +1095,24 @@ async function serveInstrumentRoutes(
     return json({ payload: { ok: true, strategy, box: name, incidents, ms: Date.now() - started } });
   }
 
-  return null;
+  return await serveProcessRoutes(route, box, input, started);
+}
+
+async function serveProcessRoutes(route: string, box: BenchStub, input: DriverBody, started: number): Promise<Response | null> {
+  if (route === 'POST /supervise') {
+    const { processId } = await box.startSupervised(input.command ?? 'true');
+    const exposed = input.port === undefined ? null : await box.exposePort(input.port, { hostname: 'bench.invalid' });
+
+    return json({ payload: { ok: true, processId, exposed: exposed?.port ?? null, ms: Date.now() - started } });
+  }
+
+  if (route !== 'POST /process') return null;
+  const id = input.processId ?? '';
+
+  if (input.kill === true) await box.killProcess(id);
+  const found = await box.getProcess(id);
+
+  return json({ payload: { ok: true, status: found?.status ?? null, ms: Date.now() - started } });
 }
 
 export default {
@@ -1060,7 +1133,7 @@ export default {
     }
 
     const requested = input.strategy ?? url.searchParams.get('strategy');
-    const strategy = parseDevboxStrategyName(requested);
+    const strategy = benchArm(requested);
 
     if (strategy === null) {
       return json({ payload: {
@@ -1086,7 +1159,7 @@ export default {
       const route = `${request.method} ${url.pathname}`;
 
       const aside = await serveInstrumentRoutes({
-        route, env, strategy, box, name, started, url, counter,
+        route, env, strategy, box, name, started, url, counter, input,
       });
 
       if (aside !== null) return aside;

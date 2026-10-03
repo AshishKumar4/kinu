@@ -51,7 +51,9 @@ test('parallel native calls retain their SDK identities after reverse completion
 
   const events = new AwaitedList<SessionEvent>();
 
-  const session = new LocalAgentSession({ rt, db, model, noAutoEvolve: true, onEvent: (event) => {
+  rt.actor.config.setLearning(false);
+
+  const session = new LocalAgentSession({ rt, db, model, onEvent: (event) => {
     events.push(event);
 
     if (event.type === 'tool-result' && event.toolCallId === 'call-B') first.resolve();
@@ -427,13 +429,14 @@ describe('LocalAgentSession.send — a user turn', () => {
     let observed: PromptMessage[] = [];
     const events = new AwaitedList<SessionEvent>();
 
+    rt.actor.config.setLearning(false);
+
     const resumed = new LocalAgentSession({
       rt,
       db,
       model: historyCapturingModel('next answer', (messages) => { observed = messages; }),
       onEvent: (e) => events.push(e),
-      noAutoEvolve: true,
-    });
+          });
 
     await resumed.send('what did I say?', { id: crypto.randomUUID() });
     await resumed.end();
@@ -470,10 +473,12 @@ describe('LocalAgentSession.send — a user turn', () => {
     function resume(db: Database, rt: ReturnType<typeof createCLIRuntime>) {
       let observed: PromptMessage[] = [];
 
+      rt.actor.config.setLearning(false);
+
       const session = new LocalAgentSession({
         rt, db,
         model: historyCapturingModel('ok', (messages) => { observed = messages; }),
-        onEvent: () => {}, noAutoEvolve: true,
+        onEvent: () => {},
       });
 
       return {
@@ -940,7 +945,8 @@ class AdvisedSession extends LocalAgentSession {
 describe('LocalAgentSession — the advisor is a hire, not a wait', () => {
   function setupWithAdvisor(model?: LanguageModel) {
     const { db, rt } = workspaceRuntime();
-    const session = new AdvisedSession({ rt, db, model: model ?? fakeModel('rotated the staging keys'), onEvent: () => {}, noAutoEvolve: true });
+    rt.actor.config.setLearning(false);
+    const session = new AdvisedSession({ rt, db, model: model ?? fakeModel('rotated the staging keys'), onEvent: () => {} });
     const advisor = scriptedAdvisorPort();
 
     rt.actor.config.setAdvisorEnabled(true);

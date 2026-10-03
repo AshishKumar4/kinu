@@ -3,7 +3,7 @@ import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  readSoul, readMission, seedSoul, summarizeSoul, SOUL_PATH, ownerMissionOf,
+  readSoul, readMission, seedSoul, summarizeSoul, SOUL_PATH, missionOf,
 } from '../src/identity/soul';
 import { initAllTables } from '../src/state/workspace-schema';
 import { createWorkspace } from '../src/workspace-birth';
@@ -76,10 +76,10 @@ describe('the mission a read-only listing reads', () => {
 
   test('a soul that says nothing a summary keeps is no mission, so a caller can fall back', () => {
     for (const soul of ['# Atlas\n', '  \n\n']) {
-      expect(ownerMissionOf({ soulTable: true, soul, identity: null })).toBeNull();
+      expect(missionOf(soul)).toBeNull();
     }
 
-    expect(ownerMissionOf({ soulTable: true, soul: '# Atlas\n\n## Mission\n\nShip it.', identity: null })).toBe('Ship it.');
+    expect(missionOf('# Atlas\n\n## Mission\n\nShip it.')).toBe('Ship it.');
   });
 });
 

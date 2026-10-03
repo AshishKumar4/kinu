@@ -1,24 +1,9 @@
 // Pure lifecycle decisions, pinned apart from the platform a unit test cannot drive.
 // Tests assert outcomes, not reachability: a silent no-op durability path must fail here.
-import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-
-import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
-import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
-
-const suiteRoot = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}decisions-`));
-
-afterAll(() => rmSync(suiteRoot, { recursive: true, force: true }));
-
-function devboxScratchDir(label: string): string {
-  return mkdtempSync(join(suiteRoot, `${label}-`));
-}
+import { describe, expect, test } from 'bun:test';
 
 // Import from the defining modules, not the barrel: it pulls in `cloudflare:workers` via
 // Sandbox, absent outside a Worker. Platform-free reachability is the property tested.
-import { parseDevboxStrategyName } from "../src/storage";
 import { startOverrun } from '../src/errors';
 import {
   DEFAULT_DEVBOX_POLICY,
@@ -27,8 +12,6 @@ import {
   healthProbeCommand,
   healthProbeSilent,
   incidentRetryDelayMs,
-  parseWorkdirHolders,
-  releaseWorkdirHoldersCommand,
   PORT_TOKEN_ALPHABET,
   admissionStep,
   classifyRecovery,
@@ -47,17 +30,6 @@ import {
   type SupervisedProcessSpec,
 } from '../src/lifecycle';
 import { requireShellAccepts } from "./support/container-shell";
-import {
-  baseObjectKey,
-  chainStoreRoot,
-  deltaObjectKey,
-  metadataObjectKey,
-  normalizeChainState,
-} from '../src/snapshot-chain';
-
-const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
-
-const FALLBACK_ID = 'a1b2c3d4-0000-4000-8000-0000000000fb';
 
 describe('quiesce timing matrix — three gates and a confirmed quiet window', () => {
   const T = 1_000_000_000;
@@ -700,199 +672,8 @@ describe('the attach budget', () => {
 });
 
 describe('a composed container command is one a POSIX shell will run', () => {
-
-  test('a work directory holding a quote is still one shell word', () => {
-    // `'` closes the quoted literal, so the escape must reopen it; only a real parse proves it.
-    requireShellAccepts(releaseWorkdirHoldersCommand("/work'dir"));
-  });
-
-  test('the listener probe parses too', () => {
+  test('the listener probe parses', () => {
     requireShellAccepts(healthProbeCommand(8080));
-  });
-
-
-  test('the scan\'s own answers are read back: names, and the word for none', () => {
-    // Real output, measured against a live holder on Linux: one ` pid:comm` token per holder,
-    // on stdout and stderr both.
-    expect(parseWorkdirHolders(' 1786951:sleep')).toEqual([{ pid: '1786951', comm: 'sleep' }]);
-    expect(parseWorkdirHolders(' 41:bun 42:node\n')).toEqual([
-      { pid: '41', comm: 'bun' },
-      { pid: '42', comm: 'node' },
-    ]);
-    expect(parseWorkdirHolders('none')).toEqual([]);
-    expect(parseWorkdirHolders('')).toEqual([]);
-  });
-
-  /** Holders start inside the namespace so the scan sees them; FIFOs sit outside the work dir,
-   *  else the cwd-only holder would hold an fd there and be signalled as a stranger. */
-  const HOLDER_SCENARIO = `
-dir=$1; script=$2; sready=$3; cready=$4
-mkfifo "$sready" "$cready"
-( exec 9>"$dir/stranger.bin"; echo ready > "$sready"; exec sleep 60 ) &
-stranger=$!
-( cd "$dir" && { echo ready > "$cready"; exec sleep 60; } ) &
-cwd=$!
-read _ < "$sready"
-read _ < "$cready"
-exec 8>"$dir/ancestor.bin"
-sh "$script"
-printf 'ALIVE %s' "$$"
-wait $stranger
-status=$?
-wait $cwd
-cwdstatus=$?
-if kill -0 $cwd 2>/dev/null; then alive=yes; else alive=no; fi
-pids=$(ls /proc | grep -cE '^[0-9]+$')
-printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdstatus=%s cwdalive=%s pidsInScan=%s\\n' \
-  "$stranger" "$cwd" "$$" "$status" "$cwdstatus" "$alive" "$pids"
-`;
-
-  /** Runs the real command in its own pid namespace, as production runs in the container's:
-   *  the scan walks every pid twice, and namespace exit reaps everything the scenario starts. */
-  test.skipIf(process.platform !== 'linux')(
-    'fd and cwd holders are signalled; the scan ancestor survives and remains named',
-    () => {
-      const dir = devboxScratchDir('devbox-workdir-holders');
-      const script = join(dir, 'release.sh');
-      writeFileSync(script, releaseWorkdirHoldersCommand(dir));
-      const scenario = join(dir, 'holders.sh');
-      writeFileSync(scenario, HOLDER_SCENARIO);
-      // PID 1 is the container init; the namespace ends with it, so it waits on the scan as a child.
-      const init = join(dir, 'init.sh');
-      writeFileSync(init, 'inner=$1; shift; sh "$inner" "$@"\n');
-      const ready = { stranger: `${dir}-ready-stranger`, cwd: `${dir}-ready-cwd` };
-
-      const ran = spawnSync('unshare', [
-        '-Ur', '--fork', '--pid', '--mount-proc',
-        'sh', init, scenario, dir, script, ready.stranger, ready.cwd,
-      ], { encoding: 'utf8' });
-
-      const holders = parseWorkdirHolders(ran.stdout.split('ALIVE')[0] ?? '');
-
-      // The scenario's own answers, since every pid in them is namespace-local.
-      const reported = (name: string): string =>
-        new RegExp(`(?:^|\\s)${name}=(\\S+)`).exec(ran.stdout)?.[1] ?? '';
-
-      const named = (pid: string): boolean =>
-        pid.length > 0 && holders.some((holder) => holder.pid === pid);
-
-      expect({
-        // First, because every other field reads false when the command never ran (missing
-        // `unshare`, refused namespace, or the bound above firing).
-        commandRan: ran.error === undefined ? 'yes' : ran.error.message,
-        sessionSurvived: ran.stdout.includes('ALIVE'),
-        strangerStillNamed: named(reported('stranger')),
-        strangerSignal: Number(reported('status')) - 128,
-        cwdHolderNamed: named(reported('cwd')),
-        cwdHolderSurvived: reported('cwdalive'),
-        cwdHolderSignal: Number(reported('cwdstatus')) - 128,
-        ancestorNamed: named(reported('session')),
-        // The scan is scoped to a container-sized process table, which is the
-        // whole reason its two walks fit inside one bounded stop.
-        pidsInScan: Number(reported('pidsInScan')) < 32,
-      }).toEqual({
-        commandRan: 'yes',
-        sessionSurvived: true,
-        strangerStillNamed: false,
-        strangerSignal: 15,
-        cwdHolderNamed: false,
-        cwdHolderSurvived: 'no',
-        cwdHolderSignal: 15,
-        ancestorNamed: true,
-        pidsInScan: true,
-      });
-      rmSync(dir, { recursive: true, force: true });
-      rmSync(ready.stranger, { force: true });
-      rmSync(ready.cwd, { force: true });
-    },
-  );
-});
-
-describe('chain identity — UUID keys refuse traversal by construction', () => {
-  test('only a UUID is a chain id', () => {
-    const STORE_ROOT = chainStoreRoot('boxes/box-under-test');
-
-    for (const bad of [
-      '../../etc', '', 'backups/x/data.sqsh', 'a/b/c/d-e-f-g-h',
-      'ZZZZZZZZ-0000-4000-8000-000000000009', `${CHAIN_ID}/..`, ` ${CHAIN_ID}`,
-    ]) {
-      expect(() => baseObjectKey(STORE_ROOT, bad)).toThrow(/is not a UUID/);
-    }
-
-    expect(baseObjectKey(STORE_ROOT, CHAIN_ID)).toStartWith(`${STORE_ROOT}/${CHAIN_ID}/`);
-  });
-
-  test('every key builder validates, so no path can be assembled from a guess', () => {
-    const STORE_ROOT = chainStoreRoot('boxes/box-under-test');
-
-    for (const build of [baseObjectKey, deltaObjectKey, metadataObjectKey]) {
-      expect(() => build(STORE_ROOT, '../../etc/passwd')).toThrow(/is not a UUID/);
-      // Keys nest under the box's own root, so one mount covers every generation
-      // and one box's sweep never reaches another box's layers.
-      expect(build(STORE_ROOT, CHAIN_ID)).toStartWith(`${STORE_ROOT}/${CHAIN_ID}/`);
-      expect(build(STORE_ROOT, CHAIN_ID)).toStartWith('boxes/');
-    }
-
-    // Three distinct objects under one prefix, so a discard can name all of
-    // them and a delta can be replaced without touching the base.
-    const keys = [baseObjectKey(STORE_ROOT, CHAIN_ID), deltaObjectKey(STORE_ROOT, CHAIN_ID), metadataObjectKey(STORE_ROOT, CHAIN_ID)];
-    expect(new Set(keys).size).toBe(3);
-  });
-
-  test('a record this code did not write reads as absent, not as a broken chain', () => {
-    for (const raw of [
-      null, undefined, 42, 'chain', {},
-      { mode: 'chain', rev: 1 },
-      { mode: 'chain', rev: 1, base: { id: 'not-a-uuid', bytes: 1 } },
-      { mode: 'chain', rev: 1, base: { id: CHAIN_ID } },
-      { mode: 'elsewhere', rev: 1, base: { id: CHAIN_ID, bytes: 1 } },
-      { mode: 'chain', rev: '1', base: { id: CHAIN_ID, bytes: 1 } },
-    ]) {
-      expect(normalizeChainState(raw)).toBeNull();
-    }
-
-    const sound = { mode: 'chain', rev: 2, base: { id: CHAIN_ID, bytes: 9 }, at: 5 };
-    expect(normalizeChainState(sound)).toEqual({
-      mode: 'chain', rev: 2, at: 5,
-      base: { id: CHAIN_ID, bytes: 9, digest: undefined, objectVersion: undefined },
-      delta: undefined, changeVersion: undefined, upperMark: undefined, orphans: undefined,
-      fallback: undefined, lastFailure: undefined,
-    });
-    // A row without layer identities parses with both absent: UNKNOWN, not unsound.
-    // Such rows are live; refusing them would be the data loss the chain exists to prevent.
-    expect(normalizeChainState(sound)?.base.digest).toBeUndefined();
-    expect(normalizeChainState(sound)?.base.objectVersion).toBeUndefined();
-    // A malformed digest rejects the row: nothing could compare it against a layer.
-    // `objectVersion` is the store's own format, so only non-emptiness is checked.
-    const digest = 'c'.repeat(64);
-    const objectVersion = 'e2f4c1a0-upload';
-    expect(normalizeChainState({
-      ...sound, base: { id: CHAIN_ID, bytes: 9, digest, objectVersion },
-    })?.base).toEqual({ id: CHAIN_ID, bytes: 9, digest, objectVersion });
-    expect(normalizeChainState({ ...sound, base: { id: CHAIN_ID, bytes: 9, digest: 'C'.repeat(64) } }))
-      .toBeNull();
-    expect(normalizeChainState({ ...sound, base: { id: CHAIN_ID, bytes: 9, digest: 'abc' } }))
-      .toBeNull();
-    expect(normalizeChainState({ ...sound, base: { id: CHAIN_ID, bytes: 9, objectVersion: '' } }))
-      .toBeNull();
-
-    // A retained fallback keeps its digest and version, delta included: a restore cannot use a
-    // generation the reader cannot check.
-    const withFallback = {
-      ...sound,
-      fallback: {
-        base: { id: FALLBACK_ID, bytes: 7, digest, objectVersion },
-        delta: { bytes: 3, digest, objectVersion },
-      },
-    };
-
-    expect(normalizeChainState(withFallback)?.fallback).toEqual({
-      base: { id: FALLBACK_ID, bytes: 7, digest, objectVersion },
-      delta: { bytes: 3, digest, objectVersion },
-    });
-    // A non-UUID fallback id nulls the whole row, as a bad `base` does: object keys derive from it.
-    expect(normalizeChainState({ ...sound, fallback: { base: { id: 'nope', bytes: 7 } } }))
-      .toBeNull();
   });
 });
 
@@ -902,17 +683,6 @@ describe('thrown values', () => {
       .toBe('outer: inner');
     expect(describeThrown({ cause: 'plain string' })).toBe('plain string');
     expect(describeThrown({ cause: undefined })).toBe('undefined');
-  });
-});
-
-describe('bench arm selection fails closed', () => {
-  test('missing and unknown strategy names never become the shipped strategy', () => {
-    expect(parseDevboxStrategyName(undefined)).toBeNull();
-    expect(parseDevboxStrategyName(null)).toBeNull();
-    expect(parseDevboxStrategyName('unknown')).toBeNull();
-    // A retired format name must parse to null: no build can serve bytes written in that format.
-    expect(parseDevboxStrategyName('a-retired-format')).toBeNull();
-    expect(parseDevboxStrategyName('snapshot-chain')).toBe('snapshot-chain');
   });
 });
 
