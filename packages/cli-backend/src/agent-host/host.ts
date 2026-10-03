@@ -35,7 +35,7 @@ import {
   delegationExhausted,
   describeSubordinateHandoff,
   inheritedContextFromTranscript,
-  headAgentName,
+  actorHomeName,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
   renderSoulMarkdown,
@@ -68,7 +68,6 @@ import {
   type PeerMessage,
   type ReceiveResult,
   metadataBroadcastEvent,
-  subordinateAgentName,
   type SqlExec,
   type SubordinateHandoff,
   type SubordinateRuntime,
@@ -603,9 +602,7 @@ export class LocalAgentHost {
     ws: LocalHostedAgent,
     record: WorkspaceActor,
   ): Promise<void> {
-    const agentName = record.origin === 'swarm'
-      ? headAgentName(record.storageKey)
-      : subordinateAgentName(record.storageKey);
+    const agentName = actorHomeName(record);
 
     if (ref.cwd) {
       cleanupFacetCwdScratch(ref.cwd, agentName);
@@ -867,7 +864,7 @@ export class LocalAgentHost {
   private childOpenConfig(parent: HostEntry, binding: LocalActorBinding): CLIOpenConfig & { facet: string } {
     if (!isSubordinateOrigin(binding.origin)) throw new KinuError('denied', 'The roster path is not a subordinate actor.');
 
-    return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: subordinateAgentName(binding.storageKey), actorBinding: binding };
+    return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: actorHomeName(binding), actorBinding: binding };
   }
 
   private buildPeerEndpoint(entry: HostEntry, hubSql: SqlExec): LocalPeerEndpoint {

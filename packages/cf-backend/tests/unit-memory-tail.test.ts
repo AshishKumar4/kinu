@@ -21,7 +21,7 @@ function memoryOver(content: string) {
     async upsertChunk() {}, async upsertChunks() {}, async deleteChunks() {}, async search() { return []; },
   };
 
-  const memory = adaptMemory(store, files, vectors, config);
+  const memory = adaptMemory(store, files, { store: vectors, config });
 
   return { memory, ready: memory.write(PATH, content) };
 }

@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/prompt.ts b/packages/core/src/prompt.ts
-index 1295af67c..4e9b2a595 100644
+index 17b859181..8096b6295 100644
 --- a/packages/core/src/prompt.ts
 +++ b/packages/core/src/prompt.ts
-@@ -92,7 +92,7 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
+@@ -91,7 +91,7 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
  
- /** Date-only, never time, so a date does not bust the prompt-cache prefix within a day. */
+ /** Date-only, never time: the dynamic block's runtime section changes at most once a day. */
  export function currentDateForPrompt(now: Date = new Date()): string {
 -  return now.toISOString().slice(0, 10);
 +  return now.toISOString().slice(0, 11);

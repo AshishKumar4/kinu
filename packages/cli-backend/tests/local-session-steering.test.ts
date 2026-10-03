@@ -171,7 +171,8 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     expect(landed).toBeGreaterThan(roles.indexOf('tool'));
     expect(activation).toBeGreaterThanOrEqual(0);
     expect(activation).toBeLessThan(roles.indexOf('tool'));
-    expect(messageText(present(third[activation + 1], 'the request'))).toBe('/focused remember this');
+    expect(messageText(present(third[activation + 1], "the turn's skills"))).toContain('Focus on memory only.');
+    expect(messageText(present(third[activation + 2], 'the request'))).toBe('/focused remember this');
     await session.end();
   });
 

@@ -614,7 +614,7 @@ function RoleEditor(props: {
   tiers: readonly TierId[];
   roleIds: readonly RoleId[];
   customized: boolean;
-  /** "Beta: swarms": off, no swarm preset is offered. */
+  /** "Beta: swarms"; off, no preset. */
   swarms: boolean;
   onChange: (role: RoleDefinition) => void;
   onReset: () => void;

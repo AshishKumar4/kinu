@@ -6,9 +6,11 @@ import type { LLMProviderConfig } from './llm';
 import { initAllTables } from './state/workspace-schema';
 import { seedSoul, UNTITLED_WORKSPACE_NAME } from './identity/soul';
 import {
-  createInlineCraftStore, createInlineExecutor, createInlineMemory,
+  createInlineCraftStore, createInlineExecutor,
   createInlineWorkspace, wrapDatabase, type AgentDatabase,
 } from './identity/inline-primitives';
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
+import { adaptMemory } from './memory/vector-sync';
 import { INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap';
 import { nanoid } from './utils/nanoid';
 import { nowMs } from './utils/date';
@@ -46,7 +48,9 @@ interface WorkspaceComponents {
 function buildComponents(components: WorkspaceComponents) {
   const { db, sql, execRaw, transactionSync, workspace, actor } = components;
   const vfs = workspace.vfs;
-  const memory = createInlineMemory(db, vfs);
+  const memoryStore = new MemoryStore(vfs, sql);
+  memoryStore.ensureSchema();
+  const memory = adaptMemory(memoryStore, vfs);
   const craftStore = createInlineCraftStore(db);
   const executor = createInlineExecutor();
   initRunEventTables(execRaw);

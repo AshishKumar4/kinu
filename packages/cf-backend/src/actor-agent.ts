@@ -77,7 +77,7 @@ import {
   turnReasonForMetadata,
   workModeForTurnMetadata, authoredTurnMetadata,
   renderUnverifiedInstructions,
-  observeSystemPromptHash, steerSkillsBlock,
+  observeSystemPromptHash, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -296,6 +296,8 @@ interface ComposedTurn {
   readonly rawMessages: readonly ModelMessage[];
   /** The unapproved instruction files as one message, null for none. */
   readonly instructions: string | null;
+  /** The input's `/name` activations, spliced before it for this turn only. */
+  readonly activated: string | null;
   readonly activeSkills: ActiveSkillSet | null;
   readonly operation: OperationProfile;
   /** Window for admission, compaction and pruning; records whether figures are the
@@ -2175,9 +2177,10 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  private scaffoldCandidateModel(): Pick<ScaffoldCandidateBinding, 'rt' | 'profile' | 'bindModel' | 'modelContext'> {
+  private scaffoldCandidateModel(): Pick<ScaffoldCandidateBinding, 'rt' | 'profile' | 'bindModel' | 'modelContext' | 'compose'> {
     return {
       rt: this.rt,
+      compose: () => this.composeNextRequest(),
       profile: async () => {
         const mode = await this.preparedWorkMode();
 
@@ -3352,7 +3355,6 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  /** The account's catalog as it stands, read through this workspace's own authority. */
   protected async profileCatalog(): Promise<ProfileCatalogEnvelope> {
     const { stub, caller } = await this.userHub();
 
@@ -3790,7 +3792,7 @@ export abstract class ActorAgent extends Agent<Env> {
     }
   }
 
-  /** "Beta: swarms" as the toolset is built; null until read, and after a catalog write. */
+  /** "Beta: swarms" as the toolset is built; null until read and after a catalog write. */
   private _accountSwarms: boolean | null = null;
 
   protected async readAccountSwarms(): Promise<boolean> {
@@ -3799,14 +3801,12 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._accountSwarms;
   }
 
-  /** As the account holds it now: work that builds no turn has no turn read to reconcile a stale value against. */
   protected async currentAccountSwarms(): Promise<boolean> {
     this._accountSwarms = betaSwarms((await this.profileCatalog()).catalog);
 
     return this._accountSwarms;
   }
 
-  /** Rebuilt when the turn's catalog read moved the setting. */
   private async turnToolsAndReads(body: JsonObject): Promise<{ tools: ToolSet; reads: TurnReads }> {
     const built = await this.readAccountSwarms();
     const tools = this.getTools();
@@ -4093,6 +4093,7 @@ export abstract class ActorAgent extends Agent<Env> {
       extensions: this.extensions.list(),
       dynamic: (profile, turnTools) => this.dynamicContextSnapshot(profile, turnTools, composed.memoryTail, composed.activeSkills),
       instructions: composed.instructions,
+      activated: composed.activated,
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
     };
   }
@@ -4204,6 +4205,7 @@ export abstract class ActorAgent extends Agent<Env> {
     });
 
     if (activeSetForPrompt) activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
+    const { pinned, invoked } = splitTurnSkills(activeSetForPrompt);
 
     const mcpToolNames = Object.keys(mcpTools);
 
@@ -4287,7 +4289,6 @@ export abstract class ActorAgent extends Agent<Env> {
       backend: 'cf',
       roleSection: profile.role,
       model,
-      currentDate: currentDateForPrompt(),
       // Read here, not in the builder: the builder is the byte-stable cacheable prefix and does no I/O.
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.actorHandle()),
       identity,
@@ -4295,7 +4296,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (availableSkills.lines.length > 0) promptOptions.availableSkills = availableSkills;
 
-    if (activeSetForPrompt) promptOptions.activeSkills = activeSetForPrompt;
+    if (pinned) promptOptions.activeSkills = pinned;
     promptOptions.agentsMd = agentsMd;
     const systemOverride = buildSystemPromptSync(this.rt, promptOptions);
 
@@ -4310,7 +4311,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // The reflection loop assumes the model sees its latest MEMORY.md lessons in-turn; read once
     // here since it is the one dynamic-context input needing an await.
     const memoryTail = await readMemoryTail(this.rt.memory);
-    const instructions = renderUnverifiedInstructions(activeSetForPrompt ? { agentsMd, activeSkills: activeSetForPrompt } : { agentsMd });
+    const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
 
     const submittedTools = { ...modeTools, ...effectiveTools };
     const providers = this.providerRegistry();
@@ -4339,7 +4340,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return {
       profile, profileInputs, system: systemOverride, model: languageModel, tools, activeTools: effectiveActiveTools, activeToolSurface,
-      rawMessages, instructions, window, memoryTail, countInputTokens,
+      rawMessages, instructions, activated: invoked ? activatedSkillsBlock(invoked) : null, window, memoryTail, countInputTokens,
       reasoningOptions, promptModel: model, activeSkills: activeSetForPrompt ?? null, operation,
     };
   }
@@ -4385,7 +4386,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Nothing clock-derived: a wall-clock field would re-fingerprint the block every request.
    */
   protected dynamicContextSnapshot(
-    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>, tools: ToolSet, memoryTail: string | undefined,
+    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools' | 'tier'>, tools: ToolSet, memoryTail: string | undefined,
     activeSkills: ActiveSkillSet | null = this._turnActiveSkills,
   ): DynamicContext {
     const extras = this.extraDynamicContext();
@@ -4395,6 +4396,7 @@ export abstract class ActorAgent extends Agent<Env> {
       stores: this.stores,
       profile,
       tools,
+      runtime: { backend: 'cf', model: this.promptModelContextFor(profile.tier.model), date: currentDateForPrompt() },
       turn: this.turnReason(),
       ...(activeSkills !== null && { activeSkills }),
       memoryTail,

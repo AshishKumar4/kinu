@@ -91,6 +91,8 @@ export interface ActorExecutionInput {
   readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   /** The turn's unapproved workspace files as one message, null for none. */
   readonly instructions?: string | null;
+  /** What the turn's input activates (`activatedSkillsBlock`), spliced before it for this turn only. */
+  readonly activated?: string | null;
   readonly scaffoldSpend?: ModelCallSpend;
   /** Re-checked before each model call, for kinds whose liveness is owned elsewhere (heads, swarm nodes). */
   readonly assertActive?: () => void;
@@ -820,6 +822,7 @@ export class ActorSession {
             return context;
           },
           instructions: input.instructions,
+          activated: input.activated,
         },
         stepContext: {
           base: async () => {

@@ -1112,7 +1112,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         backend: 'cf',
         roleSection: turn.profile.profile.role,
         model: { id: turn.profile.profile.tier.model },
-        currentDate: currentDateForPrompt(),
         sectionOverrides: activePromptSectionOverrides(this.boundSql, turn.actor.handle),
         // Makes the prompt address it as a named agent of this workspace, not the workspace's own chat.
         identity: {
@@ -1184,6 +1183,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       stores: actor.stores,
       profile,
       tools,
+      runtime: { backend: 'cf', model: { id: profile.tier.model }, date: currentDateForPrompt() },
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(
@@ -4821,7 +4821,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         work: workspaceWork, pending: pendingActions, jobs,
         changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''),
       }),
-      // Hidden while the account's swarms are off, whatever runs it kept.
+      // Hidden with swarms off.
       explorations: await this.readAccountSwarms() && listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
     };
   }

@@ -301,7 +301,7 @@ function localDebugSource(localName: string): DebugSource {
     triggers: async () => decodeJsonValue({ value: listLocalTriggers(localName) }),
     toolDescriptions: async () => decodeJsonValue({ value: getLocalToolSurface(localName) }),
     facts: async (limit) => parseLocal(JsonRowsSchema, { value: getLocalFacts(localName, limit) }),
-    memoryContent: async () => readLocalMemory(localName),
+    memoryContent: () => readLocalMemory(localName),
     recordObjectives: async (limit) => listLocalRecordObjectives(localName, limit),
     recordCells: async (handle, limit) => listLocalRecordCells(localName, handle, limit),
     recordOccupants: async (handle, cursor, limit) =>

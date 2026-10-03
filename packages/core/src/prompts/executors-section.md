@@ -1,6 +1,6 @@
 ## Execution environments
-The environments listed here are the ones selectable in this turn. A namespace is available exactly when it appears below.
-This list reflects live state at the start of this turn. Trust it over assumptions or earlier turns. A device connecting or disconnecting changes this list.
+The environments listed here are the runtimes this workspace has. A namespace exists exactly when it appears below.
+Which ones are reachable now is live state in dynamic_context's Execution status. Trust it over assumptions or earlier turns.
 Choose the runtime that matches the task. Unless you copy data between runtimes, keep reads/writes in the same runtime.
 
 {{executorLines}}

@@ -4,7 +4,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  * (kept on an archive), all through the production seams.
  */
 import { describe, expect, test } from 'bun:test';
-import { agentHome, agentTmpRoot, buildBuiltinTools, subordinateAgentName } from '@kinu.run/core';
+import { agentHome, agentTmpRoot, buildBuiltinTools, actorHomeName } from '@kinu.run/core';
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { conversationsFor } from '../../core/tests/helpers';
 import { hostedSubordinateHarness, orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
@@ -26,7 +26,7 @@ async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorA
 
   if (row === null) throw new Error(`no directory row names ${name}`);
 
-  return { parent, name, agentName: subordinateAgentName(row.storage_key) };
+  return { parent, name, agentName: actorHomeName({ origin: 'agent', storageKey: row.storage_key }) };
 }
 
 const hire = {
@@ -40,7 +40,7 @@ describe('a hosted subordinate runs as its own home', () => {
   test('hiring provisions the home on the workspace and the runtime acts as that uid', async () => {
     const parent = orchestratorHarness();
     const child = await hostedSubordinateHarness(parent, { ...hire, name: 'builder-1' });
-    const agentName = subordinateAgentName(child.actor.handle.storageKey);
+    const agentName = actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey });
 
     const home = await parent.agent.statWorkspaceFile(agentHome(agentName));
     expect(home).toMatchObject(DIRECTORY);
@@ -69,7 +69,7 @@ describe('a hosted subordinate runs as its own home', () => {
     const saved = present(/full result at ([^\]]+)\]/u.exec(clamped)?.[1], 'the saved path');
 
     expect(clamped).not.toContain('the full result was not saved');
-    expect(saved).toStartWith(`${agentHome(subordinateAgentName(child.actor.handle.storageKey))}/.kinu/tool-output/`);
+    expect(saved).toStartWith(`${agentHome(actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }))}/.kinu/tool-output/`);
     expect(await file({ action: 'read', path: saved, offset: 19_999, limit: 2 })).toContain('20000');
     expect(await shell({ command: `cd /tmp && tail -n 1 ${saved}` })).toContain('20000');
   });

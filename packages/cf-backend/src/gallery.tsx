@@ -569,7 +569,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
 /** A saved catalog reads back. */
 let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = { catalog: BUILTIN_PROFILE_CATALOG, version: 0 };
 
-/** Hashed with WebCrypto: the gallery has no `node:crypto`. A stale write is refused, as the route does. */
+/** Hashed with WebCrypto: the gallery has no `node:crypto`. A stale write is refused. */
 async function profileCatalogFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
   if (path !== "/api/user/profile-catalog") return null;
 
@@ -6431,10 +6431,9 @@ const snapshotRaceRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promi
   return value === undefined ? workspacePageRpc<T>(method, args) : rpcResult(value).json<T>();
 };
 
-/** Ratings landed since the `qualitylive` frame opened; each adds a rated turn to today. */
 let qualityLiveRatings = 0;
 
-/** A rating landing while the Quality tab is open: the workspace names the quality read, and the tab re-reads it. */
+/** The Quality tab as a rating lands. */
 function QualityLiveFrame() {
   const state = useKinu(WORKSPACE_PAGE_NAME);
 

@@ -101,8 +101,8 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
 }
 
 
-// Satisfaction per day (`getQuality`, evolution/ratings.ts): the mean rating 1-5 with its 95% interval. `moved` counts
-// the workspace's `reads_changed` frames naming it; each new rating re-reads it.
+// Satisfaction per day (`getQuality`, evolution/ratings.ts): the mean rating 1-5 with its 95% interval. `moved`: its
+// `reads_changed` count.
 export function QualityView({ rpc, moved }: { rpc: Rpc; moved: number }) {
   const load = useCallback(() => rpc<QualityDay[]>("getQuality", [30]), [rpc]);
   const { resource, reload } = useAsyncResource(load);

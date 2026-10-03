@@ -39,7 +39,7 @@ describe('lead doctrine follows actor authority and available delegation', () =>
       });
 
       const child = buildSystemPromptSync({ ...rt, actor }, { ...full.opts, identity: {} });
-      const withoutLead = leadSections.reduce((prompt, section) => prompt.replace(`${section.render({ familyDelta: '', hasTaskHire: true })}\n\n`, ''), root);
+      const withoutLead = leadSections.reduce((prompt, section) => prompt.replace(`\n\n${section.render({ familyDelta: '', hasTaskHire: true })}`, ''), root);
 
       expect(child).toBe(withoutLead);
 

@@ -1,4 +1,4 @@
-/** Settings, Beta: off until the owner turns it on, in the profile catalog both backends read. */
+/** Settings, Beta: off until turned on, in the profile catalog both backends read. */
 import { useState } from "react";
 import { GraphIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";

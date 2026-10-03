@@ -11,8 +11,7 @@ import { Database } from 'bun:sqlite';
 import { CRED_KERNEL, CRED_SESSION_USER, type SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import {
-  SESSION_UID, agentCred, agentIdentity, provisionAgentHome, settleWorkspaceRoot, subordinateAgentName, type RootMoveVfs,
-} from '../src/vfs/agent-home';
+  SESSION_UID, agentCred, agentIdentity, provisionAgentHome, settleWorkspaceRoot, type RootMoveVfs, actorHomeName } from '../src/vfs/agent-home';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 
@@ -167,7 +166,7 @@ describe('a subagent', () => {
   test('keeps its own home at /home/<name>, beside the main agent\'s', async () => {
     const database = await nimbusSeededWorkspace();
     const { kernel } = await boot(database);
-    const name = subordinateAgentName('reviewer');
+    const name = actorHomeName({ origin: 'agent', storageKey: 'reviewer' });
 
     const home = provisionAgentHome(kernel, name, agentIdentity(workspaceSql(database), name));
 
@@ -254,7 +253,7 @@ describe('a move cut short', () => {
 /** One boot with an agent hired into the workspace, and the plane as each credential reaches it. */
 async function withHire(database: Database) {
   const { bundle, kernel, user } = await boot(database);
-  const agent = subordinateAgentName('builder');
+  const agent = actorHomeName({ origin: 'agent', storageKey: 'builder' });
   const identity = agentIdentity(workspaceSql(database), agent);
   const home = provisionAgentHome(kernel, agent, identity);
   const builder = (await bundle.session()).vfs.as(agentCred(identity));

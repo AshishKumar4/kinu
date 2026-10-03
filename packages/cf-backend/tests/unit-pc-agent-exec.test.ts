@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 import { join } from 'node:path';
@@ -72,6 +72,7 @@ const PcAgentModuleSchema = v.object({
   watchOutput: v.function(),
   waitForFile: v.function(),
   waitForSupervisorState: v.function(),
+  stopSupervisor: v.pipe(v.function(), v.returnsAsync(v.void())),
 });
 
 const SupervisorRegistrySchema2 = v.object({
@@ -79,6 +80,7 @@ const SupervisorRegistrySchema2 = v.object({
 });
 
 const SupervisorRegistrySchema = v.object({
+  ready: v.promise(),
   reconcile: v.pipe(v.function(), v.returnsAsync(RecoveredSchema)),
   cancel: v.function(),
   result: v.function(),
@@ -310,10 +312,11 @@ describe('a running command\'s output, for a hub that asked', () => {
     `], { stdout: 'inherit', stderr: 'inherit', env: { ...process.env, KINU_INFLIGHT_ROOT: pcAgent.INFLIGHT_ROOT } });
 
     expect(await daemon.exited).toBe(0);
-    // Released only now, so every chunk the supervisor forwards meets a closed pipe.
-    writeFileSync(gate, 'go\n');
+    // Its successor adopts the command while the gate holds it, so nothing races the command's end.
     const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
     expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: false });
+    // Released only now, so every chunk the supervisor forwards meets a closed pipe.
+    writeFileSync(gate, 'go\n');
     const completed = v.parse(v.object({ result: ExecResultSchema }), await restarted.result(id));
 
     // Every line the command printed after its daemon left is in the capture, which the closed pipe never touched.
@@ -742,6 +745,111 @@ describe('pc-agent durable supervisor', () => {
     expect(alive(v.parse(PidSchema, command.pid))).toBe(true);
     process.kill(-v.parse(PidSchema, command.pid), 'SIGKILL');
     await commandEnded;
+  });
+
+  // 2026-10-02, CI's hammer: a daemon restarting as a command ended, before its supervisor recorded the result,
+  // deleted the record the supervisor was about to write into.
+  test('a restarted daemon keeps the record of a command that has ended while its supervisor records the result', async () => {
+    const root = scratchDir('pc-agent-reconcile-ended');
+    const id = rpcId(470);
+    const dir = join(root, id);
+    mkdirSync(dir, { mode: 0o700 });
+    const command = Bun.spawn(['sleep', '60']);
+    const supervisor = holdingLife(dir, 'sleep', '60');
+    const supervisorEnded = new Promise((resolve) => supervisor.once('exit', resolve));
+
+    try {
+      await recordSupervisor(dir, v.parse(PidSchema, supervisor.pid), command.pid);
+      command.kill('SIGKILL');
+      await command.exited;
+
+      const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+
+      expect(await restarted.reconcile()).toEqual([{ requestId: id, terminal: false }]);
+      expect(existsSync(dir)).toBe(true);
+    } finally {
+      command.kill('SIGKILL');
+      supervisor.kill('SIGKILL');
+      await Promise.all([command.exited, supervisorEnded]);
+    }
+  });
+
+  // The same restart before the state exists: a supervisor holds `life` from its spawn, so one still starting is known.
+  test('a restarted daemon adopts a supervisor still starting once it publishes its state', async () => {
+    const root = scratchDir('pc-agent-reconcile-starting');
+    const id = rpcId(476);
+    const dir = join(root, id);
+    const staging = scratchDir('pc-agent-reconcile-starting-state');
+    mkdirSync(dir, { mode: 0o700 });
+    const command = Bun.spawn(['sleep', '60']);
+    const supervisor = holdingLife(dir, 'sleep', '60');
+    const supervisorEnded = new Promise((resolve) => supervisor.once('exit', resolve));
+
+    try {
+      const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+
+      expect(existsSync(dir)).toBe(true);
+      // Published as a supervisor publishes it, by rename.
+      await recordSupervisor(staging, v.parse(PidSchema, supervisor.pid), command.pid);
+      renameSync(join(staging, 'state'), join(dir, 'state'));
+      expect(v.parse(RecoveredSchema, await restarted.ready)).toEqual([{ requestId: id, terminal: false }]);
+    } finally {
+      command.kill('SIGKILL');
+      supervisor.kill('SIGKILL');
+      await Promise.all([command.exited, supervisorEnded]);
+    }
+  });
+
+  test('a record with no state that nothing holds is removed at start', async () => {
+    const root = scratchDir('pc-agent-reconcile-unheld');
+    const released = join(root, rpcId(477));
+    const unstarted = join(root, rpcId(478));
+    mkdirSync(released, { mode: 0o700 });
+    mkdirSync(unstarted, { mode: 0o700 });
+    // A supervisor that exited before its state, and a start that never reached its spawn.
+    execFileSync('mkfifo', [join(released, 'life')]);
+
+    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+
+    expect(v.parse(RecoveredSchema, await restarted.ready)).toEqual([]);
+    expect([existsSync(released), existsSync(unstarted)]).toEqual([false, false]);
+  });
+
+  // A supervisor writes its result before it exits, so only a result read after finding the supervisor gone is final.
+  test('a result recorded while a restarted daemon checks on its supervisor is kept', async () => {
+    const root = scratchDir('pc-agent-reconcile-recorded');
+    const id = rpcId(475);
+    const dir = join(root, id);
+    mkdirSync(dir, { mode: 0o700 });
+    const supervisor = Bun.spawn(['sleep', '60']);
+    const command = Bun.spawn(['sleep', '60']);
+    await recordSupervisor(dir, supervisor.pid, command.pid);
+    supervisor.kill('SIGKILL');
+    command.kill('SIGKILL');
+    await Promise.all([supervisor.exited, command.exited]);
+
+    // The daemon's start has begun when the result appears, and finds the supervisor gone: to it, a supervisor that
+    // recorded its result and exited between its two reads.
+    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+    writeFileSync(join(dir, 'result'), 'kind=exited\nexitCode=0\n', { mode: 0o600 });
+
+    expect(v.parse(RecoveredSchema, await restarted.ready)).toEqual([{ requestId: id, terminal: true }]);
+    expect(existsSync(join(dir, 'result'))).toBe(true);
+  });
+
+  // The same window with no timing left to it: the supervisor told to stop has already exited, so kill finds no process.
+  test('a stop told to a supervisor that has just exited answers with that exit, naming the process group', async () => {
+    const id = rpcId(465);
+    const dir = join(scratchDir('pc-agent-stop-exited'), id);
+    mkdirSync(dir, { mode: 0o700 });
+    const supervisor = Bun.spawn(['true']);
+    const command = Bun.spawn(['true']);
+    await Promise.all([supervisor.exited, command.exited]);
+
+    await expect(pcAgent.stopSupervisor({ dir, pid: supervisor.pid, group: command.pid }, id)).rejects.toThrow(
+      `the supervisor of ${id} (pid ${String(supervisor.pid)}) exited without recording the command's result, so its outcome `
+        + `is unknown; the command may still be running in process group ${String(command.pid)}`,
+    );
   });
 
   test('a supervisor that dies on reading its ACK leaves its directory to the daemon, and the ACK answers', async () => {

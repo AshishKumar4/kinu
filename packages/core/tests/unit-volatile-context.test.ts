@@ -61,8 +61,83 @@ test('the mode ledger contains facts, not a second copy of the permission policy
 
   expect(plan).toContain('Mode: plan; submit_plan: available.');
   expect(plan).not.toContain('Do not change project files');
-  expect(renderDynamicContextBlock({ mode: { workMode: 'build', planSubmission: false } }))
-    .toContain('Mode: build; submit_plan: unavailable.');
+});
+
+// Build without plan submission is the default the static doctrine states, so a plain build turn spends nothing on it.
+test('a plain build turn states no work mode; leaving plan states build once', () => {
+  expect(renderDynamicContextBlock({ mode: { workMode: 'build', planSubmission: false } })).toBeNull();
+  expect(renderDynamicContextBlock({ mode: { workMode: 'build', planSubmission: true } })).toContain('Mode: build; submit_plan: available.');
+
+  const ledger = new DynamicContextLedger();
+  const history: ModelMessage[] = [{ role: 'user', content: 'plan it' }];
+
+  ledger.weave(history, { mode: { workMode: 'plan', planSubmission: true }, factsBlock: '- k = v' });
+  history.push({ role: 'assistant', content: 'planned' }, { role: 'user', content: 'build it' });
+  const built = messageText(present(ledger.weave(history, { mode: { workMode: 'build', planSubmission: false }, factsBlock: '- k = v' }).at(-2), 'woven delta'));
+
+  expect(built).toContain('## Work mode\nMode: build; submit_plan: unavailable.');
+  expect(built).not.toContain('Cleared:');
+});
+
+// The system prompt describes every runtime this workspace has, so the live status names the ones that are down.
+test('the execution status names a configured runtime that is down, and leaves out one never configured', () => {
+  const block = present(renderDynamicContextBlock({ executors: [
+    { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+    { name: 'sandbox', kind: 'sandbox', available: false, configured: true, active: false, status: 'error' },
+    { name: 'device', kind: 'device', available: false, configured: true, active: false, status: 'disconnected' },
+    { name: 'gpu', kind: 'sandbox', available: false, configured: false, active: false, status: 'not_configured' },
+  ] }), 'the block');
+
+  expect(block).toContain('- workspace: active');
+  expect(block).toContain('- sandbox: unavailable now');
+  expect(block).toContain('- device: offline');
+  expect(block).not.toContain('- gpu:');
+});
+
+// A connected machine this workspace has no grant on yet reports available=false too, but it is up: the first call
+// raises the owner's consent card, which is expected, not an outage.
+test('a connected device awaiting its first grant reads as connected and asks once, never as offline', () => {
+  const awaiting: PromptExecutorInfo = {
+    name: 'device', kind: 'device', configured: true, available: false, active: false, status: 'idle', granted: false,
+    reason: 'Connected, but this workspace has no access yet: the first command raises a consent card for the owner.',
+  };
+
+  expect(executorAvailabilityLabel(awaiting)).toBe('connected, no grant yet for this workspace: the first call asks the owner once');
+  expect(executorAvailabilityLabel({ ...awaiting, status: 'disconnected', granted: undefined })).toBe('offline');
+});
+
+// The system prompt states none of these, so a new day, a model switch or a new directory moves no cached byte.
+test('date, model and working directory are live state: a new day is a delta of the runtime section alone', () => {
+  const ledger = new DynamicContextLedger();
+  const history: ModelMessage[] = [{ role: 'user', content: 'go' }];
+
+  const on = (date: string) => ({
+    runtime: { backend: 'cli-local', model: { id: 'claude-sonnet-4-7', provider: 'anthropic' }, cwd: '/home/user/project', date },
+    factsBlock: '- k = v',
+  } as const);
+
+  const first = messageText(present(ledger.weave(history, on('2026-10-01')).at(-2), 'woven full'));
+
+  history.push({ role: 'assistant', content: 'ok' });
+  const next = messageText(present(ledger.weave(history, on('2026-10-02')).at(-1), 'woven delta'));
+
+  expect(first).toContain('## Runtime context\n- Backend: cli-local\n- Model: anthropic/claude-sonnet-4-7\n- Working directory: /home/user/project\n- Current date: 2026-10-01');
+  expect(next).toMatch(DELTA_OPEN);
+  expect(next).toContain('- Current date: 2026-10-02');
+  expect(next).not.toContain('k = v');
+});
+
+// The block's attributes are for the ledger, read back from stored history: a delta names the state it applies to.
+test('a block carries no kind attribute: a full block has a fingerprint, a delta also its state', () => {
+  const ledger = new DynamicContextLedger();
+  const history: ModelMessage[] = [{ role: 'user', content: 'go' }];
+  const full = messageText(present(ledger.weave(history, { factsBlock: '- a = 1' }).at(-2), 'woven full'));
+
+  history.push({ role: 'assistant', content: 'ok' });
+  const delta = messageText(present(ledger.weave(history, { factsBlock: '- a = 1\n- b = 2' }).at(-1), 'woven delta'));
+
+  expect(full).toMatch(FULL_OPEN);
+  expect(delta).toMatch(DELTA_OPEN);
 });
 
 /** Owner approval for every body these tests read, stated once. */
@@ -113,7 +188,11 @@ function skillsVfsOf(bodies: Readonly<Record<string, string>>): VFS & { reads: s
 }
 
 // A delta names the full state it establishes.
-const BLOCK_OPEN = /^<dynamic_context fingerprint="[0-9a-f]{16}" (?:kind="full"|kind="delta" state="[0-9a-f]{16}")>\n/;
+const BLOCK_OPEN = /^<dynamic_context fingerprint="[0-9a-f]{16}"(?: state="[0-9a-f]{16}")?>\n/;
+
+const DELTA_OPEN = /^<dynamic_context fingerprint="[0-9a-f]{16}" state="[0-9a-f]{16}">/;
+
+const FULL_OPEN = /^<dynamic_context fingerprint="[0-9a-f]{16}">/;
 
 function isDynamicBlock(text: string): boolean {
   return BLOCK_OPEN.test(text) && text.endsWith('\n</dynamic_context>');
@@ -216,7 +295,6 @@ describe('byte-stable system prefix', () => {
       executors: [workspace, idleSandbox, connectedDevice],
       workMode: 'build' as const,
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
-      currentDate: '2026-01-01',
     };
 
     const chatPrefix = buildSystemPromptSync(rt, session);
@@ -269,9 +347,9 @@ describe('renderDynamicContextBlock', () => {
     expect(text).toContain('...and 3 more, not shown');
   });
 
-  test('unselectable executors are omitted; empty state renders nothing', () => {
-    const offline: PromptExecutorInfo = { name: 'device', available: false, configured: true, active: false, status: 'disconnected' };
-    expect(renderDynamicContextBlock({ executors: [offline] })).toBeNull();
+  test('an executor never configured is omitted; empty state renders nothing', () => {
+    const absent: PromptExecutorInfo = { name: 'device', available: false, configured: false, active: false, status: 'not_configured' };
+    expect(renderDynamicContextBlock({ executors: [absent] })).toBeNull();
     expect(renderDynamicContextBlock({})).toBeNull();
     expect(renderDynamicContextBlock({ factsBlock: '  ' })).toBeNull();
   });
@@ -505,7 +583,7 @@ describe('the crafted-tools plane', () => {
       craftedTools: [{ name: 'echo_back', description: 'Return the input' }],
     }).at(-1), 'woven tail'));
 
-    expect(gained).toContain('kind="delta"');
+    expect(gained).toMatch(DELTA_OPEN);
     expect(gained).toContain('## Crafted tools available through eval');
     expect(gained).toContain('echo_back');
     expect(gained).not.toContain('Cleared:');
@@ -513,7 +591,7 @@ describe('the crafted-tools plane', () => {
     history.push({ role: 'assistant', content: 'removed it' });
     const emptied = messageText(present(ledger.weave(history, { craftedTools: [] }).at(-1), 'woven tail'));
 
-    expect(emptied).toContain('kind="delta"');
+    expect(emptied).toMatch(DELTA_OPEN);
     expect(emptied).toContain('No crafted tools exist in this workspace yet');
     expect(emptied).not.toContain('Cleared:');
     expect(emptied).not.toContain('echo_back');
@@ -791,7 +869,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const stored = (current: typeof state) => {
       ledger.weave(history, current);
 
-      return ledger.takeBirths().map((birth) => ({ kind: birth.text.includes('kind="delta"') ? 'delta' : 'full', replaces: birth.replaces }));
+      return ledger.takeBirths().map((birth) => ({ kind: DELTA_OPEN.test(birth.text) ? 'delta' : 'full', replaces: birth.replaces }));
     };
 
     ledger.adopt([]);
@@ -818,11 +896,11 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(result?.messages[0]).toBe(first?.messages[0]);
     // A turn's first step: the delta rides before the new turn's input, which ends the request.
     expect(result?.messages.at(-1)?.content).toBe('next turn');
-    expect(result?.messages.at(-2)?.content).toContain('kind="delta"');
+    expect(result?.messages.at(-2)?.content).toMatch(DELTA_OPEN);
     expect(result?.messages.at(-2)?.content).not.toContain('## Execution status');
     history.push({ role: 'assistant', content: 'working' });
     const delta = ledger.weave(history, { ...next, factsBlock: '- k = final' });
-    expect(delta.at(-1)?.content).toContain('kind="delta"');
+    expect(delta.at(-1)?.content).toMatch(DELTA_OPEN);
     expect(delta.at(-1)?.content).toContain('- k = final');
     expect(delta.at(-1)?.content).not.toContain('## Execution status');
   });
@@ -835,7 +913,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const empty = ledger.weave(history, {});
 
     expect(empty[1]).toBe(first[1]);
-    expect(empty.at(-1)?.content).toContain('kind="delta"');
+    expect(empty.at(-1)?.content).toMatch(DELTA_OPEN);
     expect(empty.at(-1)?.content).toContain('## World model');
     expect(empty.at(-1)?.content).toContain('Cleared: no current entries.');
     expect(ledger.weave(history, {})).toEqual(empty);
@@ -915,7 +993,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
   describe('row deltas and keyframes', () => {
     const task = (i: number, status = 'open', parentId: string | null = null) => ({ id: `t${i}`, title: `step ${i}`, status, parentId });
-    const blockKind = (text: string) => (text.includes('kind="delta"') ? 'delta' : 'full');
+    const blockKind = (text: string) => (DELTA_OPEN.test(text) ? 'delta' : 'full');
 
     const deltaAfter = (before: DynamicContext, after: DynamicContext): string => {
       const ledger = new DynamicContextLedger();
@@ -955,7 +1033,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
       const sections = new Map<string, string[]>();
 
       for (const block of blocks) {
-        if (block.includes('kind="full"')) sections.clear();
+        if (FULL_OPEN.test(block)) sections.clear();
         const body = block.slice(block.indexOf('>\n') + 2, block.lastIndexOf('\n</dynamic_context>'));
 
         for (const section of body.split('\n\n').slice(1)) {
@@ -1280,7 +1358,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(ledger.size).toBe(2);
     expect(second[0]).toBe(first[0]);
     const text = messageText(present(second.at(-2), 'the delta before the second turn'));
-    expect(text).toContain('kind="delta"');
+    expect(text).toMatch(DELTA_OPEN);
     expect(text).toContain('## Execution status');
     expect(text).not.toContain('## World model');
     expect(text).not.toContain('- workspace:');
@@ -1295,7 +1373,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const out = ledger.weave(history, cleared);
     expect(ledger.size).toBe(2);
     const text = messageText(present(out.at(-2), 'the delta before the second turn'));
-    expect(text).toContain('kind="delta"');
+    expect(text).toMatch(DELTA_OPEN);
     expect(text).toContain('## World model');
     expect(text).toContain('Cleared: no current entries.');
   });
@@ -1315,7 +1393,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const out = ledger.weave(compacted, state);
     expect(ledger.size).toBe(1);
     const text = messageText(present(out[1], 'the block before the input'));
-    expect(text).toContain('kind="full"');
+    expect(text).toMatch(FULL_OPEN);
     expect(text).toBe(renderDynamicContextBlock(state) ?? '');
   });
 
@@ -1527,7 +1605,7 @@ describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
     const changed = { ...state, factsBlock: '- k = later' };
     const out = ledger.weave(history, changed);
     expect(ledger.size).toBe(2);
-    expect(out.at(-2)?.content).toContain('kind="delta"');
+    expect(out.at(-2)?.content).toMatch(DELTA_OPEN);
     expect(out.at(-2)?.content).toContain('- k = later');
     expect(out.at(-2)?.content).not.toContain('## Execution status');
   });

@@ -15,6 +15,7 @@ import {
   type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { AgentTurnActivity, AgentTurnOpening, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
@@ -45,6 +46,26 @@ function upsertRow(storage: DurableObjectStorage, table: keyof typeof COPIED_KEY
      ON CONFLICT(${key.join(', ')}) DO UPDATE SET ${updates.join(', ')}`,
     ...values,
   );
+}
+
+/** Whether this database holds `row` in `table` as it is, every column alike. */
+function holds(storage: DurableObjectStorage, table: keyof typeof COPIED_KEY, row: StoredRow): boolean {
+  const key: readonly string[] = COPIED_KEY[table];
+
+  const [stored, ...more] = storage.sql.exec<StoredRow>(
+    `SELECT * FROM ${table} WHERE ${key.map((column) => `${column} = ?`).join(' AND ')}`,
+    ...key.map((column) => row[column] ?? null),
+  ).toArray();
+
+  return stored !== undefined && more.length === 0 && isDeepStrictEqual({ ...stored }, { ...row });
+}
+
+/** Whether this database holds exactly `config` for `actorId`, no row more or less. */
+function holdsConfig(storage: DurableObjectStorage, actorId: SqlValue, config: readonly StoredRow[]): boolean {
+  const stored = storage.sql.exec<StoredRow>('SELECT * FROM actor_config WHERE actor_id = ?', actorId).toArray();
+  const wanted = config.filter((row) => row.actor_id === actorId);
+
+  return stored.length === wanted.length && wanted.every((row) => holds(storage, 'actor_config', row));
 }
 
 interface AgentReadable {
@@ -101,17 +122,24 @@ export class AgentDatabase {
     });
   }
 
+  /** Writes only when the workspace's rows changed, so a read of an unchanged agent writes nothing. */
   adopt(snapshot: AgentSnapshot): void {
-    this.storage.transactionSync(() => {
-      upsertRow(this.storage, 'workspace_identity', snapshot.identity);
+    const unchanged = holds(this.storage, 'workspace_identity', snapshot.identity)
+      && snapshot.lineage.every((row) => holds(this.storage, 'workspace_actors', row) && holdsConfig(this.storage, row.actor_id ?? null, snapshot.config));
 
-      for (const row of snapshot.lineage) {
-        upsertRow(this.storage, 'workspace_actors', row);
-        this.storage.sql.exec('DELETE FROM actor_config WHERE actor_id = ?', row.actor_id ?? null);
-      }
+    if (!unchanged) {
+      this.storage.transactionSync(() => {
+        upsertRow(this.storage, 'workspace_identity', snapshot.identity);
 
-      for (const row of snapshot.config) upsertRow(this.storage, 'actor_config', row);
-    });
+        for (const row of snapshot.lineage) {
+          upsertRow(this.storage, 'workspace_actors', row);
+          this.storage.sql.exec('DELETE FROM actor_config WHERE actor_id = ?', row.actor_id ?? null);
+        }
+
+        for (const row of snapshot.config) upsertRow(this.storage, 'actor_config', row);
+      });
+    }
+
     this.snapshot = snapshot;
   }
 

@@ -277,7 +277,7 @@ describe('durable delegated turn opening', () => {
       await session.restoreWorkingHistory();
       expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered', 'two', 'two answered']);
       // A block woven against the four-message stream: positioned there, and meaningless anywhere else.
-      session.dynamic.weave(session.history, { mode: { workMode: 'build', planSubmission: false } });
+      session.dynamic.weave(session.history, { mode: { workMode: 'plan', planSubmission: true } });
       expect(session.dynamic.size).toBe(1);
 
       // The host's own idle condition is raised inside the same transaction: nothing moves.

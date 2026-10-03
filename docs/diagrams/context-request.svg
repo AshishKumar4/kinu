@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t d">
+  <!-- A docs figure. Its sibling in this directory (same name, -dark suffix)
+       is the same geometry under a different :root palette, and CONTEXT-WINDOW.md picks
+       between the two with <picture>. Everything below the palette block must
+       stay byte-identical in both, so edit them together. -->
+  <title id="t">One model request, in order</title>
+  <desc id="d">Tool definitions, then the system prompt as four parts (the core every workspace shares, the lead doctrine, the workspace, the agent), then messages: the sealed unapproved instruction files, the dynamic-context block, the conversation with frozen delta blocks, a turn's own skill bodies and the request. Markers show where each provider caches.</desc>
+  <style>
+    :root {
+      --fg: #1f2328;
+      --muted: #59636e;
+      --faint: #818b98;
+      --rule: #d1d9e0;
+      --ruleStrong: #8c959f;
+      --surface: #f6f8fa;
+      --surfaceAlt: #ffffff;
+      --bandFill: #f6f8fa;
+      --bandStroke: #d1d9e0;
+      --blue: #0550ae;
+      --blueFill: #ddf4ff;
+      --blueLine: #0969da;
+      --orange: #953800;
+      --orangeFill: #fff1e5;
+      --orangeLine: #bc4c00;
+      --green: #1a7f37;
+      --greenFill: #dafbe1;
+      --greenLine: #1f883d;
+      --purple: #6639ba;
+      --purpleFill: #fbefff;
+      --purpleLine: #8250df;
+      --pink: #99286e;
+      --pinkFill: #ffeff7;
+      --pinkLine: #bf3989;
+      --slateFill: #eef1f4;
+    }
+    text { font-family: ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; fill: var(--fg); }
+    text.mono { font-family: ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace; }
+    .h  { font-size: 15px; font-weight: 650; letter-spacing: .1px; }
+    .b  { font-size: 13px; font-weight: 600; }
+    .s  { font-size: 11.5px; fill: var(--muted); }
+    .xs { font-size: 10.5px; fill: var(--faint); }
+    .band { font-size: 11px; font-weight: 700; letter-spacing: .9px; fill: var(--faint); }
+    .edge { fill: none; stroke: var(--ruleStrong); stroke-width: 1.4; }
+    .edge-lite { fill: none; stroke: var(--rule); stroke-width: 1.2; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--ruleStrong)"/>
+    </marker>
+    <marker id="a-blue" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--blueLine)"/>
+    </marker>
+    <marker id="a-purple" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--purpleLine)"/>
+    </marker>
+    <marker id="a-pink" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--pinkLine)"/>
+    </marker>
+    <marker id="a-green" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--greenLine)"/>
+    </marker>
+    <marker id="a-orange" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--orangeLine)"/>
+    </marker>
+  </defs>
+  <text class="h" x="58" y="30" text-anchor="start">One request, in order</text>
+  <text class="s" x="58" y="49" text-anchor="start">packages/core/src/prompt.ts · prompting/prepare-step.ts · prompting/cache-breakpoints.ts — both backends</text>
+  <text class="band" x="58" y="76">TOOL DEFINITIONS</text>
+  <rect x="58" y="86" width="520" height="58" rx="7" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="b" x="70" y="107" text-anchor="start" fill="var(--green)">Native tools, then MCP and extension tools</text>
+  <text class="s" x="70" y="123" text-anchor="start">the role's tools in this work mode</text>
+  <text class="xs" x="70" y="138" text-anchor="start">same for every agent of one role and mode</text>
+  <text class="band" x="58" y="164">SYSTEM PROMPT</text>
+  <rect x="58" y="174" width="520" height="58" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="70" y="195" text-anchor="start" fill="var(--blue)">Core</text>
+  <text class="s" x="70" y="211" text-anchor="start">operating guidance · environments · tool index · state · delegation · verification</text>
+  <text class="xs" x="70" y="226" text-anchor="start">the same bytes in every workspace for one tool list</text>
+  <rect x="58" y="240" width="520" height="58" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="70" y="261" text-anchor="start" fill="var(--blue)">Lead doctrine</text>
+  <text class="s" x="70" y="277" text-anchor="start">seven sections: brief, parallel work, review, interruptions, delivery</text>
+  <text class="xs" x="70" y="292" text-anchor="start">root agents that can hire; the same in every workspace</text>
+  <rect x="58" y="306" width="520" height="42" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="70" y="327" text-anchor="start">Workspace</text>
+  <text class="s" x="70" y="343" text-anchor="start">SOUL.md · approved AGENTS.md · skills index · pinned skill bodies</text>
+  <rect x="58" y="356" width="520" height="42" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="70" y="377" text-anchor="start">Agent</text>
+  <text class="s" x="70" y="393" text-anchor="start">the agent's and workspace's names · role section</text>
+  <text class="band" x="58" y="418">MESSAGES</text>
+  <rect x="58" y="428" width="520" height="42" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b mono" x="70" y="449" text-anchor="start">&lt;workspace_instructions&gt;</text>
+  <text class="s" x="70" y="465" text-anchor="start">unapproved AGENTS.md and skill files, sealed as reference</text>
+  <rect x="58" y="478" width="520" height="58" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="b mono" x="70" y="499" text-anchor="start" fill="var(--purple)">&lt;dynamic_context fingerprint="…"&gt;</text>
+  <text class="s" x="70" y="515" text-anchor="start">runtime facts (backend, model, cwd, date) · why · mode · tasks · jobs · status</text>
+  <text class="xs" x="70" y="530" text-anchor="start">one full block, then deltas; each frozen where it was first sent</text>
+  <rect x="58" y="544" width="520" height="42" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="70" y="565" text-anchor="start">Conversation</text>
+  <text class="s" x="70" y="581" text-anchor="start">earlier turns, their tool calls and results, and their delta blocks</text>
+  <rect x="58" y="594" width="520" height="42" rx="7" fill="var(--pinkFill)" stroke="var(--pinkLine)"/>
+  <text class="b" x="70" y="615" text-anchor="start" fill="var(--pink)">A turn's /name skills</text>
+  <text class="s" x="70" y="631" text-anchor="start">bodies for this turn only, never stored</text>
+  <rect x="58" y="644" width="520" height="42" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b" x="70" y="665" text-anchor="start" fill="var(--orange)">The request</text>
+  <text class="s" x="70" y="681" text-anchor="start">the person's message or the event that woke the turn</text>
+  <text class="b" x="600" y="84" text-anchor="start">Anthropic markers</text>
+  <text class="xs" x="600" y="100" text-anchor="start">and OpenRouter on Claude models</text>
+  <path d="M580 136 L596 136" class="edge-lite" stroke-dasharray="3 3"/>
+  <rect x="600" y="125.5" width="116" height="21" rx="10.5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="658" y="140" text-anchor="middle" fill="var(--orange)">last tool</text>
+  <text class="xs" x="724" y="140" text-anchor="start">cloud</text>
+  <path d="M580 398 L596 398" class="edge-lite" stroke-dasharray="3 3"/>
+  <rect x="600" y="387.5" width="116" height="21" rx="10.5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="658" y="402" text-anchor="middle" fill="var(--orange)">end of system</text>
+  <text class="xs" x="724" y="402" text-anchor="start">every request</text>
+  <path d="M580 615 L596 615" class="edge-lite" stroke-dasharray="3 3"/>
+  <rect x="600" y="604.5" width="116" height="21" rx="10.5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="658" y="619" text-anchor="middle" fill="var(--orange)">tail −1</text>
+  <text class="xs" x="724" y="619" text-anchor="start">both move to the newest</text>
+  <path d="M580 665 L596 665" class="edge-lite" stroke-dasharray="3 3"/>
+  <rect x="600" y="654.5" width="116" height="21" rx="10.5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="658" y="669" text-anchor="middle" fill="var(--orange)">tail</text>
+  <text class="xs" x="724" y="669" text-anchor="start">messages every step</text>
+  <rect x="600" y="168" width="284" height="172" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="612" y="189" text-anchor="start">Cache key, no markers</text>
+  <text class="s" x="612" y="207" text-anchor="start">OpenAI, Codex, ChatGPT, AI Gateway:</text>
+  <text class="xs" x="612" y="222" text-anchor="start">prompt_cache_key, the provider caches</text>
+  <text class="xs" x="612" y="236" text-anchor="start">the longest prefix it has seen</text>
+  <text class="s" x="612" y="256" text-anchor="start">Workers AI:</text>
+  <text class="xs" x="612" y="271" text-anchor="start">x-session-affinity pins the agent</text>
+  <text class="xs" x="612" y="285" text-anchor="start">to one replica and its prefix cache</text>
+  <text class="xs" x="612" y="305" text-anchor="start">Key: kinu-&lt;agent&gt; on the cloud,</text>
+  <text class="xs" x="612" y="319" text-anchor="start">&lt;conversation&gt;:&lt;session&gt; in the CLI,</text>
+  <text class="xs" x="612" y="333" text-anchor="start">kinu-&lt;search root&gt; for swarm nodes</text>
+  <rect x="600" y="464" width="284" height="86" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)" stroke-dasharray="3 3"/>
+  <text class="b" x="612" y="485" text-anchor="start" fill="var(--purple)">Not in the system prompt</text>
+  <text class="xs" x="612" y="502" text-anchor="start">date, model, cwd, device status, work</text>
+  <text class="xs" x="612" y="516" text-anchor="start">mode: they are dynamic, so a new day</text>
+  <text class="xs" x="612" y="530" text-anchor="start">is one small delta and every cached</text>
+  <text class="xs" x="612" y="544" text-anchor="start">byte before it still matches</text>
+  <path d="M600 507 L582 507" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" stroke-dasharray="5 4" marker-end="url(#a-purple)"/>
+  <rect x="58" y="708" width="520" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="70" y="729" text-anchor="start">Shared prefix, measured 2026-10-02</text>
+  <text class="xs" x="70" y="745" text-anchor="start">two workspaces' root agents share 22,460 of 23,457 system prompt chars (9 before)</text>
+</svg>
