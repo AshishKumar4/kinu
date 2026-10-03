@@ -9,14 +9,12 @@
 // tsconfig.base.json declares the Markdown module).
 import agentNamesLine from "../prompts/agent-names-line.md" with { type: 'text' };
 import builtinToolLine from "../prompts/builtin-tool-line.md" with { type: 'text' };
-import externalToolLine from "../prompts/external-tool-line.md" with { type: 'text' };
 import operatingGuidance from "../prompts/operating-guidance.md" with { type: 'text' };
 import roleSection from "../prompts/role-section.md" with { type: 'text' };
 import toolsSection from "../prompts/tools-section.md" with { type: 'text' };
 import workspaceExecutorLine from "../prompts/workspace-executor-line.md" with { type: 'text' };
 import sandboxExecutorLine from "../prompts/sandbox-executor-line.md" with { type: 'text' };
 import deviceExecutorLine from "../prompts/device-executor-line.md" with { type: 'text' };
-import offlineDeviceLine from "../prompts/offline-device-line.md" with { type: 'text' };
 import genericExecutorLine from "../prompts/generic-executor-line.md" with { type: 'text' };
 import executorsSection from "../prompts/executors-section.md" with { type: 'text' };
 import persistenceSection from "../prompts/persistence-section.md" with { type: 'text' };
@@ -64,12 +62,6 @@ export const BUILTIN_TOOL_LINE = definePromptSection(
   builtinToolLine.trimEnd(),
 );
 
-export const EXTERNAL_TOOL_LINE = definePromptSection(
-  "tools/external-line",
-  "{{description}}{{name}}{{source}}",
-  externalToolLine.trimEnd(),
-);
-
 /**
  * Stable operating doctrine. The current mode and submission reach ride the
  * dynamic ledger, while tool execution still enforces the resolved profile.
@@ -92,7 +84,7 @@ export const ROLE_SECTION = definePromptSection(
  * descriptions (registry.ts); the prompt shows one real call per tool. */
 export const TOOLS_SECTION = definePromptSection(
   "tools/index",
-  "{{builtins}}{{externalLines}}{{#if hasExternal}}{{/if}}",
+  "{{builtins}}",
   toolsSection.trimEnd(),
 );
 
@@ -116,13 +108,6 @@ export const DEVICE_EXECUTOR_LINE = definePromptSection(
   "executors/device",
   "",
   deviceExecutorLine.trimEnd(),
-);
-
-/** An offline device is still listed (the user can bring it back); other unavailable executors are omitted. */
-export const OFFLINE_DEVICE_LINE = definePromptSection(
-  "executors/device-offline",
-  "{{deviceName}}",
-  offlineDeviceLine.trimEnd(),
 );
 
 export const GENERIC_EXECUTOR_LINE = definePromptSection(

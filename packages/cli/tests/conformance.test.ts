@@ -9,8 +9,8 @@ import type { LanguageModel } from 'ai';
 import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
   compareSurface, normalizeObservedTables, observedActionEnum, wiredProducers,
-  renderConformanceFindings, NO_COUNT_ENDPOINT,
-  type ObservedSurface,
+  renderConformanceFindings, NO_COUNT_ENDPOINT, BUILTIN_PROFILE_CATALOG, profileCatalogDigest,
+  type ObservedSurface, type ProfileCatalog,
 } from '@kinu.run/core';
 import {
   LocalAgentHost, openWorkspaceCLI,
@@ -100,6 +100,8 @@ function staticResolver(model: LanguageModel): LocalModelResolver {
   };
 }
 
+const BETA_CATALOG: ProfileCatalog = { ...BUILTIN_PROFILE_CATALOG, betaSwarms: true };
+
 async function observeCli(): Promise<{ observed: ObservedSurface; captured: CapturedTool[] }> {
   await createCliAgent({
     name: AGENT_NAME,
@@ -128,6 +130,10 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
         openConfig,
         modelResolver: resolver,
         staticModel: model,
+        // Conformance observes every wired action, so the account has "Beta: swarms" on, as the cf harness does.
+        profileAuthority: async () => ({
+          authority: { kind: 'local' as const }, version: 1, digest: profileCatalogDigest(BETA_CATALOG), catalog: BETA_CATALOG,
+        }),
       };
     },
   });

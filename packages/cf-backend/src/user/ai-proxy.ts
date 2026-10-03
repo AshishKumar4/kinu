@@ -5,7 +5,7 @@ import type { OwnerCapabilityEnv, ProviderEnv } from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
 import { MY_GATEWAY_PROVIDER_ID, SESSION_AFFINITY_HEADER, sessionAffinityOf, workersAiSpec, DECISION_MODELS, USER_AI_RUN_PATH, decodeJsonValue } from '@kinu.run/core';
-import { createDirectWorkersAIFetch } from '@kinu.run/core';
+import { createDirectWorkersAIFetch, transportControls } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import { json } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
@@ -113,10 +113,13 @@ async function proxyChatCompletion<Id>(
     mapError: (res, resolved) => mapGatewayError(res, model, resolved.headers['cf-aig-gateway-id']),
   });
 
+  const controls = transportControls(request);
+
   return aiFetch(`${PROXY_PLACEHOLDER}/chat/completions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...controls.headers },
     body,
+    signal: controls.signal,
   });
 }
 

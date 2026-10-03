@@ -97,7 +97,8 @@ describe('a local runtime opened without a session', () => {
   });
 
   test('the tier model is the workspace\'s own stored model, never a default of its own', async () => {
-    const { db, dbPath } = await workspace('my-model');
+    // Spelled as `setModel` stores it: the writer normalises, so a pin reaches resolution in the registry's spelling.
+    const { db, dbPath } = await workspace('openai-compat/my-model');
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
 
     const profile = await rt.ensureProfile?.();

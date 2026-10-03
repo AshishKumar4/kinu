@@ -7,8 +7,8 @@
 
 import * as v from 'valibot';
 import {
-  CHAIN_BOTTOM, CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, NEST_MISSION, NEST_RELAY, REPORT_MARK,
-  type ChildScript,
+  CHAIN_BOTTOM, CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, JOB_COMMAND, JOB_MISSION, JOB_NOTED,
+  JOB_STARTED, NEST_MISSION, NEST_RELAY, REPORT_MARK, type ChildScript,
 } from './hire-shapes';
 
 export interface HireCall {
@@ -127,6 +127,13 @@ function lastUser(body: OutboundBody): string {
   return contentText(users.at(-1)?.content ?? '');
 }
 
+/** The first thing the conversation was told, past the runtime's own state blocks. */
+function openedOn(body: OutboundBody): string {
+  const told = (body.messages ?? []).filter((message) => message.role === 'user').map((message) => contentText(message.content ?? ''));
+
+  return told.find((text) => !text.startsWith('<dynamic_context')) ?? '';
+}
+
 /** Every user turn the request carries, one string: an agent's brief stays in it across its later turns. */
 function allUsers(body: OutboundBody): string {
   return (body.messages ?? []).filter((message) => message.role === 'user').map((message) => contentText(message.content ?? '')).join('\n');
@@ -150,6 +157,11 @@ interface AgentsToolArgs {
 interface ReportToolArgs {
   readonly status: 'progress' | 'completed';
   readonly content: string;
+}
+
+interface ShellToolArgs {
+  readonly command: string;
+  readonly runtime: 'workspace';
 }
 
 interface SseChunk {
@@ -195,7 +207,7 @@ function textBody(model: string, text: string): Response {
   ]);
 }
 
-function toolCallBody(model: string, callId: string, name: string, args: AgentsToolArgs | ReportToolArgs): Response {
+function toolCallBody(model: string, callId: string, name: string, args: AgentsToolArgs | ReportToolArgs | ShellToolArgs): Response {
   return streamResponse([
     sse({
       id: callId, object: 'chat.completion.chunk', model,
@@ -242,6 +254,11 @@ function rootLane(run: HireRun, body: OutboundBody, results: readonly string[]):
   }
 
   if (results.length !== 0) return textBody(model, 'ROOT-WAITS');
+
+  // `job`: a durable hire, so the hire outlives its brief and its job wakes it.
+  if (run.childScript === 'job') {
+    return toolCallBody(model, 'call_hire_job', 'agents', { action: 'hire', lifetime: 'durable', role: 'auditor', mission: JOB_MISSION });
+  }
 
   return toolCallBody(model, 'call_hire_1', 'agents', {
     action: 'hire',
@@ -335,6 +352,24 @@ async function childLane(run: HireRun, body: OutboundBody, results: readonly str
   return textBody(model, CHILD_ANSWER);
 }
 
+/**
+ * `job`, the hire's every turn, keyed on what it last read: the brief starts the command; told it became a job, the hire
+ * ends its turn; a wake about the job is noted. With or without the `report` tool, since a wake is not its hirer's task.
+ */
+function jobLane(body: OutboundBody, results: readonly string[]): Response {
+  const model = body.model ?? HIRE_CHILD_MODEL;
+
+  if (lastUser(body).includes('Background shell job')) return textBody(model, JOB_NOTED);
+
+  if (results.some((result) => result.includes('backgrounded'))) return textBody(model, JOB_STARTED);
+
+  if (allUsers(body).includes(JOB_MISSION) && results.length === 0) {
+    return toolCallBody(model, 'call_job_1', 'shell', { command: JOB_COMMAND, runtime: 'workspace' });
+  }
+
+  return textBody(model, 'JOB-IDLE');
+}
+
 /** Auto-title and sleep-time judge want non-streamed JSON; keyed by role: title leads with a system
  *  message, the judge is user-only. */
 function auxLane(body: OutboundBody): Response {
@@ -368,7 +403,7 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
     const raw = await request.text();
 
     const spec = v.parse(
-      v.looseObject({ script: v.optional(v.picklist(['answer', 'throw', 'park', 'nest', 'nest-park', 'nest-progress', 'chain'])) }),
+      v.looseObject({ script: v.optional(v.picklist(['answer', 'throw', 'park', 'nest', 'nest-park', 'nest-progress', 'chain', 'job'])) }),
       raw === '' ? {} : JSON.parse(raw),
     );
 
@@ -401,6 +436,8 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
   if (op === 'log' && request.method === 'GET') {
     return Response.json({ calls: [...run.log] });
   }
+
+
 
   throw new Error(`hire-control: unhandled ${request.method} ${url.pathname}`);
 }
@@ -443,6 +480,9 @@ export async function hireOutbound(request: Request): Promise<Response> {
 
   // No actor turn arrives unstreamed on this wire, so non-streamed is auxiliary.
   if (body.stream !== true) return auxLane(body);
+
+  // The hire runs on the workspace's pin too: it is the conversation that opened on the brief.
+  if (run.childScript === 'job' && openedOn(body) === JOB_MISSION) return jobLane(body, results);
 
   // The child's lane: `report` is deps-gated (core's `DEPS_GATED_TOOLS`), so only a hired actor carries it.
   if (toolNames(body).includes('report')) return await childLane(run, body, results);

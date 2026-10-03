@@ -388,11 +388,8 @@ export function buildProgram(): Command {
   program
     .command('gepa <name> [runId]')
     .helpGroup(INSPECT)
-    .description('Show GEPA optimisation runs, or run one pass with --run')
-    .option('--run', 'Run one optimisation pass over the scaffold')
-    .option('--iterations <n>', 'Reflection iterations (--run)')
-    .option('--eval-size <n>', 'Labeled turns to draw the split from (--run)')
-    .option('--metric-calls <n>', 'Most metric calls to make (--run)')
+    .description('Show GEPA searches, or run one over the scaffold with --run')
+    .option('--run', 'Run one proposer search over the scaffold, judged on recent turns without running it')
     .option('--limit <n>', 'Run limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(gepaCommand));
@@ -502,7 +499,7 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['swarm', 'kinu swarm jarvis'],
   ['heads', 'kinu heads jarvis --limit 5'],
   ['debug', 'kinu debug jarvis -o jarvis.debug.jsonl'],
-  ['gepa', 'kinu gepa jarvis --run --iterations 3'],
+  ['gepa', 'kinu gepa jarvis --run'],
   ['quality', 'kinu quality jarvis'],
   ['connect', 'kinu connect --label studio'],
   ['desktop', 'kinu desktop status'],

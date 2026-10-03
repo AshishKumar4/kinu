@@ -1,15 +1,10 @@
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import { generateText } from 'ai';
 import {
-  WORKSPACE_TITLE_SYSTEM_PROMPT,
-  workspaceTitlePrompt,
-  agentAffinityKey,
   changeRoleAsOwner, openWorkspaceMainActor,
   DEFAULT_ROLE_ID,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
-  parseWorkspaceTitle,
   readMission,
   workspaceSlug,
   type ReasoningEffort,
@@ -18,7 +13,6 @@ import {
 import { ensureDefaultTier, loadActiveProfile } from './default-model';
 import { readDefaultTier } from './profiles';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
@@ -45,7 +39,6 @@ import {
 } from './cloud-api';
 import { authCommand } from './commands/auth';
 import { ensureLocalDaemonRunning } from './commands/daemon';
-import { createConfiguredLocalModelResolver } from './local-model-resolver';
 
 export interface CreateCliAgentInput {
   /** Required for local agents; cloud agents are named from their mission. */
@@ -81,43 +74,13 @@ export interface CreatedCliAgent {
   aliasPath?: string;
 }
 
-export interface SuggestAgentIdentityOptions {
-  id?: string;
-  model?: string;
-  baseUrl?: string;
-  auth?: string;
-  signal?: AbortSignal;
-  generate?: (mission: string, signal?: AbortSignal) => Promise<string>;
-}
-
-/** The slug derives from the id only; the title is generated when possible, mission-derived otherwise. */
-export async function suggestAgentIdentityFromMission(
-  mission: string,
-  opts: SuggestAgentIdentityOptions = {},
-): Promise<SuggestedWorkspaceIdentity> {
-  const fallback = fallbackWorkspaceIdentity(mission, opts.id ?? crypto.randomUUID());
-
-  try {
-    const raw = opts.generate
-      ? await opts.generate(mission, opts.signal)
-      : await generateTitleJson(mission, opts, agentAffinityKey(fallback.name));
-
-    const title = parseWorkspaceTitle(raw);
-
-    if (opts.signal?.aborted) throw opts.signal.reason;
-
-    return title ? { ...fallback, displayName: title } : fallback;
-  } catch (error) {
-    if (opts.signal?.aborted) throw opts.signal.reason;
-    diagnostics.event('agent.title_fallback', { error: renderThrownChain({ cause: error }) });
-
-    return fallback;
-  }
+/** The slug derives from the id; the title is the mission's stand-in, which the workspace's first turn names through its owed `auto_title` effect. */
+export function suggestAgentIdentityFromMission(mission: string, id: string = crypto.randomUUID()): SuggestedWorkspaceIdentity {
+  return fallbackWorkspaceIdentity(mission, id);
 }
 
 export interface CreateCloudAgentFromMissionOptions {
   id?: string;
-  generate?: (mission: string) => Promise<string>;
   create: (input: CreateCloudAgentInput) => Promise<CloudAgent>;
 }
 
@@ -129,13 +92,7 @@ export async function createCloudAgentFromMission(
 
   const identity = userNamed
     ? { name: input.name, displayName: input.displayName ?? input.name }
-    : await suggestAgentIdentityFromMission(input.purpose, {
-        id: options.id,
-        model: input.model,
-        baseUrl: input.baseUrl,
-        auth: input.auth,
-        generate: options.generate,
-      });
+    : suggestAgentIdentityFromMission(input.purpose, options.id);
 
   const createInput: CreateCloudAgentInput = {
     name: identity.name,
@@ -352,7 +309,7 @@ export interface RenamedLocalAgent {
   displayName: string;
 }
 
-/** Marks the title the owner's, which permanently stops `autoTitleLocalWorkspace` replacing it. */
+/** Marks the title the owner's, which permanently stops the `auto_title` effect replacing it. */
 export function renameLocalAgent(name: string, displayName: string): RenamedLocalAgent {
   const title = displayName.trim();
 
@@ -384,21 +341,6 @@ function nameTaken(name: string, dbPath: string, held: { cwd?: string; workspace
     : '';
 
   return `Workspace "${name}" already exists at ${dbPath}.${placement} Choose another name.`;
-}
-
-/** `conversation`: the new workspace's, as its first model call. */
-async function generateTitleJson(mission: string, opts: SuggestAgentIdentityOptions, conversation: string): Promise<string> {
-  const { resolver } = createConfiguredLocalModelResolver(opts);
-
-  const result = await generateText({
-    model: resolver.resolveModel(opts.model ?? null, conversation),
-    system: WORKSPACE_TITLE_SYSTEM_PROMPT,
-    prompt: workspaceTitlePrompt(mission),
-    abortSignal: opts.signal,
-    // No output cap: reasoning models spend it thinking and return empty text. Cheapness comes from low effort.
-  });
-
-  return result.text;
 }
 
 async function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth: boolean): Promise<{ origin: string; token: string }> {

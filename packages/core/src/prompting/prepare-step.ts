@@ -30,6 +30,8 @@ export interface StepDynamicContext {
   readonly snapshot: () => DynamicContext;
   /** The turn's unapproved workspace files as one message, null for none; the ledger keeps where it went out. */
   readonly instructions?: string | null | undefined;
+  /** What the turn's input activates (`activatedSkillsBlock`): just before the input on every step, never stored. */
+  readonly activated?: string | null | undefined;
 }
 
 /** Raw context ownership is settled before ephemeral render transforms run. */
@@ -105,10 +107,11 @@ function finishPrepareStep(
   input: TurnInput | undefined,
 ): StepPrepareResult | Promise<StepPrepareResult> {
   const base = steered ?? ctx.messages;
+  const activated = turnActivation(pipeline.dynamic, input);
 
   // The weave runs after pruning (frozen positions refer to the final array); reserve what it adds before pruning,
   // or the request is priced too small.
-  const reserved = pipeline.dynamic?.ledger.overheadTokens ?? 0;
+  const reserved = (pipeline.dynamic?.ledger.overheadTokens ?? 0) + Math.round((activated?.length ?? 0) / 4);
 
   const pruned = pipeline.prune
     ? pruneStepToolOutputs(base, { ...pipeline.prune, reservedTokens: (pipeline.prune.reservedTokens ?? 0) + reserved })
@@ -119,7 +122,9 @@ function finishPrepareStep(
   // Always rewrites: a prepareStep override never feeds the next step's input.
   const woven = pipeline.dynamic?.ledger.weave(shrunk, pipeline.dynamic.snapshot(), input, pipeline.dynamic.instructions);
 
-  const working = woven ?? shrunk;
+  // Spliced after the weave, so the blocks born before the input anchor on the stored input, not on this.
+  const opened = withActivated(woven ?? shrunk, activated, input && shrunk[input.at]);
+  const working = opened ?? woven ?? shrunk;
   const replayed = normalizeReplayForDestination(working, pipeline.destinationProviderId);
   const destinationReady = replayed ?? working;
   const plan = pipeline.cache;
@@ -129,7 +134,7 @@ function finishPrepareStep(
   // Recorded before the request is issued, so the revision is durable before it can have an effect.
   const consumed = pipeline.context?.consume({ stepNumber: ctx.stepNumber, messages });
 
-  const rewritten = pipeline.context !== undefined || steered !== undefined
+  const rewritten = pipeline.context !== undefined || steered !== undefined || opened !== undefined
     || pruned !== undefined || woven !== undefined || replayed !== undefined;
 
   let result: StepPrepareResult;
@@ -141,4 +146,19 @@ function finishPrepareStep(
   }
 
   return consumed instanceof Promise ? consumed.then(() => result) : result;
+}
+
+function turnActivation(dynamic: StepDynamicContext | undefined, input: TurnInput | undefined): string | null {
+  return input === undefined ? null : dynamic?.activated ?? null;
+}
+
+/** Right before the turn's input, so the person's request stays the last user message the model reads. */
+function withActivated(
+  messages: ModelMessage[], activated: string | null, turnInput: ModelMessage | undefined,
+): ModelMessage[] | undefined {
+  const at = activated === null || turnInput === undefined ? -1 : messages.indexOf(turnInput);
+
+  if (activated === null || at === -1) return undefined;
+
+  return [...messages.slice(0, at), { role: 'user', content: activated }, ...messages.slice(at)];
 }

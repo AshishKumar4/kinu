@@ -4,7 +4,7 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
  */
 
-import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, GenerateRequest, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
+import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell, shellCwd, createShellSession,
   observeWrites,
@@ -17,9 +17,9 @@ import {
   type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   type NimbusSandboxHandle,
-  createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, generateReported,
+  createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   decodeJsonValue,
-  createRoutedModelLane, routedCallOptions,
+  createRoutedModelLane, routedLlm, bindRoute,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
@@ -219,6 +219,10 @@ export function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
   return 'vectorStore' in runtime;
 }
 
+export interface WorkspaceBoxUse {
+  used: boolean;
+}
+
 export interface CFRuntimeHooks {
   /** Read at exec time, as resolving during construction re-enters the runtime getter. Undefined (head,
      *  subordinate): no queue, so 'strict' refuses. */
@@ -227,7 +231,8 @@ export interface CFRuntimeHooks {
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
   /** A sandbox port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
-  servingMoved?: () => Promise<void>;
+  servingMoved: () => Promise<void>;
+  readonly boxUse: WorkspaceBoxUse;
   /** Where non-turn model seams (judge, fast tier, reflection, embedder) report cost; turn spend arrives
      *  as `step_finish`. */
   reportModelCall: ModelCallSink;
@@ -286,7 +291,7 @@ export function createCFRuntime(
   const craftStore = new AgentUtilsCraftStore(sql);
   craftStore.ensureSchema();
 
-  const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
+  const memory = adaptMemory(memoryStore, originVfs, { store: vectorStore, config: memoryConfig });
 
   const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }));
 
@@ -397,7 +402,6 @@ export function createCFRuntime(
   const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
   let sandboxHandle: SandboxHandle | null = null;
-  let sandboxUsed = false;
 
   if (env.KinuDevbox) {
     try {
@@ -406,7 +410,7 @@ export function createCFRuntime(
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
       // the container has no network, so it fails closed. Only the owning workspace configures.
       const handle = adaptCloudflareSandbox(sdk, async () => {
-        sandboxUsed = true;
+        hooks.boxUse.used = true;
         const userId = actor.ownerUserId();
 
         if (!userId) return;
@@ -428,7 +432,7 @@ export function createCFRuntime(
       env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
       async () => {
         hooks.liveReadsMoved?.(['getExposedPorts']);
-        await hooks.servingMoved?.();
+        await hooks.servingMoved();
       });
 
       sandboxHandle = handle;
@@ -565,7 +569,7 @@ export function createCFRuntime(
     sandboxPortHolders: () => {
       const handle = sandboxHandle;
 
-      if (handle === null || !sandboxUsed || previewSuffix === undefined) return null;
+      if (handle === null || !hooks.boxUse.used || previewSuffix === undefined) return null;
 
       return {
         exposedPorts: async () => (await handle.getExposedPorts(previewSuffix)).map((row) => row.port),
@@ -662,20 +666,14 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
 
       return agent.registry.credentialFor(agent.normalizeSpecSync(spec), agent.deps);
     },
-    llm: route => ({
-      async *stream() { yield ""; },
-      async complete(prompt: string): Promise<string> {
-        const registry = actorProviderRegistry(options, `Kinu (${source})`);
+    llm: (route) => routedLlm((serving) => {
+      const registry = actorProviderRegistry(options, `Kinu (${source})`);
 
-        const request: GenerateRequest = {
-          model: registry.resolveModel(route.model, agentAffinityKey(options.agent.name)),
-          prompt,
-          ...routedCallOptions(route, route.model),
-        };
-
-        return (await generateReported(request, { spend: { source, report, operations: options.modelOperations }, spec: route.model })).text.trim();
-      },
-    }),
+      return bindRoute({
+        normalize: (spec) => registry.normalizeSpecSync(spec),
+        resolve: (spec) => registry.resolveModel(spec, agentAffinityKey(options.agent.name)),
+      }, serving);
+    }, route, { report, operations: options.modelOperations }),
   });
 }
 

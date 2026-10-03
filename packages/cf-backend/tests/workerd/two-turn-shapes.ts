@@ -5,15 +5,14 @@
  */
 import * as v from 'valibot';
 
+/** One run the installed Workers AI binding answered (`tests/helpers/workers-ai-binding.ts`). */
 export const CallRecordSchema = v.object({
   model: v.string(),
-  /** The request's own stream flag, separating turn calls from completion lanes. */
+  /** The request's own stream flag: no turn streams on the binding. */
   stream: v.boolean(),
-  /** The lane the fake served, keyed on request shape (stream flag, leading system role). */
-  lane: v.picklist(['turn', 'sleep', 'title', 'rating']),
+  /** The lane its request shape names (`aiLane`); null was refused. */
+  lane: v.nullable(v.picklist(['decision', 'title', 'sleep'])),
   users: v.array(v.string()),
-  /** What `options.signal` arrived as — the spike's answer. */
-  signalKind: v.string(),
 });
 
 export type CallRecord = v.InferOutput<typeof CallRecordSchema>;

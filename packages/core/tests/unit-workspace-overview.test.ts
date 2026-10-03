@@ -19,7 +19,6 @@ const EMPTY: WorkspaceOverviewInputs = {
   pendingActions: [],
   pendingConsents: [],
   activePlan: null,
-  scaffoldAutoApply: true,
   latestRun: null,
   slates: [],
   shares: [],
@@ -41,17 +40,11 @@ describe('buildWorkspaceOverview', () => {
     expect(overview.hasUpdates).toBe(true);
   });
 
-  test('a scaffold trial follows the auto-promote switch', () => {
-    const automatic = buildWorkspaceOverview({ ...EMPTY, pendingActions: [action('scaffold_version')] });
+  test('a proposed scaffold waits on the owner', () => {
+    const overview = buildWorkspaceOverview({ ...EMPTY, pendingActions: [action('scaffold_version')] });
 
-    const manual = buildWorkspaceOverview({
-      ...EMPTY, scaffoldAutoApply: false, pendingActions: [action('scaffold_version')],
-    });
-
-    expect(automatic.decisionsWaiting).toBe(0);
-    expect(automatic.hasUpdates).toBe(true);
-    expect(manual.decisionsWaiting).toBe(1);
-    expect(manual.hasUpdates).toBe(false);
+    expect(overview.decisionsWaiting).toBe(1);
+    expect(overview.hasUpdates).toBe(false);
   });
 
   test('a pending consent and a pending plan each wait on the owner', () => {

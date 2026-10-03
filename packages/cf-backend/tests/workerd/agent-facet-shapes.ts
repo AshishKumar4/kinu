@@ -41,6 +41,12 @@ export interface SwarmFacetObservation {
 }
 
 /** A swarm node's `eval` over a tool main crafted, before and after main's store retires it by score. */
+export interface NodeJobObservation {
+  readonly actorId: string;
+  readonly status: string;
+  readonly summary: string;
+}
+
 export interface CraftedFromNodeObservation {
   readonly mainActorId: string;
   readonly nodeActorId: string;

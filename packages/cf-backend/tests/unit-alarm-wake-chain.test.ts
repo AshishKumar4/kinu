@@ -229,8 +229,10 @@ describe('the workspace keeps exactly one wake per job', () => {
     expect(held(workspace.db, seededChildFibers)).toBe(0);
   });
 
-  test('a hired child deferred job is restored by the workspace wake', async () => {
-    // The activation classifies (workspace-wide `owedWorkExists`) and arms an immediate wake; the tick dispatches to the child's instant.
+  // Review of 4028013fc, 2026-10-03: the root's runner kept a wake at a hire's deferred instant, yet could never recover a
+  // row that was not its own. A hire has no re-drive, so the wake's sweep settles it through the hire's own runner.
+  test("a hired child's deferred job is settled by the workspace wake, which then keeps no wake for it", async () => {
+    // The activation classifies (workspace-wide `owedWorkExists`) and arms an immediate wake; its pass sweeps every actor.
     const workspace = orchestratorHarness();
 
     const child = await hostedSubordinateHarness(workspace, {
@@ -261,8 +263,8 @@ describe('the workspace keeps exactly one wake per job', () => {
 
     await fireSoonestWake(workspace.agent, workspace.db);
 
-    // Exactly one wake at the job's own instant; the job's wake and the retry's wake collapse.
-    expect(armedAt(workspace.db, TERMINAL_RETRY_JOB)).toEqual([landing(resumeAt)]);
+    expect(workspace.db.query('SELECT status FROM background_jobs WHERE id = ?').get('job-waiting')).toEqual({ status: 'failed' });
+    expect(armedAt(workspace.db, TERMINAL_RETRY_JOB)).not.toContain(landing(resumeAt));
   });
 
   test('a deferred job costs one wake at its instant, not a climbing chain', async () => {

@@ -15,6 +15,7 @@ import type { ConversationRecall } from '../memory/conversation-search';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
 import { permitInPlan } from '../execution/work-mode';
+import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
 
 export interface HeadSplitRequest {
   readonly rationale: string;
@@ -43,6 +44,7 @@ export interface HeadToolDeps {
   webSearch: WebSearchProvider;
   /** The backend owns the spawn substrate; the budget gate lives here. */
   split(request: HeadSplitRequest): Promise<HeadSplitResult>;
+  jobs: ActorJobs;
 }
 
 const SplitSubheadsInputSchema = z.object({
@@ -107,5 +109,6 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     extra,
     allowed: input.allowedTools,
     codemodeTool: deps.codemodeTool,
+    wrapFinished: (finished) => wrapToolsForBackground(finished, deps.jobs),
   });
 }

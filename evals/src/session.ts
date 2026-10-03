@@ -101,7 +101,7 @@ import {
   RunEventSchema, STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type SubordinateInspectionRequest, type WorkspaceSpend,
-  QualityDaySchema, type QualityDay,
+  QualityDaySchema, type QualityDay, ProfileCatalogEnvelopeSchema, betaSwarms,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream, TurnStreams } from '../../packages/cli/src/cloud-turn-stream';
@@ -711,7 +711,7 @@ const InspectionAnswerSchema = v.variant('view', [
   v.object({ view: v.literal('children'), page: pageOf(v.object({
     name: v.string(), status: v.string(), lifetime: v.string(), actorReference: v.nullable(v.object({ actorId: v.string() })),
   })) }),
-  v.object({ view: v.literal('runs'), page: pageOf(v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
+  v.object({ view: v.literal('runs'), page: pageOf(v.object({ startedAt: v.number(), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
   v.object({ view: v.literal('missing'), reason: v.string(), error: v.string() }),
 ]);
 
@@ -1080,8 +1080,33 @@ export function beatWorkspace(origin: string, identity: PublicWebIdentity, name:
   return everyBeat(() => markLive(origin, identity, name));
 }
 
+/** Writers per account racing for its catalog, and a spare: each lost race means another writer landed. */
+const CATALOG_WRITE_ATTEMPTS = 4;
+
+/** "Beta: swarms" on for the account the evals run as, whose swarms are part of what they measure; the cases of one
+ *  run race to turn it on, so a lost version race reads again until it is on. */
+async function turnOnSwarms(origin: string, headers: Record<string, string>): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    const read = await fetch(`${origin}/api/user/profile-catalog`, { headers });
+    const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await readJson(read, 'read the profile catalog'));
+
+    if (betaSwarms(catalog)) return;
+
+    const answer = await fetch(`${origin}/api/user/profile-catalog`, {
+      method: 'PUT',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ catalog: { ...catalog, betaSwarms: true }, expectedVersion: version }),
+    });
+
+    if (answer.ok || (answer.status === 409 && attempt < CATALOG_WRITE_ATTEMPTS)) continue;
+    await readJson(answer, 'turn on Beta: swarms');
+  }
+}
+
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
   const headers = webHeaders(input.identity);
+
+  await infraBoundary(`PUT ${input.origin}/api/user/profile-catalog`, () => turnOnSwarms(input.origin, headers));
 
   const created = await infraBoundary(
     `POST ${input.origin}/api/user/workspaces`,
@@ -1763,6 +1788,22 @@ export class KinuPublicSession {
     return v.parse(v.array(QualityDaySchema), await this.boundary(
       `getQuality on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getQuality', [days]),
+    ));
+  }
+
+  /** The memory note displayed by the UI's memory pane. */
+  async memoryContent(): Promise<string> {
+    return v.parse(v.string(), await this.boundary(
+      `getMemoryContent on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getMemoryContent', []),
+    ));
+  }
+
+  /** The same public fact listing the workspace exposes to its owner. */
+  async memoryFacts(): Promise<readonly { key: string; value: JsonValue }[]> {
+    return v.parse(v.array(v.object({ key: v.string(), value: JsonValueSchema })), await this.boundary(
+      `getFacts on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getFacts', []),
     ));
   }
 

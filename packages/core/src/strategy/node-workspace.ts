@@ -63,8 +63,8 @@ export interface NodeHomeHost {
 
 /**
  * The real provisioner for every facet kind: a private home and private `/tmp`
- * per agent name. The caller names the agent with its kind's function
- * (`subordinateAgentName`, `headAgentName`) so namespaces stay disjoint.
+ * per agent name. The caller names the agent with `actorHomeName`, whose
+ * per-kind prefixes keep the namespaces disjoint.
  */
 export function facetHomeProvisioner(
   host: NodeHomeHost | Promise<NodeHomeHost>,

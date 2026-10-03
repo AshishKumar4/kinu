@@ -8,7 +8,6 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { MissionGovernor } from '../src/mission-budget';
-import { estimateTokens } from '../src/llm';
 import type { CompletedTurn } from '../src/evolution/types';
 import { listTurnRatings } from '../src/evolution/ratings';
 import type { AgentRuntime } from '../src/types/agent-runtime';
@@ -53,7 +52,7 @@ function workspace() {
       return { answers: {
         satisfaction: { type: 'score', score: 0.4 }, corrected: { type: 'noul', noul: 0.95 },
         wrong: { type: 'choice', choice: 'misunderstood' },
-      }, usage: {} };
+      }, usage: { input: 0, output: 0 } };
     },
   };
 
@@ -91,7 +90,7 @@ describe('evolution spend under a mission budget', () => {
     expect(spent.spent.tokens).toBeGreaterThan(0);
   });
 
-  test('a rating debits the tokens the decision model counted, or its state and questions estimated', async () => {
+  test('a rating debits the tokens the decision model counted', async () => {
     const { rt } = createTestRuntime();
     const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
     governor.declare('ratings', { tokens: 1_000_000 }, {});
@@ -101,12 +100,9 @@ describe('evolution spend under a mission budget', () => {
     await governor.governDecision(async () => ({ answers, usage: { input: 406, output: 0 } }), ['ratings'])(request);
     expect(governor.snapshot('ratings')[0].spent.tokens).toBe(406);
 
-    await governor.governDecision(async () => ({ answers, usage: {} }), ['ratings'])(request);
-    expect(governor.snapshot('ratings')[0].spent.tokens).toBe(406 + estimateTokens(request.state.length + JSON.stringify(request.questions).length));
-
     // A refused call spent nothing.
     await governor.governDecision(async () => null, ['ratings'])(request);
-    expect(governor.snapshot('ratings')[0]).toMatchObject({ calls: 2 });
+    expect(governor.snapshot('ratings')[0]).toMatchObject({ calls: 1 });
   });
 
   test('a turn under a label nobody declared debits nothing — a review invents no budget', async () => {

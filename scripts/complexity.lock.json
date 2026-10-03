@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-02",
-  "files": 2956,
-  "functions": 74450,
+  "measuredAt": "2026-10-03",
+  "files": 2962,
+  "functions": 74633,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -182,10 +182,6 @@
       "complexity": 31
     },
     {
-      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
-      "complexity": 31
-    },
-    {
       "key": "packages/core/src/scaffold/chat-transform.ts#scaffoldTurn",
       "complexity": 31
     },
@@ -219,6 +215,10 @@
     },
     {
       "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
+      "complexity": 30
+    },
+    {
+      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
       "complexity": 30
     },
     {

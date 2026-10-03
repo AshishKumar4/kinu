@@ -160,6 +160,7 @@ describe('layer gate — decomposition', () => {
     const reached = reachableSubjects(resolve(SRC, SUBJECT_SOURCE.buildSystemPromptSync));
     expect(reached.has('compilePromptSurface')).toBe(true);
     expect(reached.has('renderAgentsMdSection')).toBe(true);
+    expect(reachableSubjects(resolve(SRC, 'evolution/trials.ts')).has('trialDecision')).toBe(true);
   });
 
   test('no layer\'s production code reaches another layer\'s subject', () => {

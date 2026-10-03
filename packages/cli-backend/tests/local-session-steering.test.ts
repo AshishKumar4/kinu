@@ -171,7 +171,8 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     expect(landed).toBeGreaterThan(roles.indexOf('tool'));
     expect(activation).toBeGreaterThanOrEqual(0);
     expect(activation).toBeLessThan(roles.indexOf('tool'));
-    expect(messageText(present(third[activation + 1], 'the request'))).toBe('/focused remember this');
+    expect(messageText(present(third[activation + 1], "the turn's skills"))).toContain('Focus on memory only.');
+    expect(messageText(present(third[activation + 2], 'the request'))).toBe('/focused remember this');
     await session.end();
   });
 
@@ -1776,7 +1777,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
   function sandboxWith(deps: AgentsToolDeps) {
     const tool = createNodeCodemodeToolFactory({
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
-    })({ native: {}, craftedTools: () => [], providers: [] });
+    })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 
     return (code: string, options?: ToolExecutionOptions) =>
       toolExecute<{ code: string }, JsonValue>(tool)({ code }, options);
@@ -1816,7 +1817,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
-    return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
+    return { deps: { mode: 'build', swarms: true, swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
   }
 
   test('a script searches, branches on the result, and returns its own synthesis', async () => {

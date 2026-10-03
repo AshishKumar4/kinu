@@ -1,4 +1,4 @@
-import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Local CLI runtime factory. Two file planes: agent state always lives in the
  * Nimbus filesystem over SQLite; the workspace plane (`file`, `shell`, `eval`,
@@ -10,29 +10,27 @@ import type {
   AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome,
 } from '@kinu.run/core';
-import type { Schedule, Memory, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
+import type { Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
 import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
+  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, actorHomeName, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL, WORKSPACE_ROOT, WORKSPACE_SOUL_DDL,
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
-  withMountTable, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
-  withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant,
+  withMountTable, adaptMemory, sharedDriveMount, SHARED_DRIVE_UNBOUND,
+  withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant, createInheritedApprovalPolicy,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, localContextTree, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
   type AgentStores, type ChildContextResolver, type ContextTree,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
-  type WorkspaceActor,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS, unsandboxedCommandEnvironment,
-  isSubordinateOrigin,
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -40,7 +38,7 @@ import {
   workspaceGenerationStorage,
   workspaceToolchainCapabilities,
 } from '@kinu.run/core/workspace';
-import { tolerate, tolerateAsync } from '@kinu.run/core/obs';
+import { tolerate } from '@kinu.run/core/obs';
 import { localNodeRuntime } from './node-runtime';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import { localFacetHost } from '@nimbus-sh/core/runtime/local-facet-host.js';
@@ -56,11 +54,11 @@ import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS, directoryFileReach } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
-import { agentViewMount, createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
+import { agentViewMount, createSqlFiber, detectOrphanedFibers, readSoul, settledWorkspaceSoul } from '@kinu.run/core';
 import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
-  createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV, workersAiEndpoint,
+  createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV, workersAiRoute,
   type LocalCloudSession, type LocalModelResolver, type LocalProviderCredentials,
 } from './model-resolver';
 import {
@@ -91,7 +89,7 @@ interface CLIRuntimeOptions {
   agentName?: string;
   providerCredentials?: LocalProviderCredentials;
   oauthStore?: LocalOAuthStore;
-  /** The signed-in Kinu session: the decision model's route when `llm` serves no Workers AI (`workersAiEndpoint`). */
+  /** The signed-in Kinu session: the decision model's route when `llm` serves no Workers AI (`workersAiRoute`). */
   cloud?: LocalCloudSession;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
@@ -194,35 +192,6 @@ export function makeSqlExec(db: Pick<Database, 'query'>): SqlExec {
 /** All onto one database, so no caller can pair a DDL handle with another file's reads. */
 export function makeWorkspaceSchemaSql(db: LocalDb): WorkspaceSchemaSql {
   return { execRaw: makeExecRaw(db), sql: makeSql(db), exec: makeSqlExec(db), transactionSync: (write) => writeTransaction(db, write) };
-}
-
-/** The tail reads via the plane's stat + ranged read, which MemoryStore's seam lacks. */
-function adaptMemory(store: MemoryStore, vfs: VFS & Required<Pick<VFS, 'readRange'>>): Memory {
-  return {
-    write: (path, content) => store.writeFile(path, content),
-    append: (path, content) => store.appendToFile(path, content),
-    async index(path) {
-      const raw = await tolerateAsync(() => readText(vfs, path), 'enoent');
-
-      if (raw === undefined) return;
-      await store.indexFile(path, raw);
-    },
-    search(query, limit = 10) {
-      return Promise.resolve(store.search(query, limit));
-    },
-    read: (path) => store.readFile(path),
-    tail: (path, bytes) => readTailWithVfsOps(vfs, path, bytes),
-  };
-}
-
-/** Heads, nodes and branches are named by storage key: roster names are not
- *  unique across expansions. */
-function actorFacetName(record: WorkspaceActor): string {
-  if (record.origin === 'system') return MAIN_AGENT;
-
-  if (isSubordinateOrigin(record.origin)) return subordinateAgentName(record.name);
-
-  return headAgentName(record.storageKey);
 }
 
 /** A lock held longer than this is a hung opener, and the write fails naming the lock. */
@@ -362,11 +331,12 @@ export function createCLIRuntime(
 
   const llm = createRoutedModelLane(actor, 'reflection', modelLanes);
 
-  // At `/ai/run` beside the Workers AI endpoint a chat model would use; none, and no turn is rated.
-  const decisionEndpoint = workersAiEndpoint(config.llm, config.cloud);
+  const decisionEndpoint = workersAiRoute(config.llm, config.cloud)?.auth;
 
-  const decide = decisionEndpoint === null ? undefined : createDecisionPort({
-    run: restDecisionRun({ getAuth: async () => decisionEndpoint }),
+  // `/ai/run` beside a chat model's `/ai/v1`: only Cloudflare's API and the worker's proxy serve one. Elsewhere, and
+  // with no Workers AI route, no turn is rated.
+  const decide = !/\/ai\/v1\/?$/.test(decisionEndpoint?.baseURL ?? '') ? undefined : createDecisionPort({
+    run: restDecisionRun({ getAuth: async () => decisionEndpoint ?? null }),
     model: async () => (await ensureProfile()).decisionModel,
     report,
     refusals,
@@ -412,12 +382,25 @@ export function createCLIRuntime(
   let approvalDeferrals: DeferredApprovalChannel | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
 
-  const approvalPolicy: ShellApprovalPolicy = {
+  const ownerPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
     granted: (grant) => holdsGrant(agentConfig.getShellApprovalGrants(), grant),
     requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
     get deferrals() { return approvalDeferrals ?? undefined; },
   };
+
+  // As on the cloud: grants are written on the root's rows, so a child inherits the root's answers
+  // intersected with its own narrowing, and cannot remember or ask for wider reach.
+  const approvalPolicy: ShellApprovalPolicy = config.facet === undefined
+    ? ownerPolicy
+    : createInheritedApprovalPolicy({
+      fetchRoot: async () => {
+        const root = openLocalRootActor(sql).config;
+
+        return { mode: root.getShellApprovalMode(), grants: root.getShellApprovalGrants() };
+      },
+      ownGrants: () => agentConfig.getShellApprovalGrants(),
+    });
 
   const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
 
@@ -462,7 +445,7 @@ export function createCLIRuntime(
       return { vfs: fileVfs, artifactDirectory };
     }
 
-    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: storage.sql }))(), () => target.assertCurrent())(actorFacetName(record));
+    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: storage.sql }))(), () => target.assertCurrent())(actorHomeName(record));
 
     if (home.isolation !== 'private-home') throw new KinuError('io', 'actor home provisioner returned a shared plane');
     const plane = await workspace.asAgent(home);
@@ -578,9 +561,11 @@ export function createCLIRuntime(
  */
 export async function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLIRuntime, facet: string): Promise<CLIRuntime> {
   requireLocalActorWorkspace(workspace.actor, actor.actor);
+  // A hire is framed with the workspace's soul, as on the cloud; it has none of its own.
+  const ownerSoul = (): Promise<string | null> => workspace.ownerSoul?.() ?? readSoul(workspace.agentStateVfs ?? workspace.storage.vfs);
 
   if (workspace.cwd && actor.cwd === workspace.cwd) {
-    return Object.assign(actor, { checkpoints: workspace.checkpoints, nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell });
+    return Object.assign(actor, { checkpoints: workspace.checkpoints, nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell, ownerSoul });
   }
 
   if (!workspace.nodeHome || !workspace.nodeRuntime) throw new KinuError('missing', 'The workspace has no actor file-plane owner.');
@@ -590,7 +575,7 @@ export async function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLI
   return Object.assign(actor, {
     storage: { ...actor.storage, vfs: plane.storage.vfs, home: plane.storage.home }, toolFiles: plane.toolFiles, memory: workspace.memory, craftStore: workspace.craftStore,
     executionRouter: plane.executionRouter, shell: plane.shell, checkpoints: workspace.checkpoints, cwd: workspace.cwd ?? null,
-    nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell,
+    nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell, ownerSoul,
   });
 }
 
@@ -678,7 +663,7 @@ async function buildCLIHeadRuntime(
 
   if (opts.actorBinding.origin !== 'swarm') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
-  const physicalName = headAgentName(actor.storageKey);
+  const physicalName = actorHomeName({ origin: opts.actorBinding.origin, storageKey: actor.storageKey });
 
   const stores = createAgentStores(() => sql, () => actor, (write) => parent.storage.transactionSync(write), async () => {
     if (!parent.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');

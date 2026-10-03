@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { subordinateAgentName } from '@kinu.run/core';
+import { actorHomeName } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
 import { cleanupFacetCwdScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
 import { registerLocalActor } from '@kinu.run/core';
@@ -25,7 +25,7 @@ function rootRuntime(state: string, cwd?: string): LocalRoot {
 /** A child over its root's database: same handle, same file, its own actor row. */
 async function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): Promise<CLIRuntime> {
   const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), origin: 'agent', lifetime: 'durable' });
-  const facet = subordinateAgentName(binding.storageKey);
+  const facet = actorHomeName({ origin: 'agent', storageKey: binding.storageKey });
   const child = createCLIRuntime(root.db, { llm: null, cwd: parent.cwd, facet, actorBinding: binding });
 
   return shareLocalWorkspacePlane(child, parent, facet);
@@ -37,7 +37,7 @@ async function exec(rt: CLIRuntime, command: string) {
   return rt.shell.exec(command);
 }
 
-const home = (actor: CLIRuntime) => `/home/${subordinateAgentName(actor.actor.storageKey)}`;
+const home = (actor: CLIRuntime) => `/home/${actorHomeName({ origin: 'agent', storageKey: actor.actor.storageKey })}`;
 
 describe('local actor file-plane identity', () => {
   test('same-name children under two parents have distinct homes and private scratch', async () => {
@@ -66,7 +66,7 @@ describe('local actor file-plane identity', () => {
     mkdirSync(project);
     const root = rootRuntime(state, project);
     const child = await childRuntime(root.rt, root, 'reader');
-    const key = subordinateAgentName(child.actor.storageKey);
+    const key = actorHomeName({ origin: 'agent', storageKey: child.actor.storageKey });
     expect((await exec(child, 'pwd; echo "$HOME"; echo "$TMPDIR"')).stdout.trim().split('\n')).toEqual([
       resolve(project), join(project, '.kinu', 'facets', key), join(project, '.kinu', 'facets', key, 'tmp'),
     ]);
@@ -92,8 +92,8 @@ describe('local actor file-plane identity', () => {
     const one = await childRuntime(root.rt, root, 'one');
     const two = await childRuntime(root.rt, root, 'two');
     expect((await exec(one, 'echo keep > keep.txt')).exitCode).toBe(0);
-    const oneKey = subordinateAgentName(one.actor.storageKey);
-    const twoKey = subordinateAgentName(two.actor.storageKey);
+    const oneKey = actorHomeName({ origin: 'agent', storageKey: one.actor.storageKey });
+    const twoKey = actorHomeName({ origin: 'agent', storageKey: two.actor.storageKey });
     const facets = join(project, '.kinu', 'facets');
     expect(readdirSync(join(facets, oneKey))).toEqual(['tmp']);
     cleanupFacetCwdScratch(project, oneKey);

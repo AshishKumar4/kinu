@@ -280,8 +280,8 @@
           "file": "packages/core/src/prompt.ts",
           "edits": [
             [
-              "    renderRuntimeContext(opts),\n  ].filter(Boolean).join",
-              "    renderRuntimeContext(opts),\n    String(performance.now()),\n  ].filter(Boolean).join"
+              "    renderRoleSection(surface, render),\n  ].filter(Boolean).join",
+              "    renderRoleSection(surface, render),\n    String(performance.now()),\n  ].filter(Boolean).join"
             ]
           ]
         }

@@ -16,6 +16,7 @@ import type { ActiveRoster } from '../src/types/dynamic-context';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { profileCatalogDigest, resolveTurnProfile } from '../src/profiles';
 import { withCraftedToolDeclarations } from '../src/tools/sandbox-contract';
+import { applyStruggleLesson } from '../src/evolution/struggles';
 
 interface Fixture {
   readonly rt: AgentRuntime;
@@ -57,6 +58,7 @@ function collect(o: Fixture, over: Overrides = {}, stores: AgentStores = o.store
     rt: o.rt, stores,
     profile: over.profile ?? { workMode: 'build', allowedTools: [] },
     tools: over.tools ?? {},
+    runtime: { backend: 'cf', model: { id: 'claude-sonnet-4-7' }, date: '2026-01-01' },
     memoryTail: over.memoryTail,
     missingCapabilities: over.missingCapabilities ?? [],
     subordinateDelegates: over.subordinateDelegates,
@@ -209,6 +211,21 @@ describe('collectDynamicContext', () => {
     o.stores.jobs.create({ id: 'j1', kind: 'shell', workMode: 'build', now: 1 });
     expect(present(collect(o).jobs, 'the running-jobs block').items).toHaveLength(1);
   });
+});
+
+test('a step sees the active struggle lessons about the tools it offers, and no others', () => {
+  const o = setup();
+  const offered = (name: string) => ({ [name]: tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'ok' }) });
+
+  const teach = (turnId: string, toolName: string, text: string) => applyStruggleLesson(o.rt.storage.sql, o.rt.actor, {
+    turnId, tool: toolName, answer: { update: null, text },
+  });
+
+  teach('t-1', 'edit', 'Name `path` in every edit call.');
+  teach('t-2', 'deploy', 'Build before you deploy.');
+
+  expect(collect(o, { tools: offered('edit') }).toolLessons).toEqual([{ id: 'tl-t-1', revision: 1, line: '`edit`: Name `path` in every edit call.' }]);
+  expect(collect(o, { tools: offered('read') }).toolLessons).toBeUndefined();
 });
 
 describe('the backend-only planes ride the typed source callbacks', () => {

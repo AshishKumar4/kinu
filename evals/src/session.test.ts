@@ -30,7 +30,10 @@ import type { Server, ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 import type { UIMessageChunk } from 'ai';
 
-import { isAgentRpcMethod, JOB_OUTPUT_EVENT, READS_CHANGED_EVENT, renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
+import {
+  BUILTIN_PROFILE_CATALOG, isAgentRpcMethod, JOB_OUTPUT_EVENT, profileCatalogDigest, READS_CHANGED_EVENT, renderSoulMarkdown,
+  type ProfileCatalog, type RunEvent, type JsonValue,
+} from '../../packages/core/src/index';
 import { DeploymentAnswer, EVAL_WEB_IDENTITY_ENV, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import {
   decodeFrame, encodeChatRequest, encodeRpcRequest,
@@ -1379,13 +1382,30 @@ describe('the genesis flag on a public session', () => {
   /** One workspace worth of fake deployment: the create REST, the chat socket
    *  and the DELETE teardown, recording what it was asked rather than parsing
    *  what the harness meant to send. */
-  function fakeDeployment() {
+  function fakeDeployment(catalog: ProfileCatalog = BUILTIN_PROFILE_CATALOG) {
     const creates: unknown[] = [];
     const wire: { method: string; args: readonly unknown[] }[] = [];
+    const written: ProfileCatalog[] = [];
+    const account = { catalog, version: 0, written };
 
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
       async fetch(request, upgrading) {
         const url = new URL(request.url);
+
+        if (url.pathname === '/api/user/profile-catalog') {
+          if (request.method === 'PUT') {
+            const put = v.parse(v.object({ catalog: v.looseObject({}), expectedVersion: v.number() }), await request.json());
+
+            account.catalog = { ...account.catalog, ...put.catalog };
+            account.version += 1;
+            account.written.push(account.catalog);
+          }
+
+          return Response.json({
+            authority: { kind: 'account', accountId: 'eval-service' }, version: account.version,
+            digest: profileCatalogDigest(account.catalog), catalog: account.catalog,
+          });
+        }
 
         if (url.pathname === '/api/user/workspaces' && request.method === 'POST') {
           const body = v.parse(v.object({
@@ -1425,7 +1445,7 @@ describe('the genesis flag on a public session', () => {
       } },
     });
 
-    return { server, creates, wire };
+    return { server, creates, wire, account };
   }
 
   function probeInput(server: Bun.Server<undefined>, genesis?: boolean) {
@@ -1458,6 +1478,20 @@ describe('the genesis flag on a public session', () => {
       expect(wire.map((entry) => entry.method)).toEqual(['setSoul', 'setModel', 'prompt']);
     } finally {
       await session.teardown();
+      await server.stop(true);
+    }
+  });
+
+  test('the account the evals run as has "Beta: swarms" on before its first workspace, and it is written once', async () => {
+    const { server, account } = fakeDeployment();
+    const first = await openPublicSession(probeInput(server));
+    const second = await openPublicSession(probeInput(server));
+
+    try {
+      expect(account.written.map((catalog) => catalog.betaSwarms)).toEqual([true]);
+    } finally {
+      await first.teardown();
+      await second.teardown();
       await server.stop(true);
     }
   });

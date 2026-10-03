@@ -1,7 +1,9 @@
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   credentialToHeaders,
+  type OpenAICompatCredential,
   normalizeModelMenu,
   createChatGptProvider,
   accountDeps,
@@ -58,18 +60,11 @@ const proxiedCredentialsSchema = v.object({
   })), []),
 });
 
-interface LocalOpenAICompatCredential {
-  baseURL: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
-  extraHeaders?: Record<string, string>;
-}
-
 export interface LocalProviderCredentials {
   openaiApiKey?: string;
   anthropicApiKey?: string;
   openrouterApiKey?: string;
-  openaiCompat?: Record<string, LocalOpenAICompatCredential>;
+  openaiCompat?: Record<string, OpenAICompatCredential>;
   apiKeyAccounts?: Readonly<Record<string, string>>;
 }
 
@@ -205,15 +200,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const authStore = buildAuthStore(localEndpoint, credentials, opts.oauthStore);
 
   const cloud = opts.cloud;
-
-  // An explicit direct endpoint takes precedence over the signed-in proxy; the
-  // proxy-derived config registers through the cloud providers below.
-  const llmIsCloudProxy = cloud !== undefined
-    && localEndpoint !== null
-    && localEndpoint.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
-
   const defaultSpec = defaultSpecForEndpoint(localEndpoint);
-  const gateway = defaultProviderFor(localEndpoint) === 'workers-ai' && !llmIsCloudProxy ? localEndpoint : null;
+  const gateway = workersAiRoute(localEndpoint, cloud)?.gateway ?? null;
   const menu = cloud ? createCloudModelMenu(cloud, opts.fetch) : null;
 
   const cloudProvider = (id: CloudProxyProviderId, label: string, unavailableReason: string, defaultModel?: string): ModelProvider => {
@@ -542,16 +530,14 @@ function createCloudProxyProvider(opts: {
           reasoningEfforts: entry.reasoningEfforts,
         }));
     },
+    // A relay: the worker's transport spends the call's retry allowance, so the header must reach it unspent.
     createModel(modelId, deps): LanguageModel {
-      return createChatModel({
-        kind: 'openai-compat',
+      return createOpenAICompatible({
         name: opts.id,
         baseURL,
         headers: { Authorization: `Bearer ${opts.cloud.token}`, [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
-        modelId,
-        fetch: opts.fetch,
-        onWait: deps.onProviderWait,
-      });
+        ...(opts.fetch !== undefined && { fetch: opts.fetch }),
+      }).chatModel(modelId);
     },
   };
 }
@@ -582,20 +568,29 @@ type CliProviderId =
   | 'openrouter' | 'openai-compat' | 'opencode' | 'claude';
 
 /**
+ * Where a Workers AI call from this CLI goes: the configured endpoint when it serves Workers AI (`KINU_BASE_URL`, a
+ * local gateway, a Cloudflare login), else the signed-in worker's proxy, an explicit endpoint winning over it.
+ * `gateway`: the endpoint, null through the proxy.
+ */
+export function workersAiRoute(
+  llm: LLMProviderConfig | null, cloud: LocalCloudSession | undefined,
+): { readonly gateway: LLMProviderConfig | null; readonly auth: AuthResolution } | null {
+  const proxied = cloud !== undefined && llm !== null && llm.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
+
+  if (llm !== null && !proxied && defaultProviderFor(llm) === 'workers-ai') {
+    return { gateway: llm, auth: { baseURL: llm.baseURL, headers: llm.headers } };
+  }
+
+  if (cloud === undefined) return null;
+
+  return { gateway: null, auth: { baseURL: cloudProxyBaseURL(cloud.origin), headers: { Authorization: `Bearer ${cloud.token}` } } };
+}
+
+/**
  * Which provider a bare model id belongs to, given the configured endpoint. The
  * adapter's one table, create path included; a copy missing rows would seed the
  * wrong provider.
  */
-/**
- * Where a Workers AI call from this CLI goes, as the resolver routes one: the configured endpoint when it serves
- * Workers AI (`KINU_BASE_URL`, a local gateway, a Cloudflare login, the proxy), else the signed-in worker's proxy.
- */
-export function workersAiEndpoint(llm: LLMProviderConfig | null, cloud: LocalCloudSession | undefined): AuthResolution | null {
-  if (defaultProviderFor(llm) === 'workers-ai' && llm !== null) return { baseURL: llm.baseURL, headers: llm.headers };
-
-  return cloud === undefined ? null : { baseURL: cloudProxyBaseURL(cloud.origin), headers: { Authorization: `Bearer ${cloud.token}` } };
-}
-
 function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null {
   if (llm === null) return null;
 
@@ -663,7 +658,7 @@ function buildAuthStore(
   }
 
   for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {
-    store.set(`openai-compat.${name}`, { headers: openAiCompatHeaders(compat), baseURL: compat.baseURL });
+    store.set(`openai-compat.${name}`, { headers: credentialToHeaders(`openai-compat.${name}`, compat), baseURL: compat.baseURL });
   }
 
   return {
@@ -683,11 +678,3 @@ function buildAuthStore(
   };
 }
 
-/** Core's openai-compat order (`credentialToHeaders`): the key's Authorization, then the extra headers over it. */
-export function openAiCompatHeaders(compat: LocalOpenAICompatCredential) {
-  const headers = { ...compat.headers };
-
-  if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
-
-  return { ...headers, ...compat.extraHeaders };
-}

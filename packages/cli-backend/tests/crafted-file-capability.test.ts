@@ -42,7 +42,7 @@ function programs() {
   });
 
   const built = createNodeCodemodeToolFactory({ extraProviders: [workspace] })({
-    native: {}, craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql), providers: [],
+    native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql), providers: [],
   });
 
   return toolExecute<{ code: string }, { result: JsonValue }>(built);

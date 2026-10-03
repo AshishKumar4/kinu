@@ -14,12 +14,12 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, ModelInfo, ModelRouteResolution } from '@kinu.run/core';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, Clock, ModelInfo, ModelRouteResolution, ActorToolsets } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { SessionTranscript, WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
-import type { ChatTurnInput, ActorTurnLease, PreparedTurn } from '@kinu.run/core';
+import type { ChatTurnInput, ActorTurnLease, PreparedTurn, TurnOpening } from '@kinu.run/core';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import { isWorkMode, workModeForTurnMetadata, ChatSession, ExtensionHost, type KinuExtension } from '@kinu.run/core';
 import { ActorClaimStore, admitSubordinateTask, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
@@ -42,7 +42,7 @@ import {
   type TierAssignments,
   composePrepareStep,
   BackgroundJobStore, parseJsonValue, type JsonValue,
-  type WorkMode, type JsonObject,
+  type WorkMode, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown, WORKSPACE_SOUL_DDL,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
   type EgressSecretBinding,
@@ -65,11 +65,14 @@ const { OrchestratorAgent } = await import('../../src/orchestrator');
 
 /** The scaffold precondition, declared satisfied. The soul is not: a turn
  *  refreshes the cache `setObservedSoul` pre-fills from the workspace filesystem. */
+/** "Beta: swarms" on, so the swarm suites pin the tool as it stands; a suite turns it off by overlay. */
+const HARNESS_CATALOG: ProfileCatalog = { ...BUILTIN_PROFILE_CATALOG, betaSwarms: true };
+
 const HARNESS_PROFILE_ENVELOPE: ProfileCatalogEnvelope = {
   authority: { kind: 'local' },
   version: 0,
-  digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG),
-  catalog: BUILTIN_PROFILE_CATALOG,
+  digest: profileCatalogDigest(HARNESS_CATALOG),
+  catalog: HARNESS_CATALOG,
 };
 
 const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
@@ -116,11 +119,13 @@ export class HarnessDynamicWorkers {
     }
   }
 
-  #admit(key: string): () => void {
+  /** Null when the platform refuses the call. */
+  #admit(key: string): (() => void) | null {
     if (!this.inFlight.has(key) && this.inFlight.size + this.hidden >= 10) {
       this.refused += 1;
       this.#check();
-      throw new Error('Dynamic worker concurrency limit exceeded: each request may have up to 10 concurrent dynamic worker invocations. Wait for one to finish before starting another.');
+
+      return null;
     }
 
     this.inFlight.set(key, (this.inFlight.get(key) ?? 0) + 1);
@@ -139,6 +144,12 @@ export class HarnessDynamicWorkers {
   counted(key: string, isolate: AgentFacetCalls): AgentFacetCalls {
     return agentCallsThrough((call) => Effect.promise(async () => {
       const release = this.#admit(key);
+
+      if (release === null) {
+        // The refusal comes back over the RPC, a round trip later.
+        await new Promise<void>((resolve) => { setImmediate(resolve); });
+        throw new Error('Dynamic worker concurrency limit exceeded: each request may have up to 10 concurrent dynamic worker invocations. Wait for one to finish before starting another.');
+      }
 
       this.calls.push(key);
 
@@ -178,6 +189,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
         holdHarnessFiber(this.agentTurnSettled(actorReferenceOf(this.agentOf(actorId))));
       },
     });
+  }
+
+  /** The world's clock, when it sets one: a job's foreground window then runs on the suite's time. */
+  protected override jobClock(): Clock {
+    return activationWorlds.get(this.ctx)?.jobClock ?? super.jobClock();
   }
 
   /** Work the object detached, run to its end: a task agent's retirement follows its answer this way. */
@@ -387,18 +403,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     const overlay = this._catalogOverlay;
     const revision = this._providerRevision;
+    const envelope = await this.profileCatalog();
 
-    if (overlay === null) return { envelope: HARNESS_PROFILE_ENVELOPE, provider: { ...HARNESS_PROVIDER_SNAPSHOT, revision } };
+    if (overlay === null) return { envelope, provider: { ...HARNESS_PROVIDER_SNAPSHOT, revision } };
 
-    // Merged over the builtins, digest recomputed. Overlay tier models join the
-    // provider snapshot: a tier naming an unlisted model is refused before routing.
-    const catalog: ProfileCatalog = {
-      roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
-      tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
-    };
-
+    // Overlay tier models join the provider snapshot: a tier naming an unlisted model is refused before routing.
     return {
-      envelope: { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) },
+      envelope,
       provider: overlay.availableModels === undefined ? { ...HARNESS_PROVIDER_SNAPSHOT, revision } : {
         ...HARNESS_PROVIDER_SNAPSHOT,
         revision,
@@ -406,7 +417,21 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       },
     };
   }
-  /** Install roles/tiers over the builtin catalog; hosted children resolve through it. */
+  /** The installed overlay merged over the builtins, digest recomputed. */
+  protected override async profileCatalog(): Promise<ProfileCatalogEnvelope> {
+    const overlay = this._catalogOverlay;
+
+    if (overlay === null) return HARNESS_PROFILE_ENVELOPE;
+
+    const catalog: ProfileCatalog = {
+      roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
+      tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
+      betaSwarms: overlay.betaSwarms ?? true,
+    };
+
+    return { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) };
+  }
+
   /** Whether the object's timer wake is due now, as the alarm would fire it. */
   harnessTimerDue(now = Date.now()): boolean {
     const at = this.nextWakeAt(now);
@@ -420,6 +445,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     /** Merged over the builtin tiers, so `default` may be left as it is. */
     readonly tiers?: Partial<TierAssignments>;
     readonly availableModels?: readonly string[];
+    /** "Beta: swarms"; on unless the suite turns it off. */
+    readonly betaSwarms?: boolean;
   }): void {
     this._catalogOverlay = overlay;
   }
@@ -427,6 +454,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     readonly roles?: RoleCatalog;
     readonly tiers?: Partial<TierAssignments>;
     readonly availableModels?: readonly string[];
+    readonly betaSwarms?: boolean;
   } | null = null;
   /** Answer these specs as the provider catalog would; any other spec asks the real catalog. */
   harnessCatalogModels(entries: Readonly<Record<string, Omit<ModelInfo, 'id'>>>): void {
@@ -502,7 +530,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const result = await composePrepareStep(
       {
         extensions,
-        dynamic: { ledger: this.actorSession.dynamic, snapshot: () => dynamic(profile, this._preparedTools) },
+        dynamic: { ledger: this.actorSession.dynamic, snapshot: () => this.actorSession.stepContext(dynamic, profile, this._preparedTools) },
         // The destination provider a cross-provider replay is re-keyed at.
         destinationProviderId: this.promptModelContext().provider,
       },
@@ -518,11 +546,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return failure;
   }
-  protected override async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
+  protected override async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     this._prepareFailure = null;
 
     try {
-      const native = await super.prepareTurn(item, lease);
+      const native = await super.prepareTurn(item, lease, opening);
       const additions = activationWorlds.get(this.ctx)?.turnExtensions;
 
       const prepared = additions === undefined ? native : {
@@ -547,11 +575,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  for another mode (a role imposing Plan) is the actor's own. */
   private _suppliedTools: ToolSet | null = null;
   harnessSupplyTools(tools: ToolSet | undefined): void { this._suppliedTools = tools ?? null; }
-  protected override getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
+  protected override actorToolsets(mode: WorkMode, claimScope?: string): ActorToolsets {
     // The requested mode is the message's, never the operation a role bound over it.
-    if (this._suppliedTools !== null && mode === workModeForTurnMetadata(this.turnUserMetadata())) return this._suppliedTools;
+    if (this._suppliedTools !== null && mode === workModeForTurnMetadata(this.turnUserMetadata())) {
+      return { turn: this._suppliedTools, raw: this._suppliedTools };
+    }
 
-    return super.getRawToolsForWorkMode(mode, claimScope);
+    return super.actorToolsets(mode, claimScope);
   }
 
   /** The scripted model the next turns run on; held, not consumed by one turn. */
@@ -951,12 +981,16 @@ export function tapDiagnostics(logger: Logger): () => void {
 }
 
 /** Replace, not update: `onStart` seeds its own row after its first await. */
+/** The mission as production holds it: in the owner's soul, which every listing reads it off. */
 export function seedMission(db: Database, mission: string): void {
   db.prepare('DELETE FROM workspace_identity').run();
   db.prepare(
-    `INSERT INTO workspace_identity (id, name, owner_user_id, mission)
-     VALUES ('harness-actor', 'harness-actor', 'harness-owner', ?)`,
-  ).run(mission);
+    `INSERT INTO workspace_identity (id, name, owner_user_id)
+     VALUES ('harness-actor', 'harness-actor', 'harness-owner')`,
+  ).run();
+  db.exec(WORKSPACE_SOUL_DDL);
+  db.prepare('INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown')
+    .run(renderSoulMarkdown({ name: 'harness-actor', mission }));
 }
 
 /** The workspace's main actor as its durable identity rows name it, read through core's directory. */
@@ -974,10 +1008,9 @@ export function workspaceMainActor(db: Database): ActorHandle {
   return openWorkspaceMainActor(sqlOver(db));
 }
 
-/** A candidate under trial, seeded under `runtime.actor`: the pointer is per-actor. */
+/** A pending scaffold proposal, seeded under `runtime.actor`: the pointer is per-actor. */
 export function declareShadowCandidate(db: Database): void {
   const actor = workspaceMainActor(db);
-  actor.config.setShadowSampleRate(0.5);
   void sqlOver(db)`INSERT OR REPLACE INTO scaffold_versions
     (actor_id, version, written_at, rationale, status)
     VALUES (${actor.actorId}, 1, ${Date.now()}, 'a harness candidate', 'pending')`;
@@ -1580,6 +1613,8 @@ export interface RecordedUserPlaneCalls {
   failWarm: Error | null;
   /** Set to make `userMcp_toolDescriptors` reject with this error; unset, the read is unreachable. */
   failDescriptors?: Error;
+  /** The owner's MCP tools, served as the UserDO serves them; each call is recorded and answered by `answerMcp`. */
+  mcp?: { readonly descriptors: readonly SerializableToolDescriptor[]; readonly calls: Array<{ tool: string; args: JsonValue }>; readonly answer: JsonValue };
   /** How many times the object asked for its tool descriptors. */
   descriptorReads?: number;
   /** Set to make the egress-vault listing reject; unset, it answers empty. */
@@ -1620,6 +1655,9 @@ export interface HarnessActorWorld {
   container?: boolean;
   /** Every call the workspace made on a box, as `<box>.<method>`, in call order. */
   boxCalls?: string[];
+  /** What a box answers, by name, when the container is on: unset, every call is recorded in `boxCalls` and
+   *  answered with nothing. */
+  box?: (name: string) => object;
   /** `PREVIEW_HOST_SUFFIX` as the deployment names it from the start: with it, the sandbox lists its exposed ports. */
   previewHostSuffix?: string;
   /** Every method this object served over its own namespace's stub, in call order. */
@@ -1630,6 +1668,9 @@ export interface HarnessActorWorld {
   /** The platform steer-branch heads run on: each head's report, when it lands. A promise that never
    *  settles is a head still running. Unset, branching needs the production head runtime. */
   heads?: (task: string) => Promise<ScriptedHeadReport>;
+  /** The clock every actor's job runner detaches on, the box's commands too when a suite times them by it. Unset,
+   *  the real one. */
+  jobClock?: Clock;
 }
 
 /** What a scripted steer-branch head reports; the rest of the report is the empty run it did. */
@@ -1665,7 +1706,7 @@ export function makeEnv(
     ...(world?.previewHostSuffix !== undefined && { PREVIEW_HOST_SUFFIX: world.previewHostSuffix }),
     ...(world?.container === true && {
       KinuDevbox: {
-        getByName: (name: string) => new Proxy({}, {
+        getByName: (name: string) => world.box?.(name) ?? new Proxy({}, {
           get: (_target, method) => () => { world.boxCalls?.push(`${name}.${String(method)}`); },
         }),
       },
@@ -1694,10 +1735,21 @@ export function makeEnv(
 
             return { servers: 1 };
           },
-          userMcp_toolDescriptors: async (): Promise<never> => {
+          userMcp_toolDescriptors: async (): Promise<string> => {
             if (userPlane) userPlane.descriptorReads = (userPlane.descriptorReads ?? 0) + 1;
+
+            if (userPlane?.mcp !== undefined && userPlane.failDescriptors === undefined) {
+              return JSON.stringify({ descriptors: userPlane.mcp.descriptors, unavailable: [] });
+            }
+
             throw userPlane?.failDescriptors
               ?? new Error('harness UserDO: userMcp_toolDescriptors is not reachable under bun');
+          },
+          userMcp_callTool: async (_caller: UserCaller, _server: string, tool: string, args: JsonValue): Promise<string> => {
+            if (userPlane?.mcp === undefined) throw new Error('harness UserDO: no MCP tools are served');
+            userPlane.mcp.calls.push({ tool, args });
+
+            return JSON.stringify(userPlane.mcp.answer);
           },
           getProfile: async (): Promise<{ email: string } | null> => userPlane?.profile ?? null,
           // No stored egress secrets; `failVault` drives an unreadable vault.

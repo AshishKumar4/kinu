@@ -21,6 +21,7 @@ import { asFetchFunction } from '../src/providers/fetch-shim';
 import { parseJsonObject, type JsonObject } from '../src/utils/json';
 import { callAccountOf, quotaWindowText } from '../src/providers/quota';
 import { claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn } from '../src/providers/claude-oauth';
+import { PROVIDER_RETRIES_HEADER } from '../src/providers/rate-limit-retry';
 
 interface Sent {
   readonly url: string;
@@ -126,7 +127,7 @@ const HISTORY: ModelMessage[] = [
 ];
 
 /** One streamed turn; a failed call rejects with the error the stream carried, as a turn shows it. */
-async function turn(provider: ReturnType<typeof createClaudeProvider>, providerDeps: ModelCallDeps) {
+async function turn(provider: ReturnType<typeof createClaudeProvider>, providerDeps: ModelCallDeps, controls: { maxRetries?: number; headers?: Record<string, string> } = {}) {
   let failure: unknown;
 
   const result = streamText({
@@ -135,6 +136,7 @@ async function turn(provider: ReturnType<typeof createClaudeProvider>, providerD
     messages: HISTORY,
     tools: { read: READ },
     maxOutputTokens: 100_000,
+    ...controls,
     onError: ({ error }) => { failure = error; },
   });
 
@@ -167,6 +169,30 @@ function billing(firstUserMessage: string, version: string, cch: string): string
 }
 
 describe('the Claude subscription wire', () => {
+  test('Claude spends only the caller retry allowance at the HTTP endpoint', async () => {
+    const sent: Array<string | null> = [];
+
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      sent.push(request.headers.get(PROVIDER_RETRIES_HEADER));
+
+      return new Response('limited', { status: 429, headers: { 'retry-after': '0' } });
+    } });
+
+    const transport = asFetchFunction((_input, init) => fetch(server.url, init));
+
+    try {
+      for (const retries of [0, 1]) {
+        sent.length = 0;
+        await expect(turn(createClaudeProvider(), deps(transport, [login('sk-ant-oat01-retries')]), {
+          maxRetries: 0, headers: { [PROVIDER_RETRIES_HEADER]: String(retries) },
+        })).rejects.toThrow('is rate-limiting this account');
+        expect(sent).toEqual(Array.from({ length: retries + 1 }, () => null));
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test('headers, URL, system blocks and body are Claude Code\'s, and the reply\'s tool name is the declared one', async () => {
     const { sent, fetchFn } = wire([sse]);
     const { calls } = await turn(createClaudeProvider(), deps(fetchFn, [login('sk-ant-oat01-first')]));

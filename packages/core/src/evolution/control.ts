@@ -6,62 +6,25 @@ import * as v from 'valibot';
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { LLM, SqlExecutor } from '../types/primitives';
-import type { AgentConfigStore } from '../config/store';
-import { clampGepaEvalBudget } from '../config/store';
-import type { ModelCallSink, ModelCallSpend, ModelOperationSink } from '../events/model-call';
-import { generateReported } from '../providers/model-invocation';
+import type { ModelCallSink, ModelOperationSink } from '../events/model-call';
 import { effortFor } from '../providers/effort';
-import { evidenceWindow } from '../utils/evidence-window';
-import { EVIDENCE_BUDGETS } from '../types/evidence';
 import { extractJsonObject, generateJson, jsonObjectOnlyInstruction } from '../providers/structured';
-import {
-  runScaffold, scaffoldEventText,
-  type ScaffoldRunOptions, type ScaffoldRunResult,
-} from '../scaffold/executor';
+import { runScaffold, type ScaffoldRunOptions, type ScaffoldRunResult } from '../scaffold/executor';
 import { modifyScaffold } from '../scaffold/modify';
 import type { ScaffoldVersionView } from '../types/scaffold';
 import type { ActorHandle } from '../identity/actor-handle';
-import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import type { SessionHistory } from '../session/history';
-import type { SessionTranscriptReader } from '../session/transcript';
 import { listScaffoldArchive } from '../scaffold/archive';
 import {
-  DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,
-  decidePromotion, dropQueuedShadowTrial, getPendingScaffold, listQueuedShadowTrials,
-  purgeQueuedShadowTrials, queueShadowTrial, readScaffoldVersion,
-  type ScaffoldDecisionEvents,
-} from '../scaffold/shadow';
-import type {
-  ShadowTrialDrain, ShadowTrialPlan, ShadowTrialQueueOutcome, ShadowTrialTurn,
-} from './types';
-import {
-  DEFAULT_AUTO_JUDGE_CONFIG, runAutoShadowEval,
-} from '../scaffold/auto-judge';
-import { buildOutcomeEvalSplit } from './eval-split';
-import {
-  describeSplitDegeneracy, renderOutcomeCriterion, FRESH_RESPONSE_RULE,
-  type OutcomeEvalExpectation, type OutcomeEvalSplit, type OutcomeScoringRule,
-} from './eval-split';
-import { runScaffoldGepa } from './gepa/scaffold-bridge';
-import {
-  runSectionGepa, findPromptSectionTarget, PROMPT_SECTION_TARGETS,
-} from './gepa/section-bridge';
-import {
-  applyPromptSectionDecision, decidePromptSectionPromotion, firstPendingPromptSection,
-  getPendingPromptSection, incumbentSectionSource, proposePromptSection, recordPromptSectionTrial,
-  type ProposeSectionRefusal,
-} from '../prompting/section-store';
-import type { PromptSection } from '../prompting/template';
-import {
-  finishGepaRun, lastGepaRunPerTarget, makePersistingHooks, startGepaRun,
-} from './gepa/persistence';
-import {
-  MetricScoreSchema, type EvalInstance, type GepaConfig, type GepaMetric, type GepaResult, type MetricOutcome,
-  type ReflectionLM,
-} from './gepa/types';
-import { scoreInterval, type ScoreInterval } from '../utils/stats';
+  applyPromotionDecision, getPendingScaffold, readScaffoldVersion, type PendingScaffold, type ScaffoldDecisionEvents,
+} from '../scaffold/versions';
+import { listArtifactVersions, type ArtifactVersion } from './artifacts';
+import { runningTrial } from './trials';
+import type { LiveTrial } from './trial-rules';
+import { runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './proposer';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { KinuError, settle } from '../obs/index';
+import { Effect } from 'effect';
 
 export type { ScaffoldVersionView } from '../types/scaffold';
 
@@ -92,10 +55,6 @@ export interface ScaffoldControl {
   readonly sql: SqlExecutor;
   /** The host's conversation store; eval splits read graded turns' text from it. */
   readonly history: SessionHistory;
-  readonly config: Pick<
-    AgentConfigStore,
-    'getShadowSampleRate' | 'getAutoPromoteScaffold' | 'getGepaEvalBudget'
-  >;
   /** Resolved per call against the task being run. `context` is the conversation the
      *  task was asked in, empty for one-shot operations. */
   /** `callScope` makes the rollout's tool call ids reproducible so the effect claim
@@ -113,11 +72,6 @@ export interface ScaffoldControl {
   readonly reportModelCall: ModelCallSink;
   /** Operation lifecycle sink. Absent means in-flight work is unattributable. */
   readonly operations?: ModelOperationSink;
-}
-
-/** The graded turns all live in the default conversation. */
-export function controlTranscript(control: ScaffoldControl): SessionTranscriptReader {
-  return control.history.transcript(CHAT_SESSION_ID);
 }
 
 function scaffoldRunOptions(
@@ -140,30 +94,8 @@ function scaffoldRunOptions(
 }
 
 /**
- * Run a scaffold and return its text: with `candidateCode`, the GEPA metric's
- * rollout; without it, the live scaffold. No deadline: a candidate cut off early
- * would score as a bad candidate rather than be measured.
- */
-async function runScaffoldCaptureText(
-  control: ScaffoldControl,
-  task: string,
-  candidateCode?: string,
-): Promise<string> {
-  let text = '';
-
-  const result = await runScaffold(scaffoldRunOptions(control, task, {
-    emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
-    scaffoldCodeOverride: candidateCode,
-  }));
-
-  if (!result.ok && result.error) throw new Error(result.error);
-
-  return text;
-}
-
-/**
  * Run the current scaffold for a one-shot task without injecting into the
- * conversation. `useShadowOverride` runs the pending version instead.
+ * conversation. `useShadowOverride` runs the pending proposal instead.
  */
 export async function runScaffoldOnce(
   control: ScaffoldControl,
@@ -176,149 +108,6 @@ export async function runScaffoldOnce(
   return runScaffold(scaffoldRunOptions(control, task, {
     scaffoldCodeOverride: codeOverride ?? undefined,
   }));
-}
-
-/**
- * {@link shadowTrialPlan} decides which candidate a turn is sampled against;
- * {@link queueTurnShadowTrial} records that plan. Split so a replay records the
- * same plan instead of deciding again against a moved rate or candidate.
- * The trial itself runs on the cadence lane ({@link runQueuedShadowTrials}), never
- * on the user's turn. The auto-evolution gate lives in EvolutionEngine.
- */
-export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): number | null {
-  // An empty key would hash to a stable bias, and has no durable identity to record under.
-  if (turnKey === '') return null;
-  const sampleRate = control.config.getShadowSampleRate();
-
-  if (sampleRate <= 0) return null;
-  const pending = getPendingScaffold(control.sql, control.rt.actor);
-
-  if (!pending) return null;
-
-  if (sampleFraction(turnKey) >= sampleRate) return null;
-
-  return pending.version;
-}
-
-/**
- * A stable fraction in [0, 1) from the turn id, so a repeated ask for an owed
- * decision answers the same while staying uniform across turns.
- */
-function sampleFraction(turnKey: string): number {
-  // FNV-1a, 32-bit: spreads short similar ids evenly; identical on every backend.
-  let hash = 0x811c9dc5;
-
-  for (let i = 0; i < turnKey.length; i++) {
-    hash ^= turnKey.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-
-  return hash / 0x1_0000_0000;
-}
-
-/**
- * Synchronous and total: a lost trial must never fail its turn, so failures are
- * absorbed and named in the return value.
- */
-export function queueTurnShadowTrial(
-  control: ScaffoldControl,
-  turn: ShadowTrialTurn,
-  plan: ShadowTrialPlan,
-): ShadowTrialQueueOutcome {
-  try {
-    const trial = {
-      pendingVersion: plan.pendingVersion,
-      // Passed whole: runAutoShadowEval applies the evidence budget once, and the pending
-      // scaffold must answer the same question the live turn did.
-      task: turn.task,
-      currentOutput: turn.currentOutput,
-      context: turn.context,
-    };
-
-    return queueShadowTrial(
-      control.sql,
-      control.rt.actor,
-      plan.id === undefined ? trial : { ...trial, id: plan.id },
-    );
-  } catch (err) {
-    diagnostics.failure(
-      'evolution.shadow_trial_queue_failed',
-      toKinuError({ doing: 'queue a shadow trial', cause: err, otherwise: 'io' }),
-    );
-
-    return 'failed';
-  }
-}
-
-/**
- * Run every trial queued for the pending scaffold, then let the promotion gate read
- * the result. Cadence-lane only; the queue is durable across hosts. Trials for a
- * version no longer pending are discarded, and the loop stops once a decision applies.
- */
-export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<ShadowTrialDrain> {
-  const pending = getPendingScaffold(control.sql, control.rt.actor);
-  purgeQueuedShadowTrials(control.sql, control.rt.actor, pending?.version ?? null);
-
-  if (!pending) return { trials: 0, applied: null };
-
-  let trials = 0;
-  let processed = 0;
-
-  // Re-read between laps so trials queued mid-drain are included; the ceiling bounds
-  // the pathological case.
-  while (processed < MAX_QUEUED_SHADOW_TRIALS) {
-    const batch = listQueuedShadowTrials(control.sql, control.rt.actor, pending.version);
-
-    if (batch.length === 0) break;
-
-    for (const trial of batch) {
-      if (processed >= MAX_QUEUED_SHADOW_TRIALS) break;
-      processed++;
-      // Scoped on the queue row so a re-drive reproduces call ids and the effect claim
-      // does not repeat external work.
-      const surface = control.surface(trial.task, trial.context, trial.id);
-      let applied: 'promote' | 'rollback' | null = null;
-
-      try {
-        const result = await runAutoShadowEval({
-          rt: control.rt,
-          events: control.events,
-          task: trial.task,
-          currentOutput: trial.currentOutput,
-          judge: (prompt, schema) => control.judge({ schema, prompt }),
-          llmStream: surface.llmStream,
-          callTool: surface.callTool,
-          history: surface.history,
-          defaultInference: surface.defaultInference,
-          config: { ...DEFAULT_AUTO_JUDGE_CONFIG, autoApply: control.config.getAutoPromoteScaffold() },
-          // Keys the evaluation and gates the rollout, so an interruption before the delete
-          // does not rerun the pending scaffold's tool calls.
-          trialId: trial.id,
-        });
-
-        applied = result.applied ?? null;
-
-        if (!result.skipped) trials++;
-      } catch (err) {
-        // An unscorable trial is dropped, not a reason to wedge the queue.
-        diagnostics.failure(
-          'evolution.shadow_trial_failed',
-          toKinuError({ doing: 'run a queued shadow trial', cause: err, otherwise: 'unavailable' }),
-          { trialId: trial.id },
-        );
-      }
-
-      dropQueuedShadowTrial(control.sql, control.rt.actor, trial.id);
-
-      if (applied) {
-        purgeQueuedShadowTrials(control.sql, control.rt.actor, null);
-
-        return { trials, applied };
-      }
-    }
-  }
-
-  return { trials, applied: null };
 }
 
 /** Preview a scaffold version from its VFS `agent.js.vN` backup. */
@@ -338,10 +127,7 @@ export async function previewScaffoldLive(
   }));
 }
 
-/**
- * Propose a new scaffold version through modifyScaffold's gates. It lands
- * `pending` and goes through shadow eval and the promotion gate like any other.
- */
+/** Propose a new scaffold version through modifyScaffold's gates. It lands `pending` for the owner's decision. */
 export async function proposeScaffold(
   control: ScaffoldControl,
   rationale: string,
@@ -372,523 +158,49 @@ export function listScaffoldVersions(
     rationale: e.rationale,
     status: e.status,
     parent_version: e.parentVersion,
-    trials: e.trials,
-    wins: e.wins,
-    losses: e.losses,
-    ties: e.ties,
-    win_rate: e.winRate,
   }));
 }
 
-export type ShadowStatus =
-  | { hasPending: false; versions: ScaffoldVersionView[] }
-  | {
-      hasPending: true;
-      pending: NonNullable<ReturnType<typeof getPendingScaffold>>;
-      decision: ReturnType<typeof decidePromotion>;
-      config: typeof DEFAULT_SHADOW_CONFIG;
-      /** Sampled but unexecuted trials; never folded into `pending.trialsSoFar`. */
-      queuedTrials: number;
-    };
+/** What evolution has in flight: the scaffold proposal awaiting the owner, the live trial, and the edits waiting for one. */
+export interface EvolutionStatus {
+  readonly pendingScaffold: PendingScaffold | null;
+  readonly trial: LiveTrial | null;
+  readonly waiting: readonly ArtifactVersion[];
+  readonly versions: readonly ScaffoldVersionView[];
+}
 
-/** With nothing pending, the recent archive instead. */
-export function getShadowStatus(sql: SqlExecutor, actor: ActorHandle): ShadowStatus {
-  const pending = getPendingScaffold(sql, actor);
-
-  if (!pending) return { hasPending: false, versions: listScaffoldVersions(sql, actor, 10) };
-
+export function getEvolutionStatus(sql: SqlExecutor, actor: ActorHandle): EvolutionStatus {
   return {
-    hasPending: true,
-    pending,
-    decision: decidePromotion(pending, DEFAULT_SHADOW_CONFIG),
-    config: DEFAULT_SHADOW_CONFIG,
-    queuedTrials: countQueuedShadowTrials(sql, actor, pending.version),
+    pendingScaffold: getPendingScaffold(sql, actor),
+    trial: runningTrial(sql, actor),
+    waiting: listArtifactVersions(sql, actor).filter((version) => version.status === 'candidate'),
+    versions: listScaffoldVersions(sql, actor, 10),
   };
 }
 
-export type ScaffoldDecisionResult =
-  | { ok: false; error: string }
-  | (Awaited<ReturnType<typeof applyPromotionDecision>> & { ok: true; fromVersion: number });
+export type ScaffoldDecisionResult = Awaited<ReturnType<typeof applyPromotionDecision>> & { readonly fromVersion: number };
 
-/**
- * `auto` acts only on a conclusive gate; `promote`/`rollback` force it. The
- * misevolution recheck can still turn a promote into a rollback, so the result
- * reports the action actually applied.
- */
-export async function applyScaffoldDecision(
-  control: ScaffoldControl,
-  mode: 'auto' | 'promote' | 'rollback',
-): Promise<ScaffoldDecisionResult> {
+/** The owner's decision on the pending scaffold. The misevolution recheck can still turn a promote into a rollback, so the result reports the action applied. */
+export async function applyScaffoldDecision(control: ScaffoldControl, mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
   const pending = getPendingScaffold(control.sql, control.rt.actor);
 
-  if (!pending) return { ok: false, error: 'no pending scaffold' };
-  let decision: 'promote' | 'rollback';
+  if (pending === null) return settle(Effect.fail(new KinuError('missing', 'no pending scaffold')));
+  const result = await applyPromotionDecision(control.rt, pending, mode, control.events);
 
-  if (mode === 'auto') {
-    const auto = decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision;
-
-    if (auto === 'continue') return { ok: false, error: 'inconclusive; need more trials' };
-    decision = auto;
-  } else {
-    decision = mode;
-  }
-
-  const fromVersion = pending.version - (decision === 'promote' ? 1 : 0);
-  const result = await applyPromotionDecision(control.rt, pending, decision, control.events);
-
-  return { ok: true, fromVersion, ...result };
-}
-
-/** Uses the `scaffold_mutation` effort for prompt sections too: the job is the same. */
-function reflectionLmFor(control: ScaffoldControl, model: LanguageModel): ReflectionLM {
-  const spend: ModelCallSpend = { source: 'reflection', report: control.reportModelCall, operations: control.operations };
-
-  return async (prompt) => (await generateReported({ model, prompt, ...effortFor('scaffold_mutation') }, { spend })).text;
-}
-
-const GepaScoreSchema = v.object({
-  score: MetricScoreSchema,
-  feedback: v.pipe(v.string(), v.minLength(1)),
-});
-
-/** Judge failure aborts the measurement via the failed-run path, never as a score. */
-async function judgeScore(control: ScaffoldControl, prompt: string): Promise<MetricOutcome> {
-  const scored = await control.judge({
-    schema: GepaScoreSchema,
-    prompt: `${prompt}\n\nJSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
-  });
-
-  return { score: scored.score, feedback: scored.feedback };
-}
-
-export interface GepaOptimizationResult {
-  ok: boolean;
-  error?: string;
-  runId?: string;
-  proposed?: boolean;
-  pendingVersion?: number | null;
-  skipReason?: string;
-  bestScore?: ScoreInterval;
-  seedScore?: ScoreInterval;
-  iterations?: number;
-  selection?: { heldOutNegatives: number; guards: number };
-  /** Present when the split could not support an out-of-sample selection. */
-  selectionWarning?: string;
+  return { fromVersion: pending.version - (mode === 'promote' ? 1 : 0), ...result };
 }
 
 /**
- * GEPA on a disjoint train/val split of the outcome ledger: older negatives train reflection; held-out newest
- * negatives plus accepted guards select the winner. Budget from `gepa_eval_budget` unless `evalSize` overrides it.
+ * The manual optimisation RPCs: one search of the proposer on the named artifact (`scaffold`, or an
+ * `artifact_versions` id), its bad set the recent low-rated turns. The edit waits like any other.
  */
-async function gepaPass<R extends { readonly gepa: GepaResult | null }, O extends { selectionWarning?: string }>(
-  control: ScaffoldControl,
-  opts: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
-  target: {
-    readonly run: { target: 'scaffold' } | { target: 'prompt_section'; targetRef: string };
-    readonly metric: GepaMetric<string, OutcomeEvalExpectation>;
-    readonly gepa: (config: Pick<
-      GepaConfig<string, OutcomeEvalExpectation>,
-      'evalSet' | 'trainSet' | 'metric' | 'reflectionLm' | 'budget' | 'onCandidate' | 'onIteration'
-    >) => Promise<R>;
-    readonly output: (result: R, runId: string, split: OutcomeEvalSplit) => O;
-  },
-): Promise<O | Pick<GepaOptimizationResult, 'ok' | 'error' | 'runId'>> {
-  const evalSize = clampGepaEvalBudget(opts.evalSize ?? control.config.getGepaEvalBudget());
-  const split = await buildOutcomeEvalSplit(control.sql, control.rt.actor, controlTranscript(control), evalSize);
+export async function runOptimization(control: ScaffoldControl, target: string = SCAFFOLD_ARTIFACT): Promise<ProposerOutcome> {
+  // Asked only once there are turns to judge: with none the search is idle and needs no model.
+  const decide = control.rt.decide ?? (() => settle(Effect.fail(new KinuError('unavailable', 'no decision model is wired, so no edit can be judged'))));
 
-  // Without a failure there is nothing to select on but judge noise, and an empty
-  // train set would hand val back to reflection.
-  if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
-    return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
-  }
-
-  const budget = {
-    maxIterations: Math.max(1, Math.min(opts.maxIterations ?? 4, 20)),
-    // Seed scoring plus one minibatch and one full scoring per iteration.
-    maxMetricCalls: Math.max(10, Math.min(opts.maxMetricCalls ?? 120, 400)),
-    // The paper's 3; the engine caps it at the train set size.
-    minibatchSize: 3,
-  };
-
-  const reflectionLm = reflectionLmFor(control, await control.model());
-  const runId = startGepaRun(control.sql, control.rt.actor, target.run);
-  const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
-  let metricCalls = 0;
-  let iterations = 0;
-  let result: R;
-
-  try {
-    result = await target.gepa({
-      evalSet: split.val, trainSet: split.train, budget, reflectionLm,
-      metric: (candidate, instance) => {
-        metricCalls++;
-
-        return target.metric(candidate, instance);
-      },
-      onCandidate: persist.onCandidate,
-      onIteration: (state) => {
-        iterations = state.iteration + 1;
-
-        return persist.onIteration(state);
-      },
-    });
-  } catch (err) {
-    finishGepaRun(control.sql, control.rt.actor, {
-      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
-    });
-
-    return { ok: false, error: renderThrownChain({ cause: err }), runId };
-  }
-
-  const { gepa } = result;
-
-  finishGepaRun(control.sql, control.rt.actor, {
-    runId,
-    status: 'completed',
-    stopReason: gepa?.stopReason ?? 'no_improvement_possible',
-    winnerId: gepa?.winner.id ?? null,
-    metricCalls: gepa?.metricCallsUsed ?? 0,
-    iterations: gepa?.iterationsRun ?? 0,
-  });
-
-  const output = target.output(result, runId, split);
-
-  if (split.degeneracy) output.selectionWarning = describeSplitDegeneracy(split.degeneracy);
-
-  return output;
+  return runProposer({ rt: control.rt, decide, reflect: control.rt.judgeModel ?? control.rt.llm, now: Date.now() }, target);
 }
 
-/** A strictly better winner goes to modifyScaffold and the normal shadow-eval pipeline. */
-export async function runScaffoldGepaOptimization(
-  control: ScaffoldControl,
-  opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
-): Promise<GepaOptimizationResult> {
-  // Accepted turns are regression checks against the approved response; negatives
-  // score on whether the candidate addresses the complaint.
-  const metric = async (
-    candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
-  ): Promise<MetricOutcome> => {
-    let output: string;
-
-    try {
-      output = await runScaffoldCaptureText(control, instance.input, candidate);
-    } catch (err) {
-      const message = renderThrownChain({ cause: err });
-
-      return { score: 0, feedback: `scaffold execution failed: ${message}` };
-    }
-
-    return judgeScore(
-      control,
-      `Score this agent response on a 0..1 scale and give one sentence of specific, ` +
-        `actionable feedback on how the agent's behaviour could improve.\n\n` +
-        `Task:\n${instance.input}\n\nNew response:\n${evidenceWindow(output, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n` +
-        renderOutcomeCriterion(instance.expected, FRESH_RESPONSE_RULE),
-    );
-  };
-
-  return gepaPass(control, opts ?? {}, {
-    run: { target: 'scaffold' }, metric,
-    gepa: ({ evalSet, trainSet, metric: counted, reflectionLm, budget, onCandidate, onIteration }) => runScaffoldGepa({
-      rt: control.rt, evalSet, trainSet, metric: counted, reflectionLm, budget, onCandidate, onIteration,
-    }),
-    output: (result, runId, split): GepaOptimizationResult => ({
-      ok: true,
-      runId,
-      proposed: result.proposed,
-      pendingVersion: result.pendingVersion,
-      skipReason: result.skipReason,
-      bestScore: result.winnerScore,
-      seedScore: result.seedScore,
-      iterations: result.gepa.iterationsRun,
-      selection: { heldOutNegatives: split.heldOutNegatives, guards: split.val.length - split.heldOutNegatives },
-    }),
-  });
-}
-
-const SECTION_WORDING_RULE: OutcomeScoringRule = {
-  accepted: 'Score 1.0 when the candidate wording would still have produced a response at least '
-    + 'this good, 0.0 when it would have pushed the agent off it.',
-  failed: 'Score 1.0 when the candidate wording would have prevented that failure, 0.0 when it '
-    + 'would have changed nothing.',
-};
-
-/**
- * Scores a section counterfactually with no rollout: would this wording have
- * prevented the correction or kept the accepted answer? Weaker evidence, so a winner
- * only lands pending (`prompting/section-store.ts`).
- */
-function renderSectionScorePrompt(
-  sectionId: string,
-  candidate: string,
-  instance: EvalInstance<string, OutcomeEvalExpectation>,
-): string {
-  return `Score a candidate revision of one section of an agent's system prompt on a 0..1 scale, `
-    + `and give one sentence of specific feedback naming what in the WORDING is responsible.\n\n`
-    + `Section: ${sectionId}\n\nCandidate wording:\n${evidenceWindow(candidate, EVIDENCE_BUDGETS.gepaParentSource)}\n\n`
-    + `The agent was asked:\n${evidenceWindow(instance.input, EVIDENCE_BUDGETS.replayTask)}\n\n`
-    + renderOutcomeCriterion(instance.expected, SECTION_WORDING_RULE);
-}
-
-function sectionMetric(control: ScaffoldControl, sectionId: string) {
-  return (
-    candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
-  ): Promise<MetricOutcome> => judgeScore(control, renderSectionScorePrompt(sectionId, candidate, instance));
-}
-
-export interface PromptSectionOptimizationResult {
-  ok: boolean;
-  error?: string;
-  runId?: string;
-  sectionId?: string;
-  proposed?: boolean;
-  pendingVersion?: number | null;
-  skipReason?: string;
-  /** `size_rule` is the anti-bloat rule, not a fault. */
-  refusal?: string;
-  bestScore?: ScoreInterval;
-  incumbentScore?: ScoreInterval;
-  iterations?: number;
-  /** Bytes the winner would add to every turn if promoted. */
-  byteDelta?: number;
-  selectionWarning?: string;
-}
-
-/** GEPA over one prompt section, with the same disjoint train/val split as the scaffold pass. */
-async function runPromptSectionGepaOptimization(
-  control: ScaffoldControl,
-  opts: { sectionId: string; maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
-): Promise<PromptSectionOptimizationResult> {
-  return gepaPass(control, opts, {
-    run: { target: 'prompt_section', targetRef: opts.sectionId },
-    metric: sectionMetric(control, opts.sectionId),
-    gepa: ({ evalSet, trainSet, metric, reflectionLm, budget, onCandidate, onIteration }) => runSectionGepa({
-      sql: control.sql, actor: control.rt.actor, sectionId: opts.sectionId,
-      evalSet, trainSet, metric, reflectionLm, budget, onCandidate, onIteration,
-    }),
-    output: (result, runId): PromptSectionOptimizationResult => {
-      const { gepa } = result;
-      const seedBytes = Buffer.byteLength(gepa?.history[0]?.source ?? '', 'utf8');
-
-      return {
-        ok: true,
-        runId,
-        sectionId: result.sectionId,
-        proposed: result.proposed,
-        pendingVersion: result.pendingVersion,
-        skipReason: result.skipReason,
-        bestScore: result.winnerScore,
-        incumbentScore: result.incumbentScore,
-        iterations: gepa?.iterationsRun ?? 0,
-        byteDelta: Buffer.byteLength(gepa?.winner.source ?? '', 'utf8') - seedBytes,
-        ...(result.proposeError && { refusal: result.proposeError.error }),
-      };
-    },
-  });
-}
-
-export interface PromptSectionTrialResult {
-  sectionId: string;
-  pending: boolean;
-  trialsRun: number;
-  decision?: 'promote' | 'rollback' | 'continue';
-  winRate?: number;
-  action?: 'promote' | 'rollback';
-  vetoReason?: string;
-}
-
-function trialWinner(pendingScore: number, currentScore: number): 'current' | 'pending' | 'tie' {
-  if (pendingScore > currentScore) return 'pending';
-
-  if (pendingScore < currentScore) return 'current';
-
-  return 'tie';
-}
-
-/**
- * Score the pending section against the incumbent on held-out turns, paired per
- * instance, on the cadence lane only. No queue: a section trial needs no live turn.
- */
-async function runPromptSectionTrials(
-  control: ScaffoldControl,
-  sectionId: string,
-  opts?: { trials?: number },
-): Promise<PromptSectionTrialResult> {
-  const pending = getPendingPromptSection(control.sql, control.rt.actor, sectionId);
-
-  if (!pending) return { sectionId, pending: false, trialsRun: 0 };
-  const section = findPromptSectionTarget(sectionId);
-
-  if (!section) return { sectionId, pending: false, trialsRun: 0 };
-
-  const incumbent = incumbentSectionSource(control.sql, control.rt.actor, section);
-  const metric = sectionMetric(control, sectionId);
-  // Drawn fresh each pass, never including the train half.
-  const split = await buildOutcomeEvalSplit(control.sql, control.rt.actor, controlTranscript(control), control.config.getGepaEvalBudget());
-  const instances = split.val.slice(0, Math.max(1, opts?.trials ?? 3));
-
-  let trialsRun = 0;
-
-  for (const instance of instances) {
-    const [current, candidate] = await Promise.all([
-      metric(incumbent, instance),
-      metric(pending.source, instance),
-    ]);
-
-    recordPromptSectionTrial(control.sql, control.rt.actor, {
-      sectionId,
-      pendingVersion: pending.version,
-      winner: trialWinner(candidate.score, current.score),
-    });
-    trialsRun += 1;
-  }
-
-  const settled = getPendingPromptSection(control.sql, control.rt.actor, sectionId);
-
-  if (!settled) return { sectionId, pending: true, trialsRun };
-  const verdict = decidePromptSectionPromotion(settled);
-
-  const result: PromptSectionTrialResult = {
-    sectionId, pending: true, trialsRun,
-    decision: verdict.decision, winRate: verdict.winRate,
-  };
-
-  if (verdict.decision === 'continue') return result;
-  const applied = applyPromptSectionDecision(control.sql, control.rt.actor, settled, verdict.decision);
-  result.action = applied.action;
-
-  if (applied.vetoReason) result.vetoReason = applied.vetoReason;
-
-  return result;
-}
-
-/** `code` names the bar so callers can branch without parsing prose. */
-export type MeasuredSectionProposal =
-  | {
-    readonly ok: true;
-    readonly sectionId: string;
-    readonly version: number;
-    readonly incumbentScore: ScoreInterval;
-    readonly candidateScore: ScoreInterval;
-  }
-  | {
-    readonly ok: false;
-    readonly sectionId: string;
-    readonly code: ProposeSectionRefusal | 'unknown_section' | 'degenerate_split';
-    readonly error: string;
-  };
-
-/**
- * Measure one externally authored section candidate against the incumbent on
- * held-out labeled turns, then hand it to the proposal gate. It lands pending and
- * needs `advancePromptSectionLane`'s trials. A degenerate split is a refusal.
- */
-export async function proposeMeasuredPromptSection(
-  control: ScaffoldControl,
-  input: { sectionId: string; source: string; rationale: string; trials?: number },
-): Promise<MeasuredSectionProposal> {
-  const section = findPromptSectionTarget(input.sectionId);
-
-  if (!section) {
-    return {
-      ok: false, sectionId: input.sectionId, code: 'unknown_section',
-      error: `"${input.sectionId}" is not a registered prompt section`,
-    };
-  }
-
-  const split = await buildOutcomeEvalSplit(
-    control.sql, control.rt.actor, controlTranscript(control), clampGepaEvalBudget(control.config.getGepaEvalBudget()),
-  );
-
-  if (split.degeneracy !== null) {
-    return {
-      ok: false, sectionId: section.id, code: 'degenerate_split',
-      error: describeSplitDegeneracy(split.degeneracy),
-    };
-  }
-
-  const incumbent = incumbentSectionSource(control.sql, control.rt.actor, section);
-  const metric = sectionMetric(control, section.id);
-  // Held-out turns only: a candidate measured on turns its author saw has learned them.
-  const instances = split.val.slice(0, Math.max(1, input.trials ?? 3));
-
-  const scored = await Promise.all(instances.map(async (instance) => Promise.all([
-    metric(incumbent, instance),
-    metric(input.source, instance),
-  ])));
-
-  const incumbentScore = scoreInterval(scored.map(([current]) => current.score));
-  const candidateScore = scoreInterval(scored.map(([, candidate]) => candidate.score));
-
-  const proposal = proposePromptSection(control.sql, control.rt.actor, {
-    section,
-    source: input.source,
-    rationale: input.rationale,
-    incumbentScore,
-    candidateScore,
-  });
-
-  if (!proposal.ok) {
-    return { ok: false, sectionId: section.id, code: proposal.code, error: proposal.error };
-  }
-
-  return {
-    ok: true, sectionId: section.id, version: proposal.version, incumbentScore, candidateScore,
-  };
-}
-
-/**
- * The section whose last pass is oldest; never-passed first, ties by registry order.
- * Derived from `gepa_runs` because an in-memory cursor is reset by Durable Object eviction.
- */
-function nextPromptSectionTarget(sql: SqlExecutor, actor: ActorHandle): PromptSection<string> | null {
-  const lastPass = lastGepaRunPerTarget(sql, actor, 'prompt_section');
-  let next: PromptSection<string> | null = null;
-  let nextAt = Number.POSITIVE_INFINITY;
-
-  for (const section of PROMPT_SECTION_TARGETS) {
-    const at = lastPass.get(section.id) ?? Number.NEGATIVE_INFINITY;
-
-    if (at < nextAt) {
-      next = section;
-      nextAt = at;
-    }
-  }
-
-  return next;
-}
-
-export type PromptSectionLaneStep =
-  | { readonly step: 'trials'; readonly sectionId: string; readonly trials: PromptSectionTrialResult }
-  | { readonly step: 'pass'; readonly sectionId: string; readonly pass: PromptSectionOptimizationResult }
-  | { readonly step: 'idle' };
-
-/**
- * A section under trial is finished first; with nothing pending, the next section
- * in rotation gets a pass. Scheduling and fault handling stay with the caller.
- */
-export async function advancePromptSectionLane(
-  control: ScaffoldControl,
-): Promise<PromptSectionLaneStep> {
-  const pending = firstPendingPromptSection(control.sql, control.rt.actor);
-
-  if (pending !== null) {
-    return { step: 'trials', sectionId: pending, trials: await runPromptSectionTrials(control, pending) };
-  }
-
-  const section = nextPromptSectionTarget(control.sql, control.rt.actor);
-
-  if (!section) return { step: 'idle' };
-
-  return {
-    step: 'pass',
-    sectionId: section.id,
-    pass: await runPromptSectionGepaOptimization(control, { sectionId: section.id }),
-  };
-}
-
-/** Structured output over a review model at the judge stage's reasoning effort.
- *  Supplies its own `judge` spend label. */
 export function createJsonJudge(
   model: () => LanguageModel | Promise<LanguageModel>,
   reportModelCall: ModelCallSink,

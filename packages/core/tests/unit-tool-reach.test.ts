@@ -62,7 +62,7 @@ describe('the reach declaration', () => {
 
     const factories = {
       agents: () => createAgentsCodemodeProvider(() => ({
-        mode: 'build',
+        mode: 'build', swarms: true,
         swarm: {
           rt, model: new MockLanguageModelV3(),
           hostNode: refuseHostNode('the tool-reach suite builds providers and runs no node'),

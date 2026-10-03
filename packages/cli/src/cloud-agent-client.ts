@@ -73,11 +73,7 @@ import * as v from 'valibot';
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
 
 const EvolutionConfigSchema: v.GenericSchema<EvolutionConfigView> = v.object({
-  reviewModel: v.nullable(v.string()),
-  autoPromoteScaffold: v.boolean(),
-  gepaEvalBudget: v.number(),
-  shadowSampleRate: v.number(),
-  scaffoldExploreShare: v.number(),
+  liveTrials: v.boolean(),
   advisorEnabled: v.boolean(),
   advisorMinSeverity: v.picklist(ADVISOR_SEVERITIES),
 });

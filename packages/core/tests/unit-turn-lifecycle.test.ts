@@ -184,7 +184,7 @@ describe('openTurnRun / closeTurnRun', () => {
     expect(row.returned).toBe(1);
     expect(observed).toEqual([['sum']]);
     // The same clock is what the graded turn reports as crafted-tool use.
-    expect(snapshotCompletedTurn(acc, {
+    expect(snapshotCompletedTurn({ acc, steering: new TurnSteering() }, {
       userMessage: 'u', assistantResponse: 'a', sessionId: 'default', origin: 'user',
     }).craftedToolsUsed).toEqual(['sum']);
 
@@ -243,7 +243,7 @@ describe('snapshotCompletedTurn', () => {
     acc.recordToolCall({ toolCallId: 'fixture-2', toolName: 'shell', input: { command: 'ls' }, success: true, output: 'ok' });
     acc.recordStep({});
 
-    const turn = snapshotCompletedTurn(acc, {
+    const turn = snapshotCompletedTurn({ acc, steering: new TurnSteering() }, {
       userMessage: 'do it', assistantResponse: 'done', turnId: 't1', sessionId: 'default', origin: 'user',
     });
 
@@ -261,7 +261,7 @@ describe('snapshotCompletedTurn', () => {
     acc.recordToolCall({ toolCallId: 'fixture-3', toolName: 'shell', success: false, reason: null, error: 'exit 1' });
     acc.recordStep({ usage: { input: 7, output: 3 } });
 
-    const turn = snapshotCompletedTurn(acc, {
+    const turn = snapshotCompletedTurn({ acc, steering: new TurnSteering() }, {
       userMessage: 'u', assistantResponse: 'a', sessionId: 's', origin: 'programmatic',
     });
 
@@ -269,6 +269,22 @@ describe('snapshotCompletedTurn', () => {
     expect(turn.origin).toBe('programmatic');
     expect(turn.usage).toEqual({ input: 7, output: 3 });
     expect('turnId' in turn).toBe(false);
+  });
+});
+
+describe('snapshotCompletedTurn carries the struggles', () => {
+  test('a turn\'s record holds what its steering detector saw', () => {
+    const acc = new TurnAccumulator();
+    const steering = new TurnSteering();
+    acc.reset(Date.now());
+
+    for (let n = 1; n <= 3; n++) {
+      steering.onToolResult({ toolName: 'shell', args: { n }, result: `exit ${String(n)}`, success: false, reason: null });
+    }
+
+    const turn = snapshotCompletedTurn({ acc, steering }, { userMessage: 'u', assistantResponse: 'a', sessionId: 's', origin: 'user' });
+
+    expect(turn.struggles).toEqual([{ kind: 'repeated_failure', tool: 'shell', count: 3, sample: 'exit 3' }]);
   });
 });
 

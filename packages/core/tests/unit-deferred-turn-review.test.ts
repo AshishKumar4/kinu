@@ -15,7 +15,7 @@ import { MAX_TURN_REVIEWS_PER_OPEN } from '../src/evolution/session-window';
 /** A reply read as a correction, as Clef answers one. */
 const CORRECTED: DecisionPort = async () => ({ answers: {
   satisfaction: { type: 'score', score: 0.4 }, corrected: { type: 'noul', noul: 0.95 }, wrong: { type: 'choice', choice: 'misunderstood' },
-}, usage: {} });
+}, usage: { input: 0, output: 0 } });
 
 function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   return {

@@ -42,6 +42,8 @@ const STAGE_CONSEQUENCE = {
   rest: 'Answer with sandbox.rest(\'now\') or sandbox.rest(\'keep\'). \'now\' saves the workspace and stops the '
     + 'container: an unsupervised process listed ends and does not come back, and a supervised server restarts '
     + 'cold on its next use, without its in-memory state. Until you answer, the container keeps running.',
+  recovered: 'Every sandbox tool works: the workspace is as it was at that time. Rebuild the folders named above '
+    + 'before you rely on them, and redo any edit made after that time that you still need.',
 } satisfies Record<IncidentStage, string>;
 
 function isIncidentStage(name: string): name is IncidentStage {
@@ -258,6 +260,8 @@ function incidentWhere(incident: SandboxLifecycleIncident): string {
 function incidentText(incident: SandboxLifecycleIncident): string {
   // Not a failure: the container would rest, and asks first (devbox D59).
   if (incident.stage === 'rest') return `${incident.reason}\n${STAGE_CONSEQUENCE.rest}\n\nAsk id: ${incident.incidentId}`;
+
+  if (incident.stage === 'recovered') return `${incident.reason}\n${STAGE_CONSEQUENCE.recovered}\n\nNotice id: ${incident.incidentId}`;
   const where = incidentWhere(incident);
 
   return `The workspace container failed at the ${incident.stage} stage${where}. `

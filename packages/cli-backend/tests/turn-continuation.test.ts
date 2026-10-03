@@ -93,6 +93,9 @@ function sharedPrefix(earlier: readonly PromptMessage[], later: readonly PromptM
 
 const isBlock = (message: PromptMessage): boolean => message.role === 'user' && messageText(message).startsWith(DYNAMIC_CONTEXT_OPEN_TAG);
 
+/** A delta's open tag also names the state it applies to. */
+const isDelta = (message: PromptMessage): boolean => messageText(message).split('\n', 1)[0]?.includes(' state="') ?? false;
+
 /** No AGENTS.md sits over it, so a request carries the dynamic blocks alone. */
 const WORKSPACE = scratchDir('turn-continuation-workspace');
 
@@ -223,9 +226,12 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
       const users = prompt.flatMap((message) => message.role === 'user' ? [messageText(message)] : []);
       const activation = users.findIndex((text) => text.includes('- focused: explicit /focused'));
 
-      // The kept steps follow the request; the dynamic block naming the activation rides before it, never after them.
+      // The kept steps follow the request; the dynamic block naming the activation and the turn's skill bodies ride
+      // before it, never after them.
       expect(activation).toBeGreaterThanOrEqual(0);
-      expect(users.slice(activation + 1)).toEqual(['/focused remember this']);
+      expect(users.slice(activation + 1)).toHaveLength(2);
+      expect(users[activation + 1]).toContain('Focus on memory only.');
+      expect(users.at(-1)).toBe('/focused remember this');
       expect(roles.lastIndexOf('user')).toBeLessThan(roles.indexOf('tool'));
     }
 
@@ -375,7 +381,7 @@ describe('RUNTIME CONTEXT SURVIVES A RESTART — where it was woven', () => {
     const first = present(prompts[0], 'the first request after the expiry');
 
     // Born at the new turn's first step: after the conversation it collapsed, before the request.
-    expect(first.filter(isBlock).map((block) => messageText(block).includes('kind="full"'))).toEqual([true]);
+    expect(first.filter(isBlock).map(isDelta)).toEqual([false]);
     expect(messageText(present(first[first.findIndex(isBlock) - 1], 'the message before the block'))).toBe('answer to the second question');
     expect(renders()).toHaveLength(1);
     expect(renders()).not.toContain(stale[0]);
@@ -402,7 +408,7 @@ describe('RUNTIME CONTEXT SURVIVES A RESTART — where it was woven', () => {
 
     // The first turn's block is gone from after the system prompt; one full block rides before the new request.
     expect(isBlock(present(second[1], 'the message after the system prompt'))).toBe(false);
-    expect(second.filter(isBlock).map((block) => messageText(block).includes('kind="full"'))).toEqual([true]);
+    expect(second.filter(isBlock).map(isDelta)).toEqual([false]);
     expect(messageText(present(second.at(-1), 'the request'))).toBe('the second question');
     db.close();
   });
@@ -414,7 +420,7 @@ describe('RUNTIME CONTEXT SURVIVES A RESTART — where it was woven', () => {
     await answered({ db, rt }, ['the first question', 'the second question'], promptsA, async () => { await appendMemoryNote(rt.memory, 'Parse invoices with the CSV parser.'); });
 
     const delta = present(present(promptsA[1], 'the second turn\u2019s request').filter(isBlock)[1], 'the delta the lesson brought');
-    expect(messageText(delta)).toContain('kind="delta"');
+    expect(isDelta(delta)).toBe(true);
 
     const promptsB: PromptMessage[][] = [];
     const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('the third answer')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: () => {} });

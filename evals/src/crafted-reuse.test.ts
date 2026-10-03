@@ -1,16 +1,20 @@
 import { expect, test } from 'bun:test';
-import { reusedInLaterTurn } from '../tasks/crafted-reuse';
+import type { RunEvent } from '@kinu.run/core';
+import { invokedInTurn } from '../tasks/crafted-reuse';
 
-const tool = (uses: number) => [{ name: 'manifest_totals', description: 'Shipping manifest totals', usageCount: uses }];
+function cycle(at: number, invoked: string[]): RunEvent {
+  return { type: 'craft_cycle', eventIndex: 1, runId: `run-${String(at)}`, timestamp: new Date(at).toISOString(),
+    crafted: [], invoked, reused: [], returned: 1, raised: 0, dropped: [] };
+}
 
-test('jcnu57: one September call and two October calls count as two reviewed turns', () => {
-  expect(reusedInLaterTurn(tool(1), tool(2), 'manifest_totals')).toBe(true);
+test('a lagging use counter does not erase this turn’s invocation', () => {
+  expect(invokedInTurn([cycle(110, ['manifest_totals'])], 'manifest_totals', 100)).toBe(true);
 });
 
-test('an unchanged counter does not prove later-turn reuse', () => {
-  expect(reusedInLaterTurn(tool(3), tool(3), 'manifest_totals')).toBe(false);
+test('a previous turn’s invocation does not count in this turn', () => {
+  expect(invokedInTurn([cycle(90, ['manifest_totals']), cycle(110, [])], 'manifest_totals', 100)).toBe(false);
 });
 
-test('a tool built in the first turn can first be used in the later turn', () => {
-  expect(reusedInLaterTurn(tool(0), tool(1), 'manifest_totals')).toBe(true);
+test('an invocation of a different tool is not reuse of this one', () => {
+  expect(invokedInTurn([cycle(110, ['other_totals'])], 'manifest_totals', 100)).toBe(false);
 });

@@ -27,7 +27,7 @@ function decide(score: number, corrected: number, wrong: string): DecisionPort {
     satisfaction: { type: 'score', score },
     corrected: { type: 'noul', noul: corrected },
     wrong: { type: 'choice', choice: wrong },
-  }, usage: {} });
+  }, usage: { input: 0, output: 0 } });
 }
 
 describe('a turn is judged by the user reply alone', () => {

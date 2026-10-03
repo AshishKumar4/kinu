@@ -3,7 +3,7 @@
 // Evolution exit contract. Every dispatch is detached; `end()` decides what to wait for.
 //   Turn lane (outcome review): `settleEvolution()` joins it with no elapsed bound (owner ruling, 2026-08).
 //     A `oneShot` host defers it as a durable row drained by `runDeferredTurnReviews` at the next session open.
-//   Cadence lane (session/lifetime chain, incl. scaffold shadow trials): never joined; only started by a host
+//   Cadence lane (session/lifetime chain, the live trial and the proposer): never joined; only started by a host
 //     that can afford to finish it. Safe because the session window closes only after its pass settles
 //     (`CompletedTurnStore.claim`).
 // The in-episode clock (`craft`, `recordRecovery`) writes synchronous rows and needs no join.
@@ -58,7 +58,7 @@ export interface AgentOrchestratorDeps {
     | 'deferTurnReview'
     | 'runDeferredTurnReviews'
     | 'onSessionComplete'
-    | 'runDueShadowTrials'
+    | 'runDueEvolution'
     | 'recentAdvisorNotes'
     | 'recordAdvisorNote'
     | 'hasAdvisorNoteForTurn'
@@ -72,7 +72,7 @@ export interface AgentOrchestratorDeps {
    *  Independent of {@link TurnContinuity}. */
   oneShot?: boolean;
   /**
-   * The continual-refinement lane, driven off-turn beside the shadow-trial drain so it never lengthens a turn.
+   * The continual-refinement lane, driven off-turn beside the evolution pass so it never lengthens a turn.
    * Absent: requests stay durable for the next host that wires one.
    */
   refinementLane?: () => Promise<void>;
@@ -121,7 +121,7 @@ export class AgentOrchestrator {
   private cadencePasses: Promise<void> = Promise.resolve();
   /** Cadence lane: trial-drain latch, separate from the window pass so trials never run twice
    *  and a no-op drain never hides a filled window. */
-  private shadowTrials: Promise<void> | null = null;
+  private evolutionPass: Promise<void> | null = null;
 
   constructor(private readonly deps: AgentOrchestratorDeps, steers?: UserSteerDeps) {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
@@ -296,7 +296,7 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Cadence lane: shadow trials, then the session/lifetime chain once the window reaches the interval.
+   * Cadence lane: the evolution pass (trial, then proposer), then the session/lifetime chain once the window reaches the interval.
    * The window is closed only after the chain settles. Never rejects. The window is claimed before any await:
    * `claim()` marks nothing, so a single tick is what keeps a second pass off it.
    */
@@ -321,11 +321,11 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Trials first: the engine refuses to propose a scaffold while one is pending. The refinement lane runs last,
+   * The live trial's look first, so a decided trial frees the proposer this pass. The refinement lane runs last,
    * whether or not a window was claimed; its trigger is durable debt.
    */
   private async runCadencePass(claimed: ClaimedWindow | null): Promise<void> {
-    await this.drainDueShadowTrials();
+    await this.runDueEvolution();
 
     if (claimed) {
       try {
@@ -365,15 +365,15 @@ export class AgentOrchestrator {
     }
   }
 
-  private drainDueShadowTrials(): Promise<void> {
-    if (this.shadowTrials) return this.shadowTrials;
+  private runDueEvolution(): Promise<void> {
+    if (this.evolutionPass) return this.evolutionPass;
 
-    const drain = this.deps.engine.runDueShadowTrials()
-      .finally(() => { this.shadowTrials = null; });
+    const pass = this.deps.engine.runDueEvolution()
+      .finally(() => { this.evolutionPass = null; });
 
-    this.shadowTrials = drain;
+    this.evolutionPass = pass;
 
-    return drain;
+    return pass;
   }
 
   /**
@@ -397,7 +397,7 @@ export class AgentOrchestrator {
     }
   }
 
-  /** Join backend-owned post-turn evolution (the sampled scaffold shadow eval) to the turn lane. */
+  /** Join backend-owned post-turn evolution to the turn lane. */
   track(work: Promise<void>, label: string): void {
     this.detach(work, label);
   }
@@ -540,7 +540,7 @@ export class AgentOrchestrator {
   // The settle spine is `declareTerminalRoster` (orchestrator/terminal-roster.ts). The pure rules below are
   // public so a backend claiming the sub-effects separately asks them without re-spelling them.
 
-  /** Completed-only improvement lanes (shadow trial, advisor review, auto-title) open only after a completed build turn. */
+  /** Completed-only improvement lanes (advisor review, auto-title) open only after a completed build turn. */
   improvementLanesOpen(status: RunEndReason, workMode?: WorkMode): boolean {
     // `workMode` is for a replay on a fresh activation; absent means the live turn.
     return status === 'completed' && (workMode ?? this.activeWorkMode) !== 'plan';

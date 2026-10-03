@@ -1,11 +1,12 @@
 import * as v from 'valibot';
-import { JsonValueSchema, projectJsonValue, type JsonValue, type SubordinateInspectionRequest } from '@kinu.run/core';
+import { JsonValueSchema, projectJsonValue, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
 import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSwarmRun, WorkBoard } from './session';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { helperAddress, ROOT, type RosterHelper } from './helper-address';
 import { redact, redactJson } from './redact';
-import type { EvalCheck, EvalTurnResult } from './task';
+import type { EvalCheck } from './task';
+import { invokedInTurn } from '../tasks/crafted-reuse';
 
 /** Thrown errors are cut here in the report; a stack trace is not evidence. */
 const EVIDENCE_LIMIT = 2_000;
@@ -23,13 +24,17 @@ function lostByThePlatform(call: string, answer: { reason: string; error: string
     answer.error === `slate ${call}: ${message}` || answer.error === `slate ${call}: ${message}.`);
 }
 
-/** The artifact's own surfaces. Checks read what a person could read; never the agent's ledger. */
+/** The artifact and public inspector surfaces, including the UI's structured run events. */
 export type VerifierSession = {
   slateOp(operation: JsonValue): Promise<JsonValue>;
   readFile(path: string, options?: { allowMissing?: boolean }): Promise<string>;
+  readBytes(path: string): Promise<Uint8Array>;
   writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void>;
   listFiles(dir: string): Promise<readonly PublicDirEntry[]>;
   craftedTools(): Promise<readonly PublicCraftedTool[]>;
+  runEvents(): Promise<readonly RunEvent[]>;
+  memoryContent(): Promise<string>;
+  memoryFacts(): Promise<readonly { key: string; value: JsonValue }[]>;
   workspaceWork(): Promise<WorkBoard>;
   inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer>;
   swarmRuns(): Promise<PublicSwarmRun[]>;
@@ -38,17 +43,16 @@ export type VerifierSession = {
 };
 
 /** A helper and its runs, as the inspector lists them: how each run ended, and the message that started it. */
-export type HelperWork = { name: string; status: string; runs: { status: string | null; userMessage: string | null }[] };
+export type HelperWork = { name: string; status: string; runs: { startedAt: number; status: string | null; userMessage: string | null }[] };
 
 /**
- * The helpers that finished the work naming `subject`: a message naming it started one of their runs, and a run of
- * their own completed. Told is not done: on 2026-10-01 every helper's model call on staging was refused, the lead
- * did the helpers' work itself, and the helpers' transcripts still held the work they were given.
+ * A run naming `subject` assigns the work; that run or a later continuation must finish it.
+ * On staging, 2026-10-01, refused helpers still held their briefs while the lead did their work.
  */
 export function finishedWork(helpers: readonly HelperWork[], subject: string): string[] {
   return helpers
-    .filter((helper) => helper.runs.some((run) => run.status === 'completed')
-      && helper.runs.some((run) => (run.userMessage ?? '').includes(subject)))
+    .filter((helper) => helper.runs.some((assignment) => (assignment.userMessage ?? '').includes(subject)
+      && helper.runs.some((run) => run.status === 'completed' && run.startedAt >= assignment.startedAt)))
     .map((helper) => helper.name);
 }
 
@@ -144,25 +148,19 @@ export class EvalVerifier {
   /** What the agent said in the chat after this turn's prompt, oldest first. */
   readonly replies: readonly string[];
   readonly #session: VerifierSession;
-  readonly #previousTurns: readonly EvalTurnResult[];
+  readonly #startedAt: number;
   readonly #checks: EvalCheck[] = [];
   readonly #pending: Promise<void>[] = [];
 
-  constructor(session: VerifierSession, replies: readonly string[], previousTurns: readonly EvalTurnResult[]) {
+  constructor(session: VerifierSession, replies: readonly string[], startedAt: number) {
     this.#session = session;
     this.replies = replies;
-    this.#previousTurns = previousTurns;
+    this.#startedAt = startedAt;
   }
 
-  /** Read observations from completed grades belonging to this trial. */
-  earlierCheck(id: string): EvalCheck | undefined {
-    for (let index = this.#previousTurns.length - 1; index >= 0; index -= 1) {
-      const found = this.#previousTurns[index]?.checks.find((check) => check.id === id);
-
-      if (found !== undefined) return found;
-    }
-
-    return undefined;
+  /** A current-turn invocation observation, independent of deferred quality/use review. */
+  async toolInvoked(name: string): Promise<boolean> {
+    return invokedInTurn(await this.#session.runEvents(), name, this.#startedAt);
   }
 
   /**
@@ -225,9 +223,21 @@ export class EvalVerifier {
     throw new SlateRefusal(answer.reason, answer.error);
   }
 
+  /** Remove an authored app through the same public slate lifecycle operation. */
+  async removeSlate(id: string): Promise<void> {
+    const answer = v.parse(SlateAnswerSchema, await this.#session.slateOp({ op: 'remove', id }));
+
+    if (!answer.ok) throw new SlateRefusal(answer.reason, answer.error);
+  }
+
   /** A workspace file, or '' when it does not exist. */
   readFile(path: string): Promise<string> {
     return this.#session.readFile(path, { allowMissing: true });
+  }
+
+  /** A binary file through the same Files route the UI downloads from. */
+  readBytes(path: string): Promise<Uint8Array> {
+    return this.#session.readBytes(path);
   }
 
   /** Change the workspace's data mid-check, the way a person drops in a new file. */
@@ -243,6 +253,13 @@ export class EvalVerifier {
   /** The tools the agent built for itself, as the Tools pane lists them. */
   tools(): Promise<readonly PublicCraftedTool[]> {
     return this.#session.craftedTools();
+  }
+
+  /** The memory pane's note and keyed facts, read without consulting the agent's answer. */
+  async memory(): Promise<{ content: string; facts: readonly { key: string; value: JsonValue }[] }> {
+    const [content, facts] = await Promise.all([this.#session.memoryContent(), this.#session.memoryFacts()]);
+
+    return { content, facts };
   }
 
   /** Every agent's plans and tasks, as the Work tab shows them. */
@@ -265,7 +282,7 @@ export class EvalVerifier {
     }
   }
 
-  /** Every helper the lead hired, with its runs. */
+  /** The lead's helpers, with only runs started during this turn. */
   async helperWork(): Promise<HelperWork[]> {
     return Promise.all((await this.helpers()).map(async (helper) => ({
       name: helper.name, status: helper.status, runs: await this.runsOf(helper),
@@ -296,16 +313,16 @@ export class EvalVerifier {
       const answer = await this.#session.inspect(actor === undefined ? { path: [...path], view: 'runs', page } : { path: [...path], actor, view: 'runs', page });
 
       if (answer.view !== 'runs') throw new Error(`${helper.name}'s runs could not be listed: ${JSON.stringify(answer)}`);
-      runs.push(...answer.page.items);
+      runs.push(...answer.page.items.filter((run) => run.startedAt >= this.#startedAt));
 
       if (answer.page.status === 'end') return runs;
       cursor = answer.page.next;
     }
   }
 
-  /** The swarms the lead ran, newest first, as the Swarms pane draws them. */
-  swarms(): Promise<PublicSwarmRun[]> {
-    return this.#session.swarmRuns();
+  /** Swarms started during this turn, as the Swarms pane draws them. */
+  async swarms(): Promise<PublicSwarmRun[]> {
+    return (await this.#session.swarmRuns()).filter((swarm) => swarm.run.startedAt >= this.#startedAt);
   }
 
   /** One command on an executor, the call the Env pane makes, answered whole: output, exit code and any refusal. */

@@ -53,6 +53,7 @@ async function liveRead(agent: HarnessOrchestratorAgent, read: LiveRead): Promis
     listWorkspaceWork: () => agent.listWorkspaceWork(),
     listWorkspaceAgents: () => agent.listWorkspaceAgents(),
     listSubordinates: () => agent.listSubordinates(),
+    getQuality: () => agent.getQuality(30),
   };
 
   await reads[read]();
@@ -190,6 +191,18 @@ test('a crafted tool and the changelog seen mark each name what they move', asyn
   endTick(agent);
   expect(named()).toContain('getEvolutionChangelog');
   await turns.settle({ messageId: 'a-tool', text: 'made' });
+});
+
+test('a rating names the quality read, so an open Quality tab shows it', async () => {
+  const { agent } = orchestratorHarness();
+  const named = namedReads(agent);
+  await agent.getWorkspaceSnapshot();
+  endTick(agent);
+  named();
+
+  await agent.setTurnFeedback('m-1', 'positive');
+  endTick(agent);
+  expect(named()).toContain('getQuality');
 });
 
 test('an agent dismissed names the Agents panel and the roster', async () => {

@@ -1,4 +1,6 @@
-export { DEFAULT_PROVIDER_RETRIES, isTierId, ROLE_ID_RE, DEFAULT_ROLE_ID, isValidRoleId, type BuiltinRoleId } from '../types/profile';
+export {
+  DEFAULT_PROVIDER_RETRIES, isTierId, ROLE_ID_RE, DEFAULT_ROLE_ID, isValidRoleId, type BuiltinRoleId, betaSwarms, SWARMS_BETA_SETTING,
+} from '../types/profile';
 
 export {
   TIER_IDS, TierIdSchema, tierIdsOf, validateProfileCatalog, validateProfileCatalogEnvelope,
@@ -14,7 +16,7 @@ export type {
 } from './catalog';
 
 export {
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, ancestorPins,
 } from './resolve';
 
 export type {

@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import * as v from "valibot";
 import { describe, expect, test } from "bun:test";
 import {
-  initWorkspaceSchema, openWorkspaceMainActor,
+  initWorkspaceSchema, MEMORY_PATH, openWorkspaceMainActor,
   type LLMProviderConfig, type SpendSource, type Usage,
 } from "@kinu.run/core";
 import { createWorkspace } from "@kinu.run/core/workspace-birth";
@@ -46,13 +46,14 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
   const db = new Database(join(dir, "agent.db"));
 
   try {
-    await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM });
+    const rt = await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     // `search_nodes` and `agent_log` are actor-private: seed under the main actor `createWorkspace` issued;
     // rows under any other id are silently invisible to `kinu swarm` and `kinu events`.
     const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
-    db.run("INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text) VALUES (?, ?, ?, ?, ?, ?)",
-      ["c1", "memory/MEMORY.md", 0, 2, "h", "# Memory\n\nhello local memory\n"]);
+    // Through the agent's own memory, so the file and its index are what a session leaves.
+    await rt.memory.write(MEMORY_PATH, "# Memory\n\nhello local memory\n");
+    await rt.memory.index(MEMORY_PATH);
     db.run("INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
       actorId,
       "root",
@@ -135,6 +136,25 @@ describe("CLI inspection commands", () => {
     expect(executors.exitCode).toBe(0);
     expect(executors.stdout).not.toContain("device");
     expect(executors.stdout).toContain("native_binary");
+  });
+
+  test("kinu executors <name> workspace runs in the addressed workspace, never the invoking directory", async () => {
+    const home = scratchDir("cli-executor-exec");
+    await createLocalAgent(home, "localtest");
+    const invokedFrom = newProjectDir();
+
+    const run = (command: string) => runToExit([process.execPath, cliBin, "executors", "localtest", "workspace", command], {
+      cwd: invokedFrom, env: { ...process.env, KINU_HOME: home },
+    });
+
+    const wrote = await run("echo addressed > marker.txt && pwd");
+    expect(wrote.exitCode).toBe(0);
+    expect(wrote.stdout).not.toContain(invokedFrom);
+    expect(existsSync(join(invokedFrom, "marker.txt"))).toBe(false);
+
+    const read = await run("cat marker.txt");
+    expect(read.exitCode).toBe(0);
+    expect(read.stdout).toContain("addressed");
   });
 
   test("kinu model normalizes specs through the provider resolver", async () => {

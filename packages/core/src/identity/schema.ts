@@ -9,9 +9,6 @@ export const WORKSPACE_IDENTITY_DDL =
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
     owner_user_id TEXT NOT NULL DEFAULT '',
-    -- The one line a read-only listing needs. Maintained by writeSoul and
-    -- nothing else, so it cannot drift from SOUL.md (identity/soul.ts).
-    mission    TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`;
 
@@ -93,7 +90,6 @@ const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     head_source_name                TEXT    NOT NULL DEFAULT '',
     head_cut_message_id             TEXT    NOT NULL DEFAULT '',
     head_cut_created_at             INTEGER NOT NULL DEFAULT 0,
-    mission                         TEXT    NOT NULL DEFAULT '',
     staged_agent_config             INTEGER NOT NULL DEFAULT 0,
     staged_crafted_tools            INTEGER NOT NULL DEFAULT 0,
     staged_memory_chunks            INTEGER NOT NULL DEFAULT 0,

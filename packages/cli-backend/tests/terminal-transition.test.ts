@@ -10,16 +10,17 @@ import {
   TerminalEffectInterrupt,
   COMPLETION_GATE_EVENT, TERMINAL_EFFECT_RETRY_CEILING_MS,
   TERMINAL_TRANSITION_CALL_ID,
-  listQueuedShadowTrials,
+  readMission,
   type Shell, type TemporaryAgentPort, type TerminalEffectFault,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
-import type { TestLanguageModelV2 } from './test-language-model';
+import { TestLanguageModelV2 } from './test-language-model';
 import type { CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import {
-  armShadowTrials, openTerminalWorkspace, scriptedModel,
+  openTerminalWorkspace, scriptedModel,
 } from './terminal-workspace';
+import { fakeModel, toolSequenceModel, type PromptMessage } from './helpers/local-session';
 
 /** The advisor a workspace's sessions hire through; a session with no host has no port of its own. */
 const advisors = new WeakMap<CLIRuntime, TemporaryAgentPort>();
@@ -64,10 +65,6 @@ function workspace(): { db: Database; rt: CLIRuntime } {
 const completedTurns = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM completed_turns`[0]?.n ?? 0;
 
-const queuedTrials = (rt: CLIRuntime) =>
-  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM scaffold_trial_queue
-    WHERE actor_id = ${rt.actor.actorId}`[0]?.n ?? 0;
-
 const stillOwed = (rt: CLIRuntime) =>
   rt.storage.sql<{ effect_name: string; status: string }>`
     SELECT effect_name, status FROM terminal_effects WHERE status != 'completed'`;
@@ -91,10 +88,33 @@ async function restart({ rt, db, model, events, generation = 1, ...sessionOpts }
   return next;
 }
 
-describe('an interrupted terminal sequence is finished by the next start', () => {
-  test('the recording, the trial and the title each run exactly once', async () => {
+describe('a workspace born with its mission as a stand-in title', () => {
+  test('its first turn names it through the session, once, as the cloud genesis turn does', async () => {
     const { db, rt } = workspace();
-    await armShadowTrials(rt);
+    const mission = 'Audit the OAuth callback flow';
+    // The mission is the soul's own section, as `kinu create` seeds it.
+    void rt.storage.sql`INSERT INTO workspace_soul (id, markdown) VALUES (1, ${`# Kinu\n\n## Mission\n\n${mission}\n`})
+      ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown`;
+    rt.actor.config.setDisplayNameOrigin(mission, 'auto');
+    expect(readMission(rt.storage.sql)).toBe(mission);
+    const { model, state } = scriptedModel('found two issues');
+    const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
+
+    await session.send('start', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+    expect(state.titleCalls).toBe(1);
+    expect(rt.actor.config.getDisplayName()).toBe('Parser Work');
+
+    await session.send('and the refresh path?', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+    expect(state.titleCalls).toBe(1);
+    await session.end();
+  });
+});
+
+describe('an interrupted terminal sequence is finished by the next start', () => {
+  test('the recording and the title each run exactly once', async () => {
+    const { db, rt } = workspace();
     const { model, state } = scriptedModel('the parser is fixed');
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
@@ -104,30 +124,24 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     await session.send('refactor the parser', { id: crypto.randomUUID() });
 
     expect(completedTurns(rt)).toBe(0);
-    expect(queuedTrials(rt)).toBe(0);
     expect(state.titleCalls).toBe(0);
     expect(stillOwed(rt).length).toBeGreaterThan(0);
 
     const next = await restart({ rt, db, model, events });
 
     expect(completedTurns(rt)).toBe(1);
-    expect(queuedTrials(rt)).toBe(1);
     expect(state.titleCalls).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
     await next.end();
   });
 
-  // Both inline inserts commit with their disposition; a cut on either side leaves neither.
-  const keyedInserts = [
-    { effect: 'turn_record', observe: completedTurns },
-    { effect: 'shadow_trial', observe: queuedTrials },
-  ] as const;
+  // The inline insert commits with its disposition; a cut on either side leaves neither.
+  const keyedInserts = [{ effect: 'turn_record', observe: completedTurns }] as const;
 
   for (const { effect, observe } of keyedInserts) {
     test(`${effect} interrupted BEFORE and AFTER its side effect both converge on one execution`, async () => {
       for (const phase of ['before', 'after'] as const) {
         const { db, rt } = workspace();
-        await armShadowTrials(rt);
         const { model, state } = scriptedModel('answered');
         const events: SessionEvent[] = [];
         const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
@@ -204,7 +218,6 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 
   test('a second start with nothing owed does nothing', async () => {
     const { db, rt } = workspace();
-    await armShadowTrials(rt);
     const { model, state } = scriptedModel('done');
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
@@ -212,25 +225,20 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     await session.send('tidy the imports', { id: crypto.randomUUID() });
     await session.end();
 
-    const settled = {
-      turns: completedTurns(rt), trials: queuedTrials(rt), titles: state.titleCalls,
-    };
+    const settled = { turns: completedTurns(rt), titles: state.titleCalls };
 
     expect(settled.turns).toBe(1);
-    expect(settled.trials).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
 
     const next = await restart({ rt, db, model, events });
 
     expect(completedTurns(rt)).toBe(settled.turns);
-    expect(queuedTrials(rt)).toBe(settled.trials);
     expect(state.titleCalls).toBe(settled.titles);
     await next.end();
   });
 
   test('a process that does not hold the driver lease replays nothing', async () => {
     const { db, rt } = workspace();
-    await armShadowTrials(rt);
     const { model, state } = scriptedModel('answered');
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
@@ -247,7 +255,6 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     await rival.settleBackgroundWork();
 
     expect(completedTurns(rt)).toBe(0);
-    expect(queuedTrials(rt)).toBe(0);
     expect(state.titleCalls).toBe(0);
     expect(stillOwed(rt).length).toBeGreaterThan(0);
     await rival.end();
@@ -258,7 +265,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
  * Across a real process boundary: a child is SIGKILLed at instants production code reaches, over a workspace on disk,
  * which a same-process restart cannot observe.
  */
-test('a managed context edit reaches the local request and retained trial together', async () => {
+test('a managed context edit reaches the local request', async () => {
   const { db, rt } = workspace();
   const requests: string[] = [];
 
@@ -268,29 +275,24 @@ test('a managed context edit reaches the local request and retained trial togeth
   try {
     await session.send('use the OLD premise', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
-    // Armed after the first turn: a drain still running that turn's trial re-reads the queue between laps and
-    // would take the follow-up's trial with it, however fast the workspace files answer.
-    await armShadowTrials(rt);
     const document = v.parse(v.string(), await readText(rt.storage.vfs, '/context/working.jsonl'));
     await writeText(rt.storage.vfs, '/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
     await expect(writeText(rt.storage.vfs, '/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
     await session.send('follow-up input', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
-    const trial = listQueuedShadowTrials(rt.storage.sql, rt.actor, 1).find((row) => row.task === 'follow-up input');
     const claim = rt.stores.claims.latestTurn();
 
-    if (trial === undefined || claim === null) throw new Error('the turn did not retain its claim and trial');
+    if (claim === null) throw new Error('the turn did not retain its claim');
     const admitted = await rt.stores.claims.admittedContext(claim.turnId);
     const consumed = await rt.stores.claims.consumedContext(claim.turnId, 0);
 
     if (admitted === null || consumed === null) throw new Error('the turn recorded no admitted or consumed context');
     expect(requests.at(-1)).toContain('NEW premise');
     expect(requests.at(-1)).not.toContain('OLD premise');
-    // The admission is the selection before the edit landed; the trial retains the step-0 context.
+    // The admission is the selection before the edit landed; the step consumed the edited context.
     expect(admitted.messages[0]).toEqual({ role: 'user', content: 'use the OLD premise' });
-    expect(trial.context[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
-    expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
-    expect(trial.context).toEqual(consumed.messages);
+    expect(consumed.messages[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
+    expect(consumed.messages.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
   } finally {
     await session.end();
     db.close();
@@ -326,7 +328,6 @@ describe('a killed CLI process is recovered by the next start', () => {
     const next = await restart({ rt, db, model, events });
 
     expect(completedTurns(rt)).toBe(1);
-    expect(queuedTrials(rt)).toBe(1);
     expect(state.titleCalls).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
     // A replay that re-persisted would leave two assistant rows.
@@ -352,7 +353,6 @@ describe('a killed CLI process is recovered by the next start', () => {
     // The acknowledged send re-enters the pump and its turn commits whole, then the replay settles each effect once.
     expect(events.some((e) => e.type === 'turn-start')).toBe(true);
     expect(completedTurns(rt)).toBe(1);
-    expect(queuedTrials(rt)).toBe(1);
     expect(state.titleCalls).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
     expect(assistantRows(rt)).toBe(1);
@@ -390,10 +390,9 @@ describe('a killed CLI process is recovered by the next start', () => {
     const events: SessionEvent[] = [];
     const next = await restart({ rt, db, model, events });
 
-    // The replay pays for nothing: the title is no longer a placeholder, so the lane is a no-op.
-    // This is why a failed persist must reach the ledger instead of being logged.
-    expect(state.titleCalls).toBe(0);
-    expect(displayName(rt)).toBe('refactor the parser');
+    // The stand-in is not a name: the replay asks again until one lands, as the cloud's genesis row does.
+    expect(state.titleCalls).toBe(1);
+    expect(displayName(rt)).toBe('Parser Work');
     expect(completedTurns(rt)).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
     await next.end();
@@ -779,6 +778,72 @@ describe('a one-shot exit waits on the turn\'s own close', () => {
     expect(events.items.filter((e) => e.type === 'background')).toEqual([]);
     await session.end();
     db.close();
+  });
+});
+
+describe('a turn\'s lessons are one owed terminal effect', () => {
+  const LESSON = 'Name `path` in every file read.';
+
+  /** Calls `file` with no path, which its schema refuses; asked for a lesson, answers one, or refuses while
+   *  `refusing`. */
+  function struggler(state: { lessonAsks: number; refusing: boolean }) {
+    const turn = toolSequenceModel([{ name: 'file', input: { action: 'read' } }]);
+    const lesson = fakeModel(JSON.stringify({ update: null, text: LESSON }));
+
+    const answering = (prompt: readonly PromptMessage[]) => {
+      if (!JSON.stringify(prompt).includes('spared this turn the struggle')) return turn;
+      state.lessonAsks += 1;
+
+      if (state.refusing) throw new Error('the fast tier is down');
+
+      return lesson;
+    };
+
+    return new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doGenerate: async (options) => answering(options.prompt).doGenerate(options),
+      doStream: async (options) => answering(options.prompt).doStream(options),
+    });
+  }
+
+  const lessons = (rt: CLIRuntime) => rt.storage.sql<{ tool: string; text: string }>`SELECT tool, text FROM tool_lessons`;
+
+  test('a programmatic turn asks for its lesson once, with its review and a restart run too', async () => {
+    const { db, rt } = workspace();
+    const state = { lessonAsks: 0, refusing: false };
+    const model = struggler(state);
+    const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
+
+    await session.enqueueTurn({ text: 'read the README', metadata: { kinuEvent: 'background_job' } });
+    await session.settleBackgroundWork();
+    await session.end();
+    const next = await restart({ rt, db, model, events: [] });
+
+    expect({ asked: state.lessonAsks, lessons: lessons(rt) }).toEqual({ asked: 1, lessons: [{ tool: 'file', text: LESSON }] });
+    await next.end();
+  });
+
+  test('a refused lesson stays owed, and the next start writes it', async () => {
+    const { db, rt } = workspace();
+    const state = { lessonAsks: 0, refusing: true };
+    const model = struggler(state);
+    const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
+
+    await session.send('read the README', { id: crypto.randomUUID() });
+    await session.end();
+
+    // The naming call fails on this scripted model too and stays owed, as on the cloud; only the lessons are this test's.
+    const owedLessons = () => stillOwed(rt).filter((row) => row.effect_name === 'turn_lessons');
+    expect(lessons(rt)).toEqual([]);
+    expect(owedLessons()).toEqual([{ effect_name: 'turn_lessons', status: 'pending' }]);
+
+    state.refusing = false;
+    const next = await restart({ rt, db, model, events: [] });
+
+    expect(lessons(rt)).toEqual([{ tool: 'file', text: LESSON }]);
+    expect(owedLessons()).toEqual([]);
+    await next.end();
   });
 });
 

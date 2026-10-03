@@ -49,7 +49,7 @@ function ratedAs(rt: AgentRuntime, read: keyof typeof READS) {
       satisfaction: { type: 'score', score: answer.score },
       corrected: { type: 'noul', noul: answer.corrected },
       wrong: { type: 'choice', choice: answer.wrong },
-    }, usage: { input: 400 } };
+    }, usage: { input: 400, output: 0 } };
   };
 
   rt.decide = decide;
@@ -261,7 +261,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
 
   test('a decision model failure records nothing and fails the review, to be retried', async () => {
     const { rt, stores } = createTestRuntime();
-    rt.decide = async () => ({ answers: { satisfaction: { type: 'score', score: 2 } }, usage: {} });
+    rt.decide = async () => ({ answers: { satisfaction: { type: 'score', score: 2 } }, usage: { input: 0, output: 0 } });
     const engine = new EvolutionEngine(rt, stores.history);
     const turn = makeTurn();
 

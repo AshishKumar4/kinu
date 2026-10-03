@@ -637,7 +637,8 @@ export const FIRST_RUN_DEFECTS = {
     provedRedAt: null,
     redDirection: 'Not yet run on a deployment: no build that rates turns is deployed. The red direction is any '
       + 'deployed build before b53b8db77, where getQuality is no RPC, and a binding answer the port cannot read, '
-      + 'which leaves today\'s `rated` at 0 when the budget ends.',
+      + 'which leaves today\'s `rated` at 0 when the budget ends. The case waits on the `reads_changed` frame naming '
+      + 'getQuality, so a build that rates without announcing it is red the same way.',
   },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
