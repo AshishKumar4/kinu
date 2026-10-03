@@ -9,10 +9,11 @@ import {
   HeadController, HeadJournal,
   type HeadInput, type HeadReport, type HeadRuntime, type HeadGrounding,
   type SpawnedHead, type SerializedMessage, type MergeOutput,
-  type Executor, type LLM,
+  type LLM,
   initHeadsTables,
 } from '../src/index';
 import { createJSONLLM, present } from '@kinu.run/test-utils';
+import { createInlineExecutor } from '../src/identity/inline-primitives';
 import { makeSql, makeExecRaw, captureConsole, createTestActor } from './helpers';
 
 function newJournal() {
@@ -23,18 +24,6 @@ function newJournal() {
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'grounding-test');
 
   return { sql, journal: new HeadJournal(sql, actor), db, actor };
-}
-
-/** Executor whose verdict is decided by whether the code mentions "boom". */
-function verdictExecutor(): Executor {
-  return {
-    languages: ['javascript'],
-    async execute(code: string) {
-      return code.includes('boom')
-        ? { result: undefined, error: 'boom' }
-        : { result: undefined };
-    },
-  };
 }
 
 function report(id: string, o: Partial<HeadReport> = {}): HeadReport {
@@ -87,38 +76,56 @@ const ctx: SerializedMessage[] = [{ id: 'm1', role: 'user', content: 'go', creat
 function grounding(over: Partial<HeadGrounding> = {}): HeadGrounding {
   const judge = createJSONLLM({ score: 0.5, rationale: 'ok' });
 
-  return { executor: verdictExecutor(), explorer: judge, judge, ...over };
+  return { executor: createInlineExecutor(), explorer: judge, judge, ...over };
 }
 
 describe('grounded head outcome scores', () => {
-  test('a head whose code RAN outscores a head whose code FAILED', async () => {
+  test('heads distinguish verified, failed and unverified evidence in scores and merge status', async () => {
     const { journal } = newJournal();
+    const mergePrompts: string[] = [];
+
+    const judge: LLM = {
+      async *stream() { yield ''; },
+      async complete(prompt) {
+        return prompt.includes('verification harness')
+          ? '```js\nif (x !== 42) throw new Error("wrong answer");\n```'
+          : '{"score": 0.5}';
+      },
+    };
 
     const runtime = buildRuntime({
       reports: {
         good: report('h-good', { summary: 'works', evidence: [{ id: 'e1', kind: 'artifact', body: '```js\nconst x = 42;\n```' }] }),
         bad: report('h-bad', { summary: 'broken', evidence: [{ id: 'e2', kind: 'artifact', body: '```js\nthrow new Error("boom");\n```' }] }),
+        skipped: report('h-skipped', { summary: 'skipped', evidence: [{ id: 'e3', kind: 'artifact', body: '```js\nconst x = 0; return;\n```' }] }),
       },
-      grounding: grounding(),
+      grounding: grounding({ judge, explorer: judge }),
+      mergePrompts,
     });
 
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
-      request: { rationale: 'task', heads: [{ task: 'good', rationale: 'a' }, { task: 'bad', rationale: 'b' }] },
+      request: { rationale: 'task', heads: [{ task: 'good', rationale: 'a' }, { task: 'bad', rationale: 'b' }, { task: 'skipped', rationale: 'c' }] },
       // Each split forks once, so it states one level of recursion room.
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.grounded).toBe(true);
-    expect(result.headScores).toHaveLength(2);
+    expect(result.headScores).toHaveLength(3);
     const good = present(result.headScores.find((s) => s.text === 'works'), "the 'works' head score");
     const bad = present(result.headScores.find((s) => s.text === 'broken'), "the 'broken' head score");
-    expect(good.grounding).toBe('execution');
-    expect(bad.grounding).toBe('execution');
-    expect(good.score).toBeGreaterThan(bad.score);
+    const skipped = present(result.headScores.find((s) => s.text === 'skipped'), 'the skipped head score');
+    expect(good.grounding).toBe('verified');
+    expect(bad.grounding).toBe('failed');
+    expect(skipped.grounding).toBe('unverified');
+    expect(good.score).toBeGreaterThan(skipped.score);
+    expect(skipped.score).toBeGreaterThan(bad.score);
     expect(bad.score).toBeLessThanOrEqual(0.3);   // fail band
     expect(good.score).toBeGreaterThanOrEqual(0.6); // pass band
+    expect(mergePrompts[0]).toContain('(verified)');
+    expect(mergePrompts[0]).toContain('(failed)');
+    expect(mergePrompts[0]).toContain('(unverified)');
   });
 
   test('a non-completed head is floored below a completed one without a judge call', async () => {
