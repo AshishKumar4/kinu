@@ -109,8 +109,8 @@ import {
   type TuiAgentSource,
   type TuiAgentSummary,
 } from './tui-shell';
-import { diagnostics, renderThrownChain, toKinuError, settle, showing, detach } from '@kinu.run/core/obs';
-import { Effect, Cause, Result } from 'effect';
+import { diagnostics, hold, recording, renderThrownChain, toKinuError, settle, showing, detach } from '@kinu.run/core/obs';
+import { Effect, Cause, Result, type Exit } from 'effect';
 import { readParkedNotice } from '../parked-actions';
 
 /** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
@@ -198,7 +198,7 @@ function persistedTranscriptEvent(event: AgentClientEvent): boolean {
     || event.type === 'error';
 }
 
-let globalExit: (() => Promise<void>) | null = null;
+let globalExit: (() => Promise<Exit.Exit<void>>) | null = null;
 
 export function ChatApp(props: ChatAppOpts) {
   return (
@@ -332,11 +332,11 @@ function ChatScene({
   const hintedTakesRef = useRef<string | null>(null);
   const modelRequestRef = useRef(0);
   // Effects cannot return their tasks; these refs hold scene-owned work until cleanup.
-  const hubRefreshTaskRef = useRef<Promise<void> | null>(null);
+  const hubRefreshTaskRef = useRef<Promise<Exit.Exit<void>> | null>(null);
   const connectionTaskRef = useRef<Promise<void> | null>(null);
   const metadataTaskRef = useRef<Promise<void> | null>(null);
   const rosterTaskRef = useRef<Promise<void> | null>(null);
-  const subagentTaskRef = useRef<Promise<void> | null>(null);
+  const subagentTaskRef = useRef<Promise<Exit.Exit<void>> | null>(null);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
 
@@ -794,25 +794,20 @@ function ChatScene({
 
     if (hub !== null && hub.identity === identity) return;
     const abort = new AbortController();
-    let task: Promise<void> | null = null;
+    let task: Promise<Exit.Exit<void>> | null = null;
     let settled = false;
-    task = (async () => {
-      try {
-        const fresh = await (readHub ?? loadHubData)(client);
 
-        if (!abort.signal.aborted) setHub({ identity, data: fresh });
-      } catch (cause) {
-        diagnostics.failure(
-          'tui.hub_refresh_failed',
-          toKinuError({ doing: 'refreshing the agent hub', cause, otherwise: 'unavailable' }),
-          { workspace: client.agentName },
-        );
-      } finally {
-        settled = true;
+    task = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const fresh = yield* Effect.promise(() => (readHub ?? loadHubData)(client));
 
-        if (task !== null && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
-      }
-    })();
+      if (!abort.signal.aborted) setHub({ identity, data: fresh });
+    }), recording({ doing: 'refreshing the agent hub', otherwise: 'unavailable' }, (failure) => {
+      diagnostics.failure('tui.hub_refresh_failed', failure, { workspace: client.agentName });
+    })), Effect.sync(() => {
+      settled = true;
+
+      if (task !== null && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
+    })));
     hubRefreshTaskRef.current = task;
 
     if (settled && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
@@ -899,15 +894,14 @@ function ChatScene({
     let live = true;
     setSubagentChat({ name, label, messages: null, error: null });
 
-    subagentTaskRef.current = (async () => {
-      try {
-        const conversation = await readSubagentConversation(client, actorId === null ? { path: [...path] } : { path: [], actor: actorId });
-
+    subagentTaskRef.current = hold(Effect.matchCause(readSubagentConversation(client, actorId === null ? { path: [...path] } : { path: [], actor: actorId }), {
+      onSuccess: (conversation) => {
         if (live) setSubagentChat({ name, label, messages: conversation, error: null });
-      } catch (cause) {
-        if (live) setSubagentChat({ name, label, messages: null, error: `Its conversation could not be read: ${renderThrownChain({ cause })}` });
-      }
-    })();
+      },
+      onFailure: (failed) => {
+        if (live) setSubagentChat({ name, label, messages: null, error: `Its conversation could not be read: ${renderThrownChain({ cause: Cause.squash(failed) })}` });
+      },
+    }));
 
     return () => { live = false; };
   }, [client, subagentSurface]);
@@ -2285,21 +2279,24 @@ async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subord
 }
 
 /** Pages arrive newest first. */
-async function readSubagentConversation(client: AgentClient, target: { path: string[]; actor?: string }): Promise<DisplayMessage[]> {
-  const pages: DisplayMessage[][] = [];
-  let cursor: PositionCursor | undefined;
+function readSubagentConversation(client: AgentClient, target: { path: string[]; actor?: string }): Effect.Effect<DisplayMessage[]> {
+  return Effect.gen(function* () {
+    const pages: DisplayMessage[][] = [];
+    let cursor: PositionCursor | undefined;
 
-  do {
-    const result = await client.inspectSubordinate({ ...target, view: 'history', page: cursor === undefined ? {} : { cursor } });
+    do {
+      const page = cursor === undefined ? {} : { cursor };
+      const result = yield* Effect.promise(() => client.inspectSubordinate({ ...target, view: 'history', page }));
 
-    if (result.view === 'missing') throw new Error(result.error);
+      if (result.view === 'missing') return yield* Effect.die(new Error(result.error));
 
-    if (result.view !== 'history') throw new Error(`the conversation read answered "${result.view}"`);
-    pages.unshift(result.page.items.map((item) => ({ id: item.id, role: item.role, content: item.content })));
-    cursor = result.page.status === 'more' ? result.page.next : undefined;
-  } while (cursor !== undefined);
+      if (result.view !== 'history') return yield* Effect.die(new Error(`the conversation read answered "${result.view}"`));
+      pages.unshift(result.page.items.map((item) => ({ id: item.id, role: item.role, content: item.content })));
+      cursor = result.page.status === 'more' ? result.page.next : undefined;
+    } while (cursor !== undefined);
 
-  return pages.flat();
+    return pages.flat();
+  });
 }
 
 async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'> & { evolution: TuiWorkEntry[] }> {
@@ -2330,14 +2327,11 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   const root = createRoot(renderer);
   let currentClient = opts.client;
 
-  const cleanup = async () => {
-    let closeFailure: string | null = null;
-
-    try {
-      await currentClient.close();
-    } catch (error) {
-      closeFailure = renderThrownChain({ cause: error });
-    }
+  const cleanup = Effect.gen(function* () {
+    const closeFailure = yield* Effect.matchCause(Effect.promise(() => currentClient.close()), {
+      onSuccess: () => null,
+      onFailure: (failed) => renderThrownChain({ cause: Cause.squash(failed) }),
+    });
 
     root.render(<box />);
     renderer.destroy();
@@ -2345,28 +2339,25 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
     if (closeFailure) console.error(`\n  The workspace did not close cleanly: ${closeFailure}`);
     console.log('\n  Goodbye.\n');
     process.exit(0);
-  };
+  });
 
-  const shutDown = async () => {
-    try {
-      await cleanup();
-    } catch (cause) {
-      console.error(`\n  The TUI could not shut down cleanly: ${renderThrownChain({ cause })}`);
-      process.exit(1);
-    }
-  };
+  const shutDown = Effect.catchCause(cleanup, (failed) => Effect.sync(() => {
+    console.error(`\n  The TUI could not shut down cleanly: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
+    process.exit(1);
+  }));
 
-  let exiting: Promise<void> | null = null;
+  // Held: every exit path joins the one shutdown, which answers its own failure.
+  let exiting: Promise<Exit.Exit<void>> | null = null;
 
   const exit = () => {
-    exiting ??= shutDown();
+    exiting ??= hold(shutDown);
 
     return exiting;
   };
 
   globalExit = exit;
 
-  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, (...args: Parameters<typeof exit>) => detach(Effect.promise(async () => exit(...args))));
+  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, (...args: Parameters<typeof exit>) => detach(Effect.asVoid(Effect.promise(() => exit(...args)))));
 
   root.render(<ChatApp {...renderOptions} onClientChange={(client) => { currentClient = client; }} />);
 
