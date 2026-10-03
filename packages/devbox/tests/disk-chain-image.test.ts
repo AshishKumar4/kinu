@@ -276,3 +276,33 @@ test('a rewrite saves with its changed bytes on the disk once, as the archive st
     must(`umount ${RT}`);
   }
 });
+
+test('a lost-snapshot wake mounts its layers at once, not one store round trip after another', async () => {
+  // D68 lost wake at 2 GB: 3.4 s, mostly squashfuse mounting each layer over the store in turn.
+  loseTheDisk();
+  stored = null;
+  must(`set -e; cd ${WD}; echo a > a.txt`);
+  await commit('tick');
+
+  for (const file of ['b', 'c', 'd']) {
+    must(`echo ${file} > ${WD}/${file}.txt`);
+    await commit('tick');
+  }
+
+  const expected = tree();
+  loseTheDisk();
+  // Each mount waits, up to 5 s, for every layer's mount to start before it mounts.
+  must(`set -e; mv /usr/local/bin/devbox-squashfuse /usr/local/bin/devbox-squashfuse.real; rm -f ${RT}.mounts; `
+    + `printf '%s\\n' '#!/bin/sh' 'echo start >> ${RT}.mounts' `
+    + `'for i in $(seq 1 50); do [ "$(grep -c start ${RT}.mounts)" -ge 4 ] && break; sleep 0.1; done' `
+    + `'echo end >> ${RT}.mounts' 'exec /usr/local/bin/devbox-squashfuse.real "$@"' > /usr/local/bin/devbox-squashfuse; chmod +x /usr/local/bin/devbox-squashfuse`);
+
+  try {
+    await settle(chain.attach(false));
+
+    expect({ order: must(`cat ${RT}.mounts`).split('\n'), exact: tree() === expected })
+      .toEqual({ order: ['start', 'start', 'start', 'start', 'end', 'end', 'end', 'end'], exact: true });
+  } finally {
+    must('mv /usr/local/bin/devbox-squashfuse.real /usr/local/bin/devbox-squashfuse');
+  }
+});
