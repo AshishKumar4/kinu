@@ -62,7 +62,7 @@ sys.modules[_SPEC.name] = _events
 _SPEC.loader.exec_module(_events)
 
 parse_events = _events.parse_events
-read_grading = _events.read_grading
+read_ratings = _events.read_ratings
 read_spend = _events.read_spend
 step_usage = _events.step_usage
 model_usage_complete = _events.model_usage_complete

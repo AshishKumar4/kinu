@@ -3,7 +3,7 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 
 
 import type { VfsMount } from '../vfs/mounts';
-import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { syscallError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
@@ -63,20 +63,34 @@ export function skillsMount(plane: () => VFS): VfsMount {
     return real === null ? null : plane().stat(real);
   };
 
+  const contents = (path: string): Effect.Effect<{ readonly text: Uint8Array } | { readonly real: string }, VfsError> => Effect.gen(function* () {
+    const located = yield* Effect.promise(() => locate(path));
+
+    if (located?.kind === 'builtin' && located.rest === SKILL_FOLDER_FILE) return { text: encoder.encode(located.text) };
+    const real = located?.kind === 'file' ? source(located) : null;
+
+    if (real === null) return yield* Effect.fail(absent(path, 'open'));
+
+    return { real };
+  });
+
   const files: VFS = {
     readFile(path) {
       return settle(Effect.gen(function* () {
-        const located = yield* Effect.promise(() => locate(path));
+        const at = yield* contents(path);
 
-        if (located?.kind === 'builtin' && located.rest === SKILL_FOLDER_FILE) {
-          return encoder.encode(located.text);
-        }
+        return 'text' in at ? at.text : yield* Effect.promise(async () => plane().readFile(at.real));
+      }));
+    },
+    // `cat` reads in ranges.
+    readRange(path, offset, length) {
+      return settle(Effect.gen(function* () {
+        const at = yield* contents(path);
+        const whole = plane();
 
-        const real = located?.kind === 'file' ? source(located) : null;
+        if ('text' in at) return at.text.slice(offset, offset + length);
 
-        if (real === null) return yield* Effect.fail(absent(path, 'open'));
-
-        return yield* Effect.promise(async () => plane().readFile(real));
+        return yield* Effect.promise(async () => whole.readRange ? whole.readRange(at.real, offset, length) : (await whole.readFile(at.real)).slice(offset, offset + length));
       }));
     },
     readdir(path) {

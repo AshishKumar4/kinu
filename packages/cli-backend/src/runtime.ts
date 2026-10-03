@@ -58,10 +58,11 @@ import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-
 import { createCwdPlaneVFS, directoryFileReach } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { agentViewMount, createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
+import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
-  createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV,
-  type LocalModelResolver, type LocalProviderCredentials,
+  createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV, workersAiEndpoint,
+  type LocalCloudSession, type LocalModelResolver, type LocalProviderCredentials,
 } from './model-resolver';
 import {
   createLocalProfileAuthority,
@@ -91,6 +92,8 @@ interface CLIRuntimeOptions {
   agentName?: string;
   providerCredentials?: LocalProviderCredentials;
   oauthStore?: LocalOAuthStore;
+  /** The signed-in Kinu session: the decision model's route when `llm` serves no Workers AI (`workersAiEndpoint`). */
+  cloud?: LocalCloudSession;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
 }
@@ -361,6 +364,16 @@ export function createCLIRuntime(
 
     const llm = createRoutedModelLane(actor, 'reflection', modelLanes);
 
+    // At `/ai/run` beside the Workers AI endpoint a chat model would use; none, and no turn is rated.
+    const decisionEndpoint = workersAiEndpoint(config.llm, config.cloud);
+
+    const decide = decisionEndpoint === null ? undefined : createDecisionPort({
+      run: restDecisionRun({ getAuth: async () => decisionEndpoint }),
+      model: async () => (await ensureProfile()).decisionModel,
+      report,
+      refusals,
+    });
+
     const schedule: Schedule = {
       // Unreferenced so a one-shot `kinu` command still exits with a timer pending.
       after: async (ms, fn) => {
@@ -518,6 +531,7 @@ export function createCLIRuntime(
       memory,
       craftStore,
       modelLanes,
+      ...(decide !== undefined && { decide }),
       executionRouter, shell, checkpoints,
       setShellApprovalChannel: (fn) => { approvalChannel = fn; },
       setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },

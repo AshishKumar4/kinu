@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-10-02",
+  "measuredAt": "2026-10-03",
   "counts": {
     "packages/agent-utils/src/core/utils.ts#catch": 2,
     "packages/agent-utils/src/core/utils.ts#throw": 5,
@@ -150,8 +150,6 @@
     "packages/cli/src/acp/agent.ts#throw": 1,
     "packages/cli/src/agent-list.ts#catch": 1,
     "packages/cli/src/attachments.ts#catch": 1,
-    "packages/cli/src/cc-transcript.ts#catch": 2,
-    "packages/cli/src/cc-transcript.ts#throw": 2,
     "packages/cli/src/chat-loop.ts#catch": 8,
     "packages/cli/src/chat-loop.ts#promise-rejection": 1,
     "packages/cli/src/client-factory.ts#throw": 3,

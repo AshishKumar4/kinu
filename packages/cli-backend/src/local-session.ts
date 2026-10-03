@@ -96,7 +96,7 @@ import { TierIdSchema,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldCaptureText, runScaffoldGepaOptimization,
+  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldGepaOptimization,
   queueTurnShadowTrial, runQueuedShadowTrials,
   type GepaOptimizationResult, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
@@ -223,7 +223,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
-    replayTaskRunner: (task) => input.session().runReplayTask(task),
     shadowTrialQueue: (turn, opts) => input.session().queueShadowTrial(turn, opts),
     // A resolved gate swaps the live scaffold, so model-bound state is dropped.
     shadowTrialRunner: () => input.session().runShadowTrials(),
@@ -2319,11 +2318,6 @@ export class LocalAgentSession {
   /** `host.history`: a read-only, budgeted page, resolved per call. */
   private makeScaffoldHistory(): NonNullable<ScaffoldRunOptions['history']> {
     return createScaffoldHistory(async () => this.actorSession.history);
-  }
-
-  /** Replay-eval re-run: the live scaffold, as cf runs it (core's `runScaffoldCaptureText`). */
-  runReplayTask(task: string): Promise<string> {
-    return runScaffoldCaptureText(this.scaffoldControl, task);
   }
 
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a

@@ -75,9 +75,11 @@ export const CAPABILITY_ROWS = {
   'nested hosted delegation, settling at uneven depths': ['delegation-tree'],
   'a dismissed subagent\'s kept chat': ['agent-dismissed-chat'],
   'cloud workspace consent, machine not connected and connected': ['machine-consent'],
+  'a long command on the owner\'s machine, its output seen while it runs': ['device-job-output'],
   'a swarm whose nodes run as hosted agents and settle': ['exploration'],
   'a live web search': ['web-search'],
   'an internal address refused on every fetch path': ['capability-isolation'],
   'a correction sent while the agent works': ['steer-correction'],
   'several accounts of one provider, each listed and chosen per workspace': ['multi-account'],
+  'a turn rated from the user\'s reply by the decision model': ['turn-rated'],
 } as const satisfies Record<string, Rows>;

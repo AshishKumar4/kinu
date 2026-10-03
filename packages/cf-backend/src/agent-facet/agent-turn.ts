@@ -11,7 +11,7 @@ import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import { codexContainerFetch } from '../egress/codex-egress-route';
 import type { AgentDatabase } from './agent-database';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from '@kinu.run/core';
+import type { AgentFigures, AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from '@kinu.run/core';
 
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
@@ -31,7 +31,7 @@ export interface AgentWorkspace {
   observe(lines: ReadableStream<Uint8Array>, call: ObservedCall): Promise<void>;
   answerMetadata(turnId: string, narration: readonly string[]): Promise<JsonObject | null>;
   finishTurn(turnId: string, end: AgentTurnEnd): Promise<void>;
-  failTurn(turnId: string, failure: string): Promise<void>;
+  failTurn(turnId: string, failure: string, figures: AgentFigures): Promise<void>;
   getAuth(key: string, opts?: AuthRequest): Promise<AuthResolution | null>;
   listCredentials(): ReturnType<UserCredentialClient['listCredentials']>;
   relayDevice(provider: RelayedProvider): ReturnType<UserCredentialClient['relayDevice']>;
@@ -181,7 +181,7 @@ export function queueAgentTask({ after, database, workspace, providers, task }: 
   }).pipe(
     Effect.tapError((failure) => attempt(
       { doing: 'reporting a delegated turn that could not run', otherwise: 'io' },
-      () => workspace.failTurn(task.sequenceId, renderCauseChain(failure)),
+      () => workspace.failTurn(task.sequenceId, renderCauseChain(failure), database.figures()),
     )),
     Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('agent.turn_failed', failure, { turn: task.sequenceId }); })),
   ));
@@ -297,6 +297,7 @@ async function runTurn(
   await workspace.finishTurn(task.sequenceId, {
     ...report,
     activity: database.takeActivity(),
+    figures: database.figures(),
     errorMessage: report.errorMessage ?? null,
     narration: narration.join('\n'),
     ...(produced !== undefined && { produced }),

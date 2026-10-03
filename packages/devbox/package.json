@@ -23,6 +23,7 @@
     "test": "bun test --preload ../../scripts/test-preload.ts --timeout=0 ../../scripts/bench-devbox-independence.test.ts tests/*.test.ts bench/*.test.ts && vitest run tests/workerd"
   },
   "devDependencies": {
+    "@kinu.run/test-utils": "workspace:*",
     "@cloudflare/vitest-plugin": "1.3.4",
     "@cloudflare/workers-types": "5.20260930.2",
     "miniflare": "5.20260926.0-alpha",

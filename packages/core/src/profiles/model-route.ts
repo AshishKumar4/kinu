@@ -26,6 +26,8 @@ export const MODEL_ROUTE_POLICY = {
   // Replays the frozen spec that wrote the entry (providers/cache-warming.ts); no turn exists.
   warming: { kind: 'platform' },
   test: { kind: 'platform' },
+  // The catalog's `decisionModel`, not a tier (providers/decision-model.ts).
+  rating: { kind: 'platform' },
 } as const satisfies Record<SpendSource, ModelRoutePolicy>;
 
 /** Producers whose model the turn profile decides — everything but `platform`. */

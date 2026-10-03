@@ -25,6 +25,7 @@ import {
   createOAuthStore,
   loadConfigFile,
   readProviderRevision,
+  resolveCloudSession,
   resolveMcpServers,
   resolveProviderCredentials,
 } from './config';
@@ -95,9 +96,11 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
     const providerCredentials = resolveProviderCredentials();
     const oauthStore = createOAuthStore();
     const db = new Database(dbPath);
+    const cloud = resolveCloudSession();
 
     const openConfig = {
       llm: llmConfig, providerCredentials, oauthStore,
+      ...(cloud !== null && { cloud }),
       checkpointKeep: loadConfigFile().checkpointKeep,
       cwd: opts.cwd,
     };

@@ -55,7 +55,7 @@ function observeAfterLoading(specifier: string): Observed {
       '',
     ].join('\n'),
   );
-  const run = spawnSync('bun', [probe], { encoding: 'utf8', cwd: here });
+  const run = spawnSync('bun', [probe], { env: process.env, encoding: 'utf8', cwd: here });
   expect(
     run.status,
     `importing ${specifier} first did not initialise cleanly (exit ${run.status}):\n${run.stderr}`,

@@ -10,15 +10,14 @@ import type { ProviderWaitInfo } from './types';
 import { silenceBoundMs } from '../platform-catalog';
 import { DEFAULT_PROVIDER_RETRIES } from '../types/profile';
 
-/** Full-jitter backoff when a 429 lacks `Retry-After`; BASE and MAX are unmeasured. */
+/** Full-jitter backoff; unmeasured. */
 const BASE_DELAY_MS = 2_000;
 
 const BACKOFF_FACTOR = 2;
 
 const MAX_DELAY_MS = 60_000;
 
-/** OMP's `maxRetryDelayMs` (oh-my-pi ai/src/types.ts:499). A longer Retry-After classifies the answer, not elapsed
- *  time: the account is spent until then. */
+/** OMP's `maxRetryDelayMs` (oh-my-pi ai/src/types.ts:499); a longer Retry-After means the account is spent. */
 const MAX_RETRY_DELAY_MS = 60_000;
 
 /** This call's retries; never sent upstream. */
@@ -111,7 +110,6 @@ export function withRateLimitRetry(
 
       // Announce only cooldowns another request declared.
       let owned: number | null = null;
-      // A 429, a sibling's cooldown, a silent start: each spends a retry.
       let waits = 0;
 
       const spendRetry = (spent: () => APICallError): Effect.Effect<void> => Effect.suspend(() => (++waits > retries ? Effect.die(spent()) : Effect.void));
@@ -125,7 +123,9 @@ export function withRateLimitRetry(
 
             if (untilMs === owned) return;
 
-            yield* spendRetry(() => handedOver(null, waitMs));
+            // A chain entry takes a call with no retries.
+            if (retries === 0) return yield* Effect.die(handedOver(null, waitMs));
+
             yield* reportWait(waitMs, 0, 'cooldown');
           })),
         }));
@@ -133,15 +133,15 @@ export function withRateLimitRetry(
         const reading = streams ? new LiveStream(stalled) : UNTIMED;
         const response = yield* Effect.promise(() => reading.open(fetchImpl, input, init));
         const limit = response === null ? null : yield* Effect.promise(() => rateLimitOf(response));
-        const answered = response !== null && limit === null ? yield* Effect.promise(() => reading.body(response)) : null;
+        const read = response !== null && limit === null ? yield* Effect.promise(() => reading.body(response, waits >= retries)) : 'stall';
 
-        if (answered !== null) return answered;
+        if (read instanceof Response) return read;
 
         if (response === null || limit === null) {
           yield* spendRetry(stalled);
           const waitMs = Math.floor(random() * backoffCeiling(attempt));
 
-          yield* reportWait(waitMs, attempt, 'stall');
+          yield* reportWait(waitMs, attempt, read);
           yield* Effect.promise(() => sleep(waitMs, signal));
           continue;
         }
@@ -181,10 +181,11 @@ function backoffCeiling(attempt: number): number {
   return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32));
 }
 
-/** Null: silent before a byte. */
+/** Null: silent before a byte. `body`: the answer, or the wait when silent or erring first (OpenRouter errs under
+ *  HTTP 200) and not `last`. */
 interface AttemptReading {
   open(fetchImpl: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined): Promise<Response | null>;
-  body(response: Response): Promise<Response | null>;
+  body(response: Response, last: boolean): Promise<Response | 'stall' | 'backoff'>;
 }
 
 const UNTIMED: AttemptReading = {
@@ -203,23 +204,46 @@ class LiveStream implements AttemptReading {
     return this.within(fetchImpl(input, { ...init, signal: own === undefined ? this.cut.signal : AbortSignal.any([own, this.cut.signal]) }));
   }
 
-  async body(response: Response): Promise<Response | null> {
+  async body(response: Response, last: boolean): Promise<Response | 'stall' | 'backoff'> {
     if (response.body === null) return response;
     const reader = response.body.getReader();
-    const first = reader.read();
+    const events = response.headers.get('content-type')?.startsWith('text/event-stream') === true;
+    const decoder = new TextDecoder();
+    const held: Uint8Array[] = [];
+    let text = '';
+    let first: SseEvent | null = null;
+    let ended: { readonly reason: unknown } | 'closed' | null = null;
 
-    if (await this.within(Promise.allSettled([first])) === null) {
+    while (first === null && ended === null) {
+      const [read] = await this.within(Promise.allSettled([reader.read()])) ?? [];
+
+      if (read === undefined) {
+        await reader.cancel();
+
+        return 'stall';
+      }
+
+      if (read.status === 'rejected') ended = { reason: read.reason };
+      else if (read.value.done) ended = 'closed';
+      else {
+        held.push(read.value.value);
+        text += decoder.decode(read.value.value, { stream: true });
+        first = events ? firstSseEvent(text) : 'output';
+      }
+    }
+
+    if (first === 'error' && !last) {
       await reader.cancel();
 
-      return null;
+      return 'backoff';
     }
 
     const body = new ReadableStream<Uint8Array>({
-      start: async (controller) => {
-        const read = await first;
+      start: (controller) => {
+        for (const chunk of held) controller.enqueue(chunk);
 
-        if (read.done) controller.close();
-        else controller.enqueue(read.value);
+        if (ended === 'closed') controller.close();
+        else if (ended !== null) controller.error(ended.reason);
       },
       pull: async (controller) => {
         const next = await this.within(reader.read());
@@ -246,6 +270,34 @@ class LiveStream implements AttemptReading {
     return Promise.race([work, stall.promise]).finally(() => { clearTimeout(timer); });
   }
 }
+
+type SseEvent = 'error' | 'output';
+
+function firstSseEvent(text: string): SseEvent | null {
+  const whole = text.split(/\r\n\r\n|\n\n|\r\r/).slice(0, -1);
+
+  for (const event of whole) {
+    const lines = event.split(/\r\n|\n|\r/).filter((line) => line !== '' && !line.startsWith(':'));
+
+    const field = (name: string): string[] => lines
+      .filter((line) => line.startsWith(`${name}:`))
+      .map((line) => line.slice(name.length + 1).replace(/^ /, ''));
+
+    if (lines.length === 0) continue;
+
+    if (field('event').includes('error')) return 'error';
+    const data = tolerate<unknown>(() => JSON.parse(field('data').join('\n')), 'malformed-input');
+
+    return v.is(SseErrorSchema, data) ? 'error' : 'output';
+  }
+
+  return null;
+}
+
+const SseErrorSchema = v.union([
+  v.looseObject({ error: v.looseObject({}) }),
+  v.looseObject({ type: v.literal('error') }),
+]);
 
 function hasReplayableBody(input: RequestInfo | URL, init: RequestInit | undefined): boolean {
   if (init?.body !== undefined) return v.safeParse(v.string(), init.body).success;

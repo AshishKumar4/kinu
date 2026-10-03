@@ -6,6 +6,7 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
@@ -487,6 +488,15 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(pin).toBe(`bun@${approvedBun()}`);
     const minKey = /KINU_BUN_MIN_KEY=(\d+)/.exec(bunResolutionShell())?.[1];
     expect(Number(minKey)).toBeGreaterThan(0);
+  });
+
+  test('the device daemon carries the launcher\'s own resolution, to leave an older Bun the same way', async () => {
+    const daemon = v.parse(
+      v.object({ bunResolutionShell: v.pipe(v.function(), v.returns(v.string())) }),
+      createRequire(import.meta.url)(join(import.meta.dir, '../../pc-agent/src/update.js')),
+    );
+
+    expect(await servedScript('/downloads/kinu')).toContain(daemon.bunResolutionShell());
   });
 
   test('only the launcher resolves and provides Bun; the installer never probes it', async () => {

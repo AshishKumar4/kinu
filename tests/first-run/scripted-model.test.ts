@@ -8,7 +8,8 @@ import { createTestActorsOver } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../packages/core/tests/helpers';
 import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
 import {
-  DELEGATION_TASK_ASK, DELEGATION_WORD, HELLO_SLATE_ASK, HELLO_SLATE_ID, RELAY_MISSION, TREE_ASK, TREE_DEEP_WORD, sayWordMission,
+  DELEGATION_TASK_ASK, DELEGATION_WORD, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND, HELLO_SLATE_ASK, HELLO_SLATE_ID, RELAY_MISSION, TREE_ASK,
+  TREE_DEEP_WORD, sayWordMission,
 } from './asks';
 import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
 import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
@@ -256,6 +257,27 @@ function hiredAndWaiting(ask: string, hired: { readonly id: string; readonly age
     { role: 'assistant', content: 'WAITING' },
   ];
 }
+
+// The deployed Worker answers device-job-output's ask, so the case runs on the build that ships with this script.
+describe('the device job the first-run tier runs on a machine', () => {
+  test('is one shell call on the device, answered with the job it detached into', async () => {
+    const first = await reply([{ role: 'user', content: DEVICE_JOB_ASK }]);
+
+    expect(first.tool_calls?.map((made) => [made.function.name, JSON.parse(made.function.arguments)])).toEqual([
+      ['shell', { runtime: 'device', command: DEVICE_JOB_COMMAND, why: 'The owner asked for this command on that machine.' }],
+    ]);
+
+    const handle = { background: true, jobId: 'bgjob-devjob01', kind: 'shell', message: 'Outran the 30s foreground window; backgrounded.' };
+
+    const answered = await reply([
+      { role: 'user', content: DEVICE_JOB_ASK },
+      { role: 'assistant', content: 'Calling shell.', tool_calls: [{ id: 'call_job', type: 'function', function: { name: 'shell', arguments: JSON.stringify({ runtime: 'device', command: DEVICE_JOB_COMMAND }) } }] },
+      { role: 'tool', tool_call_id: 'call_job', content: JSON.stringify(handle) },
+    ]);
+
+    expect(answered.content).toBe('JOB bgjob-devjob01');
+  });
+});
 
 // A hire returns at once (cafab2bfc): each answer opens its hirer's next turn, and the cases' scripts answer that turn.
 describe('the first-run scripts answer the turn a helper\'s answer opens', () => {

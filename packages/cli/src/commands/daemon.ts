@@ -19,6 +19,7 @@ import {
   ensureAgentHome,
   listLocalRefsAllProjects,
   readProviderRevision,
+  resolveCloudSession,
   resolveMcpServers,
   resolveProviderCredentials,
 } from '../config';
@@ -334,10 +335,13 @@ async function openDaemonAgent(
 ): Promise<LocalHostedAgent> {
   const { llmConfig, resolver: modelResolver } = createConfiguredLocalModelResolver();
 
+  const cloud = resolveCloudSession();
+
   const openConfig = {
     llm: llmConfig,
     providerCredentials: resolveProviderCredentials(),
     oauthStore: createOAuthStore(),
+    ...(cloud !== null && { cloud }),
     // The ref's stored directory, never process.cwd(): a daemon serves every project.
     cwd: ref.cwd,
   };

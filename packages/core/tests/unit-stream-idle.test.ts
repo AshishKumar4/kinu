@@ -82,6 +82,10 @@ function turnOver(primary: ScriptedStream) {
   return { asked, events, done };
 }
 
+const streamedRequest = (wrapped: typeof globalThis.fetch, retries: number) => wrapped('https://stub.invalid/v1/chat/completions', {
+  method: 'POST', body: JSON.stringify({ model: 'm', stream: true }), headers: { [PROVIDER_RETRIES_HEADER]: String(retries) },
+});
+
 afterEach(() => { jest.useRealTimers(); });
 
 /** Compiles only while `silenceBoundMs` admits the silence bound and refuses a duration, a total. */
@@ -163,10 +167,7 @@ describe('a provider that sends nothing before its first byte', () => {
     });
 
     const wrapped = withRateLimitRetry(fetch, { provider: 'stub', sleep: async () => {}, onWait: (info) => { waits.push(info); } });
-
-    const call = (retries: number) => wrapped('https://stub.invalid/v1/chat/completions', {
-      method: 'POST', body: JSON.stringify({ model: 'm', stream: true }), headers: { [PROVIDER_RETRIES_HEADER]: String(retries) },
-    });
+    const call = (retries: number) => streamedRequest(wrapped, retries);
 
     /** Settles once request `n` (1-based) reached the provider. */
     const reached = (n: number) => arrivals[n - 1]?.promise;
@@ -209,3 +210,40 @@ describe('a provider that sends nothing before its first byte', () => {
   });
 });
 
+describe('a provider whose stream opens with its error', () => {
+  /** OpenRouter's upstream failure: HTTP 200, a keep-alive, then the error as the first event. */
+  const erring = () => new Response(new Blob([
+    encoder.encode(': OPENROUTER PROCESSING\n\n'),
+    frame(JSON.stringify({ error: { code: 500, message: 'Upstream error from Inception: The server had an error while processing your request.' } })),
+  ].map((chunk) => new Uint8Array(chunk))), { headers: { 'content-type': 'text/event-stream' } });
+
+  const answering = () => new Response(new Blob([delta('at last'), ...finish].map((chunk) => new Uint8Array(chunk))), {
+    headers: { 'content-type': 'text/event-stream' },
+  });
+
+  function erringThenAnswering(errors: number) {
+    let calls = 0;
+    const waits: ProviderWaitInfo[] = [];
+    const fetch = asFetchFunction(async () => (++calls <= errors ? erring() : answering()));
+    const wrapped = withRateLimitRetry(fetch, { provider: 'stub', sleep: async () => {}, onWait: (info) => { waits.push(info); } });
+
+    return { wrapped, waits, calls: () => calls };
+  }
+
+  test('the error spends a retry and the transport asks again, as it does for an HTTP refusal', async () => {
+    const provider = erringThenAnswering(1);
+    const answered = await streamedRequest(provider.wrapped, 3);
+
+    expect(await answered.text()).toContain('at last');
+    expect(provider.calls()).toBe(2);
+    expect(provider.waits.map(({ source, attempt }) => ({ source, attempt }))).toEqual([{ source: 'backoff', attempt: 1 }]);
+  });
+
+  test('past its retries the provider\'s own error reaches the caller', async () => {
+    const provider = erringThenAnswering(5);
+    const answered = await streamedRequest(provider.wrapped, 1);
+
+    expect(await answered.text()).toContain('Upstream error from Inception');
+    expect(provider.calls()).toBe(2);
+  });
+});

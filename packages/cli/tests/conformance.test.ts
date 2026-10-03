@@ -90,7 +90,6 @@ function staticResolver(model: LanguageModel): LocalModelResolver {
     listProviders: async () => [],
     listModels: async () => ({ models: [], failures: [] }),
     modelInfo: async () => null,
-    judgeCandidates: async () => [],
     getAuth: async () => null,
     // A conformance model has no count endpoint, so admission runs ungated.
     countInputTokens: async () => ({

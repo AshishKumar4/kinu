@@ -2,14 +2,13 @@ import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import {
   decodeJsonValue, formatScoreInterval, JsonArraySchema, JsonValueSchema,
-  renderAlignmentConvergence, renderCalibrationReport, SPEND_SOURCE_LABEL, usageTotal,
-  type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue,
+  QualityDaySchema, renderQualitySeries, SPEND_SOURCE_LABEL, usageTotal,
+  type GepaOptimizationResult, type JsonObject, type JsonValue,
   type MissionBudgetLimits, type SearchNode, type Usage, type WorkspaceSpend,
   type AgentRpcMethod,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
-import { fetchReport } from './label';
 import { runLocalGepa } from '../local-agent-client';
 import { requireAuthConfig } from '../config';
 import {
@@ -22,7 +21,7 @@ import {
   executeLocalExecutor,
   getLocalAgentState,
   getLocalWorkspaceSpend,
-  getLocalAlignment,
+  getLocalQuality,
   getLocalGepaRun,
   getLocalMctsNode,
   getLocalActorInfo,
@@ -60,24 +59,6 @@ const GepaOptimizationResultSchema: v.GenericSchema<GepaOptimizationResult> = v.
   bestScore: v.optional(ScoreIntervalSchema), seedScore: v.optional(ScoreIntervalSchema), iterations: v.optional(v.number()),
   selection: v.optional(v.object({ heldOutNegatives: v.number(), guards: v.number() })),
   selectionWarning: v.optional(v.string()),
-});
-
-const RateIntervalSchema = v.object({
-  per100: v.number(), lowPer100: v.number(), highPer100: v.number(), reliable: v.boolean(),
-});
-
-const AlignmentTotalsSchema = v.object({
-  turns: v.number(), negatives: v.number(), abandoned: v.number(), executionGraded: v.number(),
-  rate: RateIntervalSchema, firstAt: v.number(), lastAt: v.number(),
-});
-
-const AlignmentConvergenceSchema: v.GenericSchema<AlignmentConvergence> = v.object({
-  segments: v.array(v.object({ ...AlignmentTotalsSchema.entries, scaffoldVersion: v.nullable(v.number()) })),
-  overall: AlignmentTotalsSchema,
-  trend: v.picklist(['improving', 'worsening', 'flat', 'insufficient']),
-  deltaPer100: v.nullable(v.number()),
-  comparedVersions: v.nullable(v.object({ from: v.nullable(v.number()), to: v.nullable(v.number()) })),
-  note: v.string(),
 });
 
 const SearchNodeSchema: v.GenericSchema<SearchNode> = v.object({
@@ -506,32 +487,30 @@ function runExecutorCommand(name: string, executor: string, commandParts: string
   });
 }
 
-/** K_align: user corrections per 100 graded turns, by scaffold version. Always printed with calibration: the rate is the classifier's count. */
-export async function alignmentCommand(name: string, opts: InspectOpts = {}): Promise<void> {
+/** Satisfaction per day: the mean rating of the turns users answered, with its interval. */
+export async function qualityCommand(name: string, opts: InspectOpts & { days?: string } = {}): Promise<void> {
   const target = resolveAgentTarget(name);
+  const days = opts.days === undefined ? 30 : parsePositiveInt(opts.days, '--days');
 
   const data = await readTarget(target, {
     cloud: (auth) => callAgentRpc({
       origin: auth.origin,
       token: auth.token,
       name: target.cloudName,
-      method: 'getAlignmentConvergence',
-      schema: AlignmentConvergenceSchema,
+      method: 'getQuality',
+      args: [days],
+      schema: v.array(QualityDaySchema),
     }),
-    local: () => getLocalAlignment(target.localName),
+    local: () => getLocalQuality(target.localName, days),
   });
 
-  const calibration = await fetchReport(target);
-
   if (opts.json) {
-    printJson(decodeJsonValue({ value: { alignment: data, calibration } }));
+    printJson(decodeJsonValue({ value: data }));
 
     return;
   }
 
-  console.log(renderAlignmentConvergence(data));
-  console.log('');
-  console.log(renderCalibrationReport(calibration));
+  console.log(renderQualitySeries(data));
 }
 
 export function webhookCommand(name: string, label: string | undefined, opts: InspectOpts & {

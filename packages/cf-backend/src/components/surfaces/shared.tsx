@@ -232,14 +232,6 @@ export function DetailSection({ title, children }: { title: string; children: Re
   );
 }
 
-export function scoreColor(value: number): string {
-  if (value >= 0.7) return "p-success";
-
-  if (value >= 0.4) return "p-warning";
-
-  return "p-danger";
-}
-
 export function formatScore(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }

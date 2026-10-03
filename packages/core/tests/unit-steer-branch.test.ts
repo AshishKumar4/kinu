@@ -290,16 +290,14 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
     }), 'the recorded take set');
 
     const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[1].nodeId });
-    expect(record.outcome).toBe('corrected');
     expect(record.changedAnswer).toBe(true);
     expect(record.chosen.text).toBe('B-style answer');
 
-    const ledger = sql<{ outcome: string; source: string; followup: string | null; turn_id: string }>`
-      SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0];
+    const ledger = sql<{ score: number; source: string; followup: string | null; turn_id: string }>`
+      SELECT score, source, followup, turn_id FROM turn_ratings`[0];
 
-    expect(ledger).toMatchObject({
-      outcome: 'corrected', source: 'take_pick', followup: 'B-style answer', turn_id: 'turn-9',
-    });
+    // Picking the alternate rates the delivered answer low.
+    expect(ledger).toMatchObject({ score: 2, source: 'take_pick', followup: 'B-style answer', turn_id: 'turn-9' });
 
     const prompt = buildTakeContinuationPrompt(record.set, record.chosen);
     expect(prompt).toContain('ran as a parallel branch');
@@ -315,8 +313,8 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
     }), 'the recorded take set');
 
     const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[0].nodeId });
-    expect(record.outcome).toBe('accepted');
     expect(record.changedAnswer).toBe(false);
+    expect(sql<{ score: number }>`SELECT score FROM turn_ratings`[0]?.score).toBe(4);
   });
 });
 

@@ -15,6 +15,7 @@ import { NAMED_SWARM_PRESETS } from '../types/swarm';
 import { MODEL_ROUTE_POLICY } from './model-route';
 import { REASONING_EFFORTS } from '../providers/effort';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
+import { DECISION_MODELS } from '../providers/decision-model';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
@@ -84,6 +85,7 @@ const ProfileCatalogObjectSchema = v.strictObject({
     v.check((chain) => new Set(chain).size === chain.length, 'a model chain names each fallback once'),
   ))),
   retries: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(10))),
+  decisionModel: v.optional(v.picklist(DECISION_MODELS)),
 });
 
 function allSpawnReferencesExist(

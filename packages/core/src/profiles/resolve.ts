@@ -11,6 +11,7 @@ import { JsonValueSchema } from '../utils/json';
 import { REASONING_EFFORT_FOR_STAGE, REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
 import type { NamedSwarmPreset } from '../types/swarm';
 import { DEFAULT_PROVIDER_RETRIES, ROLE_ID_RE, isValidRoleId } from '../types/profile';
+import { DEFAULT_DECISION_MODEL, type DecisionModel } from '../providers/decision-model';
 import { TierIdSchema, tierIdsOf,
   BUILTIN_PROFILE_CATALOG, SYSTEM_ROLE_DEFINITIONS, deriveRoleLabel, effectiveRoleCatalog,
   profileCatalogDigest, validateProfileCatalogEnvelope,
@@ -137,6 +138,8 @@ export interface ResolvedTurnProfile {
   };
   readonly tiers: Readonly<Record<TierId, TierRoute>>;
   readonly retries: number;
+  /** The decision model that rates this actor's turns. */
+  readonly decisionModel: DecisionModel;
   readonly workMode: WorkMode;
   readonly skills: readonly string[];
   readonly allowedTools: readonly string[];
@@ -381,6 +384,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
       providerRevision: provider.revision,
       tiers: Object.freeze(tiers),
       retries: envelope.catalog.retries ?? DEFAULT_PROVIDER_RETRIES,
+      decisionModel: envelope.catalog.decisionModel ?? DEFAULT_DECISION_MODEL,
     };
 
     const profileDigest = sha256Hex(stableStringify(v.parse(JsonValueSchema, resolved)));

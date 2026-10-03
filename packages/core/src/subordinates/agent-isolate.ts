@@ -1,3 +1,4 @@
+import type { AgentFigures } from '../read-models/agent-figures';
 import type { JSONSchema7, ModelMessage } from 'ai';
 import type { CompletedTurn } from '../evolution/types';
 import type { DynamicContext } from '../prompting/volatile-context';
@@ -112,6 +113,7 @@ export interface AgentHeadDelta {
 
 export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
   readonly activity: readonly AgentTurnActivity[];
+  readonly figures: AgentFigures;
   readonly errorMessage: string | null;
   readonly narration: string;
   readonly produced?: readonly ModelMessage[];

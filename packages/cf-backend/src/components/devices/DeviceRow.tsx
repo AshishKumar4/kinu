@@ -32,6 +32,18 @@ function unstoppedLine(count: number | undefined): string {
   return `${count} commands have no confirmed termination and may still run.`;
 }
 
+/** The daemon's version note; silent when it is current. */
+function UpdateBadge({ device }: { device: UserDevice }) {
+  if (device.update !== "behind" && device.update !== "off" && device.update !== "unstamped" && device.update !== "refused") return null;
+
+  return (
+    <span role="status" data-device-update={device.update} title={device.version === null ? undefined : `${device.version} installed; ${device.servedVersion ?? ""} served`}
+      className={`px-2 py-0.5 ${device.update === "behind" || device.update === "refused" ? "p-badge-warning" : "p-badge-neutral"}`}>
+      {DEVICE_UPDATE_COPY[device.update]}
+    </span>
+  );
+}
+
 export function DeviceRow({
   device, grants, onDeviceChanged, onGrantsChanged, onError, onRevoke,
   unstoppedCommands, onAcknowledge,
@@ -165,15 +177,12 @@ export function DeviceRow({
         )}
         {device.hostname && <span className="p-annotation p-text-3">{device.hostname}{device.os ? ` · ${device.os}` : ""}</span>}
         <span className={`ml-auto px-2 py-0.5 ${device.connected ? "p-badge-success" : "p-badge-neutral"}`}>{device.connected ? "connected" : "offline"}</span>
-        {/* Daemon version note: behind, updates off, or source install; silent when current. */}
-        {(device.update === "behind" || device.update === "off" || device.update === "unstamped") && (
-          <span role="status" data-device-update={device.update} title={device.version === null ? undefined : `${device.version} installed; ${device.servedVersion ?? ""} served`}
-            className={`px-2 py-0.5 ${device.update === "behind" ? "p-badge-warning" : "p-badge-neutral"}`}>
-            {DEVICE_UPDATE_COPY[device.update]}
-          </span>
-        )}
+        <UpdateBadge device={device} />
         <button onClick={onRevoke} title="Revoke device" className="ml-1 border-l p-border pl-3 p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
       </div>
+      {device.update === "refused" && (
+        <p className="mt-1.5 p-meta p-text-3">Update to {device.servedVersion} refused: {device.updateRefusal}</p>
+      )}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <label className="inline-flex items-center gap-2 p-text">
           <button

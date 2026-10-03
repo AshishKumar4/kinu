@@ -3431,8 +3431,7 @@ async function main() {
 
   const cfg = readDeviceConfig(CONFIG_PATH);
   const USER = cfg.user;
-  const origin = cfg.origin ?? '';
-  const HTTP_ORIGIN = (origin === '' ? 'https://kinu.run' : origin).replace(/\/+$/, '');
+  const HTTP_ORIGIN = hubOrigin(cfg);
   const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, 'ws');
 
   const ctx = {
@@ -3455,16 +3454,10 @@ async function main() {
     reclaim: () => claimMachine(),
   });
 
-  // The daemon's one WebSocket: the runtime's global. Kinu launches this
-  // daemon only under its own Bun, whose WebSocket is the implementation the
-  // whole connect protocol is exercised against — there is no `ws` fallback,
-  // because a fallback is a second implementation that never runs in CI and
-  // failed first in the field. A runtime without the global cannot run the
-  // daemon, and says so.
-  if (!(globalThis.WebSocket instanceof Function)) {
-    throw new Error('this daemon requires a runtime with a global WebSocket; run it with the Kinu CLI (its bundled Bun)');
-  }
-
+  // The daemon's one WebSocket: the global of the approved Bun
+  // `startOnApprovedBun` put this process on, the implementation the whole
+  // connect protocol is exercised against. There is no `ws` fallback: a fallback is a second
+  // implementation that never runs in CI and failed first in the field.
   const mkWs = (url) => new globalThis.WebSocket(url);
 
   // Probed once, by RUNNING the real sandbox shape: a check that only looked
@@ -3558,6 +3551,8 @@ async function main() {
           // every daemon before this field.
           version: REPORTED_VERSION ?? undefined,
           updateCheck: !update.updateOptedOut(DEVICE_HOME),
+          // A build this daemon refused is not pushed again while it runs here.
+          runtime: runtimeName(),
           // What this machine PROVED at startup, in the hub's words: the hub
           // decides the tier and needs one term for what the machine can
           // honour, so a machine that cannot sandbox is never silently given a
@@ -3624,6 +3619,72 @@ async function main() {
   });
 }
 
+/** The HTTP origin the device credentials trust. */
+function hubOrigin(cfg) {
+  const origin = cfg.origin ?? '';
+
+  return (origin === '' ? 'https://kinu.run' : origin).replace(/\/+$/, '');
+}
+
+/**
+ * The daemon, on the Bun it was tested on. One woken on an older runtime (an
+ * older daemon's updater starts its successor on the runtime it had) first
+ * provides the approved Bun the launcher's way, then goes on as this same
+ * process on it: same pid, arguments and descriptors, a successor's lifeline
+ * among them. Nothing is claimed or served before that.
+ */
+async function startOnApprovedBun() {
+  if (!update.onApprovedBun()) await moveToApprovedBun();
+  await main();
+}
+
+/** The runtime this process runs on, as HELLO and a refusal name it. */
+function runtimeName() {
+  return process.versions.bun === undefined ? `${process.release.name} ${process.version}` : `Bun ${process.versions.bun}`;
+}
+
+async function moveToApprovedBun() {
+  const running = runtimeName();
+  let bun;
+
+  try {
+    // Bun 1.3.12 has no process.execve: it cannot go on as this process on another runtime.
+    if (!(process.execve instanceof Function)) throw new Error(`${running} cannot restart this daemon on another runtime`);
+    bun = await update.provideApprovedBun(DEVICE_HOME, log);
+  } catch (err) {
+    await refuse(running, `this machine runs ${running}, and ${errorDetail(err)}`);
+
+    return;
+  }
+
+  log('device.runtime_provided', `${running}; going on as Bun ${update.KINU_BUN_VERSION} or newer at ${bun}`);
+  process.execve(bun, [bun, ...process.execArgv, ...process.argv.slice(1)], process.env);
+}
+
+/**
+ * This build cannot run here. The hub is told why, so it stops pushing the
+ * build and the owner's device row says why the machine is behind; then the
+ * process ends, and an updater that started it rolls back and keeps serving.
+ */
+async function refuse(runtime, reason) {
+  log('device.runtime_refused', reason);
+
+  try {
+    if (RUNNING_VERSION === null) {
+      log('device.runtime_refusal_unsent', 'no build stamp: the hub pushes nothing to an unstamped daemon');
+    } else {
+      const cfg = readDeviceConfig(CONFIG_PATH);
+      const status = await update.reportRefusal({ origin: hubOrigin(cfg), cfg, version: RUNNING_VERSION, runtime, reason });
+      log(status === 200 ? 'device.runtime_refusal_sent' : 'device.runtime_refusal_unsent', `HTTP ${String(status)}`);
+    }
+  } catch (err) {
+    log('device.runtime_refusal_unsent', errorDetail(err));
+  }
+
+  console.error('Kinu PC agent:', reason);
+  exitWhenQuiet(1);
+}
+
 /** @param {unknown} err */
 function reportFatal(err) {
   console.error('Kinu PC agent:', err instanceof Error ? err.message : String(err));
@@ -3642,7 +3703,7 @@ if (require.main === module) {
       if (stamp === null) throw new Error(`no version stamp beside ${__filename}`);
       console.log(stamp);
     } else {
-      main().catch(reportFatal);
+      startOnApprovedBun().catch(reportFatal);
     }
   } catch (err) {
     reportFatal(err);

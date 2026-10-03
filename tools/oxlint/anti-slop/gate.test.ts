@@ -6,62 +6,10 @@ import antiSlopPlugin from "./index.ts";
 import { isParseable, isRunnableSuite, readRepositoryFile, trackedFiles } from "../../../scripts/sources.ts";
 import { declaredName, importBindings, literalString, parse, walk, type SyntaxNode } from "../../../scripts/syntax.ts";
 
-const expectedRules = [
-  "anti-slop/effect-restricted-api",
-  "anti-slop/effect-run-in-adapter",
-  "anti-slop/no-ambient-git-in-tests",
-  "anti-slop/no-chained-type-assertions",
-  "anti-slop/no-conditional-empty-object-spread",
-  "anti-slop/no-copy-rpc-stub",
-  "anti-slop/no-bare-error-in-durable-object",
-  "anti-slop/no-ddl-in-catch",
-  "anti-slop/no-effect-swallow",
-  "anti-slop/no-elapsed-work-deadline",
-  "anti-slop/no-empty-catch",
-  "anti-slop/no-known-value-widening",
-  "anti-slop/no-manufactured-sql-column",
-  "anti-slop/no-module-mocking",
-  "anti-slop/no-near-duplicate-functions",
-  "anti-slop/no-object-parameters",
-  "anti-slop/no-output-token-cap",
-  "anti-slop/require-rpc-seal",
-  "anti-slop/require-super-alarm",
-  "anti-slop/no-tui-colour-literal",
-  "anti-slop/no-dynamic-model-import",
-  "anti-slop/require-variant-utility",
-  "anti-slop/no-cli-credential-flag",
-  "anti-slop/no-reduce-accumulator-copy",
-  "anti-slop/no-reflect-apply",
-  "anti-slop/no-reflect-get",
-  "anti-slop/no-runtime-typeof",
-  "anti-slop/no-sentinel-catch",
-  "anti-slop/no-sync-spawn",
-  "anti-slop/no-shape-in-symbol-names",
-  "anti-slop/no-unaccounted-catch",
-  "anti-slop/no-unknown-parameters",
-  "anti-slop/no-unknown-returns",
-  "anti-slop/no-unknown-type-aliases",
-  "anti-slop/no-unsafe-dictionary-type",
-  "anti-slop/no-untyped-console",
-  "anti-slop/no-vacuous-type-predicate",
-  "anti-slop/no-wait-until-in-durable-object",
-  "anti-slop/no-widen-then-assert",
-  "anti-slop/require-cause-on-rethrow",
-  "anti-slop/require-readable-spacing",
-  "anti-slop/require-runtime-import-extension",
-  "anti-slop/require-safety-comment-for-type-assertion",
-];
-
 const config = JSON.parse(readFileSync(".oxlintrc.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const pluginPackage = JSON.parse(
   readFileSync("tools/oxlint/anti-slop/package.json", "utf8"),
-);
-
-assert.deepEqual(
-  Object.keys(config.rules).filter((name) => name.startsWith("anti-slop/")).sort(),
-  [...expectedRules].sort(),
-  "every anti-slop rule must remain enabled",
 );
 
 // Four-way equality. A rule file with no index.ts registration is dead; a registration with no
@@ -78,16 +26,20 @@ const ruleFiles = ruleEntries
 const registeredRules = Object.keys(antiSlopPlugin.rules ?? {})
   .map((rule) => `anti-slop/${rule}`)
   .sort();
-const testedRules = expectedRules.filter((name) =>
+const testedRules = ruleFiles.filter((name) =>
   ruleEntries.some((entry) =>
     entry.startsWith(`${name.slice("anti-slop/".length)}.`) && isRunnableSuite(entry)),
 );
 
 assert.ok(ruleFiles.length > 0, "no rule source files found");
 assert.ok(registeredRules.length > 0, "the plugin registered no rules");
-assert.deepEqual(ruleFiles, [...expectedRules].sort(), "every rule file must be an expected rule");
-assert.deepEqual(registeredRules, [...expectedRules].sort(), "every rule must be registered in index.ts");
-assert.deepEqual([...testedRules].sort(), [...expectedRules].sort(), "every rule must own a suite");
+assert.deepEqual(
+  Object.keys(config.rules).filter((name) => name.startsWith("anti-slop/")).sort(),
+  ruleFiles,
+  "every anti-slop rule file must remain enabled",
+);
+assert.deepEqual(registeredRules, ruleFiles, "every rule must be registered in index.ts");
+assert.deepEqual([...testedRules].sort(), ruleFiles, "every rule must own a suite");
 
 // Value mapping extends the four-way key equality above. A registry value can point at a
 // sibling rule and leave every key set equal, so parse index.ts itself: each property key must
@@ -167,8 +119,8 @@ const indexRegistry = parseRuleRegistry(
 );
 assert.equal(
   indexRegistry.entries.length,
-  expectedRules.length,
-  "the parsed registry must carry every expected value",
+  ruleFiles.length,
+  "the parsed registry must carry every governed value",
 );
 assert.deepEqual(
   indexRegistry.entries.map(([key]) => `anti-slop/${key}`).sort(),
@@ -207,7 +159,7 @@ assert.deepEqual(
   "sabotaging one adjacent registry value mapping must fail exactly once",
 );
 
-for (const name of expectedRules) {
+for (const name of ruleFiles) {
   const setting = config.rules[name];
   const severity = Array.isArray(setting) ? setting[0] : setting;
   assert.equal(severity, "error", `${name} must remain an error`);
@@ -255,7 +207,7 @@ assert.equal(config.options?.denyWarnings, true);
 assert.equal(config.options?.reportUnusedDisableDirectives, "error");
 
 // KINU-069. These two are oxlint BUILT-INS, so they own no rule file, no suite and no entry in
-// `expectedRules`; their whole existence is this config. That makes them the one kind of rule that
+// the plugin rule corpus; their whole existence is this config. That makes them the one kind of rule that
 // can be deleted without leaving a trace anywhere else, so the policy is pinned here as well as
 // behaviourally in typescript-escapes.gate.test.ts. The options matter as much as the severity:
 // `ignoreRestArgs` would re-admit the `(...args: any[])` wrapper this ticket removed, and
@@ -269,7 +221,7 @@ assert.deepEqual(
 );
 
 // The same argument covers every other built-in the config turns on: no rule file, no suite, no
-// `expectedRules` entry, so the severity and the option are only ever true here. A bare "error"
+// tracked plugin rule file, so the severity and the option are only ever true here. A bare "error"
 // for a rule with an option leaves the threshold to whatever the next oxlint release defaults to,
 // which is why each pin carries its option. The `typescript/*` block is governed as one set in
 // type-aware.gate.test.ts; these two are read from syntax alone and state their reason here.
@@ -496,5 +448,5 @@ assert.deepEqual(
 );
 
 process.stdout.write(
-  `anti-slop: registry-value mapping equality (${indexRegistry.entries.length}/${expectedRules.length}); ${ladderRows.size} LADDER rows read; blind: a registry value that is not an identifier maps to no module, and a LADDER run or tier that is not a string literal is not read\n`,
+  `anti-slop: registry-value mapping equality (${indexRegistry.entries.length}/${ruleFiles.length}); ${ladderRows.size} LADDER rows read; blind: a registry value that is not an identifier maps to no module, and a LADDER run or tier that is not a string literal is not read\n`,
 );

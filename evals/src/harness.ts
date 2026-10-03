@@ -137,7 +137,7 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
 
 /** What a turn tells its trial while it waits: how many steps its runs have recorded (a stream that dropped shows no
  *  more, and the ledger does), and through `watching` the jobs it waits on. */
-type TurnHooks = { readonly stepped: (steps: number) => void; readonly watching: WatchOptions };
+type TurnHooks = { readonly stepped: (steps: number) => void; readonly watching: WatchOptions; readonly previousTurns: readonly EvalTurnResult[] };
 
 /** Where a trial records what stopped it early, and how long the turn it stopped had run. */
 type StopRecord = { readonly turns: EvalTurnResult[]; readonly errors: HarnessError[]; readonly turnWallMs: number };
@@ -165,7 +165,7 @@ function recordStop(thrown: { readonly cause: unknown }, { turns, errors, turnWa
 }
 
 /** One turn: its seeded files, the prompt, the wait until the workspace settles, and the checks. */
-async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, { stepped, watching }: TurnHooks): Promise<EvalTurnResult> {
+async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, { stepped, watching, previousTurns }: TurnHooks): Promise<EvalTurnResult> {
   if (turn.fresh) {
     await timeline.span('evict', async () => {
       await session.abortActivation();
@@ -222,7 +222,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
   const checks: EvalCheck[] = cut.length === 0 ? [] : [{ id: CUT_REPORTED_COMPLETED, pass: false, evidence: { runs: cut } }];
   const verify = turn.verify;
 
-  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies).collect(verify)));
+  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies, previousTurns).collect(verify)));
   const afterEviction = turn.verifyAfterEviction;
 
   if (afterEviction !== undefined && checks.every((check) => check.pass)) {
@@ -231,7 +231,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
       session.disconnect();
       await session.connect();
 
-      return new EvalVerifier(session, replies).collect(afterEviction);
+      return new EvalVerifier(session, replies, previousTurns).collect(afterEviction);
     }));
   }
 
@@ -372,6 +372,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
               if (recorded > steps) say(`turn ${String(turnNumber)}, step ${String(steps = recorded)}, off the ledger`);
             },
             watching: { waiting: say, cancelled: stop },
+            previousTurns: turns,
           });
 
           say(`turn ${String(turnNumber)} ${result.outcome.status} in ${String(Math.round(result.turnWallMs / 1000))}s, `

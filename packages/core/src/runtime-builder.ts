@@ -1,4 +1,5 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { DecisionPort } from './providers/decision-model';
 /** Composes a backend's raw primitives into a full AgentRuntime. */
 
 import type { SqlExecutor, RawSqlExec, Memory, Identity, LLM, Executor, Schedule, Shell } from './types/primitives';
@@ -35,6 +36,8 @@ export interface RuntimeComponents {
   memory: Memory;
   /** Judge/fast lanes routed through MODEL_ROUTE_POLICY from the live turn profile. */
   modelLanes?: ModelLaneComponents;
+  /** Rates turns; absent leaves them unrated. */
+  decide?: DecisionPort;
   executionRouter?: ExecutionRouter;
   /** Required by the `shell` tool's workspace fast path and the `eval` new-Function fallback. */
   shell?: Shell;
@@ -89,6 +92,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     set judgeModel(model: LLM | undefined) { pinned.judge = model; },
     get fastLlm() { return pinned.fast ?? routed.fast; },
     set fastLlm(model: LLM | undefined) { pinned.fast = model; },
+    ...(components.decide !== undefined && { decide: components.decide }),
     executionRouter: components.executionRouter,
     shell: components.shell,
     checkpoints: components.checkpoints,

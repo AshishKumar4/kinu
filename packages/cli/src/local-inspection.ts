@@ -2,7 +2,6 @@ import { Effect } from 'effect';
 import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
-  agentAffinityKey,
   BackgroundJobStore,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOLS,
@@ -10,8 +9,6 @@ import {
   HeadJournal,
   MctsSearchStore,
   RunEventRecorder,
-  unpricedLedgerSink,
-  type ModelCallSink,
   TriggerRegistry,
   type AlarmScheduler,
   openWorkspaceMainActor,
@@ -25,16 +22,12 @@ import {
   createFactsStore,
   initEventsHubTables,
   initAgentConfigTable,
-  alignmentConvergence,
-  calibrationReport,
-  createCompletionLLM,
-  ensembleReport,
   getChatHistoryPage, readSessionTranscript, CHAT_SESSION_ID,
   missingSubordinateHistory, inspectDescendant, readSubordinateInspection, SubordinateInspectionRequestSchema,
   type SubordinateInspectionRequest, type SubordinateInspectionResult,
   getEvolutionChangelog,
-  ingestOutcomeLabels,
-  initTurnOutcomeTables,
+  qualitySeries,
+  type QualityDay,
   listGepaRuns,
   listRuns,
   listScaffoldVersions,
@@ -42,31 +35,16 @@ import {
   createTimerTrigger,
   tableExists as coreTableExists,
   workspaceSpend,
-  runCorpusEval,
-  runEnsemble,
-  sampleForLabeling,
-  selectEnsembleJudges,
-  type AlignmentConvergence,
-  type CalibrationReport,
   type BackgroundJob,
   type ChatHistoryEntry,
-  type CorpusEvalReport,
-  type CorpusTurn,
-  type EnsembleJudge,
   type EvolutionChangelogView,
   type GepaCandidate,
   type RunListEntry,
   type GepaRunSummary,
   type HeadRunView,
-  type WeakLabel,
-  type EnsembleReport,
-  type EnsembleRunResult,
-  type LabelIngestResult,
-  type LabelingItem,
   type JsonObject,
   type JsonValue,
   type ResolvedTurnProfile,
-  type OutcomeLabel,
   type EventVariant,
   type KinuEvent,
   type QueryFilter,
@@ -103,7 +81,7 @@ import {
 import { classify, settle } from '@kinu.run/core/obs';
 import {
   makeSql, makeSqlExec, schemaGenesisOf, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
-  resolverModelPlane, type LocalModelResolver,
+  resolverModelPlane,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveAgentRef } from './config';
@@ -531,116 +509,8 @@ export function getLocalFacts(name: string, limit = 100): Array<{
   });
 }
 
-export function getLocalAlignment(name: string): AlignmentConvergence {
-  return withLocalDb(name, (db) => alignmentConvergence(makeSql(db), requireMainActor(db)));
-}
-
-export function getLocalCalibration(name: string): CalibrationReport {
-  return withLocalDb(name, (db) => calibrationReport(makeSql(db), requireMainActor(db)));
-}
-
-export function sampleLocalLabeling(name: string, size: number): LabelingItem[] {
-  return withLocalDb(name, (db) => sampleForLabeling(makeSql(db), requireMainActor(db), { size }));
-}
-
-/** Tables are ensured first: a workspace can predate the label table. */
-export function recordLocalOutcomeLabels(
-  name: string,
-  input: { labeler: string; labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }> },
-): Promise<LabelIngestResult> {
-  return settle(withLocalWritableDb(name, (db) => {
-    const sql = makeSql(db);
-    initTurnOutcomeTables((ddl) => { db.exec(ddl); });
-
-    return ingestOutcomeLabels(sql, openWorkspaceMainActor(sql), input);
-  }));
-}
-
-export function getLocalEnsemble(name: string): EnsembleReport {
-  return withLocalDb(name, (db) => ensembleReport(makeSql(db), requireMainActor(db)));
-}
-
-/** Resolving costs credentials, so `runEnsemble` takes this as a callback rather than resolving up front. */
-function localJudge(resolver: LocalModelResolver, named: string, workspace: string, report: ModelCallSink): EnsembleJudge {
-  const spec = resolver.normalizeSpecSync(named);
-
-  return {
-    spec,
-    llm: createCompletionLLM({ model: resolver.resolveModel(spec, agentAffinityKey(workspace)), spec, stage: 'judge', spend: { source: 'judge', report } }),
-  };
-}
-
-/** Holds the database open for the whole pass: verdicts are written as they land, so an interrupted run keeps paid calls. */
-export function runLocalOutcomeEnsemble(
-  name: string,
-  specs: string[] | null,
-): Promise<EnsembleRunResult> {
-  return settle(Effect.gen(function* () {
-    yield* ensureLocalAgent(name);
-    const db = new Database(agentDbPath(name));
-
-    return yield* Effect.ensuring(Effect.gen(function* () {
-      const sql = makeSql(db);
-      initTurnOutcomeTables((ddl) => { db.exec(ddl); });
-      // Choosing judges reads the catalog; resolving one needs credentials. Deferred so a label-less workspace is told that, not "unauthenticated".
-      const { resolver } = createConfiguredLocalModelResolver();
-      const actor = openWorkspaceMainActor(sql);
-      const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
-
-      return yield* Effect.promise(async () => runEnsemble(sql, actor, {
-        specs: async () => (await selectEnsembleJudges({
-          specs,
-          chatSpec: () => resolver.normalizeSpecSync(actor.config.getModel()),
-          candidates: () => resolver.judgeCandidates(),
-        })).specs,
-        judge: (named) => localJudge(resolver, named, name, report),
-      }));
-    }), Effect.sync(() => {
-      db.close();
-    }));
-  }));
-}
-
-/** The corpus is not this agent's history: no outcome row is written. */
-export function runLocalCorpusEval(name: string, input: {
-  turns: ReadonlyArray<CorpusTurn>;
-  labels: ReadonlyArray<WeakLabel>;
-  specs: string[] | null;
-}): Promise<CorpusEvalReport> {
-  return settle(Effect.gen(function* () {
-    yield* ensureLocalAgent(name);
-    const { resolver } = createConfiguredLocalModelResolver();
-    const db = new Database(agentDbPath(name));
-
-    return yield* Effect.ensuring(Effect.gen(function* () {
-      const sql = makeSql(db);
-      const actor = openWorkspaceMainActor(sql);
-      const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
-      const chatSpec = resolver.normalizeSpecSync(actor.config.getModel());
-
-      const selection = yield* Effect.promise(async () => selectEnsembleJudges({
-        specs: input.specs,
-        chatSpec: () => chatSpec,
-        candidates: () => resolver.judgeCandidates(),
-      }));
-
-      const judges = selection.specs.map((named) => localJudge(resolver, named, name, report));
-
-      return yield* Effect.promise(async () => runCorpusEval({
-        turns: input.turns,
-        labels: input.labels,
-        classifier: {
-          name: `${chatSpec} (turn-outcome classifier)`,
-          llm: createCompletionLLM({
-            model: resolver.resolveModel(chatSpec, agentAffinityKey(name)), spec: chatSpec, stage: 'chat', spend: { source: 'fast', report },
-          }),
-        },
-        judges,
-      }));
-    }), Effect.sync(() => {
-      db.close();
-    }));
-  }));
+export function getLocalQuality(name: string, days?: number): QualityDay[] {
+  return withLocalDb(name, (db) => qualitySeries(makeSql(db), requireMainActor(db), days === undefined ? {} : { days }));
 }
 
 export interface LocalGepaRunDetail {

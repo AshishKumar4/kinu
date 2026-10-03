@@ -7,7 +7,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { LLM } from '../types/primitives';
-import type { TurnOutcome } from '../evolution/outcomes';
+import { isHighRating, isLowRating, listTurnRatings } from '../evolution/ratings';
 import { extractJsonArray, jsonArrayOnlyInstruction } from '../providers/structured';
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
@@ -82,15 +82,11 @@ function collectContext(rt: AgentRuntime): CurriculumContext {
       FROM crafted_tools
       ORDER BY uses DESC NULLS LAST, name`;
 
-  // No catch: a missing table must not read as a fresh workspace. Abandoned turns carry
-  // no verdict, so listing them as failures would mislead the judge.
-  rt.actor.assertCurrent();
-
-  const recent = rt.storage.sql<{ user_message: string; outcome: TurnOutcome }>`
-    SELECT user_message, outcome FROM turn_outcomes
-      WHERE actor_id = ${rt.actor.actorId} AND outcome != 'abandoned'
-      ORDER BY created_at DESC LIMIT 20`
-    .map((row) => ({ task: row.user_message, succeeded: row.outcome === 'accepted' }));
+  // No catch: a missing table must not read as a fresh workspace. Neutral ratings carry no verdict, so listing
+  // them as failures would mislead the judge.
+  const recent = listTurnRatings(rt.storage.sql, rt.actor, { limit: 20 })
+    .filter((rating) => isHighRating(rating.score) || isLowRating(rating.score))
+    .map((rating) => ({ task: rating.request, succeeded: isHighRating(rating.score) }));
 
   return { skills, recent };
 }

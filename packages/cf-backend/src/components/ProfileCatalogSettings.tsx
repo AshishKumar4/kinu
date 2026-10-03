@@ -6,6 +6,8 @@ import {
   BUILTIN_SKILL_HEADERS,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_SPECS,
+  DECISION_MODELS,
+  DEFAULT_DECISION_MODEL,
   DEFAULT_PROVIDER_RETRIES,
   NAMED_SWARM_PRESETS,
   TIER_IDS,
@@ -37,6 +39,32 @@ const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
 
 interface CatalogOperation {
   promise: Promise<void> | null;
+}
+
+/** The model that rates each turn from the user's reply (`evolution/ratings.ts`); absent is the default. */
+function DecisionModelField({ value, onChange }: {
+  value: string | undefined;
+  onChange: (model: (typeof DECISION_MODELS)[number]) => void;
+}) {
+  return (
+    <div className="border-t p-border pt-3" data-section="decision-model">
+      <Field inline label="Decision model"
+        hint="Rates each turn from your reply to it, so the agent learns what served you. Your thumbs override it.">
+        <select
+          className={`${selectSmCls} w-56`}
+          aria-label="Decision model"
+          value={value ?? DEFAULT_DECISION_MODEL}
+          onChange={(event) => {
+            const model = DECISION_MODELS.find((spec) => spec === event.target.value);
+
+            if (model !== undefined) onChange(model);
+          }}
+        >
+          {DECISION_MODELS.map((model) => <option key={model} value={model}>{model.slice(model.lastIndexOf('/') + 1)}</option>)}
+        </select>
+      </Field>
+    </div>
+  );
 }
 
 /** Overrides `inputCls` to the combobox's `size="sm"` metrics; `!` because same-property
@@ -237,6 +265,10 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
     return next;
   });
 
+  const setDecisionModel = (decisionModel: (typeof DECISION_MODELS)[number]) => {
+    if (draft) setDraft({ ...draft, decisionModel });
+  };
+
   const setRetries = (retries: number) => {
     if (!draft || !Number.isInteger(retries) || retries < 0 || retries > 10) return;
     setDraft({ ...draft, retries });
@@ -403,6 +435,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                 />
               </Field>
             </div>
+            <DecisionModelField value={draft.decisionModel} onChange={setDecisionModel} />
           </>
         )}
       </Card>

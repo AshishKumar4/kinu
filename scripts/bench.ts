@@ -291,8 +291,8 @@ function unknownVariant(spec: string): never {
  *   paired per task, dev split first, sealed split for the reported number.
  *   Decision:
  *     • mixed beats self, CI excludes 0  → per-fork model diversity is real for
- *       agentic coding, and the implementation is to reuse selectEnsembleJudges
- *       (judge-model.ts), NOT a second family selector.
+ *       agentic coding, and the implementation picks one model per vendor family
+ *       from the registry's available specs.
  *     • self beats mixed, CI excludes 0  → Self-MoA replicates WITH execution
  *       ground truth. The current inherit-the-parent default is correct on
  *       evidence rather than by accident, and the question is closed.

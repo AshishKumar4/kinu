@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { createReadStream, readFileSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
-import { scratchPath } from '@kinu.run/test-utils';
+import { spawnTest, scratchPath } from '@kinu.run/test-utils'
 import { DEADLINE_EXIT_CODE, deadlineLine, leftoverLine, runUnderDeadline } from './deadline';
 import { GATE_DEADLINE_SECONDS, LADDER, scriptDeadline } from './ladder';
 
@@ -90,7 +90,7 @@ describe('a run under a deadline', () => {
       + 'seconds: 30, label: \'tee\', stdio: \'tee\' });\n'
       + 'console.log(`KEPT ${JSON.stringify(outcome.stdout)}`);';
 
-    const run = Bun.spawnSync([process.execPath, '-e', probe], { stdout: 'pipe', stderr: 'pipe' });
+    const run = Bun.spawnSync([process.execPath, '-e', probe], { env: process.env, stdout: 'pipe', stderr: 'pipe' });
 
     expect(run.stdout.toString()).toBe('from the row\nKEPT "from the row\\n"\n');
   });
@@ -216,7 +216,7 @@ function runner(rows: readonly (readonly string[])[]) {
     + 'process.on(\'SIGINT\', () => { runUnderDeadline({ argv: [process.execPath, \'-e\', \'console.log("started after the cancel")\'], seconds: 60, label: \'late\', stdio: \'tee\' }).catch(() => undefined); });\n'
     + 'console.log(`RETURNED ${JSON.stringify((await Promise.all(runs)).map((outcome) => outcome.exitCode))}`);\n';
 
-  return Bun.spawn([process.execPath, '-e', probe], { detached: true, stdout: 'pipe', stderr: 'pipe' });
+  return spawnTest([process.execPath, '-e', probe], { detached: true, stdout: 'pipe', stderr: 'pipe' });
 }
 
 describe("a runner that is cancelled, as a person's Ctrl-C or a stop of its service cancels it", () => {

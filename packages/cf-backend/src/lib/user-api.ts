@@ -246,6 +246,7 @@ const UserDeviceSchema = v.object({
   version: v.optional(v.nullable(v.string()), null),
   servedVersion: v.optional(v.nullable(v.string()), null),
   update: v.optional(v.picklist(DEVICE_UPDATE_STATES), 'unreported'),
+  updateRefusal: v.optional(v.nullable(v.string()), null),
 });
 
 const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string() });

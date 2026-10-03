@@ -1,5 +1,5 @@
 {
-  "measured": "86fbd16b82: 1282 test files, 1106 runnable suites, 13514 tests, 50 runners, 1519 non-public product members, 8891 product function bodies",
+  "measured": "293e1ae1c: 1351 test files, 1153 runnable suites, 13526 tests, 50 runners, 1622 non-public product members, 9336 product function bodies",
   "entries": [
     {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: only a resolved write reads as copied :: expected side computed by the code under test",
@@ -176,22 +176,6 @@
       ]
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-calibration.test.ts :: is deterministic, and an empty ledger draws nothing :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "an unseeded shuffle",
-          "file": "packages/core/src/evolution/calibration.ts",
-          "edits": [
-            [
-              "return shuffled(drawn, SHUFFLE_SEED).map(labelingItem);",
-              "return shuffled(drawn, Math.floor(Math.random() * 2 ** 31)).map(labelingItem);"
-            ]
-          ]
-        }
-      ]
-    },
-    {
       "key": "tautology_suspect :: packages/core/tests/unit-diversity.test.ts :: the first six branches read exactly as they always did :: expected side computed by the code under test",
       "count": 1,
       "plants": [
@@ -266,48 +250,6 @@
             [
               "return portable ? `${scope}-n-${trimmed}` : `${scope}-i-${index + 1}`;",
               "return portable ? `n-${trimmed}` : `${scope}-i-${index + 1}`;"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-turn-outcomes.test.ts :: an execution verdict never reaches a user verdict's poles :: expected side computed by the code under test",
-      "count": 2,
-      "plants": [
-        {
-          "defect": "a tool run priced at a user's approval",
-          "file": "packages/core/src/evolution/outcomes.ts",
-          "edits": [
-            [
-              "const EXECUTION_QUALITY = { accepted: 0.7, negative: 0.3 } as const;",
-              "const EXECUTION_QUALITY = { accepted: 0.9, negative: 0.3 } as const;"
-            ]
-          ]
-        },
-        {
-          "defect": "a failed tool run priced at a user's correction",
-          "file": "packages/core/src/evolution/outcomes.ts",
-          "edits": [
-            [
-              "const EXECUTION_QUALITY = { accepted: 0.7, negative: 0.3 } as const;",
-              "const EXECUTION_QUALITY = { accepted: 0.7, negative: 0.2 } as const;"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-turn-outcomes.test.ts :: outcomeQuality ties to the explicit-feedback constants :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "frustration priced above a correction",
-          "file": "packages/core/src/evolution/outcomes.ts",
-          "edits": [
-            [
-              "if (outcome === 'frustrated') return 0.1;",
-              "if (outcome === 'frustrated') return 0.25;"
             ]
           ]
         }

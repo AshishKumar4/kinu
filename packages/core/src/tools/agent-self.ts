@@ -12,7 +12,7 @@ import type { BackgroundJob } from '../types/jobs';
 import { PROPOSED_TASK_STATUSES, type ProposedTask } from '../types/proposals';
 import type { ModifyResult } from '../types/scaffold';
 import type { ScaffoldVersionView } from '../types/scaffold';
-import type { ReplayEvalSummary } from '../types/evolution';
+import type { QualityDay } from '../types/quality';
 import type { TimerTrigger } from '../events/ingress/triggers';
 import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
@@ -45,7 +45,7 @@ export interface AgentSelfHost {
     | { ok: boolean; changed: boolean; error?: string };
   jobResult(jobId: string): Promise<BackgroundJob | null>;
   listBackgroundJobs(limit?: number): Promise<BackgroundJob[]>;
-  getReplayEvals(limit?: number): Promise<ReplayEvalSummary[]>;
+  getQuality(days?: number): Promise<QualityDay[]>;
   /** Arm the compaction ladder's forced rebuild for this session's NEXT turn
    *  assembly — the same one-shot flag overflow recovery uses. */
   armCompactNow(): void;
@@ -79,8 +79,8 @@ export declare const agent: {
   backgroundJobs(limit?: number): Promise<unknown>;
   /** Compact the conversation when the next turn is assembled; the folded range stays archived. */
   compactNow(): Promise<{ armed: boolean; appliesAt: 'next-turn-assembly' } | Refusal>;
-  /** Past turns replayed against your current config, newest first: loss = 1 - mean score, with a 95% interval. */
-  replayEvals(limit?: number): Promise<unknown>;
+  /** How satisfied users were with your turns per day, oldest first: mean rating 1-5 with a 95% interval. */
+  quality(days?: number): Promise<unknown>;
 };
 `;
 
@@ -265,11 +265,11 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           return { armed: true, appliesAt: 'next-turn-assembly' };
         },
       },
-      replayEvals: {
-        description: 'Read your replay-eval loss curve (newest first): past outcome-labeled turns re-run against the current config, scored against how they originally landed. Each entry carries the 95% confidence interval on its mean score: a move inside the interval is noise, not progress.',
+      quality: {
+        description: 'Read how satisfied users were with your turns, one row per day over the last `days` (default 30): the mean rating from 1 to 5 with its 95% interval, the share of turns where the user had to correct you, and how many turns were rated. A move inside the interval is noise, not progress.',
         execute: (...args: unknown[]) => settle(withArgument(
-          argument(OptionalNumberSchema, { value: args[0] }, 'agent.replayEvals: limit must be a number when given'),
-          (limit) => host.getReplayEvals(limit),
+          argument(OptionalNumberSchema, { value: args[0] }, 'agent.quality: days must be a number when given'),
+          (days) => host.getQuality(days),
         )),
       },
     },

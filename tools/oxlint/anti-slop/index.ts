@@ -3,6 +3,7 @@ import { eslintCompatPlugin } from "@oxlint/plugins";
 import { effectRestrictedApiRule } from "./rules/effect-restricted-api.ts";
 import { effectRunInAdapterRule } from "./rules/effect-run-in-adapter.ts";
 import { noAmbientGitInTestsRule } from "./rules/no-ambient-git-in-tests.ts";
+import { noAmbientBunInTestsRule } from "./rules/no-ambient-bun-in-tests.ts";
 import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.ts";
 import { noElapsedWorkDeadlineRule } from "./rules/no-elapsed-work-deadline.ts";
 import { noConditionalEmptyObjectSpreadRule } from "./rules/no-conditional-empty-object-spread.ts";
@@ -57,6 +58,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"effect-restricted-api": effectRestrictedApiRule,
 		"effect-run-in-adapter": effectRunInAdapterRule,
 		"no-ambient-git-in-tests": noAmbientGitInTestsRule,
+		"no-ambient-bun-in-tests": noAmbientBunInTestsRule,
 		"no-elapsed-work-deadline": noElapsedWorkDeadlineRule,
 		"no-chained-type-assertions": noChainedTypeAssertionsRule,
 		"no-conditional-empty-object-spread": noConditionalEmptyObjectSpreadRule,

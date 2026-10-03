@@ -15,6 +15,7 @@ import { currentOwner, OWNER_RECORD, procFile, reapAbandonedRoots } from './proc
 import { isParseable, readMatching } from './sources';
 import { memberCalleeName, parse, walk, type Parsed } from './syntax';
 import { launchTestChrome } from './test-chrome';
+import { spawnTest } from '../packages/test-utils/src/spawn';
 
 const HELD = join(import.meta.dir, 'fixtures', 'test-chrome', 'held.ts');
 
@@ -36,7 +37,7 @@ function profileOf(pid: number | undefined): string {
 
 /** Settles when every process in `pids` has ended: `tail --pid` waits on a process this one did not start. */
 async function ended(pids: readonly number[]): Promise<void> {
-  await Promise.all(pids.map((pid) => Bun.spawn(['tail', `--pid=${String(pid)}`, '-f', '/dev/null']).exited));
+  await Promise.all(pids.map((pid) => spawnTest(['tail', `--pid=${String(pid)}`, '-f', '/dev/null']).exited));
 }
 
 async function firstLine(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -85,7 +86,7 @@ test('closing an unresponsive browser ends every owned process and removes its p
 });
 
 test('a launcher killed outright takes its browser with it, and the profile it left is reaped as abandoned', async () => {
-  const launcher = Bun.spawn(['bun', HELD], { stdout: 'pipe', stderr: 'inherit' });
+  const launcher = spawnTest(['bun', HELD], { stdout: 'pipe', stderr: 'inherit' });
   const named = v.parse(v.object({ browser: v.number() }), JSON.parse(await firstLine(launcher.stdout)));
   const profile = profileOf(named.browser);
   const processes = runningFrom(profile);
@@ -143,10 +144,8 @@ test('a dead launcher\'s profile stays while a process still runs from it, and g
   // `ready` once it runs under that command line: a child read at once has none yet (2026-09-30, CI run 36761423135
   // reaped this root; here 99 of 100 reads of a just-spawned child's /proc cmdline came back empty, 0 of 100 after
   // `ready`). It waits on its stdin, so a SIGKILL leaves no child of its own behind.
-  const survivor = Bun.spawn(
-    ['bash', '-c', 'exec -a "$0" bash -c "echo ready; read -r"', `browser --user-data-dir=${join(root, 'profile')}`],
-    { stdin: 'pipe', stdout: 'pipe' },
-  );
+  const survivor = spawnTest(['bash', '-c', 'exec -a "$0" bash -c "echo ready; read -r"', `browser --user-data-dir=${join(root, 'profile')}`],
+  { stdin: 'pipe', stdout: 'pipe' },);
 
   await survivor.stdout.getReader().read();
 

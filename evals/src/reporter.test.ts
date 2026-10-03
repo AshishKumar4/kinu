@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { scratchDir, spawnTest } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const REPO = join(import.meta.dirname, '../..');
@@ -25,7 +25,7 @@ test('a task file that did not load and a suite whose hook threw are named in th
   ].join('\n'));
 
   const run = spawnSync('bun', ['--bun', join(REPO, 'node_modules/.bin/vitest'), 'run', '--root', dir,
-    '--config', join(dir, 'vitest.config.mjs'), `--reporter=${join(REPO, 'evals/src/reporter.ts')}`], { cwd: REPO, encoding: 'utf8' });
+    '--config', join(dir, 'vitest.config.mjs'), `--reporter=${join(REPO, 'evals/src/reporter.ts')}`], { env: process.env, cwd: REPO, encoding: 'utf8' });
 
   const output = `${run.stdout}${run.stderr}`;
 
@@ -117,7 +117,7 @@ async function cancelHeldTrial(signal: 'SIGTERM' | 'SIGINT', to: 'group' | 'vite
     + `await runUnderDeadline({ argv: ${JSON.stringify(vitest)}, cwd: ${JSON.stringify(REPO)}, seconds: 480, label: 'Eval pass', stdio: 'tee' });\n`;
 
   // Its own process group, as the deploy starts a gate and a terminal its foreground job.
-  const run = Bun.spawn(to === 'deploy row' ? [process.execPath, '-e', row] : vitest, { cwd: REPO, detached: true, stdout: 'pipe', stderr: 'pipe' });
+  const run = spawnTest(to === 'deploy row' ? [process.execPath, '-e', row] : vitest, { cwd: REPO, detached: true, stdout: 'pipe', stderr: 'pipe' });
 
   let output = '';
   let sent = false;

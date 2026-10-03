@@ -512,9 +512,9 @@ corroborated lessons, confident facts, or a live scaffold with a passing
 misevolution veto.
 
 `import` runs the misevolution gate, records vetoes, and stages survivors in
-`imported_experience`. Only `EvolutionEngine.reviewTurn` promotes accepted
-entries, discards corrected or frustrated ones, or leaves ungraded ones
-waiting. Imported scaffolds enter `modifyScaffold` as pending. Only
+`imported_experience`. Only `EvolutionEngine.reviewTurn` promotes entries on
+a turn rated 4 or more, discards them on one rated 2 or lower, and leaves them
+waiting on an unrated or neutral one. Imported scaffolds enter `modifyScaffold` as pending. Only
 `applyPromotionDecision` writes `scaffoldPath`.
 
 ## CraftStore lifecycle

@@ -5,6 +5,7 @@
 
 import * as v from 'valibot';
 import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives';
+import type { DecisionPort } from './providers/decision-model';
 import type { ActorHandle } from './identity/actor-handle';
 import { estimateTokens, estimateUsdCost } from './llm';
 import type { ModelPricing } from './providers/types';
@@ -379,22 +380,43 @@ export class MissionGovernor {
   govern(llm: LLM, labels: readonly string[] = this.active): LLM {
     if (labels.length === 0) return llm;
 
-    const admitted = (): Effect.Effect<void, KinuError> => Effect.suspend(() => {
-      const refusal = this.guard('model_call', labels);
-
-      return refusal ? Effect.fail(new MissionBudgetExhausted(refusal)) : Effect.void;
-    });
-
     return {
-      stream: (opts) => settleSync(Effect.andThen(admitted(), Effect.sync(() => llm.stream(opts)))),
+      stream: (opts) => settleSync(Effect.andThen(this.admitCall(labels), Effect.sync(() => llm.stream(opts)))),
       complete: (prompt) => settle(Effect.gen({ self: this }, function* () {
-        yield* admitted();
+        yield* this.admitCall(labels);
         const text = yield* Effect.promise(() => llm.complete(prompt));
         this.debit(estimateTokens(prompt.length + text.length), { labels, calls: 1 });
 
         return text;
       })),
     };
+  }
+
+  /** The decision model under `govern`'s gate and debit; it writes no text, so its input is the spend: the tokens
+   *  it reported, or the state and questions estimated. A refused call spent nothing. */
+  governDecision(decide: DecisionPort, labels: readonly string[] = this.active): DecisionPort {
+    if (labels.length === 0) return decide;
+
+    return (request) => settle(Effect.gen({ self: this }, function* () {
+      yield* this.admitCall(labels);
+      const result = yield* Effect.promise(() => decide(request));
+
+      if (result !== null) {
+        const estimated = estimateTokens(request.state.length + JSON.stringify(request.questions).length);
+        this.debit(result.usage.input ?? estimated, { labels, calls: 1 });
+      }
+
+      return result;
+    }));
+  }
+
+  /** One model call's admission under `labels`: a spent cap refuses it before the model is reached. */
+  private admitCall(labels: readonly string[]): Effect.Effect<void, KinuError> {
+    return Effect.suspend(() => {
+      const refusal = this.guard('model_call', labels);
+
+      return refusal ? Effect.fail(new MissionBudgetExhausted(refusal)) : Effect.void;
+    });
   }
 
   private refusalFor(seam: MissionSeam, scope: string, row: MissionRow): MissionBudgetRefusal {
