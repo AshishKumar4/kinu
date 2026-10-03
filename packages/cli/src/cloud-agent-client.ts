@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect, type Exit } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   ADVISOR_SEVERITIES,
@@ -19,7 +19,7 @@ import {
   type StagedSkillResult,
   type ModelTestResult,
 } from '@kinu.run/core';
-import { renderThrownChain, tolerate, settle, detach } from '@kinu.run/core/obs';
+import { renderThrownChain, tolerate, settle, detach, hold } from '@kinu.run/core/obs';
 import {
   AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
   FileRestoreResultSchema, type FileCheckpointListing, type PlanReviewResult, type WorkspaceSpend,
@@ -325,9 +325,9 @@ export class CloudAgentClient implements AgentClient {
   private readonly pendingRpcs = new Map<string, { resolve: (value: JsonValue) => void; reject: (err: Error) => void }>();
   /** Kept visible until the actor confirms its durable cancellation sweep. */
   private readonly stoppingTurnIds = new Set<string>();
-  private stopPromise: Promise<void> | null = null;
+  private stopPromise: Promise<Exit.Exit<void>> | null = null;
   /** Held until the submission or RPC ack reaches the event stream; ids keep cleanup identity-safe. */
-  private readonly launchedTasks = new Map<string, Promise<void>>();
+  private readonly launchedTasks = new Map<string, Promise<Exit.Exit<void>>>();
 
   constructor(opts: CloudAgentClientOptions) {
     this.origin = opts.origin;
@@ -406,19 +406,16 @@ export class CloudAgentClient implements AgentClient {
     };
 
     const taskId = randomRequestId();
-    let task: Promise<void> | null = null;
-    task = (async () => {
-      try {
-        const result = await this.callRpc('branchTurn', [text]);
-        const r = v.parse(BranchTurnResultSchema, result);
 
-        if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
-      } catch (cause) {
-        fail(renderThrownChain({ cause }));
-      } finally {
-        if (this.launchedTasks.get(taskId) === task) this.launchedTasks.delete(taskId);
-      }
-    })();
+    const task: Promise<Exit.Exit<void>> = hold(Effect.ensuring(Effect.catchCause(Effect.gen({ self: this }, function* () {
+      const result = yield* Effect.promise(() => this.callRpc('branchTurn', [text]));
+      const r = v.parse(BranchTurnResultSchema, result);
+
+      if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
+    }), (failed) => Effect.sync(() => fail(renderThrownChain({ cause: Cause.squash(failed) })))), Effect.sync(() => {
+      if (this.launchedTasks.get(taskId) === task) this.launchedTasks.delete(taskId);
+    })));
+
     this.launchedTasks.set(taskId, task);
 
     return true;
@@ -555,18 +552,16 @@ export class CloudAgentClient implements AgentClient {
     }
 
     if (this.stoppingTurnIds.size > 0 && !this.stopPromise) {
-      this.stopPromise = this.settleStoppedTurns();
+      this.stopPromise = hold(this.settleStoppedTurns());
     }
 
     return [];
   }
 
-  private async settleStoppedTurns(): Promise<void> {
-    try {
-      await this.callRpc('cancelCurrentWork', []);
-    } catch (cause) {
-      this.emit({ type: 'error', message: renderThrownChain({ cause }) });
-    } finally {
+  private settleStoppedTurns(): Effect.Effect<void> {
+    return Effect.ensuring(Effect.catchCause(Effect.asVoid(Effect.promise(() => this.callRpc('cancelCurrentWork', []))), (failed) => Effect.sync(() => {
+      this.emit({ type: 'error', message: renderThrownChain({ cause: Cause.squash(failed) }) });
+    })), Effect.sync(() => {
       this.stopPromise = null;
 
       for (const id of this.stoppingTurnIds) {
@@ -577,7 +572,7 @@ export class CloudAgentClient implements AgentClient {
         this.activeTurns.delete(id);
         turn.settle();
       }
-    }
+    }));
   }
 
   async close(): Promise<void> {

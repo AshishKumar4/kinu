@@ -1,4 +1,4 @@
-import { Effect, Cause } from 'effect';
+import { Effect, Cause, type Exit } from 'effect';
 import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction } from "react";
 import { useAgent } from "agents/react";
 import {
@@ -28,7 +28,7 @@ import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
 import { looksLikeSecretField, parseMemoryNotes, type InlineSteer } from "@kinu.run/core";
-import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate, settleLogged, settle, detach } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate, settleLogged, settle, detach, hold } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -650,6 +650,13 @@ export interface LiveResourceRead<Value> {
   readonly isCurrent: () => boolean;
 }
 
+/** A live-data task's failure, recorded: nothing awaits the task, and its next run reads again. */
+function recordingLiveFailure(record: (error: KinuError) => void): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
+  return (failed) => Effect.sync(() => {
+    record(toKinuError({ doing: 'refreshing live workspace data', cause: Cause.squash(failed), otherwise: 'io' }));
+  });
+}
+
 export function refreshLiveResource<Value>(
   { source, read, apply, report, isCurrent }: LiveResourceRead<Value>,
 ): Promise<void> {
@@ -1057,7 +1064,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     [],
   );
 
-  const chatStreamReports = useRef(new Set<Promise<void>>());
+  const chatStreamReports = useRef(new Set<Promise<Exit.Exit<void>>>());
 
   // Always live: the transport only surfaces this for a request id still in flight.
   useEffect(() => {
@@ -1065,20 +1072,17 @@ export function useKinu(target?: string | KinuActorAddress) {
     setChatError({ body: streamError.message || String(streamError), replayed: false });
     const reports = chatStreamReports.current;
 
-    let report: Promise<void> | null = null;
+    const report: Promise<Exit.Exit<void>> = hold(Effect.ensuring(Effect.catchCause(Effect.promise(async () => {
+      await reportChatStreamFailure(streamError, subordinate === undefined ? "root" : "actor", {
+        release: await pageDeployedBuildSha(),
+        route: routeTemplateOf(location.pathname),
+      });
+    }), (failed) => Effect.sync(() => {
+      diagnostics.event("client_error.reporter_failed", { reason: renderThrownChain({ cause: Cause.squash(failed) }) });
+    })), Effect.sync(() => {
+      reports.delete(report);
+    })));
 
-    report = (async () => {
-      try {
-        await reportChatStreamFailure(streamError, subordinate === undefined ? "root" : "actor", {
-          release: await pageDeployedBuildSha(),
-          route: routeTemplateOf(location.pathname),
-        });
-      } catch (cause) {
-        diagnostics.event("client_error.reporter_failed", { reason: renderThrownChain({ cause }) });
-      } finally {
-        if (report !== null) reports.delete(report);
-      }
-    })();
     reports.add(report);
   }, [streamError, subordinate]);
 
@@ -1114,7 +1118,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const [loadGeneration, setLoadGeneration] = useState(0);
   const failureStreak = useRef(0);
   const snapshotLoadTaskId = useRef(0);
-  const snapshotLoadTasks = useRef(new Map<number, Promise<void>>());
+  const snapshotLoadTasks = useRef(new Map<number, Promise<Exit.Exit<void>>>());
 
   // `agentRef` indirection keeps the recovery callbacks stable across renders.
   const agentRef = useRef(agent);
@@ -1203,37 +1207,30 @@ export function useKinu(target?: string | KinuActorAddress) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
     const taskId = ++snapshotLoadTaskId.current;
-    let task: Promise<void> | null = null;
-    task = (async () => {
-      try {
-        const outcome = await loadWorkspaceSnapshot(
-          isSubordinate ? loadSubordinateData : loadAllData,
-          setSourceError,
-          (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
-          isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
-        );
 
-        if (disposed || outcome === "superseded") return;
+    const task = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const outcome = yield* Effect.promise(() => loadWorkspaceSnapshot(
+        isSubordinate ? loadSubordinateData : loadAllData,
+        setSourceError,
+        (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
+        isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
+      ));
 
-        if (outcome === "loaded") {
-          failureStreak.current = 0;
+      if (disposed || outcome === "superseded") return;
 
-          return;
-        }
+      if (outcome === "loaded") {
+        failureStreak.current = 0;
 
-        const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
-        failureStreak.current += 1;
-        timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
-      } catch (cause) {
-        diagnostics.failure('workspace.initial_snapshot_task_failed', toKinuError({
-          doing: 'refreshing live workspace data',
-          cause,
-          otherwise: 'io',
-        }));
-      } finally {
-        snapshotLoadTasks.current.delete(taskId);
+        return;
       }
-    })();
+
+      const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
+      failureStreak.current += 1;
+      timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
+    }), recordingLiveFailure((failure) => diagnostics.failure('workspace.initial_snapshot_task_failed', failure))), Effect.sync(() => {
+      snapshotLoadTasks.current.delete(taskId);
+    })));
+
     snapshotLoadTasks.current.set(taskId, task);
 
     return () => {
@@ -1545,24 +1542,17 @@ export function useKinu(target?: string | KinuActorAddress) {
   ]);
 
   const liveRefreshTaskId = useRef(0);
-  const liveRefreshTasks = useRef(new Map<number, Promise<void>>());
+  const liveRefreshTasks = useRef(new Map<number, Promise<Exit.Exit<void>>>());
 
   const rereadLive = useCallback((reads: readonly LiveRead[], also: readonly (() => Promise<void>)[] = []): void => {
     const taskId = ++liveRefreshTaskId.current;
 
-    const task = (async () => {
-      try {
-        await Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]);
-      } catch (cause) {
-        diagnostics.failure('workspace.live_refresh_failed', toKinuError({
-          doing: 'refreshing live workspace data',
-          cause,
-          otherwise: 'io',
-        }));
-      } finally {
-        liveRefreshTasks.current.delete(taskId);
-      }
-    })();
+    const task = hold(Effect.ensuring(Effect.catchCause(
+      Effect.asVoid(Effect.promise(() => Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]))),
+      recordingLiveFailure((failure) => diagnostics.failure('workspace.live_refresh_failed', failure)),
+    ), Effect.sync(() => {
+      liveRefreshTasks.current.delete(taskId);
+    })));
 
     liveRefreshTasks.current.set(taskId, task);
   }, [liveReads]);

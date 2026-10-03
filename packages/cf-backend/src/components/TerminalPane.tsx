@@ -1,13 +1,13 @@
 // Native container PTY, device PTY, workspace shell and line-mode terminal lanes.
 
-import { Effect } from 'effect';
+import { Cause, Effect, type Exit } from 'effect';
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import * as v from 'valibot';
 import "@xterm/xterm/css/xterm.css";
 import { describeError } from "@/hooks/use-async-resource";
-import { renderThrownChain, showing, tolerate, detach } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, tolerate, detach, hold } from "@kinu.run/core/obs";
 import { useTheme, type Theme, type ThemeMode } from "@/hooks/use-theme";
 import {
   BUSY, LINE_MODE_LABEL, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
@@ -47,7 +47,7 @@ export function TerminalPane({ workspace, executor, outputs, onExecute }: Termin
 
 
 interface TerminalOperation {
-  promise: Promise<void> | null;
+  promise: Promise<Exit.Exit<void>> | null;
 }
 
 interface MountedPty {
@@ -80,18 +80,14 @@ function mountPtyTerminal(
     const owner: TerminalOperation = { promise: null };
     // The key handler must return synchronously; install the owner before the browser action starts.
     copyOperation.current = owner;
-    owner.promise = (async () => {
-      try {
-        await navigator.clipboard.writeText(selection);
-      } catch (cause) {
-        if (copyOperation.current === owner) {
-          // The header advertises the chord, so a refused clipboard write must be shown.
-          setFailure(`clipboard refused the copy: ${renderThrownChain({ cause })}`);
-        }
-      } finally {
-        if (copyOperation.current === owner) copyOperation.current = null;
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => navigator.clipboard.writeText(selection)), (failed) => Effect.sync(() => {
+      if (copyOperation.current === owner) {
+        // The header advertises the chord, so a refused clipboard write must be shown.
+        setFailure(`clipboard refused the copy: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
       }
-    })();
+    })), Effect.sync(() => {
+      if (copyOperation.current === owner) copyOperation.current = null;
+    })));
 
     return false;
   });
@@ -220,28 +216,26 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
       const owner: TerminalOperation = { promise: null };
       // Several keepalives may be outstanding at once; each owns its own map entry.
       keepaliveOperations.current.set(keepaliveKey, owner);
-      owner.promise = (async () => {
-        try {
-          const response = await fetch(
-            `/api/workspaces/${encodeURIComponent(workspace)}/terminal/keepalive`
-            + `?executor=${encodeURIComponent(executor)}`,
-            { method: "POST", credentials: "same-origin" },
-          );
+      owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+        const response = yield* Effect.promise(() => fetch(
+          `/api/workspaces/${encodeURIComponent(workspace)}/terminal/keepalive`
+          + `?executor=${encodeURIComponent(executor)}`,
+          { method: "POST", credentials: "same-origin" },
+        ));
 
-          // Shown, not fatal: the reason (container gone, attach failed) arrives here before the socket reports it.
-          if (keepaliveOperations.current.get(keepaliveKey) === owner && !response.ok) {
-            setFailure(`the container refused the terminal's keepalive (${response.status})`);
-          }
-        } catch (cause) {
-          if (keepaliveOperations.current.get(keepaliveKey) === owner) {
-            setFailure(describeError({ cause }));
-          }
-        } finally {
-          if (keepaliveOperations.current.get(keepaliveKey) === owner) {
-            keepaliveOperations.current.delete(keepaliveKey);
-          }
+        // Shown, not fatal: the reason (container gone, attach failed) arrives here before the socket reports it.
+        if (keepaliveOperations.current.get(keepaliveKey) === owner && !response.ok) {
+          setFailure(`the container refused the terminal's keepalive (${response.status})`);
         }
-      })();
+      }), (failed) => Effect.sync(() => {
+        if (keepaliveOperations.current.get(keepaliveKey) === owner) {
+          setFailure(describeError({ cause: Cause.squash(failed) }));
+        }
+      })), Effect.sync(() => {
+        if (keepaliveOperations.current.get(keepaliveKey) === owner) {
+          keepaliveOperations.current.delete(keepaliveKey);
+        }
+      })));
     }, KEEPALIVE_MS);
 
     return () => {
@@ -482,36 +476,31 @@ function LineTerminal(
       // xterm's data callback is synchronous, so retain the promise until it settles.
       const owner: TerminalOperation = { promise: null };
       commandOperation.current = owner;
-      owner.promise = (async () => {
-        try {
-          // A failed command is an outcome for the terminal row: the rejection is held as a value so both fences apply alike.
-          let thrown: { readonly cause: unknown } | undefined;
+      owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+        // A failed command is an outcome for the terminal row: the rejection is held as a value so both fences apply alike.
+        const thrown = yield* Effect.matchCause(Effect.promise(() => run(cmd)), {
+          onSuccess: () => undefined,
+          onFailure: (failed) => ({ cause: Cause.squash(failed) }),
+        });
 
-          try {
-            await run(cmd);
-          } catch (cause) {
-            thrown = { cause };
-          }
+        if (!lineState.finishCommand(generation)) return;
 
-          if (!lineState.finishCommand(generation)) return;
+        if (termRef.current !== term) return;
 
-          if (termRef.current !== term) return;
-
-          if (thrown !== undefined) {
-            // A rejected exec produces no output row, so clear the marker and reprint the prompt here.
-            clearBusy(term, lineState);
-            term.write(`\x1b[31m${describeError(thrown)}\x1b[0m\r\n`);
-            writePrompt(term);
-          }
-        } catch (cause) {
-          if (lineState.finishCommand(generation) && termRef.current === term) {
-            clearBusy(term, lineState);
-            setFailure(describeError({ cause }));
-          }
-        } finally {
-          if (commandOperation.current === owner) commandOperation.current = null;
+        if (thrown !== undefined) {
+          // A rejected exec produces no output row, so clear the marker and reprint the prompt here.
+          clearBusy(term, lineState);
+          term.write(`\x1b[31m${describeError(thrown)}\x1b[0m\r\n`);
+          writePrompt(term);
         }
-      })();
+      }), (failed) => Effect.sync(() => {
+        if (lineState.finishCommand(generation) && termRef.current === term) {
+          clearBusy(term, lineState);
+          setFailure(describeError({ cause: Cause.squash(failed) }));
+        }
+      })), Effect.sync(() => {
+        if (commandOperation.current === owner) commandOperation.current = null;
+      })));
     });
 
     const observer = new ResizeObserver(() => {
