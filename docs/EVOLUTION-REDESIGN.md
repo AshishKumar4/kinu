@@ -56,7 +56,7 @@ A struggle shows the agent fighting its tools. The turn's steering detector (`or
 
 | Kind | Rule |
 |---|---|
-| `failure_streak` | One tool fails 3 times in a row (`CONSECUTIVE_FAILURES_BEFORE_STEER`) |
+| `repeated_failure` | One tool fails 3 times in a row (`CONSECUTIVE_FAILURES_BEFORE_STEER`) |
 | `repeated_call` | One call returns the same output 3 times (`IDENTICAL_CALLS_BEFORE_STEER`) |
 | `schema_refusal` | A tool input is refused by its schema before the tool runs |
 | `no_progress` | 12 steps with nothing new (`STEPS_WITHOUT_PROGRESS_BEFORE_STEER`) |

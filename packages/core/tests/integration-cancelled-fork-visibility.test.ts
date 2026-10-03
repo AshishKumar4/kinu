@@ -71,7 +71,7 @@ function workspace() {
 
 function nextStepBlock(w: ReturnType<typeof workspace>): string | null {
   return renderDynamicContextBlock(agentDynamicContext({
-    factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
+    factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], toolLessons: [], executors: [],
     runningJobs: w.jobs.listRunning(),
     openTasks: { items: [], total: 0 },
     liveHeadRuns: w.journal.listLive(),
@@ -283,7 +283,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const history: ModelMessage[] = [{ role: 'user', content: 'research this' }];
 
     const before = ledger.weave(history, agentDynamicContext({
-      factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
+      factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], toolLessons: [], executors: [],
       runningJobs: { items: [], total: 0 }, openTasks: { items: [], total: 0 }, liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
     }));
 
@@ -293,7 +293,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
 
     // One superseding block at the tail; frozen bytes before it untouched (prefix-cache contract).
     const after = ledger.weave([...history, { role: 'assistant', content: 'working' }], agentDynamicContext({
-      factsBlock: 'workspace = kinu', memoryTail: undefined, recoveryFindings: [], executors: [],
+      factsBlock: 'workspace = kinu', memoryTail: undefined, recoveryFindings: [], toolLessons: [], executors: [],
       runningJobs: { items: [], total: 0 }, openTasks: { items: [], total: 0 }, liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
     }));
 
@@ -389,7 +389,7 @@ describe('the operator cancel of ONE job reaches the agent', () => {
     expect(w.jobs.listRunning()).toEqual({ items: [], total: 0 });
 
     const block = renderDynamicContextBlock(agentDynamicContext({
-      factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
+      factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], toolLessons: [], executors: [],
       runningJobs: w.jobs.listRunning(), openTasks: { items: [], total: 0 }, liveHeadRuns: { items: [], total: 0 }, missingCapabilities: [],
     }));
 

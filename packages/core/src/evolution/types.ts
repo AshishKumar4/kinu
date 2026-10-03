@@ -4,6 +4,7 @@ import type { Usage } from '../usage';
 import type { JsonObject, JsonValue } from '../utils/json';
 import type { MissionGovernor } from '../mission-budget';
 import type { ToolOutcome } from '../tools/outcome';
+import type { Struggle } from './struggles';
 
 export interface ToolCallRecord {
   toolCallId?: string;
@@ -35,6 +36,8 @@ export interface CompletedTurn {
   /** Mission labels stamped when the turn ended. Carried by the turn because a deferred
      *  review may run with no active scope. Absent = ungoverned; a review must never invent one. */
   missionLabels?: readonly string[];
+  /** Where the turn fought its tools, from its steering detector; absent on turns recorded before. */
+  struggles?: readonly Struggle[];
 }
 
 export interface CompletedSession {

@@ -42,6 +42,10 @@ import {
 } from '../advisor/review';
 import { initLessonTables, recordLesson, corroborateLessonsForTurn, renderRecentLessons } from './lessons';
 import {
+  applyStruggleLesson, initStruggleTables, listToolLessons, recordTurnStruggles, scoreToolLessons, StruggleLessonSchema,
+  struggleLessonPrompt, teachingStruggle,
+} from './struggles';
+import {
   initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf, listTurnRatings, hasLowRating,
   isLowRating, isHighRating, feedbackOf, ratingQuality, thumbsRating, retractThumbs, realRatingScaffoldRates,
   isTrivialTurn,
@@ -279,6 +283,7 @@ export class EvolutionEngine {
     // Created here so every backend gets the engine's ledgers without schema wiring.
     initLessonTables(rt.storage.execRaw);
     initTurnRatingTables(rt.storage.execRaw);
+    initStruggleTables(rt.storage.execRaw);
     this.agentConfig = rt.actor.config;
     initCompletedTurnTable(rt.storage.execRaw);
     this.sessionWindow = createCompletedTurnStore(rt.storage.sql, rt.actor);
@@ -494,6 +499,9 @@ export class EvolutionEngine {
       this.announceReview(turn, rated);
     });
 
+    // Struggles teach whether or not the turn is rated.
+    await this.learnFromStruggles(turn, gradedKey);
+
     const rating = effective();
 
     if (rating === null) return;
@@ -548,6 +556,41 @@ export class EvolutionEngine {
         await this.extractPattern(turn, ratingQuality(rating.score), patternKey);
       }
     }
+  }
+
+  /** Records the turn's struggles and scores the lessons it used, then has the fast tier write one lesson about the
+   *  tool it struggled with most. Each part has its tombstone, so a retry neither rescores nor asks again. A turn
+   *  with no id has none to key them by. */
+  private async learnFromStruggles(reviewed: CompletedTurn, turnId: string | null): Promise<void> {
+    if (turnId === null) return;
+    const turn = { ...reviewed, turnId };
+    const { sql } = this.rt.storage;
+    const { actor } = this.rt;
+    const recordKey = `${turn.turnId}:struggles`;
+
+    if (!effectAlreadyDone(sql, actor, TURN_REVIEW_STEP_SCOPE, recordKey)) {
+      this.commit(() => {
+        recordTurnStruggles(sql, actor, turn);
+        scoreToolLessons(sql, actor, turn);
+        recordEffectDone(sql, actor, { scope: TURN_REVIEW_STEP_SCOPE, key: recordKey });
+      });
+    }
+
+    const struggle = teachingStruggle(turn.struggles ?? []);
+    const lessonKey = `${turn.turnId}:struggle-lesson`;
+
+    if (struggle === null || effectAlreadyDone(sql, actor, TURN_REVIEW_STEP_SCOPE, lessonKey)) return;
+    const prompt = struggleLessonPrompt(turn, struggle, listToolLessons(sql, actor, new Set([struggle.tool])));
+    const said = await this.reviewLlm(turn).complete(prompt);
+    const answer = v.safeParse(StruggleLessonSchema, tolerate(() => extractJsonObject(said), 'malformed-input'));
+
+    // Unusable output is not asked for again.
+    this.commit(() => {
+      if (answer.success) applyStruggleLesson(sql, actor, { turnId: turn.turnId, tool: struggle.tool, answer: answer.output });
+      recordEffectDone(sql, actor, { scope: TURN_REVIEW_STEP_SCOPE, key: lessonKey });
+    });
+
+    if (answer.success) this.emit({ type: 'reflection', message: `Lesson for \`${struggle.tool}\`: ${answer.output.text}` });
   }
 
   /**

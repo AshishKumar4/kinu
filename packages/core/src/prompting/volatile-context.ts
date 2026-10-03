@@ -72,6 +72,8 @@ export interface DynamicContext {
   memoryTail?: string;
   /** Re-read per step; facts and the memory tail freeze at turn assembly. */
   recoveries?: readonly string[];
+  /** What struggling turns taught about the tools offered this step. */
+  toolLessons?: readonly string[];
   /** Status labels only; executor doctrine lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
   /** Every machine by name, never "the device"; absent where a backend has no fleet. */
@@ -124,6 +126,7 @@ export interface DynamicContextSources {
   readonly memoryTail: string | undefined;
   /** Synchronous per-step read, so a mid-turn finding shows on the next step. */
   readonly recoveryFindings: readonly string[];
+  readonly toolLessons: readonly string[];
   readonly executors: readonly PromptExecutorInfo[];
   readonly devices?: readonly DeviceFleetEntry[];
   readonly runningJobs: ActiveRoster<{ id: string; kind: string; label: string | null }>;
@@ -181,6 +184,8 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   if (sources.memoryTail) context.memoryTail = sources.memoryTail;
 
   if (sources.recoveryFindings.length > 0) context.recoveries = sources.recoveryFindings;
+
+  if (sources.toolLessons.length > 0) context.toolLessons = sources.toolLessons;
 
   if (sources.missingCapabilities.length > 0) {
     context.missingCapabilities = sources.missingCapabilities;
@@ -414,6 +419,7 @@ const DYNAMIC_SECTION_TITLES = {
   factsBlock: '## World model (facts you remembered)',
   memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
   recoveries: '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
+  toolLessons: '## Tool lessons (what earlier turns that struggled with these tools learned)',
   executors: '## Execution status',
   devices: '## Your user\'s machines (the `device` runtime)',
   tasks: '## Your task list: what is still open (you keep this with the `tasks` tool)',
@@ -462,6 +468,12 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     DYNAMIC_SECTION_TITLES.recoveries,
     { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, { cap: MAX_RECOVERIES, keyed: false },
     (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
+  ));
+
+  add('toolLessons', rosterSection(
+    DYNAMIC_SECTION_TITLES.toolLessons,
+    { items: ctx.toolLessons ?? [], total: (ctx.toolLessons ?? []).length }, { cap: Infinity, keyed: false },
+    (lesson) => `- ${lesson}`,
   ));
 
   const executors = (ctx.executors ?? []).filter(executorIsSelectable);

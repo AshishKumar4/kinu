@@ -654,6 +654,7 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
     factsBlock: undefined,
     memoryTail: undefined,
     recoveryFindings: [],
+    toolLessons: [],
     executors: [],
     runningJobs: roster([]),
     openTasks: roster([]),
@@ -740,7 +741,7 @@ describe('observeSystemPromptHash', () => {
 
 describe('active skills and why each is on', () => {
   const blockOf = (activeSkills: ActiveSkillSet) => renderDynamicContextBlock(agentDynamicContext({
-    factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [], runningJobs: roster([]),
+    factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], toolLessons: [], executors: [], runningJobs: roster([]),
     openTasks: roster([]), liveHeadRuns: roster([]), missingCapabilities: [], activeSkills,
   }));
 

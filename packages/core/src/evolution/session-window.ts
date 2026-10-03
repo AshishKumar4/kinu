@@ -20,6 +20,7 @@ import {
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { ToolOutcomeSchema } from '../tools/outcome';
+import { StruggleSchema } from './struggles';
 
 /** The one durable mirror of {@link CompletedTurn}; a second mirror would drift
  *  into turns that silently fail to decode. */
@@ -44,6 +45,7 @@ export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   usage: v.optional(UsageSchema),
   // Persisted with the turn: the drain needs it after the running scope is gone.
   missionLabels: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
+  struggles: v.optional(v.array(StruggleSchema)),
 });
 
 const APPEND_SCOPE = 'turn_append';

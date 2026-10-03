@@ -13,7 +13,7 @@ import { listLessons } from '../src/evolution/lessons';
 import { listTurnRatings } from '../src/evolution/ratings';
 import { listRecoveryFindings } from '../src/evolution/recovery';
 import { snapshotCompletedTurn } from '../src/orchestrator/turn-lifecycle';
-import { CONSECUTIVE_FAILURES_BEFORE_STEER } from '../src/orchestrator/turn-steering';
+import { CONSECUTIVE_FAILURES_BEFORE_STEER, TurnSteering } from '../src/orchestrator/turn-steering';
 import type { LLM } from '../src/types/primitives';
 import type { SqlExecutor } from '../src/types/primitives';
 import { actorReferenceOf } from '../src/identity/actor-handle';
@@ -199,7 +199,7 @@ describe('a headless actor runs the step clock only', () => {
 
     // Control: the same turn at the root, answered by a user, does yield a lesson, so the zeros above are the
     // loop's decision.
-    const turn = snapshotCompletedTurn(acc, {
+    const turn = snapshotCompletedTurn({ acc, steering: new TurnSteering() }, {
       userMessage: 'probe the parser', assistantResponse: report.summary,
       turnId: 'h1', sessionId: 'default', origin: 'user',
     });

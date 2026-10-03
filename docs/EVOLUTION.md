@@ -82,6 +82,10 @@ The decision model is the account's Models setting (`decisionModel` in the profi
 
 Reflection fires on a turn rated 2 or lower. An LLM call writes a lesson and always records it in `lessons`. The lesson reaches the curated memory note only when corroborated, and corroboration needs the user's own negative: a thumbs-down, a pick of an alternate, or a reply the model reads as a correction with probability 0.8 or more. An uncorroborated lesson stays `provisional` until a later negative corroborates it. A turn rated 4 or more with tool calls may promote a reusable procedure.
 
+### Struggles teach tool lessons
+
+A struggle is the agent fighting a tool, as the turn's steering detector (`orchestrator/turn-steering.ts`) sees it: a `repeated_failure` streak, a `repeated_call` that returns the same output, a `schema_refusal` of the tool's input, or `no_progress` over 12 steps. The turn carries its struggles to its review (`evolution/struggles.ts`; design in [EVOLUTION-REDESIGN.md](./EVOLUTION-REDESIGN.md) §2). The review runs whether or not the turn is rated. It records the turn's struggles, tool errors and steps in `turn_struggles`, one row per reviewed turn, and scores the active lessons about the tools the turn used: helpful if the turn did not struggle with the tool, harmful if it did. After 5 uses, a lesson with more harmful than helpful scores retires. Then the fast tier reads the tool the turn struggled with most, its calls and the lessons already known about it, and adds one lesson to `tool_lessons` or rewrites a known one in place. A stall alone teaches nothing, as no one tool owns it. Each step's dynamic context lists the newest 5 active lessons about the tools it offers.
+
 The Quality panel and `kinu quality <agent>` show satisfaction per day with its 95% interval, the corrected rate, and how many turns were rated and by whom (`qualitySeries`). A rating, or a review's `turn_complete`, names `getQuality` in the workspace's `reads_changed` frame, so an open Quality panel re-reads it.
 
 ## Session-level evolution
