@@ -3623,7 +3623,7 @@ function QualityRetryFrame() {
   return (
     <div data-quality-retry className="p-bg p-text min-h-screen p-6">
       <div className="mx-auto max-w-[760px]">
-        <QualityView rpc={rpc} />
+        <QualityView rpc={rpc} moved={0} />
       </div>
     </div>
   );
@@ -6421,6 +6421,34 @@ const snapshotRaceRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promi
   return value === undefined ? workspacePageRpc<T>(method, args) : rpcResult(value).json<T>();
 };
 
+/** Ratings landed since the `qualitylive` frame opened; each adds a rated turn to today. */
+let qualityLiveRatings = 0;
+
+/** A rating landing while the Quality tab is open: the workspace names the quality read, and the tab re-reads it. */
+function QualityLiveFrame() {
+  const state = useKinu(WORKSPACE_PAGE_NAME);
+
+  const rpc = useMemo<Rpc>(() => async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method !== "getQuality") return workspacePageRpc<T>(method, args);
+    const today = QUALITY_DAYS.at(-1);
+
+    return rpcResult(today === undefined ? QUALITY_DAYS : [
+      ...QUALITY_DAYS.slice(0, -1),
+      { ...today, rated: today.rated + qualityLiveRatings, turns: today.turns + qualityLiveRatings },
+    ]).json<T>();
+  }, []);
+
+  return (
+    <div data-quality-live className="p-bg p-text min-h-screen p-6">
+      <button data-quality-rate onClick={() => {
+        qualityLiveRatings += 1;
+        galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getQuality"] }));
+      }}>Rate a turn</button>
+      <div className="mx-auto max-w-[760px]"><QualityView rpc={rpc} moved={state.readMoves.getQuality ?? 0} /></div>
+    </div>
+  );
+}
+
 function snapshotRaceFrame(): MountedFrame {
   serveGalleryRpc(snapshotRaceRpc);
 
@@ -6498,6 +6526,11 @@ async function mount() {
     }],
     ["drive-design", () => Promise.resolve(driveDesignFrame())],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
+    ["qualitylive", () => {
+      serveGalleryRpc(workspacePageRpc);
+
+      return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
+    }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
   ]);
 

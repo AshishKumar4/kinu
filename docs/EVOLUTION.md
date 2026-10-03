@@ -82,7 +82,7 @@ The decision model is the account's Models setting (`decisionModel` in the profi
 
 Reflection fires on a turn rated 2 or lower. An LLM call writes a lesson and always records it in `lessons`. The lesson reaches the curated memory note only when corroborated, and corroboration needs the user's own negative: a thumbs-down, a pick of an alternate, or a reply the model reads as a correction with probability 0.8 or more. An uncorroborated lesson stays `provisional` until a later negative corroborates it. A turn rated 4 or more with tool calls may promote a reusable procedure.
 
-The Quality panel and `kinu quality <agent>` show satisfaction per day with its 95% interval, the corrected rate, and how many turns were rated and by whom (`qualitySeries`).
+The Quality panel and `kinu quality <agent>` show satisfaction per day with its 95% interval, the corrected rate, and how many turns were rated and by whom (`qualitySeries`). A rating, or a review's `turn_complete`, names `getQuality` in the workspace's `reads_changed` frame, so an open Quality panel re-reads it.
 
 ## Session-level evolution
 

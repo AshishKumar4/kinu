@@ -315,7 +315,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               snapshot={props.snapshot}
               memory={props.memory} memoryContent={props.memoryContent}
               onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
-              rpc={props.rpc}
+              rpc={props.rpc} readMoves={props.readMoves}
             />
           )}
           {surface === "Environment" && (
