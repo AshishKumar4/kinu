@@ -5,7 +5,8 @@ import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { listAvailableModels } from "@/lib/user-api";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 
 export const MISSION_LABEL = "Mission";
 
@@ -26,22 +27,22 @@ export function useCreateWorkspace() {
   const hasModels = menu === null ? null : menu.models.length > 0;
 
   /** `onBeforeNavigate` lets a modal dismiss itself first. */
-  const create = useCallback(async (mission: string, onBeforeNavigate?: () => void) => {
+  const create = useCallback((mission: string, onBeforeNavigate?: () => void): Promise<void> => {
     const m = mission.trim();
 
-    if (!m || busy) return;
+    if (!m || busy) return Promise.resolve();
     setBusy(true);
     setErr(null);
 
-    try {
-      const created = await createWorkspaceFromMission(m);
+    return settle(Effect.catchCause(Effect.gen(function* () {
+      const created = yield* Effect.promise(() => createWorkspaceFromMission(m));
       roster.upsert(created);
       onBeforeNavigate?.();
-      await navigate(`/workspace/${created.name}`);
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
+      yield* Effect.promise(async () => navigate(`/workspace/${created.name}`));
+    }), (failed) => Effect.sync(() => {
+      setErr(renderThrownChain({ cause: Cause.squash(failed) }));
       setBusy(false);
-    }
+    })));
   }, [busy, navigate, roster]);
 
   return { hasModels, busy, err, create };
