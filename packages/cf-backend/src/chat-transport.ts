@@ -76,6 +76,8 @@ interface LiveStream {
   readonly relayed: { readonly step: number; readonly type: string; readonly body: string }[];
   /** Steps whose last chunk went out, those before this activation included. */
   finished: number;
+  /** Tabs already replayed it: told again by their own probe, they are not held back again. */
+  readonly joined: Set<string>;
   /** The relay broke before the stream ended, so the accumulated parts are not the answer. */
   broken: boolean;
   /** Why the turn failed, sent as the frame that ends it. */
@@ -218,7 +220,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   private notifyResuming(connection: ChatSocket, live: LiveStream, probeId: string | undefined): void {
     const frame = { type: MessageType.CF_AGENT_STREAM_RESUMING, id: live.requestId, turnId: live.turnId, ...(probeId !== undefined && { probeId }) };
 
-    if (sendIfOpen(connection, JSON.stringify(frame))) this.pendingResume.add(connection.id);
+    if (sendIfOpen(connection, JSON.stringify(frame)) && !live.joined.has(connection.id)) this.pendingResume.add(connection.id);
   }
 
   quiet(): void {
@@ -243,6 +245,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
       return;
     }
+
+    live.joined.add(connection.id);
 
     const recorded = wire.steps();
     const restated = Math.min(recorded.length, live.finished);
@@ -397,7 +401,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     const live: LiveStream = {
       requestId, turnId: turn.turnId, carried, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), relayed: [],
-      finished: turn.finishedSteps, broken: false, failure: null,
+      finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null,
     };
 
     this.live = live;

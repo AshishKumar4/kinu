@@ -538,6 +538,26 @@ describe('ChatWireTransport', () => {
     await h.land(answered);
   });
 
+  // The SDK's hook acks a stream once, though it is told on connect and again on its own probe, and the ack can land first.
+  test('a tab whose ack lands before its own probe is not held again: it hears the turn live after its replay', async () => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]), { index: 0 });
+
+    const tab = h.connection('c2');
+    await h.transport.onConnect(tab);
+    await h.transport.onMessage(tab, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+    await h.transport.onMessage(tab, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-1' }));
+    await h.transport.observe(chunks([{ type: 'text-delta', id: 't', delta: 'tial' }]), { index: 0 });
+
+    const heard = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)));
+    const live = heard.filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.replay !== true).map((frame) => JSON.parse(frame.body ?? '{}').delta);
+    expect(live).toEqual(['tial']);
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'partial', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+  });
+
   // A joining tab's replay restates from the ledger each step it records whose last chunk went out, then the relay's
   // chunks after them: the loop records a step beside the stream, so either can be ahead.
   test('a joining tab hears a step the ledger records and the relay sent whole restated, then the relay\'s chunks after it', async () => {
