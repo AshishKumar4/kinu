@@ -41,6 +41,57 @@ const DEADLINE_MS = 10_000;
  * not `Math.random`: both arms of a paired comparison must see a bit-identical instance.
  */
 const HARNESS_PROLOGUE = `
+const verifierNow = process.hrtime.bigint;
+
+// The verifier shares the candidate's realm, so lock its intrinsics before importing the candidate.
+function lockRealm() {
+  const seen = new Set();
+  function freeze(value) {
+    if (value === null || (typeof value !== 'object' && typeof value !== 'function') || seen.has(value)) return;
+    seen.add(value);
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      freeze(descriptor.value);
+      freeze(descriptor.get);
+      freeze(descriptor.set);
+    }
+    freeze(Object.getPrototypeOf(value));
+    Object.freeze(value);
+  }
+  const globals = [
+    'Object', 'Function', 'Array', 'Number', 'Boolean', 'String', 'Symbol', 'BigInt',
+    'Math', 'JSON', 'Reflect', 'Proxy', 'Promise', 'Date', 'RegExp',
+    'Map', 'Set', 'WeakMap', 'WeakSet', 'WeakRef', 'FinalizationRegistry',
+    'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Atomics',
+    'Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array',
+    'Int32Array', 'Uint32Array', 'Float16Array', 'Float32Array', 'Float64Array',
+    'BigInt64Array', 'BigUint64Array',
+    'Error', 'AggregateError', 'EvalError', 'RangeError', 'ReferenceError',
+    'SyntaxError', 'TypeError', 'URIError', 'SuppressedError',
+    'Iterator', 'DisposableStack', 'AsyncDisposableStack', 'Intl', 'Temporal',
+    'eval', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
+    'decodeURI', 'decodeURIComponent', 'encodeURI', 'encodeURIComponent', 'escape', 'unescape',
+    'Infinity', 'NaN', 'undefined',
+  ];
+  const syntax = [
+    Object.getPrototypeOf([][Symbol.iterator]()),
+    Object.getPrototypeOf(new Map()[Symbol.iterator]()),
+    Object.getPrototypeOf(new Set()[Symbol.iterator]()),
+    Object.getPrototypeOf(''[Symbol.iterator]()),
+    Object.getPrototypeOf(''.matchAll(/(?:)/g)),
+    Object.getPrototypeOf(function* () {}),
+    Object.getPrototypeOf(async function () {}),
+    Object.getPrototypeOf(async function* () {}),
+  ];
+  for (const intrinsic of syntax) freeze(intrinsic);
+  for (const name of globals) {
+    if (!Object.getOwnPropertyDescriptor(globalThis, name)) continue;
+    const value = globalThis[name];
+    freeze(value);
+    Object.defineProperty(globalThis, name, { value, writable: false, configurable: false });
+  }
+}
+
 function mulberry32(a) {
   return function () {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -87,15 +138,15 @@ function meter(fn) {
  *  candidate, which is not. */
 function measure(fn, input, oracle, limit) {
   OPS = 0; LIMIT = limit; UNTIL = Date.now() + P.deadlineMs;
-  const t0 = process.hrtime.bigint();
+  const t0 = verifierNow();
   try {
     const out = fn(input, oracle);
-    return { out, err: null, ops: OPS, ms: Number(process.hrtime.bigint() - t0) / 1e6 };
+    return { out, err: null, ops: OPS, ms: Number(verifierNow() - t0) / 1e6 };
   } catch (e) {
     const kind = e instanceof Budget || e instanceof Deadline ? '' : 'threw: ';
     return {
       out: undefined, err: kind + String((e && e.message) || e),
-      ops: OPS, ms: Number(process.hrtime.bigint() - t0) / 1e6,
+      ops: OPS, ms: Number(verifierNow() - t0) / 1e6,
     };
   }
 }
@@ -339,6 +390,7 @@ export function runRatioMeasurement(
       `const verifierSign = await (${hmacSha256Signer.toString()})(RECEIPT);`,
       `const refSolve = ${yield* referenceAsExpression(problem.reference)};`,
       `await unlink(${JSON.stringify(measureFile)});`,
+      ctx.nodeIsolated ? 'lockRealm();' : '',
       `const cand = await loadSolve('./${candidateFile}');`,
       problem.body,
       'await Promise.all(verifierPending);',

@@ -566,6 +566,7 @@ export function createCFRuntime(
     }),
     executionRouter,
     shell,
+    nodeIsolated: true,
     localVfs: baseWorkspaceVfs,
     deviceTransport,
     vectorStore,
