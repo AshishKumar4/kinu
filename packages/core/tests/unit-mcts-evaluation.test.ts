@@ -1,9 +1,9 @@
 // Grounded MCTS branch evaluator: execution picks the score band, then a k-sample judge median.
+import { createEvalExecutor } from './helpers';
 import { describe, test, expect } from 'bun:test';
 import { evaluateWithMultiModelJudging } from '../src/index';
 import { isParseFailure, judgeCallBudget } from '../src/mcts/evaluation';
 import { DEFAULT_CONFIG } from '../src/config';
-import { createInlineExecutor } from '../src/identity/inline-primitives';
 import { createScriptedLLM, createJSONLLM } from '@kinu.run/test-utils';
 import type { Executor, LLM } from '../src/index';
 
@@ -41,7 +41,7 @@ describe('verifier-owned completion through the real executor', () => {
 
     return evaluateWithMultiModelJudging({
       task: 'add two numbers', trajectory: withCode('implementation', code),
-      executor: createInlineExecutor(), judge, explorer: judge, judgeSamples: 1,
+      executor: createEvalExecutor(), judge, explorer: judge, judgeSamples: 1,
     });
   };
 
@@ -841,7 +841,7 @@ describe('partial credit: the fail band is positioned by MEASURED checks, not th
     trajectory: withCode('an approach', `const widget = ${JSON.stringify(
       Object.fromEntries(CHECKS.map((name, index) => [name, index < passing])),
     )};`),
-    executor: createInlineExecutor(),
+    executor: createEvalExecutor(),
     judge: suiteJudge(0.5),
     explorer: suiteJudge(0.5),
   });

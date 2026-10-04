@@ -19,7 +19,7 @@ import {
   codemodeFunction, withCodemodeProgram, currentWorkMode, toolsInWorkMode, execCallArgs, readDeviceRequestChannel,
 } from '@kinu.run/core';
 import { tool } from 'ai';
-import { normalizeCode } from '@cloudflare/codemode/normalize';
+import { programBody } from './executor';
 import * as v from 'valibot';
 
 interface NodeExecuteToolFactoryDeps {
@@ -133,10 +133,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 
-          const fn = new Function(
-            ...argNames,
-            `${renderCraftedDefinitions(crafted)}\nreturn (\n${normalizeCode(args.code)}\n)()`,
-          );
+          const fn = new Function(...argNames, programBody(args.code, renderCraftedDefinitions(crafted)));
 
           const rawResult = await fn(...argValues);
 

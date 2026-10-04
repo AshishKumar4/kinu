@@ -13,8 +13,7 @@ import {
   initHeadsTables,
 } from '../src/index';
 import { createJSONLLM, present } from '@kinu.run/test-utils';
-import { createInlineExecutor } from '../src/identity/inline-primitives';
-import { makeSql, makeExecRaw, captureConsole, createTestActor } from './helpers';
+import { makeSql, makeExecRaw, captureConsole, createTestActor, createEvalExecutor } from './helpers';
 
 function newJournal() {
   const db = new Database(':memory:');
@@ -76,7 +75,7 @@ const ctx: SerializedMessage[] = [{ id: 'm1', role: 'user', content: 'go', creat
 function grounding(over: Partial<HeadGrounding> = {}): HeadGrounding {
   const judge = createJSONLLM({ score: 0.5, rationale: 'ok' });
 
-  return { executor: createInlineExecutor(), explorer: judge, judge, ...over };
+  return { executor: createEvalExecutor(), explorer: judge, judge, ...over };
 }
 
 describe('grounded head outcome scores', () => {
