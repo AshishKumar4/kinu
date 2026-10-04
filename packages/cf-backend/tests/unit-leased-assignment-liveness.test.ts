@@ -59,7 +59,7 @@ async function hire(workspace: ReturnType<typeof gatewayWorkspace>, lifetime: Li
 
   rosterOver(workspace.db).create({
     name: 'summariser', actorReference: child.reference, birth: null, deleteRequested: false,
-    status: 'working', currentTask: BRIEF, createdAt: Date.now(), dismissedAt: null, lifetime, taskEventId: null,
+    status: 'working', currentTask: BRIEF, createdAt: Date.now(), dismissedAt: null, taskEventId: null,
   });
 
   return child.reference.actorId;

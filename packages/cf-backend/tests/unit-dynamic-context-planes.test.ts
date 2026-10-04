@@ -26,7 +26,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
     new SubordinateRosterStore(makeSqlExec(db), workspaceMainActor(db)).create({
       name: 'scout', actorReference: scout.reference, birth: null, deleteRequested: false,
       status: 'working', currentTask: 'map the failure surface', createdAt: Date.now(), dismissedAt: null,
-      lifetime: 'durable', taskEventId: null,
+      taskEventId: null,
     });
 
     const context = await modelContext(agent);

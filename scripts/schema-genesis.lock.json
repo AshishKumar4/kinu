@@ -57,7 +57,6 @@
     "current_task TEXT",
     "created_at INTEGER NOT NULL",
     "dismissed_at INTEGER",
-    "lifetime TEXT NOT NULL DEFAULT 'durable' CHECK (lifetime IN ('durable','task'))",
     "task_event_id TEXT",
     "actor_reference TEXT",
     "birth_request TEXT",

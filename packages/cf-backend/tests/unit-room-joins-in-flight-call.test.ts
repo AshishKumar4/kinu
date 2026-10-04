@@ -129,7 +129,7 @@ async function joinedMidCall(room: 'root' | 'helper'): Promise<{ resumed: boolea
 
     rosterOver(workspace.db).create({
       name: 'lead', actorReference: child.reference, birth: null, deleteRequested: false,
-      status: 'working', currentTask: ASK, createdAt: Date.now(), dismissedAt: null, lifetime: 'durable', taskEventId: null,
+      status: 'working', currentTask: ASK, createdAt: Date.now(), dismissedAt: null, taskEventId: null,
     });
     actor = child.reference.actorId;
     await wakeForDelegatedTask(workspace, actor, ASK);

@@ -147,7 +147,7 @@ describe("a delegated run settles its hirer's roster", () => {
 
     roster.create({
       name: 'researcher', actorReference: child.actor.reference, birth: null, deleteRequested: false,
-      lifetime: 'durable', status: 'idle', currentTask: null, taskEventId: null, createdAt: Date.now(), dismissedAt: null,
+      status: 'idle', currentTask: null, taskEventId: null, createdAt: Date.now(), dismissedAt: null,
     });
     roster.assign('researcher', brief);
     await runDelegatedTask(workspace, child.actor.handle.actorId, brief);

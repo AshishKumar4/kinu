@@ -52,6 +52,9 @@ import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
 
+/** A roster row's lifetime is its actor's. */
+const ROSTER_LIFETIME = "(SELECT lifetime FROM workspace_actors WHERE actor_id = json_extract(actor_subordinates.actor_reference, '$.actorId')) AS lifetime";
+
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake',
   baseURL: 'http://localhost:0',
@@ -1101,7 +1104,7 @@ describe('LocalAgentHost', () => {
 
     const rows = archived.query<{
       name: string; status: string; lifetime: string; task_event_id: string | null;
-    }, []>('SELECT name, status, lifetime, task_event_id FROM actor_subordinates').all();
+    }, []>(`SELECT name, status, ${ROSTER_LIFETIME}, task_event_id FROM actor_subordinates`).all();
 
     archived.close();
     expect(rows).toEqual([
@@ -1230,7 +1233,7 @@ describe('LocalAgentHost', () => {
       const view = new Database(dbPath, { readonly: true });
 
       const rows = view.query<{ name: string; status: string; lifetime: string }, []>(
-        'SELECT name, status, lifetime FROM actor_subordinates',
+        `SELECT name, status, ${ROSTER_LIFETIME} FROM actor_subordinates`,
       ).all();
 
       const reports = view.query<{ n: number }, []>(
@@ -1463,7 +1466,7 @@ describe('LocalAgentHost', () => {
       const view = new Database(dbPath, { readonly: true });
 
       const rows = view.query<{ status: string; lifetime: string }, []>(
-        'SELECT status, lifetime FROM actor_subordinates',
+        `SELECT status, ${ROSTER_LIFETIME} FROM actor_subordinates`,
       ).all();
 
       // The progress note is not the answer, so it reaches the rail like any mid-work note, and the answer after it.
@@ -1655,7 +1658,7 @@ describe('LocalAgentHost', () => {
     });
     await team.assign({ name: 'ask-researcher-late', task: 'Report it.', mode: 'build' });
     const roster = new Database(dbPath);
-    roster.run("UPDATE actor_subordinates SET lifetime='task' WHERE name='ask-researcher-late'");
+    roster.run("UPDATE workspace_actors SET lifetime='task' WHERE actor_id = (SELECT json_extract(actor_reference, '$.actorId') FROM actor_subordinates WHERE name='ask-researcher-late')");
     roster.close();
     await reported.promise;
     await host.close();
@@ -1667,7 +1670,7 @@ describe('LocalAgentHost', () => {
     ).get()?.n ?? 0;
 
     const rows = view.query<{ status: string; lifetime: string }, []>(
-      "SELECT status, lifetime FROM actor_subordinates WHERE name='ask-researcher-late'",
+      `SELECT status, ${ROSTER_LIFETIME} FROM actor_subordinates WHERE name='ask-researcher-late'`,
     ).all();
 
     view.close();
@@ -1691,7 +1694,6 @@ describe('LocalAgentHost', () => {
       VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
     seed.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
       VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
-    seed.run(`UPDATE workspace_actors SET origin = 'evolution', tab = 0, input = 0, lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
     seed.close();
 
     const stage = () => {
@@ -1723,6 +1725,10 @@ describe('LocalAgentHost', () => {
     };
 
     await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
+    // The helper the lane hires is task-lived, and durable verbs refuse one: so it becomes one after the handoff.
+    const helper = new Database(dbPath);
+    helper.run(`UPDATE workspace_actors SET origin = 'evolution', tab = 0, input = 0, lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
+    helper.close();
     await held.promise;
     const closing = host.close();
     release.resolve();
