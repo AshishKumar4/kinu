@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { asSchema, jsonSchema, tool, type ToolSet } from 'ai';
 import { mcpToolKey } from '../src/tools/mcp-naming';
-import { admitMcpDescriptors, describeMcpTool } from '../src/tools/mcp-surface';
+import { describeMcpTool, servedMcpDescriptors } from '../src/tools/mcp-surface';
 import { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from '../src/tools/tool-schema';
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
@@ -180,8 +180,7 @@ describe('MCP tool names', () => {
       return answer.admitted;
     });
 
-    const keys = admitMcpDescriptors(described, { contextWindow: 200_000, modelOutputLimit: null, nativeToolTokens: 0 })
-      .admitted.map((descriptor) => descriptor.toolKey);
+    const keys = servedMcpDescriptors(described).map((descriptor) => descriptor.toolKey);
 
     expect(keys).toHaveLength(5);
     expect(new Set(keys).size).toBe(5);

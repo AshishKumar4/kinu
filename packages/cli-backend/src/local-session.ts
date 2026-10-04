@@ -139,7 +139,7 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode,
+  McpToolSurfaceCache, servedMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, type McpServedSurface, type McpSurfaceBudget,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
@@ -1203,22 +1203,21 @@ export class LocalAgentSession {
 
   async connectMcp(servers: Record<string, McpServerConfig>): Promise<void> {
     if (!servers || Object.keys(servers).length === 0) return;
+    const conn = await connectMcpServers(servers, (message) => { this.emitMcp(message); }, this.lifetime.signal);
 
-    const log = (message: string): void => {
-      this.emit({ type: 'background', event: 'mcp', message });
+    this.mcpServed = {
+      descriptors: conn.descriptors,
+      unavailable: [
+        ...conn.diagnostics.filter((d) => d.status === 'failed').map((d) => ({
+          server: d.server, reason: d.reason ?? 'failed to start, so its tools are missing from this turn',
+        })),
+        ...conn.refused,
+      ],
     };
-
-    const conn = await connectMcpServers(servers, log, this.lifetime.signal);
-
-    // Admission is session-scoped, so the native figure is the full surface; a narrower turn keeps more room.
-    const admission = admitMcpDescriptors(conn.descriptors, {
-      ...this.modelCatalog.window(),
-      nativeToolTokens: toolSurfaceTokens(this.tools),
-    });
 
     // Admitted tools without a readOnly annotation run under the same durable claim as natives
     // (KINU-019: unwrapped MCP effects started unclaimed and replayed after reset).
-    this.extraTools = buildMcpToolSet(admission.admitted, {
+    this.mcpSurface = new McpToolSurfaceCache(async (admitted) => buildMcpToolSet(admitted, {
       call: (d, args, options) => conn.call(d.serverName, d.name, args, options.abortSignal),
       effectClaims: {
         sql: this.rt.storage.sql,
@@ -1231,25 +1230,39 @@ export class LocalAgentSession {
         budget: this.actorSession.orchestrator.acc.context,
         producer: 'external_tool',
       },
-    });
+    }));
     this.mcpClose = () => conn.close();
-    // Unavailable or deferred servers are named in the live context so the model can explain their absence.
-    this.mcpUnavailable = [
-      ...conn.diagnostics
-        .filter((d) => d.status === 'failed')
-        .map((d) => ({
-          source: `MCP server "${d.server}"`,
-          reason: d.reason ?? 'failed to start, so its tools are missing from this turn',
-        })),
-      ...[...conn.refused, ...admission.deferred].map((d) => ({
-        source: `MCP server "${d.server}"`,
-        reason: d.reason,
-      })),
-    ];
+    await this.admitMcp(await this.modelCatalog.resolved());
+  }
 
-    for (const d of admission.deferred) {
-      log(`mcp: ${d.server} deferred: ${d.reason}`);
+  private mcpServed: McpServedSurface | null = null;
+  private mcpSurface: McpToolSurfaceCache<ToolSet> | null = null;
+  private readonly mcpDeferred = new Set<string>();
+
+  private emitMcp(message: string): void {
+    this.emit({ type: 'background', event: 'mcp', message });
+  }
+
+  /** Against the window the next request runs on, so a switched model re-admits what fits it. */
+  private async admitMcp(window: Pick<McpSurfaceBudget, 'contextWindow' | 'modelOutputLimit'>): Promise<void> {
+    const served = this.mcpServed;
+
+    if (served === null || this.mcpSurface === null) return;
+
+    this.extraTools = await this.mcpSurface.refresh(async () => served, {
+      contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit, nativeToolTokens: toolSurfaceTokens(this.tools),
+    });
+    // Unavailable or deferred servers are named in the live context so the model can explain their absence.
+    this.mcpUnavailable = this.mcpSurface.unavailable.map((u) => ({ source: `MCP server "${u.server}"`, reason: u.reason }));
+    const deferred = this.mcpSurface.deferred;
+
+    for (const d of deferred) {
+      if (!this.mcpDeferred.has(d.server)) this.emitMcp(`mcp: ${d.server} deferred: ${d.reason}`);
     }
+
+    this.mcpDeferred.clear();
+
+    for (const d of deferred) this.mcpDeferred.add(d.server);
   }
 
   private mcpUnavailable: MissingCapability[] = [];
@@ -1652,6 +1665,11 @@ export class LocalAgentSession {
     const model = this.ensureModelState();
     this.activateToolMode(this.actorSession.workMode);
     const { execution } = await this.composeTurnRequest(resolved, model);
+    const context = execution.chat.modelContext;
+
+    await this.admitMcp(context?.contextWindow === undefined
+      ? await this.modelCatalog.resolved()
+      : { contextWindow: context.contextWindow, modelOutputLimit: context.modelOutputLimit ?? null });
     this.turnExternalTools = this.externalToolsFor(resolved.profile);
     this.recordSystemPromptHash(execution.chat.system);
     const sessionKey = this.cacheIdentity().sessionKey;
@@ -1693,7 +1711,8 @@ export class LocalAgentSession {
       workMode,
       availableTools: [
         ...candidateBuiltinNames,
-        ...Object.keys(this.extraTools),
+        // Every connected tool: what fits this turn's model is admitted after its window is known.
+        ...servedMcpDescriptors(this.mcpServed?.descriptors ?? []).map((descriptor) => descriptor.toolKey),
         // `report` is added to the toolset after this resolution; name it or a role's tool list drops it.
         ...(this.reportDeps !== null && parentAssigned ? [REPORT_TOOL] : []),
         // `submit_plan` lives outside BUILTIN_TOOLS; same reason as `report`.

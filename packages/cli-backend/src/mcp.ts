@@ -1,5 +1,5 @@
 // Local MCP client over stdio child processes. Admission policy lives in core
-// (`admitMcpDescriptors`); the session applies it.
+// (`McpToolSurfaceCache`, each turn); the session applies it.
 
 import {
   describeMcpTool, decodeJsonValue, JsonObjectSchema, listMcpToolsLeniently, McpToolError, NO_TIMER_DEADLINE_MS,
@@ -26,8 +26,8 @@ export interface McpServerConfig {
 }
 
 interface McpConnection {
-  /** Every discovered tool, unadmitted; the session admits them via core's
-   *  `admitMcpDescriptors`. `serverId` is the config key, unique per agent. */
+  /** Every discovered tool, unadmitted; the session admits them through core's stage
+   *  each turn. `serverId` is the config key, unique per agent. */
   readonly descriptors: SerializableToolDescriptor[];
   readonly refused: McpToolRefusal[];
   call(serverName: string, toolName: string, args: JsonObject, signal?: AbortSignal): Promise<string>;
