@@ -1564,6 +1564,8 @@ export abstract class ActorAgent extends Agent<Env> {
         // fires before the first step weave. A byte-stable replay keeps positions valid.
         if (outcome !== 'replayed') this.actorSession.dynamic.reset();
       },
+      model: () => this.effectiveModelSpec(),
+      attachments: { files: () => this.rt },
     });
     this.extensions.register(this._compactionExtension);
   }
@@ -4087,7 +4089,7 @@ export abstract class ActorAgent extends Agent<Env> {
       history, tools, reads, requestedWorkMode: await this.preparedWorkMode(), cliCwd: this._cliCwd, item: null,
     });
 
-    return { execution: await this.executionFor(composed), profile: composed.profile };
+    return { execution: await this.executionFor(composed), profile: composed.profile, sessionKey: this.name };
   }
 
   private async executionFor(composed: ComposedTurn): Promise<Omit<ActorExecutionInput, 'task'>> {

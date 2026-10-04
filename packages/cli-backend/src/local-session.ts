@@ -146,7 +146,7 @@ import { TierIdSchema,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
-  type ChatTurnInput, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
+  type ChatTurnInput, type CompactOutcome, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, type Refusal,
@@ -673,6 +673,8 @@ export class LocalAgentSession {
       onOutcome: ({ outcome }) => {
         if (outcome !== 'replayed') this.actorSession.dynamic.reset();
       },
+      model: () => this.effectiveModelSpec(),
+      attachments: { files: () => this.rt },
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(
       () => this.cachedModel ?? this.defaultModel("a head with no model of its own"),
@@ -1188,7 +1190,7 @@ export class LocalAgentSession {
     return this.chat.clear();
   }
 
-  compact(): Promise<void> {
+  compact(): Promise<CompactOutcome> {
     return this.chat.compact();
   }
 
@@ -1663,7 +1665,7 @@ export class LocalAgentSession {
     this.invalidateModelState();
     const model = this.ensureModelState();
     this.activateToolMode(this.actorSession.workMode);
-    const { execution } = await this.composeTurnRequest(resolved, model);
+    const { execution, sessionKey } = await this.composeTurnRequest(resolved, model);
     const context = execution.chat.modelContext;
 
     await this.admitMcp(context?.contextWindow === undefined
@@ -1671,7 +1673,6 @@ export class LocalAgentSession {
       : { contextWindow: context.contextWindow, modelOutputLimit: context.modelOutputLimit ?? null });
     this.turnExternalTools = this.externalToolsFor(resolved.profile);
     this.recordSystemPromptHash(execution.chat.system);
-    const sessionKey = this.cacheIdentity().sessionKey;
     // `historyLength` is the durable length the measurement is bound to (orchestrator/turn-context.ts).
     const historyLength = this.actorSession.history.length;
     const measured = measureCompactionTrigger(this.compactionState, sessionKey, historyLength);
@@ -1849,6 +1850,7 @@ export class LocalAgentSession {
         scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       },
       profile,
+      sessionKey: cache.sessionKey,
     };
   }
 

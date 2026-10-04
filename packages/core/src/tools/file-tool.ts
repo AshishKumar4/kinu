@@ -27,6 +27,9 @@ import { KinuError, renderThrownChain } from '../obs/index';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
+import { rasterImage } from '../utils/raster-image';
+import { bytesToBase64 } from '../utils/base64';
+import { imageModelOutput } from './image-results';
 
 /** Most names one `list` returns; matches `tools/db-codemode.ts` SELECT_LIMIT_MAX. */
 const FILE_LIST_MAX_ENTRIES = 1_000;
@@ -36,6 +39,12 @@ const FILE_LIST_MAX_CHARS = RESIDENT_TEXT_MAX_BYTES;
 
 /** Most bytes one `search` reads of the scanned file (same budget as `vfs/mounts.ts`). */
 const FILE_SEARCH_MAX_BYTES = RESIDENT_TEXT_MAX_BYTES;
+
+/** Most bytes of an image one `read` shows: 5 MB as base64, Anthropic's ceiling on Bedrock and Google Cloud. */
+const IMAGE_READ_MAX_BYTES = 3_750_000;
+
+/** Which reads check for an image; the header decides. */
+const RASTER_PATH = /\.(?:png|jpe?g|gif|webp)$/iu;
 
 /** `truncated` is absent on a whole listing, so its presence is the fact. */
 function boundListing(path: string, entries: readonly string[]): JsonValue {
@@ -233,6 +242,55 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   /** How a result names its file: the reference the live table gives it. */
   const referenceOf = (path: string): string => formatPath(resolvePath(path, deps.planes).absolute, deps.planes);
 
+  /** A raster image is shown to the model, as a screenshot is: its text would be noise. Null for anything else. */
+  const imageRead = async (path: string): Promise<JsonValue | null> => {
+    const bytes = await vfs.readFile(path);
+    const image = rasterImage(bytes);
+
+    if (image === null) return null;
+
+    if (bytes.byteLength > IMAGE_READ_MAX_BYTES) {
+      return failure('bad_input', `${path} is a ${image.width}x${image.height} image of ${bytes.byteLength} bytes, above the `
+        + `${IMAGE_READ_MAX_BYTES} a model is shown; scale it down with the shell first.`);
+    }
+
+    const output = `${referenceOf(path)}: ${image.mediaType} ${image.width}x${image.height}, ${bytes.byteLength} bytes`;
+    budget.admit(output.length);
+
+    return { output, images: [{ mediaType: image.mediaType, data: bytesToBase64(bytes) }] };
+  };
+
+  /** A text read reads every byte (the ledger keys on the whole-content fingerprint) but retains only this window and the running hash. */
+  const read = async (path: string, args: FileToolInput): Promise<JsonValue> => {
+    const maxChars = DEFAULT_TOOL_RESULT_MAX_CHARS;
+    let scanned: ScannedFile;
+
+    try {
+      const shown = RASTER_PATH.test(path) ? await imageRead(path) : null;
+
+      if (shown !== null) return shown;
+      scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit, maxChars });
+    } catch (err) {
+      const vfsFail = await vfsFailure(vfs, { error: err }, 'read', path);
+
+      return failure(vfsFail.reason, vfsFail.error);
+    }
+
+    const slice = formatFileSlice(scanned.window, { path, limit: args.limit, maxChars });
+
+    ledger.observeRange(path, {
+      fingerprint: scanned.fingerprint, first: slice.first, last: slice.last, total: slice.total, revision: scanned.revision,
+    });
+    budget.admit(slice.output.length);
+
+    if (slice.omitted > 0) {
+      // Not spilled: the file is addressable at its path and the marker names the continuing offset.
+      budget.recordSpill({ producer: 'file_read', omitted: slice.omitted, referenced: true });
+    }
+
+    return slice.output;
+  };
+
   return async (args: FileToolInput): Promise<JsonValue> => {
     const { path } = args;
 
@@ -262,34 +320,8 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         });
       }
 
-      case 'read': {
-        const maxChars = DEFAULT_TOOL_RESULT_MAX_CHARS;
-        let scanned: ScannedFile;
-
-        // Reads every byte (the ledger keys on the whole-content fingerprint) but retains
-        // only this window and the running hash.
-        try {
-          scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit, maxChars });
-        } catch (err) {
-          const vfsFail = await vfsFailure(vfs, { error: err }, 'read', path);
-
-          return failure(vfsFail.reason, vfsFail.error);
-        }
-
-        const slice = formatFileSlice(scanned.window, { path, limit: args.limit, maxChars });
-
-        ledger.observeRange(path, {
-          fingerprint: scanned.fingerprint, first: slice.first, last: slice.last, total: slice.total, revision: scanned.revision,
-        });
-        budget.admit(slice.output.length);
-
-        if (slice.omitted > 0) {
-          // Not spilled: the file is addressable at its path and the marker names the continuing offset.
-          budget.recordSpill({ producer: 'file_read', omitted: slice.omitted, referenced: true });
-        }
-
-        return slice.output;
-      }
+      case 'read':
+        return read(path, args);
 
       case 'write': {
         if (args.content === undefined) return failure('bad_input', 'file action=write requires `content`.');
@@ -402,5 +434,6 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
     description: BUILTIN_TOOL_DESCRIPTIONS.file,
     inputSchema: FileToolInputSchema,
     execute: async (args) => run(args),
+    toModelOutput: imageModelOutput,
   }));
 }

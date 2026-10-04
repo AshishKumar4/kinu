@@ -166,7 +166,7 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
   const bytes = new TextEncoder().encode(text);
 
   if (bytes.length <= INLINE_TEXT_MAX_BYTES) return null;
-  const path = await storeContentAddressed(bytes, 'text/plain', policy);
+  const path = await storeAttachment(policy.vfs, ATTACHMENTS_DIR, bytes, 'text/plain');
   const head = text.slice(0, PASTED_TEXT_PREVIEW_CHARS);
   policy.budget?.recordSpill({
     producer: 'pasted_text', omitted: text.length - head.length, referenced: true,
@@ -253,7 +253,7 @@ async function storeAndReference(
   filename: string | undefined,
   policy: AttachmentPolicy,
 ): Promise<TextPart> {
-  const path = await storeContentAddressed(bytes, mediaType, policy);
+  const path = await storeAttachment(policy.vfs, ATTACHMENTS_DIR, bytes, mediaType);
   const basename = path.slice(ATTACHMENTS_DIR.length + 1);
   policy.budget?.recordSpill({ producer: 'attachment', omitted: bytes.length, referenced: true });
   const name = filename ?? basename;
@@ -264,25 +264,25 @@ async function storeAndReference(
   };
 }
 
-/** Reuse verifies the bytes: an existing path (truncated write, agent-written file) is not proof of content. */
-async function storeContentAddressed(
-  bytes: Uint8Array,
-  mediaType: string,
-  policy: AttachmentPolicy,
-): Promise<string> {
-  const path = `${ATTACHMENTS_DIR}/${sha256Hex(bytes)}.${extensionFor(mediaType)}`;
+/**
+ * `bytes` under `directory` by content (`<sha256>.<ext>`), the path returned once durable: the one attachment store,
+ * for a part the model cannot take and for one compaction moves out. Reuse verifies the bytes: an existing path
+ * (truncated write, agent-written file) is not proof of content.
+ */
+export async function storeAttachment(vfs: VFS, directory: string, bytes: Uint8Array, mediaType: string): Promise<string> {
+  const path = `${directory}/${sha256Hex(bytes)}.${extensionFor(mediaType)}`;
 
-  if (await holdsBytes(policy.vfs, path, bytes)) return path;
+  if (await holdsBytes(vfs, path, bytes)) return path;
 
   try {
-    await policy.vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
+    await vfs.mkdir(directory, { recursive: true });
   } catch (err) {
     if (classify({ cause: err }) !== 'eexist') {
       throw toKinuError({ doing: 'creating the attachments spill directory', cause: err, otherwise: 'io' });
     }
   }
 
-  await policy.vfs.writeFile(path, bytes);
+  await vfs.writeFile(path, bytes);
 
   return path;
 }
@@ -316,6 +316,13 @@ function remoteReference(url: string, mediaType: string, filename: string | unde
 type DecodedPayload =
   | { kind: 'bytes'; bytes: Uint8Array }
   | { kind: 'remote'; url: string };
+
+/** A part's payload as bytes; null for a remote URL, which has none here. */
+export function attachmentBytes(data: FilePart['data']): Uint8Array | null {
+  const payload = decodePayload(data);
+
+  return payload.kind === 'bytes' ? payload.bytes : null;
+}
 
 function decodePayload(data: FilePart['data']): DecodedPayload {
   if (data instanceof URL) return { kind: 'remote', url: data.toString() };

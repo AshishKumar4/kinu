@@ -18,7 +18,7 @@ import type {
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
-import { isSteeredMessage, type AgentModelMenu, type FileLinks, type JobOutputTail, type PathPlanes } from '@kinu.run/core';
+import { isSteeredMessage, type AgentModelMenu, type CompactOutcome, type FileLinks, type JobOutputTail, type PathPlanes } from '@kinu.run/core';
 import type { KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -265,7 +265,7 @@ export interface LocalSessionControls {
   revokeInstruction(path: string): Promise<AdmittedInstructionDecision>;
   /** Resolves with why the emptied request could not be measured, or null once its number is recorded. */
   clearConversation(): Promise<KinuError | null>;
-  compact(): Promise<void>;
+  compact(): Promise<CompactOutcome>;
 }
 
 /** The owner's half of Plan mode; both backends serve core's `PlanReviewStore`. */
