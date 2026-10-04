@@ -71,9 +71,6 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
 
     const providers = deps.reach.narrowProviders(bound);
 
-    // A crafted name shadows a native one, as in the CF prelude.
-    const nativeBindings = nativeToolFunctions(surface.native);
-
     return withCraftedToolDeclarations(tool({
       // Every provider's `types` must be read into the description, or the model
       // gets callables it was never told about.
@@ -99,9 +96,11 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
 
-          const external = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.external()));
+          const external = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.external()), signal);
+          const native = nativeToolFunctions(surface.native, signal);
 
-          for (const [name, entry] of Object.entries({ ...external, ...nativeBindings, ...craftedFailureFunctions(crafted) })) {
+          // A crafted name shadows a native one, as in the CF prelude.
+          for (const [name, entry] of Object.entries({ ...external, ...native, ...craftedFailureFunctions(crafted) })) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 

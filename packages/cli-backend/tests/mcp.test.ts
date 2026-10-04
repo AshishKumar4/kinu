@@ -2,16 +2,17 @@
 import { describe, test, expect, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import type { LanguageModel } from 'ai';
+import { jsonSchema, tool, type LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import { isMcpToolKey, NO_TIMER_DEADLINE_MS, type LLMProviderConfig } from '@kinu.run/core';
+import { isMcpToolKey, narrowToolSurface, NO_TIMER_DEADLINE_MS, type JsonObject, type LLMProviderConfig } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { connectMcpServers } from '../src/mcp';
+import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { createLocalProfileAuthority, resolverModelPlane } from '../src/profile-authority';
-import { scratchPath, scriptedTurnModel } from '@kinu.run/test-utils';
+import { scratchPath, scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -121,6 +122,47 @@ describe('connectMcpServers', () => {
       expect(Bun.peek.status(running)).toBe('pending');
       stop.abort();
       await expect(running).rejects.toBeInstanceOf(Error);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  // Release review, 2026-10-04: eval bound a tool without eval's signal, so a stopped eval left the server's call running.
+  test('stopping eval cancels the MCP call its program is waiting on', async () => {
+    const conn = await connectMcpServers({
+      echo: { command: 'node', args: [fixtureServer] },
+    });
+
+    const stop = new AbortController();
+    const calls: Promise<string>[] = [];
+    const object = jsonSchema<JsonObject>({ type: 'object' });
+
+    // Bound as the session binds a server's tool, with the call's own signal.
+    const external = {
+      held: tool({ description: 'Held until cancelled.', inputSchema: object, execute: async (_input, options) => {
+        const call = conn.call('echo', 'held', {}, options.abortSignal);
+        calls.push(call);
+
+        return await call;
+      } }),
+      stop: tool({ description: 'The person stops the turn.', inputSchema: object, execute: async () => {
+        stop.abort();
+
+        return 'stopped';
+      } }),
+    };
+
+    try {
+      const run = toolExecute<{ code: string }, unknown>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
+        native: {}, providers: [], craftedTools: () => [], external: () => external,
+      }));
+
+      await Promise.allSettled([run(
+        { code: 'const held = tools.held({}); await tools.stop({}); return await held;' },
+        { toolCallId: 'eval-held', messages: [], abortSignal: stop.signal },
+      )]);
+      expect(calls).toHaveLength(1);
+      await expect(calls[0]).rejects.toBeInstanceOf(Error);
     } finally {
       await conn.close();
     }

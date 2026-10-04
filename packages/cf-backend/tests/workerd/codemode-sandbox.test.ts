@@ -248,7 +248,7 @@ describe('the eval sandbox under workerd', () => {
     const native = nativeToolFunctions({ file: tool({
       inputSchema: jsonSchema<{ action: string }>({ type: 'object' }),
       execute: async (): Promise<string> => { throw new KinuError('unavailable', 'file plane offline'); },
-    }) });
+    }) }, undefined);
 
     const providers = [{ name: 'tools', fns: Object.fromEntries(Object.entries(native).map(([name, entry]) => [name, entry.execute])) }];
     const run = (code: string) => withCodemodeProgram(() => executor.execute(code, providers));
