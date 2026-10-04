@@ -56,7 +56,9 @@ function sessionToken(): string {
 }
 
 function wrangler(args: readonly string[]) {
-  const ran = spawnSync(join(import.meta.dir, '..', 'node_modules/.bin/wrangler'), args, { encoding: 'utf8' });
+  const ran = spawnSync(join(import.meta.dir, '..', 'node_modules/.bin/wrangler'), args, {
+    encoding: 'utf8', env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: ACCOUNT },
+  });
 
   return { ok: ran.status === 0, out: `${ran.stdout}${ran.stderr}` };
 }
