@@ -338,7 +338,8 @@ export class FakeSandbox {
    *  with the other fault controls; this is not a live process registry. */
   readonly listening = new Set<number>();
   /** Answers a port's fetch in place of the probe status, e.g. with an upgrade. */
-  portAnswer: ((port: number, request: Request) => Response) | undefined;
+  portAnswer: ((port: number, request: Request) => Response | Promise<Response>) | undefined;
+  desktopStart: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
   readonly fileOperations: FileOperation[] = [];
   readonly mountCalls: string[] = [];
   /** Mounts and execs share one chronological list: stop order is a property of the order
@@ -841,7 +842,7 @@ export class FakeSandbox {
       destroy: async () => { await this.destroy(); this.#ended.resolve(); },
       signal: () => { void this.stop().then(this.#ended.resolve, this.#ended.reject); },
       getTcpPort: port => ({
-        fetch: async (request: Request) => this.portAnswer?.(port, request) ?? new Response('', { status: this.listening.has(port) ? 200 : 503 }),
+        fetch: async (request: Request) => await this.portAnswer?.(port, request) ?? new Response('', { status: this.listening.has(port) ? 200 : 503 }),
         connect: () => unreached('port.connect'),
       }),
       setInactivityTimeout: async () => { this.activityRenewals++; },
@@ -910,7 +911,8 @@ export class FakeSandbox {
     await this.#admitNative(options);
 
     // An untimed launch is `setsid -w /bin/bash -c` (D69); a raw exec is `/bin/bash -c`.
-    const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners";
+    const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners"
+      || args[3] === 'devbox-desktop';
 
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 
@@ -956,6 +958,12 @@ export class FakeSandbox {
     }
 
     if (PROCESS_SCRIPTS.has(args[3] ?? '')) return await this.#processScript(args, pid);
+
+    if (args[3] === 'devbox-desktop') {
+      this.sequence.push('desktop');
+
+      return processResult(Promise.resolve(this.desktopStart), pid);
+    }
 
     if (args[3] === 'devbox-trust') {
       this.sequence.push('trust');

@@ -22,6 +22,18 @@ const DEVICE_EXECUTOR = "device";
 
 const WORKSPACE_EXECUTOR = "workspace";
 
+const SANDBOX_EXECUTOR = "sandbox";
+
+const NOT_READY = { terminal: "terminal.not_ready", desktop: "desktop.not_ready" } as const;
+
+const PREFLIGHT_FAILED = { terminal: "terminal.preflight_failed", desktop: "desktop.preflight_failed" } as const;
+
+const UPGRADE_NOT_RELEASED = {
+  terminal: "terminal.abandoned_upgrade_not_released", desktop: "desktop.abandoned_upgrade_not_released",
+} as const;
+
+const ATTACH_FAILED = { terminal: "terminal.attach_failed", desktop: "desktop.attach_failed" } as const;
+
 const DEFAULT_WINDOW = { cols: 80, rows: 24 } as const;
 
 interface DeviceHolderNamespace {
@@ -100,8 +112,8 @@ function clientGone(signal: AbortSignal): Promise<typeof CLIENT_GONE> {
   return promise;
 }
 
-function abandonedAttach(): Response {
-  return err(503, "terminal attach abandoned: the client disconnected before the shell opened");
+function abandonedAttach(surface: TerminalCall["surface"]): Response {
+  return err(503, `${surface} attach abandoned: the client disconnected before it opened`);
 }
 
 interface TerminalCall {
@@ -111,12 +123,14 @@ interface TerminalCall {
   readonly agentName: string;
   readonly executor: string;
   readonly verb: "attach" | "keepalive" | "reset";
+  /** The desktop (D70) is the container's alone, and attaches as its terminal does. */
+  readonly surface: "terminal" | "desktop";
   readonly scope: { readonly workspace: string; readonly executor: string };
 }
 
-function notAnUpgrade(request: Request): Response | null {
+function notAnUpgrade({ request, surface }: TerminalCall): Response | null {
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-    return err(400, "the terminal endpoint is a WebSocket; send an Upgrade: websocket request");
+    return err(400, `the ${surface} endpoint is a WebSocket; send an Upgrade: websocket request`);
   }
 
   return null;
@@ -133,7 +147,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
     return json({ body: { ok: true } });
   }
 
-  const refused = notAnUpgrade(request);
+  const refused = notAnUpgrade(call);
 
   if (refused !== null) return refused;
 
@@ -177,7 +191,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
     return err(503, opened.error);
   }
 
-  if (request.signal.aborted) return abandonedAttach();
+  if (request.signal.aborted) return abandonedAttach(call.surface);
   // A WebSocket cannot cross an RPC boundary, but an upgrade request can. The session is single-use.
   const socketUrl = new URL(request.url);
   socketUrl.pathname = DEVICE_TERMINAL_PATH;
@@ -197,7 +211,7 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
     return json({ body: { ok: true } });
   }
 
-  const refused = notAnUpgrade(request);
+  const refused = notAnUpgrade(call);
 
   if (refused !== null) return refused;
 
@@ -215,7 +229,7 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
       return err(503, ready.error);
     }
 
-    if (request.signal.aborted) return abandonedAttach();
+    if (request.signal.aborted) return abandonedAttach(call.surface);
     // The gate's identity headers ride along: one revocation closes chat and socket.
     const socketUrl = new URL(request.url);
     socketUrl.pathname = WORKSPACE_TERMINAL_PATH;
@@ -261,15 +275,15 @@ async function sandboxCommand(
  * scope. Not fenced by cancellation: the start is shared and idempotent.
  */
 async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
-  const { deps, agentName, executor, scope } = call;
+  const { deps, agentName, executor, scope, surface } = call;
 
   try {
     const agent = await deps.resolveWorkspace(agentName);
     const ready = await agent.prepareTerminal(executor);
 
     if ("error" in ready) {
-      diagnostics.failure("terminal.not_ready", toKinuError({
-        doing: "preparing this workspace's container for a terminal",
+      diagnostics.failure(NOT_READY[surface], toKinuError({
+        doing: `preparing this workspace's container for a ${surface}`,
         cause: ready.error,
         otherwise: "unavailable",
       }), scope);
@@ -278,12 +292,12 @@ async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
     }
   } catch (cause) {
     const error = toKinuError({
-      doing: "reaching this workspace to prepare a terminal",
+      doing: `reaching this workspace to prepare a ${surface}`,
       cause,
       otherwise: "unavailable",
     });
 
-    diagnostics.failure("terminal.preflight_failed", error, scope);
+    diagnostics.failure(PREFLIGHT_FAILED[surface], error, scope);
 
     return err(503, renderThrownChain({ cause: error }));
   }
@@ -296,14 +310,14 @@ async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
  * open tab.
  */
 async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
-  const { request, scope } = call;
+  const { request, scope, surface } = call;
 
-  if (request.signal.aborted) return abandonedAttach();
+  if (request.signal.aborted) return abandonedAttach(surface);
 
   try {
     await sandbox.noteTerminalActivity();
     const url = new URL(request.url);
-    url.pathname = "/_devbox/terminal";
+    url.pathname = `/_devbox/${surface}`;
     const size = paneWindow(call.url);
     url.searchParams.set("cols", String(size.cols));
     url.searchParams.set("rows", String(size.rows));
@@ -317,28 +331,28 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
         try {
           const response = await upgrade;
           response.webSocket?.accept();
-          response.webSocket?.close(1001, "terminal client went away");
+          response.webSocket?.close(1001, `${surface} client went away`);
         } catch (cause) {
-          diagnostics.failure("terminal.abandoned_upgrade_not_released", toKinuError({
-            doing: "releasing the terminal upgrade a departed client left behind",
+          diagnostics.failure(UPGRADE_NOT_RELEASED[surface], toKinuError({
+            doing: `releasing the ${surface} upgrade a departed client left behind`,
             cause,
             otherwise: "unavailable",
           }), scope);
         }
       })());
 
-      return abandonedAttach();
+      return abandonedAttach(surface);
     }
 
     return settled;
   } catch (cause) {
     const error = toKinuError({
-      doing: "attaching a terminal to the sandbox container",
+      doing: `attaching a ${surface} to the sandbox container`,
       cause,
       otherwise: "unavailable",
     });
 
-    diagnostics.failure("terminal.attach_failed", error, scope);
+    diagnostics.failure(ATTACH_FAILED[surface], error, scope);
 
     return err(503, renderThrownChain({ cause: error }));
   }
@@ -366,7 +380,7 @@ async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, '
     });
   }
 
-  const refused = notAnUpgrade(call.request) ?? await sandboxPreflight(call);
+  const refused = notAnUpgrade(call) ?? await sandboxPreflight(call);
 
   if (refused !== null) return refused;
 
@@ -396,7 +410,7 @@ export function terminalRoutes<Bindings extends object>(
       return json({ body: { error: `${executor} has no terminal`, lane: "line" } }, { status: 409 });
     }
 
-    const call: TerminalCall = { request, url, deps: depsFor(c.env), agentName, executor, verb, scope };
+    const call: TerminalCall = { request, url, deps: depsFor(c.env), agentName, executor, verb, scope, surface: "terminal" };
 
     if (executor === DEVICE_EXECUTOR) return deviceTerminal(call);
 
@@ -408,6 +422,15 @@ export function terminalRoutes<Bindings extends object>(
   routes.all(`${LITERAL_WORKSPACE}/terminal`, terminal("attach"));
   routes.all(`${LITERAL_WORKSPACE}/terminal/keepalive`, terminal("keepalive"));
   routes.all(`${LITERAL_WORKSPACE}/terminal/reset`, terminal("reset"));
+
+  routes.all(`${LITERAL_WORKSPACE}/desktop`, async (c) => {
+    const { name: agentName, request } = c.get('workspace');
+    const scope = { workspace: agentName, executor: SANDBOX_EXECUTOR };
+
+    return sandboxTerminal({
+      request, url: new URL(request.url), deps: depsFor(c.env), agentName, executor: SANDBOX_EXECUTOR, verb: "attach", scope, surface: "desktop",
+    }, c.executionCtx);
+  });
 
   return routes;
 }

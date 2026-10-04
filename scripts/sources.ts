@@ -366,9 +366,12 @@ export const isMossaicVendored = (file: string): boolean =>
 /** The vendored agent-core runtime dist, pinned per file by its own `upstream.json`. */
 export const isAgentCoreVendored = (file: string): boolean => file.startsWith('packages/agent-core/dist/');
 
-/** Pinned upstream bytes of either closure: each closure's drift test owns
+/** KasmVNC's web client (D70), pinned per file by its own `upstream.json`. */
+export const isKasmvncVendored = (file: string): boolean => file.startsWith('packages/cf-backend/public/kasmvnc/');
+
+/** Pinned upstream bytes of any closure: each closure's drift test owns
  *  them rather than Kinu's source gates. */
-export const isVendoredSource = (file: string): boolean => isAgentCoreVendored(file) || isMossaicVendored(file);
+export const isVendoredSource = (file: string): boolean => isAgentCoreVendored(file) || isMossaicVendored(file) || isKasmvncVendored(file);
 
 /** Kinu-maintained code parseable by `syntax.ts`. */
 export const isParseable = (file: string): boolean => PARSEABLE.test(file) && !isVendoredSource(file);

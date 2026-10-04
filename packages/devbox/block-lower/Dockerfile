@@ -16,12 +16,15 @@ FROM node:22.23.2-bookworm-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e
 FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS bun
 # The tools a golden snapshot installs on cloudflare/debian-trixie (D65): an offline apt repository of the
 # packages named in `wanted` and their closure, pinned to one day of the Debian archive, and our binaries.
+# The desktop (D70) adds KasmVNC's own release, which Debian does not carry.
 FROM docker.io/library/debian@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c AS debs
+ADD --checksum=sha256:80b241de7dfe53bba2b7e1cc5ac8c5246d72271efa16be2d4f76607f30fab1c4 https://github.com/kasmtech/KasmVNC/releases/download/v1.5.0/kasmvncserver_trixie_1.5.0_amd64.deb /repo/kasmvncserver_trixie_1.5.0_amd64.deb
 RUN printf 'Types: deb\nURIs: http://snapshot.debian.org/archive/debian/20261002T000000Z\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\nTypes: deb\nURIs: http://snapshot.debian.org/archive/debian-security/20261002T000000Z\nSuites: trixie-security\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n' > /etc/apt/sources.list.d/debian.sources \
  && apt-get -o Acquire::Check-Valid-Until=false update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends dpkg-dev >/dev/null \
  && mkdir -p /repo && touch /tmp/empty-status \
- && echo bash ca-certificates curl git python3 tmux tini fuse3 fuse-overlayfs squashfs-tools zstd s3fs libfuse2t64 libzstd1 libstdc++6 procps > /repo/wanted \
- && apt-get -o Dir::State::status=/tmp/empty-status -o Dir::Cache::archives=/repo install --download-only -y -qq --no-install-recommends $(cat /repo/wanted) \
+ && echo bash ca-certificates curl git python3 tmux tini fuse3 fuse-overlayfs squashfs-tools zstd s3fs libfuse2t64 libzstd1 libstdc++6 procps chromium openbox xdotool scrot > /repo/wanted \
+ && apt-get -o Dir::State::status=/tmp/empty-status -o Dir::Cache::archives=/repo install --download-only -y -qq --no-install-recommends $(cat /repo/wanted) /repo/kasmvncserver_trixie_1.5.0_amd64.deb \
+ && echo kasmvncserver >> /repo/wanted \
  && cd /repo && rm -rf partial lock && dpkg-scanpackages --multiversion . /dev/null > Packages 2>/dev/null
 
 FROM docker.io/library/debian@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c AS pack
