@@ -3853,6 +3853,48 @@ starting a process that ignores TERM, and exits. On bfb0f35a9 the untimed
 kill answered with that process still running; now both callers answer once
 it is gone, and a command that ignores TERM ends on KILL under both.
 
+D70. The desktop is KasmVNC with its own web client, started by the first
+open and reached through `/_devbox/desktop` (2026-10-04). The probe ran on
+throwaway Medium boxes from integration 85285006f's image, each server driven
+by a real client in headless Chrome through the box's Durable Object, n=3
+boxes a server:
+
+| | KasmVNC 1.5, its client | TigerVNC, websockify, noVNC 1.6 |
+|---|---|---|
+| server listens, ms | 187 (169-196) | 703 (702-774) |
+| idle server PSS | 27 MB | 18 MB Xvnc and 34 MB websockify |
+| socket opens, ms (n=9) | 123 (119-1,189) | 156 (137-251) |
+| first frame after open, ms (n=9) | 218 (163-237) | 115 (108-188) |
+| click to screen, ms (n=60) | 66 (64-83) | 49 (32-83) |
+| full-screen scroll, MB/s (n=9) | 2.7 (2.6-3.1) | 9.3 (7.7-10.2) |
+| packages installed | 330 MB | 324 MB |
+
+Chromium with one tab is 402 MB PSS under both, and an idle screen sends 0
+bytes. The stack is 236 more packages in the tools tarball (336 MB, was 101
+MB): its offline install on trixie took 82 s locally, against 33 s before. KasmVNC's PointerEvent is 11 bytes (a 16-bit button mask, then x, y
+and two scroll deltas; kasmweb `core/rfb.js`), where RFB's is 6: with
+upstream noVNC 1.6 or 1.7 the server ends the session at the first click
+("unknown message type 144"), live 3 of 3 and locally. Kasm's client is not
+on npm and is not a library (its `display.js` imports its app UI), so the
+client is its prebuilt web app, vendored from the image's pinned `.deb`: the
+15 files it loads, 864 KB (`packages/cf-backend/public/kasmvnc/upstream.json`,
+`scripts/kasmvnc-client.ts`, `unit-kasmvnc-vendor.test.ts`). The app frames
+it from its own origin; its document policy allows framing by the app alone
+and sockets to the app's origin alone, so no client setting can point the
+socket elsewhere.
+
+The server listens on every interface, because the box reaches the container
+at the container's own address, and asks for the `binary` subprotocol and an
+`Origin`, which the Worker's allowlist strips and the box sets. Without
+`-publicIP`, KasmVNC queries STUN servers and exits when none answers: with
+no network it never listened (`tools-image.test.ts`). An open desktop is a
+bridged socket like a preview's, so it holds the box awake; port 6080 is
+refused as a preview. `desktop-image.test.ts` drives the vendored client in
+Chrome, through the Worker's route and the box's, to Chromium in the real
+image, and sees a click turn the screen; it fails without the box's
+`Origin`. `tools-image.test.ts` runs the start script with no network, so it
+fails without `-publicIP`, and opens the menu's browser as root.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

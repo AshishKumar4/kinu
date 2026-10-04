@@ -2109,6 +2109,8 @@ export { KINU_USER_AGENT, kinuUserAgent } from './utils/user-agent';
 
 export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';
 
+export { desktopClientUrl } from './http/desktop-client';
+
 export { serveApp } from './http/app-shell';
 
 export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressAdmission } from './http/ingress-budget';

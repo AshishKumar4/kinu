@@ -16,6 +16,7 @@ import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import { bridgeSockets } from './socket-bridge';
+import { DESKTOP_PORT, DESKTOP_START } from './desktop';
 import { Deferred, Effect, Result } from 'effect';
 
 import {
@@ -2480,7 +2481,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     port: number,
     options: { name?: string; hostname: string; token?: string },
   ) {
-    return await settle(this.#claimed(portScope(port), attempt("file", () => this.#expose(port, options))).pipe(Effect.mapError(fileFault)));
+    const exposed = port === DESKTOP_PORT
+      ? Effect.fail(new DevboxError('invalid-input', `port ${String(DESKTOP_PORT)} is the desktop's, and is never a preview`))
+      : this.#claimed(portScope(port), attempt("file", () => this.#expose(port, options)));
+
+    return await settle(exposed.pipe(Effect.mapError(fileFault)));
   }
 
   /** Revocation touches only this object's preview rows, never the container, so it skips
@@ -2982,6 +2987,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     });
   }
 
+  #desktop(request: Request): Effect.Effect<Response, DevboxError> {
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return Effect.succeed(new Response('WebSocket required', { status: 426 }));
+
+    return this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
+      const started = yield* attempt('io', async () => await (await container.exec(['/bin/bash', '-c', DESKTOP_START, 'devbox-desktop'], { env: CONTAINER_TRUST_ENV })).output());
+
+      if (started.exitCode !== 0) {
+        return yield* Effect.fail(new DevboxError('io', `the desktop did not start: ${new TextDecoder().decode(started.stderr).trim()}`));
+      }
+
+      const server = `http://127.0.0.1:${String(DESKTOP_PORT)}`;
+      const headers = new Headers(request.headers);
+      headers.set('origin', server);
+      const answer = yield* attempt('io', () => container.getTcpPort(DESKTOP_PORT).fetch(new Request(`${server}/websockify`, { headers })));
+
+      return answer.webSocket ? this.#bridge(answer.webSocket, answer.headers) : answer;
+    }));
+  }
+
   /** The SDK's `bridge()`: an open preview socket is the box's use. */
   #bridge(upstream: WebSocket, headers: Headers): Response {
     this.#openSockets += 1;
@@ -3044,6 +3069,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         return yield* this.#preview(forwarded, Number(preview[1]), token);
       }
+
+      if (url.pathname === '/_devbox/desktop') return yield* this.#desktop(request);
 
       if (url.pathname !== '/_devbox/terminal') return new Response('Not found', { status: 404 });
 
