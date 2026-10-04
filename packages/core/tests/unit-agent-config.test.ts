@@ -31,6 +31,15 @@ describe('AgentConfigStore — generic get/set/delete', () => {
     c.set('a', '1'); c.set('b', '2');
     expect(c.all()).toEqual({ a: '1', b: '2' });
   });
+
+  test('deleting related keys leaves the other settings intact', () => {
+    const c = setup();
+    c.set('settled', '1');
+    c.set('closed', '2');
+    c.set('keep', '3');
+    c.delete('settled', 'closed');
+    expect(c.all()).toEqual({ keep: '3' });
+  });
 });
 
 describe('AgentConfigStore — lastActiveExecutor', () => {

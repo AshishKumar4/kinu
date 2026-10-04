@@ -66,6 +66,7 @@ function inertEngine(): AgentOrchestratorDeps['engine'] {
 
   return {
     enabled: false,
+    withTurnLearning: (body) => body(),
     recordsTurns: false,
     recoverInterruptedWork: () => {},
     recentAdvisorNotes: () => [],

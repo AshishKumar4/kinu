@@ -76,7 +76,7 @@ export const SHELL_APPROVAL_AUTHORITY_KEYS: readonly string[] = [
 export interface AgentConfigStore {
   get(key: string): string | null;
   set(key: string, value: string): void;
-  delete(key: string): void;
+  delete(key: string, ...others: string[]): void;
   /** All rows; used by fork.ts to copy state. */
   all(): Record<string, string>;
 
@@ -164,11 +164,13 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     if (key === AGENT_CONFIG_KEYS.liveTrials || key === AGENT_CONFIG_KEYS.learning || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
   };
 
-  const remove = (key: string): void => {
+  const remove = (key: string, ...others: string[]): void => {
     authorize();
-    void sql`DELETE FROM actor_config WHERE actor_id = ${actorId} AND key = ${key}`;
+    const keys = [key, ...others];
+    void sql`DELETE FROM actor_config WHERE actor_id = ${actorId}
+      AND key IN (SELECT value FROM json_each(${JSON.stringify(keys)}))`;
 
-    if (key === AGENT_CONFIG_KEYS.liveTrials || key === AGENT_CONFIG_KEYS.learning || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
+    if (keys.some((name) => name === AGENT_CONFIG_KEYS.liveTrials || name === AGENT_CONFIG_KEYS.learning || name === AGENT_CONFIG_KEYS.changelogSeenAt)) markStoreChanged(sql);
   };
 
   const setValid = (key: string, value: string, valid: boolean, what: string): Effect.Effect<void> =>
