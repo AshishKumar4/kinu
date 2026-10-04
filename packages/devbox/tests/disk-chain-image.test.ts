@@ -69,7 +69,6 @@ const ports: DiskChainPorts = {
   },
   mountStore: () => Promise.resolve(),
   excludes: () => EXCLUDES,
-  checkpointIntervalMs: () => 0,
   now: () => Date.now(),
   log: () => undefined,
 };
@@ -331,4 +330,22 @@ test('a lost wake whose copy to disk would not fit stays lazy, and the workspace
     loseTheDisk();
     must(`umount ${RT}`);
   }
+});
+
+test('a quiesce commit does not push the next periodic tick a period back', async () => {
+  // A quiesce whose stop then fails leaves the box running; its next tick must still save. The alarm spaces ticks.
+  let clock = 0;
+  const timed = diskChain({ ...ports, now: () => clock });
+  loseTheDisk();
+  stored = null;
+  must(`echo a > ${WD}/a.txt`);
+  const first = await settle(timed.commit('tick'));
+  clock = 10_000;
+  must(`echo b > ${WD}/b.txt`);
+  const quiesced = await settle(timed.commit('quiesce'));
+  clock = 60_000;
+  must(`echo c > ${WD}/c.txt`);
+  const tick = await settle(timed.commit('tick'));
+
+  expect([first.kind, quiesced.kind, tick.kind, tick.reason]).toEqual(['committed', 'committed', 'committed', undefined]);
 });

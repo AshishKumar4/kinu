@@ -76,7 +76,6 @@ export interface DiskChainPorts {
   readonly deleteObjects: (keys: readonly string[]) => Promise<void>;
   readonly mountStore: () => Promise<void>;
   readonly excludes: () => readonly string[];
-  readonly checkpointIntervalMs: () => number;
   readonly now: () => number;
   readonly log: (message: string) => void;
 }
@@ -463,10 +462,6 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
   const commit = (kind: CheckpointKind): Effect.Effect<CheckpointOutcome, DevboxError> => Effect.gen(function* () {
     const at = ports.now();
     const state = yield* attempt('io', () => ports.readState());
-
-    if (kind === 'tick' && state !== null && at - state.committedAt < ports.checkpointIntervalMs()) {
-      return { kind: 'skipped', reason: 'within the minimum checkpoint interval', bytes: heldBytes(state), movedBytes: 0 } satisfies CheckpointOutcome;
-    }
 
     yield* attempt('io', () => ports.mountStore());
     const recovered = yield* recovery();
