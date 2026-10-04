@@ -4,7 +4,7 @@
 import { stat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
-import type { PromptFile } from '@kinu.run/core';
+import { resolvePath, type PathPlanes, type PromptFile } from '@kinu.run/core';
 import { renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 import { formatBytes } from './display';
 
@@ -74,8 +74,18 @@ const NAME_MAX_BYTES = 255;
 
 const PATH_MAX_BYTES = 4095;
 
+/** A `root://` reference this workspace's planes name, as its path on this machine; null for any other token. */
+function planePath(candidate: string, planes: PathPlanes | undefined): string | null {
+  const root = /^([^\s/:]+):\/\//u.exec(candidate)?.[1];
+
+  if (planes === undefined || !planes.roots.some((plane) => plane.root === root)) return null;
+
+  // A reference that climbs above its plane is refused to the user, as the file tool refuses it.
+  return resolvePath(candidate, planes).absolute;
+}
+
 /** Retries once without one trailing punctuation mark so "see @/tmp/shot.png." matches. */
-async function statCandidate(token: string, cwd: string): Promise<{ path: string; size: number } | null> {
+async function statCandidate(token: string, cwd: string, planes: PathPlanes | undefined): Promise<{ path: string; size: number } | null> {
   const candidates = [token];
   const trimmed = token.replace(/[.,;:!?]$/, '');
 
@@ -83,7 +93,7 @@ async function statCandidate(token: string, cwd: string): Promise<{ path: string
 
   for (const candidate of candidates) {
     const expanded = candidate.startsWith('~/') ? homedir() + candidate.slice(1) : candidate;
-    const absolute = resolve(cwd, expanded);
+    const absolute = planePath(candidate, planes) ?? resolve(cwd, expanded);
 
     if (
       Buffer.byteLength(absolute) > PATH_MAX_BYTES
@@ -102,11 +112,13 @@ interface PromptAttachmentOptions {
   /** The cap belongs to the backend that stores the message and the two differ by 8x, so no default. */
   limitBytes: number;
   cwd?: string;
+  /** A local workspace's planes, where its `vfs://` and `local://` references are on this machine. */
+  planes?: PathPlanes;
 }
 
 export async function resolvePromptAttachments(
   text: string,
-  { limitBytes, cwd = process.cwd() }: PromptAttachmentOptions,
+  { limitBytes, cwd = process.cwd(), planes }: PromptAttachmentOptions,
 ): Promise<PromptAttachments> {
   const files: PromptFile[] = [];
   const attached: ResolvedAttachment[] = [];
@@ -117,7 +129,7 @@ export async function resolvePromptAttachments(
   let inlineBudget = limitBytes;
 
   for (const token of extractPathTokens(text)) {
-    const found = await statCandidate(token.path, cwd);
+    const found = await statCandidate(token.path, cwd, planes);
 
     if (!found) continue;
 

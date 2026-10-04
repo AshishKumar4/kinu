@@ -427,7 +427,7 @@ declare namespace workspace {
   function createTool(
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;
-  ${slate === undefined ? '' : `/** Slates in this workspace; read /skills/slates/SKILL.md first, which names the \`$\` members.
+  ${slate === undefined ? '' : `/** Slates in this workspace; read vfs://skills/slates/SKILL.md first, which names the \`$\` members.
    * \`await workspace.slates.board.addStroke(stroke)\` runs the board slate's \`addStroke\`. */
   const slates: { readonly [id: string]: { readonly [member: string]: (...args: unknown[]) => Promise<unknown> } };
 `}

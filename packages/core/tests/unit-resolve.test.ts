@@ -1,13 +1,13 @@
 // One reading of a written path: `root://path`, `~`, relative and absolute, and the reference a person reads back.
 import { describe, expect, test } from 'bun:test';
-import { cloudPlanes, formatPath, resolvePath, type PathPlanes } from '../src/vfs/resolve';
+import { cloudPlanes, formatPath, resolvePath, shellReference, type PathPlanes } from '../src/vfs/resolve';
 import { deviceMountSegment } from '../src/execution/device-tunnel-executor';
 import type { DeviceFleetEntry } from '../src/execution/device-status';
 
 const CF = cloudPlanes('/home/main');
 
 const CLI: PathPlanes = {
-  cwd: '/home/ana/acme', home: '/home/ana', devices: null,
+  cwd: '/home/ana/acme', home: '/home/ana', devices: null, views: ['skills'],
   roots: [{ root: 'vfs', at: '/home/ana/.kinu/acme' }, { root: 'local', at: '/home/ana/acme' }],
 };
 
@@ -73,6 +73,20 @@ describe('a machine path formats to the reference of the plane that holds it', (
     for (const name of ['local', 'pc', 'https']) {
       const named: DeviceFleetEntry = { id: 'dev-9', name, os: 'linux', hostname: 'l', connected: true };
       expect(deviceMountSegment(named, [named])).toBe('dev-9');
+    }
+  });
+});
+
+describe('a shell takes its machine\'s paths', () => {
+  test('a reference to a plane is refused with its real path; a view has none; any other word passes', () => {
+    expect(shellReference('vfs://slates/board/index.ts', CLI)).toBe('the shell takes this machine\'s paths: vfs://slates/board/index.ts is /home/ana/.kinu/acme/slates/board/index.ts here');
+    expect(shellReference('local://src/a.ts', CLI)).toContain('is /home/ana/acme/src/a.ts here');
+    expect(shellReference('vfs://skills/slates/SKILL.md', CLI)).toBe('vfs://skills/slates/SKILL.md is in the skills view, which the file tool and workspace.* read; the shell has no path for it');
+    expect(shellReference('sandbox://w/a', CF)).toContain('is /sandbox/w/a here');
+    expect(shellReference('vfs://../x', CLI)).toContain('names no file');
+
+    for (const word of ['https://example.com', 'postgres://db/app', 'notes/vfs://x', 'sandbox://x', '/etc/hosts']) {
+      expect(shellReference(word, CLI)).toBeNull();
     }
   });
 });

@@ -27,6 +27,7 @@ async function publicPlane(name: 'cf' | 'cli') {
     return {
       read: (path: string) => cloud.agent.readExecutorFile('workspace', path),
       file: fileTool((await hostedMainActor(cloud)).actor.runtime),
+      shell: present((await hostedMainActor(cloud)).actor.runtime.shell, 'the cloud workspace shell'),
       list: (path: string) => files.readdir(path),
       write: async (path: string, text: string) => {
         await files.writeFile(path, new TextEncoder().encode(text));
@@ -58,6 +59,7 @@ async function publicPlane(name: 'cf' | 'cli') {
     },
     list: (path: string) => rt.storage.vfs.readdir(path),
     file: fileTool(rt),
+    shell: present(rt.shell, 'the local shell'),
     write: async (path: string, text: string) => { await rt.storage.vfs.writeFile(path, new TextEncoder().encode(text)); },
     end: () => db.close(),
     home: join(space, 'home', 'main'), workdir: cwd, legacyHomes: [],
@@ -127,6 +129,20 @@ for (const name of testBackends()) {
         expect(await plane.file({ action: 'read', path: written.reference })).toContain('one');
 
         if (name === 'cf') expect(await plane.file({ action: 'read', path: '~/notes/ref.txt' })).toContain('one');
+      } finally {
+        plane.end?.();
+      }
+    });
+
+    // 2026-10-04: a shell given `vfs://x` ran it as a relative path. The shell takes its machine's paths; a refusal names the real one.
+    test('the shell refuses a plane reference and names the path it has for it', async () => {
+      const plane = await publicPlane(name);
+
+      try {
+        const refused = await plane.shell.exec('cat vfs://home/main/notes/ref.txt');
+        expect(refused.stderr).toContain(`NOT RUN: the shell takes this machine's paths: vfs://home/main/notes/ref.txt is ${plane.home}/notes/ref.txt here`);
+        expect(refused.exitCode).not.toBe(0);
+        expect((await plane.shell.exec('echo "see vfs://home/main/x and https://example.com"')).stdout).toContain('see vfs://home/main/x');
       } finally {
         plane.end?.();
       }

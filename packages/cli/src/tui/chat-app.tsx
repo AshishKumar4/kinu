@@ -545,7 +545,7 @@ function ChatScene({
     clientActionCountRef.current += 1;
 
     try {
-      const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
+      const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
 
       if (clientGenerationRef.current !== generation) return;
 

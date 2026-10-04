@@ -52,7 +52,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
         home: node.home, userRoots: () => mounted.userRoots(), stored: async (name) => await plane.shell.cwd?.(name) ?? null,
       });
 
-      shell = withApprovalGatedShell(plane.shell, { filesOwner: 'agent', shellSession }, origin.approvalPolicy);
+      shell = withApprovalGatedShell(plane.shell, { filesOwner: 'agent', shellSession, planes }, origin.approvalPolicy);
       const ownRouter = new DefaultExecutionRouter(origin.approvalPolicy);
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;
 

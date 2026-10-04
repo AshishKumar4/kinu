@@ -55,6 +55,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     agentName: 'test',
     cliSession: createCliSession('test', { noTranscript: true }),
     inlineAttachmentLimitBytes: 1024,
+    planes: null,
     consents: null,
     checkpoints: null,
     plans: null,

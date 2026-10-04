@@ -35,10 +35,10 @@ function refusalOf(result) {
     && (result.success === false || typeof result.reason === 'string') ? result.error : null;
 }
 
-/** A relative path joined onto the working root, as the host would resolve it; an absolute or empty one as given. */
+/** A relative path joined onto the working root, as the host would resolve it; an absolute, empty or root:// one as given. */
 function resolveAt(cwd, path) {
   const text = String(path);
-  if (text === '' || text.startsWith('/')) return text;
+  if (text === '' || text.startsWith('/') || /^[^\s/:]+:\/\//.test(text)) return text;
   const segments = [];
   for (const segment of (cwd + '/' + text).split('/')) {
     if (segment === '' || segment === '.') continue;
