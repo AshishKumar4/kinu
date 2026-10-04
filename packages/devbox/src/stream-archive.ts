@@ -224,7 +224,6 @@ try {
   if (stopped) child.kill('SIGCONT');
   await exited;
   await settleInput();
-  await Promise.all(pending);
 
   if (failure !== undefined) throw failure;
 } catch (error) {
@@ -248,18 +247,6 @@ if (size <= 0) {
 let etag;
 
 try {
-  // A part rewritten after its bytes were freed would hold data again where only a hole should be.
-  if (freed.size > 0) {
-    const ranges = [...freed].map((number) => String((number - 1) * partBytes) + ' ' + String(number * partBytes)).join('\\n');
-    const holes = spawnSync('python3', ['-c', 'import os,sys\\nfd=os.open(sys.argv[1],os.O_RDONLY)\\nfor line in sys.stdin:\\n'
-      + '  lo,hi=map(int,line.split())\\n  try:\\n    at=os.lseek(fd,lo,os.SEEK_DATA)\\n  except OSError:\\n    continue\\n'
-      + '  if at<hi: print(lo)', archive], { encoding: 'utf8', input: ranges });
-
-    if (holes.status !== 0 || holes.stdout.trim() !== '') {
-      throw new Error('the archive was written again where its uploaded parts were freed: ' + (holes.stderr || holes.stdout).trim());
-    }
-  }
-
   const count = Math.ceil(size / partBytes);
 
   if (count === 1) {
@@ -271,6 +258,7 @@ try {
   } else {
     if (uploadId === undefined) await open();
 
+    // The parts the loop left start beside those it has in flight.
     for (let number = next; number <= count; number += 1) {
       while (pending.size >= inFlight) await Promise.race(pending);
       start(number, size);
@@ -280,6 +268,19 @@ try {
     await Promise.all(pending);
 
     if (failure !== undefined) throw failure;
+
+    // Every punch has settled. A part rewritten after its bytes were freed would hold data again where only a hole should be.
+    if (freed.size > 0) {
+      const ranges = [...freed].map((number) => String((number - 1) * partBytes) + ' ' + String(number * partBytes)).join('\\n');
+      const holes = spawnSync('python3', ['-c', 'import os,sys\\nfd=os.open(sys.argv[1],os.O_RDONLY)\\nfor line in sys.stdin:\\n'
+        + '  lo,hi=map(int,line.split())\\n  try:\\n    at=os.lseek(fd,lo,os.SEEK_DATA)\\n  except OSError:\\n    continue\\n'
+        + '  if at<hi: print(lo)', archive], { encoding: 'utf8', input: ranges });
+
+      if (holes.status !== 0 || holes.stdout.trim() !== '') {
+        throw new Error('the archive was written again where its uploaded parts were freed: ' + (holes.stderr || holes.stdout).trim());
+      }
+    }
+
     const parts = digests.map((digest, index) => '<Part><PartNumber>' + (index + 1) + '</PartNumber><ETag>"' + digest.toString('hex') + '"</ETag></Part>');
     await answered('POST ?uploadId', await fetch(url + '?uploadId=' + uploadId, {
       method: 'POST', body: '<CompleteMultipartUpload>' + parts.join('') + '</CompleteMultipartUpload>',
