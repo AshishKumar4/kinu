@@ -666,7 +666,7 @@ export class SessionStream {
 
       this.terminal = true;
 
-      if (this.failedRecord) return;
+      if (this.failedRecord || [this.assistant, this.tool, this.ui].every(container => container.reference === null || container.sealed)) return;
 
       if (!this.history.epochCurrent(this.turnId, this.epoch)) return;
 

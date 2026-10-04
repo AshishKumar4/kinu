@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { SessionHistory } from '../src/session/history';
@@ -96,6 +96,24 @@ test('a failed ledger write rolls back its step, and a committed step is publish
     expect(heard).toEqual([{ inTransaction: false, open: [] }]);
     expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
     expect(events.read('run-t1')).toEqual([expect.objectContaining({ type: 'step_finish', stepIndex: 1, usage: { input: 7, output: 2 }, usd: 0.000003 })]);
+  } finally { s.testSql.close(); }
+});
+
+test('settling an already sealed stream runs no SQL', async () => {
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    await stream.nativePart({ type: 'text-start', id: '0' });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'done' });
+    await stream.nativePart({ type: 'text-end', id: '0' });
+    await stream.nativeStep({ messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }], toolResults: [] });
+    const statements = spyOn(s.testSql.db, 'prepare');
+
+    try {
+      await stream.settle();
+      expect(statements).toHaveBeenCalledTimes(0);
+    } finally { statements.mockRestore(); }
   } finally { s.testSql.close(); }
 });
 
