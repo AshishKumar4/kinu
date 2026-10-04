@@ -117,9 +117,9 @@ function watchCommands(container: FakeSandbox, rows: Map<string, StoredValue>): 
   const seen: { command: string; restoration: StoredValue }[] = [];
 
   container.nativeExec = async (args) => {
-    seen.push({ command: String(args[2]), restoration: rows.get('devbox:restoration') });
+    seen.push({ command: String(args.at(-1)), restoration: rows.get('devbox:restoration') });
 
-    return processResult(Promise.resolve({ stdout: `ran ${String(args[2])}\n`, stderr: '', exitCode: 0 }), 4242);
+    return processResult(Promise.resolve({ stdout: `ran ${String(args.at(-1))}\n`, stderr: '', exitCode: 0 }), 4242);
   };
 
   return seen;

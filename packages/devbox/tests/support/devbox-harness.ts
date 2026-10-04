@@ -909,7 +909,8 @@ export class FakeSandbox {
     if (options.signal !== undefined) this.execSignals.push(options.signal);
     await this.#admitNative(options);
 
-    const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[3] === "kill-tree" || args[3] === "port-listeners";
+    // An untimed launch is `setsid -w /bin/bash -c` (D69); a raw exec is `/bin/bash -c`.
+    const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners";
 
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 
@@ -962,7 +963,8 @@ export class FakeSandbox {
       return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }
 
-    const command = args[2] ?? '';
+    // `[setsid -w] /bin/bash -c <command>` (D69): the command follows `-c`.
+    const command = args[args.indexOf('-c') + 1] ?? '';
 
     return processResult(this.#execIn(command, { cwd: options.cwd }), pid);
   }
