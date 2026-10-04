@@ -4,6 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { AwaitedList, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
 import { agentAffinityKey, initWorkspaceSchema } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { APICallError } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
@@ -1802,6 +1803,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
 describe('agents.* codemode namespace — node sandbox', () => {
   function sandboxWith(deps: AgentsToolDeps) {
     const tool = createNodeCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
     })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 

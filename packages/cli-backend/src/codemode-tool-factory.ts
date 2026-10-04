@@ -3,7 +3,7 @@
  * hosted sandbox's `kinu-node.js`, so a program's files and cwd are its workspace, never the machine.
  */
 
-import { KINU_NODE_MODULE_SOURCE, requireBuild, WORKSPACE_ROOT } from '@kinu.run/core';
+import { KINU_NODE_MODULE_SOURCE, requireBuild, WORKSPACE_ROOT, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type {
   CodemodeProvider,
   CodemodeBuilder,
@@ -24,6 +24,8 @@ import * as v from 'valibot';
 
 interface NodeExecuteToolFactoryDeps {
   extraProviders?: CodemodeProvider[];
+  /** The role's reach, over every namespace bound, as cf's factory takes it. */
+  reach: ToolSurfaceNarrowing;
 }
 
 /** Always-bound sandbox parameters; a provider may not take them. `__kinu` defines the crafted tools. */
@@ -60,12 +62,14 @@ interface ExecuteSuccess {
 }
 
 /** Pass as `codemode` to `buildActorTools`, or call with a finished confined surface (heads). */
-export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps = {}): CodemodeBuilder {
+export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): CodemodeBuilder {
   return (surface) => {
-    const providers: CodemodeProvider[] = [
+    const bound: CodemodeProvider[] = [
       ...surface.providers.map(adaptExecutorProvider),
       ...(deps.extraProviders ?? []),
     ];
+
+    const providers = deps.reach.narrowProviders(bound);
 
     // A crafted name shadows a native one, as in the CF prelude.
     const nativeBindings = nativeToolFunctions(surface.native);

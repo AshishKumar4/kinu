@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, newJobId,
-  type JobHarvester, type JobResumer,
+  type JobHarvester, type JobHolder, type JobResumer,
 } from '../src/jobs/runner';
 import { Inbox } from '../src/orchestrator/inbox';
 import {
@@ -20,6 +20,9 @@ import { makeSql, makeExecRaw, makeSqlExec, conversationsFor } from './helpers';
 import { createTestRuntime, createTestActors, toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { inWorkMode } from '../src/execution/work-mode';
+import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
+import { processJobHolder } from '../src/jobs/process-holder';
+import { scratchPath } from '@kinu.run/test-utils';
 
 /** Runs the body inline; exposes in-flight bodies so a test can await detach completion. */
 function fakeFiber() {
@@ -68,6 +71,7 @@ function setup(opts: {
   onDetached?: ((jobId: string, requestIds: readonly string[]) => Promise<void> | void) | null;
   onCancelled?: ((jobId: string) => Promise<void> | void) | null;
   scheduleResume?: (atMs: number) => Promise<void> | void;
+  holder?: JobHolder;
 } = {}) {
   const db = opts.db ?? new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
@@ -107,6 +111,7 @@ function setup(opts: {
     policy: policy === undefined ? undefined : () => policy,
     harvest: opts.harvest,
     scheduleResume: opts.scheduleResume,
+    holder: opts.holder,
   };
 
   const runner = new BackgroundJobRunner(runnerDeps);
@@ -756,6 +761,96 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     expect(first.store.runningIds()).toEqual(['jz']);
   });
 
+  test('a job another live process runs is left to it and named in flight; one it no longer runs is re-driven and held here', async () => {
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const held = new Map<string, string>([['jl', 'daemon'], ['jg', 'gone']]);
+
+    const holder: JobHolder = {
+      hold: (jobId) => { held.set(jobId, 'this'); },
+      heldElsewhere: (jobId) => held.get(jobId) === 'daemon',
+      take: (jobId, claim) => {
+        if (held.get(jobId) === 'daemon') return 'held';
+        const won = claim();
+
+        if (won !== null) held.set(jobId, 'this');
+
+        return won;
+      },
+    };
+
+    const { runner, store } = setup({ resume, holder });
+    store.create({ id: 'jl', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    store.create({ id: 'jg', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+
+    expect((await runner.recoverOrphans()).map((job) => job.id).sort()).toEqual(['jg', 'jl']);
+    expect({ live: store.get('jl')?.resumeAttempts, gone: store.get('jg')?.resumeAttempts }).toEqual({ live: 0, gone: 1 });
+    expect(Object.fromEntries(held)).toEqual({ jl: 'daemon', jg: 'this' });
+    expect(held.get(runner.create('think', {}, 'build', new AbortController()))).toBe('this');
+  });
+
+  // Main, 2026-10-04: two processes starting together after a job's holder died both reclaimed it and both resumed it.
+  test('two processes recovering a job whose holder died resume it once, though one claims while the other reads', async () => {
+    const path = scratchPath('job-claim', 'jobs.db');
+    const [first, second] = [new Database(path), new Database(path)];
+    const other = Bun.spawn(['sleep', '600']);
+    const gone = Bun.spawn(['true']);
+    await gone.exited;
+
+    // Both racers live; the holder that left the job does not.
+    const alive = new Set([process.pid, other.pid]);
+    const isAlive = (pid: number): boolean => alive.has(pid);
+
+    const resumed: string[] = [];
+
+    const racer = (db: Database, pid: number, name: string, holder = processJobHolder({ sql: makeSql(db), execRaw: makeExecRaw(db), transactionSync: (write) => db.transaction(write).immediate() }, { pid, isAlive })) => {
+      const sql = makeSql(db);
+      const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
+      const { fiber, settled } = fakeFiber();
+
+      const resume: JobResumer = async () => {
+        resumed.push(name);
+
+        return 'done';
+      };
+
+      return { store, settled, holder, runner: new BackgroundJobRunner({ store, fiber, inbox: new Inbox(fakeHost().host), resume, holder }) };
+    };
+
+    try {
+      initBackgroundJobsTable(makeExecRaw(first));
+      createTestActors(makeSql(first), makeExecRaw(first));
+      const b = racer(second, other.pid, 'b');
+      const real = racer(first, process.pid, 'a').holder;
+      let raced: Promise<unknown> | null = null;
+
+      // The other process's recovery runs to its claim between this one's read of the holder and its own claim.
+      const a = racer(first, process.pid, 'a', {
+        ...real,
+        heldElsewhere: (jobId) => {
+          const answer = real.heldElsewhere(jobId);
+
+          raced ??= b.runner.recover({ jobId, phase: 'running' });
+
+          return answer;
+        },
+      });
+
+      a.store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+      processJobHolder({ sql: makeSql(first), execRaw: makeExecRaw(first), transactionSync: (write) => first.transaction(write).immediate() }, { pid: gone.pid, isAlive }).hold('jd');
+
+      await a.runner.recover({ jobId: 'jd', phase: 'running' });
+      await raced;
+      await Promise.all([a.settled(), b.settled()]);
+
+      expect(resumed).toEqual(['b']);
+      expect(a.store.get('jd')).toMatchObject({ status: 'completed', resumeAttempts: 1 });
+    } finally {
+      other.kill();
+      first.close();
+      second.close();
+    }
+  });
+
   test('a job whose executor is alive in THIS process is not reclaimed as an orphan', async () => {
     const resume: JobResumer = async () => 'should not run';
     const { runner, store, settled } = setup({ resume });
@@ -991,7 +1086,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       store.create({ id: `owed-${i}`, kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
-      store.reclaim(`owed-${i}`);
+      store.reclaim(`owed-${i}`, store.epochOf(`owed-${i}`) ?? -1);
       store.deferResume(`owed-${i}`, Date.now() + 60_000);
     }
 
@@ -1097,7 +1192,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     store.create({ id: 'j1', kind: 'agents', workMode: 'build', input: '{}', now: 1_000 });
     expect(store.get('j1')?.attemptStartedAt).toBe(1_000);
 
-    store.reclaim('j1', 5_000);
+    store.reclaim('j1', store.epochOf('j1') ?? -1, 5_000);
     expect(store.get('j1')).toMatchObject({
       attemptStartedAt: 5_000, resumeAttempts: 1, epoch: 1,
     });
@@ -1121,7 +1216,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     store.create({ id: 'bgjob-unresumable', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
     // The attempt count rides the partial but decides nothing.
-    for (let i = 0; i < 50; i++) store.reclaim('bgjob-unresumable');
+    for (let i = 0; i < 50; i++) store.reclaim('bgjob-unresumable', store.epochOf('bgjob-unresumable') ?? -1);
 
     await runner.recoverOrphans();
     await settled();
@@ -1220,8 +1315,8 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     });
 
     store.create({ id: 'bgjob-gen', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
-    store.reclaim('bgjob-gen');
-    store.reclaim('bgjob-gen');
+    store.reclaim('bgjob-gen', store.epochOf('bgjob-gen') ?? -1);
+    store.reclaim('bgjob-gen', store.epochOf('bgjob-gen') ?? -1);
 
     await runner.recoverOrphans();
     await settled();

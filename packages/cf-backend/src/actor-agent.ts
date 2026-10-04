@@ -50,9 +50,6 @@ import {
 } from "@kinu.run/compaction";
 import { convertToModelMessages } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
-import {
-  McpToolSurfaceCache,
-} from "./user/mcp";
 
 import {
   EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference, createDbCodemodeProvider,
@@ -66,7 +63,7 @@ import {
   type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
   type AdvisorRecoverySnapshot,
   buildActorTools, buildBuiltinTools,
-  buildMcpToolSet,
+  buildMcpToolSet, McpToolSurfaceCache,
   type WebSearchProvider,
   type BrowserSessions,
   browserSessions,
@@ -3923,7 +3920,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // Budget is the resolved model's step context limit minus this actor's own tool definitions, read
       // off the same `ModelCatalogSession` as compaction (`McpSurfaceBudget`).
       const tools = await this.mcpToolsCache.refresh(
-        () => surface,
+        async () => v.parse(McpToolSurfaceSchema, JSON.parse(await surface)),
         {
           ...read.value.window(),
           nativeToolTokens: toolSurfaceTokens(nativeTools),

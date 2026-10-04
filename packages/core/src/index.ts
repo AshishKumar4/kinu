@@ -543,11 +543,11 @@ export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from './tools/tool-schema';
 
 export {
-  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens, omitEmptyOptionalArgs,
+  describeMcpTool, toolSurfaceTokens, omitEmptyOptionalArgs,
   buildMcpToolSet, listMcpToolsLeniently,
-  McpToolSurfaceSchema,
+  McpToolSurfaceSchema, McpToolSurfaceCache, servedMcpDescriptors,
   type SerializableToolDescriptor, type RemoteMcpTool, type McpToolRefusal, type ListedMcpTools,
-  type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild,
+  type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild, type McpServedSurface,
 } from './tools/mcp-surface';
 
 export {
@@ -1000,7 +1000,7 @@ export {
 
 export { explainSandboxError } from './tools/sandbox-errors';
 
-export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
+export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
@@ -1527,7 +1527,7 @@ export {
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
-  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
+  type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
   WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,
   JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, lastOutputLines, jobName, shortJobId, type JobName,
   type JobOutputFrame, type JobOutputTail,

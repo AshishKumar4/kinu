@@ -26,7 +26,6 @@ import {
   listLocalMcts,
   listLocalTriggers,
   listLocalTimeline,
-  markLocalBackgroundJobsCancelled,
   readLocalMemory,
   searchLocalMemory,
 } from '../local-inspection';
@@ -513,7 +512,7 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
     case 'stop':
       client.stop();
 
-      return { interrupted: true, cancelledBackgroundJobs: await markLocalBackgroundJobsCancelled(name) };
+      return { interrupted: true };
     default:
       throw new Error('Unsupported command');
   }

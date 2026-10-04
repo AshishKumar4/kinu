@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { codemodeSurface, runOnExecutor, storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -61,7 +61,7 @@ import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
+  admitHostedTask, hostedDelegationBudget, hostedRetryTools, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
   reportSettlesRun, hostedTaskEnding, reclaimSettledExplorationActors,
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
@@ -1000,14 +1000,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The host's own provisioner, the one every hosted runtime is built over, so the node's
       // disclosed boundary and its real credential are the same fact.
       nodeHome: (actor) => this.actorHomes.require(actor.record, actor.reference),
-      codemodeTool: (runtime, webSearch) => {
-        const factory = createCodemodeToolFactory({
-          launch: this.codemodeLaunch(runtime.actor.actorId), rt: runtime,
-          workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(runtime.actor.actorId),
-        });
-
-        return (finished) => factory.toolFor(codemodeSurface(runtime, finished));
-      },
+      codemodeTool: (runtime, webSearch) => (finished: ToolSet, reach: ToolSurfaceNarrowing) => createCodemodeToolFactory({
+        launch: this.codemodeLaunch(runtime.actor.actorId), rt: runtime, reach,
+        workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(runtime.actor.actorId),
+      }).toolFor(codemodeSurface(runtime, finished)),
       recordStep: async (headId, seq, step) => { await this.recordHeadStep(headId, seq, step); },
       publishDelta: (kind, delta) => { this.publishHeadStreamFrame({ headId: '', kind, delta }); },
       mission: (input) => {
@@ -1039,6 +1035,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const factory = createCodemodeToolFactory({
       launch: this.codemodeLaunch(turn.runtime.actor.actorId), rt: turn.runtime,
+      // The role's own list: this profile was resolved before the tools it would intersect existed.
+      reach: narrowToolSurface(effectiveRoleCatalog(turn.profile.inputs.envelope.catalog)[turn.profile.profile.role.id]?.allowedTools),
       workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
       // A thunk, so it reads the `report` deps declared below rather than a construction-time copy.
       extraProviders: () => [createReportCodemodeProvider(() => report)],
@@ -1089,11 +1087,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // `report` belongs only to a parent-driven turn; an owner chat with this actor must not carry it.
     deps.report = report;
-    const tools = withHeadCaptureRecording(buildActorTools(deps).turn, turn.capture);
+    const built = buildActorTools(deps);
+    const tools = withHeadCaptureRecording(built.turn, turn.capture);
 
     // Framing is rendered from these exact tool names; `report` among them makes core's
     // `state/delegation` section name this actor as a hire.
-    return { tools, framing: await this.hostedTaskFraming(turn, tools, agents) };
+    return { tools, raw: built.raw, framing: await this.hostedTaskFraming(turn, tools, agents) };
   }
 
   /**
@@ -2818,9 +2817,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** A pane naming `actor` acts on its jobs alone. */
-  private jobOperation(
-    operation: string, jobId: string, actor: string | undefined, run: (authority: JobAuthority) => Promise<{ ok: boolean }> | { ok: boolean },
-  ): Effect.Effect<{ ok: boolean }, KinuError> {
+  private jobOperation<Outcome extends { ok: boolean }>(
+    operation: string, jobId: string, actor: string | undefined, run: (authority: JobAuthority) => Promise<Outcome> | Outcome,
+  ): Effect.Effect<Outcome, KinuError> {
     const authority = this.jobAuthorities.owning(jobId) ?? this.jobAuthorities.root();
 
     if (actor !== undefined && authority.actorId !== this.hostedChild(actor).child.reference.actorId) {
@@ -2858,16 +2857,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async retryBackgroundJob(jobId: string): Promise<RetryOutcome> {
-    if (this.jobAuthorities.owning(jobId)?.kind !== 'root') throw new KinuError('unsupported', "A hired agent's job is run again by asking that agent.");
-    await this.currentAccountSwarms();
+  async retryBackgroundJob(jobId: string, actor?: string): Promise<RetryOutcome> {
+    return await settle(this.jobOperation('retry', jobId, actor, (authority) => this.retryJob(authority, jobId)));
+  }
 
-    return this.countJobOperation('retry', await retryBackgroundJob({
-      jobs: this.jobs,
-      jobRunner: this.jobRunner,
-      rawTools: (mode) => this.getRawToolsForWorkMode(mode),
-      logActivity: (event, detail) => this.logActivity(event, detail),
-    }, jobId));
+  /** On its owner's raw tools and runner: a hire's job runs again as the hire, and its settle wakes the hire. */
+  private async retryJob(authority: JobAuthority, jobId: string): Promise<RetryOutcome> {
+    if (authority.kind === 'step-loop') return { ok: false, error: "a swarm node's job ends with its run" };
+
+    const rawTools = authority.kind === 'root'
+      ? async (mode: WorkMode) => {
+        await this.currentAccountSwarms();
+
+        return this.getRawToolsForWorkMode(mode);
+      }
+      : (mode: WorkMode) => hostedRetryTools(this.hostedSeams(), actorReferenceOf(this.liveAgentOf(authority.actorId)), mode, `retry:${jobId}`);
+
+    return await retryBackgroundJob({
+      jobs: authority.store, jobRunner: authority.runner, rawTools, logActivity: (event, detail) => this.logActivity(event, detail),
+    }, jobId);
   }
 
   @callable()

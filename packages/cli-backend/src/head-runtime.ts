@@ -13,7 +13,7 @@ import {
   runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
   codemodeSurface, createDbCodemodeProvider, createStateCodemodeProvider,
   headMergeLLM, spawnSeatedHead,
-  localMissionScope,
+  localMissionScope, type ToolSurfaceNarrowing,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { CLIRuntime } from './runtime';
@@ -101,14 +101,10 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps) {
  * `eval` over one hosted actor: `state.*` and `db` bind off the actor's own handle and stores, never the
  * parent's (a fork must not move its parent's program state), and code routes through its own runtime.
  */
-export function hostedCodemodeTool(actor: HostedActor, extras: readonly CodemodeProvider[]): (finished: ToolSet) => ToolSet[string] {
-  const sandbox = createNodeCodemodeToolFactory({
-    extraProviders: [
-      ...extras,
-      createStateCodemodeProvider(actor.handle.programState),
-      createDbCodemodeProvider(actor.stores.appData),
-    ],
-  });
+export function hostedCodemodeTool(
+  actor: HostedActor, extras: readonly CodemodeProvider[],
+): (finished: ToolSet, reach: ToolSurfaceNarrowing) => ToolSet[string] {
+  const extraProviders = [...extras, createStateCodemodeProvider(actor.handle.programState), createDbCodemodeProvider(actor.stores.appData)];
 
-  return (finished) => sandbox(codemodeSurface(actor.runtime, finished));
+  return (finished, reach) => createNodeCodemodeToolFactory({ extraProviders, reach })(codemodeSurface(actor.runtime, finished));
 }

@@ -1,11 +1,10 @@
 /**
- * The per-activation MCP tool cache is keyed by a hash of the descriptor content, never a mutation
- * watermark: a watermark resets on cold start while durable server rows survive.
+ * The MCP admission stage is keyed by a hash of the descriptor content, never a mutation watermark:
+ * a watermark resets on cold start while durable server rows survive.
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { McpToolSurfaceCache } from '../src/user/mcp';
-import { McpToolSurfaceSchema } from '@kinu.run/core';
+import { McpToolSurfaceCache, McpToolSurfaceSchema } from '../src/tools/mcp-surface';
 
 function surface(descriptors: Array<{ toolKey: string; name: string }>, unavailable: string[] = []): string {
   return JSON.stringify(v.parse(McpToolSurfaceSchema, {
@@ -38,7 +37,7 @@ function harness() {
     cache, builds, serve, failNext,
     // A window big enough that admission is never under test; the budget is proven in unit-user-mcp.test.ts.
     refresh: (contextWindow = 200_000, nativeToolTokens = 0) =>
-      cache.refresh(async () => next, { contextWindow, modelOutputLimit: 4_000, nativeToolTokens }),
+      cache.refresh(async () => v.parse(McpToolSurfaceSchema, JSON.parse(next)), { contextWindow, modelOutputLimit: 4_000, nativeToolTokens }),
     unavailable: () => cache.unavailable,
   };
 }

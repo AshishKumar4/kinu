@@ -26,7 +26,8 @@ export interface CodemodeFactoryOptions {
   agents?: () => AgentsToolDeps;
   extraProviders?: () => CodemodeProvider[];
   onExecutorUsed?: (name: string) => void;
-  reach?: ToolSurfaceNarrowing;
+  /** Which namespaces the turn's role or allowed tools reach: none is bound past it. */
+  reach: ToolSurfaceNarrowing;
 }
 
 export interface CodemodeFactory {
@@ -73,12 +74,12 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         const entry = Object.hasOwn(functions, name) ? functions[name] : undefined;
 
         if (entry !== undefined) {
-          if (options.reach !== undefined && !options.reach.allowsTool(name)) throw new KinuError('denied', `${name} is not within this actor's reach right now`);
+          if (!options.reach.allowsTool(name)) throw new KinuError('denied', `${name} is not within this actor's reach right now`);
 
           return entry.execute(input);
         }
 
-        if (name === 'eval' || (options.reach !== undefined && !options.reach.allowsTool(name) && !options.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
+        if (name === 'eval' || (!options.reach.allowsTool(name) && !options.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
           throw new KinuError('denied', `${name} is not within this actor's reach right now`);
         }
 
@@ -100,8 +101,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       return call(input);
     },
     toolFor(surface) {
-      const reach = (tools: ToolSet): ToolSet => options.reach === undefined ? tools
-        : Object.fromEntries(Object.entries(tools).filter(([name]) => options.reach?.allowsTool(name)));
+      const reach = (tools: ToolSet): ToolSet => Object.fromEntries(Object.entries(tools).filter(([name]) => options.reach.allowsTool(name)));
 
       const reachable = reach(surface.native);
 
@@ -123,7 +123,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
         if (options.extraProviders) providers.push(...options.extraProviders());
         providers.push(webProvider, ...executorProviders);
-        const bound = providersInWorkMode(mode, options.reach?.narrowProviders(providers) ?? providers);
+        const bound = providersInWorkMode(mode, options.reach.narrowProviders(providers));
 
         const built = createCodeTool({
           // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.

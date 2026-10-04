@@ -82,10 +82,29 @@ export function lastPrinted(output: JobOutputTail | undefined): string | undefin
   return printed === '' ? undefined : printed;
 }
 
-export function jobWork(jobs: readonly AgentJobSummary[]): TuiWorkEntry[] {
+export interface TuiJobOwner {
+  readonly name: string;
+  readonly label: string;
+  readonly actorId: string;
+}
+
+export function jobOwners(entries: readonly SubordinateChild[]): TuiJobOwner[] {
+  return entries.flatMap((entry) => (entry.status === 'dismissed' || entry.actorReference === null ? [] : [{
+    name: entry.name, label: agentDisplayLabel({ name: entry.name, label: entry.displayName }), actorId: entry.actorReference.actorId,
+  }]));
+}
+
+/** `owner` absent: the workspace's own jobs. */
+export function jobWork(jobs: readonly AgentJobSummary[], owner?: TuiJobOwner): TuiWorkEntry[] {
   return jobs.filter((job) => job.status === 'running' || job.status === 'serving').map((job) => {
     const { title, shortId } = jobName(job);
-    const entry: WorkEntryDraft = { id: `job:${job.id}`, title, label: `${shortId} · ${job.status}`, status: 'running' };
+    const entry: WorkEntryDraft = { id: `job:${job.id}`, title, label: `${owner === undefined ? '' : `${owner.label} · `}${shortId} · ${job.status}`, status: 'running' };
+
+    if (owner !== undefined) {
+      entry.path = [owner.name];
+      entry.actorId = owner.actorId;
+    }
+
     const printed = lastPrinted(job.output);
 
     if (printed !== undefined) entry.printed = printed;

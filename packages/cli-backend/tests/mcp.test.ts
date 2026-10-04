@@ -9,6 +9,8 @@ import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { connectMcpServers } from '../src/mcp';
+import type { LocalModelResolver } from '../src/model-resolver';
+import { createLocalProfileAuthority, resolverModelPlane } from '../src/profile-authority';
 import { scratchPath, scriptedTurnModel } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -206,7 +208,69 @@ describe('LocalAgentSession MCP surface', () => {
   });
 });
 
+/** What the request's latest context declares; an earlier turn's block stays in the history it was sent in. */
+function latestDeclarations(prompt: string): string {
+  return prompt.slice(prompt.lastIndexOf('MCP and extension tools available through eval'));
+}
+
+/** Two models known by their windows: the session switches between them through its public `setModel`. */
+function sessionWithWindows(model: LanguageModel, windows: Readonly<Record<string, number>>) {
+  const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+
+  rt.actor.config.setLearning(false);
+
+  const modelResolver: LocalModelResolver = {
+    normalizeSpecSync: (spec) => (spec === null || spec === undefined || spec.trim() === '' ? 'local/small' : spec.trim()),
+    resolveModel: () => model,
+    credentialFor: async () => null,
+    listProviders: async () => [],
+    listModels: async () => ({ models: Object.keys(windows).map((spec) => ({ provider: 'local', id: spec.slice('local/'.length), label: spec })), failures: [] }),
+    modelInfo: async (spec) => ({ id: spec ?? 'local/small', contextWindow: windows[spec ?? 'local/small'], modelOutputLimit: 4_000 }),
+    countInputTokens: async () => ({ kind: 'unsupported', provider: 'local', reason: 'no endpoint behind the stand-in' }),
+    getAuth: async () => null,
+  };
+
+  rt.actor.config.setModel('local/small');
+  const authority = createLocalProfileAuthority({ config: rt.actor.config, plane: resolverModelPlane(modelResolver) });
+
+  const session = new LocalAgentSession({
+    rt, db, model, modelResolver, onEvent: () => {},
+    profileAuthority: () => authority.envelope(),
+  });
+
+  return { session };
+}
+
 describe('LocalAgentSession MCP admission', () => {
+  // Rank 26: the CLI admitted the catalog once, at connect, against whatever window it had then.
+  test("a model switch re-admits the catalog against the new model's window, both ways", async () => {
+    let captured = '';
+
+    const { session } = sessionWithWindows(capturingModel((request) => { captured = request.prompt; }), {
+      'local/small': 128_000, 'local/large': 4_000_000,
+    });
+
+    try {
+      await session.connectMcp(mcpServers());
+      await session.send('which tools can you see?', { id: crypto.randomUUID() });
+      expect(latestDeclarations(captured)).toContain('tools[\\"mcp_echo_echo\\"]');
+      expect(latestDeclarations(captured)).not.toContain('mcp_echo_huge');
+
+      await session.setModel('local/large');
+      await session.send('and now?', { id: crypto.randomUUID() });
+      expect(latestDeclarations(captured)).toContain('tools[\\"mcp_echo_huge\\"]');
+
+      await session.setModel('local/small');
+      await session.send('and now?', { id: crypto.randomUUID() });
+      expect(latestDeclarations(captured)).toContain('tools[\\"mcp_echo_echo\\"]');
+      expect(latestDeclarations(captured)).not.toContain('mcp_echo_huge');
+    } finally {
+      await session.end();
+    }
+  });
+
   test('a tool larger than the session step allocation is deferred with its arithmetic', async () => {
     // `huge` carries ~600KB each of description and schema against a ~117k-token step remainder;
     // schemas are never truncated, so it defers whole.

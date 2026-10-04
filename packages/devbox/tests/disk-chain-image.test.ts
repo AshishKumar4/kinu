@@ -276,3 +276,59 @@ test('a rewrite saves with its changed bytes on the disk once, as the archive st
     must(`umount ${RT}`);
   }
 });
+
+test('a lost-snapshot wake mounts its layers at once, not one store round trip after another', async () => {
+  // D68 lost wake at 2 GB: 3.4 s, mostly squashfuse mounting each layer over the store in turn.
+  loseTheDisk();
+  stored = null;
+  must(`set -e; cd ${WD}; echo a > a.txt`);
+  await commit('tick');
+
+  for (const file of ['b', 'c', 'd']) {
+    must(`echo ${file} > ${WD}/${file}.txt`);
+    await commit('tick');
+  }
+
+  const expected = tree();
+  loseTheDisk();
+  // Each mount waits, up to 5 s, for every layer's mount to start before it mounts.
+  must(`set -e; mv /usr/local/bin/devbox-squashfuse /usr/local/bin/devbox-squashfuse.real; rm -f ${RT}.mounts; `
+    + `printf '%s\\n' '#!/bin/sh' 'echo start >> ${RT}.mounts' `
+    + `'for i in $(seq 1 50); do [ "$(grep -c start ${RT}.mounts)" -ge 4 ] && break; sleep 0.1; done' `
+    + `'echo end >> ${RT}.mounts' 'exec /usr/local/bin/devbox-squashfuse.real "$@"' > /usr/local/bin/devbox-squashfuse; chmod +x /usr/local/bin/devbox-squashfuse`);
+
+  try {
+    await settle(chain.attach(false));
+
+    expect({ order: must(`cat ${RT}.mounts`).split('\n'), exact: tree() === expected })
+      .toEqual({ order: ['start', 'start', 'start', 'start', 'end', 'end', 'end', 'end'], exact: true });
+  } finally {
+    must('mv /usr/local/bin/devbox-squashfuse.real /usr/local/bin/devbox-squashfuse');
+  }
+});
+
+test('a lost wake whose copy to disk would not fit stays lazy, and the workspace keeps taking writes and saves', async () => {
+  // 18 GB lost wake: the copy and s3fs's read cache of the archive filled the disk and reads failed with EIO.
+  loseTheDisk();
+  stored = null;
+  must(`head -c 50331648 /dev/urandom > ${WD}/db.bin`);
+  await commit('tick');
+  const expected = tree();
+  loseTheDisk();
+  // A disk with room for the 48 MiB workspace's writes, not for a copy of it.
+  must(`mount -t tmpfs -o size=40m devbox-runtime ${RT}`);
+
+  try {
+    await settle(chain.attach(false));
+    const lazily = tree();
+    must(`for _ in $(seq 1 100); do [ -e ${RT}/disk-hydrate.pid ] && ! kill -0 "$(cat ${RT}/disk-hydrate.pid)" 2>/dev/null && break; sleep 0.1; done`);
+    const wrote = sh(`echo after > ${WD}/after.txt`);
+    const saved = await commit('tick');
+
+    expect({ exact: lazily === expected, wrote: wrote.status === 0 ? 'ok' : wrote.stderr, saved: saved.kind })
+      .toEqual({ exact: true, wrote: 'ok', saved: 'committed' });
+  } finally {
+    loseTheDisk();
+    must(`umount ${RT}`);
+  }
+});

@@ -30,7 +30,6 @@ import {
   listLocalHeads,
   listLocalMcts,
   listLocalTimeline,
-  markLocalBackgroundJobsCancelled,
   readLocalMemory,
   searchLocalMemory,
 } from '../local-inspection';
@@ -83,19 +82,12 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
     return;
   }
 
-  const cancelled = await markLocalBackgroundJobsCancelled(target.localName);
-
   if (opts.json) {
-    printJson({
-      ok: true,
-      cancelledBackgroundJobs: cancelled,
-      note: 'Foreground local turns can only be interrupted from their owning terminal session.',
-    });
+    printJson({ ok: true, note: 'Foreground local turns can only be interrupted from their owning terminal session.' });
 
     return;
   }
 
-  if (cancelled.length > 0) console.log(`${OK('cancelled')} ${plural(cancelled.length, 'background job')}`);
   console.log(`${WARN('!')} A running local turn can only be stopped from its own terminal: press Ctrl+C there.`);
 }
 
