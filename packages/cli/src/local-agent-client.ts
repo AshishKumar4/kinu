@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { PathPlanes } from '@kinu.run/core';
+import { localFileLinks, type FileLinks, type PathPlanes } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type ProposerOutcome } from '@kinu.run/core';
@@ -68,6 +68,7 @@ import type {
   LocalSessionControls,
   PlanReviewSurface,
 } from './agent-client';
+
 
 interface LocalAgentClientOptions {
   model?: string;
@@ -189,6 +190,7 @@ export class LocalAgentClient implements AgentClient {
   private readonly deps: LocalAgentClientDeps;
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
   readonly planes: PathPlanes;
+  readonly fileLinks: FileLinks;
   readonly rename = async (displayName: string) => renameLocalAgent(this.agentName, displayName);
 
   /** Outlives the session, so a walk-back fork does not invalidate it. */
@@ -214,6 +216,7 @@ export class LocalAgentClient implements AgentClient {
     this.deps = deps;
     this.agentName = deps.agentName;
     this.planes = deps.rt.planes;
+    this.fileLinks = localFileLinks(deps.rt.planes);
     initAgentConfigTable(deps.rt.storage.execRaw);
     this.config = deps.rt.actor.config;
     this.canonicalConversation = canonicalConversationId(this.config);

@@ -41,7 +41,7 @@ import {
 } from './session';
 import { CloudTurnStream, jsonErrorMessage, TurnStreams } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
-import { JobOutputFrameSchema, LIVE_READS, READS_CHANGED_EVENT, type AgentModelMenu, type AgentRpcMethod } from '@kinu.run/core';
+import { cloudFileLinks, JobOutputFrameSchema, LIVE_READS, READS_CHANGED_EVENT, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
 import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
@@ -70,6 +70,7 @@ import {
   type PlanReviewSurface,
 } from './agent-client';
 import * as v from 'valibot';
+
 
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
 
@@ -305,6 +306,7 @@ export class CloudAgentClient implements AgentClient {
   readonly plans: PlanReviewSurface | null;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
   readonly planes = null;
+  readonly fileLinks: FileLinks;
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
 
   private readonly origin: string;
@@ -331,6 +333,7 @@ export class CloudAgentClient implements AgentClient {
 
   constructor(opts: CloudAgentClientOptions) {
     this.origin = opts.origin;
+    this.fileLinks = cloudFileLinks(opts.origin, opts.cloudName);
     this.token = opts.token;
     this.agentName = opts.agentName;
     this.cloudName = opts.cloudName;

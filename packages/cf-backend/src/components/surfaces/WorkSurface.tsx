@@ -6,7 +6,7 @@ import {
 import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import type { HeadDeltas } from "@kinu.run/core";
+import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
 import { tabCls, tabStripH } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
@@ -54,6 +54,8 @@ export interface WorkSurfaceProps {
   previewFocus?: string | null;
   planFocus?: string | null;
   changesFocus?: ChangesFocus | null;
+  /** A file a chat link opened; each new value opens Files on it. */
+  filesFocus?: FilesFocus | null;
   planOwner?: string;
   workspacePlanArrival?: WorkspacePlanArrival | null;
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
@@ -199,6 +201,12 @@ export function WorkSurface(props: WorkSurfaceProps) {
   }, [focus.navigate]);
 
   const openChangedFile = useCallback((file: string) => openFiles(parentDir(file), file), [openFiles]);
+
+  const chatFile = props.filesFocus;
+
+  useEffect(() => {
+    if (chatFile) openFiles(chatFile.path, chatFile.file);
+  }, [chatFile, openFiles]);
 
   const openSlate = slateId(surface);
 

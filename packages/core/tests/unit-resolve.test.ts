@@ -1,6 +1,6 @@
 // One reading of a written path: `root://path`, `~`, relative and absolute, and the reference a person reads back.
 import { describe, expect, test } from 'bun:test';
-import { cloudPlanes, formatPath, resolvePath, shellReference, type PathPlanes } from '../src/vfs/resolve';
+import { cloudPlanes, findPlaneReferences, formatPath, resolvePath, shellReference, type PathPlanes } from '../src/vfs/resolve';
 import { deviceMountSegment } from '../src/execution/device-tunnel-executor';
 import type { DeviceFleetEntry } from '../src/execution/device-status';
 
@@ -88,5 +88,24 @@ describe('a shell takes its machine\'s paths', () => {
     for (const word of ['https://example.com', 'postgres://db/app', 'notes/vfs://x', 'sandbox://x', '/etc/hosts']) {
       expect(shellReference(word, CLI)).toBeNull();
     }
+  });
+});
+
+// 2026-10-04: chat named files as plain text. A reference to one of the workspace's planes is found in prose to be
+// linked; any other scheme, and the punctuation that ends a sentence, is not part of it.
+describe('a reference in prose', () => {
+  test('is found by its root, without the sentence punctuation after it', () => {
+    const text = 'Wrote vfs://home/main/report.md, see (sandbox://w/build.log). Not postgres://db/x, https://x.io or avfs://y.';
+
+    expect(findPlaneReferences(text, ['vfs', 'sandbox'])).toEqual([
+      { index: 6, reference: 'vfs://home/main/report.md' },
+      { index: 38, reference: 'sandbox://w/build.log' },
+    ]);
+    expect(findPlaneReferences('vfs:// alone, and vfs://a/b/', ['vfs'])).toEqual([
+      { index: 0, reference: 'vfs://' },
+      { index: 18, reference: 'vfs://a/b/' },
+    ]);
+    expect(findPlaneReferences('ashish@studio://home/x.', ['ashish@studio'])).toEqual([{ index: 0, reference: 'ashish@studio://home/x' }]);
+    expect(findPlaneReferences('local://a', [])).toEqual([]);
   });
 });

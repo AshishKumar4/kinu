@@ -1,11 +1,11 @@
-import { memo, useContext, useCallback, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useCallback, useState, type ReactNode } from "react";
 import { CaretRightIcon, CopyIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
-import { MAX_LINES_PER_FILE, SLATE_LINK, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
+import { findPlaneReferences, MAX_LINES_PER_FILE, SLATE_LINK, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -102,6 +102,9 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
   );
 }
 
+/** The chat's file links: the planes it names (`vfs`, `sandbox`) and what opens one. Null elsewhere: a reference stays text. */
+export const FileLinkContext = createContext<{ readonly roots: readonly string[]; readonly open: (reference: string) => void } | null>(null);
+
 export function SlateLink({ id }: { id: string }) {
   const inline = useContext(SlateInlineContext);
 
@@ -111,26 +114,27 @@ export function SlateLink({ id }: { id: string }) {
   return <span className="block my-2"><InlineSlate id={id} rpc={inline.rpc} display="inline" /></span>;
 }
 
-function remarkSlateLinks() {
-  // Local mdast slice: importing `mdast` types for one plugin is heavier than the plugin.
-  interface MdNode {
-    readonly type: string;
-    readonly value?: string;
-    readonly url?: string;
-    children?: MdNode[];
-  }
+// Local mdast slice: importing `mdast` types for two plugins is heavier than the plugins.
+interface MdNode {
+  readonly type: string;
+  readonly value?: string;
+  readonly url?: string;
+  children?: MdNode[];
+}
 
-  const split = (node: MdNode): MdNode[] | null => {
-    const value = node.value ?? '';
+/**
+ * Links every hit `find` reports in the tree's prose, outside links and code; `code` says which whole inline code
+ * spans are links too, wrapped as they are.
+ */
+function linkProse(tree: MdNode, find: (value: string) => ReadonlyArray<{ readonly index: number; readonly text: string }>, code: (value: string) => boolean): void {
+  const split = (value: string): MdNode[] | null => {
     const parts: MdNode[] = [];
     let from = 0;
 
-    for (const hit of value.matchAll(SLATE_LINK)) {
-      if (slateLinkId(hit[0]) === null) continue;
-
+    for (const hit of find(value)) {
       if (hit.index > from) parts.push({ type: 'text', value: value.slice(from, hit.index) });
-      parts.push({ type: 'link', url: hit[0], children: [{ type: 'text', value: hit[0] }] });
-      from = hit.index + hit[0].length;
+      parts.push({ type: 'link', url: hit.text, children: [{ type: 'text', value: hit.text }] });
+      from = hit.index + hit.text.length;
     }
 
     if (parts.length === 0) return null;
@@ -143,35 +147,62 @@ function remarkSlateLinks() {
   const walk = (node: MdNode): void => {
     if (node.type === 'link' || node.type === 'linkReference' || node.type === 'inlineCode' || node.type === 'code') return;
 
-    const children = node.children;
-
-    if (children === undefined) return;
+    const children = node.children ?? [];
 
     for (let i = 0; i < children.length; i++) {
       const child = children[i];
 
-      if (child.type === 'text') {
-        const parts = split(child);
-
-        if (parts !== null) {
-          children.splice(i, 1, ...parts);
-          i += parts.length - 1;
-
-          continue;
-        }
+      if (child.type === 'inlineCode' && code(child.value ?? '')) {
+        children[i] = { type: 'link', url: child.value, children: [child] };
+        continue;
       }
 
-      walk(child);
+      const parts = child.type === 'text' ? split(child.value ?? '') : null;
+
+      if (parts === null) {
+        walk(child);
+        continue;
+      }
+
+      children.splice(i, 1, ...parts);
+      i += parts.length - 1;
     }
   };
 
-  return (tree: MdNode) => { walk(tree); };
+  walk(tree);
+}
+
+function remarkSlateLinks() {
+  const find = (value: string) => [...value.matchAll(SLATE_LINK)]
+    .filter((hit) => slateLinkId(hit[0]) !== null)
+    .map((hit) => ({ index: hit.index, text: hit[0] }));
+
+  return (tree: MdNode) => { linkProse(tree, find, () => false); };
+}
+
+/** True when `href` is exactly one reference to `roots`. */
+function isFileReference(href: string, roots: readonly string[]): boolean {
+  const [only] = findPlaneReferences(href, roots);
+
+  return only !== undefined && only.index === 0 && only.reference === href;
+}
+
+function remarkFileLinks({ roots }: { readonly roots: readonly string[] }) {
+  const find = (value: string) => findPlaneReferences(value, roots).map(({ index, reference }) => ({ index, text: reference }));
+
+  return (tree: MdNode) => { linkProse(tree, find, (value) => isFileReference(value, roots)); };
 }
 
 // Memoized on content: the react-markdown re-parse dominates render cost.
 export const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
+  const files = useContext(FileLinkContext);
+  const roots = files?.roots ?? [];
+
   return (
-    <Markdown remarkPlugins={[remarkGfm, remarkSlateLinks]} urlTransform={(url) => url.startsWith('slate://') ? url : defaultUrlTransform(url)} components={{
+    <Markdown
+      remarkPlugins={files === null ? [remarkGfm, remarkSlateLinks] : [remarkGfm, remarkSlateLinks, [remarkFileLinks, { roots }]]}
+      urlTransform={(url) => (url.startsWith('slate://') || isFileReference(url, roots) ? url : defaultUrlTransform(url))}
+      components={{
       // An unlabelled fence has no className, same as inline code, so a fence is detected by spanning lines.
       code({ node, className, children, ...props }) {
         const source = (node?.children ?? []).map((child) => (child.type === "text" ? child.value : "")).join("");
@@ -186,6 +217,10 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
         const id = slateLinkId(href ?? '');
 
         if (id !== null) return <SlateLink id={id} />;
+
+        if (files !== null && href !== undefined && isFileReference(href, roots)) {
+          return <button type="button" data-file-link={href} className="p-accent hover:underline" onClick={() => files.open(href)}>{children}</button>;
+        }
 
         return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>;
       },

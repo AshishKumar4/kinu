@@ -63,6 +63,15 @@ export function resolvedPath(path: string, planes: PathPlanes): Effect.Effect<Re
   return Effect.map(absolute, (at) => ({ plane: servingRoot(at, planes)?.root ?? null, absolute: at }));
 }
 
+/** The path a link's reference names, or null where it names none: a plane this workspace lacks, or a climb out of one. */
+export function referencedPath(reference: string, planes: PathPlanes): string | null {
+  return settleSync(Effect.catchIf(
+    Effect.map(resolvedPath(reference, planes), (resolved): string | null => resolved.absolute),
+    (refused: VfsError) => refused.code === 'ENOENT' || refused.code === 'EPERM',
+    () => Effect.succeed(null),
+  ));
+}
+
 /** A plain path as this machine's shell names it: `~` is the home, a relative path starts at `cwd`. */
 export function machinePath(path: string, at: Pick<PathPlanes, 'cwd' | 'home'>): string {
   if (path === '~' || path.startsWith('~/')) return workspacePath(`.${path.slice(1)}`, at.home);
@@ -91,6 +100,18 @@ export function shellReference(word: string, planes: PathPlanes): string | null 
         : `${word} is in the ${view} view, which the file tool and workspace.* read; the shell has no path for it`;
     },
   }));
+}
+
+/** A reference's path stops at whitespace, a quote or a bracket; sentence punctuation after it is prose. */
+const REFERENCE_PATH = String.raw`[^\s<>()[\]{}"'\x60]*`;
+
+/** Every reference to one of `roots` in prose, in order: what a chat surface links. */
+export function findPlaneReferences(text: string, roots: readonly string[]): Array<{ readonly index: number; readonly reference: string }> {
+  if (roots.length === 0) return [];
+  const names = roots.map((root) => root.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)).join('|');
+  const pattern = new RegExp(String.raw`(?<![\w@.+-])(?:${names}):\/\/${REFERENCE_PATH}`, 'gu');
+
+  return [...text.matchAll(pattern)].map((hit) => ({ index: hit.index, reference: hit[0].replace(/[.,;:!?]+$/u, '') }));
 }
 
 /** The reference a person reads: the deepest root holding it. A machine path under none stays as it is. */

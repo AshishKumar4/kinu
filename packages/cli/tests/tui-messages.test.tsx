@@ -40,6 +40,34 @@ describe('TUI transcript rendering', () => {
     }
   });
 
+  // 2026-10-04: a file the agent named was plain text. Each reference to the workspace's planes is a link to the file:
+  // a terminal hyperlink where the terminal has them, else its target printed after it.
+  test('a file the agent names is a link to it; code blocks stay as written', async () => {
+    // Wide enough that no target wraps across lines.
+    const { renderer, waitForFrame } = await createTestRenderer({ width: 180, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    const fileLinks = { roots: ['vfs', 'local'], href: (reference: string) => `file:///work/${reference.replace('://', '/')}` };
+    renderer.start();
+
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
+          <MessageList
+            fileLinks={fileLinks}
+            messages={[{ id: 'a1', role: 'assistant', content: 'Wrote vfs://slates/board/index.ts, ran `local://test.sh`.\n\n```\ncat vfs://x\n```' }]}
+          />
+        </box>,
+      );
+      const frame = await waitForFrame((painted) => ['Wrote', 'ran', 'cat vfs://x'].every((text) => painted.includes(text)));
+      expect(frame).toContain('file:///work/vfs/slates/board/index.ts');
+      expect(frame).toContain('file:///work/local/test.sh');
+      expect(frame).not.toContain('file:///work/vfs/x');
+    } finally {
+      flushSync(() => { root.unmount(); });
+      renderer.destroy();
+    }
+  });
+
   test('status snapshots stay in transcript chronology', async () => {
     const { renderer, waitForFrame } = await createTestRenderer({
       width: 96,
