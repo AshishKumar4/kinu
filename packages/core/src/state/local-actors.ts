@@ -4,9 +4,7 @@
  */
 import { WorkspaceActorDirectory, type CreateWorkspaceActor, type WorkspaceActor } from '../identity/workspace-actors';
 import { bindActorHandle, type ActorHandle, type ActorReference } from '../identity/actor-handle';
-import { explorationActorKey } from '../identity/actor-key';
 import type { SqlExecutor } from '../types/primitives';
-import type { NodeIdentity } from '../strategy/node-workspace';
 import { KinuError } from '../obs/error';
 
 interface LocalActorScope {
@@ -122,16 +120,6 @@ export function openLocalActor(parent: ActorHandle, name: string): LocalActorBin
   if (entry.state !== 'active') throw new KinuError('missing', 'The local actor is retired.');
 
   return bindChild(scope, entry.reference, name);
-}
-
-/** The one caller wanting a handle without a binding; others use `registerLocalActor` + `bindLocalActor`. */
-export function registerLocalNode(parent: ActorHandle, node: NodeIdentity): ActorHandle {
-  const scope = scopeFor(parent);
-  const entry = scope.directory.apply(parent, scope.path, { action: 'register', name: explorationActorKey(node.nodeId), creationId: node.nodeId, origin: 'swarm', lifetime: 'task' });
-  const actor = scope.directory.open(entry.reference.actorId);
-  actors.set(actor, { ...scope, path: scope.directory.storagePath(entry.reference) });
-
-  return actor;
 }
 
 /** Bind a handle to an actor this root issued; the directory row is the binding authority. */

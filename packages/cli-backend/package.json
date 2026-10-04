@@ -16,8 +16,6 @@
     "@kinu.run/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@nimbus-sh/core": "0.14.0",
-    "@nimbus-sh/runtime-bash": "5.2.37-3",
-    "@nimbus-sh/runtime-cpython": "3.13.14",
     "ai": "6.0.214",
     "effect": "4.0.0-rc.117",
     "valibot": "^1.4.1"

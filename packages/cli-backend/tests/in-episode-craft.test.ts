@@ -9,7 +9,7 @@ import { initWorkspaceSchema } from '@kinu.run/core';
 import { CRAFT_NEUTRAL_PRIOR } from '@kinu.run/core';
 import { createCLIRuntime, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { present, scratchPath } from '@kinu.run/test-utils';
+import { present, scratchPath, scratchDir } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -59,6 +59,7 @@ function episode(blocks: readonly string[]) {
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const rt = createCLIRuntime(db, {
+    cwd: scratchDir('workspace-folder'),
     llm: DUMMY_LLM,
   });
 
@@ -163,6 +164,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
       initWorkspaceSchema(makeWorkspaceSchemaSql(dbOff));
 
       const rt = createCLIRuntime(dbOff, {
+        cwd: scratchDir('workspace-folder'),
         llm: DUMMY_LLM,
       });
 

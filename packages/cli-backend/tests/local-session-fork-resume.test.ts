@@ -9,7 +9,7 @@ import type { LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { makeExecRaw, makeSql } from '../src/runtime';
-import { scratchPath } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -48,7 +48,7 @@ const RATIONALE = 'four angles on the research question';
 function interruptedWorkspace() {
   const db = new Database(scratchPath('local-session-fork-resume', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   const execRaw = makeExecRaw(db);
   initHeadsTables(execRaw);
   initBackgroundJobsTable(execRaw);
@@ -114,7 +114,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
   test('a clean workspace resumes silently', async () => {
     const db = new Database(scratchPath('local-session-fork-clean', 'agent.db'), { create: true });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const events: SessionEvent[] = [];
 
     rt.actor.config.setLearning(false);

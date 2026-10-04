@@ -165,7 +165,7 @@ function renderExecutorLine(
   switch (exec.name) {
       case 'workspace':
         return render(WORKSPACE_EXECUTOR_LINE, {
-          cliLocal: backend === 'cli-local', cliVfs: backend === 'cli-vfs', memoryMb: String(WORKSPACE_MEMORY_MB),
+          cliLocal: backend === 'cli-local', memoryMb: String(WORKSPACE_MEMORY_MB),
         });
       case 'sandbox':
         return render(SANDBOX_EXECUTOR_LINE, sandboxSizeSlots(exec.sizes));

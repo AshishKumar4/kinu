@@ -20,6 +20,7 @@ import { createCliAgent } from '../src/agent-create';
 import { resolveLLMConfig, agentDbPath, AGENT_HOME, listLocalRefsAllProjects, updateConfigFile } from '../src/config';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { present } from '@kinu.run/test-utils';
+import { scratchDir } from '../../test-utils/src/scratch';
 
 // Dummy provider config so resolveLLMConfig succeeds offline. Passed as arguments, not `process.env`:
 // bun runs every file of an invocation in one process, so env set here leaks into later files.
@@ -115,7 +116,7 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   let captured: CapturedTool[] = [];
   const model = capturingModel((tools) => { captured = tools; });
   const resolver = staticResolver(model);
-  const openConfig = { llm: resolveLLMConfig(OFFLINE_PROVIDER) };
+  const openConfig = { llm: resolveLLMConfig(OFFLINE_PROVIDER), cwd: scratchDir('cli-conformance-folder') };
 
   const host = new LocalAgentHost({
     // The host binds planes from placement, never from an agent.db.

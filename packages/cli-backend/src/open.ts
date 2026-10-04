@@ -29,7 +29,8 @@ interface CLIOpenOptions {
   oauthStore?: LocalOAuthStore;
   /** The signed-in session, whose worker rates turns. */
   cloud?: LocalCloudSession;
-  cwd?: string | null;
+  /** The folder the workspace works in; see `CLIRuntimeConfig.cwd`. */
+  cwd: string;
   checkpointKeep?: number;
 }
 

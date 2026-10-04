@@ -7,12 +7,13 @@ import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createCLIRuntime } from '../src/runtime';
 import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
-import { scratchPath } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir } from '@kinu.run/test-utils';
 
 function freshVfs() {
   const db = new Database(scratchPath('vfs-blob', 'agent.db'), { create: true });
 
   const rt = createCLIRuntime(db, {
+    cwd: scratchDir('workspace-folder'),
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });
 

@@ -67,7 +67,7 @@ export async function statusCommand(name: string, opts: LocalModelResolverOption
     return;
   }
 
-  const local = await requireLocalAgent(target.requestedName, { adopt: false });
+  const local = requireLocalAgent(target.requestedName);
   const info = getLocalAgentInfo(local.name);
   const tier = await readLocalNextTurnTier(local.name, opts);
 

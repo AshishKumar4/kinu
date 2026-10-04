@@ -56,9 +56,9 @@ class ProbeSession extends LocalAgentSession {
   }
 }
 
-/** One in-memory database shared by sessions: the restart the fault hooks reach. */
+/** One database shared by sessions: the restart the fault hooks reach. A workspace's own space is beside its file. */
 function workspace(): { db: Database; rt: CLIRuntime } {
-  return openTerminalWorkspace(':memory:');
+  return openTerminalWorkspace(scratchPath('terminal-transition', 'agent.db'));
 }
 
 // Each observable is the effect's own storage footprint, not a ledger row.

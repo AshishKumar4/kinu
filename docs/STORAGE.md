@@ -380,13 +380,17 @@ space is `~/.kinu/<workspace>/` (the directory `agent.db` is in), laid out as
 the cloud tree (`home/<agent>`, `slates/`); before that a folder agent's
 `/home/main` and `/slates` were the project folder itself.
 
-| | Cloud (`cf-backend/src/runtime.ts`) | Local, placed in a directory (`cli-backend/src/runtime.ts`) | Local with no directory (evals, `cwd: null`) |
-|---|---|---|---|
-| Nimbus plane | `createWorkspace` over the Durable Object's `ctx.storage.sql` (`workspace-host.ts`) | `createWorkspace` over `agent.db`; holds agent state only | `createWorkspace` over `agent.db`; also the workspace |
-| `file` tool plane | the Nimbus plane | `localFilePlane` (`cli-backend/src/host-mount.ts`): every path is the machine's own; the own space's (`vfs://`, and core's `/home/main`, `/slates` and view paths) land in `~/.kinu/<workspace>/`, a relative one in the folder; past those two, writes keep the approval gate | the Nimbus plane |
-| Shell | Nimbus `runtime-bash` in the box (`nimbusSessionShell`) | the host shell rooted in the directory (`createHostShell`), behind the approval gate, with a shadow-git checkpoint at most once per turn before a command runs | Nimbus `runtime-bash` |
-| Mounts on the file plane | `/pc`, `/sandbox`, `/skills`, `/shared` (Drive), `/context` | `/skills`, `/shared`, `/context`, `/agent`; `/shared` answers `ENXIO` without a Drive; `/pc` and `/sandbox` are native host paths, never device/container mounts | `/skills`, `/shared`, `/context`; no device/container mounts |
-| Mounts in the shell | the same table, through `mountedAuthority` | none: `/pc` in the host shell is the machine's own path | the same table, through `workspace.mountTable` |
+Every local workspace works in the folder its ref records (`CLIRuntimeConfig.cwd` is required since 2026-10-04):
+`kinu create` and `kinu import` record the folder they run in, and `resolveLocalAgent` refuses a workspace with no
+folder, or one whose folder is gone; there is no adoption. Evals and fixtures bind a scratch folder.
+
+| | Cloud (`cf-backend/src/runtime.ts`) | Local (`cli-backend/src/runtime.ts`) |
+|---|---|---|
+| Nimbus plane | `createWorkspace` over the Durable Object's `ctx.storage.sql` (`workspace-host.ts`) | `createWorkspace` over `agent.db`; holds agent state only, and runs no shell |
+| `file` tool plane | the Nimbus plane | `localFilePlane` (`cli-backend/src/host-mount.ts`): every path is the machine's own; the own space's (`vfs://`, and core's `/home/main`, `/slates` and view paths) land in `~/.kinu/<workspace>/`, a relative one in the folder; past those two, writes keep the approval gate |
+| Shell | Nimbus `runtime-bash` in the box (`nimbusSessionShell`) | the host shell rooted in the directory (`createHostShell`), behind the approval gate, with a shadow-git checkpoint at most once per turn before a command runs |
+| Mounts on the file plane | `/pc`, `/sandbox`, `/skills`, `/shared` (Drive), `/context` | `/skills`, `/shared`, `/context`, `/agent`; `/shared` answers `ENXIO` without a Drive; `/pc` and `/sandbox` are native host paths, never device/container mounts |
+| Mounts in the shell | the same table, through `mountedAuthority` | none: `/pc` in the host shell is the machine's own path |
 
 Both backends mount through one Kinu API: `withMountTable(base, mounts)`
 (`core/src/vfs/mounts.ts`) gives the `file` tool its view.

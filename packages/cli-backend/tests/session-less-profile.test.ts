@@ -34,7 +34,7 @@ async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: 
   const dir = scratchDir('sessionless');
   const dbPath = join(dir, 'agent.db');
   const db = new Database(dbPath);
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM, agentName: 'jarvis' });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM, agentName: 'jarvis' });
   // The owner's soul, as `writeWorkspaceSoul` records it; the next turn reseals the file from it.
   db.exec('CREATE TABLE IF NOT EXISTS workspace_soul (id INTEGER PRIMARY KEY CHECK (id = 1), markdown TEXT NOT NULL)');
   db.prepare('INSERT INTO workspace_soul (id, markdown) VALUES (1, ?)').run('# jarvis\n\n## Mission\n\nRun the lab.');
@@ -62,7 +62,7 @@ function stubModels(rt: CLIRuntime): ModelRouteResolution[] {
 describe('a local runtime opened without a session', () => {
   test('a later runtime operation resolves the revised profile authority', async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const seen = stubModels(rt);
     await rt.llm.complete('before the authority change');
     rt.profiles?.refine({ plane: staticModelPlane() });
@@ -73,7 +73,7 @@ describe('a local runtime opened without a session', () => {
 
   test("the explorer lane reaches the model instead of refusing for want of a resolver", async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const seen = stubModels(rt);
 
     expect(await rt.llm.complete('propose one improvement')).toBe('stub answer');
@@ -82,7 +82,7 @@ describe('a local runtime opened without a session', () => {
 
   test('every fixed-tier lane resolves to the tier its route policy names', async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const seen = stubModels(rt);
 
     expect(rt.judgeModel).toBeDefined();
@@ -99,7 +99,7 @@ describe('a local runtime opened without a session', () => {
   test('the tier model is the workspace\'s own stored model, never a default of its own', async () => {
     // Spelled as `setModel` stores it: the writer normalises, so a pin reaches resolution in the registry's spelling.
     const { db, dbPath } = await workspace('openai-compat/my-model');
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
     const profile = await rt.ensureProfile?.();
 
@@ -110,14 +110,14 @@ describe('a local runtime opened without a session', () => {
 
   test('with nothing stored it falls to the endpoint the workspace was opened against', async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
     expect((await rt.ensureProfile?.())?.tier.model).toBe('openai-compat/fake-model');
   });
 
   test('an issued operation retains its profile while a later operation sees revised authority', async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const pinned = await rt.ensureProfile?.();
 
     if (!pinned) throw new Error('runtime profile resolution is required');
@@ -142,7 +142,7 @@ describe('a local runtime opened without a session', () => {
 
   test('a lane stream issued under one operation retains its route when another operation consumes it', async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const profileA = await rt.ensureProfile?.();
 
     if (!profileA) throw new Error('runtime profile resolution is required');
@@ -172,7 +172,7 @@ describe('a local runtime opened without a session', () => {
 
   test('a lane stream issued with no operation resolves fresh authority under the workspace identity', async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const profileA = await rt.ensureProfile?.();
 
     if (!profileA) throw new Error('runtime profile resolution is required');
@@ -195,7 +195,7 @@ describe('a local runtime opened without a session', () => {
 
   test('a delayed generator retains its issuing profile for every continuation and cleanup', async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const profile = await rt.ensureProfile?.();
 
     if (!profile) throw new Error('runtime profile resolution is required');
@@ -224,7 +224,7 @@ describe('a local runtime opened without a session', () => {
 
   test('revoking authority refuses later requests without mutating an issued request', async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const started = Promise.withResolvers<void>();
     const held = Promise.withResolvers<void>();
     rt.setModelForRoute?.(route => ({
@@ -248,7 +248,7 @@ describe('a local runtime opened without a session', () => {
 describe('the authority a session refines', () => {
   test('a refined plane answers the next resolution, and the listing cached under the old one is dropped', async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
     expect((await rt.profiles?.resolvePreTurn())?.tier.model).toBe('openai-compat/fake-model');
 
@@ -261,7 +261,7 @@ describe('the authority a session refines', () => {
 
   test('a catalog authority overrides the workspace bootstrap without touching the resolver', async () => {
     const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const bootstrap = await rt.profiles?.envelope();
 
     if (!bootstrap) throw new Error('the runtime built no profile authority');

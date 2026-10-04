@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-04",
-  "files": 2968,
-  "functions": 74175,
+  "files": 2973,
+  "functions": 74372,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -182,10 +182,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 30
-    },
-    {
       "key": "packages/cli-backend/src/opencode-provider.ts#discoverModels",
       "complexity": 30
     },
@@ -219,6 +215,10 @@
     },
     {
       "key": "packages/cf-backend/tests/helpers/actor-harness.ts#chatSessionTurns>admit",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
       "complexity": 29
     },
     {

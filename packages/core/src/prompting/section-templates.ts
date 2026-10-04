@@ -93,7 +93,7 @@ export const TOOLS_SECTION = definePromptSection(
  * from the `worker.isolate.memory` catalog fact, not a measured `resourceLimits`. */
 export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
   "executors/workspace",
-  "{{memoryMb}}{{#if cliLocal}}{{/if}}{{#if cliVfs}}{{/if}}",
+  "{{memoryMb}}{{#if cliLocal}}{{/if}}",
   workspaceExecutorLine.trimEnd(),
 );
 
