@@ -369,6 +369,51 @@ test('a lazy recovery keeps saving after a snapshot wake, and a later loss keeps
   }
 });
 
+test('a lazy recovery whose save recorded its layer but kept no inventory still saves next, and a loss keeps both edits', async () => {
+  // The record is written before the disk keeps the save's inventory. An exec lost in between left a recovering box
+  // with a baseline behind the record, and every later save skipped as "still taking its baseline".
+  let recorded = false;
+  let lost = false;
+
+  const dropped = diskChain({
+    ...ports,
+    writeState: async (state, expectedRev) => {
+      await ports.writeState(state, expectedRev);
+      recorded = true;
+    },
+    exec: async (command) => {
+      if (!recorded || lost) return await ports.exec(command);
+      lost = true;
+
+      return { stdout: '', stderr: 'the exec was never dispatched', exitCode: 1 };
+    },
+  });
+
+  loseTheDisk();
+  stored = null;
+  must(`head -c 50331648 /dev/urandom > ${WD}/db.bin`);
+  await commit('tick');
+  loseTheDisk();
+  must(`mount -t tmpfs -o size=40m devbox-runtime ${RT}`);
+
+  try {
+    await settle(chain.attach(false));
+    copyEnded();
+    must(`echo first > ${WD}/first.txt`);
+    await expect(settle(dropped.commit('tick'))).rejects.toThrow('keeping the inventory exited 1: the exec was never dispatched');
+    must(`echo second > ${WD}/second.txt`);
+    const next = await commit('tick');
+    const expected = tree();
+    loseTheDisk();
+    await settle(chain.attach(false));
+
+    expect({ lost, next: [next.kind, next.reason], exact: tree() === expected }).toEqual({ lost: true, next: ['committed', undefined], exact: true });
+  } finally {
+    loseTheDisk();
+    must(`umount ${RT}`);
+  }
+});
+
 test('a quiesce commit does not push the next periodic tick a period back', async () => {
   // A quiesce whose stop then fails leaves the box running; its next tick must still save. The alarm spaces ticks.
   let clock = 0;
