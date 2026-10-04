@@ -46,6 +46,15 @@ function build() {
   }
 }
 
+/** The deploy's own credential, the one `wrangler r2 object put` publishes with; an Access-only API token cannot read R2. */
+function sessionToken(): string {
+  const ran = spawnSync(join(import.meta.dir, '..', 'node_modules/.bin/wrangler'), ['auth', 'token', '--json'], { encoding: 'utf8' });
+
+  if (ran.status !== 0) throw new Error(`\`wrangler auth token\` failed: ${ran.stderr.slice(-400)}`);
+
+  return v.parse(v.object({ token: v.pipe(v.string(), v.minLength(1)) }), JSON.parse(ran.stdout)).token;
+}
+
 function wrangler(args: readonly string[]) {
   const ran = spawnSync(join(import.meta.dir, '..', 'node_modules/.bin/wrangler'), args, { encoding: 'utf8' });
 
@@ -64,7 +73,7 @@ async function main(): Promise<number> {
 
   if (command === 'check' && bucket !== undefined) {
     const pinned = pinnedTools();
-    const size = await r2ObjectSize({ accountId: ACCOUNT, bucket, key: toolsKey(pinned.sha256) });
+    const size = await r2ObjectSize({ accountId: ACCOUNT, bucket, key: toolsKey(pinned.sha256), token: sessionToken() });
 
     if (size === pinned.bytes) return 0;
     process.stderr.write(`${bucket} lacks the pinned devbox tools ${toolsKey(pinned.sha256)} (${size === undefined ? 'absent' : `${String(size)} bytes`}): `
@@ -77,7 +86,7 @@ async function main(): Promise<number> {
     const pinned = pinnedTools();
     const key = `${bucket}/${toolsKey(pinned.sha256)}`;
 
-    if (await r2ObjectSize({ accountId: ACCOUNT, bucket, key: toolsKey(pinned.sha256) }) === pinned.bytes) {
+    if (await r2ObjectSize({ accountId: ACCOUNT, bucket, key: toolsKey(pinned.sha256), token: sessionToken() }) === pinned.bytes) {
       process.stdout.write(`${key} is already there\n`);
 
       return 0;
