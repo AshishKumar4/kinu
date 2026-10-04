@@ -11,7 +11,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import type { TemporaryAgentPort } from '@kinu.run/core';
 import {
-  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER, initWorkspaceSchema,
+  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER, initWorkspaceSchema, OUTPUT_CONTINUATION_EVENT,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type SessionEvent } from '../src/local-session';
@@ -178,6 +178,33 @@ test('an output-limit continuation records each sealed step once across SDK call
     }))).toEqual([{ step: 1, text: 'first half' }, { step: 2, text: 'second half' }]);
     expect(events.flatMap((event) => event.type === 'turn-end' ? [event.turn.steps] : [])).toEqual([2]);
   } finally { await session.end(); db.close(); }
+});
+
+// DUPLICATE-PATHS rank 16: the CLI built its roster without the continuation, so an answer cut at the output limit was
+// left cut where the cloud continues it.
+test('an answer cut at the output limit on both calls is continued by one more turn, as the cloud continues it', async () => {
+  let call = 0;
+
+  const model = scriptedTurnModel({ doGenerate: () => {
+    call += 1;
+    const cut = call <= 2;
+
+    return {
+      content: [{ type: 'text', text: cut ? `part ${String(call)} ` : 'the end' }],
+      finishReason: { unified: cut ? 'length' : 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    };
+  } });
+
+  const { session, events } = setup('unused', model);
+
+  try {
+    await session.send('Write the whole report.', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+
+    expect(turnStarts(events).map((turn) => turn.event ?? 'user')).toEqual(['user', OUTPUT_CONTINUATION_EVENT]);
+  } finally { await session.end(); }
 });
 
 describe('LocalAgentSession.send — a user turn', () => {

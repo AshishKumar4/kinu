@@ -5,7 +5,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
-import { turnLessonsTerminalEffect } from '../src/orchestrator/terminal-effects';
+import { present } from '@kinu.run/test-utils';
+import { chatTerminalEffects } from '../src/orchestrator/terminal-effects';
 import type { CompletedTurn } from '../src/evolution/types';
 import { applyStruggleLesson, listToolLessons, type Struggle } from '../src/evolution/struggles';
 import { createTestRuntime } from './helpers';
@@ -178,7 +179,17 @@ describe('a struggling turn teaches one lesson about its tool', () => {
 
   test('the owed effect learns from the turn its row recorded, once however often it runs', async () => {
     const { lessons, prompts, evolution } = engine({ update: null, text: LESSON });
-    const effect = turnLessonsTerminalEffect(evolution);
+
+    const effect = present(chatTerminalEffects({
+      chat: () => { throw new Error('the lessons owe no turn'); },
+      orchestrator: {
+        recordTurn: () => { throw new Error('the lessons record no turn'); },
+        recordedTurn: () => { throw new Error('the lessons record no turn'); },
+        drainPendingEvents: () => Promise.reject(new Error('the lessons drain nothing')),
+      },
+      engine: evolution,
+    }).turn_lessons, 'the lessons body');
+
     const input = JSON.parse(JSON.stringify({ turn: turn('t-1', [REFUSED]) }));
 
     for (let run = 0; run < 2; run++) {

@@ -1,22 +1,13 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shared tools and roster for non-main agents; their turns run in AgentFacet. */
 
-import { INTERRUPTED_TURN, currentDateForPrompt, type ConversationRecall, type HeadReport, isSubordinateOrigin, type ToolSurfaceNarrowing } from '@kinu.run/core';
+import { INTERRUPTED_TURN, currentDateForPrompt, publishSubordinateReport, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
-import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, buildHeadMessages, buildHeadSystemPrompt, callableToolNames, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type HeadInferenceDeps, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, buildHeadMessages, buildHeadSystemPrompt, callableToolNames, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type HeadInferenceDeps, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { isCFRuntime, type CFRuntime } from './runtime';
 import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting';
-
-/**
- * `spoke` (durable relay policy) and `settled` (temporary rung answered) are distinct: a `progress`
- * note speaks without settling, and conflating them suppressed the terminal report of an ask.
- */
-export interface HostedReportLedger {
-  spoke: boolean;
-  settled: boolean;
-}
 
 /**
  * One delegated turn, decided once: claimed and tooled from the same `input`, under one
@@ -27,7 +18,7 @@ export interface HostedTaskTurn {
   readonly turnId: string;
   readonly actor: HostedActor;
   readonly runtime: CFRuntime;
-  readonly reports: HostedReportLedger;
+  readonly reports: SubordinateReportLedger;
   readonly input: HeadInput;
   readonly capture: HeadCapture;
   readonly model: LanguageModel;
@@ -438,11 +429,10 @@ export function settleHostedTask(
       return null;
     }
 
-    return yield* Effect.promise(() => relayHostedReport(seams, actor, {
-      status: relayed.status, content: relayed.content, origin: 'turn_end',
-      mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
+    return yield* Effect.promise(() => publishSubordinateReport({ mode: task.mode, reports }, {
+      status: relayed.status, content: relayed.content, origin: 'turn_end', sequenceId: task.sequenceId,
       ...(relayed.quiet === true && { quiet: true }),
-    }));
+    }, (report) => relayHostedReport(seams, actor, { ...report, answers: task.sequenceId })));
   }));
 }
 
@@ -541,11 +531,6 @@ async function retireDescendants(seams: HostedActorSeams, below: ActorReference,
       reference: actorReferenceOf(descendant), name: descendant.name, keepHistory, interrupt: true,
     }));
   }
-}
-
-/** Core's predicate at the one place a hosted child's report is admitted. */
-export function reportSettlesRun(status: SubordinateReportStatus, origin: SubordinateReportOrigin): boolean {
-  return temporaryRunSettles({ status, origin });
 }
 
 /** Heads, swarm nodes and steer branches are run actors. */

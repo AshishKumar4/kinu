@@ -193,8 +193,7 @@ import {
   recoveryBackoffMs,
   // Once-only lifecycle for one settled response; both backends drive this state machine.
   TerminalTransitions, initTerminalEffectTable,
-  terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  turnRecordTerminalEffect, turnLessonsTerminalEffect, eventDrainTerminalEffect,
+  terminalEffect, chatTerminalEffects,
   RunEndReasonSchema, WorkModeSchema,
   AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
@@ -1221,6 +1220,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Effect bodies shared by every actor; per-actor effects live in each actor's own table. */
   protected sharedTerminalEffects(): TerminalEffectTable {
     return {
+      ...chatTerminalEffects({ chat: () => this.chatLoop, orchestrator: this.orch, engine: this.engine }),
       turn_end_extensions: terminalEffect({
         input: v.object({ messageId: v.string() }),
         // Replayed from the recorded message, not a live tree; the row stops a second announcement.
@@ -1260,15 +1260,6 @@ export abstract class ActorAgent extends Agent<Env> {
             : { status: 'completed', detail: refusal };
         },
       }),
-      // Follow-up turns a settled turn can owe; each is owed until its own turn is on disk.
-      overflow_retry: overflowRetryTerminalEffect(() => this.chatLoop),
-      output_continuation: outputLimitContinuationTerminalEffect(() => this.chatLoop),
-      task_reminder: taskReminderTerminalEffect(() => this.chatLoop),
-
-      turn_record: turnRecordTerminalEffect(this.orch),
-      turn_lessons: turnLessonsTerminalEffect(this.engine),
-      event_drain: eventDrainTerminalEffect(this.orch),
-
       improvement_lanes: terminalEffect({
         input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
         // Lanes read durable queues on re-entry (per-turn snapshots do not survive), and the verdict

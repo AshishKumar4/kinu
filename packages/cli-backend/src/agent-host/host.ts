@@ -37,13 +37,14 @@ import {
   actorHomeName,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
+  publishSubordinateReport,
+  type SubordinateReportLedger,
   mintSubordinateName,
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
   facetHomeReleaser,
   readMission,
   recoverSubordinateLifecycles,
-  temporaryRunSettles,
   terminalTaskReport,
   taskAnswerIsLater,
   type ActorHost,
@@ -199,14 +200,8 @@ interface HostEntry {
   /** Peer mail, roots only: a subordinate could otherwise escape its depth cap via another tree. */
   peers: LocalPeerEndpoint | null;
   children: Map<string, HostEntry>;
-  relay: {
+  relay: SubordinateReportLedger & {
     ownerDriven: boolean;
-    reportedThisTurn: boolean;
-    /**
-     * Whether a run-settling report went out this turn. Distinct from `reportedThisTurn`: a
-     * mid-task `progress` note sets that one, and must not suppress the terminal answer.
-     */
-    settledRun: boolean;
     mode: WorkMode;
   } | null;
 }
@@ -687,7 +682,7 @@ export class LocalAgentHost {
       children: new Map(),
       relay: input.parentKey === null
         ? null
-        : { ownerDriven: false, reportedThisTurn: false, settledRun: false, mode: 'build' },
+        : { ownerDriven: false, spoke: false, settled: false, mode: 'build' },
     };
 
     this.entries.set(input.key, entry);
@@ -997,8 +992,8 @@ export class LocalAgentHost {
 
     if (!state || event.type !== 'turn-start') return;
     state.ownerDriven = event.kind === 'user';
-    state.reportedThisTurn = false;
-    state.settledRun = false;
+    state.spoke = false;
+    state.settled = false;
     state.mode = event.workMode;
   }
 
@@ -1016,7 +1011,7 @@ export class LocalAgentHost {
         const state = child.relay;
 
         // Suppressed only by a run-settling report, never a progress note.
-        if (state === null || state.settledRun) return null;
+        if (state === null || state.settled) return null;
 
         // A task child always reports its ending, and any child its failure.
         const terminal = await terminalTaskReport({
@@ -1030,7 +1025,7 @@ export class LocalAgentHost {
         if (ending !== 'answered' || child.actor.record.lifetime === 'task') return null;
 
         return subordinateRelaysTurnEnd({
-          reportedThisTurn: state.reportedThisTurn,
+          reportedThisTurn: state.spoke,
           ownerDriven: state.ownerDriven,
           assistantText,
         })
@@ -1039,15 +1034,9 @@ export class LocalAgentHost {
       },
       sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
       send: async ({ text, status, mode, sequenceId, quiet }) => {
-        // Recorded before the send, so a second terminal path on this turn is suppressed.
-        if (child.relay) {
-          child.relay.reportedThisTurn = true;
-          child.relay.settledRun = true;
-        }
-
-        const relayed = await this.relayToParent({
-          child, content: text, mode, status, origin: 'turn_end', sequenceId, ...(quiet === true && { quiet }),
-        });
+        const relayed = await publishSubordinateReport({ mode, reports: child.relay }, {
+          content: text, status, origin: 'turn_end', sequenceId, ...(quiet === true && { quiet }),
+        }, report => this.relayToParent({ child, ...report }));
 
         return relayed.disposition;
       },
@@ -1106,22 +1095,13 @@ export class LocalAgentHost {
   private buildReport(child: HostEntry): ReportToolDeps {
     return {
       report: async ({ status, content, handoff }) => {
-        const relayed = await this.relayToParent({
-          child,
+        const relayed = await publishSubordinateReport({ mode: child.relay?.mode ?? 'build', reports: child.relay }, {
           content,
-          mode: child.relay?.mode ?? 'build',
           status,
           origin: 'report_tool',
           sequenceId: `${child.key}:report:${crypto.randomUUID()}`,
           handoff,
-        });
-
-        // Set here, not off a `tool-call` event: the one seam both the native tool and `report.*` codemode publish through.
-        if (child.relay) {
-          child.relay.reportedThisTurn = true;
-          // Only a run-settling report counts, the same predicate the parent's ingress uses.
-          child.relay.settledRun ||= temporaryRunSettles({ status, origin: 'report_tool' });
-        }
+        }, report => this.relayToParent({ child, ...report }));
 
         return { disposition: relayed.disposition, id: relayed.id };
       },

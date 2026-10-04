@@ -11,7 +11,7 @@ import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { DurableObject } from 'cloudflare:workers';
 import type { ModelMessage } from 'ai';
 import { SlateId } from '@agent-core/core/slates';
-import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts, withMountTable, type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines, WORKSPACE_ROOT } from '@kinu.run/core';
+import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, TerminalTransitions, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initCodemodeStateTable, initTerminalEffectTable, initToolEffectClaimTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts, withMountTable, type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines, WORKSPACE_ROOT } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { SlateFiles, WorkspaceSlateContentStore, slateDirectory } from '@kinu.run/core/slates';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
@@ -288,6 +288,32 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     return await this.meter.measure(async () => {
       if (eventRecorder.openTurn()?.runId !== `run-${String(runs)}`) throw new Error('the open turn was not found');
+
+      return null;
+    });
+  }
+
+  /** Subject: the wake's question "is an interrupted response owed", after `settled` responses settled their claims. */
+  async terminalRecoveryCheck(settled: number): Promise<OperationCost> {
+    const actor = this.main();
+    initToolEffectClaimTable(this.execRaw);
+    initTerminalEffectTable(this.execRaw);
+
+    const terminal = new TerminalTransitions({
+      sql: this.executor, actor, effects: {}, now: () => Date.now(), transaction: (body) => this.ctx.storage.transactionSync(body),
+      turnIsLive: () => false, scheduleRetry: async () => {}, settled: async () => {},
+    });
+
+    for (let index = 0; index < settled; index += 1) {
+      const transition = { turnId: `turn-${String(index)}`, messageId: `answer-${String(index)}` };
+      terminal.record(transition, []);
+      terminal.end(transition);
+    }
+
+    terminal.record({ turnId: `turn-${String(settled)}`, messageId: `answer-${String(settled)}` }, []);
+
+    return await this.meter.measure(async () => {
+      if (!terminal.hasIncomplete()) throw new Error('the interrupted response was not found');
 
       return null;
     });
