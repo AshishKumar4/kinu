@@ -4,6 +4,8 @@
  * back via LLM synthesis.
  */
 
+import type { UIMessage } from 'ai';
+import * as v from 'valibot';
 import type { ToolCallRecord } from '../evolution/types';
 import type { HeadFileChange, HeadFileChangeSet, HeadId, SerializedMessage } from '../types/heads';
 import type { EvaluationGrounding } from '../types/evaluation';
@@ -75,17 +77,11 @@ export interface ArtifactRef {
   readonly description?: string;
 }
 
-export interface HeadStepToolCall {
-  readonly toolCallId?: string;
-  readonly name: string;
-  readonly input?: unknown;
-  readonly output?: unknown;
-}
+/** A recorded step's parts as the transcript draws one (`drawnStep`): its calls under their own ids, a failed one failed. */
+export const HeadStepPartsSchema = v.custom<UIMessage['parts']>((value) => v.is(v.array(v.looseObject({ type: v.string() })), value));
 
 export interface HeadStep {
-  readonly text: string;
-  readonly reasoning?: string;
-  readonly toolCalls: readonly HeadStepToolCall[];
+  readonly parts: UIMessage['parts'];
 }
 
 /** Every terminal status of a head run; readers classifying a `TEXT` column must handle all four, not `completed` versus the rest. */

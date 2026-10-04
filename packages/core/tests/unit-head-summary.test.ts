@@ -1,6 +1,6 @@
 // Head summaries preserve the final answer and the evidence recorded during work.
 import { describe, test, expect } from "bun:test";
-import { extractFinalText, synthesizeHeadSummary, toHeadStep } from "../src/heads/head-summary";
+import { extractFinalText, synthesizeHeadSummary } from "../src/heads/head-summary";
 
 describe("extractFinalText", () => {
   test("uses result.text when the final step has text", () => {
@@ -49,33 +49,5 @@ describe("synthesizeHeadSummary", () => {
 
   test("returns null when the head recorded nothing at all", () => {
     expect(synthesizeHeadSummary({ decisions: [], evidence: [], toolCalls: [] })).toBeNull();
-  });
-});
-
-describe("live head trace", () => {
-  test("pairs tool outputs by call identity despite a different result order", () => {
-    const step = toHeadStep({
-      text: "Read both files",
-      toolCalls: [
-        { toolName: "file", input: { path: "/a.ts" }, toolCallId: "a" },
-        { toolName: "file", input: { path: "/b.ts" }, toolCallId: "b" },
-      ],
-      toolResults: [
-        { output: "B", toolCallId: "b" },
-        { output: "A", toolCallId: "a" },
-      ],
-    });
-
-    expect(step?.toolCalls).toEqual([
-      { name: "file", toolCallId: "a", input: { path: "/a.ts" }, output: "A" },
-      { name: "file", toolCallId: "b", input: { path: "/b.ts" }, output: "B" },
-    ]);
-  });
-
-  test("omits padding but retains reasoning-only steps", () => {
-    expect(toHeadStep({ text: " " })).toBeNull();
-    expect(toHeadStep({ reasoningText: "Check the invariant" })).toEqual({
-      text: "", reasoning: "Check the invariant", toolCalls: [],
-    });
   });
 });

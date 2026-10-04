@@ -10,7 +10,7 @@ import type { LanguageModel, ModelMessage } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import { runHeadInference, HeadCapture, type HeadInferenceDeps } from '../src/heads/head-inference';
 import type { HeadStreamKind } from '../src/heads/head-stream';
-import { makeSql, makeExecRaw, createTestActor } from './helpers';
+import { makeSql, makeExecRaw, createTestActor, stepText } from './helpers';
 import { LiveHeadJournal } from '../src/heads/live-journal';
 import { initHeadsTables } from '../src/heads/schema';
 import type { HeadInput, HeadStep } from '../src/heads/types';
@@ -188,8 +188,8 @@ describe('a running head publishes what it is producing', () => {
     }));
 
     expect(steps).toHaveLength(1);
-    expect(steps[0]?.text).toBe(chunks.join(''));
-    expect(frames.map((frame) => frame.delta).join('')).toBe(steps[0]?.text);
+    expect(steps.map(stepText)).toEqual([chunks.join('')]);
+    expect(frames.map((frame) => frame.delta).join('')).toBe(chunks.join(''));
     expect(report.summary).toBe(chunks.join(''));
   });
 
@@ -214,7 +214,7 @@ describe('a running head publishes what it is producing', () => {
 
     expect(frames).toHaveLength(3);
     expect(announced).toEqual([input.id]);
-    expect(journal.readSteps(input.id).map((step) => step.text)).toEqual(['a settled answer']);
+    expect(journal.readSteps(input.id).map(stepText)).toEqual(['a settled answer']);
     database.close();
   });
 

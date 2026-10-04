@@ -1482,7 +1482,7 @@ export { isoDate, today, nowMs } from './utils/date';
 // Branching heads
 export type {
   HeadId, HeadBudget, HeadInput, HeadReport, HeadReportStatus, HeadUnsettledStatus,
-  HeadStep, HeadStepToolCall, HeadRunView, HeadRunHeadView,
+  HeadStep, HeadRunView, HeadRunHeadView,
   Evidence, Decision, ArtifactRef,
   SplitRequest, MergeResult, HeadScore, MergeStrategy,
   HeadFileChange, HeadFileChangeSet,
@@ -2151,7 +2151,7 @@ export {
 } from './read-models/background-event';
 
 export {
-  appendHeadDelta, retireHeadDelta, stepAsMessage, deltaAsMessage, NO_HEAD_DELTAS,
+  appendHeadDelta, retireHeadDelta, deltaAsMessage, NO_HEAD_DELTAS,
   type HeadDelta, type HeadDeltaKind, type HeadDeltas,
 } from './read-models/head-chat';
 

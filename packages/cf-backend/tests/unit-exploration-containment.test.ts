@@ -240,7 +240,7 @@ describe('exploration actors write the workspace journal and acquire only their 
 
     // Unscoped on purpose: a read filtered by the expected actor would pass on a row filed under the wrong owner.
     const rows = workspace.db.prepare<{ actor_id: string; head_id: string; text: string }, []>(
-      'SELECT actor_id, head_id, text FROM head_steps',
+      "SELECT actor_id, head_id, json_extract(parts_json, '$[0].text') AS text FROM head_steps",
     ).all();
 
     expect(rows).toEqual([{ actor_id: root, head_id: workspace.head, text: 'read the parser' }]);

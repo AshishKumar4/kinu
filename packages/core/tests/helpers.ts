@@ -6,6 +6,7 @@ import * as v from 'valibot';
 import type { SqlExecutor, SqlExec, RawSqlExec, Memory, Executor, LLM, Schedule, Identity, FiberCtx, ExecuteResult, ResolvedProvider } from '../src/types/primitives';
 import type { AgentRuntime, CraftStore } from '../src/types/agent-runtime';
 import type { ActorHandle } from '../src/identity/actor-handle';
+import type { HeadStep } from '../src/heads/types';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 
 import {
@@ -321,4 +322,14 @@ export async function captureConsole<Result>(fn: () => Promise<Result>): Promise
   }
 
   return { stdout, stderr };
+}
+
+/** A journalled head step that says `text`, as the node view draws it. */
+export function saidStep(text: string): HeadStep {
+  return { parts: [{ type: 'text', text, state: 'done' }] };
+}
+
+/** What a journalled head step says. */
+export function stepText(step: HeadStep): string {
+  return step.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
 }
