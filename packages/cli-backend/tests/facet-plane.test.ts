@@ -100,4 +100,18 @@ describe('local actor file-plane identity', () => {
     expect(readdirSync(facets)).toEqual([twoKey]);
     expect(existsSync(join(project, 'keep.txt'))).toBe(true);
   });
+
+  // Release review, 2026-10-04: joining the plane rebuilt the child's shell under the root's policy, so the
+  // child's narrowing was lost and a force-push the root had granted reached the box.
+  test("a joined child keeps its own narrowing of the root's grants", async () => {
+    const root = rootRuntime(scratchDir('facet-plane-grants'));
+    root.rt.actor.config.grantShellApproval([{ rule: 'git-force-push', executor: 'workspace' }]);
+    const child = await childRuntime(root.rt, root, 'publisher');
+    child.actor.config.grantShellApproval([{ rule: 'package-publish', executor: 'workspace' }]);
+    const command = 'git push --force origin main';
+    expect((await exec(root.rt, command)).stderr).not.toContain('NOT RUN');
+    const refused = await exec(child, command);
+    expect(refused.stderr).toContain('NOT RUN: needs owner approval');
+    expect(refused.stderr).toContain('git-force-push');
+  });
 });

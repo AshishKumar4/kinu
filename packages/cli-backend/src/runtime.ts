@@ -106,6 +106,9 @@ function ownContextTree(actor: ActorHandle, stores: AgentStores): () => ContextT
 
 export type CLIRuntimeConfig = CLIRuntimeOptions & LocalActorConfig;
 
+/** The runtime a node plane is joined for, with the policy its gates answer to. */
+export type NodeSource = AgentRuntime & Pick<CLIRuntime, 'approvalPolicy'>;
+
 /**
  * The local runtime plus late-bound session channels: model seams are built before
  * any session, but their usage belongs in the session's run-event log.
@@ -146,7 +149,7 @@ export interface CLIRuntime extends AgentRuntime {
    */
   nodeHome?: () => Promise<NodeHomeHost>;
   /** Present exactly where {@link nodeHome} is: a node-owned home is one the origin plane cannot write. */
-  nodeRuntime?: (node: NodeWorkspace, actor: ActorHandle, source: AgentRuntime, observer?: WriteObserver) => Promise<AgentRuntime>;
+  nodeRuntime?: (node: NodeWorkspace, actor: ActorHandle, source: NodeSource, observer?: WriteObserver) => Promise<AgentRuntime>;
   /** A facet's gated, checkpointed host shell with its own `HOME`/`TMPDIR`; present exactly where `cwd` is. */
   facetShell?: (facet: string) => Shell;
   /** Shared rather than rebuilt per consumer: two instances over one actor are two memos of one truth. */
@@ -553,7 +556,7 @@ export function createCLIRuntime(
   }
 
   runtime.nodeRuntime = localNodeRuntime({
-    workspace, origin: runtime, approvalPolicy, inline: inlineOptions,
+    workspace, origin: runtime, inline: inlineOptions,
   });
 
   return runtime;
@@ -777,7 +780,8 @@ async function buildCLIHeadRuntime(
     };
   }
 
-  const runtime = buildRuntime(runtimeOptions);
+  // A head acts under its parent's policy, as its file gates above do.
+  const runtime = Object.assign(buildRuntime(runtimeOptions), { approvalPolicy: parent.approvalPolicy });
 
   if (parent.cwd) return runtime;
 
