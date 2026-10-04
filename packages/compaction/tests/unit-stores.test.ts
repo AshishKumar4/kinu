@@ -171,6 +171,15 @@ describe('createCompactionStateStore', () => {
     expect(store.plans.load('s1')).toEqual(snap);
   });
 
+  // 2026-10-04: the row dropped 0.3.0's fields, and a replay refuses a plan whose attachment key is not the live one, so
+  // every plan, a `/compact` fold included, was thrown away on the next turn.
+  test('a plan keeps its attachment key, links and bypass through the durable row', async () => {
+    const { store } = stateRig();
+    const snap: PlanSnapshot = { ...snapshot('s1'), attachmentPolicyKey: 'anthropic/claude-opus-4-7|recent:2', attachmentLinks: { 'turn:item': 'vfs://home/main/attachments/a.png' }, bypassSummaries: true };
+    await store.plans.save('s1', snap);
+    expect(store.plans.load('s1')).toEqual(snap);
+  });
+
   test('save(null) clears a stale plan but keeps the prompt-token signal', async () => {
     const { store } = stateRig();
     store.savePromptTokens('s1', 12_345, 30);
