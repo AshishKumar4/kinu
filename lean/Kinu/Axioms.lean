@@ -191,54 +191,6 @@ import Kinu
 #print axioms Kinu.Storage.LossWindow.another_commit_never_loses_a_write
 #print axioms Kinu.Storage.LossWindow.a_refused_stop_keeps_the_window
 
-/-! ## Kinu/Storage/SnapshotChain.lean -/
-
-#print axioms Kinu.Storage.SnapshotChain.layers_le_two
-#print axioms Kinu.Storage.SnapshotChain.small_file_travels_whole
-#print axioms Kinu.Storage.SnapshotChain.sparse_file_travels_whole
-#print axioms Kinu.Storage.SnapshotChain.unavailable_hashes_travel_whole
-#print axioms Kinu.Storage.SnapshotChain.chunked_file_publishes_blocks_and_record
-#print axioms Kinu.Storage.SnapshotChain.chain_tick_is_sum_of_file_publications
-#print axioms Kinu.Storage.SnapshotChain.chain_tick_append
-#print axioms Kinu.Storage.SnapshotChain.identical_upper_republishes_same_blocks
-#print axioms Kinu.Storage.SnapshotChain.deduplicated_stage_le_file_sum
-#print axioms Kinu.Storage.SnapshotChain.unavailable_chunking_uses_full_upper
-#print axioms Kinu.Storage.SnapshotChain.c3_overwrite_touches_at_most_five_blocks
-#print axioms Kinu.Storage.SnapshotChain.c3_aligned_overwrite_touches_four_blocks
-#print axioms Kinu.Storage.SnapshotChain.c3_uses_chunked_publication
-#print axioms Kinu.Storage.SnapshotChain.c3_publication_bound
-#print axioms Kinu.Storage.SnapshotChain.c3_wire_bound
-#print axioms Kinu.Storage.SnapshotChain.c3_is_strictly_cheaper_than_whole_file
-#print axioms Kinu.Storage.SnapshotChain.chain_attach_layer_setup
-#print axioms Kinu.Storage.SnapshotChain.chain_attach_reads_manifest
-#print axioms Kinu.Storage.SnapshotChain.chain_attach_reads_no_payload
-#print axioms Kinu.Storage.SnapshotChain.chain_attach_independent_of_n
-#print axioms Kinu.Storage.SnapshotChain.chain_attach_independent_of_pending
-#print axioms Kinu.Storage.SnapshotChain.attach_without_delta_materializes_nothing
-#print axioms Kinu.Storage.SnapshotChain.extract_attach_is_linear_in_n
-#print axioms Kinu.Storage.SnapshotChain.first_base_uploads_unexcluded_bytes
-#print axioms Kinu.Storage.SnapshotChain.first_base_upper_bound
-#print axioms Kinu.Storage.SnapshotChain.tick_never_rebases
-#print axioms Kinu.Storage.SnapshotChain.rebase_requires_the_delta_to_outgrow_k_base
-#print axioms Kinu.Storage.SnapshotChain.rebase_amortizes_at_a_quiesce
-#print axioms Kinu.Storage.SnapshotChain.a_tick_past_the_ratio_still_publishes_changed_blocks
-#print axioms Kinu.Storage.SnapshotChain.retained_generations_le_two
-#print axioms Kinu.Storage.SnapshotChain.fresh_retention_is_bounded
-#print axioms Kinu.Storage.SnapshotChain.genStep_preserves_retention_bound
-#print axioms Kinu.Storage.SnapshotChain.stored_is_bounded_by_current_fallback_and_orphans
-#print axioms Kinu.Storage.SnapshotChain.first_rebase_retains_a_fallback
-#print axioms Kinu.Storage.SnapshotChain.further_rebase_names_one_generation
-#print axioms Kinu.Storage.SnapshotChain.proven_attach_retires_the_fallback
-#print axioms Kinu.Storage.SnapshotChain.a_completed_sweep_leaves_current_and_fallback
-#print axioms Kinu.Storage.SnapshotChain.a_partial_sweep_preserves_retained_generations
-#print axioms Kinu.Storage.SnapshotChain.without_a_sweep_current_fallback_and_orphans_grow
-#print axioms Kinu.Storage.SnapshotChain.unchanged_tick_uploads_nothing
-#print axioms Kinu.Storage.SnapshotChain.a_completed_tick_closes_the_window
-#print axioms Kinu.Storage.SnapshotChain.a_tick_free_segment_only_writes
-#print axioms Kinu.Storage.SnapshotChain.loss_is_the_writes_since_the_last_tick
-#print axioms Kinu.Storage.SnapshotChain.skipped_ticks_preserve_loss
-#print axioms Kinu.Storage.SnapshotChain.no_number_of_skipping_ticks_closes_the_window
-#print axioms Kinu.Storage.SnapshotChain.a_skipping_tick_leaves_the_window_open
 
 /-! ## Kinu/Storage/BlockLayer.lean -/
 
@@ -255,8 +207,6 @@ import Kinu
 #print axioms Kinu.Storage.BlockLayer.absent_override_reads_base
 #print axioms Kinu.Storage.BlockLayer.ready_implies_all_composed_mounted
 #print axioms Kinu.Storage.BlockLayer.copyup_is_file_local
-#print axioms Kinu.Storage.BlockLayer.publication_accounting_unchanged
-#print axioms Kinu.Storage.BlockLayer.c3_publication_stays_bounded
 
 /-! ## Kinu/Exploration -- docs/EXPLORATION.md — "The Lean invariants" -/
 
