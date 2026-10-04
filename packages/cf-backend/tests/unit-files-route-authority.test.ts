@@ -50,6 +50,15 @@ const ErrorReplySchema = v.object({ error: v.string() });
 
 const OkReplySchema = v.object({ ok: v.literal(true) });
 
+/** A file's size, or a directory: any path a file sits under, as the daemon stats one. */
+function statOf(files: Map<string, string>, path: string): JsonValue {
+  const body = files.get(path);
+
+  if (body !== undefined) return { size: body.length, mtimeMs: 1, isDir: false };
+
+  return [...files.keys()].some((name) => name.startsWith(`${path}/`)) ? { size: 0, mtimeMs: 1, isDir: true } : null;
+}
+
 /** The far end has to answer, or a call that passed consent could not be told from one that was stopped. */
 function daemon(files: Map<string, string>) {
   return (frame: DeviceFrame): JsonValue => {
@@ -58,7 +67,7 @@ function daemon(files: Map<string, string>) {
 
     switch (frame.method) {
       case 'which': return { present: [] };
-      case 'statPath': return body === undefined ? null : { size: body.length, mtimeMs: 1, isDir: false };
+      case 'statPath': return statOf(files, path);
       case 'readFile': return { encoding: 'base64', content: btoa(body ?? '') };
       case 'readRange': return { encoding: 'base64', content: btoa((body ?? '').slice(0, 64)) };
       case 'exists': return files.has(path);
