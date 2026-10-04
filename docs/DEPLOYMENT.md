@@ -51,21 +51,19 @@ From source I run `bun run cli -- setup`, then `bun run cli -- ...`. Origin defa
 
 ## Zero to production
 
-This assumes an empty Cloudflare account. Three commands bring up each environment, staging first because every build lands there, and a fourth proves it:
+This assumes an empty Cloudflare account. Two commands bring up each environment, staging first because every build lands there, and a third proves it:
 
 ```bash
-bun run infra:provision staging   # staging's R2 buckets and Vectorize index
-bun run deploy                    # kinu-staging, its DO namespaces, containers, routes, cron
-bun run infra:provision staging   # its secrets; `wrangler secret put` needs the Worker to exist
-bun run gate:infra staging        # every resource staging declares exists and is bound
+bun run infra:provision staging      # staging's R2 buckets, Vectorize index and secrets
+bun run deploy --bootstrap           # kinu-staging, its DO namespaces, containers, routes, cron
+bun run gate:infra staging           # every resource staging declares exists and is bound
 
-bun run infra:provision production # the same for production
-bun run deploy --promote          # kinu, from the build staging verified
-bun run infra:provision production
+bun run infra:provision production   # the same for production
+bun run deploy --promote --bootstrap # kinu, from the build staging verified
 bun run gate:infra production
 ```
 
-`wrangler secret put` refuses on a nonexistent Worker, so on a fresh account the root secret installs only after the first deploy. That is why provisioning runs twice. The second run creates nothing new. `bun run deploy` is the only supported deploy path. Provisioning creates resources and never deploys.
+On an environment with no Worker yet, `wrangler secret put` creates a placeholder Worker to hold the secrets, so the deploy's upload gate finds them and no Kinu version is live without them. The first deploy replaces the placeholder. It passes `--bootstrap` because it declares everything only a deploy can create; its post-deploy check tolerates nothing. Later deploys drop the flag. `bun run deploy` is the only supported deploy path. Provisioning creates resources and secrets and never deploys Kinu.
 
 ### Release signing
 
