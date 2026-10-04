@@ -61,7 +61,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     });
 
     // The store holds `crafted`, read fresh per program as a runtime's surface reads it.
-    const surface: CodemodeSurface = { home: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), providers: [] };
+    const surface: CodemodeSurface = { cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), providers: [] };
 
     const host = new SlateHost({
       ctx: this.ctx, workspace: 'binding-probe',
@@ -137,7 +137,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       },
     });
 
-    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ home: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] }) }).eval;
+    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] }) }).eval;
     const execute = tool?.execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');

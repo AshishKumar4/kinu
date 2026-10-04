@@ -22,8 +22,8 @@ type ResolvedProvider = Extract<DynamicProviderInput, object[]>[number];
 
 export interface SandboxIdentity {
   readonly workspace: string;
-  /** The actor's own home, where the program's `process` starts. */
-  readonly home: string;
+  /** Where the program's `process` starts: the actor's own (`PathPlanes.cwd`). */
+  readonly cwd: string;
 }
 
 /**
@@ -37,7 +37,7 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
     '    __kinu.bindSlates(__kinuWorkspace);',
     '    const __kinuState = typeof state === "undefined" ? null : state;',
     '    const __kinuBuiltins = await __kinu.loadBuiltins();',
-    `    const process = __kinu.createProcess(${JSON.stringify(identity.home)});`,
+    `    const process = __kinu.createProcess(${JSON.stringify(identity.cwd)});`,
     '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
     `    const env = Object.freeze({ workspace: ${JSON.stringify(identity.workspace)}, state: __kinuState, missingBuiltins: __kinuBuiltins.missing });`,

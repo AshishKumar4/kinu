@@ -56,8 +56,8 @@ export interface CodemodeSurface {
    */
   readonly external: () => ToolSet;
   readonly providers: ExecutorProviderSurface[];
-  /** The runtime's own home: a program's `process.cwd()`, where its relative paths resolve. */
-  readonly home: string;
+  /** Where a program's relative paths start, its `process.cwd()`: the runtime's own (`PathPlanes.cwd`). */
+  readonly cwd: string;
 }
 
 /** Core has no codegen; the CLI supplies `createNodeCodemodeToolFactory`. */
@@ -65,14 +65,14 @@ export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 
 /** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */
 export function codemodeSurface(
-  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'executionRouter'>, native: ToolSet, external: () => ToolSet = () => ({}),
+  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'executionRouter' | 'planes'>, native: ToolSet, external: () => ToolSet = () => ({}),
 ): CodemodeSurface {
   return {
     native,
     craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
     external: () => withCheckedInputs(external()),
     providers: rt.executionRouter?.getProviders() ?? [],
-    home: rt.storage.home,
+    cwd: rt.planes.cwd,
   };
 }
 

@@ -8,6 +8,7 @@ import { asSchema, jsonSchema, tool } from 'ai';
 import {
   decodeJsonValue,
   BUILTIN_TOOL_DESCRIPTIONS, CODEMODE_CODE_DESCRIPTION,
+  cloudPlanes,
   codemodeSurface,
   createAgentsCodemodeProvider,
   parseJsonValue,
@@ -236,7 +237,7 @@ describe("a program's working directory", () => {
   test("a hosted actor's program starts in that actor's home", async () => {
     const { rt, testSql } = createTestRuntime();
     initCraftedToolsTables(testSql.sql);
-    const hosted = { ...rt, storage: { ...rt.storage, home: '/home/sub-hosted' } };
+    const hosted = { ...rt, storage: { ...rt.storage, home: '/home/sub-hosted' }, planes: cloudPlanes('/home/sub-hosted') };
     const preludes: string[] = [];
 
     const launch = (): ProgramLaunch => ({

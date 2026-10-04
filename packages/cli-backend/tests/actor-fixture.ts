@@ -9,7 +9,7 @@ import {
   type SqlExec, type SqlValue, type WriteObserver,
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
 import { ConversationSearchStore, bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '@kinu.run/core';
-import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
+import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import { resolveModelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
 
 /** A head's runtime over its parent's database; a head has no store of its own. */
@@ -122,7 +122,7 @@ export function headSeatFactory(
         host.release(binding.reference);
         writes?.delete(binding.reference.actorId);
         await retireLocalActor(parent.actor, binding.name, binding.reference, async () => {
-          if (parent.cwd) cleanupFacetCwdScratch(parent.cwd, agentName);
+          if (parent.space) cleanupFacetScratch(parent.space, agentName);
           else if (parent.nodeHome) await facetHomeReleaser(parent.nodeHome())(agentName);
         });
       },

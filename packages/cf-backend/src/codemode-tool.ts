@@ -144,7 +144,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
               const live = Array.isArray(resolved)
                 ? resolved.map((provider) => {
                   if (provider.name === CRAFTED_TOOL_NAMESPACE) {
-                    return { name: provider.name, fns: { ...external, ...provider.fns, ...failures }, prelude: renderToolsPrelude(crafted, { workspace: options.workspace, home: surface.home }) };
+                    return { name: provider.name, fns: { ...external, ...provider.fns, ...failures }, prelude: renderToolsPrelude(crafted, { workspace: options.workspace, cwd: surface.cwd }) };
                   }
 
                   const prelude = bound.find((declared) => declared.name === provider.name)?.prelude;

@@ -57,7 +57,7 @@ function toolsProvider(crafted: Array<{ name: string; code: string; description:
       ...Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute])),
       file: async (...args: unknown[]) => ({ echoed: decodeJsonValue({ value: args[0] }) }),
     },
-    prelude: renderToolsPrelude(crafted, { home: WORKSPACE_ROOT, workspace: 'probe' }),
+    prelude: renderToolsPrelude(crafted, { cwd: WORKSPACE_ROOT, workspace: 'probe' }),
   };
 }
 
