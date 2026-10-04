@@ -206,11 +206,13 @@ describe('addressing the bound directory', () => {
       const removeTree = present(rt.storage.vfs.removeRecursive?.bind(rt.storage.vfs), 'the mounted removal route');
       await writeText(rt.storage.vfs, 'keep.txt', 'the project survives');
 
-      await expect(rename(home, join(project, '..', 'renamed'))).rejects.toMatchObject({ code: 'EPERM' });
+      // A plane with no rename carries it as mv does, and the bound directory's removal refuses the carry whole.
+      await expect(rename(home, join(project, '..', 'renamed'))).rejects.toMatchObject({ code: 'EACCES' });
       await expect(rt.storage.vfs.unlink(home)).rejects.toMatchObject({ code: 'EACCES' });
       await expect(removeTree(home)).rejects.toMatchObject({ code: 'EACCES' });
       expect(readFileSync(join(project, 'keep.txt'), 'utf8')).toBe('the project survives');
       expect(statSync(project).isDirectory()).toBe(true);
+      expect(readdirSync(dirname(project)).filter((entry) => entry.startsWith('.nimbus-move-') || entry === 'renamed')).toEqual([]);
     }
   });
 

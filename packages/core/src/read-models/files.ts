@@ -6,10 +6,11 @@ import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
  */
 
 import {
-  MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, carryFileWithVfsOps, listWithVfsOps,
+  MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, listWithVfsOps,
   readBoundedWithVfsOps, partialTreeRemovalMessage, removeTreeWithVfsOps,
 } from '../vfs/mounts';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { move } from '@nimbus-sh/core/vfs/move.js';
 import { inlineFileType } from './file-types';
 import { isSystemManaged } from '../vfs/workspace-path';
 
@@ -563,20 +564,7 @@ export function renameExecutorPathOp(
     if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
 
     if (await exists(vfs, to)) return { error: `${to} already exists` };
-    const native = vfs.rename?.bind(vfs);
-
-    if (native) {
-      await native.call(vfs, from, to);
-
-      return { ok: true };
-    }
-
-    const stat = await vfs.stat(from);
-
-    if (!stat) return { error: `no such file or directory: ${from}` };
-
-    if ((stat.type === 'directory')) return { error: 'this environment cannot rename a directory in place' };
-    await carryFileWithVfsOps({ files: vfs, path: from }, { files: vfs, path: to });
+    await move(vfs, from, to);
 
     return { ok: true };
   })));

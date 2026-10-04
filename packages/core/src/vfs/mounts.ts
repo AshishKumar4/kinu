@@ -1,4 +1,4 @@
-import { exists, type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Workspace plane mount table: the durable workspace tree extended by `/pc` (device tunnel) and `/sandbox`
  * (container), each read through that executor's own `files` VFS so its boundaries still apply.
@@ -11,8 +11,8 @@ import { Effect } from 'effect';
 import type { FilesOwner } from '../safety/approval-gate';
 import type { ExecutorStatus } from '../execution/types';
 import { renderThrownChain, settle } from '../obs/index';
-import { nanoid } from '../utils/nanoid';
 import { isVfsError, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { move } from '@nimbus-sh/core/vfs/move.js';
 
 export interface VfsMount {
 	readonly name: string;
@@ -224,80 +224,6 @@ export function partialTreeRemovalMessage(path: string, removal: Extract<TreeRem
 		+ `so ${path} was only partly removed: gone [${gone}]; still present [${left}]`;
 }
 
-/** A carry can cross planes, so the two sides are not interchangeable. */
-export interface CarrySide {
-	readonly files: VFS;
-	readonly path: string;
-}
-
-/**
- * Fallback rename in base VFS ops. Directories refuse with EPERM before any I/O.
- * The copy is confirmed before the source goes, and a failed carry removes its copy: a rename happens or not.
- */
-export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promise<void> {
-	const sourceStat = await from.files.stat(from.path);
-
-	if (!sourceStat) throw syscallError('ENOENT', 'rename', from.path, { dest: to.path });
-
-	if ((sourceStat.type === 'directory')) {
-		throw new VfsError('EPERM',
-			'a directory cannot be renamed here: this plane has no native rename, and only a file\'s bytes can be carried',
-			from.path,);
-	}
-
-	const payload = await from.files.readFile(from.path);
-	const temp = siblingPath(to.path, 'carry', nanoid(10));
-	const destinationExisted = await exists(to.files, to.path);
-	const native = to.files.rename?.bind(to.files);
-	// Without native rename the destination is overwritten in place, so it must be read first to be restorable.
-	const destinationBytes = destinationExisted && !native ? await to.files.readFile(to.path) : null;
-
-	await to.files.writeFile(temp, payload);
-
-	if (!(await exists(to.files, temp))) {
-		throw new VfsError('EIO', `the staged copy at ${temp} is not there after writing it`, from.path);
-	}
-
-	try {
-		// The destination keeps its bytes until one final rename over it; never moved aside first.
-		await from.files.unlink(from.path);
-
-		if (native) await native.call(to.files, temp, to.path);
-		else {
-			await to.files.writeFile(to.path, payload);
-
-			// The staged copy is the last witness, so the destination is confirmed before it goes.
-			if (!(await exists(to.files, to.path))) {
-				throw new VfsError('EIO', `the copy at ${to.path} is not there after writing it`, to.path);
-			}
-
-			await to.files.unlink(temp);
-		}
-	} catch (cause) {
-		try {
-			if (destinationBytes !== null) await to.files.writeFile(to.path, destinationBytes);
-			else if (!destinationExisted && await exists(to.files, to.path)) await to.files.unlink(to.path);
-
-			if (!(await exists(from.files, from.path))) await from.files.writeFile(from.path, payload);
-
-			if (await exists(to.files, temp)) await to.files.unlink(temp);
-		} catch (rollback) {
-			throw new VfsError('EIO', `the rename failed (${renderThrownChain({ cause })}) and rollback failed (${renderThrownChain({ cause: rollback })})`, to.path, { cause: rollback });
-		}
-
-		throw cause;
-	}
-}
-
-/** Never interprets user path segments and cannot escape the destination parent. */
-function siblingPath(path: string, purpose: string, nonce: string): string {
-	const slash = path.lastIndexOf('/');
-	const parent = slash < 0 ? '' : path.slice(0, slash + 1);
-	const name = slash < 0 ? path : path.slice(slash + 1);
-
-	return `${parent}.${name}.kinu-${purpose}-${nonce}`;
-}
-
 /** What the workspace shell reads to serve this table. */
 export interface VfsMountRouting {
 	mountOf(path: string): string | null;
@@ -504,14 +430,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 					throw new VfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
 				}
 
-				const files = filesForMount(from.mount, oldPath);
-				const native = files.rename?.bind(files);
-
-				if (native) return native.call(files, from.native, to.native);
-				await carryFileWithVfsOps(
-					{ files, path: from.native },
-					{ files, path: to.native },
-				);
+				await move(filesForMount(from.mount, oldPath), from.native, to.native);
 
 				return;
 			}
@@ -526,21 +445,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 				throw new VfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
 			}
 
-			const native = base.rename?.bind(base);
-
-			if (native) return native.call(base, oldPath, newPath);
-			const st = await base.stat(oldPath);
-
-			if (!st) throw syscallError('ENOENT', 'rename', oldPath, { dest: newPath });
-
-			if ((st.type === 'directory')) {
-				throw new VfsError('EPERM', 'a directory cannot be renamed here: this route has no native rename, and only a file\'s bytes can be carried', oldPath);
-			}
-
-			await carryFileWithVfsOps(
-				{ files: base, path: oldPath },
-				{ files: base, path: newPath },
-			);
+			await move(base, oldPath, newPath);
 		},
 		removeRecursive(path) {
 			return mutate(path, 'removed', async (files, native) => {

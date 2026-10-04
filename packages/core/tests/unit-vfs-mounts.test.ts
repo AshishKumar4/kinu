@@ -387,22 +387,15 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		await mounted.rename('/pc/home/dev/notes.txt', '/pc/home/dev/renamed.txt');
 		expect(await readText(device, '/home/dev/renamed.txt')).toBe('from the machine');
 	});
-	test('a base-plane directory refuses the fallback carry before anything is written or deleted', async () => {
-		const base = fakeTree({ '/src/app.ts': 'export {};' });
+	test('a base-plane directory without a native rename moves whole, as mv moves it, and leaves nothing staged', async () => {
+		const base = fakeTree({ '/work/src/app.ts': 'export {};' });
 		const mounted = withMountTable(base, [mountOf('pc', fakeTree({}))]);
 
-		let error: unknown;
+		await mounted.rename('/work/src', '/work/moved');
 
-		try { await mounted.rename('/src', '/moved'); } catch (caught) { error = caught; }
-
-		if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
-		expect(error.code).toBe('EPERM');
-		expect(error.path).toBe('/src');
-		expect(await base.stat('/src')).toMatchObject({ type: 'directory' });
-		expect(await exists(base, '/src/app.ts')).toBe(true);
-		expect(await exists(base, '/moved')).toBe(false);
-		expect(await exists(base, '/.moved.kinu-carry')).toBe(false);
-		expect(await readText(base, '/src/app.ts')).toBe('export {};');
+		expect(await exists(base, '/work/src')).toBe(false);
+		expect(await readText(base, '/work/moved/app.ts')).toBe('export {};');
+		expect((await base.readdir('/work')).map((entry) => entry.name)).toEqual(['moved']);
 	});
 
 	test('an absent directory source refuses the carry with ENOENT, and the destination keeps its bytes', async () => {
@@ -445,23 +438,15 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(await readText(sandbox, '/workspace/report.txt')).toBe('container copy');
 	});
 
-	test('a directory refuses to rename where only bytes could carry it, and the tree survives the refusal', async () => {
+	test('a directory on a plane without a native rename moves whole, as mv moves it, and leaves nothing staged', async () => {
 		const device = fakeTree({ '/home/dev/src/app.ts': 'export {};' });
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
 
-		let error: unknown;
+		await mounted.rename('/pc/home/dev/src', '/pc/home/dev/moved');
 
-		try { await mounted.rename('/pc/home/dev/src', '/pc/home/dev/moved'); } catch (caught) { error = caught; }
-
-		if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
-		expect(error.code).toBe('EPERM');
-		// The plane's path, not the router's mount-prefixed one.
-		expect(error.path).toBe('/home/dev/src');
-		expect(await device.stat('/home/dev/src')).toMatchObject({ type: 'directory' });
-		expect(await exists(device, '/home/dev/src/app.ts')).toBe(true);
-		expect(await exists(device, '/home/dev/moved')).toBe(false);
-		expect(await exists(device, '/home/dev/.moved.kinu-carry')).toBe(false);
-		expect(await readText(device, '/home/dev/src/app.ts')).toBe('export {};');
+		expect(await exists(device, '/home/dev/src')).toBe(false);
+		expect(await readText(device, '/home/dev/moved/app.ts')).toBe('export {};');
+		expect((await device.readdir('/home/dev')).map((entry) => entry.name).sort()).toEqual(['moved']);
 	});
 
 	test('a mount point is part of this plane and cannot be mutated', async () => {
