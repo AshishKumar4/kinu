@@ -59,6 +59,8 @@ export interface CodemodeSurface {
    */
   readonly external: () => ToolSet;
   readonly providers: ExecutorProviderSurface[];
+  /** The runtime's own home: a program's `process.cwd()`, where its relative paths resolve. */
+  readonly home: string;
 }
 
 /** Core has no codegen; the CLI supplies `createNodeCodemodeToolFactory`. */
@@ -73,6 +75,7 @@ export function codemodeSurface(
     craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
     external: () => withCheckedInputs(external()),
     providers: rt.executionRouter?.getProviders() ?? [],
+    home: rt.storage.home,
   };
 }
 

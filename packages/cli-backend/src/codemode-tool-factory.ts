@@ -3,7 +3,7 @@
  * hosted sandbox's `kinu-node.js`, so a program's files and cwd are its workspace, never the machine.
  */
 
-import { KINU_NODE_MODULE_SOURCE, requireBuild, WORKSPACE_ROOT, type ToolSurfaceNarrowing } from '@kinu.run/core';
+import { KINU_NODE_MODULE_SOURCE, requireBuild, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type {
   CodemodeProvider,
   CodemodeBuilder,
@@ -71,9 +71,6 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
 
     const providers = deps.reach.narrowProviders(bound);
 
-    // A crafted name shadows a native one, as in the CF prelude.
-    const nativeBindings = nativeToolFunctions(surface.native);
-
     return withCraftedToolDeclarations(tool({
       // Every provider's `types` must be read into the description, or the model
       // gets callables it was never told about.
@@ -99,9 +96,11 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
 
-          const external = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.external()));
+          const external = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.external()), signal);
+          const native = nativeToolFunctions(surface.native, signal);
 
-          for (const [name, entry] of Object.entries({ ...external, ...nativeBindings, ...craftedFailureFunctions(crafted) })) {
+          // A crafted name shadows a native one, as in the CF prelude.
+          for (const [name, entry] of Object.entries({ ...external, ...native, ...craftedFailureFunctions(crafted) })) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 
@@ -128,8 +127,8 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
 
           const argValues: unknown[] = [
             workspace, toolBindings, sandboxConsole,
-            node.createRequire({ workspace, builtins: node.builtins, cwd: WORKSPACE_ROOT }),
-            node.createProcess(WORKSPACE_ROOT), node,
+            node.createRequire({ workspace, builtins: node.builtins, cwd: surface.home }),
+            node.createProcess(surface.home), node,
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 

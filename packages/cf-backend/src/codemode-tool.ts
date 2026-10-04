@@ -70,7 +70,8 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
   return {
     async callTool(surface, name, input) {
       const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async () => {
-        const functions = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.native));
+        // A slate's call runs no program, so there is no eval to stop it with.
+        const functions = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.native), undefined);
         const entry = Object.hasOwn(functions, name) ? functions[name] : undefined;
 
         if (entry !== undefined) {
@@ -107,11 +108,13 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
       const build = (mode: WorkMode): Tool => {
         const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'));
+        // No signal: createCodeTool runs its executor without the tool call's options, so a program's
+        // calls here cannot be stopped with its eval, and the user DO's MCP call takes none either.
 
         // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
         const toolsProvider: CodemodeProvider = {
           name: CRAFTED_TOOL_NAMESPACE,
-          tools: nativeToolFunctions(toolsInWorkMode(mode, reachable)),
+          tools: nativeToolFunctions(toolsInWorkMode(mode, reachable), undefined),
           // Declared by schemas
           types: '',
           positionalArgs: true,
@@ -135,13 +138,13 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
               const crafted = surface.craftedTools();
               const failures = Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute]));
 
-              const external = Object.fromEntries(Object.entries(nativeToolFunctions(toolsInWorkMode(mode, reach(surface.external()))))
+              const external = Object.fromEntries(Object.entries(nativeToolFunctions(toolsInWorkMode(mode, reach(surface.external())), undefined))
                 .map(([name, entry]) => [name, entry.execute]));
 
               const live = Array.isArray(resolved)
                 ? resolved.map((provider) => {
                   if (provider.name === CRAFTED_TOOL_NAMESPACE) {
-                    return { name: provider.name, fns: { ...external, ...provider.fns, ...failures }, prelude: renderToolsPrelude(crafted, { workspace: options.workspace }) };
+                    return { name: provider.name, fns: { ...external, ...provider.fns, ...failures }, prelude: renderToolsPrelude(crafted, { workspace: options.workspace, home: surface.home }) };
                   }
 
                   const prelude = bound.find((declared) => declared.name === provider.name)?.prelude;

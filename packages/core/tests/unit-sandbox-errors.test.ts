@@ -128,7 +128,7 @@ test('a native tool a program calls runs only on input its own schema admits', a
   const admitted: string[] = [];
 
   // Every native tool whose schema requires a field is called without it.
-  for (const [name, entry] of Object.entries(nativeToolFunctions(native))) {
+  for (const [name, entry] of Object.entries(nativeToolFunctions(native, undefined))) {
     const declared = await asSchema(present(native[name], name).inputSchema).jsonSchema;
 
     if (!declared.required?.length) continue;
@@ -138,7 +138,7 @@ test('a native tool a program calls runs only on input its own schema admits', a
   }
 
   expect(admitted).toEqual([]);
-  expect(await codemodeFunction('tools', 'shell', present(nativeToolFunctions(native).shell, 'shell').execute)({ command: 42 }))
+  expect(await codemodeFunction('tools', 'shell', present(nativeToolFunctions(native, undefined).shell, 'shell').execute)({ command: 42 }))
     .toMatchObject({ success: false, reason: 'bad_input', error: expect.stringContaining('command') });
   // Neither call reached the shell.
   expect(runs).toBe(0);
@@ -155,7 +155,7 @@ test('every member of every namespace refuses with the one declared Refusal, and
     createSandboxExecutor(),
     createParentExecutor({ handle: refusingDouble() }),
     createDeviceTunnelExecutor(refusingDouble()),
-    { name: CRAFTED_TOOL_NAMESPACE, types: '', tools: nativeToolFunctions(buildBuiltinTools({ rt, conversations: conversationsFor(rt) })) },
+    { name: CRAFTED_TOOL_NAMESPACE, types: '', tools: nativeToolFunctions(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }), undefined) },
     createStateCodemodeProvider(refusingDouble()),
     createAgentsCodemodeProvider(() => refusingDouble()),
     createReportCodemodeProvider(() => refusingDouble()),

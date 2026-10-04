@@ -11,7 +11,7 @@ import {
   type CraftedToolSource, type ExecuteResult, type Executor, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, WORKSPACE_ROOT } from '@kinu.run/core';
+import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from '@kinu.run/core';
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { EGRESS_FAILURE_HEADER, codemodeEgress, type CodemodeEgressProps } from './codemode-egress';
 import { BROWSER_CLIENT_MODULE, BROWSER_CLIENT_SOURCE } from './browser-prelude';
@@ -22,6 +22,8 @@ type ResolvedProvider = Extract<DynamicProviderInput, object[]>[number];
 
 export interface SandboxIdentity {
   readonly workspace: string;
+  /** The actor's own home, where the program's `process` starts. */
+  readonly home: string;
 }
 
 /**
@@ -35,7 +37,7 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
     '    __kinu.bindSlates(__kinuWorkspace);',
     '    const __kinuState = typeof state === "undefined" ? null : state;',
     '    const __kinuBuiltins = await __kinu.loadBuiltins();',
-    `    const process = __kinu.createProcess(${JSON.stringify(WORKSPACE_ROOT)});`,
+    `    const process = __kinu.createProcess(${JSON.stringify(identity.home)});`,
     '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
     `    const env = Object.freeze({ workspace: ${JSON.stringify(identity.workspace)}, state: __kinuState, missingBuiltins: __kinuBuiltins.missing });`,

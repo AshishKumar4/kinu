@@ -1,23 +1,23 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, localContextTree, createInlineExecutor, createShellSession, observeWrites, skillsMount, withApprovalGatedFiles, withApprovalGatedShell, withMountTable, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
-import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, WriteObserver } from '@kinu.run/core';
+import type { ActorHandle, AgentRuntime, NodeWorkspace, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
-import type { CLIRuntime } from './runtime';
+import type { CLIRuntime, NodeSource } from './runtime';
 import { requireLocalActorWorkspace } from '@kinu.run/core';
 
 export interface LocalNodeRuntimeDeps {
   readonly workspace: WorkspaceBundle;
   readonly origin: CLIRuntime;
-  readonly approvalPolicy: ShellApprovalPolicy;
   readonly inline: Parameters<typeof createInlineExecutor>[0];
 }
 
 /**
  * Readdress the file plane without copying the parent's live model getters. The
  * node shares the workspace SQL as its own actor; its home, router, and `/context` are its own.
+ * Its gates answer to the source's policy: a hire's own narrowing, never the workspace owner's.
  */
-export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspace, actor: ActorHandle, source: AgentRuntime, observer?: WriteObserver) => Promise<AgentRuntime> {
+export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspace, actor: ActorHandle, source: NodeSource, observer?: WriteObserver) => Promise<AgentRuntime> {
   return async (node, actor, origin, observer) => {
     requireLocalActorWorkspace(deps.origin.actor, actor);
     requireLocalActorWorkspace(deps.origin.actor, origin.actor);
@@ -50,8 +50,8 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
         home: node.home, userRoots: () => mounted.userRoots(), stored: async (name) => await plane.shell.cwd?.(name) ?? null,
       });
 
-      shell = withApprovalGatedShell(plane.shell, { filesOwner: 'agent', shellSession }, deps.approvalPolicy);
-      const ownRouter = new DefaultExecutionRouter(deps.approvalPolicy);
+      shell = withApprovalGatedShell(plane.shell, { filesOwner: 'agent', shellSession }, origin.approvalPolicy);
+      const ownRouter = new DefaultExecutionRouter(origin.approvalPolicy);
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;
 
       const mounted = withMountTable(files, [
@@ -62,7 +62,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
       release = deps.workspace.mountTable(mounted, node.cred);
       vfs = mounted;
-      toolFiles = withApprovalGatedFiles(mounted, 'workspace', { userRoots: () => mounted.userRoots(), locate: null, parksWrites: false }, deps.approvalPolicy);
+      toolFiles = withApprovalGatedFiles(mounted, 'workspace', { userRoots: () => mounted.userRoots(), locate: null, parksWrites: false }, origin.approvalPolicy);
       ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs: toolFiles, files: mounted, home: node.home, shell, filesOwner: 'agent' }));
 
       for (const info of origin.executionRouter?.listExecutors() ?? []) {

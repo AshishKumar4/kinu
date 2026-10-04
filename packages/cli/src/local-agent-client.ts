@@ -72,8 +72,6 @@ interface LocalAgentClientOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
-  /** `--no-auto-evolve`: turns this agent's learning setting off before the session opens. */
-  noAutoEvolve?: boolean;
   oneShot?: boolean;
   transcript?: CliSessionOptions;
   surface?: InvocationSurface;
@@ -104,8 +102,6 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
 
   const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);
 
-  if (opts.noAutoEvolve === true) rt.actor.config.setLearning(false);
-
   const client = new LocalAgentClient({
     agentName: name,
     rt,
@@ -129,7 +125,7 @@ export function cancelLocalJob(name: string, id: string, daemonPid: number | nul
       return yield* Effect.fail(new KinuError('unavailable', `${id} may be running in the local daemon (pid ${String(daemonPid)}); \`kinu daemon stop\` ends it`));
     }
 
-    const client = yield* Effect.promise(() => openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true }));
+    const client = yield* Effect.promise(() => openLocalAgentClient(name, { surface: 'one-shot' }));
 
     return yield* attempt({ doing: `cancelling job ${id}`, otherwise: 'unavailable' }, async () => {
       await client.connect();
