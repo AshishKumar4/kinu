@@ -5,7 +5,6 @@ import {
   CHAT_SESSION_ID, PlanReviewStore, bundledArtifact, drawArm, recordBranchTakeSet, sectionArtifact, startTrial, writeCandidate,
 } from '@kinu.run/core';
 import type { SharedBackend } from '../backend';
-import { until } from '../../helpers/actor-harness';
 import type { SharedCase } from '../cases';
 
 /** A scaffold proposal waiting for the owner, as the proposer leaves one. */
@@ -22,17 +21,13 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       const recorded = () => sql<{ turn: string }>`SELECT turn FROM completed_turns WHERE actor_id = ${actor.actorId}`
         .map((row) => v.parse(v.object({ userMessage: v.string() }), JSON.parse(row.turn)).userMessage);
 
-      const ended = () => sql<{ n: number }>`SELECT count(*) AS n FROM run_events WHERE actor_id = ${actor.actorId} AND type = 'run_end'`[0]?.n ?? 0;
-
-      // Both backends read the setting where a turn opens: an ended turn has read it.
+      // Both backends read the setting where a turn opens, and a send resolves once its turn has run.
       actor.config.setLearning(false);
       await surface.send('first');
-      await until(() => ended() === 1, 'the first turn ended');
       actor.config.setLearning(true);
       await surface.send('second');
-      await until(() => recorded().length > 0, 'the second turn is recorded');
 
-      // Turns settle in order, so the first had its chance before the second was recorded.
+      // A turn is recorded inline as it settles: the first had its chance, and the second was taken.
       expect(recorded()).toEqual(['second']);
     },
   },
@@ -51,9 +46,8 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       const rows = () => sql<{ turn_id: string; segment_id: string; arm: string }>`SELECT turn_id, segment_id, arm FROM trial_turns
         WHERE actor_id = ${actor.actorId} AND trial_id = ${trial.trialId} ORDER BY at`;
 
-      // cf admits a send and runs its turn after it returns; the CLI runs it inside.
       await surface.send('first');
-      await until(() => rows().length === 1, 'the turn reads its arm');
+      expect(rows()).toHaveLength(1);
 
       for (const row of rows()) expect(row.arm).toBe(drawArm(trial.trialId, row.segment_id));
     },
