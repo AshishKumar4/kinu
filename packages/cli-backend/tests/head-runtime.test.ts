@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import type { LanguageModel } from 'ai';
+import { getToolName, isToolUIPart, type LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
@@ -531,7 +531,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
     for (const head of run?.heads ?? []) {
       expect(head.status).toBe('completed');
-      expect(journal.readSteps(head.id).some((step) => step.text.includes('preserves its findings'))).toBe(true);
+      expect(journal.readSteps(head.id).some((step) => step.parts.some((part) => part.type === 'text' && part.text.includes('preserves its findings')))).toBe(true);
     }
   });
 });
@@ -657,9 +657,9 @@ function readBack(journal: HeadJournal, rootId: string, headId: string): string 
   const head = journal.readRun(rootId)?.heads.find((h) => h.id === headId);
 
   return (head === undefined ? [] : journal.readSteps(head.id))
-    .flatMap((s) => s.toolCalls)
-    .filter((c) => c.name === 'file')
-    .map((c) => JSON.stringify(c.output ?? ''))
+    .flatMap((s) => s.parts.filter(isToolUIPart))
+    .filter((c) => getToolName(c) === 'file')
+    .map((c) => JSON.stringify(c.state === 'output-available' ? c.output : ''))
     .join('\n');
 }
 
@@ -815,9 +815,9 @@ describe("a head's eval holds the namespaces the shared description promises", (
     await (await runtime.spawnHead(input)).run();
 
     const outputs = journal.readSteps('stateful')
-      .flatMap((s) => s.toolCalls)
-      .filter((c) => c.name === 'eval')
-      .map((c) => JSON.stringify(c.output ?? ''));
+      .flatMap((s) => s.parts.filter(isToolUIPart))
+      .filter((c) => getToolName(c) === 'eval')
+      .map((c) => JSON.stringify(c.state === 'output-available' ? c.output : ''));
 
     expect(outputs).toHaveLength(1);
     expect(outputs[0]).toContain('kept');

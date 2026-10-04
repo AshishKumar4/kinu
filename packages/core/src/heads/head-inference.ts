@@ -8,7 +8,7 @@ import {
   tool,
   type ToolSet, type LanguageModel, type ModelMessage, type StepResult, type ToolExecutionOptions,
 } from 'ai';
-import type { ObserveStream } from '../chat';
+import type { ObserveStream, StepRecord } from '../chat';
 import type { HostedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
@@ -17,7 +17,7 @@ import type { PromptModelContext } from '../prompting/model-profile';
 import type { ResolvedModelWindow } from '../context-window';
 import {
   EVIDENCE_KINDS,
-  type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
+  HeadStepPartsSchema, type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
@@ -25,7 +25,9 @@ import { MissionBudgetExhausted, type MissionBudgetRefusal, type MissionScope } 
 import { failedToolOutcome, type ToolOutcome } from '../tools/outcome';
 import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { nanoid } from '../utils/nanoid';
-import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary';
+import { extractFinalText, synthesizeHeadSummary } from './head-summary';
+import { drawnStep } from '../session/transcript';
+import { encodeModelMessageValues } from '../session/message-codec';
 import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
@@ -622,6 +624,8 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // One dense counter across every turn: `head_steps` is keyed `${id}-s${seq}`, so a per-turn
   // counter would overwrite earlier turns. Steps with no prose, reasoning or tool call are not recorded.
   let recorded = 0;
+  /** A step record holds the turn's messages so far; the step's own start where the last step's ended. */
+  let stepStart = 0;
   let lastText = '';
   let lastReasoning = '';
   let canonicalClaim: ActorTurnClaim | null = null;
@@ -648,17 +652,20 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   /** Classified with the natural path so an abort reads the same between or inside steps. */
   let failure: KinuError | undefined;
 
-  const onStep = async (step: StepResult<ToolSet>): Promise<void> => {
+  const onStep = async (step: StepResult<ToolSet>, record: StepRecord): Promise<void> => {
     if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
     recordRefusedCalls(step, capture);
-    const traced = toHeadStep(step);
+    // Drawn as the transcript draws the recorded step, so a call keeps its id and a failure reads as one.
+    const parts = v.parse(HeadStepPartsSchema, drawnStep(encodeModelMessageValues(record.messages.slice(stepStart))));
 
-    if (traced) {
+    stepStart = record.messages.length;
+
+    if (parts.length > 0) {
       const seq = recorded++;
 
       // A failed trace write must not kill the work; the sink can be an RPC.
       try {
-        await deps.reportStep?.(seq, traced);
+        await deps.reportStep?.(seq, { parts });
       } catch (err) {
         diagnostics.failure(
           'head.step_trace_failed',
@@ -691,6 +698,8 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         { runId: deps.runId, turnId: index === 0 ? turnId : `${turnId}#${index}` },
         input.mode, Date.now(),
       );
+
+      stepStart = 0;
 
       let turnFailed = false;
 

@@ -6,7 +6,6 @@ export type {
   HeadReportStatus,
   HeadUnsettledStatus,
   HeadStep,
-  HeadStepToolCall,
   HeadRunView,
   HeadRunHeadView,
   Evidence,

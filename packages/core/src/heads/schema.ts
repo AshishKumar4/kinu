@@ -83,9 +83,7 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
     id TEXT NOT NULL,
     head_id TEXT NOT NULL,
     seq INTEGER NOT NULL,
-    text TEXT,
-    reasoning TEXT,
-    tool_calls_json TEXT,
+    parts_json TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, id)
   )`);

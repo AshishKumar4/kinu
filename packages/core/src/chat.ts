@@ -154,9 +154,9 @@ export interface ChatOptions {
   budget?: MissionGovernor;
   /** An extra stop reason; there is no step cap to combine with (see UNBOUNDED_STEPS). */
   stopWhen?: StopCondition<ToolSet>;
-  /** Each finished step, raw and awaited, since the sink may be another DO the next request waits for; a throw rejects
-   *  the turn. */
-  onStep?: (step: StepResult<ToolSet>) => Promise<void> | void;
+  /** Each finished step, raw and as recorded, awaited, since the sink may be another DO the next request waits for; a
+   *  throw rejects the turn. */
+  onStep?: (step: StepResult<ToolSet>, record: StepRecord) => Promise<void> | void;
   /** Raw SDK output for a host UI bridge; not part of the serializable ChatEvent projection. */
   onToolOutput?: (output: ChatToolOutput) => Promise<void> | void;
   /** Where each call opens and closes its `model_operation` rows, so one in flight at process death shows in
@@ -807,20 +807,21 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }),
       onStepFinish: async (step) => {
         stepSpans.finish(step);
+        let record: StepRecord | null = null;
 
         try {
           stepCount++;
-          const record = call.stepRecord(step, stepCount, meter?.take(), responsePrefix);
+          record = call.stepRecord(step, stepCount, meter?.take(), responsePrefix);
           await opts.persistStep?.(record);
           call.stepFinished(step, record, responsePrefix.length);
         } catch (cause) {
           call.stepFailure ??= { doing: 'recording a finished model step', cause };
         }
 
-        if (call.stepFailure !== null) return;
+        if (call.stepFailure !== null || record === null) return;
 
         try {
-          await opts.onStep?.(step);
+          await opts.onStep?.(step, record);
         } catch (cause) {
           call.stepFailure ??= { doing: 'run the step hook', cause };
         }

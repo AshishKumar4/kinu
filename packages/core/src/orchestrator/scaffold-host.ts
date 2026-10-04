@@ -92,9 +92,9 @@ async function* streamScaffoldChat(
         outputs.set(part.toolCallId, { type: 'tool-output-available', toolCallId: part.toolCallId,
           output: part.output, preliminary: part.preliminary });
       },
-      onStep: async step => {
+      onStep: async (step, record) => {
         modelId = step.response.modelId;
-        await opts.streamOptions?.onStep?.(step);
+        await opts.streamOptions?.onStep?.(step, record);
       },
     })) {
       if (event.type === 'step-finish' && event.usage) usage = addUsage(usage, event.usage);

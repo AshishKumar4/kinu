@@ -3,6 +3,8 @@
 
 import { describe, expect, test } from 'bun:test';
 import { createTestSql, createTestActorsOver, present } from '@kinu.run/test-utils';
+import type { HeadStep } from '../src/heads/types';
+import { saidStep, stepText } from './helpers';
 import {
   HeadController,
   HeadJournal,
@@ -55,7 +57,7 @@ async function runSplitWithNestedSplit(opts: {
    * Where head steps land: always the root in production. Separate from `nestedJournal` so a test can split
    * them.
    */
-  stepSink: (headId: string, seq: number, step: { text: string; toolCalls: [] }) => void;
+  stepSink: (headId: string, seq: number, step: HeadStep) => void;
   afterNested?: (parentId: string) => void;
 }): Promise<{ depth1Id: string; depth2Ids: string[] }> {
   const depth2Ids: string[] = [];
@@ -63,8 +65,8 @@ async function runSplitWithNestedSplit(opts: {
 
   /** What a real head does: two steps reported as they land, then the report. */
   const runHead = (id: string): HeadReport => {
-    opts.stepSink(id, 0, { text: `${id} looked at the code`, toolCalls: [] });
-    opts.stepSink(id, 1, { text: `${id} concluded something`, toolCalls: [] });
+    opts.stepSink(id, 0, saidStep(`${id} looked at the code`));
+    opts.stepSink(id, 1, saidStep(`${id} concluded something`));
 
     return report(id, 2);
   };
@@ -171,7 +173,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
     // ...and so do the step rows the surface joins to it.
     const steps = journal.readSteps(depth2Id);
     expect(steps.length).toBe(2);
-    expect(steps[0]?.text).toContain(depth2Id);
+    expect(stepText(steps[0] ?? saidStep(''))).toContain(depth2Id);
   });
 
   test('the assembled run contains the depth-2 head, with a live last_step_at', async () => {

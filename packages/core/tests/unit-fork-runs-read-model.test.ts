@@ -3,7 +3,8 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers';
+import { getToolName, isToolUIPart } from 'ai';
+import { makeSql, makeExecRaw, saidStep, stepText } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
@@ -546,8 +547,8 @@ describe('the canvas page does not carry step traces', () => {
     const journal = new HeadJournal(fixture.sql, fixture.actor);
 
     for (const id of ['traced-h0', 'traced-h1']) {
-      journal.appendStep(id, 0, { text: 'x'.repeat(chars), toolCalls: [{ name: 'file' }] });
-      journal.appendStep(id, 1, { text: 'y'.repeat(chars), toolCalls: [] });
+      journal.appendStep(id, 0, { parts: [...saidStep('x'.repeat(chars)).parts, { type: 'tool-file', toolCallId: 'file-0', state: 'output-available', input: {}, output: 'read' }] });
+      journal.appendStep(id, 1, saidStep('y'.repeat(chars)));
     }
 
     return journal;
@@ -577,8 +578,8 @@ describe('the canvas page does not carry step traces', () => {
     expect(head?.lastStepAt).toBeGreaterThan(0);
     // …and opening it reads the trace.
     const steps = journal.readSteps('traced-h0');
-    expect(steps.map((step) => step.text)).toEqual(['x'.repeat(10), 'y'.repeat(10)]);
-    expect(steps[0]?.toolCalls.map((call) => call.name)).toEqual(['file']);
+    expect(steps.map(stepText)).toEqual(['x'.repeat(10), 'y'.repeat(10)]);
+    expect(steps[0]?.parts.filter(isToolUIPart).map(getToolName)).toEqual(['file']);
     expect(new HeadJournal(sql, actor).readHeadView('traced-h0')?.task).toBe('branch 0');
   });
 });

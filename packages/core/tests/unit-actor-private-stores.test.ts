@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestActors, present, type TestActors } from '@kinu.run/test-utils';
-import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
+import { makeExecRaw, makeSql, makeSqlExec, saidStep, stepText } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
@@ -321,16 +321,16 @@ describe('two actors, one database: the head journal', () => {
     a.insertSpawn(headInput('h0', 'root-1', 'A branch', 100));
     b.insertSpawn(headInput('h0', 'root-1', 'B branch', 100));
 
-    for (let seq = 0; seq < 3; seq++) a.appendStep('h0', seq, { text: `a${String(seq)}`, toolCalls: [] });
-    b.appendStep('h0', 0, { text: 'b0', toolCalls: [] });
+    for (let seq = 0; seq < 3; seq++) a.appendStep('h0', seq, saidStep(`a${String(seq)}`));
+    b.appendStep('h0', 0, saidStep('b0'));
 
-    expect(a.readSteps('h0').map((s) => s.text)).toEqual(['a0', 'a1', 'a2']);
-    expect(b.readSteps('h0').map((s) => s.text)).toEqual(['b0']);
+    expect(a.readSteps('h0').map(stepText)).toEqual(['a0', 'a1', 'a2']);
+    expect(b.readSteps('h0').map(stepText)).toEqual(['b0']);
     expect(a.countSteps('h0').steps).toBe(3);
     expect(b.countSteps('h0').steps).toBe(1);
 
     const page = a.readStepsPage('h0', { limit: 2 });
-    expect(page.items.map((s) => s.text)).toEqual(['a1', 'a2']);
+    expect(page.items.map(stepText)).toEqual(['a1', 'a2']);
     expect(page.status).toBe('more');
     const cursor = page.status === 'more' ? page.next.after : null;
     expect(cursor).toBe('h0-s1');
@@ -344,12 +344,12 @@ describe('two actors, one database: the head journal', () => {
     const b = new HeadJournal(w.sql, w.b);
     a.insertSpawn(headInput('h0', 'root-1', 'A branch', 100));
     b.insertSpawn(headInput('h0', 'root-1', 'B branch', 100));
-    a.appendStep('h0', 0, { text: 'a0', toolCalls: [] });
-    b.appendStep('h0', 0, { text: 'b0', toolCalls: [] });
+    a.appendStep('h0', 0, saidStep('a0'));
+    b.appendStep('h0', 0, saidStep('b0'));
 
     a.insertSpawn(headInput('h0', 'root-1', 'A branch', 500));
     expect(a.readSteps('h0')).toEqual([]);
-    expect(b.readSteps('h0').map((s) => s.text)).toEqual(['b0']);
+    expect(b.readSteps('h0').map(stepText)).toEqual(['b0']);
     w.close();
   });
 
