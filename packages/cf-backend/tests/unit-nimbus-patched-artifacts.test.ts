@@ -9,7 +9,7 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import * as v from 'valibot';
 import {
-  NIMBUS_WORKSPACE_ROOT, TurnContextBudget, WORKSPACE_ROOT, createFileDispatcher, nimbusSessionFiles, settleWorkspaceRoot,
+  NIMBUS_WORKSPACE_ROOT, TurnContextBudget, WORKSPACE_ROOT, cloudPlanes, createFileDispatcher, nimbusSessionFiles, settleWorkspaceRoot,
 } from '@kinu.run/core';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
 import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
@@ -129,7 +129,7 @@ describe('installed Nimbus dependency integrity', () => {
     const shell = await workspace.exec(`ls ${NIMBUS_WORKSPACE_ROOT}`);
 
     const file = createFileDispatcher({
-      home: WORKSPACE_ROOT,
+      home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT),
       vfs: nimbusSessionFiles({
         files: workspaceBoxFiles(async () => workspace.vfs),
         ready: async () => undefined,

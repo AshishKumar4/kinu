@@ -51,6 +51,7 @@ import {
   type RenderSection,
 } from './prompting/section-templates';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
+import type { PathPlanes } from './vfs/resolve';
 import { PLATFORM_CATALOG } from './platform-catalog';
 import { sandboxSizeLabel } from './execution/sandbox';
 import type { SandboxSizes } from './execution/types';
@@ -174,7 +175,7 @@ function renderExecutorLine(
   }
 }
 
-function renderExecutorSection(surface: PromptSurface, render: RenderSection, workspaceIsMachine: boolean): string {
+function renderExecutorSection(surface: PromptSurface, render: RenderSection, planes: PathPlanes): string {
   const tools = surface.builtinTools;
 
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
@@ -197,7 +198,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, wo
   return render(EXECUTORS_SECTION, {
     executorLines: lines.join('\n'),
     workspaceRoot: WORKSPACE_ROOT,
-    workspaceReference: workspaceIsMachine ? 'local' : 'vfs',
+    workspaceReference: planes.roots.some((root) => root.root === 'local') ? 'local' : 'vfs',
     hasDevices: devices.length > 0,
     hasSandbox: devices.some((exec) => exec.name === 'sandbox'),
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
@@ -308,7 +309,7 @@ export function buildSystemPromptSync(
   return [
     renderOperatingGuidance(surface, render),
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
-    renderExecutorSection(surface, render, rt.workspaceIsMachine),
+    renderExecutorSection(surface, render, rt.planes),
     renderToolsSection(surface, render),
     renderAgentStateSection(surface, render),
     ...(lead ? [

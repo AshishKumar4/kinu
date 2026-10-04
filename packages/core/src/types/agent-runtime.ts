@@ -9,6 +9,7 @@ import type { DeviceTransport } from '../execution/device-tunnel-executor';
 import type { FileCheckpoints } from '../checkpoints/types';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate';
 import type { TurnFileLedger } from '../vfs/file-ledger';
+import type { PathPlanes } from '../vfs/resolve';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { DecisionPort } from '../providers/decision-model';
 
@@ -25,7 +26,8 @@ export interface AgentRuntime {
   agentStateVfs?: VFS;
   /** `storage.vfs` as the agent's own file tools reach it: gated past its own files. */
   toolFiles: VFS;
-  readonly workspaceIsMachine: boolean;
+  /** Where each `root://` plane, `~` and a relative path land on this machine. */
+  readonly planes: PathPlanes;
   memory: Memory;
   executor: Executor;
   llm: LLM;

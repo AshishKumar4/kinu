@@ -6,7 +6,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { FileCheckpoints, FileReach, MountedVfs } from '@kinu.run/core';
+import type { FileCheckpoints, FileReach, MountedVfs, PathPlanes } from '@kinu.run/core';
 import { NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT, workspacePath } from '@kinu.run/core';
 import { syscallError, toVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
@@ -92,14 +92,14 @@ function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: st
 }
 
 /** The file gate's reach: `cwd` under `table`'s mounts, or the in-SQLite plane (null). */
-export function directoryFileReach(cwd: string | null, table: MountedVfs | null): FileReach {
+export function directoryFileReach(cwd: string | null, table: MountedVfs | null, planes: PathPlanes): FileReach {
   const userRoots = () => table?.userRoots() ?? [];
 
-  if (cwd === null) return { userRoots, locate: null, parksWrites: false };
+  if (cwd === null) return { planes, userRoots, locate: null, parksWrites: false };
   const locate = cwdPlaneLocator(cwd);
 
   // A mounted path is its mount's; the CLI asks, so nothing parks.
-  return { userRoots, locate: (path) => ((table?.mountOf(path) ?? null) === null ? locate(path) : { hostPath: path, outside: false }), parksWrites: false };
+  return { planes, userRoots, locate: (path) => ((table?.mountOf(path) ?? null) === null ? locate(path) : { hostPath: path, outside: false }), parksWrites: false };
 }
 
 /** The working directory as the file plane ({@link cwdPlaneLocator}). */
