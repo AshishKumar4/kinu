@@ -154,7 +154,7 @@ describe('connectMcpServers', () => {
 
     try {
       const run = toolExecute<{ code: string }, unknown>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
-        home: WORKSPACE_ROOT,
+        cwd: WORKSPACE_ROOT,
         native: {}, providers: [], craftedTools: () => [], external: () => external,
       }));
 

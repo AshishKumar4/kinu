@@ -43,7 +43,7 @@ function programs() {
   });
 
   const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [workspace] })({
-    home: WORKSPACE_ROOT,
+    cwd: WORKSPACE_ROOT,
     native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql), providers: [],
   });
 

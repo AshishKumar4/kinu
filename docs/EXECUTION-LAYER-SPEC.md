@@ -7,7 +7,9 @@
 
 ## One workspace, optional environments
 
-Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare. On the CLI the workspace is the directory the agent was placed in, and Nimbus over `bun:sqlite` holds the agent's own state (docs/STORAGE.md, "Local and cloud construction"). The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
+Every workspace has its own space and the computer it works on. On Cloudflare the own space is Nimbus, held as a library over the owning Durable Object's own `ctx.storage.sql`; the computer is the devbox (`/sandbox`) and the owner's devices (`/pc/<name>`). On the CLI everything is real files: the own space is a real directory beside the agent's database (`~/.kinu/<workspace>/`, laid out as the cloud tree: `home/<agent>`, `slates/`), and the computer is this machine, starting in the folder the workspace belongs to; Nimbus over `bun:sqlite` holds only the agent's state (docs/STORAGE.md, "Local and cloud construction"). The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
+
+One resolver reads every written path on both backends (`core/src/vfs/resolve.ts`, over the runtime's `PathPlanes`): `vfs://` is the own space, `local://` the folder (CLI only), `sandbox://` and `<device>://` the cloud's container and devices; there is no `pc://`. A plain absolute path is the machine's own, a relative one starts where the agent works (its home on the cloud, the folder locally), and `~` is the shell's `HOME`. The file tool prints every reference by the same table, so a reference it prints reads back.
 
 All planes use Nimbus's `VFS`, `VfsStat`, `VfsDirent` and `VfsRevision`
 (`@nimbus-sh/core/vfs/vfs.js`). File bodies are bytes; text is decoded or

@@ -31,14 +31,20 @@ async function publicPlane(name: 'cf' | 'cli') {
       write: async (path: string, text: string) => {
         await files.writeFile(path, new TextEncoder().encode(text));
       },
+      // The own home is the Nimbus tree's, and a relative path starts there.
+      home: '/home/main', workdir: '/home/main', legacyHomes: ['/home/user'],
       hostFile: null,
     };
   }
 
-  const cwd = scratchDir('workspace-paths');
-  mkdirSync(join(cwd, 'slates'));
+  // The own space is real files beside the database; a relative path starts in the folder.
+  const root = scratchDir('workspace-paths');
+  const cwd = join(root, 'project');
+  const space = join(root, 'space');
+  mkdirSync(cwd);
+  mkdirSync(space);
 
-  const db = new Database(':memory:');
+  const db = new Database(join(space, 'agent.db'));
   const rt = createCLIRuntime(db, { llm: null, cwd });
 
   return {
@@ -54,32 +60,32 @@ async function publicPlane(name: 'cf' | 'cli') {
     file: fileTool(rt),
     write: async (path: string, text: string) => { await rt.storage.vfs.writeFile(path, new TextEncoder().encode(text)); },
     end: () => db.close(),
-    hostFile: (path: string) => readFileSync(join(cwd, path), 'utf8'),
+    home: join(space, 'home', 'main'), workdir: cwd, legacyHomes: [],
+    hostFile: (path: string) => readFileSync(path, 'utf8'),
   };
 }
 
 for (const name of testBackends()) {
   describe(`${name} public workspace paths`, () => {
-    test('every home spelling reads and updates the same file, without copying it', async () => {
+    test('every spelling of the own home reads and updates the same file, without copying it', async () => {
       const plane = await publicPlane(name);
 
       try {
-        await plane.write('notes/item.txt', 'one');
+        await plane.write('/home/main/notes/item.txt', 'one');
 
         for (const path of [
-          'notes/item.txt', './notes/item.txt', './/notes/./item.txt', 'notes/deep/../item.txt',
-          '/home/main/notes/item.txt', '/home//main/notes/item.txt', '/home/user/notes/item.txt',
-          '/home/main/notes/item.txt/',
+          '/home/main/notes/item.txt', '/home//main/notes/item.txt', '/home/main/notes/./item.txt', '/home/main/notes/item.txt/',
+          `${plane.home}/notes/item.txt`, ...plane.legacyHomes.map((home) => `${home}/notes/item.txt`),
         ]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
 
-        await plane.write('/home/user/notes/./item.txt', 'two');
-        expect(await plane.read('notes/item.txt')).toMatchObject({ content: 'two' });
+        await plane.write(`${plane.home}/notes/./item.txt`, 'two');
+        expect(await plane.read('/home/main/notes/item.txt')).toMatchObject({ content: 'two' });
 
-        if (plane.hostFile !== null) expect(plane.hostFile('notes/item.txt')).toBe('two');
+        if (plane.hostFile !== null) expect(plane.hostFile(`${plane.home}/notes/item.txt`)).toBe('two');
 
-        for (const path of ['', '.', './', '/home/main/', '/home/user/']) {
+        for (const path of ['/home/main/', `${plane.home}/`]) {
           expect((await plane.list(path)).map((entry) => entry.name)).toContain('notes');
         }
 
@@ -89,20 +95,23 @@ for (const name of testBackends()) {
       }
     });
 
-    test('a path resolves as POSIX resolves it, from the home, on both backends', async () => {
+    test('a path resolves as POSIX resolves it, a relative one from where the agent works', async () => {
       const plane = await publicPlane(name);
 
       try {
         await plane.write('item.txt', 'one');
         await plane.write('/slates/project/item.txt', 'slate');
 
-        for (const path of ['../main/item.txt', './dir/../item.txt', '/slates/../home/main/item.txt', '/home/x/../main/item.txt']) {
+        for (const path of ['./item.txt', './dir/../item.txt', `${plane.workdir}/x/../item.txt`, `${plane.workdir}//./item.txt`]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
 
         expect(await plane.read('/home/main/../../slates/project/./item.txt')).toMatchObject({ content: 'slate' });
 
-        if (plane.hostFile !== null) expect(plane.hostFile('slates/project/item.txt')).toBe('slate');
+        if (plane.hostFile !== null) {
+          expect(plane.hostFile(`${plane.workdir}/item.txt`)).toBe('one');
+          expect(plane.hostFile(join(plane.home, '..', '..', 'slates', 'project', 'item.txt'))).toBe('slate');
+        }
       } finally {
         plane.end?.();
       }
@@ -132,7 +141,8 @@ for (const name of testBackends()) {
         expect(await plane.read('pc/studio/item.txt')).toMatchObject({ content: 'local device spelling' });
         expect(await plane.read('shared/item.txt')).toMatchObject({ content: 'local shared spelling' });
         expect((await plane.read('/shared/item.txt')).error).toContain('ENXIO');
-        expect((await plane.read('/shared/../item.txt')).error).toContain('EPERM');
+        // A mount on the cloud refuses a climb out of it; a real path climbs as POSIX does.
+        expect((await plane.read('/shared/../item.txt')).error).toContain(name === 'cf' ? 'EPERM' : 'ENOENT');
 
         if (name === 'cf') {
           expect((await plane.read('/pc/studio/item.txt')).error).toContain('ENXIO');

@@ -27,7 +27,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
   });
 
   const tool = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: providers })({
-    home: WORKSPACE_ROOT,
+    cwd: WORKSPACE_ROOT,
     native: {}, external: () => ({}), craftedTools: () => [], providers: [],
   });
 
