@@ -788,21 +788,24 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     expect(held.get(runner.create('think', {}, 'build', new AbortController()))).toBe('this');
   });
 
-  // Main, 2026-10-04: two processes starting together after a job's holder died both reclaimed it and both resumed it.
-  test('two processes recovering a job whose holder died resume it once, though one claims while the other reads', async () => {
+  /** Two processes on one SQLite file: this one, and a live `sleep` standing in for the other. */
+  async function twoProcesses() {
     const path = scratchPath('job-claim', 'jobs.db');
     const [first, second] = [new Database(path), new Database(path)];
     const other = Bun.spawn(['sleep', '600']);
     const gone = Bun.spawn(['true']);
     await gone.exited;
 
-    // Both racers live; the holder that left the job does not.
+    // Both racers live; a holder that left its job does not.
     const alive = new Set([process.pid, other.pid]);
-    const isAlive = (pid: number): boolean => alive.has(pid);
-
     const resumed: string[] = [];
 
-    const racer = (db: Database, pid: number, name: string, holder = processJobHolder({ sql: makeSql(db), execRaw: makeExecRaw(db), transactionSync: (write) => db.transaction(write).immediate() }, { pid, isAlive })) => {
+    const holderOn = (db: Database, pid: number): JobHolder => processJobHolder(
+      { sql: makeSql(db), execRaw: makeExecRaw(db), transactionSync: (write) => db.transaction(write).immediate() },
+      { pid, isAlive: (candidate) => alive.has(candidate) },
+    );
+
+    const racer = (db: Database, pid: number, name: string, holder = holderOn(db, pid)) => {
       const sql = makeSql(db);
       const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
       const { fiber, settled } = fakeFiber();
@@ -816,10 +819,20 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       return { store, settled, holder, runner: new BackgroundJobRunner({ store, fiber, inbox: new Inbox(fakeHost().host), resume, holder }) };
     };
 
+    initBackgroundJobsTable(makeExecRaw(first));
+    createTestActors(makeSql(first), makeExecRaw(first));
+
+    return {
+      first, gone, resumed, holderOn, racer, other: racer(second, other.pid, 'b'),
+      close: () => { other.kill(); first.close(); second.close(); },
+    };
+  }
+
+  // Main, 2026-10-04: two processes starting together after a job's holder died both reclaimed it and both resumed it.
+  test('two processes recovering a job whose holder died resume it once, though one claims while the other reads', async () => {
+    const { first, gone, resumed, holderOn, racer, other: b, close } = await twoProcesses();
+
     try {
-      initBackgroundJobsTable(makeExecRaw(first));
-      createTestActors(makeSql(first), makeExecRaw(first));
-      const b = racer(second, other.pid, 'b');
       const real = racer(first, process.pid, 'a').holder;
       let raced: Promise<unknown> | null = null;
 
@@ -836,7 +849,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       });
 
       a.store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
-      processJobHolder({ sql: makeSql(first), execRaw: makeExecRaw(first), transactionSync: (write) => first.transaction(write).immediate() }, { pid: gone.pid, isAlive }).hold('jd');
+      holderOn(first, gone.pid).hold('jd');
 
       await a.runner.recover({ jobId: 'jd', phase: 'running' });
       await raced;
@@ -845,9 +858,33 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       expect(resumed).toEqual(['b']);
       expect(a.store.get('jd')).toMatchObject({ status: 'completed', resumeAttempts: 1 });
     } finally {
-      other.kill();
-      first.close();
-      second.close();
+      close();
+    }
+  });
+
+  // Main, 2026-10-04: a job was published running before its holder, so a process starting between the two reclaimed it.
+  test('a process sweeping while a job is created leaves it to its creator', async () => {
+    const { first, resumed, racer, other: b, close } = await twoProcesses();
+
+    try {
+      const a = racer(first, process.pid, 'a');
+      const insert = a.store.create.bind(a.store);
+      let raced: Promise<unknown> | null = null;
+
+      // The other process sweeps the moment the running row is visible.
+      a.store.create = (row) => {
+        insert(row);
+        raced ??= b.runner.recoverOrphans();
+      };
+
+      const id = a.runner.create('agents', {}, 'build', new AbortController());
+      await raced;
+      await b.settled();
+
+      expect(resumed).toEqual([]);
+      expect(b.store.get(id)).toMatchObject({ status: 'running', epoch: 0, resumeAttempts: 0 });
+    } finally {
+      close();
     }
   });
 
