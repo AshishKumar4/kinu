@@ -45,7 +45,6 @@ export interface AgentRuntime {
   deviceTransport?: DeviceTransport;
   /** POSIX shell bound to the agent's VFS; absent degrades the `shell` tool to router-only. */
   shell?: Shell;
-  readonly nodeIsolated?: boolean;
   /** Shadow-git checkpoints over real filesystems; absent means no /undo for that surface. */
   checkpoints?: FileCheckpoints;
   /** Read at exec time, so attaching takes effect on the next command; CF never calls it. */
