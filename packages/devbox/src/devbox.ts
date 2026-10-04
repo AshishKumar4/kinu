@@ -229,6 +229,8 @@ const GOLDEN_REFRESH_CALLBACK = 'golden-refresh';
 
 const GOLDEN_KEY = 'devbox:golden';
 
+const AWAITING_GOLDEN_KEY = 'devbox:awaiting-golden';
+
 type StartSource = { readonly kind: 'image' } | { readonly kind: 'own' | 'golden'; readonly id: string };
 
 /** A classified recovery obligation; executed outside the restore block. */
@@ -314,7 +316,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #storage: DevboxStorage | undefined;
 
   #started: StartSource = { kind: 'image' };
-  #awaitingGolden: string | undefined;
   #sweeping: Promise<void> | undefined;
   #gateRestore: Flight | undefined;
   /** Fences every write below: an abandoned startup continuation keeps running, and must
@@ -509,6 +510,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #destroyGoldenContainer(): Promise<void> {
     if (this.#container().running) await this.#container().destroy();
     await this.#awaitContainerStopped();
+  }
+
+  get #awaitingGolden(): string | undefined {
+    const held = v.safeParse(v.string(), this.ctx.storage.kv.get(AWAITING_GOLDEN_KEY));
+
+    return held.success ? held.output : undefined;
+  }
+
+  set #awaitingGolden(reason: string | undefined) {
+    if (reason === undefined) this.ctx.storage.kv.delete(AWAITING_GOLDEN_KEY);
+    else this.ctx.storage.kv.put(AWAITING_GOLDEN_KEY, reason);
   }
 
   async goldenReady(answer: GoldenAnswer): Promise<void> {
@@ -2166,6 +2178,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       for (const admission of admissions) admission.abort();
       await Promise.allSettled(admissions.map((admission) => admission.settled));
+      this.#awaitingGolden = undefined;
 
       for (const callback of CONTAINER_CALLBACKS) this.#deleteSchedule(callback);
       await this.#destroyContainer();

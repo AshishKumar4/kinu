@@ -332,6 +332,43 @@ test('a lost wake whose copy to disk would not fit stays lazy, and the workspace
   }
 });
 
+/** Until the background copy has ended: taken its baseline, then copied or stopped short of a disk too small. */
+function copyEnded(): void {
+  must(`for _ in $(seq 1 100); do [ -e ${RT}/disk-hydrate.pid ] && ! kill -0 "$(cat ${RT}/disk-hydrate.pid)" 2>/dev/null && break; sleep 0.1; done`);
+}
+
+test('a lazy recovery keeps saving after a snapshot wake, and a later loss keeps its edits', async () => {
+  // Release review: a snapshot remount took the recovery's baseline again, at the recovered revision, over the
+  // inventory of the save after it; every later save then waited on a baseline that never came.
+  loseTheDisk();
+  stored = null;
+  must(`head -c 50331648 /dev/urandom > ${WD}/db.bin`);
+  await commit('tick');
+  loseTheDisk();
+  must(`mount -t tmpfs -o size=40m devbox-runtime ${RT}`);
+
+  try {
+    await settle(chain.attach(false));
+    copyEnded();
+    must(`echo before > ${WD}/before.txt`);
+    const beforeRest = await commit('tick');
+    stopTheContainer();
+    await settle(chain.attach(true));
+    copyEnded();
+    must(`echo after > ${WD}/after.txt`);
+    const afterWake = await commit('tick');
+    const expected = tree();
+    loseTheDisk();
+    await settle(chain.attach(false));
+
+    expect({ beforeRest: beforeRest.kind, afterWake: [afterWake.kind, afterWake.reason], exact: tree() === expected })
+      .toEqual({ beforeRest: 'committed', afterWake: ['committed', undefined], exact: true });
+  } finally {
+    loseTheDisk();
+    must(`umount ${RT}`);
+  }
+});
+
 test('a quiesce commit does not push the next periodic tick a period back', async () => {
   // A quiesce whose stop then fails leaves the box running; its next tick must still save. The alarm spaces ticks.
   let clock = 0;

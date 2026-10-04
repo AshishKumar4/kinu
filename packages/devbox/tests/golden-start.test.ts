@@ -70,6 +70,23 @@ test('a box with no golden to start from waits with the reason, arms no clock, a
   });
 });
 
+test('a box evicted while it waits still starts when the golden object tells it; a destroyed one does not', async () => {
+  // Release review: the wait lived in memory, so the golden object's one notice reached a successor that knew nothing.
+  const ready: GoldenAnswer = { kind: 'ready', id: 'golden-1', tools: PIN };
+  const waiting = fresh([]);
+  await waiting.box.resolveReadiness();
+  golden.answers = [ready];
+  await waiting.evict().goldenReady(ready);
+  const destroyed = fresh([]);
+  await destroyed.box.resolveReadiness();
+  await destroyed.box.destroy();
+  golden.answers = [ready];
+  await destroyed.evict().goldenReady(ready);
+
+  expect({ evicted: waiting.container.startOptions.map(startedFrom), destroyed: destroyed.container.startOptions.length })
+    .toEqual({ evicted: ['golden-1'], destroyed: 0 });
+});
+
 test('a failed build becomes the waiting box\'s reason, said once', async () => {
   const { box, container } = fresh([]);
   await box.resolveReadiness();
