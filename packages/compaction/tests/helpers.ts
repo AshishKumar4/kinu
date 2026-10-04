@@ -191,7 +191,8 @@ export async function compactedScreenshots(rt: { readonly storage: Pick<Storage,
   const extension = createCompactionExtension({
     ports, archive: memoryArchive(), ephemeral: { dropSuperseded: () => 0 },
     summarize: () => { throw new Error('the rung needs no summary'); },
-    attachments: { files: () => rt, model: () => model },
+    model: () => model,
+    attachments: { files: () => rt },
   });
 
   const compacted = await extension.transformContext?.({

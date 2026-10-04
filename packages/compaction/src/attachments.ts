@@ -9,15 +9,14 @@ import { carriedMedia, withoutMedia, type CarriedMedia } from './codec';
 
 export interface AttachmentDeps {
   readonly files: () => { readonly storage: Pick<Storage, 'vfs' | 'home'>; readonly planes: PathPlanes };
-  readonly model: () => string;
 }
 
 const KEEP_RECENT_IMAGES = 2;
 
-export function kinuAttachments(deps: AttachmentDeps): AttachmentPolicy {
+export function kinuAttachments(deps: AttachmentDeps, model: () => string): AttachmentPolicy {
   return {
     get key() {
-      return `${deps.model()}|recent:${KEEP_RECENT_IMAGES}`;
+      return `${model()}|recent:${KEEP_RECENT_IMAGES}`;
     },
     keepRecentImages: KEEP_RECENT_IMAGES,
     list: (item) => carriedMedia(item).flatMap((media) => {
@@ -28,7 +27,7 @@ export function kinuAttachments(deps: AttachmentDeps): AttachmentPolicy {
     estimateTokens: (attachment, item) => {
       const media = carriedMedia(item).find((carried) => carried.id === attachment.id);
 
-      return media === undefined ? undefined : mediaTokens(deps.model(), attachment, media);
+      return media === undefined ? undefined : mediaTokens(model(), attachment, media);
     },
     replace: (item, attachment, text) => withoutMedia(item, attachment.id, text),
     store: async (attachment, item) => {

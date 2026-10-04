@@ -778,6 +778,8 @@ export {
 
 export { rasterImage, type RasterImage } from './utils/raster-image';
 
+export { compactsServerSide, isServerCompaction, COMPACTION_TRIGGER_PERCENT } from './providers/server-compaction';
+
 export {
   DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type RuntimeFacts, type DynamicTask, type MissingCapability,
 } from './prompting/volatile-context';

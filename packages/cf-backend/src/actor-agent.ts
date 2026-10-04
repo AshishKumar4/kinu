@@ -1564,7 +1564,8 @@ export abstract class ActorAgent extends Agent<Env> {
         // fires before the first step weave. A byte-stable replay keeps positions valid.
         if (outcome !== 'replayed') this.actorSession.dynamic.reset();
       },
-      attachments: { files: () => this.rt, model: () => this.effectiveModelSpec() },
+      model: () => this.effectiveModelSpec(),
+      attachments: { files: () => this.rt },
     });
     this.extensions.register(this._compactionExtension);
   }

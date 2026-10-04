@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-04",
-  "files": 2978,
-  "functions": 74505,
+  "files": 2980,
+  "functions": 74535,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -287,10 +287,6 @@
     },
     {
       "key": "packages/cli/src/config.ts#resolveLLMConfig",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/chat.ts#ProviderCall.consume",
       "complexity": 28
     },
     {

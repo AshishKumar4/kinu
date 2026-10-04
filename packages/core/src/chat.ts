@@ -36,6 +36,7 @@ import type { CountableRequest, InputTokenCount } from './providers/input-tokens
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
+import { isServerCompaction, serverCompactionOptions } from './providers/server-compaction';
 import { describeProviderError, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
@@ -208,9 +209,14 @@ const operationRejected = (operation: ModelOperation) =>
   (...rejection: [unknown]): void => { operation.failed({ cause: rejection[0] }); };
 
 interface AnswerStep {
-  readonly text?: string;
+  readonly content: StepResult<ToolSet>['content'];
   readonly finishReason?: string;
   readonly toolCalls?: ReadonlyArray<unknown>;
+}
+
+/** A step's own prose: the provider's compaction summary is not the model speaking. */
+function stepText(step: AnswerStep): string {
+  return step.content.flatMap((part) => (part.type === 'text' && !isServerCompaction(part.providerMetadata) ? [part.text] : [])).join('');
 }
 
 /** The final step's text, or null to keep what streamed (earlier prose is narration); a toolless `length`-cut step
@@ -223,7 +229,7 @@ function answerFromSteps(
   let from = steps.length - 1;
 
   while (from > 0 && steps[from - 1]?.finishReason === OUTPUT_LIMIT_REACHED && (steps[from - 1]?.toolCalls?.length ?? 0) === 0) from -= 1;
-  const answer = steps.slice(from).map((step) => step.text ?? '').join('');
+  const answer = steps.slice(from).map(stepText).join('');
 
   return answer.trim() ? answer : null;
 }
@@ -257,6 +263,20 @@ const DEAD_STREAM = 'Model stream ended without output: the provider stream term
   + '(no finish reason, no content). The turn did not complete.';
 
 /** One provider call's state, as the SDK's stream drains into it via {@link ProviderCall.consume}. */
+/** The provider's compaction summary is for the model: the stream the owner sees leaves it out. */
+function withoutServerSummaries(stream: ReadableStream<UIMessageChunk>): ReadableStream<UIMessageChunk> {
+  const summaries = new Set<string>();
+
+  return stream.pipeThrough(new TransformStream<UIMessageChunk, UIMessageChunk>({
+    transform(chunk, controller) {
+      if (chunk.type === 'text-start' && isServerCompaction(chunk.providerMetadata)) summaries.add(chunk.id);
+
+      if ((chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end') && summaries.has(chunk.id)) return;
+      controller.enqueue(chunk);
+    },
+  }));
+}
+
 class ProviderCall {
   /** Set by `onAbort`, or by the drain when the provider threw the abort reason first. */
   interrupted = false;
@@ -269,6 +289,8 @@ class ProviderCall {
   /** No finish reason and no output: a provider stream that died, which the SDK would record as a normal stop. */
   private deadFinalStep = false;
   private stepHadOutput = false;
+  /** Text the provider wrote for itself, its compaction summary, by stream id: kept for replay, never the answer. */
+  private readonly summaries = new Set<string>();
   /** The in-flight step's content: the SDK records only finished steps, so a cut would otherwise lose it. */
   private stepContent: Array<TextPart | ToolCallPart> = [];
 
@@ -387,13 +409,9 @@ class ProviderCall {
 
   consume(chunk: TextStreamPart<ToolSet>): ChatEvent | null {
     switch (chunk.type) {
-      case 'text-delta': {
-        if (!chunk.text) return null;
-        this.stepHadOutput = true;
-        this.stepContent.push({ type: 'text', text: chunk.text });
-
-        return { type: 'text-delta', delta: chunk.text };
-      }
+      case 'text-start':
+      case 'text-delta':
+        return this.prose(chunk);
 
       case 'reasoning-delta':
         return chunk.text ? { type: 'reasoning-delta', delta: chunk.text } : null;
@@ -443,7 +461,6 @@ class ProviderCall {
       case 'start':
       case 'start-step':
       case 'text-end':
-      case 'text-start':
       case 'tool-approval-request':
       case 'tool-input-delta':
       case 'tool-input-end':
@@ -455,6 +472,20 @@ class ProviderCall {
       default:
         return null;
     }
+  }
+
+  private prose(chunk: Extract<TextStreamPart<ToolSet>, { type: 'text-start' | 'text-delta' }>): ChatEvent | null {
+    if (chunk.type === 'text-start') {
+      if (isServerCompaction(chunk.providerMetadata)) this.summaries.add(chunk.id);
+
+      return null;
+    }
+
+    if (!chunk.text || this.summaries.has(chunk.id)) return null;
+    this.stepHadOutput = true;
+    this.stepContent.push({ type: 'text', text: chunk.text });
+
+    return { type: 'text-delta', delta: chunk.text };
   }
 
   failed({ cause }: { readonly cause: unknown }): void {
@@ -555,7 +586,9 @@ function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answe
 
   if (!allText.trim()) {
     for (const step of steps) {
-      if (step.text?.trim()) allText += step.text;
+      const text = stepText(step);
+
+      if (text.trim()) allText += text;
     }
   }
 
@@ -684,7 +717,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     ...primary,
     model: opts.model,
     accepts: opts.attachments?.accepts,
-    providerOptions: mergeProviderOptions(cache.providerOptions, opts.providerOptions),
+    providerOptions: mergeProviderOptions(
+      mergeProviderOptions(cache.providerOptions, serverCompactionOptions(opts.modelSpec ?? opts.modelContext?.id, opts.modelContext?.contextWindow)),
+      opts.providerOptions,
+    ),
   };
 
   const route = new FallbackRoute<ChatFallback>(opts);
@@ -838,7 +874,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     suppressDeferredRejections(result, () => call.interrupted || signal.aborted);
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
-    const observed = opts.observeStream?.(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) }), { index: callIndex });
+    const observed = opts.observeStream?.(withoutServerSummaries(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) })), { index: callIndex });
 
     let drained = false;
 

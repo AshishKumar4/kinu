@@ -3,12 +3,15 @@
  * never stored in the plan, so a rolled or degraded summary cannot lose it.
  */
 
-import type { ModelMessage, TextPart } from 'ai';
+import type { AssistantModelMessage, ModelMessage, TextPart } from 'ai';
 import type { KinuExtension, TransformContext } from '@kinu.run/core';
 import {
   buildCompactionSummaryPrompt,
+  compactsServerSide,
+  isServerCompaction,
   stripCheckpointPreamble,
   wrapCompactionSummary,
+  COMPACTION_TRIGGER_PERCENT,
   CONTEXT_CHECKPOINT_PREFIX,
 } from '@kinu.run/core';
 import {
@@ -65,6 +68,7 @@ export interface CompactionExtensionDeps {
   profile?: CompactionProfile;
   /** Ledger-reset signal: reset on 'planned' and 'invalidated', keep on 'replayed'. */
   onOutcome?: (event: CompactionOutcomeEvent) => void;
+  model?: () => string;
   attachments?: AttachmentDeps;
 }
 
@@ -87,8 +91,10 @@ interface PrefixUpgradeInputs {
 }
 
 export function createCompactionExtension(deps: CompactionExtensionDeps): KinuExtension {
-  const profile = deps.profile ?? COMPACTION_PRESETS.light;
-  const spec: LadderSpec = deps.attachments === undefined ? kinuSpec : { ...kinuSpec, attachments: kinuAttachments(deps.attachments) };
+  const profile = deps.profile ?? { ...COMPACTION_PRESETS.light, triggerPercent: COMPACTION_TRIGGER_PERCENT };
+  const { attachments, model } = deps;
+  const spec: LadderSpec = attachments === undefined || model === undefined ? kinuSpec : { ...kinuSpec, attachments: kinuAttachments(attachments, model) };
+  const serverSide = (): boolean => compactsServerSide(model?.());
   const codec = attachmentCodec(kinuCodec, spec.attachments);
   const engine = createEngine(spec, deps.ports);
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
@@ -126,8 +132,8 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
 
   // /compact: target 0; a trigger past the largest turn keeps the last exchanges.
   const buildInputs = (ctx: TransformContext, reportedTokens: number, turns: readonly Turn[]): BuildPlanInputs => ({
-    // A bypass would drop the summary this plan carries.
-    bypassSummaries: false,
+    // A bypass drops a plan's summary; a server-compacting model keeps its own in history.
+    bypassSummaries: serverSide(),
     sessionKey: ctx.sessionKey,
     contextLimit: ctx.contextWindow,
     triggerRatio: ctx.trigger === 'user'
@@ -276,7 +282,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       ctx.abortSignal?.throwIfAborted();
 
       if (ctx.messages.length === 0 || ctx.contextWindow <= 0) return undefined;
-      const messages = [...ctx.messages];
+      const messages = serverSide() ? sinceServerSummary(ctx.messages) : [...ctx.messages];
       const turns = kinuCodec.encode(messages);
 
       // Loaded before process (which may replace it) so the upgrade can thread the prior summary.
@@ -306,7 +312,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
         ctx.trigger !== 'auto'
           ? await forceRebuild({ turns, ctx, prior, reportedTokens, summarize })
           : await engine.process({
-              bypassSummaries: false,
+              bypassSummaries: serverSide(),
               sessionKey: ctx.sessionKey,
               turns,
               contextLimit: ctx.contextWindow,
@@ -326,7 +332,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
           deps.onOutcome?.({ sessionKey: ctx.sessionKey, outcome: 'invalidated' });
         }
 
-        return undefined;
+        return messages.length === ctx.messages.length ? undefined : messages;
       }
 
       const upgraded =
@@ -444,6 +450,24 @@ function compactedTurnsForPlan(turns: Turn[], plan: BoundaryContextPlan): Turn[]
     ...turns.slice(0, turnIndex),
     { ...turn, items, fragmentKey: JSON.stringify(items.map((item) => item.key)) },
   ];
+}
+
+function sinceServerSummary(messages: readonly ModelMessage[]): ModelMessage[] {
+  let summary = messages.length - 1;
+
+  while (summary >= 0 && !carriesServerSummary(messages[summary])) summary--;
+
+  if (summary < 0) return [...messages];
+  let ask = summary - 1;
+
+  while (ask >= 0 && messages[ask]?.role !== 'user') ask--;
+
+  return messages.slice(ask < 0 ? summary : ask);
+}
+
+function carriesServerSummary(message: ModelMessage | undefined): boolean {
+  return message?.role === 'assistant' && Array.isArray(message.content)
+    && message.content.some((part: Exclude<AssistantModelMessage['content'], string>[number]) => part.type === 'text' && isServerCompaction(part.providerOptions));
 }
 
 /** Latest real user request across the full history, so "Active Task verbatim" is mechanical. */

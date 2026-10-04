@@ -1417,6 +1417,22 @@ output cap supplied, three incomplete cases, the provider's words),
 the rotated token before it exits; the first read of a sign-in raises the
 revision), `unit-chatgpt-plan-route` and `providers-command`.
 
+P2. A Claude model on Anthropic's server-side compaction list (Opus and Sonnet
+from 4.6, Fable and Mythos from 5, Mythos Preview; platform.claude.com/docs/en/
+build-with-claude/compaction-threshold, read 2026-10-04), on `anthropic` or
+`claude`, is asked to compact at Kinu's one trigger, 85 % of its window
+(`compact_20260112`, never under the API's 50,000 tokens;
+`core/src/providers/server-compaction.ts`). Its `compaction` block replaces
+better-compact's summaries: the ladder bypasses them for that model and still
+prunes and moves attachments, and a request opens at the ask before the latest
+block. The block is persisted with @ai-sdk/anthropic's mark and replayed as one.
+It stays out of the answer, the stream and the transcript. Proven against
+fixtures built from the documented shapes and the SDK's mapping
+(`core/tests/contract-server-compaction.test.ts`); live acceptance on either
+route is unmeasured. OpenAI's (`context_management` with `compact_threshold`)
+needs @ai-sdk/openai 4, which needs ai 7, so OpenAI models keep better-compact's
+summaries until that migration.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
