@@ -251,7 +251,7 @@ function observedContainer(resource: Resource, live: Deployment): Observation {
  * account-level catalogue can. A bucket that exists while nothing references it
  * is not a provisioned bucket.
  */
-async function observe(
+export async function observe(
   resource: Resource,
   worker: InfraWorker,
   live: Deployment,
@@ -259,9 +259,7 @@ async function observe(
   const bound = (name: string, expect: string | undefined): Observation => {
     if (live.state === 'unknown') return { state: 'unknown', reason: live.reason };
 
-    if (live.state === 'absent') {
-      return { state: 'unknown', reason: `${worker.workerName} is not deployed, so nothing can say whether ${name} is bound` };
-    }
+    if (live.state === 'absent') return { state: 'absent', detail: `${worker.workerName} does not exist yet, so nothing is bound to it` };
 
     const binding = live.bindings.find((entry) => entry.name === name);
 
