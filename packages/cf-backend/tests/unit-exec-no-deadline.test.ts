@@ -118,7 +118,7 @@ describe("adaptCloudflareSandbox — command completion", () => {
  * GitHub #41: a box that loses its first reply after the command ran, keeping the box's one launch per id: a
  * repeated id answers from its launch, and an id it holds no answer for (a streamed one) is never launched again.
  */
-function lossyBox() {
+function lossyBox(onLaunch: () => void = () => {}) {
   const ran: string[] = [];
   const ids: string[] = [];
   const released: string[] = [];
@@ -128,6 +128,7 @@ function lossyBox() {
 
   const launch = (command: string, execId: string): void => {
     ids.push(execId);
+    onLaunch();
 
     if (answers.has(execId)) return;
 
@@ -173,6 +174,15 @@ describe("a lost reply never runs the command twice", () => {
     expect(box.ran).toEqual(["echo once >> effects"]);
     expect(new Set(box.ids).size).toBe(1);
     expect(box.released).toEqual([box.ids[0]]);
+  });
+
+  test("a caller who cancels while the command runs gets the cancel, and the box is not asked again", async () => {
+    const stop = new AbortController();
+    const box = lossyBox(() => { stop.abort(); });
+
+    await expect(box.executor.tools.exec.execute("echo once >> effects", { signal: stop.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(box.ran).toEqual(["echo once >> effects"]);
+    expect(box.ids).toHaveLength(1);
   });
 
   test("a streamed command whose answer cannot be read again is reported as unknown, not run again", async () => {
