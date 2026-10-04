@@ -3,6 +3,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -825,6 +826,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const received: Array<{ atMs?: number; label?: string }> = [];
 
     const codemodeTool = createNodeCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
@@ -854,6 +856,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     let arms = 0;
 
     const codemodeTool = createNodeCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],

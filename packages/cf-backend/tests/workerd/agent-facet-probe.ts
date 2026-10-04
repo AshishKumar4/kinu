@@ -4,6 +4,7 @@ import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode, type Clock } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
 import { hostNodeSeat, nodeCodemodeTool } from '../../src/hosted-actors';
@@ -154,7 +155,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     this.rt.craftStore.create({ name: 'double', description: 'doubles a number', code: 'async (n) => n * 2' });
     const seams = this.hostedSeams();
     const seat = await hostNodeSeat(seams, { nodeId: 'crafted-node', rootId: 'crafted-swarm', depth: 1 });
-    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)({}) }).eval?.execute;
+    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)({}, narrowToolSurface(undefined)) }).eval?.execute;
 
     if (execute === undefined) throw new Error('the node has no eval');
 

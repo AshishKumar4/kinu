@@ -5,6 +5,7 @@ import {
   ExtensionHost, runChat, TurnAccumulator,
   type CodemodeProvider, type ChatEvent,
 } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 
@@ -25,7 +26,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
     }),
   });
 
-  const tool = createNodeCodemodeToolFactory({ extraProviders: providers })({
+  const tool = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: providers })({
     native: {}, external: () => ({}), craftedTools: () => [], providers: [],
   });
 
