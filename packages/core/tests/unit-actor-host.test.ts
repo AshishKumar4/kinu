@@ -16,6 +16,9 @@ import { initEventsHubTables, EventLog } from '../src/events/hub/index';
 import { initCompletedTurnTable } from '../src/evolution/session-window';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { listRecoveryFindings } from '../src/evolution/recovery';
+import { sectionArtifact, writeCandidate } from '../src/evolution/artifacts';
+import { runningTrial } from '../src/evolution/trials';
+import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { AgentRuntime, Identity, SqlExecutor } from '../src/index';
@@ -173,6 +176,65 @@ function claimOf({ actorId, turnId, epoch, runId, context }: ClaimSeed): ActorTu
 }
 
 describe('one workspace database, many logical actors', () => {
+  test('learning switched off between turns stops the independent background pass', async () => {
+    const fx = build(undefined, undefined, true);
+    const actor = await fx.host.acquire(fx.main);
+
+    try {
+      const lease = actor.session.beginTurn({ runId: 'run', turnId: 'turn' }, 'build', 0);
+      actor.session.finishTurn(lease);
+      actor.handle.config.setLiveTrials(true);
+      const section = PROMPT_SECTIONS[0];
+
+      if (section === undefined) throw new Error('the prompt-section registry is empty');
+      writeCandidate(fx.sql, actor.handle, {
+        artifactId: sectionArtifact(section.id), body: `${section.source.trimEnd()} Keep it short.`,
+        rationale: 'test candidate', evidence: { turns: ['turn'], reason: 'incorrect' },
+      });
+      actor.handle.config.setLearning(false);
+      await actor.session.orchestrator.runDueSessionEvolution();
+      expect(runningTrial(fx.sql, actor.handle)).toBeNull();
+      actor.handle.config.setLearning(true);
+      await actor.session.orchestrator.runDueSessionEvolution();
+      expect(runningTrial(fx.sql, actor.handle)).not.toBeNull();
+    } finally {
+      fx.host.releaseAll();
+      fx.db.close();
+    }
+  });
+
+  test('a learning change applies to the next turn, not the turn already opened', async () => {
+    const fx = build(undefined, undefined, true);
+    const actor = await fx.host.acquire(fx.main);
+
+    const policies = [
+      { before: true, after: false, recorded: 1 },
+      { before: false, after: true, recorded: 1 },
+      { before: true, after: true, recorded: 2 },
+    ];
+
+    try {
+      for (const [index, policy] of policies.entries()) {
+        actor.handle.config.setLearning(policy.before);
+        const turnId = `learning-${index}`;
+        actor.session.orchestrator.withTurnLearning(() => {
+          const lease = actor.session.beginTurn({ runId: `run-${index}`, turnId }, 'build', index);
+          actor.handle.config.setLearning(policy.after);
+          actor.session.orchestrator.recordTurn({
+            userMessage: `assignment ${index}`, assistantResponse: 'done', toolCalls: [],
+            steps: 1, durationMs: 1, feedback: null, hadError: false, turnId,
+          }, 'conversation');
+          actor.session.finishTurn(lease);
+        });
+        await actor.session.orchestrator.runDueSessionEvolution();
+        expect(actor.session.orchestrator.sessionTurnIndex).toBe(policy.recorded);
+      }
+    } finally {
+      fx.host.releaseAll();
+      fx.db.close();
+    }
+  });
+
   for (const policy of [
     { automatic: true, mode: 'build', findings: 1, rootTurns: 2 },
     { automatic: true, mode: 'plan', findings: 0, rootTurns: 0 },

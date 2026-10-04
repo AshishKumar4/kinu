@@ -2670,8 +2670,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private finishSleepTimeWindow(key: string): void {
     recordEffectDone(this.boundSql, this.actorHandle(), { scope: SLEEP_TIME_PROCESSED, key });
     void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
-    this.config.delete(SLEEP_TIME_SETTLED_AT);
-    this.config.delete(SLEEP_TIME_CLOSED_AT);
+    this.config.delete(SLEEP_TIME_SETTLED_AT, SLEEP_TIME_CLOSED_AT);
   }
 
   /** The update a previous attempt already paid for, so a replay applies it without a new call. */
