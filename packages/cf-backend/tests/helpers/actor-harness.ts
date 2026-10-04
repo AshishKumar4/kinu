@@ -233,7 +233,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Actors whose turn waits inside a task hire: a task helper of theirs is still working. */
   harnessTurnsWaitingOnDelegates(): number {
     return this.boundSql<{ n: number }>`
-      SELECT COUNT(DISTINCT actor_id) AS n FROM actor_subordinates WHERE lifetime = 'task' AND status != 'dismissed'`[0]?.n ?? 0;
+      SELECT COUNT(DISTINCT s.actor_id) AS n FROM actor_subordinates s
+      JOIN workspace_actors a ON a.actor_id = json_extract(s.actor_reference, '$.actorId')
+      WHERE a.lifetime = 'task' AND s.status != 'dismissed'`[0]?.n ?? 0;
   }
 
   /** The scripted gateway's calls still waiting on the script, when this object runs on one. */

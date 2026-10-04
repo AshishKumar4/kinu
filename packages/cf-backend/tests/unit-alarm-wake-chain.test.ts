@@ -110,8 +110,8 @@ describe('a refiner answer stored with no waiter', () => {
     });
 
     workspace.db.prepare(`INSERT INTO actor_subordinates (actor_id, name, status, current_task, created_at, dismissed_at,
-      lifetime, task_event_id, actor_reference, birth_request, delete_requested)
-      VALUES (?, 'ask-refiner-x1', 'working', 'review', ?, NULL, 'task', 'evt-1', ?, NULL, 0)`)
+      task_event_id, actor_reference, birth_request, delete_requested)
+      VALUES (?, 'ask-refiner-x1', 'working', 'review', ?, NULL, 'evt-1', ?, NULL, 0)`)
       .run(actorId, now, JSON.stringify(refiner.actor.reference));
     workspace.db.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
       VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
@@ -619,8 +619,8 @@ describe('the workspace keeps exactly one wake per job', () => {
     db.prepare(
       `INSERT INTO actor_subordinates
         (actor_id, name, status, current_task, created_at, dismissed_at,
-         lifetime, task_event_id, actor_reference, birth_request, delete_requested)
-       VALUES (?, 'poisoned-birth', 'idle', NULL, ?, NULL, 'durable', NULL, NULL, '{malformed', 0)`,
+         task_event_id, actor_reference, birth_request, delete_requested)
+       VALUES (?, 'poisoned-birth', 'idle', NULL, ?, NULL, NULL, NULL, '{malformed', 0)`,
     ).run(harnessActorId(db), Date.now());
 
     await expect(agent.terminalRetryPass()).rejects.toThrow('malformed');
