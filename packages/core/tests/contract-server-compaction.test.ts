@@ -5,9 +5,9 @@ import { describe, expect, test } from 'bun:test';
 import type { ModelMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
-  runChat, createAnthropicProvider, decodeModelMessageValues, drawnStep, encodeModelMessageValues,
+  runChat, createAnthropicProvider, decodeModelMessageValues, drawnStep, encodeModelMessageValues, TurnAccumulator,
   ANTHROPIC_CRED_KEY, parseJsonObject,
-  type ChatEvent, type JsonObject, type ModelCallDeps,
+  type ChatEvent, type ChatOptions, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { createMockFetch, type MockFetchHandle } from '@kinu.run/test-utils';
 
@@ -27,7 +27,11 @@ const COMPACTED = sse([
   ['content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }],
   ['content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Continuing the rename.' } }],
   ['content_block_stop', { type: 'content_block_stop', index: 1 }],
-  ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 6 } }],
+  // Billed for both samplings; the top level and the last iteration are the answer's alone.
+  ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: {
+    input_tokens: 23_000, output_tokens: 6, cache_read_input_tokens: 2_000,
+    iterations: [{ type: 'compaction', input_tokens: 180_000, output_tokens: 3_500 }, { type: 'message', input_tokens: 23_000, output_tokens: 6 }],
+  } }],
   ['message_stop', { type: 'message_stop' }],
 ]);
 
@@ -45,7 +49,7 @@ interface Turn {
   readonly shown: UIMessageChunk[];
 }
 
-async function turn(modelId: string, history: ModelMessage[]): Promise<Turn> {
+async function turn(modelId: string, history: ModelMessage[], extra: Partial<ChatOptions> = {}): Promise<Turn> {
   const mock = createMockFetch([{ match: 'api.anthropic.com', respond: () => ({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: COMPACTED }) }]);
   const events: ChatEvent[] = [];
   const shown: UIMessageChunk[] = [];
@@ -61,6 +65,7 @@ async function turn(modelId: string, history: ModelMessage[]): Promise<Turn> {
     observeStream: async (stream) => {
       for await (const chunk of stream) shown.push(chunk);
     },
+    ...extra,
   })) events.push(event);
 
   return { mock, events, shown };
@@ -80,6 +85,27 @@ describe('Anthropic server-side compaction', () => {
     expect(body(opus.mock).context_management).toEqual({ edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 170_000 } }] });
     expect(opus.mock.requests[0]?.headers['anthropic-beta']).toContain('compact-2026-01-12');
     expect(body(haiku.mock).context_management).toBeUndefined();
+  });
+
+  // `/compact` and an overflow's recovery arm the next request: it triggers just under its own input, so it compacts.
+  test('an armed compaction asks for one just under the request\'s input, never under the API\'s floor', async () => {
+    const trigger = async (counted: number) => body((await turn('claude-opus-4-7', [{ role: 'user', content: 'rename the parser' }], {
+      transformTrigger: 'force', countInputTokens: async () => ({ kind: 'counted' as const, tokens: counted }),
+    })).mock).context_management;
+
+    expect([await trigger(120_000), await trigger(52_000)]).toEqual([
+      { edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 108_000 } }] },
+      { edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 50_000 } }] },
+    ]);
+  });
+
+  // The provider reports every sampling's input together; the next turn's pressure is the prompt it answered from.
+  test('the request after a compaction is measured from the summary on, and billed for both samplings', async () => {
+    const acc = new TurnAccumulator();
+
+    await turn('claude-opus-4-7', [{ role: 'user', content: 'rename the parser' }], { persistStep: async (record) => { acc.writeNative(record)(); } });
+
+    expect({ pressure: acc.lastPromptTokens, billed: acc.usage.input }).toEqual({ pressure: 25_000, billed: 205_000 });
   });
 
   test('the summary stays out of the answer and the stream, and the next request opens on it', async () => {

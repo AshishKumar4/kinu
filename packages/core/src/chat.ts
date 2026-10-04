@@ -42,7 +42,7 @@ import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
 import * as v from 'valibot';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
-import { normalizeUsage, usageReported, type Usage } from './usage';
+import { answeredPromptTokens, normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_RETRIES_HEADER } from './providers/rate-limit-retry';
 import type { FallbackCooldowns } from './providers/fallback-cooldown';
 import { FallbackRoute, type CallFailure } from './providers/fallback-route';
@@ -67,6 +67,8 @@ export type ChatEvent = (
   /** Cumulative turn outputs; an absent usage field is not zero. */
   | {
     type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[]; usage?: Usage;
+    /** Where the step's one request sampled more than once (`answeredPromptTokens`): the prompt it answered from. */
+    promptTokens?: number;
     finishReason?: string;
     text?: string;
     toolCalls?: ReadonlyArray<{ toolName: string }>;
@@ -337,6 +339,7 @@ class ProviderCall {
   stepRecord(step: StepResult<ToolSet>, stepIndex: number, context: ContextComposition | undefined, prefix: readonly ModelMessage[]): StepRecord {
     const messages = modelStepMessages(step, this.responseSoFar);
     const usage = normalizeUsage(step.usage);
+    const promptTokens = answeredPromptTokens(step.usage);
     const account = callAccountOf(step.response);
     const egress = step.response.headers?.[EGRESS_ROUTE_HEADER];
     const { modelId } = step.response;
@@ -359,6 +362,7 @@ class ProviderCall {
       toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
       request: { body, sentAt: this.stepSentAt },
       ...(usageReported(usage) && { usage }),
+      ...(promptTokens !== undefined && { promptTokens }),
       ...(account !== undefined && { account }),
       ...(egress !== undefined && { egress }),
       ...(context && { context }),
@@ -718,7 +722,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     model: opts.model,
     accepts: opts.attachments?.accepts,
     providerOptions: mergeProviderOptions(
-      mergeProviderOptions(cache.providerOptions, serverCompactionOptions(opts.modelSpec ?? opts.modelContext?.id, opts.modelContext?.contextWindow)),
+      mergeProviderOptions(cache.providerOptions, serverCompactionOptions(
+        opts.modelSpec ?? opts.modelContext?.id, opts.modelContext?.contextWindow, opts.transformTrigger === 'force' ? admittedTokens : undefined,
+      )),
       opts.providerOptions,
     ),
   };

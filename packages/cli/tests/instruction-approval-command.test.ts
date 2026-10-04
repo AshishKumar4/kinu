@@ -63,7 +63,7 @@ function controls(input: {
     approveInstruction: input.approve,
     revokeInstruction: async () => ({ ok: true, path: LATER.path, digest: '' }),
     clearConversation: async () => null,
-    compact: async () => {},
+    compact: async () => 'folded' as const,
   };
 }
 

@@ -4089,7 +4089,7 @@ export abstract class ActorAgent extends Agent<Env> {
       history, tools, reads, requestedWorkMode: await this.preparedWorkMode(), cliCwd: this._cliCwd, item: null,
     });
 
-    return { execution: await this.executionFor(composed), profile: composed.profile };
+    return { execution: await this.executionFor(composed), profile: composed.profile, sessionKey: this.name };
   }
 
   private async executionFor(composed: ComposedTurn): Promise<Omit<ActorExecutionInput, 'task'>> {

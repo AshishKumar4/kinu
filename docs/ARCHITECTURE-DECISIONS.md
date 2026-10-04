@@ -1426,7 +1426,11 @@ build-with-claude/compaction-threshold, read 2026-10-04), on `anthropic` or
 better-compact's summaries: the ladder bypasses them for that model and still
 prunes and moves attachments, and a request opens at the ask before the latest
 block. The block is persisted with @ai-sdk/anthropic's mark and replayed as one.
-It stays out of the answer, the stream and the transcript. Proven against
+It stays out of the answer, the stream and the transcript. `/compact`, and an
+overflow's armed recovery, ask the next request to compact just under its own
+input (never under 50,000; `/compact` says a shorter conversation has nothing to
+fold). The next turn's pressure is the prompt the last sampling answered from,
+not the billed sum of both. Proven against
 fixtures built from the documented shapes and the SDK's mapping
 (`core/tests/contract-server-compaction.test.ts`); live acceptance on either
 route is unmeasured. OpenAI's (`context_management` with `compact_threshold`)

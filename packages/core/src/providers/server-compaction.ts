@@ -11,8 +11,11 @@ import type { ProviderOptions } from './effort';
 /** Where Kinu compacts, as a percentage of the context window: the ladder's trigger and the provider's. */
 export const COMPACTION_TRIGGER_PERCENT = 85;
 
-/** The API refuses a lower trigger. */
-const ANTHROPIC_MIN_TRIGGER = 50_000;
+/** The fewest input tokens the API compacts at: it refuses a lower trigger. */
+export const SERVER_COMPACTION_MIN_TOKENS = 50_000;
+
+/** A forced compaction triggers this far under the request's own input, so a count a little high still trips it. */
+const FORCED_TRIGGER = 0.9;
 
 /** Anthropic's compatibility list: Opus and Sonnet from 4.6, Fable and Mythos from 5, and Mythos Preview. */
 const COMPACTING = /^claude-(?:(opus|sonnet)-(\d+)(?:-(\d{1,2}))?(?!\d)|(fable|mythos)-(\d+)|mythos-preview)/u;
@@ -28,11 +31,20 @@ export function compactsServerSide(spec: string | undefined): boolean {
   return model[4] === undefined || Number(model[5]) >= 5;
 }
 
-/** The request option asking for it, or undefined where the model does not compact server-side. */
-export function serverCompactionOptions(spec: string | undefined, contextWindow: number | undefined): ProviderOptions | undefined {
-  const value = Math.floor(((contextWindow ?? 0) * COMPACTION_TRIGGER_PERCENT) / 100);
+/**
+ * The request option asking for it, or undefined where the model does not compact server-side. A forced compaction
+ * (`/compact`, an overflow's recovery) passes the request's own input, so this request compacts.
+ */
+export function serverCompactionOptions(
+  spec: string | undefined, contextWindow: number | undefined, forcedInput?: number,
+): ProviderOptions | undefined {
+  const threshold = Math.floor(((contextWindow ?? 0) * COMPACTION_TRIGGER_PERCENT) / 100);
 
-  if (!compactsServerSide(spec) || value < ANTHROPIC_MIN_TRIGGER) return undefined;
+  if (!compactsServerSide(spec) || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
+
+  const value = forcedInput === undefined
+    ? threshold
+    : Math.max(SERVER_COMPACTION_MIN_TOKENS, Math.min(threshold, Math.floor(forcedInput * FORCED_TRIGGER)));
 
   return { anthropic: { contextManagement: { edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value } }] } } };
 }
