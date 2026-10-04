@@ -8,7 +8,7 @@ import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema, type ActorHandle, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
 import { scratchPath, scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
 import {
-  historyOver, orchestratorHarness, workspaceFiles, workspaceMainActor,
+  historyOver, orchestratorHarness, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
 import { deviceHarness, WORKSPACE } from '../helpers/device-harness';
 import { pcAgentDaemon } from '../helpers/pc-agent-daemon';
@@ -152,7 +152,7 @@ async function cloudflare(): Promise<SharedBackend> {
       decideRefinement: (input) => agent.decideRefinement(input),
       revertConversation: (entryId) => agent.revertConversation(entryId),
       runOptimization: (target) => agent.runOptimization(target),
-      send: (text, id) => agent.send(text, id ?? crypto.randomUUID()),
+      send: (text, id) => sentTurn(agent, text, id ?? crypto.randomUUID()),
     },
   };
 }

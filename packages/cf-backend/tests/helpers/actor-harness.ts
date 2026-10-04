@@ -887,6 +887,13 @@ export function jobsOver(db: Database): BackgroundJobStore {
   return new BackgroundJobStore(sqlOver(db), workspaceMainActor(db));
 }
 
+/** The owner's words through the public send, resolved once the turn they open has run, as the CLI's send resolves:
+ *  a lap count cannot bound a cf turn, which asks the owner's device over a real tunnel. */
+export async function sentTurn(agent: HarnessOrchestratorAgent, text: string, id: string): Promise<void> {
+  await agent.send(text, id);
+  await agent.harnessChatLoop.pumpPromise;
+}
+
 /** One owner message to the main actor, its turn run to the end on the models the workspace catalog routes to. */
 export async function catalogTurn(agent: HarnessOrchestratorAgent, text: string): Promise<void> {
   await agent.harnessChatLoop.send(text, { id: crypto.randomUUID() });
