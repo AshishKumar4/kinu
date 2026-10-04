@@ -15,6 +15,7 @@ import {
 import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
+import { bridgeSockets } from './socket-bridge';
 import { Deferred, Effect, Result } from 'effect';
 
 import {
@@ -2970,30 +2971,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** The SDK's `bridge()`: an open preview socket is the box's use. */
   #bridge(upstream: WebSocket, headers: Headers): Response {
-    const [visitor, held] = Object.values(new WebSocketPair());
-    let open = true;
+    this.#openSockets += 1;
 
-    const end = (code: number, reason: string): void => {
-      if (!open) return;
-      open = false;
+    return bridgeSockets(upstream, headers, () => {
       this.#openSockets -= 1;
       this.stampInteraction();
-
-      for (const socket of [held, upstream]) socket.close(code === 1005 || code === 1006 ? 1000 : code, reason);
-    };
-
-    held.accept();
-    upstream.accept();
-    this.#openSockets += 1;
-    held.addEventListener('message', (event) => { if (open) upstream.send(event.data); });
-    upstream.addEventListener('message', (event) => { if (open) held.send(event.data); });
-
-    for (const socket of [held, upstream]) {
-      socket.addEventListener('close', (event) => end(event.code, event.reason));
-      socket.addEventListener('error', () => end(1011, 'preview socket failed'));
-    }
-
-    return new Response(null, { status: 101, headers, webSocket: visitor });
+    });
   }
 
   #fileClient: Files | undefined;
