@@ -602,7 +602,7 @@ describe('the sandbox contract — one namespace for every tool', () => {
           return { ok: true };
         },
       }),
-    });
+    }, undefined);
 
     const file = bound.file;
 

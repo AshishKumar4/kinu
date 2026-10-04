@@ -182,8 +182,8 @@ describe('a fork over the bound directory', () => {
     const env = await headShell.exec('pwd; echo "$HOME"; echo "$TMPDIR"');
     expect(env.stdout.trim().split('\n')).toEqual([
       resolve(project),
-      join(resolve(project), '.kinu', 'facets', `head-${head.actor.storageKey}`),
-      join(resolve(project), '.kinu', 'facets', `head-${head.actor.storageKey}`, 'tmp'),
+      join(state, 'parent', 'home', `head-${head.actor.storageKey}`),
+      join(state, 'parent', 'home', `head-${head.actor.storageKey}`, 'tmp'),
     ]);
     const parentShell = parent.shell;
 
@@ -204,54 +204,46 @@ describe('listing the bound directory', () => {
     writeFileSync(join(project, 'plain.txt'), 'x');
     expect(await spawnTest(['mkfifo', join(project, 'pipe')]).exited).toBe(0);
 
-    const kinds = (await rt.storage.vfs.readdir(WORKSPACE_ROOT)).filter((entry) => ['plain.txt', 'pipe'].includes(entry.name));
+    const kinds = (await rt.storage.vfs.readdir(project)).filter((entry) => ['plain.txt', 'pipe'].includes(entry.name));
 
     expect(kinds.map((entry) => `${entry.name}:${entry.type}`).sort()).toEqual(['pipe:fifo', 'plain.txt:file']);
   });
 });
 
 describe('addressing the bound directory', () => {
-  test('bare virtual homes cannot remove or rename the bound project directory', async () => {
-    for (const home of ['/home/main']) {
-      const { state, project } = roots('cwd-plane-home-anchor');
-      const rt = agentRuntime(state, 'solo', project);
-      const rename = present(rt.storage.vfs.rename?.bind(rt.storage.vfs), 'the mounted rename route');
-      const removeTree = present(rt.storage.vfs.removeRecursive?.bind(rt.storage.vfs), 'the mounted removal route');
-      await writeText(rt.storage.vfs, 'keep.txt', 'the project survives');
+  test('neither the folder nor the agent\'s own space can be removed or renamed away', async () => {
+    const { state, project } = roots('cwd-plane-home-anchor');
+    const rt = agentRuntime(state, 'solo', project);
+    const space = join(state, 'solo');
+    const rename = present(rt.storage.vfs.rename?.bind(rt.storage.vfs), 'the mounted rename route');
+    const removeTree = present(rt.storage.vfs.removeRecursive?.bind(rt.storage.vfs), 'the mounted removal route');
+    await writeText(rt.storage.vfs, 'keep.txt', 'the project survives');
 
-      // A plane with no rename carries it as mv does, and the bound directory's removal refuses the carry whole.
-      await expect(rename(home, join(project, '..', 'renamed'))).rejects.toMatchObject({ code: 'EACCES' });
-      await expect(rt.storage.vfs.unlink(home)).rejects.toMatchObject({ code: 'EACCES' });
-      await expect(removeTree(home)).rejects.toMatchObject({ code: 'EACCES' });
-      expect(readFileSync(join(project, 'keep.txt'), 'utf8')).toBe('the project survives');
-      expect(statSync(project).isDirectory()).toBe(true);
-      expect(readdirSync(dirname(project)).filter((entry) => entry.startsWith('.nimbus-move-') || entry === 'renamed')).toEqual([]);
+    for (const anchor of [project, space]) {
+      await expect(rename(anchor, join(state, 'renamed'))).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(rt.storage.vfs.unlink(anchor)).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(removeTree(anchor)).rejects.toMatchObject({ code: 'EACCES' });
     }
+
+    expect(readFileSync(join(project, 'keep.txt'), 'utf8')).toBe('the project survives');
+    expect(existsSync(join(space, 'agent.db'))).toBe(true);
+    // A plane with no rename carries it as mv does, and a refused carry leaves nothing behind.
+    expect(readdirSync(state).filter((entry) => entry.startsWith('.nimbus-move-') || entry === 'renamed')).toEqual([]);
   });
 
-  test('every address family the tree produces names the same bytes', async () => {
+  test('a relative path and the real path name the folder\'s file; the own space\'s spellings name its own', async () => {
     const { state, project } = roots('cwd-plane-addresses');
     const rt = agentRuntime(state, 'solo', project);
+    const space = join(state, 'solo');
 
     await writeText(rt.storage.vfs, 'notes/one.md', 'one');
+    await writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/notes/own.md`, 'own');
 
-    // Relative, the advertised workspace root, and the real host path.
     expect(await readText(rt, 'notes/one.md')).toBe('one');
-    expect(await readText(rt, `${WORKSPACE_ROOT}/notes/one.md`)).toBe('one');
     expect(await readText(rt, join(project, 'notes/one.md'))).toBe('one');
-
-    expect((await rt.storage.vfs.readdir('/')).map(({ name }) => name)).toContain('notes');
-    expect((await rt.storage.vfs.readdir(WORKSPACE_ROOT)).map(({ name }) => name)).toContain('notes');
-  });
-
-  test('a slate the agent writes at /slates is in the project\'s own slates/ folder', async () => {
-    const { state, project } = roots('cwd-plane-slates');
-    const rt = agentRuntime(state, 'solo', project);
-
-    await writeText(rt.storage.vfs, `${SLATES_ROOT}/widgets/package.json`, '{"main":"server.ts"}');
-
-    expect(readFileSync(join(project, 'slates/widgets/package.json'), 'utf8')).toBe('{"main":"server.ts"}');
-    expect((await rt.storage.vfs.readdir(SLATES_ROOT)).map(({ name }) => name)).toEqual(['widgets']);
+    expect(await readText(rt, join(space, 'home/main/notes/own.md'))).toBe('own');
+    expect(readdirSync(join(project, 'notes'))).toEqual(['one.md']);
+    expect((await rt.storage.vfs.readdir(WORKSPACE_ROOT)).map(({ name }) => name)).toEqual(['notes']);
   });
 
   /** The agent's `file` tool and codemode's `workspace.writeFile`, with a user who answers `answer`. */
@@ -371,10 +363,10 @@ describe('addressing the bound directory', () => {
     expect(readFileSync(join(project, '..hidden/file.txt'), 'utf8')).toBe('still inside');
   });
 
-  test('a skill in the bound directory is discovered: the shared Drive this runtime lacks is absent, not an escape', async () => {
+  test('a skill in the own space is discovered: the shared Drive this runtime lacks is absent, not an escape', async () => {
     const { state, project } = roots('cwd-plane-skills');
-    mkdirSync(join(project, 'skills'), { recursive: true });
-    writeFileSync(join(project, 'skills', 'review.md'), '---\nname: review\ndescription: Review a change\n---\nName every risk.\n');
+    mkdirSync(join(state, 'solo', 'home', 'main', 'skills'), { recursive: true });
+    writeFileSync(join(state, 'solo', 'home', 'main', 'skills', 'review.md'), '---\nname: review\ndescription: Review a change\n---\nName every risk.\n');
     const rt = agentRuntime(state, 'solo', project);
 
     const found = await discoverSkills(rt.storage.vfs, { admissionTokens: 100_000 });
@@ -640,7 +632,32 @@ test('a file the agent writes is named local:// when the directory is the worksp
 
   expect(await write(agentRuntime(state, 'bound', project))).toMatchObject({ ok: true, reference: 'local://notes/plan.md' });
   expect(readFileSync(join(project, 'notes/plan.md'), 'utf8')).toBe('ship it');
-  expect(await write(agentRuntime(state, 'unbound'))).toMatchObject({ ok: true, reference: 'vfs://notes/plan.md' });
+  // A relative path is the home's, so its reference names the home (it named `/notes/plan.md` before 2026-10-04).
+  expect(await write(agentRuntime(state, 'unbound'))).toMatchObject({ ok: true, reference: 'vfs://home/main/notes/plan.md' });
+});
+
+// 2026-10-04: a folder agent's /home/main and /slates were the project folder itself. The own space is real files
+// beside the database (`~/.kinu/<workspace>/`), named vfs:// there as on the cloud; the folder is local://.
+test('the agent\'s own space is real files beside its database, and only its work lands in the folder', async () => {
+  const { state, project } = roots('cwd-plane-own-space');
+  const rt = agentRuntime(state, 'solo', project);
+  const space = join(state, 'solo');
+  const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
+
+  expect(await file({ action: 'write', path: 'vfs://slates/board/index.ts', content: 'board' })).toMatchObject({ reference: 'vfs://slates/board/index.ts' });
+  expect(await file({ action: 'write', path: `${SLATES_ROOT}/widgets/package.json`, content: '{}' })).toMatchObject({ ok: true });
+  expect(await file({ action: 'write', path: `${WORKSPACE_ROOT}/notes.md`, content: 'scratch' })).toMatchObject({ ok: true });
+  expect(await file({ action: 'write', path: 'src/app.ts', content: 'work' })).toMatchObject({ reference: 'local://src/app.ts' });
+
+  expect(readFileSync(join(space, 'slates/board/index.ts'), 'utf8')).toBe('board');
+  expect(readFileSync(join(space, 'slates/widgets/package.json'), 'utf8')).toBe('{}');
+  expect(readFileSync(join(space, 'home/main/notes.md'), 'utf8')).toBe('scratch');
+  expect(readFileSync(join(project, 'src/app.ts'), 'utf8')).toBe('work');
+  expect(readdirSync(project)).toEqual(['src']);
+  expect(await file({ action: 'read', path: 'vfs://skills/slates/SKILL.md' })).toContain('slate');
+  expect(await file({ action: 'read', path: join(space, 'home/main/notes.md') })).toContain('scratch');
+  // The shell is the machine's, and its HOME is the one `~` names.
+  expect((await present(rt.shell, 'the shell').exec('echo "$HOME"')).stdout.trim()).toBe(rt.planes.home);
 });
 
 describe('SOUL.md is the owner\'s', () => {

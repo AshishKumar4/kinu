@@ -269,7 +269,8 @@ On hosted, `cf-backend/src/workspace-host.ts` calls it over the orchestrator's
 workspace box to Kinu's executor contract. On local, `cli-backend/src/runtime.ts`
 imports it as `createWorkspaceFilesystem` and calls it over `bun:sqlite` in the
 agent's own database (`~/.kinu/<name>/agent.db`). There it holds the agent's
-state; the project directory is the workspace (see "Local and cloud construction").
+state; the agent's own space is real files beside it and the project folder is
+where it works (see "Local and cloud construction").
 
 Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
 declares the exact set; an addition means the dependency changed its storage
@@ -372,12 +373,17 @@ in the directory it was started in, and that machine is the workspace. The
 Nimbus plane is the agent's own space for state, memory, slates and codemode.
 The device runtime is a cloud concept; a local CLI registers no `device`
 executor and needs no sandbox. m1705 (2026-09-24) asked which messages
-overturned the single-SQLite local plane; these are they.
+overturned the single-SQLite local plane; these are they. On 2026-10-04 the
+owner approved one story for both (design B): every workspace is its own space
+plus the computer it works on, and locally everything is real files. The own
+space is `~/.kinu/<workspace>/` (the directory `agent.db` is in), laid out as
+the cloud tree (`home/<agent>`, `slates/`); before that a folder agent's
+`/home/main` and `/slates` were the project folder itself.
 
 | | Cloud (`cf-backend/src/runtime.ts`) | Local, placed in a directory (`cli-backend/src/runtime.ts`) | Local with no directory (evals, `cwd: null`) |
 |---|---|---|---|
 | Nimbus plane | `createWorkspace` over the Durable Object's `ctx.storage.sql` (`workspace-host.ts`) | `createWorkspace` over `agent.db`; holds agent state only | `createWorkspace` over `agent.db`; also the workspace |
-| `file` tool plane | the Nimbus plane | `createCwdPlaneVFS(cwd)` (`cli-backend/src/host-mount.ts`): `workspacePath` maps home paths to the directory and `/slates` to its `slates/`; other absolute paths name the host and writes keep the approval gate | the Nimbus plane |
+| `file` tool plane | the Nimbus plane | `localFilePlane` (`cli-backend/src/host-mount.ts`): every path is the machine's own; the own space's (`vfs://`, and core's `/home/main`, `/slates` and view paths) land in `~/.kinu/<workspace>/`, a relative one in the folder; past those two, writes keep the approval gate | the Nimbus plane |
 | Shell | Nimbus `runtime-bash` in the box (`nimbusSessionShell`) | the host shell rooted in the directory (`createHostShell`), behind the approval gate, with a shadow-git checkpoint at most once per turn before a command runs | Nimbus `runtime-bash` |
 | Mounts on the file plane | `/pc`, `/sandbox`, `/skills`, `/shared` (Drive), `/context` | `/skills`, `/shared`, `/context`, `/agent`; `/shared` answers `ENXIO` without a Drive; `/pc` and `/sandbox` are native host paths, never device/container mounts | `/skills`, `/shared`, `/context`; no device/container mounts |
 | Mounts in the shell | the same table, through `mountedAuthority` | none: `/pc` in the host shell is the machine's own path | the same table, through `workspace.mountTable` |

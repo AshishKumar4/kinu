@@ -18,6 +18,7 @@ import type { FactsStore } from '../src/memory/facts';
 import type { PlanEdit, SubmitPlanToolDeps } from '../src/types/plans';
 import { conversationsFor } from './helpers';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { cloudPlanes } from '../src/vfs/resolve';
 
 const USAGE = {
   inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -58,7 +59,7 @@ function modelCalling(input: JsonObject) {
 
 async function toolResults(input: JsonObject, seed: Record<string, string>) {
   const store = recordingVfs(seed);
-  const file = createFileTool({ home: WORKSPACE_ROOT, vfs: store.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const file = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: store.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
   const results: Extract<ChatEvent, { type: 'tool-result' }>[] = [];
   const model = modelCalling(input);
 

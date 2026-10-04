@@ -70,6 +70,7 @@ import { TriggerRegistry } from '../src/events/hub/triggers';
 import { resetWorkspaceBaseline, getWorkspaceDiff } from '../src/read-models/workspace-diff';
 import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { cloudPlanes } from '../src/vfs/resolve';
 
 interface World {
   readonly db: Database;
@@ -107,7 +108,7 @@ function world(): World {
 /** For stores whose entry point is an `AgentRuntime`. */
 function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().vfs): AgentRuntime {
   return {
-    workspaceIsMachine: false,
+    planes: cloudPlanes(WORKSPACE_ROOT),
     actor,
     toolFiles: vfs,
     storage: {

@@ -23,6 +23,7 @@ import type { RunEvent, RunEventBase } from '../src/events/types';
 import { KinuError } from '../src/obs/index';
 import { failedToolOutcome } from '../src/tools/outcome';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { cloudPlanes } from '../src/vfs/resolve';
 
 
 describe('applyFileEdits', () => {
@@ -469,7 +470,7 @@ type FileToolTestInput = FileToolInput | { action: string; path: string | number
 
 /** The entry as the tool surface serves it: behind the input check a program meets. */
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
-  const entry = withCheckedInput('file', createFileTool({ home: WORKSPACE_ROOT, vfs, ledger, budget: new TurnContextBudget() }));
+  const entry = withCheckedInput('file', createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget: new TurnContextBudget() }));
 
   return { call: toolExecute<FileToolTestInput, JsonValue>(entry), ledger };
 }
@@ -488,7 +489,7 @@ describe('file tool', () => {
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
 
-    expect(edited).toEqual({ ok: true, path: 'a.ts', reference: 'vfs://a.ts', applied: [{ line: 1, removed_lines: 1, added_lines: 1 }] });
+    expect(edited).toEqual({ ok: true, path: 'a.ts', reference: 'vfs://home/main/a.ts', applied: [{ line: 1, removed_lines: 1, added_lines: 1 }] });
     expect(vfs.files.get('a.ts')).toBe('const x = 2;\n');
   });
 
@@ -615,7 +616,7 @@ describe('file tool', () => {
     };
 
     for (const path of ['memory/a.md', '/memory/a.md', 'memory/a.md']) {
-      const entry = createFileTool({ home: WORKSPACE_ROOT, vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
+      const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
       await toolExecute(entry)({ action: 'write', path, content: 'x' });
     }
 
@@ -634,7 +635,7 @@ describe('file tool', () => {
     const vfs = memoryVfs();
     const { call } = toolFor(vfs);
     expect(await call({ action: 'write', path: 'new.txt', content: 'hi' }))
-      .toEqual({ ok: true, path: 'new.txt', reference: 'vfs://new.txt', bytes: 2, action: 'created' });
+      .toEqual({ ok: true, path: 'new.txt', reference: 'vfs://home/main/new.txt', bytes: 2, action: 'created' });
     expect(vfs.files.get('new.txt')).toBe('hi');
   });
 
@@ -670,7 +671,7 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'big.txt': 'x'.repeat(500) });
     const ledger = new TurnFileLedger();
     const budget = new TurnContextBudget();
-    const entry = createFileTool({ home: WORKSPACE_ROOT, vfs, ledger, budget });
+    const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget });
     await toolExecute(entry)({ action: 'read', path: 'big.txt' });
     expect(budget.snapshot().admittedChars).toBe(500);
   });

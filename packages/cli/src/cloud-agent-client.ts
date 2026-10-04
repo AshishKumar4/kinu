@@ -304,6 +304,7 @@ export class CloudAgentClient implements AgentClient {
   readonly checkpoints: FileCheckpointSurface | null;
   readonly plans: PlanReviewSurface | null;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
+  readonly planes = null;
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
 
   private readonly origin: string;

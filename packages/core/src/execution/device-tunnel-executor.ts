@@ -33,7 +33,7 @@ import { readDeviceOwnershipContext } from './signal';
 import { callJob, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
 import { approveFileAccess, createShellSession, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { asBytes } from '../safety/bound-write';
-import { RESERVED_REFERENCE_ROOTS } from '../vfs/mounts';
+import { RESERVED_ROOTS } from '../vfs/resolve';
 import {
   isJsonObject,
   JsonValueSchema,
@@ -813,8 +813,8 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 /** Mount segment: the machine name when it is a clean, unshared segment, else its id. */
 export function deviceMountSegment(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[] | undefined): string {
   const name = device.name.trim();
-  // Reserved reference roots (`vfs`, `sandbox`, `local`) are never a machine's segment.
-  const usable = name.length > 0 && !name.includes('/') && name !== '.' && name !== '..' && !RESERVED_REFERENCE_ROOTS.includes(name);
+  // A reserved root (`vfs`, `local`, `pc`, a URL scheme...) is never a machine's segment.
+  const usable = name.length > 0 && !name.includes('/') && name !== '.' && name !== '..' && !RESERVED_ROOTS.includes(name);
 
   if (!usable) return device.id;
   const others = connectedDevices(fleet).filter((d) => d.id !== device.id && d.name.trim() === name);

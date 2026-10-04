@@ -6,11 +6,12 @@ import type { VFS, VfsDirentType } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { FileCheckpoints, FileReach, MountedVfs } from '@kinu.run/core';
-import { SLATES_ROOT, WORKSPACE_ROOT, workspacePath } from '@kinu.run/core';
-import { syscallError, toVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { tolerateAsync } from '@kinu.run/core/obs';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { Effect } from 'effect';
+import type { FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsMount } from '@kinu.run/core';
+import { SLATES_ROOT, WORKSPACE_ROOT, withMountTable, workspacePath } from '@kinu.run/core';
+import { syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { settle, tolerateAsync } from '@kinu.run/core/obs';
 
 /** `file` is a regular file only (Nimbus 0.15); Nimbus stats what a listing calls `unknown`. */
 function hostDirentType(entry: Dirent): VfsDirentType {
@@ -83,70 +84,127 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
   };
 }
 
-/** The native directory wins. The workspace's home (either name) and `/slates` resolve as POSIX resolves them and map
- *  into it; any other path names the host, outside the directory, where the approval gate decides. */
-function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: string; readonly outside: boolean } {
-  const root = resolve(cwd);
+/** `own`: the own-space path a path names, or null; `real`: where it is on this machine. */
+interface LocalPaths {
+  readonly own: (path: string) => string | null;
+  readonly real: (path: string) => string;
+}
 
-  return (path) => {
-    const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
+/** Core's own-space paths (`/home/main`, `/slates`, a view's root) land in `space` as on the cloud; a relative one in the folder. */
+function localPaths(folder: string, space: string, views: readonly string[]): LocalPaths {
+  const aliases = [WORKSPACE_ROOT, SLATES_ROOT, ...views.map((name) => `/${name}`)];
+  const absolute = (path: string): string => workspacePath(path, folder);
 
-    if (isAbsolute(path) && withinRoot(root, direct)) return { hostPath: direct, outside: false };
-    const named = workspacePath(path, WORKSPACE_ROOT);
+  const own = (path: string): string | null => {
+    const at = absolute(path);
 
-    if (named === '/') return { hostPath: root, outside: false };
+    if (at === space || at.startsWith(`${space}/`)) return at.slice(space.length) || '/';
 
-    if (named === WORKSPACE_ROOT || named.startsWith(`${WORKSPACE_ROOT}/`)) return { hostPath: resolve(root, `.${named.slice(WORKSPACE_ROOT.length)}`), outside: false };
+    return aliases.some((alias) => at === alias || at.startsWith(`${alias}/`)) ? at : null;
+  };
 
-    if (named === SLATES_ROOT || named.startsWith(`${SLATES_ROOT}/`)) return { hostPath: resolve(root, `.${named}`), outside: false };
+  const real = (path: string): string => {
+    const named = own(path);
 
-    return { hostPath: direct, outside: true };
+    return named === null ? absolute(path) : join(space, named);
+  };
+
+  return { own, real };
+}
+
+/** Real files under `root`, named from `/`. */
+function rootedFiles(root: string, files: VFS): VFS {
+  const at = (path: string): string => join(root, workspacePath(path, '/'));
+
+  return {
+    readFile: (path) => files.readFile(at(path)),
+    writeFile: (path, data) => files.writeFile(at(path), data),
+    readdir: (path) => files.readdir(at(path)),
+    stat: (path, options) => files.stat(at(path), options),
+    unlink: (path) => files.unlink(at(path)),
+    mkdir: (path, opts) => files.mkdir(at(path), opts),
   };
 }
 
-/** The file gate's reach: `cwd` under `table`'s mounts, or the in-SQLite plane (null). */
-export function directoryFileReach(cwd: string | null, table: MountedVfs | null): FileReach {
-  const userRoots = () => table?.userRoots() ?? [];
-
-  if (cwd === null) return { userRoots, locate: null, parksWrites: false };
-  const locate = cwdPlaneLocator(cwd);
-
-  // A mounted path is its mount's; the CLI asks, so nothing parks.
-  return { userRoots, locate: (path) => ((table?.mountOf(path) ?? null) === null ? locate(path) : { hostPath: path, outside: false }), parksWrites: false };
+export interface LocalFilePlane {
+  readonly folder: string;
+  readonly space: string;
+  /** Mounted on the own space as on the cloud. */
+  readonly views: readonly VfsMount[];
+  readonly checkpoints: FileCheckpoints | undefined;
 }
 
-/** The working directory as the file plane ({@link cwdPlaneLocator}). */
-export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
-  const root = resolve(cwd);
-  const host = createHostMountVFS(root, checkpoints);
-  const locate = cwdPlaneLocator(root);
-  const hostPath = (path: string): string => locate(path).hostPath;
+/** Every real path of the machine, the own space served as the cloud serves its own. Only the folder is snapshotted. */
+export function localFilePlane(input: LocalFilePlane): MountedVfs {
+  const machine = withMountTable(createHostMountVFS(input.folder, input.checkpoints), []);
+  const own = withMountTable(rootedFiles(input.space, createHostMountVFS(input.space, undefined)), input.views);
+  const paths = localPaths(input.folder, input.space, input.views.map((view) => view.name));
 
-  const remove = (path: string) => {
-    const target = hostPath(path);
+  const route = (path: string): { readonly files: MountedVfs; readonly path: string } => {
+    const named = paths.own(path);
 
-    if (target === root) {
-      throwVfsError({
-        error: syscallError('EACCES', 'unlink', path, { detail: 'the workspace directory itself cannot be removed' }),
-        syscall: 'unlink',
-        path,
-      });
-    }
+    return named === null ? { files: machine, path: paths.real(path) } : { files: own, path: named };
+  };
 
-    return host.unlink(target);
+  const on = <T>(path: string, op: (files: MountedVfs, at: string) => T): T => {
+    const at = route(path);
+
+    return op(at.files, at.path);
+  };
+
+  const removable = (path: string, syscall: string): Effect.Effect<{ readonly files: MountedVfs; readonly path: string }, VfsError> => {
+    const at = route(path);
+
+    return (at.files === own ? at.path === '/' : at.path === input.folder)
+      ? Effect.fail(syscallError('EACCES', syscall, path, { detail: 'the workspace\'s own directory and its folder cannot be removed' }))
+      : Effect.succeed(at);
   };
 
   return {
-    readFile: (path) => host.readFile(hostPath(path)),
-    writeFile: (path, data) => host.writeFile(hostPath(path), data),
-    readdir: (path) => host.readdir(hostPath(path)),
-    stat: (path, options) => host.stat(hostPath(path), options),
-    unlink: remove,
-    removeRecursive: remove,
-    mkdir: (path, opts) => host.mkdir(hostPath(path), opts),
+    mountOf: (path) => on(path, (files, at) => (files === own ? own.mountOf(at) : null)),
+    mountPoints: () => own.mountPoints(),
+    mounts: () => own.mounts(),
+    userRoots: () => own.userRoots().flatMap((root) => [root, join(input.space, root)]),
+    readFile: (path) => on(path, (files, at) => files.readFile(at)),
+    readRange: (path, offset, length) => on(path, (files, at) => files.readRange(at, offset, length)),
+    writeFile: (path, data) => on(path, (files, at) => files.writeFile(at, data)),
+    writeFileWithReport: async (path, data) => {
+      await on(path, (files, at) => files.writeFile(at, data));
+
+      return null;
+    },
+    readdir: (path) => on(path, (files, at) => files.readdir(at)),
+    stat: (path, options) => on(path, (files, at) => files.stat(at, options)),
+    mkdir: (path, opts) => on(path, (files, at) => files.mkdir(at, opts)),
+    unlink: (path) => settle(Effect.flatMap(removable(path, 'unlink'), (at) => Effect.promise(async () => at.files.unlink(at.path)))),
+    removeRecursive: (path) => settle(Effect.flatMap(removable(path, 'rm'), (at) => Effect.promise(async () => at.files.removeRecursive(at.path)))),
+    rename: (from, to) => settle(Effect.flatMap(Effect.all([removable(from, 'rename'), removable(to, 'rename')]), ([a, b]) => {
+      const viewed = [a, b].some((at) => at.files === own && own.mountOf(at.path) !== null);
+
+      return Effect.promise(async () => (viewed ? own.rename(a.files === own ? a.path : from, b.files === own ? b.path : to) : machine.rename(paths.real(from), paths.real(to))));
+    })),
   };
 }
 
+/** The folder and the own space are the agent's; past them, the user is asked. */
+export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space' | 'views'>, planes: PathPlanes): FileReach {
+  const paths = localPaths(input.folder, input.space, input.views.map((view) => view.name));
+
+  return {
+    planes,
+    userRoots: () => [],
+    locate: (path) => ({
+      hostPath: paths.real(path),
+      outside: paths.own(path) === null && !withinRoot(input.folder, paths.real(path)),
+    }),
+    parksWrites: false,
+  };
+}
+
+/** The in-SQLite plane's reach. */
+export function databaseFileReach(table: MountedVfs, planes: PathPlanes): FileReach {
+  return { planes, userRoots: () => table.userRoots(), locate: null, parksWrites: false };
+}
 
 function withinRoot(root: string, candidate: string): boolean {
   const distance = relative(root, candidate);

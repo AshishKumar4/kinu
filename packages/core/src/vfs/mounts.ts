@@ -33,9 +33,6 @@ export const EXECUTOR_MOUNTS = {
 	sandbox: '/sandbox',
 } as const satisfies Record<string, string>;
 
-/** Never a machine's mount segment, so no device name shadows `local` or a fixed plane. */
-export const RESERVED_REFERENCE_ROOTS: readonly string[] = ['vfs', 'sandbox', 'local'];
-
 export const MOUNT_EXECUTORS: Record<string, string> = Object.fromEntries(
 	Object.entries(EXECUTOR_MOUNTS).map(([executor, mount]) => [mount, executor]),
 );

@@ -7,17 +7,17 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { Database } from 'bun:sqlite';
 import type {
-  AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
-  ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome,
+  AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution, MountedVfs, PathPlanes,
+  ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome, VfsMount,
 } from '@kinu.run/core';
 import type { Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
 import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'node:fs';
-import { constants as osConstants } from 'node:os';
+import { homedir, constants as osConstants } from 'node:os';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, actorHomeName, facetHomeProvisioner, agentAffinityKey,
+  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, actorHomeName, facetHomeProvisioner, agentAffinityKey, MAIN_AGENT,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL, WORKSPACE_ROOT, WORKSPACE_SOUL_DDL,
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
@@ -53,7 +53,7 @@ import { createHostCheckpoints } from './checkpoints';
 import { kinuHome } from './home';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
-import { createCwdPlaneVFS, directoryFileReach } from './host-mount';
+import { databaseFileReach, localFilePlane, localFileReach } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { agentViewMount, createSqlFiber, detectOrphanedFibers, readSoul, settledWorkspaceSoul } from '@kinu.run/core';
 import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
@@ -67,8 +67,9 @@ import {
   type LocalProfileAuthority, type LocalProfileModelPlane,
 } from './profile-authority';
 import type { LocalOAuthStore } from './oauth-store';
-import type { FileCheckpoints } from '@kinu.run/core';
-import { diagnostics, KinuError, renderCauseChain, settleLogged, toKinuError } from '@kinu.run/core/obs';
+import type { FileCheckpoints, FileReach } from '@kinu.run/core';
+import { diagnostics, KinuError, renderCauseChain, settleLogged, settleSync, toKinuError } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from '@kinu.run/core';
 import * as v from 'valibot';
 import { stampSchemaGenesis } from './schema-genesis';
@@ -106,6 +107,9 @@ function ownContextTree(actor: ActorHandle, stores: AgentStores): () => ContextT
 
 export type CLIRuntimeConfig = CLIRuntimeOptions & LocalActorConfig;
 
+/** The runtime a node plane is joined for, with the policy its gates answer to. */
+export type NodeSource = AgentRuntime & Pick<CLIRuntime, 'approvalPolicy'>;
+
 /**
  * The local runtime plus late-bound session channels: model seams are built before
  * any session, but their usage belongs in the session's run-event log.
@@ -120,6 +124,7 @@ export interface CLIRuntime extends AgentRuntime {
   setModelOperations?(sink: ModelOperationSink | null): void;
   /** Null when this runtime keeps the in-SQLite plane. See CLIRuntimeConfig.cwd. */
   cwd?: string | null;
+  space?: string | null;
   /** The owner's soul from its row, the file view resealed first; absent on a facet, whose soul is its own. */
   ownerSoul?: () => Promise<string | null>;
   setModelForRoute?(factory: (resolution: ModelRouteResolution) => LLM): void;
@@ -146,7 +151,7 @@ export interface CLIRuntime extends AgentRuntime {
    */
   nodeHome?: () => Promise<NodeHomeHost>;
   /** Present exactly where {@link nodeHome} is: a node-owned home is one the origin plane cannot write. */
-  nodeRuntime?: (node: NodeWorkspace, actor: ActorHandle, source: AgentRuntime, observer?: WriteObserver) => Promise<AgentRuntime>;
+  nodeRuntime?: (node: NodeWorkspace, actor: ActorHandle, source: NodeSource, observer?: WriteObserver) => Promise<AgentRuntime>;
   /** A facet's gated, checkpointed host shell with its own `HOME`/`TMPDIR`; present exactly where `cwd` is. */
   facetShell?: (facet: string) => Shell;
   /** Shared rather than rebuilt per consumer: two instances over one actor are two memos of one truth. */
@@ -171,7 +176,7 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
 /** Session payload reads for inspection: the cwd plane when bound, else the
  *  Nimbus filesystem read as the kernel. */
 export function inspectionFiles(db: Database, cwd: string | null): Pick<VFS, 'readFile'> {
-  if (cwd !== null) return createCwdPlaneVFS(cwd, undefined);
+  if (cwd !== null) return settleSync(Effect.map(ownSpaceOf(db), (space) => localFilePlane({ folder: cwd, space, views: [], checkpoints: undefined })));
   const storage = inlineWorkspaceStorage(db);
   const vfs = new SqliteVFS(storage.sql, storage.transactions).as(CRED_KERNEL);
 
@@ -209,9 +214,17 @@ export function writeTransaction<T>(db: Pick<Database, 'transaction'>, body: () 
   return db.transaction(body).immediate();
 }
 
-export function createCLIRuntime(
+export function createCLIRuntime(db: Database, config: CLIRuntimeConfig): CLIRuntime {
+  const cwd = config.cwd ? resolvePath(config.cwd) : null;
+  const place = cwd === null ? Effect.succeed(null) : Effect.map(ownSpaceOf(db), (space) => ({ cwd, space }));
+
+  return settleSync(Effect.map(place, (placed) => buildCLIRuntime(db, config, placed)));
+}
+
+function buildCLIRuntime(
   db: Database,
   config: CLIRuntimeConfig,
+  place: { readonly cwd: string; readonly space: string } | null,
 ): CLIRuntime {
   waitOnSharedWrites(db);
   db.exec('PRAGMA foreign_keys = ON');
@@ -369,9 +382,27 @@ export function createCLIRuntime(
 
   const agentStateVfs = workspace.vfs;
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
-  const cwd = config.cwd ? resolvePath(config.cwd) : null;
-  // Where its shell starts; the cwd plane names the host directory by its host path too.
-  const shellHome = cwd ?? WORKSPACE_ROOT;
+  const cwd = place?.cwd ?? null;
+  const space = place?.space ?? null;
+  const stores = createAgentStores(() => sql, () => actor, (write) => writeTransaction(db, write), () => filesForActor(actor));
+  let childContext: ChildContextResolver | null = null;
+
+  const views: VfsMount[] = [
+    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
+    skillsMount((): VFS => agentVfs),
+    ...(space === null ? [] : [agentViewMount(agentStateVfs, 'scaffold')]),
+    // `/context`: this actor's own working history, keyed on its own id.
+    contextMount({
+      actorId: actor.actorId,
+      own: ownContextTree(actor, stores),
+      children: {
+        list: () => childContext?.list() ?? [],
+        tree: (storageKey, author) => childContext?.tree(storageKey, author) ?? null,
+      },
+    }),
+  ];
+
+  const { planes, home: ownHome } = runtimePlanes(cwd, space, config.facet, views);
 
   const memoryStore = new MemoryStore(agentStateVfs, sql);
   memoryStore.ensureSchema();
@@ -403,8 +434,6 @@ export function createCLIRuntime(
       ownGrants: () => agentConfig.getShellApprovalGrants(),
     });
 
-  const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
-
   // A directory-bound shell runs on the user's machine and may mutate the tree, so it
   // snapshots first; the in-SQLite shell is the agent's own and serves the mount table.
   const filesOwner: FilesOwner = cwd === null ? 'agent' : 'user';
@@ -412,14 +441,14 @@ export function createCLIRuntime(
   // Each call is a fresh `sh -c`; a named one keeps its directory and exports in a file under KINU_HOME, per agent.
   const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
     withCheckpointedShell(
-      createBashShell(createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)), {
+      createBashShell(createHostShell(cwd, facet === undefined || space === null ? process.env : facetShellEnv(space, facet)), {
         home: cwd, scope: facet === undefined ? agentName : `${agentName}/${facet}`, stateDirectory: join(kinuHome(), 'shells'),
       }),
       checkpoints,
       cwd,
     ),
     // The host shell serves no mount table: `/pc` there is the machine's own path. Its files are the user's anywhere.
-    { filesOwner, shellSession: createShellSession({ home: cwd, userRoots: () => [] }) },
+    { filesOwner, shellSession: createShellSession({ home: cwd, userRoots: () => [] }), planes },
     approvalPolicy,
   );
 
@@ -427,6 +456,7 @@ export function createCLIRuntime(
     ? facetShell(config.facet)
     : withApprovalGatedShell(workspace.shell, {
       filesOwner,
+      planes,
       shellSession: createShellSession({
         home: WORKSPACE_ROOT, userRoots: () => agentVfs.userRoots(), stored: async (name) => await workspace.shell.cwd?.(name) ?? null,
       }),
@@ -439,14 +469,13 @@ export function createCLIRuntime(
     adoptLocalActorHandle(actor, actorReferenceOf(target), target);
     requireLocalActorWorkspace(actor, target);
 
-    if (cwd !== null) {
-      const home = target.actorId === actor.actorId ? cwd : join(cwd, '.kinu', 'actors', target.actorId);
-      const artifactDirectory = agentArtifactDirectory(home);
+    if (space !== null) {
+      const artifactDirectory = agentArtifactDirectory(join(space, agentHome(actorHomeName(record))));
       mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
       chmodSync(artifactDirectory, 0o700);
       target.assertCurrent();
 
-      return { vfs: fileVfs, artifactDirectory };
+      return { vfs: agentVfs, artifactDirectory };
     }
 
     const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: storage.sql }))(), () => target.assertCurrent())(actorHomeName(record));
@@ -458,34 +487,20 @@ export function createCLIRuntime(
     return { vfs: plane.vfs, artifactDirectory: agentArtifactDirectory(home.home) };
   };
 
-  const stores = createAgentStores(() => sql, () => actor, (write) => writeTransaction(db, write), () => filesForActor(actor));
-  let childContext: ChildContextResolver | null = null;
-
-  const agentVfs = withMountTable(fileVfs, [
-    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
-    skillsMount((): VFS => agentVfs),
-    ...(cwd === null ? [] : [agentViewMount(agentStateVfs, 'scaffold')]),
-    // `/context`: this actor's own working history, keyed on its own id.
-    contextMount({
-      actorId: actor.actorId,
-      own: ownContextTree(actor, stores),
-      children: {
-        list: () => childContext?.list() ?? [],
-        tree: (storageKey, author) => childContext?.tree(storageKey, author) ?? null,
-      },
-    }),
-  ]);
+  const { files: agentVfs, reach } = runtimeFiles({ cwd, space, state: agentStateVfs, views, checkpoints, planes });
 
   if (cwd === null) workspace.mountTable(agentVfs);
+
   // Only the agent's tools: the shell and the owner's views keep `agentVfs`.
-  const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(cwd, agentVfs), approvalPolicy);
+  const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', reach, approvalPolicy);
 
   const limits = hostResourceLimits();
 
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
     vfs: toolFiles,
     files: agentVfs,
-    home: shellHome,
+    home: ownHome,
+    planes,
     memory,
     craftStore,
     shell,
@@ -503,11 +518,11 @@ export function createCLIRuntime(
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => writeTransaction(db, write),
-    workspaceIsMachine: cwd !== null,
+    planes,
     actor, sql,
     execRaw,
     vfs: agentVfs,
-    home: shellHome,
+    home: ownHome,
     agentStateVfs,
     toolFiles,
     llm,
@@ -527,6 +542,7 @@ export function createCLIRuntime(
     setApprovalDeferrals: (channel: DeferredApprovalChannel | null) => { approvalDeferrals = channel; },
     setChildContext: (resolver: ChildContextResolver | null) => { childContext = resolver; },
     cwd,
+    space,
     setModelCallSink: (sink: ModelCallSink | null) => { modelCallSink = sink; },
     setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
     profiles,
@@ -552,7 +568,7 @@ export function createCLIRuntime(
   }
 
   runtime.nodeRuntime = localNodeRuntime({
-    workspace, origin: runtime, approvalPolicy, inline: inlineOptions,
+    workspace, origin: runtime, inline: inlineOptions,
   });
 
   return runtime;
@@ -577,33 +593,75 @@ export async function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLI
   const plane = await workspace.nodeRuntime(home, actor.actor, actor);
 
   return Object.assign(actor, {
-    storage: { ...actor.storage, vfs: plane.storage.vfs, home: plane.storage.home }, toolFiles: plane.toolFiles, memory: workspace.memory, craftStore: workspace.craftStore,
+    storage: { ...actor.storage, vfs: plane.storage.vfs, home: plane.storage.home }, toolFiles: plane.toolFiles, planes: plane.planes, memory: workspace.memory, craftStore: workspace.craftStore,
     executionRouter: plane.executionRouter, shell: plane.shell, checkpoints: workspace.checkpoints, cwd: workspace.cwd ?? null,
     nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell, ownerSoul,
   });
 }
 
 /**
- * One facet's `HOME`/`TMPDIR` scratch in a directory-bound workspace. No uid
+ * One facet's `HOME`/`TMPDIR` scratch: its own home in the own space. No uid
  * separation exists there, so isolation stays `shared-origin-plane`. The name is
- * validated so `/` or `..` cannot reach the join.
+ * validated (`agentHome`) so `/` or `..` cannot reach the join.
  */
-function facetScratchRoot(cwd: string, facet: string): string {
-  agentHome(facet);
-
-  return join(cwd, '.kinu', 'facets', facet);
-}
-
-function facetShellEnv(cwd: string, facet: string): NodeJS.ProcessEnv {
-  const home = facetScratchRoot(cwd, facet);
+function facetShellEnv(space: string, facet: string): NodeJS.ProcessEnv {
+  const home = join(space, agentHome(facet));
   const tmp = join(home, 'tmp');
   mkdirSync(tmp, { recursive: true });
 
   return { ...process.env, HOME: home, TMPDIR: tmp };
 }
 
-export function cleanupFacetCwdScratch(cwd: string, facet: string): void {
-  rmSync(facetScratchRoot(cwd, facet), { recursive: true, force: true });
+export function cleanupFacetScratch(space: string, facet: string): void {
+  rmSync(join(space, agentHome(facet)), { recursive: true, force: true });
+}
+
+/** Where paths land, and the runtime's own home. */
+function runtimePlanes(cwd: string | null, space: string | null, facet: string | undefined, views: readonly VfsMount[]) {
+  if (cwd === null || space === null) {
+    // The in-SQLite shell mounts every view.
+    const planes: PathPlanes = { cwd: WORKSPACE_ROOT, home: WORKSPACE_ROOT, devices: null, roots: [{ root: 'vfs', at: '/' }], views: [] };
+
+    return { home: WORKSPACE_ROOT, planes };
+  }
+
+  const home = join(space, agentHome(facet ?? MAIN_AGENT));
+
+  // The folder is `local://`; a hire's `~` is its own home, the workspace's agent's the user's.
+  const planes: PathPlanes = {
+    cwd, home: facet === undefined ? homedir() : home, devices: null,
+    roots: [{ root: 'vfs', at: space }, { root: 'local', at: cwd }], views: views.map((view) => view.name),
+  };
+
+  return { home, planes };
+}
+
+function runtimeFiles(input: {
+  readonly cwd: string | null; readonly space: string | null; readonly state: VFS; readonly views: readonly VfsMount[];
+  readonly checkpoints: FileCheckpoints | undefined; readonly planes: PathPlanes;
+}) {
+  const { cwd: folder, space, views, planes } = input;
+
+  if (folder === null || space === null) {
+    const files: MountedVfs = withMountTable(input.state, views);
+    const reach: FileReach = databaseFileReach(files, planes);
+
+    return { files, reach };
+  }
+
+  const files: MountedVfs = localFilePlane({ folder, space, views, checkpoints: input.checkpoints });
+  const reach: FileReach = localFileReach({ folder, space, views }, planes);
+
+  return { files, reach };
+}
+
+/** The own space, `~/.kinu/<workspace>/`, is where the database is; an in-memory one has none. */
+function ownSpaceOf(db: Database): Effect.Effect<string, KinuError> {
+  const file = db.filename;
+
+  return file === '' || file === ':memory:'
+    ? Effect.fail(new KinuError('bad_input', 'a local workspace keeps its own space beside its database file, and an in-memory database has none'))
+    : Effect.succeed(dirname(resolvePath(file)));
 }
 
 /**
@@ -676,13 +734,23 @@ async function buildCLIHeadRuntime(
   });
 
   const agentStateVfs = parent.agentStateVfs ?? parent.storage.vfs;
-  const cwdPlane = parent.cwd ? createCwdPlaneVFS(parent.cwd, parent.checkpoints) : null;
-
+  const folder = parent.cwd ?? null;
+  const space = parent.space ?? null;
   const writeObserver = opts.writeObserver;
 
-  const vfs = cwdPlane !== null && writeObserver !== undefined
-    ? observeWrites(cwdPlane, writeObserver)
-    : cwdPlane ?? agentStateVfs;
+  // `/context` is this head's own history, not the parent's.
+  const views: VfsMount[] = [
+    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
+    skillsMount((): VFS => agentVfs),
+    ...(space === null ? [] : [agentViewMount(agentStateVfs, dirname(actorScaffoldPath(opts.actorBinding)))]),
+    contextMount({
+      actorId: actor.actorId,
+      own: ownContextTree(actor, stores),
+    }),
+  ];
+
+  const { files: plane, reach } = runtimeFiles({ cwd: folder, space, state: agentStateVfs, views, checkpoints: parent.checkpoints, planes: parent.planes });
+  const agentVfs = folder !== null && writeObserver !== undefined ? observeWrites(plane, writeObserver) : plane;
 
   // A head over a shared directory runs the parent's gated, checkpointed shell.
   const parentShell = parent.shell;
@@ -696,7 +764,8 @@ async function buildCLIHeadRuntime(
   const executionRouter = new DefaultExecutionRouter();
 
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs: withApprovalGatedFiles(vfs, 'workspace', directoryFileReach(parent.cwd ?? null, null), parent.approvalPolicy), files: vfs, home: parent.storage.home,
+    vfs: withApprovalGatedFiles(agentVfs, 'workspace', reach, parent.approvalPolicy), files: agentVfs, home: parent.storage.home,
+    planes: parent.planes,
     memory: parent.memory, craftStore: parent.craftStore, shell, sql,
     // The same machine the parent's shell runs on.
     filesOwner: parent.cwd ? 'user' : 'agent',
@@ -736,17 +805,6 @@ async function buildCLIHeadRuntime(
     workspaceName: actor.name,
   }));
 
-  // `/context` is this head's own history, not the parent's.
-  const agentVfs = withMountTable(vfs, [
-    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
-    skillsMount((): VFS => agentVfs),
-    ...(cwdPlane === null ? [] : [agentViewMount(agentStateVfs, dirname(actorScaffoldPath(opts.actorBinding)))]),
-    contextMount({
-      actorId: actor.actorId,
-      own: ownContextTree(actor, stores),
-    }),
-  ]);
-
   const checkpoints = parent.checkpoints;
 
   const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
@@ -755,8 +813,8 @@ async function buildCLIHeadRuntime(
     // programs; with the default, the parent would execute its head's source.
     scaffoldPath: actorScaffoldPath(opts.actorBinding),
     actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, home: parent.storage.home, agentStateVfs,
-    toolFiles: withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(parent.cwd ?? null, agentVfs), parent.approvalPolicy),
-    workspaceIsMachine: parent.workspaceIsMachine,
+    toolFiles: withApprovalGatedFiles(agentVfs, 'workspace', reach, parent.approvalPolicy),
+    planes: parent.planes,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,
     executionRouter, shell,
@@ -775,7 +833,8 @@ async function buildCLIHeadRuntime(
     };
   }
 
-  const runtime = buildRuntime(runtimeOptions);
+  // A head acts under its parent's policy, as its file gates above do.
+  const runtime = Object.assign(buildRuntime(runtimeOptions), { approvalPolicy: parent.approvalPolicy });
 
   if (parent.cwd) return runtime;
 

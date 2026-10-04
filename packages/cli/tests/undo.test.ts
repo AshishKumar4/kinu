@@ -22,7 +22,7 @@ function inertCheckpointSurface(): FileCheckpointSurface {
 function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
   const client: AgentClient = {
     mode: 'local', agentName: 'test', cliSession: createCliSession('test', { noTranscript: true }),
-    consents: null, localControls: null, checkpoints, plans: null, inlineAttachmentLimitBytes: 1024,
+    consents: null, localControls: null, checkpoints, plans: null, inlineAttachmentLimitBytes: 1024, planes: null,
     connect: async () => {}, subscribe: () => () => {},
     send: async () => ({ landed: 'turn' as const, text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: false }),
     branch: () => false,

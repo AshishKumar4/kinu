@@ -82,7 +82,7 @@ import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError } from 
 import { watchStatements } from '@kinu.run/core/identity';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
-  buildLocalActorRuntime, cleanupFacetCwdScratch, writeTransaction,
+  buildLocalActorRuntime, cleanupFacetScratch, writeTransaction,
   type CLIRuntime,
 } from '../runtime';
 import type { CLIOpenConfig } from '../open';
@@ -439,7 +439,7 @@ export class LocalAgentHost {
 
     try {
       const ws = await this.opts.open(ref, db, dbPath);
-      const tree = this.createTree(ref, db, ws, liveReads);
+      const tree = this.createTree(db, ws, liveReads);
       this.trees.set(name, tree);
 
       try {
@@ -468,7 +468,6 @@ export class LocalAgentHost {
 
   /** The one actor host over a root's database; none of its factories opens a file. */
   private createTree(
-    ref: HostedAgentRef,
     db: Database,
     ws: LocalHostedAgent,
     liveReads: LiveReadsNotice,
@@ -535,7 +534,7 @@ export class LocalAgentHost {
         return orchestration.deps;
       },
       contextEvents: (bound) => bound.stores.eventRecorder,
-      discardBytes: (record) => this.discardActorBytes(ref, ws, record),
+      discardBytes: (record) => this.discardActorBytes(ws, record),
     });
 
     return {
@@ -589,14 +588,13 @@ export class LocalAgentHost {
 
   /** Remove one destroyed actor's scratch home, named from its storage key and kind; its rows go with the directory row. */
   private async discardActorBytes(
-    ref: HostedAgentRef,
     ws: LocalHostedAgent,
     record: WorkspaceActor,
   ): Promise<void> {
     const agentName = actorHomeName(record);
 
-    if (ref.cwd) {
-      cleanupFacetCwdScratch(ref.cwd, agentName);
+    if (ws.rt.space) {
+      cleanupFacetScratch(ws.rt.space, agentName);
 
       return;
     }
@@ -944,7 +942,7 @@ export class LocalAgentHost {
         if (storageKey === undefined) return;
         const record = entry.tree.host.describe(storageKey);
 
-        if (record) await this.discardActorBytes(entry.ref, entry.ws, record);
+        if (record) await this.discardActorBytes(entry.ws, record);
       });
 
       if (!hold.held()) return nextTriggerAt(entry.tree.db);

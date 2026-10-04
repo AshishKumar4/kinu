@@ -4,7 +4,7 @@ import { type VFS, type VfsRevision, writeText } from '@nimbus-sh/core/vfs/vfs.j
  * No second filesystem path; another environment is reached through its own namespace.
  */
 
-import { formatReference, type ReferenceRoot } from '../vfs/references';
+import { formatPath, resolvePath, type PathPlanes } from '../vfs/resolve';
 import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -61,8 +61,8 @@ export interface FileToolDeps {
   budget: TurnContextBudget;
   /** Long-term memory, so a write under `memory/` re-indexes FTS like `workspace.writeFile`. */
   memory?: Memory;
-  /** Live reference roots (`vfs/references.ts`), so results name files as `root://path`. */
-  roots?: () => readonly ReferenceRoot[];
+  /** Where paths land (`vfs/resolve.ts`), so results name files as `root://path`. */
+  planes: PathPlanes;
 }
 
 /** One replacement; a missing new_text must not default to deleting the match. */
@@ -231,7 +231,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   };
 
   /** How a result names its file: the reference the live table gives it. */
-  const referenceOf = (path: string): string => formatReference(path, deps.roots?.() ?? []);
+  const referenceOf = (path: string): string => formatPath(resolvePath(path, deps.planes).absolute, deps.planes);
 
   return async (args: FileToolInput): Promise<JsonValue> => {
     const { path } = args;

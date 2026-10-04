@@ -151,7 +151,7 @@ import { TierIdSchema,
 import {
   diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
-import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
+import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { OS_LEASE_PROCESS } from './agent-host/lease-process';
@@ -2786,7 +2786,7 @@ export class LocalAgentSession {
         await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
           const agentName = actorHomeName(binding);
 
-          if (this.rt.cwd) cleanupFacetCwdScratch(this.rt.cwd, agentName);
+          if (this.rt.space) cleanupFacetScratch(this.rt.space, agentName);
           else if (this.rt.nodeHome) await facetHomeReleaser(this.rt.nodeHome())(agentName);
         });
       },

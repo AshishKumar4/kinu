@@ -1,4 +1,7 @@
-/** A workspace has a name; the slug is its address and must not reach `kinu list` or the system prompt. */
+/**
+ * A workspace has a name; the slug is its address. It must not reach `kinu list`, and the system prompt has it only
+ * inside the own space's real path, which the agent's shell needs (2026-10-04).
+ */
 import { scratchDir } from '../../test-utils/src/scratch';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -172,7 +175,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
       const session = await host.acquire(SLUG);
       const renamed = titled(host);
       await session.send(FIRST_PROMPT, { id: crypto.randomUUID() });
-      expect(log.systems()[0]).not.toContain(SLUG);
+      expect(log.systems()[0].replaceAll(join(AGENT_HOME, SLUG), '')).not.toContain(SLUG);
 
       expect(await renamed).toBe(TITLE);
 
@@ -182,7 +185,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
       await session.send('and now the token exchange', { id: crypto.randomUUID() });
       const latest = log.systems().at(-1) ?? '';
       expect(latest).toContain(`You work in the workspace "${TITLE}".`);
-      expect(latest).not.toContain(SLUG);
+      expect(latest.replaceAll(join(AGENT_HOME, SLUG), '')).not.toContain(SLUG);
     } finally {
       await host.close();
     }
@@ -236,7 +239,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
 
       expect(childPrompt).toBeDefined();
       expect(childPrompt).toContain(`You are "Researcher", a subagent in the workspace "${TITLE}".`);
-      expect(childPrompt).not.toContain(SLUG);
+      expect(childPrompt?.replaceAll(join(AGENT_HOME, SLUG), '')).not.toContain(SLUG);
       expect(childPrompt).not.toContain(created.name);
     } finally {
       await host.close();

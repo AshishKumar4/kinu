@@ -40,10 +40,10 @@ describe('the local backend file plane', () => {
     const rt = freshRuntime(dir);
     const mounted = rt.storage.vfs;
 
-    // The absolute path and the plane-relative name are one file; nothing is copied.
+    // The absolute path and the plane-relative name are one file; nothing is copied. `/` is the machine's own root.
     expect(await readText(mounted, join(dir, 'existing.txt'))).toBe('from the host');
     expect(await readText(mounted, 'existing.txt')).toBe('from the host');
-    expect((await mounted.readdir('/')).map(({ name }) => name)).toContain('existing.txt');
+    expect((await mounted.readdir(dir)).map(({ name }) => name)).toContain('existing.txt');
 
     await writeText(mounted, 'written.txt', 'from the agent');
     expect(readFileSync(join(dir, 'written.txt'), 'utf8')).toBe('from the agent');

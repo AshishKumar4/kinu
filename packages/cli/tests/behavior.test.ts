@@ -406,20 +406,29 @@ describe("kinu exec (headless)", () => {
     }
   });
 
-  test("--no-auto-evolve is rejected for cloud workspaces", async () => {
+  // Since ce8e62848 the flag writes the agent's own learning setting on both backends. The stand-in answers only that
+  // write, so each exec stops at its next request; the subject is the write it recorded, and the control without one.
+  test("--no-auto-evolve turns a cloud workspace's learning setting off", async () => {
     const home = scratchDir("cli-exec-noevolve-cloud");
+    const origin = startEvolutionSettingOrigin();
     const stamp = new Date(0).toISOString();
-    writeConfig(home, {
-      origin: "https://kinu.example.com",
-      accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
-      agents: {
-        jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", createdAt: stamp, updatedAt: stamp },
-      },
-    });
 
-    const proc = await runCli(["exec", "--workspace", "jarvis", "--json", "--no-auto-evolve", "Say hello"], { home });
-    expect(proc.exitCode).toBe(1);
-    expect(toText(proc.stderr)).toContain("--no-auto-evolve applies to local workspaces");
+    try {
+      writeConfig(home, {
+        origin: `http://127.0.0.1:${origin.port}`,
+        accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
+        agents: {
+          jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", createdAt: stamp, updatedAt: stamp },
+        },
+      });
+
+      await runCli(["exec", "--workspace", "jarvis", "--json", "Say hello"], { home });
+      expect(origin.writes).toEqual([]);
+      await runCli(["exec", "--workspace", "jarvis", "--json", "--no-auto-evolve", "Say hello"], { home });
+      expect(origin.writes).toEqual([[{ learning: false }]]);
+    } finally {
+      await origin.stop();
+    }
   });
 });
 
@@ -697,6 +706,27 @@ function startInBandErrorLlm(payload: JsonValue) {
 }
 
 /** A model menu; empty means Cloudflare AI was never granted. */
+/** A cloud origin that answers only `setEvolutionConfig` on `jarvis`, keeping each write's arguments. */
+function startEvolutionSettingOrigin() {
+  const writes: JsonValue[][] = [];
+
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(request) {
+      if (new URL(request.url).pathname !== "/api/cli/workspaces/jarvis/rpc") return new Response("not found", { status: 404 });
+      const call = v.parse(v.object({ method: v.string(), args: v.array(JsonValueSchema) }), await request.json());
+
+      if (call.method !== "setEvolutionConfig") return new Response("not found", { status: 404 });
+      writes.push(call.args);
+
+      return Response.json({ result: { learning: false, liveTrials: false, advisorEnabled: false, advisorMinSeverity: "concern" } });
+    },
+  });
+
+  return { port: present(server.port, 'the mock server port'), writes, stop: () => server.stop(true) };
+}
+
 function startEmptyModelMenuOrigin() {
   const server = Bun.serve({
     port: 0,

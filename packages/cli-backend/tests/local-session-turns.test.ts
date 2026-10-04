@@ -490,7 +490,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const text = String(system.content);
     expect(text).not.toContain('device.***');
     expect(text).toContain('the machine the CLI runs on');
-    expect(text).toContain('rooted in the directory the session was started in');
+    expect(text).toContain("starting in this workspace's folder");
     expect(text).not.toContain('device tunnel');
     expect(text).not.toContain('asks the user for consent');
     expect(text).not.toContain('OFFLINE');

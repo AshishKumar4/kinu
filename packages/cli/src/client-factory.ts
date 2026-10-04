@@ -30,34 +30,35 @@ export async function createAgentClient(
     rejectLocalLlmFlags(opts);
     const auth = requireAuthConfig();
 
-    const client = new CloudAgentClient({
+    return await withLearningFlag(new CloudAgentClient({
       origin: auth.origin,
       token: auth.token,
       agentName: target.name,
       cloudName: target.cloudName,
       transcript: opts,
       oneShot: opts.oneShot,
-    });
-
-    // The agent's own learning setting, the one switch both backends honour.
-    if (opts.noAutoEvolve === true) await client.setEvolutionConfig({ learning: false });
-
-    return client;
+    }), opts);
   }
 
   // Bind the planes to the recorded placement, not the invocation directory.
   const local = await resolveLocalAgent(target.requestedName);
 
-  return openLocalAgentClient(local.name, {
+  return await withLearningFlag(await openLocalAgentClient(local.name, {
     model: opts.model,
     baseUrl: opts.baseUrl,
     auth: opts.auth,
-    noAutoEvolve: opts.noAutoEvolve,
     oneShot: opts.oneShot,
     transcript: opts,
     surface,
     cwd: local.cwd,
-  });
+  }), opts);
+}
+
+/** The agent's own learning setting, the one switch both backends honour; only the user's flag writes it. */
+async function withLearningFlag(client: AgentClient, opts: AgentClientFlags): Promise<AgentClient> {
+  if (opts.noAutoEvolve === true) await client.setEvolutionConfig({ learning: false });
+
+  return client;
 }
 
 function rejectLocalLlmFlags(opts: AgentClientFlags): void {

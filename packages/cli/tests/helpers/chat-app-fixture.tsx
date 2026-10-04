@@ -114,6 +114,7 @@ export function fakeClient(options: FakeClientOptions) {
     }) : null,
     checkpoints: null,
     inlineAttachmentLimitBytes: 1024,
+    planes: null,
     connect: options.connect ?? (async () => {}),
     subscribe: (listener) => {
       listeners.add(listener);

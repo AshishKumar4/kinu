@@ -8,7 +8,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, initWorkspaceSchema, ParkedWriteFiles, performBoundWrite, sha256Hex, withApprovalGatedFiles, WorkspaceActorDirectory, type SqlExec, type SqlExecutor, type SqlValue } from '@kinu.run/core';
+import { cloudPlanes, DeferredApprovalQueue, DeferredApprovalStore, WORKSPACE_ROOT, initDeferredApprovalsTable, initWorkspaceSchema, ParkedWriteFiles, performBoundWrite, sha256Hex, withApprovalGatedFiles, WorkspaceActorDirectory, type SqlExec, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 
 /** The owner's machine as the agent's plane mounts it. */
 const MACHINE = '/pc/studio';
@@ -107,7 +107,7 @@ export class ParkedWritesProbeDO extends DurableObject<Cloudflare.Env> {
 
     const asked = pattern(size, 2);
 
-    const files = withApprovalGatedFiles(plane, 'workspace', { userRoots: () => ['/pc'], locate: null, parksWrites: true }, {
+    const files = withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), userRoots: () => ['/pc'], locate: null, parksWrites: true }, {
       mode: () => 'strict', deferrals: queue.channel,
     });
 

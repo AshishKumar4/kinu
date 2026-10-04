@@ -29,6 +29,7 @@ import { TurnFileLedger } from '../vfs/file-ledger';
 import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
 import type { JsonValue } from '../utils/json';
+import { cloudPlanes, type PathPlanes } from '../vfs/resolve';
 
 const StringSchema = v.string();
 
@@ -62,6 +63,8 @@ export interface InlineExecutorDeps {
   vfs: VFS;
   /** Absent: {@link WORKSPACE_ROOT}, the root's. */
   home?: string;
+  /** Absent: the cloud's planes over `home`. */
+  planes?: PathPlanes;
   /** The owner's files surface; absent: `vfs`, the plane the tools reach. */
   files?: VFS;
   memory: Memory;
@@ -125,6 +128,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const currentFileDispatch = () => createFileDispatcher({
     vfs,
     home: deps.home ?? WORKSPACE_ROOT,
+    planes: deps.planes ?? cloudPlanes(deps.home ?? WORKSPACE_ROOT),
     ledger: currentLedger(),
     budget: currentBudget(),
     memory,
@@ -423,7 +427,7 @@ declare namespace workspace {
   function createTool(
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;
-  ${slate === undefined ? '' : `/** Slates in this workspace; read /skills/slates/SKILL.md first, which names the \`$\` members.
+  ${slate === undefined ? '' : `/** Slates in this workspace; read vfs://skills/slates/SKILL.md first, which names the \`$\` members.
    * \`await workspace.slates.board.addStroke(stroke)\` runs the board slate's \`addStroke\`. */
   const slates: { readonly [id: string]: { readonly [member: string]: (...args: unknown[]) => Promise<unknown> } };
 `}

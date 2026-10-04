@@ -12,7 +12,7 @@ import {
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT,
+  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
@@ -230,7 +230,7 @@ export class AgentDatabase {
         execRaw: (ddl) => { files.storage.sql.exec(ddl); },
         transactionSync: (write) => files.storage.transactionSync(write),
       },
-      workspaceIsMachine: false,
+      planes: cloudPlanes(this.workspace.home),
       memory: this.workspace.memory(),
       get executor() {
         const current = execution();
