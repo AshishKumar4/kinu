@@ -1,4 +1,5 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { direntType } from '../vfs/dirent';
 /** Nimbus executor adapter: maps a backend-supplied workspace box onto Kinu's ExecutorProvider contract. */
 
 import * as v from 'valibot';
@@ -781,11 +782,8 @@ export function nimbusSessionFiles(
     async readdir(path) {
       const absolute = at(path);
 
-      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => {
-        if (entry.type === 'symlink') return { name: entry.name, type: 'symlink' as const };
-
-        return { name: entry.name, type: entry.type === 'directory' || entry.isDir === true ? 'directory' as const : 'file' as const };
-      });
+      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute)))
+        .map((entry) => ({ name: entry.name, type: entry.isDir === true ? 'directory' : direntType(entry.type) }));
     },
     async readlink(path) {
       const absolute = at(path);

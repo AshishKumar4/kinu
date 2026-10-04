@@ -15,6 +15,7 @@ import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { JsonValue } from '../utils/json';
+import { direntType } from '../vfs/dirent';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
@@ -899,9 +900,9 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
         .map((entry) => ({ name: nameOf(entry), entry }))
         .filter(({ name }) => name.length > 0)
         .map(({ name, entry }) => {
-          const type = isDir(entry) ? 'directory' as const : 'file' as const;
+          const type = isDir(entry) ? 'directory' : direntType(entry.type);
 
-          return { name, type, stat: { size: entry.size ?? 0, mtimeMs: 0, type } };
+          return { name, type, ...((type === 'file' || type === 'directory') && { stat: { size: entry.size ?? 0, mtimeMs: 0, type } }) };
         });
     },
 
