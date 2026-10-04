@@ -8,12 +8,13 @@
   Authentication assumes a page accepted by the digest check is the named
   immutable page; this model does not prove SHA-256 collision resistance.
   Service-demanded reads, writable opens and unsynced mappings are outside
-  storage attachment. Publication keeps SnapshotChain's conditional bounds.
+  storage attachment.
 -/
-import Kinu.Storage.SnapshotChain
 import Init.Data.Nat.Log2
 
 namespace Kinu.Storage.BlockLayer
+
+def blockBytes : Nat := 16384
 
 /-- H counts opaque directories as directory records, not their lower children. -/
 inductive NamespaceRecord where
@@ -270,18 +271,18 @@ def byteAt (base : Nat → UInt8) (baseSize : Nat) (blobs : Nat → Nat → UInt
     (source : Option Source) (position : Nat) : UInt8 :=
   match source with
   | some .hole => 0
-  | some (.chunk id) => blobs id (position % SnapshotChain.blockBytes)
+  | some (.chunk id) => blobs id (position % blockBytes)
   | none => if position < baseSize then base position else 0
 
 def composedRead (tree : Index) (base : Nat → UInt8) (baseSize size : Nat)
     (blobs : Nat → Nat → UInt8) (offset length : Nat) : List UInt8 :=
   (List.range (min length (size - offset))).map fun n =>
-    byteAt base baseSize blobs (lookup ((offset + n) / SnapshotChain.blockBytes) tree) (offset + n)
+    byteAt base baseSize blobs (lookup ((offset + n) / blockBytes) tree) (offset + n)
 
 def specifiedRead (records : List Entry) (base : Nat → UInt8) (baseSize size : Nat)
     (blobs : Nat → Nat → UInt8) (offset length : Nat) : List UInt8 :=
   (List.range (min length (size - offset))).map fun n =>
-    byteAt base baseSize blobs (linearLookup ((offset + n) / SnapshotChain.blockBytes) records) (offset + n)
+    byteAt base baseSize blobs (linearLookup ((offset + n) / blockBytes) records) (offset + n)
 
 theorem composed_read_correct (tree : Index) (ordered : Ordered tree)
     (base : Nat → UInt8) (baseSize size : Nat) (blobs : Nat → Nat → UInt8) (offset length : Nat) :
@@ -349,15 +350,5 @@ theorem copyup_is_file_local (fileSize largest requested : Nat) (h : fileSize �
     copyupBytes fileSize requested ≤ fileSize ∧ copyupBytes fileSize requested ≤ largest := by
   have fileLocal := Nat.min_le_right requested fileSize
   exact ⟨fileLocal, Nat.le_trans fileLocal h⟩
-
-theorem publication_accounting_unchanged (f : SnapshotChain.FileDelta)
-    (h : SnapshotChain.travelsWhole f = false) :
-    SnapshotChain.filePublication f = f.changedChunks * SnapshotChain.blockBytes + f.recordBytes :=
-  SnapshotChain.chunked_file_publishes_blocks_and_record f h
-
-theorem c3_publication_stays_bounded (offset recordBytes wireBytes : Nat)
-    (recordBound : recordBytes ≤ 4096)
-    (wireBound : wireBytes ≤ (3 * SnapshotChain.tickUpload [SnapshotChain.c3File offset recordBytes]) / 2 + 65536) :
-    wireBytes < 196608 := SnapshotChain.c3_wire_bound offset recordBytes wireBytes recordBound wireBound
 
 end Kinu.Storage.BlockLayer

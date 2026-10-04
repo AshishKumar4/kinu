@@ -2,9 +2,8 @@
   Kinu.Storage.LossWindow — how much wall-clock time of writes a crash can
   lose. 0 sorry, 0 axioms.
 
-  `SnapshotChain.lean` counts the loss: after a completed checkpoint a crash
-  loses exactly the writes accepted since it. This file bounds the same loss in
-  milliseconds. A write survives a crash at `T` when some sync captured it
+  After a completed checkpoint a crash loses exactly the writes accepted since
+  it. This file bounds that loss in milliseconds. A write survives a crash at `T` when some sync captured it
   (`t ≤ capture`) and committed by `T`; the loss window at `T` is how far back
   a write can have been accepted and still be lost.
 
