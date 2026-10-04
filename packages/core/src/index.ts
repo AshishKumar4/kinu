@@ -543,11 +543,11 @@ export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from './tools/tool-schema';
 
 export {
-  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens, omitEmptyOptionalArgs,
+  describeMcpTool, toolSurfaceTokens, omitEmptyOptionalArgs,
   buildMcpToolSet, listMcpToolsLeniently,
-  McpToolSurfaceSchema,
+  McpToolSurfaceSchema, McpToolSurfaceCache, servedMcpDescriptors,
   type SerializableToolDescriptor, type RemoteMcpTool, type McpToolRefusal, type ListedMcpTools,
-  type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild,
+  type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild, type McpServedSurface,
 } from './tools/mcp-surface';
 
 export {
