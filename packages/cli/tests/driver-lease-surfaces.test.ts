@@ -186,6 +186,29 @@ describe('the interactive client and the driver lease', () => {
     expect(printed(result, 'answer')).toContain(`the interactive driver in process ${printed(result, 'otherPid')}`);
   });
 
+  // Release review, 2026-10-04: the cancel opened its one-shot client with noAutoEvolve, which writes the
+  // agent's learning setting, so cancelling any job turned learning off for good.
+  test("cancelling a job leaves the agent's learning setting alone; --no-auto-evolve still turns it off", async () => {
+    const result = await scenario(`
+      const { openWorkspaceMainActor } = await import('@kinu.run/core');
+      const { jobsCommand } = await import('./packages/cli/src/commands/control.ts');
+      const { createAgentClient } = await import('./packages/cli/src/client-factory.ts');
+      const { requireAgentTarget } = await import('./packages/cli/src/local-target.ts');
+      function learning() {
+        const db = new Database(dbPath);
+        try { return openWorkspaceMainActor(makeSql(db)).config.getLearning(); } finally { db.close(); }
+      }
+      const before = learning();
+      await jobsCommand('leasebot', 'cancel', 'bgjob-missing', { json: true });
+      const afterCancel = learning();
+      const client = await createAgentClient(requireAgentTarget('leasebot'), { noAutoEvolve: true });
+      await client.close();
+      console.log(JSON.stringify({ before, afterCancel, afterFlag: learning() }));
+    `);
+
+    expect(result).toEqual({ before: true, afterCancel: true, afterFlag: false });
+  });
+
   test('a foreground daemon tick reports a deferred pass instead of printing a tick', async () => {
     const result = await scenario(`
       const ownerPid = rivalHolds('interactive');
