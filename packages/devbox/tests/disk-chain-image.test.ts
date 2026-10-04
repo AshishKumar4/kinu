@@ -306,3 +306,29 @@ test('a lost-snapshot wake mounts its layers at once, not one store round trip a
     must('mv /usr/local/bin/devbox-squashfuse.real /usr/local/bin/devbox-squashfuse');
   }
 });
+
+test('a lost wake whose copy to disk would not fit stays lazy, and the workspace keeps taking writes and saves', async () => {
+  // 18 GB lost wake: the copy and s3fs's read cache of the archive filled the disk and reads failed with EIO.
+  loseTheDisk();
+  stored = null;
+  must(`head -c 50331648 /dev/urandom > ${WD}/db.bin`);
+  await commit('tick');
+  const expected = tree();
+  loseTheDisk();
+  // A disk with room for the 48 MiB workspace's writes, not for a copy of it.
+  must(`mount -t tmpfs -o size=40m devbox-runtime ${RT}`);
+
+  try {
+    await settle(chain.attach(false));
+    const lazily = tree();
+    must(`for _ in $(seq 1 100); do [ -e ${RT}/disk-hydrate.pid ] && ! kill -0 "$(cat ${RT}/disk-hydrate.pid)" 2>/dev/null && break; sleep 0.1; done`);
+    const wrote = sh(`echo after > ${WD}/after.txt`);
+    const saved = await commit('tick');
+
+    expect({ exact: lazily === expected, wrote: wrote.status === 0 ? 'ok' : wrote.stderr, saved: saved.kind })
+      .toEqual({ exact: true, wrote: 'ok', saved: 'committed' });
+  } finally {
+    loseTheDisk();
+    must(`umount ${RT}`);
+  }
+});

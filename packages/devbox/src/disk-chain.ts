@@ -28,6 +28,8 @@ const COMPACT_SHARE = 0.25;
 
 const COMPACT_LAYERS = 8;
 
+const COPY_HEADROOM = 1024 * 1024 * 1024;
+
 const RT = DEVBOX_RUNTIME_DIR;
 
 const INVENTORY = `${RT}/disk-inventory`;
@@ -408,7 +410,6 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     const base = at(layers.length - 1);
     const lowers = [...deltas.map(delta => `${delta}/tree`), base].map(shellPath).join(':');
 
-    // At once: each mount is a few store round trips (D68: 3.4 s in turn at 2 GB).
     const mounts = [...layers.map((key, index) => `{ mountpoint -q ${shellPath(at(index))} || { mkdir -p ${shellPath(at(index))} && `
       + `/usr/local/bin/devbox-squashfuse ${shellPath(mounted(ports.storeRoot(), key))} ${shellPath(at(index))} -o allow_other,ro,nonempty; }; } & pids="$pids $!"`),
     'for pid in $pids; do wait "$pid"; done'];
@@ -433,11 +434,16 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     ].join('\n'));
   });
 
-  const startHydration = (rev: number) => {
+  const startHydration = (rev: number, layers: readonly string[]) => {
     const recovered = `${INVENTORY}.recovered`;
 
+    // s3fs keeps each layer byte it reads on this disk.
+    const fits = `need=$(( $(tr '\\0' '\\n' < ${shellPath(recovered)} | awk -F '\\t' '{s+=$3} END {printf "%d", s}') `
+      + `+ $(stat -c %s ${layers.map(key => shellPath(mounted(ports.storeRoot(), key))).join(' ')} | awk '{s+=$1} END {printf "%d", s}') + ${String(COPY_HEADROOM)} )); `
+      + `[ "$need" -le "$(df -B1 --output=avail ${shellPath(RT)} | tail -1)" ] || { echo "the copy needs $need bytes free; the workspace stays lazy"; exit 0; }`;
+
     const script = `${inventoryCommand(LOWERS, ports.excludes(), recovered)} && cp ${shellPath(recovered)} ${shellPath(INVENTORY)} `
-      + `&& printf %s ${String(rev)} > ${shellPath(INVENTORY_REV)} && rm -rf ${shellPath(`${HYDRATE}.tmp`)} && mkdir -p ${shellPath(`${HYDRATE}.tmp`)} `
+      + `&& printf %s ${String(rev)} > ${shellPath(INVENTORY_REV)} && { ${fits}; } && rm -rf ${shellPath(`${HYDRATE}.tmp`)} && mkdir -p ${shellPath(`${HYDRATE}.tmp`)} `
       + `&& cp -a ${shellPath(LOWERS)}/. ${shellPath(`${HYDRATE}.tmp`)}/ && { ${blockCacheCommand(`${HYDRATE}.tmp`, recovered, rev, false)} || true; } `
       + `&& mv ${shellPath(`${HYDRATE}.tmp`)} ${shellPath(HYDRATE)} && touch ${shellPath(HYDRATED)}`;
 
@@ -470,7 +476,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
 
     if (state !== null && recovered !== null && baseline !== String(state.rev)) {
       if ((yield* run('checking the copy', `kill -0 "$(cat ${shellPath(HYDRATING)} 2>/dev/null)" 2>/dev/null && echo alive || true`)) !== 'alive') {
-        yield* startHydration(recovered.rev);
+        yield* startHydration(recovered.rev, recovered.layers);
       }
 
       return { kind: 'skipped', reason: 'the recovery is still taking its baseline', bytes: heldBytes(state), movedBytes: 0 } satisfies CheckpointOutcome;
@@ -508,7 +514,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     yield* run('recording the recovery', `mkdir -p ${shellPath(RT)} && printf %s ${shellPath(JSON.stringify({ rev: state.rev, layers }))} > ${shellPath(RECOVERED)} `
       + `&& rm -f ${shellPath(INVENTORY_REV)} ${shellPath(HYDRATED)}`);
     yield* mountLayers(layers);
-    yield* startHydration(state.rev);
+    yield* startHydration(state.rev, layers);
 
     return { kind: 'attached', detail: `rev ${String(state.rev)}, ${String(layers.length)} layers, lazy`, recoveredTo: state.committedAt };
   });
@@ -522,7 +528,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
 
     if (hydrated !== 'done') {
       yield* mountLayers(recovered.layers);
-      yield* startHydration(recovered.rev);
+      yield* startHydration(recovered.rev, recovered.layers);
 
       return 'remounted';
     }
