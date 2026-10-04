@@ -140,7 +140,7 @@ function listing(squashfs: Uint8Array | undefined, label: string): string {
   return listed.exitCode === 0 ? listed.stdout.toString().split('\n').filter((line) => line.includes('squashfs-root')).map((line) => line.replace(/^\S+ \S+ +/, '')).sort().join('\n') : listed.stderr.toString();
 }
 
-test('an archive many times the window streams in parts: the store holds exactly it, and the disk never held it whole', async () => {
+test('an archive many times the window streams in parts: the store holds exactly it, and the disk held three windows at most', async () => {
   const store = r2LikeStore(archive);
   const source = tree('large', 20, 32 * 1024 * 1024);
   const { stdout, stderr } = await stream(source, store.url);
@@ -150,7 +150,8 @@ test('an archive many times the window streams in parts: the store holds exactly
   Bun.spawnSync(['mksquashfs', source, direct, '-noappend', '-comp', 'zstd', '-no-progress']);
   const [code, size] = stdout.split(' ');
 
-  expect({ code, stderr, partsAtOnce: store.partsAtOnce(), held: store.mostOnDisk() < Number(size) / 2, tree: listing(landed, 'landed') })
+  // mksquashfs writes up to 7 GB/s here: between two paces it passes the window by tens of MiB, never by two windows.
+  expect({ code, stderr, partsAtOnce: store.partsAtOnce(), held: store.mostOnDisk() <= 3 * SMALL.windowBytes, tree: listing(landed, 'landed') })
     .toEqual({ code: '0', stderr: '', partsAtOnce: true, held: true, tree: listing(Bun.file(direct).size > 0 ? new Uint8Array(await Bun.file(direct).arrayBuffer()) : undefined, 'direct') });
   expect(Number(size)).toBe(landed?.byteLength ?? -1);
 });
