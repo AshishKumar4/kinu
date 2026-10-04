@@ -3,7 +3,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
-import { narrowToolSurface } from '@kinu.run/core';
+import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -841,7 +841,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         listBackgroundJobs: async () => [],
         ...agentSelfRest,
       })],
-    })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
+    })({ home: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
@@ -868,7 +868,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         ...agentSelfRest,
         armCompactNow: () => { arms++; },
       })],
-    })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
+    })({ home: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: 'return await agent.compactNow();',

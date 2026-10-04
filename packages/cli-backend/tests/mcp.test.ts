@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { jsonSchema, tool, type LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import { isMcpToolKey, narrowToolSurface, NO_TIMER_DEADLINE_MS, type JsonObject, type LLMProviderConfig } from '@kinu.run/core';
+import { isMcpToolKey, narrowToolSurface, NO_TIMER_DEADLINE_MS, WORKSPACE_ROOT, type JsonObject, type LLMProviderConfig } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -154,6 +154,7 @@ describe('connectMcpServers', () => {
 
     try {
       const run = toolExecute<{ code: string }, unknown>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
+        home: WORKSPACE_ROOT,
         native: {}, providers: [], craftedTools: () => [], external: () => external,
       }));
 

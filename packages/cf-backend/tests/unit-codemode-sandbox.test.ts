@@ -105,7 +105,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
   test("defines require, env and every crafted tool on the tools namespace", () => {
     const prelude = renderToolsPrelude(
       [{ name: "double", code: "async (n) => n * 2", description: "" }],
-      { workspace: "hardy-stone-a905df14" },
+      { home: WORKSPACE_ROOT, workspace: "hardy-stone-a905df14" },
     );
 
     expect(prelude).toContain(`await import("./${KINU_NODE_MODULE_NAME}")`);
@@ -122,7 +122,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
         { name: "broken", code: "const broken = async () => 1", description: "" },
         { name: "fine", code: "async () => 2", description: "" },
       ],
-      { workspace: "w" },
+      { home: WORKSPACE_ROOT, workspace: "w" },
     );
 
     expect(prelude).toContain('"broken": __kinu.defineCrafted("broken", () => { throw new Error("stored source does not parse:');
@@ -136,7 +136,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
     // compiled prelude, denying every tool; the async wrapper keeps failure at call time.
     const prelude = renderToolsPrelude(
       [{ name: "waiter", code: "await foo()", description: "" }],
-      { workspace: "w" },
+      { home: WORKSPACE_ROOT, workspace: "w" },
     );
 
     expect(prelude).toContain('"waiter": __kinu.defineCrafted("waiter", async () => (\nawait foo()\n), tools["waiter"])');

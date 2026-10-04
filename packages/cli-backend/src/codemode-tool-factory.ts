@@ -3,7 +3,7 @@
  * hosted sandbox's `kinu-node.js`, so a program's files and cwd are its workspace, never the machine.
  */
 
-import { KINU_NODE_MODULE_SOURCE, requireBuild, WORKSPACE_ROOT, type ToolSurfaceNarrowing } from '@kinu.run/core';
+import { KINU_NODE_MODULE_SOURCE, requireBuild, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type {
   CodemodeProvider,
   CodemodeBuilder,
@@ -127,8 +127,8 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
 
           const argValues: unknown[] = [
             workspace, toolBindings, sandboxConsole,
-            node.createRequire({ workspace, builtins: node.builtins, cwd: WORKSPACE_ROOT }),
-            node.createProcess(WORKSPACE_ROOT), node,
+            node.createRequire({ workspace, builtins: node.builtins, cwd: surface.home }),
+            node.createProcess(surface.home), node,
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 

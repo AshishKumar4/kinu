@@ -3,9 +3,10 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { actorHomeName } from '@kinu.run/core';
-import { scratchDir } from '@kinu.run/test-utils';
+import { actorHomeName, codemodeSurface, narrowToolSurface, type JsonValue } from '@kinu.run/core';
+import { scratchDir, toolExecute } from '@kinu.run/test-utils';
 import { cleanupFacetCwdScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
+import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { registerLocalActor } from '@kinu.run/core';
 
 interface LocalRoot {
@@ -113,5 +114,16 @@ describe('local actor file-plane identity', () => {
     const refused = await exec(child, command);
     expect(refused.stderr).toContain('NOT RUN: needs owner approval');
     expect(refused.stderr).toContain('git-force-push');
+  });
+
+  // Release review, 2026-10-04: eval's Node `process` and `fs` started in the root's home, so a child's relative
+  // paths missed the files its own shell wrote.
+  test("a joined child's eval starts in the child's own home", async () => {
+    const root = rootRuntime(scratchDir('facet-plane-eval-home'));
+    const child = await childRuntime(root.rt, root, 'writer');
+    expect((await exec(child, 'echo mine > note.txt')).exitCode).toBe(0);
+    const run = toolExecute<{ code: string }, { result: JsonValue }>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })(codemodeSurface(child, {})));
+    const read = await run({ code: 'return [process.cwd(), await require("fs/promises").readFile("note.txt", "utf8")];' });
+    expect(read.result).toEqual([home(child), 'mine\n']);
   });
 });
