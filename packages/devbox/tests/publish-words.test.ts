@@ -19,7 +19,6 @@ test('a publication the store refused fails with the publisher\'s own words', as
     deleteObjects: async () => undefined,
     mountStore: async () => undefined,
     excludes: () => [],
-    checkpointIntervalMs: () => 0,
     now: () => 1_000,
     log: () => undefined,
   };

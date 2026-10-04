@@ -3823,6 +3823,21 @@ detection is not built: it saves about 0.6 s a save at 10 GB, but loses its
 base snapshot at every wake (so the first save after one walks anyway) and its
 held snapshot pins rewritten blocks, which deepens C's ENOSPC at 10 to 18 GB.
 
+After D68 (2026-10-04). The fault soak is clean: 104 cycles plus a 32-cycle
+kill-mid-save rerun, 0 silent losses, 0 dead boxes (be2407fc8, 47b0a7a4b).
+A delta streams its tar to mksquashfs with no staged copy, chunks sharded by
+digest (eeab19c94): at 18 GB, 12 GB rewrites save in 375 to 401 s with at
+least 1.96 GB free (n=5; ENOSPC before). A lost wake mounts its layers at
+once (a417a4e2f): median/worst ms, all exact, n=5: 0.25 GB 3,242/3,940,
+2 GB 3,428/4,437, 10 GB 4,342/4,687; 18 GB 4,338/4,933 (n=2). s3fs keeps
+every layer byte it reads on the disk, so a lost wake copies to disk only
+when copy and layers fit (9cb262140); at 18 GB the workspace stays lazy
+instead of failing reads with EIO. Rejected for the remaining 2.5 to 3.5 s
+gate: s3fs read-ahead cut to 10 MiB (0.7 s faster, sequential reads 43-67
+down to 17-27 MiB/s); priming each layer's superblock and tables (no gain);
+the DO+R2 store. The gate's time is several 100 to 500 ms s3fs round trips
+per layer, not bytes, and a DO behind the gateway does not remove them.
+
 D69. An untimed command's kill and a supervised process's stop end it by
 one operation, and answer only once nothing it started is alive
 (2026-10-03). `END_TREE` (`src/processes.ts`) sends TERM to the command's

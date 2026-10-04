@@ -2861,7 +2861,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         await this.#routes().mount(STORE_MOUNT);
       },
       excludes: () => this.archiveExcludes,
-      checkpointIntervalMs: () => this.policy.checkpointIntervalMs,
       now: () => Date.now(),
       log: (message) => {
         console.log(`[devbox] ${message}`);
