@@ -771,13 +771,11 @@ export class ChatSession {
 
   private async runPump(): Promise<void> {
     try {
-      let item: QueueItem | undefined;
-
       for (;;) {
         // Before the item leaves the queue, so it still counts as in flight to a message sent meanwhile; and so the
         // turn's own measure is the newer.
         await this.revision;
-        item = this.queue.shift();
+        const item = this.queue.shift();
 
         if (item === undefined) break;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
@@ -816,8 +814,9 @@ export class ChatSession {
         let opened: OpenedTurn | null = null;
 
         try {
-          opened = await this.openTurn(item);
-          await this.runOpenedTurn(item, opened);
+          const opening = await this.openTurn(item);
+          opened = opening;
+          await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening));
         } catch (err) {
           diagnostics.failure(
             'turn.processing_failed',

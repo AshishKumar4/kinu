@@ -66,6 +66,7 @@ export function createSandboxedExecutor(): Executor {
         return executeInProcess(code, providerList);
       }
 
+      // Apart on purpose: a verifier check cannot read its receipt, nor a probe the owner's project.
       return executeInSubprocess(code);
     },
   };
@@ -172,6 +173,11 @@ function normalizeProviders(
   return [{ name: 'codemode', fns: providers }];
 }
 
+/** The one body every in-process CLI program runs as, `eval`'s and the executor's: `prelude`, then the code's value. */
+export function programBody(code: string, prelude = ''): string {
+  return `${prelude}\nreturn (\n${normalizeCode(code)}\n)()`;
+}
+
 /** In-process execution: tool-backed code, or JS when no subprocess runtime is on PATH. */
 async function executeInProcess(
   code: string, providers: ResolvedProvider[],
@@ -197,7 +203,7 @@ async function executeInProcess(
   const argValues = argNames.map(k => context[k]);
 
   try {
-    const fn = new Function(...argNames, `return (\n${normalizeCode(code)}\n)()`);
+    const fn = new Function(...argNames, programBody(code));
 
     const value: unknown = await fn(...argValues);
 

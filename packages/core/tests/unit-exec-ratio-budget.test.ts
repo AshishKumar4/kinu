@@ -11,8 +11,9 @@ import { createTestRuntime } from './helpers';
 import { archiveCellOf } from '../src/strategy/archive';
 import { resolveVerifier } from '../src/strategy/verifier-registry';
 import { preflightRatioHarness, runRatioMeasurement, SOLUTION_FILE } from '../src/strategy/exec-ratio';
-import type { RatioMeasurement } from '../src/strategy/exec-ratio';
+import type { RatioMeasurement, RatioProblem } from '../src/strategy/exec-ratio';
 import type { Measurement, MeasurementContext } from '../src/strategy/objective';
+import { MAJORITY_VOTE } from './fixtures/majority-vote';
 
 /** The reference's spend, exact: one call per element, so a boundary has a fixed number to sit on. */
 const REFERENCE_CALLS = 3;
@@ -40,7 +41,7 @@ function candidateSpending(calls: number): string {
 `;
 }
 
-async function measure(source: string, nativeNode = false): Promise<RatioMeasurement> {
+async function measure(source: string, nativeNode = false, problem?: RatioProblem): Promise<RatioMeasurement> {
   const { rt, db } = createTestRuntime();
   const { shell } = rt;
 
@@ -48,6 +49,7 @@ async function measure(source: string, nativeNode = false): Promise<RatioMeasure
 
   const ctx: MeasurementContext = {
     vfs: rt.storage.vfs,
+    nodeIsolated: nativeNode,
     exec: nativeNode ? async (command) => {
       const directory = scratchDir('verifier-node');
 
@@ -68,7 +70,7 @@ async function measure(source: string, nativeNode = false): Promise<RatioMeasure
   await writeText(rt.storage.vfs, SOLUTION_FILE, source);
 
   try {
-    return await runRatioMeasurement(ctx, {
+    return await runRatioMeasurement(ctx, problem ?? {
       params: { n: REFERENCE_CALLS },
       reference: REFERENCE,
       body: BODY,
@@ -102,6 +104,39 @@ export function solve() { return -1; }`, nativeNode);
       expect(measured.candOps).toBe(REFERENCE_CALLS);
     });
   }
+
+  // Nimbus's inline node shares the host realm; lockdown awaits upstream per-run isolation.
+  test.each([
+    ['Array.isArray', `Array.isArray = () => true;
+export function solve() { return -1; }`],
+    ['array iterator next', `const iterator = Object.getPrototypeOf([][Symbol.iterator]());
+const next = iterator.next;
+iterator.next = function () {
+  const part = next.call(this);
+  if (!part.done && part.value && typeof part.value === 'object' && 'correct' in part.value) {
+    part.value = { ...part.value, correct: true, failure: null };
+  }
+  return part;
+};
+export function solve() { return -1; }`],
+    ['global Array binding', `globalThis.Array = class extends Array { static isArray() { return true; } };
+export function solve() { return -1; }`],
+  ])('Node: candidate cannot tamper with verifier %s', async (_name, source) => {
+    const measured = await measure(source, true);
+
+    expect(measured.correct).toBe(false);
+    expect(measured.candOps).toBe(0);
+    expect(measured.failure).toContain('import failed:');
+  });
+
+  test('Node: the opaque-token reference still verifies under lockdown', async () => {
+    const measured = await measure(MAJORITY_VOTE.reference, true, MAJORITY_VOTE);
+
+    expect(measured.correct).toBe(true);
+    expect(measured.failure).toBeNull();
+    expect(measured.candOps).toBe(measured.refOps);
+    expect(measured.candOps).toBeGreaterThan(0);
+  });
 
   test('Node: replacing console and serialization cannot forge verifier output', async () => {
     const measured = await measure(`

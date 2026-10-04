@@ -95,6 +95,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       get fastLlm() { return origin.fastLlm; },
       executionRouter: router,
       shell,
+      nodeIsolated: origin.nodeIsolated,
       checkpoints: origin.checkpoints,
       setShellApprovalChannel: origin.setShellApprovalChannel,
       setTurnFileLedgerProvider: origin.setTurnFileLedgerProvider,

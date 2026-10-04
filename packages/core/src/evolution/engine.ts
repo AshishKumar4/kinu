@@ -10,6 +10,7 @@
  */
 
 import * as v from 'valibot';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { parseJsonValue } from '../utils/json';
 
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -154,6 +155,7 @@ export class EvolutionEngine {
   /** A head or node the workspace does not evolve records nothing, whatever the setting. */
   private readonly evolves: boolean;
   private recoveryPending = true;
+  private readonly learningScope = new AsyncLocalStorage<boolean>();
 
   constructor(
     rt: AgentRuntime, history: SessionHistory, config: Partial<EvolutionConfig> = {},
@@ -228,9 +230,13 @@ export class EvolutionEngine {
     (this.config.transaction ?? ((run: () => void) => { run(); }))(body);
   }
 
-  /** The agent's own learning setting, read live: switched off, the next turn records nothing. */
+  /** A turn and the async work it starts keep one gate; independent work reads the live setting. */
+  withTurnLearning<Result>(body: () => Result): Result {
+    return this.learningScope.run(this.config.enabled && this.agentConfig.getLearning(), body);
+  }
+
   get enabled(): boolean {
-    return this.config.enabled && this.agentConfig.getLearning();
+    return this.config.enabled && (this.learningScope.getStore() ?? this.agentConfig.getLearning());
   }
 
   get recordsTurns(): boolean {

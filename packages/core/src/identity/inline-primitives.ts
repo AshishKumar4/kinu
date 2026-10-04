@@ -4,10 +4,7 @@ import { createWorkspace as createWorkspaceFilesystem, workspaceGenerationStorag
 import type { WorkspaceBundle, WorkspaceOptions } from '../vfs/nimbus-workspace';
 import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
-import type { ExecuteResult, Executor, RawSqlExec, SqlExec, SqlExecutor, SqlValue, Storage } from '../types/primitives';
-import { decodeJsonValue } from '../utils/json';
-import { Effect } from 'effect';
-import { renderThrownChain, settle } from '../obs/index';
+import type { RawSqlExec, SqlExec, SqlExecutor, SqlValue, Storage } from '../types/primitives';
 import * as v from 'valibot';
 
 export interface AgentDatabase {
@@ -97,19 +94,3 @@ export function createInlineCraftStore(db: AgentDatabase): CraftStore {
   return new AgentUtilsCraftStore(wrapDatabase(db).sql);
 }
 
-export function createInlineExecutor(): Executor {
-  return {
-    languages: ['javascript'],
-    execute(code) {
-      return settle(Effect.tryPromise({
-        try: async (): Promise<ExecuteResult> => {
-          const fn = new Function(`return (async () => { ${code} })()`);
-          const result: unknown = await fn();
-
-          return { result: result === undefined ? '(no return value)' : decodeJsonValue({ value: result }) };
-        },
-        catch: (cause) => ({ cause }),
-      }).pipe(Effect.catch((failed) => Effect.succeed<ExecuteResult>({ result: undefined, error: renderThrownChain(failed) }))));
-    },
-  };
-}

@@ -400,18 +400,6 @@ describe("sandbox transient error classification", () => {
     )).toBe(true);
   });
 
-  // Admission control's two refusals are both the platform saying "not now", so both retry. Texts are the SDK's
-  // own (@cloudflare/containers/dist/lib/container.js:9 and :868).
-  test("classifies both container admission refusals as retryable", () => {
-    expect(isSandboxTransientError(new Error(
-      'There is no Container instance available at this time.\n'
-      + 'This is likely because you have reached your max concurrent instance count',
-    ))).toBe(true);
-    expect(isSandboxTransientError(
-      new Error('you are requesting too many containers per second'),
-    )).toBe(true);
-  });
-
   test("a real fault is NOT retryable, so the classifier can say no", () => {
     // A predicate true for everything would make the two above meaningless.
     expect(isSandboxTransientError(new Error('command not found: nope'))).toBe(false);

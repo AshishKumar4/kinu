@@ -83,6 +83,24 @@ describe('a struggling turn teaches one lesson about its tool', () => {
     expect(lessons()).toHaveLength(1);
   });
 
+  test('a detached turn tail keeps its own learning gate after the turn closes', async () => {
+    const { rt, lessons, learn, evolution } = engine({ update: null, text: LESSON });
+    const continueTail = Promise.withResolvers<void>();
+
+    const tail = evolution.withTurnLearning(async () => {
+      await continueTail.promise;
+      await learn(turn('tail', [REFUSED]));
+    });
+
+    rt.actor.config.setLearning(false);
+    await learn(turn('independent', [REFUSED]));
+    expect(lessons()).toEqual([]);
+    continueTail.resolve();
+    await tail;
+    expect(lessons()).toHaveLength(1);
+    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([{ turn_id: 'tail' }]);
+  });
+
   test('learning twice from one turn records, scores and asks once', async () => {
     const { lessons, prompts, learn } = engine({ update: null, text: LESSON });
 
