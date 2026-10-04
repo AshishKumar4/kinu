@@ -68,3 +68,33 @@ describe('lead doctrine follows actor authority and available delegation', () =>
     }
   });
 });
+
+// 2026-10-04: the prompt named files as "references" a person reads, never as paths the tools take, and named no real
+// path for any plane, so the agent gave its shell vfs:// paths it could not run.
+describe('the agent works in prefixed paths, and is told where each plane is', () => {
+  const local = PROMPT_MATRIX.find(({ name }) => name === 'cli-local-full-surface');
+
+  if (!local) throw new Error('the local prompt proof surface is missing');
+
+  test('the static block makes prefixes the tools\' paths and a person\'s links; the workspace block names the real roots', () => {
+    const { rt } = createTestRuntime();
+    const planes = { cwd: '/home/ana/acme', home: '/home/ana', devices: null, views: [], roots: [{ root: 'vfs', at: '/home/ana/.kinu/acme' }, { root: 'local', at: '/home/ana/acme' }] };
+    const prompt = buildSystemPromptSync({ ...rt, planes }, local.opts);
+
+    expect(prompt).toContain('The `file` tool and `workspace.*` take these as paths');
+    expect(prompt).toContain('a link they open');
+    expect(prompt).toContain('`local://` the folder');
+    expect(prompt).toContain('Here `vfs://` is `/home/ana/.kinu/acme` and `local://` is `/home/ana/acme`.');
+    expect(prompt.indexOf('Here `vfs://`')).toBeGreaterThan(prompt.indexOf('## Execution environments'));
+    expect(prompt).toContain('read-only at `vfs://agent`');
+  });
+
+  test('the cloud is told the same, with its own roots', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, full.opts);
+
+    expect(prompt).toContain('The `file` tool and `workspace.*` take these as paths');
+    expect(prompt).not.toContain('`local://` the folder');
+    expect(prompt).toContain('Here `vfs://` is `/` and `sandbox://` is `/sandbox`; a machine\'s `<name>://` is `/pc/<name>`.');
+  });
+});

@@ -6,7 +6,8 @@ import { TierIdSchema } from '../types/profile';
 import { renderIssues, type JsonPrimitive } from '../utils/json';
 import { SLATE_INLINE_HEIGHT } from './host-context';
 import { SLATE_READ_MODELS } from './read-models';
-import { workspacePath } from '../vfs/workspace-path';
+import { resolvePath } from '../vfs/resolve';
+import { SLATE_PLANES } from './bindings';
 
 const Name = v.pipe(v.string(), v.minLength(1));
 
@@ -14,8 +15,8 @@ const SourcePath = v.pipe(Name, v.check((path) => !path.startsWith('/') && !path
 
 const PathPrefix = v.pipe(
   Name,
-  v.check((path) => path.startsWith('/') && !path.includes('\0'), 'must name an absolute path'),
-  v.transform((path) => workspacePath(path, '/')),
+  v.check((path) => (path.startsWith('/') || path.startsWith('vfs://')) && !path.includes('\0'), 'must name an absolute path or vfs:// reference'),
+  v.transform((path) => resolvePath(path, SLATE_PLANES).absolute),
 );
 
 const Binding = v.variant('kind', [

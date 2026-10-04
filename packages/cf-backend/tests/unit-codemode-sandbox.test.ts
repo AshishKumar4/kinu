@@ -217,6 +217,24 @@ describe("createRequire — Node's fs and child_process over the workspace", () 
     expect(await require("fs/promises").readFile("saved.json", "utf8")).toBe('{"reason":"io","error":"a saved API error"}');
   });
 
+  // 2026-10-04: `fs` joined `vfs://notes/a.md` onto the working directory, so a prefixed path named no file.
+  test("a prefixed path reaches the workspace as written, for the host's resolver; a relative one joins the working directory", async () => {
+    const read: string[] = [];
+
+    const readFile = async (path: string) => {
+      read.push(path);
+
+      return "x";
+    };
+
+    const fs = shim.createRequire({ workspace: { readFile }, builtins: {}, cwd: WORKSPACE_ROOT })("fs/promises");
+
+    await fs.readFile("vfs://notes/a.md", "utf8");
+    await fs.readFile("local://src/b.ts", "utf8");
+    await fs.readFile("notes/c.md", "utf8");
+    expect(read).toEqual(["vfs://notes/a.md", "local://src/b.ts", `${WORKSPACE_ROOT}/notes/c.md`]);
+  });
+
   test("Node builtins resolve with or without the node: prefix; anything else names what exists", () => {
     expect(require("path").join("a", "b")).toBe("a/b");
     expect(require("node:path")).toBe(require("path"));

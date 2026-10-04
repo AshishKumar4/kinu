@@ -18,7 +18,7 @@ import type {
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
-import { isSteeredMessage, type AgentModelMenu, type JobOutputTail } from '@kinu.run/core';
+import { isSteeredMessage, type AgentModelMenu, type JobOutputTail, type PathPlanes } from '@kinu.run/core';
 import type { KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -289,6 +289,8 @@ export interface AgentClient {
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
   /** Per-message cap on inlined raw bytes. Cloud and local limits differ by 8x, so surfaces ask. */
   readonly inlineAttachmentLimitBytes: number;
+  /** Where a local workspace's `vfs://` and `local://` are on this machine; a cloud workspace's are not here. */
+  readonly planes: PathPlanes | null;
 
   /** Starts client-owned resources (local MCP servers). The daemon owns orphaned-job recovery. */
   connect(): Promise<void>;

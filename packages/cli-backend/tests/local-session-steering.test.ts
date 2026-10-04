@@ -6,6 +6,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { agentAffinityKey, initWorkspaceSchema } from '@kinu.run/core';
 import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
+import { resolve as resolvePath } from 'node:path';
 import { APICallError } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -2321,6 +2322,8 @@ describe('LocalAgentSession — a workspace bound to a directory', () => {
 
     expect(systems.length).toBeGreaterThanOrEqual(2);
     expect(new Set(systems).size).toBe(1);
-    expect(systems[0]).toContain('`local://` for this workspace');
+    expect(systems[0]).toContain('`local://` the folder');
+    // The real roots are the workspace's own, so they ride the byte-identical prompt too.
+    expect(systems[0]).toContain(`\`local://\` is \`${resolvePath(root)}\``);
   });
 });

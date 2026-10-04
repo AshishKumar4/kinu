@@ -21,6 +21,8 @@ export interface PathPlanes {
   readonly roots: readonly PlaneRoot[];
   /** Where `<device>://` lands, by the device's segment; null where no device is mounted. */
   readonly devices: string | null;
+  /** The own space's top-level names only the file tools serve, with no path on the machine: the CLI's views. */
+  readonly views: readonly string[];
 }
 
 export interface ResolvedPath {
@@ -42,6 +44,8 @@ export function cloudPlanes(home: string): PathPlanes {
     home,
     roots: [{ root: 'vfs', at: '/' }, { root: 'sandbox', at: EXECUTOR_MOUNTS.sandbox }],
     devices: EXECUTOR_MOUNTS.device,
+    // The workspace shell mounts every view.
+    views: [],
   };
 }
 
@@ -64,6 +68,29 @@ export function machinePath(path: string, at: Pick<PathPlanes, 'cwd' | 'home'>):
   if (path === '~' || path.startsWith('~/')) return workspacePath(`.${path.slice(1)}`, at.home);
 
   return workspacePath(path, at.cwd);
+}
+
+/**
+ * Why a shell refuses `word`, a reference to one of this workspace's planes, or null for any other word. The shell
+ * takes only its machine's paths, so the refusal gives the real one; a view has none, and only the file tools read it.
+ */
+export function shellReference(word: string, planes: PathPlanes): string | null {
+  const reference = REFERENCE.exec(word);
+  const root = planes.roots.find((candidate) => candidate.root === reference?.[1]);
+
+  if (reference === null || root === undefined) return null;
+
+  return settleSync(Effect.match(resolvedPath(word, planes), {
+    onFailure: (refused) => `${word} names no file: ${refused.message}`,
+    onSuccess: ({ absolute }) => {
+      const under = (name: string) => (root.at === '/' ? `/${name}` : `${root.at}/${name}`);
+      const view = root.root === 'vfs' ? planes.views.find((name) => absolute === under(name) || absolute.startsWith(`${under(name)}/`)) : undefined;
+
+      return view === undefined
+        ? `the shell takes this machine's paths: ${word} is ${absolute} here`
+        : `${word} is in the ${view} view, which the file tool and workspace.* read; the shell has no path for it`;
+    },
+  }));
 }
 
 /** The reference a person reads: the deepest root holding it. A machine path under none stays as it is. */

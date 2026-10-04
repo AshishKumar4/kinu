@@ -339,7 +339,8 @@ export function createCFRuntime(
     stored: async (name) => await sessionShell.cwd?.(name) ?? null,
   });
 
-  const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession }, approvalPolicy);
+  const planes = cloudPlanes(home);
+  const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession, planes }, approvalPolicy);
 
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
@@ -379,8 +380,6 @@ export function createCFRuntime(
 
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
   const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
-
-  const planes = cloudPlanes(home);
 
   const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
     planes, userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,

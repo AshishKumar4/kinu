@@ -156,6 +156,23 @@ describe('resolvePromptAttachments', () => {
     ]);
   });
 
+  // 2026-10-04: `@vfs://…` and `@local://…` named nothing, since the CLI resolved every token against its own cwd.
+  test('a reference to the workspace\'s own space or folder attaches the file it names; another plane stays prose', async () => {
+    const space = makeDir();
+    const folder = makeDir();
+    mkdirSync(join(space, 'slates', 'board'), { recursive: true });
+    writeFileSync(join(space, 'slates', 'board', 'shot.png'), PNG_BYTES);
+    writeFileSync(join(folder, 'notes.txt'), 'in the folder');
+    const planes = { cwd: folder, home: folder, devices: null, views: [], roots: [{ root: 'vfs', at: space }, { root: 'local', at: folder }] };
+
+    const result = await resolvePromptAttachments('see @vfs://slates/board/shot.png and @local://notes.txt not @sandbox://x', { limitBytes: CAP, cwd: folder, planes });
+
+    expect(result.attached.map((a) => a.path)).toEqual([join(space, 'slates', 'board', 'shot.png'), join(folder, 'notes.txt')]);
+    expect(result.files).toHaveLength(1);
+    expect(result.text).toBe('see vfs://slates/board/shot.png and local://notes.txt not @sandbox://x');
+    expect(result.errors).toEqual([]);
+  });
+
   test('nonexistent paths and directories are ignored', async () => {
     const dir = makeDir();
     const result = await resolvePromptAttachments(`see @${join(dir, 'missing.png')} and @${dir}`, { limitBytes: CAP, cwd: dir });

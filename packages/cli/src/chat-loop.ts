@@ -160,7 +160,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       return;
     }
 
-    const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
+    const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
 
     for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
     const payload = resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text;
@@ -222,7 +222,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   };
 
   const runTurn = async (input: string, mode?: WorkMode) => {
-    const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
+    const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
 
     for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
 

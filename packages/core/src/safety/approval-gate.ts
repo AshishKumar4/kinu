@@ -439,6 +439,11 @@ const EXPANDING: ReadonlySet<string> = new Set(['$', '`', '*', '?', '[']);
 
 const STEP_BREAKS: ReadonlySet<string> = new Set([';', '\n', '(', ')']);
 
+/** Every word the shell would take as written, unexpanded. */
+export function literalWords(command: string): string[] {
+  return shellSteps(command).flatMap((step) => step.words.filter((word) => word !== null));
+}
+
 /** A subshell's `cd` counts as the session's, which only asks more. */
 function shellSteps(command: string): ShellStep[] {
   const steps: ShellStep[] = [];

@@ -123,6 +123,12 @@ test('a path-scoped workspace binding offers only file members, on an absolute p
   }
 });
 
+// 2026-10-04: a slate named its own space's file by its reference and was refused as a relative path.
+test('a path-scoped workspace binding takes a reference to the own space, forwarded as the path it names', () => {
+  expect(route('FILES', 'readFile', ['vfs://home/main/notes/a.md'])).toMatchObject({ args: ['/home/main/notes/a.md'] });
+  expect(() => route('FILES', 'readFile', ['local://notes/a.md'])).toThrow(expect.objectContaining({ code: 'denied' }));
+});
+
 describe('a granted path is judged where it lands in the workspace namespace', () => {
   async function landsWithin(prefixes: readonly string[]) {
     const granted = parseSlateProject({ main: 'server.js', slate: { bindings: {

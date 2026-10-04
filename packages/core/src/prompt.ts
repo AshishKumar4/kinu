@@ -27,6 +27,7 @@ import {
   CODE_EXECUTION_SECTION,
   DELEGATION_SECTION,
   EXECUTORS_SECTION,
+  PLANES_SECTION,
   GENERIC_EXECUTOR_LINE,
   DEVICE_EXECUTOR_LINE,
   OPERATING_GUIDANCE,
@@ -198,7 +199,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, pl
   return render(EXECUTORS_SECTION, {
     executorLines: lines.join('\n'),
     workspaceRoot: WORKSPACE_ROOT,
-    workspaceReference: planes.roots.some((root) => root.root === 'local') ? 'local' : 'vfs',
+    hasFolder: planes.roots.some((root) => root.root === 'local'),
     hasDevices: devices.length > 0,
     hasSandbox: devices.some((exec) => exec.name === 'sandbox'),
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
@@ -211,6 +212,15 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, pl
 
 function hasTool(tools: readonly BuiltinToolName[], name: BuiltinToolName): boolean {
   return tools.includes(name);
+}
+
+/** `vfs://` is `/x` and `local://` is `/y`: each fixed root, then where a device's root lands. */
+function renderPlanesSection(planes: PathPlanes, render: RenderSection): string {
+  const roots = planes.roots.map((root) => `\`${root.root}://\` is \`${root.at}\``);
+  const fixed = roots.length < 2 ? roots.join('') : `${roots.slice(0, -1).join(', ')} and ${roots.at(-1) ?? ''}`;
+  const devices = planes.devices === null ? '' : `; a machine's \`<name>://\` is \`${planes.devices}/<name>\``;
+
+  return render(PLANES_SECTION, { planes: `${fixed}${devices}` });
 }
 
 function renderAgentStateSection(surface: PromptSurface, render: RenderSection): string {
@@ -321,6 +331,7 @@ export function buildSystemPromptSync(
       render(LEAD_DELIVERY, {}),
       render(LEAD_DIRECT_EDIT, {}),
     ] : []),
+    renderPlanesSection(rt.planes, render),
     readSoulForPrompt(opts.soulOverride),
     // System placement carries only owner-approved (by digest) and built-in instructions; the rest ride the
     // unapproved-instructions block (prompting/volatile-context.ts).

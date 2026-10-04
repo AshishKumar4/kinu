@@ -384,7 +384,25 @@ function buildCLIRuntime(
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
   const cwd = place?.cwd ?? null;
   const space = place?.space ?? null;
-  const { planes, home: ownHome } = runtimePlanes(cwd, space, config.facet);
+  const stores = createAgentStores(() => sql, () => actor, (write) => writeTransaction(db, write), () => filesForActor(actor));
+  let childContext: ChildContextResolver | null = null;
+
+  const views: VfsMount[] = [
+    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
+    skillsMount((): VFS => agentVfs),
+    ...(space === null ? [] : [agentViewMount(agentStateVfs, 'scaffold')]),
+    // `/context`: this actor's own working history, keyed on its own id.
+    contextMount({
+      actorId: actor.actorId,
+      own: ownContextTree(actor, stores),
+      children: {
+        list: () => childContext?.list() ?? [],
+        tree: (storageKey, author) => childContext?.tree(storageKey, author) ?? null,
+      },
+    }),
+  ];
+
+  const { planes, home: ownHome } = runtimePlanes(cwd, space, config.facet, views);
 
   const memoryStore = new MemoryStore(agentStateVfs, sql);
   memoryStore.ensureSchema();
@@ -430,7 +448,7 @@ function buildCLIRuntime(
       cwd,
     ),
     // The host shell serves no mount table: `/pc` there is the machine's own path. Its files are the user's anywhere.
-    { filesOwner, shellSession: createShellSession({ home: cwd, userRoots: () => [] }) },
+    { filesOwner, shellSession: createShellSession({ home: cwd, userRoots: () => [] }), planes },
     approvalPolicy,
   );
 
@@ -438,6 +456,7 @@ function buildCLIRuntime(
     ? facetShell(config.facet)
     : withApprovalGatedShell(workspace.shell, {
       filesOwner,
+      planes,
       shellSession: createShellSession({
         home: WORKSPACE_ROOT, userRoots: () => agentVfs.userRoots(), stored: async (name) => await workspace.shell.cwd?.(name) ?? null,
       }),
@@ -467,24 +486,6 @@ function buildCLIRuntime(
 
     return { vfs: plane.vfs, artifactDirectory: agentArtifactDirectory(home.home) };
   };
-
-  const stores = createAgentStores(() => sql, () => actor, (write) => writeTransaction(db, write), () => filesForActor(actor));
-  let childContext: ChildContextResolver | null = null;
-
-  const views: VfsMount[] = [
-    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
-    skillsMount((): VFS => agentVfs),
-    ...(space === null ? [] : [agentViewMount(agentStateVfs, 'scaffold')]),
-    // `/context`: this actor's own working history, keyed on its own id.
-    contextMount({
-      actorId: actor.actorId,
-      own: ownContextTree(actor, stores),
-      children: {
-        list: () => childContext?.list() ?? [],
-        tree: (storageKey, author) => childContext?.tree(storageKey, author) ?? null,
-      },
-    }),
-  ];
 
   const { files: agentVfs, reach } = runtimeFiles({ cwd, space, state: agentStateVfs, views, checkpoints, planes });
 
@@ -617,16 +618,21 @@ export function cleanupFacetScratch(space: string, facet: string): void {
 }
 
 /** Where paths land, and the runtime's own home. */
-function runtimePlanes(cwd: string | null, space: string | null, facet: string | undefined) {
+function runtimePlanes(cwd: string | null, space: string | null, facet: string | undefined, views: readonly VfsMount[]) {
   if (cwd === null || space === null) {
-    const planes: PathPlanes = { cwd: WORKSPACE_ROOT, home: WORKSPACE_ROOT, devices: null, roots: [{ root: 'vfs', at: '/' }] };
+    // The in-SQLite shell mounts every view.
+    const planes: PathPlanes = { cwd: WORKSPACE_ROOT, home: WORKSPACE_ROOT, devices: null, roots: [{ root: 'vfs', at: '/' }], views: [] };
 
     return { home: WORKSPACE_ROOT, planes };
   }
 
   const home = join(space, agentHome(facet ?? MAIN_AGENT));
+
   // The folder is `local://`; a hire's `~` is its own home, the workspace's agent's the user's.
-  const planes: PathPlanes = { cwd, home: facet === undefined ? homedir() : home, devices: null, roots: [{ root: 'vfs', at: space }, { root: 'local', at: cwd }] };
+  const planes: PathPlanes = {
+    cwd, home: facet === undefined ? homedir() : home, devices: null,
+    roots: [{ root: 'vfs', at: space }, { root: 'local', at: cwd }], views: views.map((view) => view.name),
+  };
 
   return { home, planes };
 }

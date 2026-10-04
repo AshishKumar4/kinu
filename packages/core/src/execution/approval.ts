@@ -3,7 +3,7 @@ import { exists as nimbusExists, type Awaitable, type VFS } from '@nimbus-sh/cor
  *  and where the agent's tools reach a file. */
 
 import {
-  approveFileAccess, commandFilesOwner, gateExec, onUserRoots, reviewProgram, reviewShellCommand,
+  approveFileAccess, commandFilesOwner, gateExec, literalWords, onUserRoots, reviewProgram, reviewShellCommand,
   STRICT_NO_CHANNEL_POLICY, type ApprovalResult, type FileAccess, type GatedExecutor, type ShellApprovalPolicy, type ShellCwd,
 } from '../safety/approval-gate';
 import { asBytes, currentBytes } from '../safety/bound-write';
@@ -13,12 +13,15 @@ import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types
 import type { CheckpointFiles, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { busyShell, callJob, shellExecOptions } from './shell-session';
 import { requireBuild } from './work-mode';
-import { resolvedPath, type PathPlanes } from '../vfs/resolve';
-import { refusalOf, type KinuError } from '../obs/error';
+import { resolvedPath, shellReference, type PathPlanes } from '../vfs/resolve';
+import { KinuError, refusalOf } from '../obs/error';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 
-export type ShellReach = Pick<GatedExecutor, 'filesOwner' | 'shellSession'>;
+export type ShellReach = Pick<GatedExecutor, 'filesOwner' | 'shellSession'> & {
+  /** This workspace's planes: a `root://` word is refused with its real path. Absent, none is. */
+  readonly planes?: PathPlanes;
+};
 
 /** A refusal reads as a command that did not run: exit 1, message on stderr, its code in `refusal`. */
 export function withApprovalGatedShell(
@@ -45,6 +48,15 @@ export function withApprovalGatedShell(
   );
 
   const run = async (command: string, options: ShellExecOptions): Promise<ShellExecResult> => {
+    const planes = reach.planes;
+    const misnamed = planes === undefined ? null : literalWords(command).map((word) => shellReference(word, planes)).find((why) => why !== null);
+
+    if (misnamed !== undefined && misnamed !== null) {
+      const refused = new KinuError('bad_input', `NOT RUN: ${misnamed}`);
+
+      return { stdout: '', stderr: refused.message, exitCode: 1, refusal: refusalOf(refused) };
+    }
+
     let result: ShellExecResult | undefined;
 
     try {
