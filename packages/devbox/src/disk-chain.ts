@@ -441,8 +441,10 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
       + `+ $(stat -c %s ${layers.map(key => shellPath(mounted(ports.storeRoot(), key))).join(' ')} | awk '{s+=$1} END {printf "%d", s}') + ${String(COPY_HEADROOM)} )); `
       + `[ "$need" -le "$(df -B1 --output=avail ${shellPath(RT)} | tail -1)" ] || { echo "the copy needs $need bytes free; the workspace stays lazy"; exit 0; }`;
 
-    const script = `${inventoryCommand(LOWERS, ports.excludes(), recovered)} && cp ${shellPath(recovered)} ${shellPath(INVENTORY)} `
-      + `&& printf %s ${String(rev)} > ${shellPath(INVENTORY_REV)} && { ${fits}; } && rm -rf ${shellPath(`${HYDRATE}.tmp`)} && mkdir -p ${shellPath(`${HYDRATE}.tmp`)} `
+    // Once per recovery.
+    const script = `${inventoryCommand(LOWERS, ports.excludes(), recovered)} `
+      + `&& { [ -e ${shellPath(INVENTORY_REV)} ] || { cp ${shellPath(recovered)} ${shellPath(INVENTORY)} && printf %s ${String(rev)} > ${shellPath(INVENTORY_REV)}; }; } `
+      + `&& { ${fits}; } && rm -rf ${shellPath(`${HYDRATE}.tmp`)} && mkdir -p ${shellPath(`${HYDRATE}.tmp`)} `
       + `&& cp -a ${shellPath(LOWERS)}/. ${shellPath(`${HYDRATE}.tmp`)}/ && { ${blockCacheCommand(`${HYDRATE}.tmp`, recovered, rev, false)} || true; } `
       + `&& mv ${shellPath(`${HYDRATE}.tmp`)} ${shellPath(HYDRATE)} && touch ${shellPath(HYDRATED)}`;
 
