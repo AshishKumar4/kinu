@@ -194,9 +194,11 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     sendIfOpen(connection, transcriptFrame(history));
   }
 
+  /** A socket redialled under the same id is a new joiner: what the closed one was replayed is not its own. */
   onClose(connection: Pick<ChatSocket, 'id'>): void {
     this.pendingResume.delete(connection.id);
     this.parked.delete(connection.id);
+    this.live?.joined.delete(connection.id);
   }
 
   /** Told proactively on connect and again on the tab's own request; the client acknowledges once. False when no
