@@ -213,7 +213,11 @@ export { OutputSinkSchema, ShellExecOptionsSchema, VfsRevisionSchema } from './t
 export { REAL_CLOCK, waitOn, every, type Clock } from './types/clock';
 
 export {
-  cloudPlanes, formatPath, machinePath, resolvePath, RESERVED_ROOTS, type PathPlanes, type PlaneRoot, type ResolvedPath,
+  cloudFileLinks, filesFocusOf, linkFileReferences, localFileLinks, type FileLinks, type FilesFocus,
+} from './read-models/file-links';
+
+export {
+  cloudPlanes, findPlaneReferences, formatPath, machinePath, referencedPath, resolvePath, RESERVED_ROOTS, type PathPlanes, type PlaneRoot, type ResolvedPath,
 } from './vfs/resolve';
 
 export type * from './types/agent-runtime';

@@ -18,9 +18,10 @@ import type {
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
-import { isSteeredMessage, type AgentModelMenu, type JobOutputTail, type PathPlanes } from '@kinu.run/core';
+import { isSteeredMessage, type AgentModelMenu, type FileLinks, type JobOutputTail, type PathPlanes } from '@kinu.run/core';
 import type { KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+
 
 export const STEP_RESTART_NOTICE = '\n\nThe agent restarted; this step continues from the start below.\n\n';
 
@@ -291,6 +292,8 @@ export interface AgentClient {
   readonly inlineAttachmentLimitBytes: number;
   /** Where a local workspace's `vfs://` and `local://` are on this machine; a cloud workspace's are not here. */
   readonly planes: PathPlanes | null;
+  /** Where a file the agent names opens. */
+  readonly fileLinks: FileLinks;
 
   /** Starts client-owned resources (local MCP servers). The daemon owns orphaned-job recovery. */
   connect(): Promise<void>;

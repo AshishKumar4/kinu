@@ -56,6 +56,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     cliSession: createCliSession('test', { noTranscript: true }),
     inlineAttachmentLimitBytes: 1024,
     planes: null,
+    fileLinks: { roots: [], href: () => null },
     consents: null,
     checkpoints: null,
     plans: null,

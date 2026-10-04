@@ -2109,7 +2109,7 @@ function ChatScene({
           },
         }}
       >
-        <MessageList messages={messages} toolDetailsExpanded={toolDetailsExpanded} />
+        <MessageList messages={messages} toolDetailsExpanded={toolDetailsExpanded} fileLinks={client.fileLinks} />
         <PhaseLine label={phaseLineLabel(isProcessing, turnPhase, nextTier, commandPhase)} meter={turnMeterRef} />
       </scrollbox>
 
