@@ -15,14 +15,9 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 
-import {
-  initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, recordedTurnVerdict,
-  takePickOutcome, recordOutcomeLabels, listOutcomeLabels, goldLabels,
-  recordEnsembleLabels, ensembleLabels, recordLesson, listLessons, getLesson,
-  corroborateLessonsForTurn,
-} from '../src/evolution/outcomes';
+import { initLessonTables, recordLesson, listLessons, getLesson, corroborateLessonsForTurn } from '../src/evolution/lessons';
+import { initTurnRatingTables, listTurnRatings, ratingOf, recordTurnRating } from '../src/evolution/ratings';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
-import { initReplayTables, runReplayEval, listReplayEvals } from '../src/evolution/replay';
 import { initRefinementTables, createRefinementStore } from '../src/evolution/refinement';
 import {
   initGepaTables, startGepaRun, persistGepaCandidate, listGepaRuns, loadGepaCandidates,
@@ -155,37 +150,23 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
   };
 }
 
-describe('two actors, one database: turn_outcomes', () => {
-  test('both actors grade the same turn id, and each reads back its own verdict', () => {
+describe('two actors, one database: turn_ratings', () => {
+  test('both actors rate the same turn id, and each reads back its own rating', () => {
     const w = world();
-    initTurnOutcomeTables(w.execRaw);
+    initTurnRatingTables(w.execRaw);
 
-    recordTurnOutcome(w.sql, w.a, {
-      turnId: 'turn-1', outcome: 'accepted', confidence: 1, source: 'explicit',
-      userMessage: 'ask', assistantResponse: 'from-a', now: 10,
+    recordTurnRating(w.sql, w.a, {
+      turnId: 'turn-1', score: 5, corrected: 0, wrong: null, source: 'thumbs', request: 'ask', answer: 'from-a', now: 10,
     });
-    recordTurnOutcome(w.sql, w.b, {
-      turnId: 'turn-1', outcome: 'frustrated', confidence: 1, source: 'explicit',
-      userMessage: 'ask', assistantResponse: 'from-b', now: 10,
+    recordTurnRating(w.sql, w.b, {
+      turnId: 'turn-1', score: 1, corrected: 1, wrong: null, source: 'thumbs', request: 'ask', answer: 'from-b', now: 10,
     });
 
-    expect(w.count('turn_outcomes')).toBe(2);
-    expect(recordedTurnVerdict(w.sql, w.a, 'turn-1')?.outcome).toBe('accepted');
-    expect(recordedTurnVerdict(w.sql, w.b, 'turn-1')?.outcome).toBe('frustrated');
-    expect(listTurnOutcomes(w.sql, w.a).map((r) => r.assistantResponse)).toEqual(['from-a']);
-    expect(listTurnOutcomes(w.sql, w.b).map((r) => r.assistantResponse)).toEqual(['from-b']);
-    w.close();
-  });
-
-  test('a take pick recorded by one actor is not the other actor\'s pick', () => {
-    const w = world();
-    initTurnOutcomeTables(w.execRaw);
-    recordTurnOutcome(w.sql, w.a, {
-      turnId: 'turn-1', outcome: 'corrected', confidence: 1, source: 'take_pick',
-      userMessage: 'ask', assistantResponse: 'a', now: 5,
-    });
-    expect(takePickOutcome(w.sql, w.a, 'turn-1')).toBe('corrected');
-    expect(takePickOutcome(w.sql, w.b, 'turn-1')).toBeNull();
+    expect(w.count('turn_ratings')).toBe(2);
+    expect(ratingOf(w.sql, w.a, 'turn-1')?.score).toBe(5);
+    expect(ratingOf(w.sql, w.b, 'turn-1')?.score).toBe(1);
+    expect(listTurnRatings(w.sql, w.a).map((r) => r.answer)).toEqual(['from-a']);
+    expect(listTurnRatings(w.sql, w.b).map((r) => r.answer)).toEqual(['from-b']);
     w.close();
   });
 });
@@ -193,7 +174,7 @@ describe('two actors, one database: turn_outcomes', () => {
 describe('two actors, one database: lessons', () => {
   test('the same KEYED lesson id is a row per actor, and corroboration stops at the owner', () => {
     const w = world();
-    initTurnOutcomeTables(w.execRaw);
+    initLessonTables(w.execRaw);
 
     // `key` makes the row id deterministic, so both actors collide.
     const idA = recordLesson(w.sql, w.a, {
@@ -218,30 +199,10 @@ describe('two actors, one database: lessons', () => {
   });
 });
 
-describe('two actors, one database: outcome_labels and outcome_ensemble_labels', () => {
-  test('both actors label the same outcome id and neither sees the other\'s verdict', () => {
-    const w = world();
-    initTurnOutcomeTables(w.execRaw);
-
-    recordOutcomeLabels(w.sql, w.a, { labeler: 'ana', labels: [{ outcomeId: 'outc-1', label: 'accepted' }] });
-    recordOutcomeLabels(w.sql, w.b, { labeler: 'ben', labels: [{ outcomeId: 'outc-1', label: 'frustrated' }] });
-    expect(w.count('outcome_labels')).toBe(2);
-    expect(listOutcomeLabels(w.sql, w.a).map((r) => r.labeler)).toEqual(['ana']);
-    expect(goldLabels(w.sql, w.b).get('outc-1')?.label).toBe('frustrated');
-
-    recordEnsembleLabels(w.sql, w.a, { model: 'm/1', labels: [{ outcomeId: 'outc-1', label: 'accepted' }] });
-    recordEnsembleLabels(w.sql, w.b, { model: 'm/1', labels: [{ outcomeId: 'outc-1', label: 'corrected' }] });
-    expect(w.count('outcome_ensemble_labels')).toBe(2);
-    expect(ensembleLabels(w.sql, w.a).map((r) => r.label)).toEqual(['accepted']);
-    expect(ensembleLabels(w.sql, w.b).map((r) => r.label)).toEqual(['corrected']);
-    w.close();
-  });
-});
-
 describe('two actors, one database: pattern_extractions', () => {
   test('one effect key holds a different held answer for each actor', () => {
     const w = world();
-    initTurnOutcomeTables(w.execRaw);
+    initLessonTables(w.execRaw);
 
     // The store lives in the engine; the row identity is what is scoped.
     for (const [actor, answer] of [[w.a, 'from-a'], [w.b, 'from-b']] as const) {
@@ -299,33 +260,6 @@ describe('two actors, one database: effect_tombstones', () => {
     expect(effectAlreadyDone(w.sql, w.b, 'turn_review', 'row-1')).toBe(false);
     recordEffectDone(w.sql, w.b, { scope: 'turn_review', key: 'row-1' });
     expect(w.count('effect_tombstones')).toBe(2);
-    w.close();
-  });
-});
-
-describe('two actors, one database: replay_evals', () => {
-  test('each actor samples its own ledger and reads back only its own curve', async () => {
-    const w = world();
-    initTurnOutcomeTables(w.execRaw);
-    initReplayTables(w.execRaw);
-
-    for (const [actor, response] of [[w.a, 'a-answer'], [w.b, 'b-answer']] as const) {
-      recordTurnOutcome(w.sql, actor, {
-        turnId: 'turn-1', outcome: 'accepted', confidence: 1, source: 'explicit',
-        userMessage: 'ask', assistantResponse: response, now: 1,
-      });
-    }
-
-    const summary = await runReplayEval({
-      sql: w.sql, actor: w.a,
-      judge: createScriptedLLM(['{"score":1,"note":"ok"}']),
-      runTask: async () => 'fresh',
-      sampleSize: 1, now: 2,
-    });
-
-    expect(summary?.sampleSize).toBe(1);
-    expect(listReplayEvals(w.sql, w.a)).toHaveLength(1);
-    expect(listReplayEvals(w.sql, w.b)).toHaveLength(0);
     w.close();
   });
 });
@@ -651,7 +585,7 @@ describe('two actors, one database: prompt_section_versions', () => {
 describe('two actors, one database: alternate_takes and search_nodes', () => {
   test('one branch settlement key records a take set for each actor', () => {
     const w = world();
-    initTurnOutcomeTables(w.execRaw);
+    initTurnRatingTables(w.execRaw);
     initAlternateTakesTable(w.execRaw);
 
     const input = {
@@ -949,7 +883,8 @@ describe('two actors, one store: the Diffs reviews', () => {
 describe('a handle whose validation throws is refused before the statement runs', () => {
   test('every bound store refuses, and the table is unchanged', () => {
     const w = world();
-    initTurnOutcomeTables(w.execRaw);
+    initLessonTables(w.execRaw);
+    initTurnRatingTables(w.execRaw);
     initCompletedTurnTable(w.execRaw);
     initEffectTombstoneTable(w.execRaw);
     initToolEffectClaimTable(w.execRaw);
@@ -974,18 +909,11 @@ describe('a handle whose validation throws is refused before the statement runs'
 
     // Each attempt's contract is the write it tries; the loop asserts only that it throws.
     const attempts: ReadonlyArray<readonly [string, () => void]> = [
-      ['turn_outcomes', () => recordTurnOutcome(w.sql, w.revocable, {
-        turnId: 't', outcome: 'accepted', confidence: 1, source: 'explicit',
-        userMessage: 'u', assistantResponse: 'a',
+      ['turn_ratings', () => recordTurnRating(w.sql, w.revocable, {
+        turnId: 't', score: 5, corrected: 0, wrong: null, source: 'thumbs', request: 'u', answer: 'a',
       })],
       ['lessons', () => recordLesson(w.sql, w.revocable, {
         turnIds: [], text: 'x', source: 'import', status: 'provisional',
-      })],
-      ['outcome_labels', () => recordOutcomeLabels(w.sql, w.revocable, {
-        labeler: 'x', labels: [{ outcomeId: 'o', label: 'accepted' }],
-      })],
-      ['outcome_ensemble_labels', () => recordEnsembleLabels(w.sql, w.revocable, {
-        model: 'm', labels: [{ outcomeId: 'o', label: 'accepted' }],
       })],
       ['completed_turns', () => window.append({
         userMessage: 'u', assistantResponse: 'a', toolCalls: [], steps: 1,

@@ -18,6 +18,7 @@ export default defineConfig({
     name: 'evals',
     root: fileURLToPath(new URL('..', import.meta.url)),
     include: ['evals/tasks/**/*.eval.ts'],
+    outputFile: { json: `${process.env.BENCH_ARTIFACTS ?? 'bench-artifacts/evals'}/results.json` },
     environment: 'node',
     // Bun already gives an external module its own exports, a CommonJS one included, and vitest's default-export
     // interop misreads them there: a Bun module namespace answers `'__esModule' in ns`, so a package whose default

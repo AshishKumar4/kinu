@@ -75,7 +75,7 @@ export {
   type CallAccount, type QuotaSnapshot, type QuotaWindow,
 } from './quota';
 
-export * from './judge-model';
+export * from './decision-model';
 
 export * from './workers-ai-catalog';
 

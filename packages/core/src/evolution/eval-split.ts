@@ -1,4 +1,4 @@
-/** Budgeted, disjoint GEPA train/val split drawn from graded `turn_outcomes` turns; advisor notes backfill negatives. */
+/** Budgeted, disjoint GEPA train/val split drawn from rated turns (`turn_ratings`); advisor notes backfill negatives. */
 
 import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
@@ -14,11 +14,103 @@ import { conversationTurnPair } from '../identity/conversation-store';
 import type { SessionTranscriptReader } from '../session/transcript';
 import { RunEventRecorder } from '../events/recorder';
 import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } from '../utils/json';
-import {
-  listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
-  type OutcomeEvalInstance, type OutcomeEvalSplit, type OutcomeSplitDegeneracy,
-  type TurnOutcome, type TurnOutcomeRow,
-} from './outcomes';
+import { isHighRating, listTurnRatings, type TurnRating } from './ratings';
+import type { EvalInstance } from './gepa/types';
+import { evidenceWindow } from '../utils/evidence-window';
+import { EVIDENCE_BUDGETS } from '../types/evidence';
+
+/** The two sides of a GEPA split: a turn rated high, or one rated low. */
+export type EvalVerdict = 'accepted' | 'corrected';
+
+export interface OutcomeEvalExpectation {
+  outcome: EvalVerdict;
+  recordedResponse: string;
+  /** The user's follow-up on a ledger-drawn negative, the advisor's note on an
+     *  advisor-drawn one. */
+  followup: string | null;
+  /** Who complained, so the scoring prompt does not tell a judge a user corrected a
+     *  turn no user saw. */
+  critic: 'user' | 'advisor';
+}
+
+export type OutcomeEvalInstance = EvalInstance<string, OutcomeEvalExpectation>;
+
+/**
+ * How every scorer names a negative instance's complaint. The `user` wording is the
+ * sentence the prompts carried before advisor notes existed, byte for byte.
+ */
+const CRITIC_PROSE = {
+  user: { verdict: 'the user had to correct it', complaint: "User's correction" },
+  advisor: {
+    verdict: 'no user ever graded it, and a second model reviewing the turn found this',
+    complaint: "Reviewer's note",
+  },
+} as const satisfies Readonly<
+  Record<OutcomeEvalExpectation['critic'], { verdict: string; complaint: string }>
+>;
+
+/**
+ * The 1.0 / 0.0 sentence a scorer states for each recorded outcome. The rest of
+ * the criterion comes from {@link renderOutcomeCriterion}.
+ */
+export interface OutcomeScoringRule {
+  readonly accepted: string;
+  readonly failed: string;
+}
+
+/** For scorers comparing a fresh response with the recorded one. */
+export const FRESH_RESPONSE_RULE: OutcomeScoringRule = {
+  accepted: 'Score 1.0 when the new response is at least as good, 0.0 when it regresses.',
+  failed: 'Score 1.0 when the new response already addresses the correction, 0.0 when it '
+    + 'repeats the failure.',
+};
+
+export function renderOutcomeCriterion(
+  expected: OutcomeEvalExpectation | undefined,
+  rule: OutcomeScoringRule,
+): string {
+  if (expected && expected.outcome === 'accepted') {
+    return `The agent's response below was ACCEPTED by the user. ${rule.accepted}\n\n`
+      + `Accepted response:\n${evidenceWindow(expected.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`;
+  }
+
+  const critic = CRITIC_PROSE[expected?.critic ?? 'user'];
+
+  return `The agent's response below FAILED: ${critic.verdict}. ${rule.failed}\n\n`
+    + `Failed response:\n${evidenceWindow(expected?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n`
+    + `${critic.complaint}:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
+}
+
+export type OutcomeSplitDegeneracy =
+  | 'no_labeled_turns'
+  /** Only accepted turns exist, so `train` is empty. */
+  | 'no_negatives'
+  /** The single failure must be trained on, leaving nothing unseen to score. */
+  | 'no_held_out_negatives';
+
+export function describeSplitDegeneracy(degeneracy: OutcomeSplitDegeneracy): string {
+  switch (degeneracy) {
+    case 'no_labeled_turns':
+      return 'no outcome-labeled turns yet: chat with the agent first';
+    case 'no_negatives':
+      return 'no low-rated turns yet: there is no failure to optimize toward';
+    case 'no_held_out_negatives':
+      return 'only one labeled failure exists, and the optimizer must train on it: ' +
+        'the winner is selected without any unseen failure, so an improvement here is not evidence of one';
+  }
+}
+
+export interface OutcomeEvalSplit {
+  /** Low-rated turns the optimizer must fix. Shares no instance with `val`. */
+  train: OutcomeEvalInstance[];
+  /** Failures held out of `train` plus accepted turns the optimizer must not regress. */
+  val: OutcomeEvalInstance[];
+  /** Selection is evidence of improvement only when this is > 0. */
+  heldOutNegatives: number;
+  /** Non-null means the caller must not trust the winner. */
+  degeneracy: OutcomeSplitDegeneracy | null;
+}
+
 
 interface StoredRunEvent {
   type: string;
@@ -126,7 +218,7 @@ async function turnProcessEvidence(
   }));
 }
 
-/** An advisor-flagged turn the outcome ledger never graded (wakes, one-shots, serial work the ledger cannot see). */
+/** An advisor-flagged turn nobody rated (wakes, one-shots, serial work no user answered). */
 export interface AdvisorNegativeRow {
   readonly id: string;
   readonly turnId: string;
@@ -143,7 +235,7 @@ interface RawAdvisorRow {
 }
 
 /**
- * Advisor notes for turns absent from `turn_outcomes`, newest first. The `NOT EXISTS`
+ * Advisor notes for turns absent from `turn_ratings`, newest first. The `NOT EXISTS`
  * keeps a turn from landing in both train and val; notes with no transcript pair are
  * dropped; a payload failing `AdvisorRowDataSchema` throws.
  */
@@ -160,9 +252,9 @@ async function advisorNegatives(
     WHERE e.actor_id = ${actor.actorId} AND e.type = ${ADVISOR_EVENT_TYPE}
       AND json_extract(e.data, '$.turnId') IS NOT NULL
       AND NOT EXISTS (
-        SELECT 1 FROM turn_outcomes o
-        WHERE o.actor_id = ${actor.actorId}
-          AND o.turn_id = json_extract(e.data, '$.turnId'))
+        SELECT 1 FROM turn_ratings r
+        WHERE r.actor_id = ${actor.actorId}
+          AND r.turn_id = json_extract(e.data, '$.turnId'))
     ORDER BY e.created_at DESC, e.id DESC LIMIT ${limit}`;
 
   const negatives: AdvisorNegativeRow[] = [];
@@ -197,18 +289,18 @@ interface EvalDraw {
   readonly turnId: string | null;
   readonly input: string;
   readonly response: string;
-  readonly outcome: TurnOutcome;
+  readonly outcome: EvalVerdict;
   readonly complaint: string | null;
   readonly critic: 'user' | 'advisor';
   readonly extraEvidence: readonly string[];
 }
 
-function ledgerDraw(row: TurnOutcomeRow): EvalDraw {
+function ledgerDraw(row: TurnRating): EvalDraw {
   return {
     rowId: row.id, createdAt: row.createdAt, turnId: row.turnId,
-    input: row.userMessage, response: row.assistantResponse,
-    outcome: row.outcome, complaint: row.followup, critic: 'user',
-    extraEvidence: [],
+    input: row.request, response: row.answer,
+    outcome: isHighRating(row.score) ? 'accepted' : 'corrected', complaint: row.followup, critic: 'user',
+    extraEvidence: [`Rated ${row.score.toFixed(1)}/5${row.wrong !== null && row.wrong !== 'nothing' ? `: ${row.wrong.replaceAll('_', ' ')}` : ''}`],
   };
 }
 
@@ -241,8 +333,8 @@ export async function buildOutcomeEvalSplit(
   sql: SqlExecutor, actor: ActorHandle, transcript: SessionTranscriptReader, budget: number,
 ): Promise<OutcomeEvalSplit> {
   const size = Math.max(2, Math.floor(budget));
-  const ledgerNegatives = listTurnOutcomes(sql, actor, { limit: size, outcomes: NEGATIVE_TURN_OUTCOMES });
-  const accepted = listTurnOutcomes(sql, actor, { limit: size, outcomes: ['accepted'] });
+  const ledgerNegatives = listTurnRatings(sql, actor, { limit: size, low: true });
+  const accepted = listTurnRatings(sql, actor, { limit: size, high: true });
   const advisorRows = await advisorNegatives(sql, actor, transcript, size - ledgerNegatives.length);
 
   // Array.sort is stable, so equal-age rows keep their query order.

@@ -2,11 +2,11 @@
 // must end the process whatever it does with SIGTERM, return only once the process has exited, and never touch a
 // stranger that holds the recorded pid now.
 import { expect, test } from 'bun:test';
-import { utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { present } from '../src/present';
 import { scratchDir } from '../src/scratch';
-import { killAndAwaitExit, recordedIn, runToExit } from '../src/spawn';
+import { killAndAwaitExit, recordedIn, runToExit, spawnTest } from '../src/spawn';
 
 /** Exited: no process holds the pid, or only its zombie does. */
 async function exited(pid: number): Promise<boolean> {
@@ -17,7 +17,7 @@ async function exited(pid: number): Promise<boolean> {
 
 /** Spawns `cmd` and resolves once it prints `ready`, its sign that it is set up. */
 async function started(cmd: readonly string[]): Promise<Bun.Subprocess<'ignore', 'pipe', 'inherit'>> {
-  const child = Bun.spawn([...cmd], { stdin: 'ignore', stdout: 'pipe', stderr: 'inherit' });
+  const child = spawnTest([...cmd], { stdin: 'ignore', stdout: 'pipe', stderr: 'inherit' });
   const { value } = await child.stdout.getReader().read();
 
   expect(new TextDecoder().decode(value)).toContain('ready');
@@ -77,4 +77,37 @@ test('with group, a recorded pid that leads no group is refused, and nothing is 
   expect(await exited(child.pid)).toBe(false);
   child.kill('SIGKILL');
   await child.exited;
+});
+
+test('a Bun child creates scratch under the current preload environment, not the parent launch snapshot', async () => {
+  const launch = scratchDir('spawn-launch');
+  const current = scratchDir('spawn-current');
+  const helper = new URL('../src/spawn.ts', import.meta.url).pathname;
+  const scratch = new URL('../src/scratch.ts', import.meta.url).pathname;
+
+  const child = `
+    import { writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { scratchDir } from ${JSON.stringify(scratch)};
+    const root = scratchDir('child-marker');
+    writeFileSync(join(root, 'marker'), 'current scratch');
+    console.log(root);
+  `;
+
+  const parent = `
+    import { runToExit } from ${JSON.stringify(helper)};
+    process.env.TMPDIR = ${JSON.stringify(current)};
+    const child = await runToExit([process.execPath, '-e', ${JSON.stringify(child)}]);
+    console.log(child.stdout.trim());
+    process.exitCode = child.exitCode;
+  `;
+
+  const result = await runToExit([process.execPath, '-e', parent], { env: { ...process.env, TMPDIR: launch } });
+  const created = result.stdout.trim();
+
+
+  expect(result.exitCode, result.stderr).toBe(0);
+  expect(created.startsWith(current + '/')).toBe(true);
+  expect(existsSync(join(created, 'marker'))).toBe(true);
+  expect(readdirSync(launch)).toEqual([]);
 });

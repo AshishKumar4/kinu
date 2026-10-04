@@ -1042,10 +1042,12 @@ eatmydata. A root under a worktree breaks Chrome, whose `SingletonSocket` lies
 71 bytes below a scratch root, while a Unix socket path holds 107. With
 `TMPDIR=/var/tmp` and eatmydata, `bun test --parallel=4 packages/cf-backend/`
 added at most 90 to 127 MB of entries to `/var/tmp`, other lanes' included,
-and left no scratch root behind (three runs, 2026-09-24). One gap: under bun
-1.4.0, `Bun.spawn` with no `env` passes the environment bun started with, not
-`process.env` as the preload changed it, so those children keep the runner's
-`TMPDIR` instead of the scratch root. One exception, 2026-09-25: a test
+and left no scratch root behind (three runs, 2026-09-24). Under Bun 1.4.0,
+`Bun.spawn` with no `env` passes the environment Bun started with, not the
+preload's current `process.env`. Re-proved on Bun 1.4.2, 2026-10-02: a child
+minted scratch under the launch root after its parent changed `TMPDIR`.
+Tests now use `spawnTest` or name `env` explicitly; `no-ambient-bun-in-tests`
+refuses the native no-env path, with no allowlist. One exception, 2026-09-25: a test
 browser's profile lives in `/tmp` until the browser closes, because one probe
 run wrote 174 MB of profile data in six minutes (`scripts/test-chrome.ts`).
 
@@ -1297,6 +1299,11 @@ measurement took 24m47s; the statistical eval Verdict still
 gates production independently.
 The first hosted run (70464f439, 2026-10-01) took 24m47s for the hammer job; all six runs passed 3,672 tests, but its coverage parser recognized zero files. Bun’s Actions reporter prefixes each file heading with ::group::. The reader now normalizes that supported prefix and terminal decoration before reading filenames or failures, and coverage-red runs keep output even when the child exits zero.
 Amended after that hosted measurement, 2026-10-01: local costs misbalanced the source runners (7m15s against 18m21s), and six sequential four-minute hammer runs became the critical path. CI now plans from recorded hosted wall times, splits the devbox suite by file, balances eight source runners, and gives each of the six hammer runs its own runner and burners. The complete collector still needs every unit and every split file. The under-15-minute push-to-verdict target, including queues, is not yet observed on this shape.
+
+L24. Deploy's eval cohort is Muse; its performance budget excludes the named critical trial.
+Decided 2026-10-02 by the owner. Mercury and Ling leave the configured eval roster, while an explicit comparison can name another model. The deploy keeps one trial of every task, including the extended true-myth journey, in its existing admitted wave beside deterministic tiers. No task is pruned and no model deadline is added. The report's 1200-second budget is whole deploy wall minus its longest eval trial, not minus the whole eval row; that trial and duration stay beside the residual wall.
+Measured staging `85a438698` (2026-10-02): total 8,599 s, critical Ling order-book trial 8,125.925 s, residual 473.075 s. The old twelve-task Muse maximum was chess at 964.301 s. The extended true-myth trial reached only turns 1–3 in 1,317.758 s on 2026-10-01; its complete journey is unmeasured and stays intact. The old upload-CI wait was 138.735 s with a 40.3 s account row after it; these checks now overlap, and both still gate upload. Provider readiness, formerly 87.334 s before the wave, belongs inside the eval row; deterministic tiers need no real-model credentials. The revised deploy wall remains unmeasured.
+Every request's provider-reported input, cache-read and output counts come from the public main and retained-descendant ledgers. Actor/run/step identities are retained; absent counts remain unknown. The per-trial and deployment report uses Activity's cache EMA (alpha 0.2) and nearest-rank p95/p99, plus token-weighted hit share, with the previous deploy alongside. Old reports without those request measurements are named unavailable; none are backfilled. Vitest's first-party output-file config places the JSON report beside the deploy evidence; repeating its CLI output option was measured red and is not used.
 
 ## Providers
 

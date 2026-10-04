@@ -8,7 +8,7 @@
 # deployment and whose green run a promotion waits for.
 #
 # The harness (evals/) runs every task file at once and every trial of a file
-# at once, on its default models, as eval-service at KINU_EVAL_ORIGIN, with the
+# at once, on Muse by default, as eval-service at KINU_EVAL_ORIGIN, with the
 # identity `evalWebIdentityEnv` names for that origin. A failed trial exits 1
 # and prints its reason; each trial's evidence goes beside the deploy's report
 # when there is one.
@@ -17,7 +17,12 @@ cd "$(dirname "$0")/.."
 source scripts/repo-runtime.sh
 : "${KINU_EVAL_ORIGIN:?names the deployment this pass drives; the deploy exports it}"
 export KINU_EVAL_TRIALS=1
+unset KINU_EVAL_MODELS
 if [[ -n "${KINU_DEPLOY_REPORT:-}" ]]; then
   export BENCH_ARTIFACTS="$KINU_DEPLOY_REPORT/evals"
 fi
-exec bun run evals
+# Readiness belongs to this row: deterministic tiers and source gates need no real-model provider keys.
+status=0
+bun scripts/eval-provider-keys.ts "${KINU_EVAL_ORIGIN%/}" || status=1
+bun run evals || status=1
+exit "$status"

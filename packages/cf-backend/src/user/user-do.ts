@@ -354,6 +354,8 @@ const DeviceHelloSchema = v.object({
   version: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1))),
   arch: v.optional(v.string()),
   updateCheck: v.optional(v.boolean()),
+  /** The daemon's runtime (`Bun 1.4.2`); a refusal holds until it changes. */
+  runtime: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1))),
 });
 
 /** An object type rather than an interface, so it satisfies the row constraint `sqlx` puts
@@ -2218,7 +2220,7 @@ export class UserDO extends Agent<Env> {
     if (hello.success) {
       this.recordDeviceHello(deviceId, hello.output);
       await this.devicesMoved();
-      const frame = await this.deviceUpdateFrame(hello.output);
+      const frame = await this.deviceUpdateFrame(deviceId, hello.output);
 
       if (frame !== null) {
         diagnostics.event('device.update_pushed', { device: deviceId, from: hello.output.version ?? '', to: frame.version });
@@ -2357,6 +2359,10 @@ export class UserDO extends Agent<Env> {
       hello.version ?? null,
       hello.updateCheck === false ? 0 : 1,
     );
+
+    if (hello.runtime !== undefined) {
+      this.sqlx(`DELETE FROM user_device_update_refusals WHERE device_id = ? AND runtime <> ?`, deviceId, hello.runtime);
+    }
   }
 
   /** Null when the deploy published no stamp or names no public origin. Read per HELLO: the stamp
@@ -2375,12 +2381,19 @@ export class UserDO extends Agent<Env> {
 
   /**
    * UPDATE frame for a daemon behind the served build, when its owner allows the push.
-   * Null for no reported build, unbuilt platform, opted-out owner, or no checksum.
+   * Null for no reported build, unbuilt platform, opted-out owner, refused build, or no checksum.
    */
-  private async deviceUpdateFrame(hello: v.InferOutput<typeof DeviceHelloSchema>): Promise<DeviceUpdateFrame | null> {
+  private async deviceUpdateFrame(deviceId: string, hello: v.InferOutput<typeof DeviceHelloSchema>): Promise<DeviceUpdateFrame | null> {
     const stamp = await this.servedStamp();
     const served = stamp?.version ?? null;
-    const state = deviceUpdateState({ version: hello.version ?? null, updateCheck: hello.updateCheck !== false }, served);
+
+    const [refusal] = this.sqlx<{ version: string }>(
+      `SELECT version FROM user_device_update_refusals WHERE device_id = ?`, deviceId,
+    );
+
+    const state = deviceUpdateState({
+      version: hello.version ?? null, updateCheck: hello.updateCheck !== false, refusedVersion: refusal?.version,
+    }, served);
 
     if (state !== 'behind' || served === null || stamp === null) return null;
     const tarball = cliArtifactPath(hello.os, hello.arch);
@@ -2533,6 +2546,31 @@ export class UserDO extends Agent<Env> {
     );
 
     return { ok: true, ticket, expiresAt };
+  }
+
+  async recordDeviceUpdateRefusal(
+    caller: UserCaller, token: string, refusal: { version: string; runtime: string; reason: string },
+  ): Promise<boolean> {
+    await this.requireTier(caller, 'device.manage');
+    const verified = await this.verifyDeviceToken(await ownerCaller(this.env), token);
+
+    if (!verified.ok || !verified.deviceId) return false;
+    this.sqlx(
+      `INSERT INTO user_device_update_refusals (device_id, version, runtime, reason, refused_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(device_id) DO UPDATE SET
+           version = excluded.version,
+           runtime = excluded.runtime,
+           reason = excluded.reason,
+           refused_at = excluded.refused_at`,
+      verified.deviceId, refusal.version, refusal.runtime, refusal.reason, Date.now(),
+    );
+    diagnostics.event('device.update_refused', {
+      device: verified.deviceId, version: refusal.version, runtime: refusal.runtime, reason: refusal.reason,
+    });
+    await this.devicesMoved();
+
+    return true;
   }
 
   async verifyDeviceConnectTicket(caller: UserCaller, ticket: string): Promise<{ ok: boolean; deviceId?: string; tokenWasCurrent?: boolean }> {
@@ -3217,6 +3255,7 @@ export class UserDO extends Agent<Env> {
     version: string | null;
     servedVersion: string | null;
     update: DeviceUpdateState;
+    updateRefusal: string | null;
   }>> {
     await this.requireTier(caller, 'device.manage');
     const served = await this.servedBuild();
@@ -3227,30 +3266,37 @@ export class UserDO extends Agent<Env> {
       replaced_at: number | null;
       revoked_at: number | null; unstopped_at: number | null; reuse_detected_at: number | null;
       tier: string | null; version: string | null; update_check: number | null; consented_root: string | null;
+      refused_version: string | null; refusal_reason: string | null;
     }>(`SELECT d.id, d.label, d.os, d.hostname, d.created_at, d.last_seen_at, d.expires_at,
                d.replaced_at, d.revoked_at, d.unstopped_at, x.reuse_detected_at,
                d.consented_root,
                d.tier, d.sandbox_capability, d.sandbox_reason, d.sandbox_detail, d.sandbox_gpu,
-               b.version, b.update_check
+               b.version, b.update_check, f.version AS refused_version, f.reason AS refusal_reason
           FROM user_devices d
           LEFT JOIN user_device_builds b ON b.device_id = d.id
+          LEFT JOIN user_device_update_refusals f ON f.device_id = d.id
           LEFT JOIN (SELECT device_id, MAX(reuse_detected_at) AS reuse_detected_at
                        FROM user_device_retired_tokens WHERE reuse_detected_at IS NOT NULL
                       GROUP BY device_id) x ON x.device_id = d.id
          WHERE d.revoked_at IS NULL OR d.unstopped_at IS NOT NULL OR x.reuse_detected_at IS NOT NULL
          ORDER BY d.created_at DESC`)
-      .map((r) => ({
-        id: r.id, label: r.label, os: r.os, hostname: r.hostname,
-        connected: r.revoked_at === null && this._devices.isConnected(r.id),
-        createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
-        replacedAt: r.replaced_at,
-        revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at, reuseDetectedAt: r.reuse_detected_at,
-        wholeMachine: r.consented_root === '/',
-        sandbox: { tier: parseDeviceTier(r.tier), ...readSandboxColumns(r) },
-        version: r.version,
-        servedVersion: served,
-        update: deviceUpdateState({ version: r.version, updateCheck: r.update_check !== 0 }, served),
-      }));
+      .map((r) => {
+        const update = deviceUpdateState({ version: r.version, updateCheck: r.update_check !== 0, refusedVersion: r.refused_version }, served);
+
+        return {
+          id: r.id, label: r.label, os: r.os, hostname: r.hostname,
+          connected: r.revoked_at === null && this._devices.isConnected(r.id),
+          createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
+          replacedAt: r.replaced_at,
+          revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at, reuseDetectedAt: r.reuse_detected_at,
+          wholeMachine: r.consented_root === '/',
+          sandbox: { tier: parseDeviceTier(r.tier), ...readSandboxColumns(r) },
+          version: r.version,
+          servedVersion: served,
+          update,
+          updateRefusal: update === 'refused' ? r.refusal_reason : null,
+        };
+      });
   }
 
   async watchDeviceStatus(caller: UserCaller, watching: boolean): Promise<void> {

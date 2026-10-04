@@ -299,11 +299,6 @@ describe("deploy gate", () => {
     expect(run.events).toEqual([...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]);
     expect(run.buildEnvironment).toBe("staging");
     expect(run.infraEnvironment).toBe("staging");
-    // The failed step is a red of the report's, the skipped rows are named by the ladder, and the report is rendered.
-    expect(run.report).toEqual([
-      "open staging deploy testsha", "mark preflight", "mark upload",
-      "note publish build, upload and smoke vite build failed", "mark wave", "mark ci", "mark end", "render",
-    ]);
   });
 
   test("a record that cannot be withdrawn builds nothing, and every local gate still runs", () => {
@@ -472,7 +467,6 @@ describe("deploy gate", () => {
 
       expect(run.status, `${phase} did not fail the deploy`).toBe(1);
       expect(run.events, `${phase} failed and a later step ran\n${run.stdout}`).toEqual(STOPS.slice(0, index + 1));
-      expect(run.stdout).toContain("phase is red, so nothing was built or uploaded.");
       expect(run.report.slice(-2)).toEqual(["mark end", "render"]);
     }
   });

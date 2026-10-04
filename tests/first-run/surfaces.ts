@@ -81,4 +81,5 @@ export const CAPABILITY_ROWS = {
   'an internal address refused on every fetch path': ['capability-isolation'],
   'a correction sent while the agent works': ['steer-correction'],
   'several accounts of one provider, each listed and chosen per workspace': ['multi-account'],
+  'a turn rated from the user\'s reply by the decision model': ['turn-rated'],
 } as const satisfies Record<string, Rows>;

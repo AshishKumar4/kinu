@@ -94,6 +94,10 @@
     "last_observed_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, key)"
   ],
+  "agent_figures@packages/core/src/read-models/agent-figures.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "figures TEXT NOT NULL"
+  ],
   "agent_log@packages/core/src/events/hub/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -747,6 +751,17 @@
     "id INTEGER PRIMARY KEY",
     "value INTEGER NOT NULL"
   ],
+  "lessons@packages/core/src/evolution/lessons.ts": [
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "turn_ids TEXT NOT NULL",
+    "text TEXT NOT NULL",
+    "source TEXT NOT NULL CHECK (source IN (${sqlCheckList(LESSON_SOURCES)}))",
+    "status TEXT NOT NULL CHECK (status IN ('provisional','corroborated'))",
+    "created_at INTEGER NOT NULL",
+    "corroborated_at INTEGER",
+    "PRIMARY KEY (actor_id, id)"
+  ],
   "lessons@packages/core/src/evolution/outcomes.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -831,6 +846,12 @@
     "labeler TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
+  ],
+  "pattern_extractions@packages/core/src/evolution/lessons.ts": [
+    "actor_id TEXT NOT NULL",
+    "effect_key TEXT NOT NULL",
+    "answer TEXT NOT NULL",
+    "PRIMARY KEY (actor_id, effect_key)"
   ],
   "pattern_extractions@packages/core/src/evolution/outcomes.ts": [
     "actor_id TEXT NOT NULL",
@@ -1221,6 +1242,22 @@
     "evidence TEXT",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "turn_ratings@packages/core/src/evolution/ratings.ts": [
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "score REAL NOT NULL CHECK (score >= 1 AND score <= 5)",
+    "corrected REAL NOT NULL CHECK (corrected >= 0 AND corrected <= 1)",
+    "wrong TEXT CHECK (wrong IN (${sqlCheckList(WRONG_REASONS)}))",
+    "source TEXT NOT NULL CHECK (source IN (${sqlCheckList(RATING_SOURCES)}))",
+    "request TEXT NOT NULL",
+    "actions TEXT NOT NULL",
+    "answer TEXT NOT NULL",
+    "followup TEXT",
+    "scaffold_version INTEGER",
+    "created_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, id)"
+  ],
   "user_access_tokens@packages/core/src/cli/access-tokens.ts": [
     "token_hash TEXT PRIMARY KEY",
     "name TEXT NOT NULL",
@@ -1283,6 +1320,13 @@
     "device_id TEXT NOT NULL REFERENCES user_devices(id) ON DELETE CASCADE",
     "retired_at INTEGER NOT NULL",
     "reuse_detected_at INTEGER"
+  ],
+  "user_device_update_refusals@packages/core/src/state/user-schema.ts": [
+    "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE",
+    "version TEXT NOT NULL",
+    "runtime TEXT NOT NULL",
+    "reason TEXT NOT NULL",
+    "refused_at INTEGER NOT NULL"
   ],
   "user_devices@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",

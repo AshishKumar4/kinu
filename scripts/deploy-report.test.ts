@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
+import { measurePromptUsage, type Assertion } from '../evals/src/results';
 import { previousSummary, renderReport, type ReportEntry, type ReportSummary } from './deploy-report';
 
 const META = { environment: 'staging', mode: 'deploy', sha: 'bbbbbbbbbbbbbbbb', startedAt: '2026-09-30T20:00:00.000Z' };
@@ -17,6 +18,55 @@ const summary = (sha: string, dir: string, mode: string, reds: readonly string[]
 });
 
 describe('the deploy report', () => {
+  test('owned deploy wall over twenty minutes is red; the longest eval trial is named and excluded, never killed', () => {
+    const input = (seconds: number) => ({
+      dir: '/reports/budget', meta: META, entries: [
+        { kind: 'mark' as const, mark: 'end', seconds },
+        { kind: 'timing' as const, phase: 'upload', what: 'secret scan', command: 'bun run security-scan', seconds: 73.5 },
+        { kind: 'timing' as const, phase: 'post-publish', what: 'product flows', command: 'bash scripts/product-flows-tier.sh', seconds: 524 },
+      ],
+      evals: [{ status: 'passed', duration: 1_600_000, meta: { harness: { run: {
+        session: { metadata: { taskId: 'chess', taskVersion: 'v1', evalCommit: META.sha, productSha: META.sha, arm: 'product', trial: 1 }, events: [] },
+        usage: { model: 'muse', metadata: { steps: [] } }, errors: [],
+        output: { metrics: { modelTurns: 0, toolCalls: 0, toolErrors: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
+      } } } } satisfies Assertion],
+    });
+
+    const at = renderReport(input(2800));
+    const over = renderReport(input(2801));
+
+    expect(at.summary.reds).toEqual([]);
+    expect(over.summary.reds).toEqual(['budget: owned deployment wall']);
+    expect(over.text).toContain('chess / muse / product / trial 1');
+    expect(over.text).toContain('product flows');
+    expect(over.text).toContain('524');
+    expect(over.summary.totalSeconds).toBe(2801);
+  });
+
+  test('current and previous cache measurements stay separate at both deployment and trial scope', () => {
+    const measured = (sha: string, input: number, cacheRead: number, output: number): Assertion => ({
+      status: 'passed', duration: 1000, meta: { harness: { run: {
+        session: { metadata: { taskId: 'task', taskVersion: 'v1', evalCommit: sha, productSha: sha, arm: 'product', trial: 1 }, events: [] },
+        usage: { model: 'muse', ...measurePromptUsage([{ actor: 'main', events: [{
+          type: 'step_finish', runId: 'run', eventIndex: 0, stepIndex: 1, timestamp: '2026-10-02T19:00:00Z', usage: { input, cacheRead, output },
+        }] }]) }, errors: [],
+        output: { metrics: { modelTurns: 1, toolCalls: 0, toolErrors: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
+      } } },
+    });
+
+    const before = measured('aaaaaaaaaaaaaaaa', 100, 20, 10);
+    const after = measured(META.sha, 200, 180, 30);
+
+    const { text } = renderReport({ dir: '/reports/after', meta: META, entries: [], evals: [after],
+      previous: { summary: summary('aaaaaaaaaaaaaaaa', '/reports/before', 'deploy', []), merges: { kind: 'listed', merges: [] }, evals: [before] },
+    });
+
+    expect(text).toContain('| current | Deployment | 200 | 180 | 30 | 90.00% | 90.00% | 90.00% | 90.00% | 1/1 |');
+    expect(text).toContain('| previous | Deployment | 100 | 20 | 10 | 20.00% | 20.00% | 20.00% | 20.00% | 1/1 |');
+    expect(text).toContain('| current | task / muse / product / trial 1 | 200 | 180 | 30 | 90.00%');
+    expect(text).toContain('| previous | task / muse / product / trial 1 | 100 | 20 | 10 | 20.00%');
+  });
+
   // THE DIFFERENTIAL. A fixer starts from what this deploy's merges broke: a red the previous report of the
   // environment already held is carried over, and one it did not is new.
   test('each red is new or carried over from the previous report, and the merges between them are listed', () => {

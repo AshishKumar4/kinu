@@ -3,7 +3,7 @@
  * each home carries the running Bun at `runtime/bin/bun`, and no origin is contacted.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
 import { cliPageRoutes } from '../src/cli/routes';
@@ -25,7 +25,7 @@ async function launcherScript(): Promise<string> {
 async function launcherHome(): Promise<{ home: string; launcher: string }> {
   const home = scratchDir('launcher-swap');
   mkdirSync(join(home, 'runtime', 'bin'), { recursive: true });
-  symlinkSync(process.execPath, join(home, 'runtime', 'bin', 'bun'));
+  symlinkSync(resolve(import.meta.dir, '../../../node_modules/.bin/bun'), join(home, 'runtime', 'bin', 'bun'));
   mkdirSync(join(home, 'bin'), { recursive: true });
   const launcher = join(home, 'bin', 'kinu');
   writeFileSync(launcher, await launcherScript(), { mode: 0o755 });
@@ -54,7 +54,7 @@ async function launchIn(cwd: string, home: string, launcher: string, ...args: st
   const proc = Bun.spawn({
     cmd: ['bash', launcher, ...args],
     cwd,
-    env: { HOME: home, KINU_HOME: home, PATH: '/usr/bin:/bin', KINU_ORIGIN: 'http://127.0.0.1:9' },
+    env: { HOME: home, KINU_HOME: home, PATH: '/usr/bin:/bin', KINU_ORIGIN: 'http://127.0.0.1:9', KINU_INSTALL_BUN: '0' },
     stdout: 'pipe',
     stderr: 'pipe',
   });

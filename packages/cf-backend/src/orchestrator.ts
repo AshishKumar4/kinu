@@ -33,6 +33,7 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
+import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import type { AgentTurnActivity, AgentSnapshot, StoredRow } from '@kinu.run/core';
@@ -90,7 +91,6 @@ import {
   // Declared reach axis; getToolDescriptions reports it rather than guessing from ToolSet keys.
   TOOL_REACH,
   updateCraftScores,
-  feedbackToQuality,
   forkWorkspace, ForkTargetWriter, ForkTransferReceiver,
   type ForkTransport, type ForkFrame,
   readWorkspaceArchivePage, type ArchiveAgentSource, type ArchiveCursor, type ArchivePage,
@@ -105,7 +105,7 @@ import {
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
-  previewScaffoldLive, runScaffoldCaptureText, runScaffoldGepaOptimization,
+  previewScaffoldLive, runScaffoldGepaOptimization,
   advancePromptSectionLane,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
@@ -124,12 +124,7 @@ import {
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
   type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
-  listReplayEvals, type ReplayEvalSummary,
-  alignmentConvergence, type AlignmentConvergence,
-  calibrationReport, sampleForLabeling, ingestOutcomeLabels, DEFAULT_LABEL_BUDGET,
-  type CalibrationReport, type LabelingItem, type LabelIngestResult, type OutcomeLabel,
-  ensembleReport, runEnsemble, createCompletionLLM,
-  type EnsembleReport, type EnsembleRunResult,
+  qualitySeries, type QualityDay, ratingQuality, thumbsRating, listThumbs,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   listAlternateTakeSets, latestAlternateTakeSet,
@@ -139,7 +134,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
-  readWorkspaceAgents, readAgentFigures, type PanelAgent,
+  readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
@@ -205,7 +200,6 @@ import {
   EVENT_VARIANTS,
   boundEventQuery,
   type WorkMode,
-  resolveModelRoute,
   WORKSPACE_RUN_ID, activeOperationProfile, SLATES_ROOT,
   buildWorkspaceOverview, recoveryBackoffMs, type WorkspaceOverview,
   projectJsonValue,
@@ -225,7 +219,6 @@ import {
 import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
 } from "@kinu.run/core/analytics";
-import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
 import {
   agentSelfHost, createAgentSelfProvider,
   DeviceConsentRegistry, DeviceConsentStore,
@@ -661,7 +654,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
+  private readonly agentIsolateSlots = new AgentIsolateSlots(this.ctx);
+
   protected async agentCalls(actorId: string): Promise<AgentFacetCalls> {
+    const key = `kinu-agent:${this.agentOf(actorId).storageKey}`;
+
+    return agentCallsThrough((call) => this.agentIsolateSlots.held(key, () => this.agentIsolate(actorId), call));
+  }
+
+  protected async agentIsolate(actorId: string): Promise<AgentFacetCalls> {
     return await this.agentFacetOf(actorId);
   }
 
@@ -753,10 +754,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       answerMetadata: (turnId, narration) => this.takeTurnSlates(actorId, turnId, async () => narration),
       finishTurn: (turnId, end) => {
         this.agentActivity(actorId, end.activity);
+        recordAgentFigures(this.boundSql, actorId, end.figures);
 
         return this.agentTurns.finish(actorId, turnId, end);
       },
-      failTurn: (turnId, failure) => this.agentTurns.fail(actorId, turnId, failure),
+      failTurn: (turnId, failure, figures) => {
+        recordAgentFigures(this.boundSql, actorId, figures);
+
+        return this.agentTurns.fail(actorId, turnId, failure);
+      },
       getAuth: async (key, opts) => {
         const { stub, caller } = await credentials();
 
@@ -1910,7 +1916,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
         // Replay-eval rollout runs the live scaffold with the real LLM and tool bridges.
-        replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
         // Promotion-gate evidence runs on the cadence lane so rollouts don't block the chat queue.
         ...this.shadowTrialPorts,
       });
@@ -2879,14 +2884,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return readWorkspaceAgents({
       sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main', queued: this.chatTurnOwed,
       actors: this.workspaceActors().list({ retired: true }),
-      figures: async (actorIds) => {
+      figures: (actorIds) => {
         const main = this.actorHandle().actorId;
-        const local = readAgentFigures(this.boundSql, [main]);
 
-        const remote = await Promise.all(actorIds.filter((actorId) => actorId !== main).map(async (actorId) =>
-          [actorId, await this.agentStores(actorId).figures()] as const));
-
-        return new Map([...local, ...remote]);
+        return new Map([...readAgentFigures(this.boundSql, [main]), ...reportedAgentFigures(this.boundSql, actorIds.filter((actorId) => actorId !== main))]);
       },
     });
   }
@@ -3050,21 +3051,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initWebhookIngressTables(this.ctx.storage.sql);
     initSubordinateRosterTable(this.ctx.storage.sql);
 
-    // Keyed (actor_id, message_id): message ids are minted per actor, so a bare message_id
-    // key would let two actors' thumbs silently overwrite each other.
-    execRaw(`CREATE TABLE IF NOT EXISTS turn_feedback (
-      actor_id   TEXT NOT NULL,
-      message_id TEXT NOT NULL,
-      feedback   TEXT NOT NULL CHECK (feedback IN ('positive','negative')),
-      PRIMARY KEY (actor_id, message_id)
-    )`);
     // Persisting the paid-for answer between model call and fact mutation makes a replay
     // apply the same update instead of buying another.
     execRaw(`CREATE TABLE IF NOT EXISTS sleep_time_updates (
       effect_key  TEXT PRIMARY KEY,
       update_json TEXT NOT NULL
     )`);
-    // Same per-actor key as turn_feedback: the thumbs re-score reads this table.
+    // Keyed per actor and message, as a thumb is: the thumbs re-score reads this table.
     execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
       actor_id   TEXT NOT NULL,
       message_id TEXT NOT NULL,
@@ -3687,7 +3680,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       { sql: this.boundSql, actor: this.rt.actor, history: this.stores.history, engine: this.engine, inbox: this.orch.inbox },
       takeId, nodeId);
 
-    this.logActivity('take_pick', `${outcome.outcome} (${nodeId})`);
+    this.logActivity('take_pick', `${outcome.changedAnswer ? 'alternate' : 'delivered'} (${nodeId})`);
 
     return outcome;
   }
@@ -3834,8 +3827,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * `feedback: null` clears. Applies an EMA observation (feedbackToQuality) to the crafted tools
-   * recorded for this message in turn_craft_usage.
+   * A thumb is the user's own rating of the turn (`evolution/ratings.ts`); `feedback: null` clears it. Applies an
+   * EMA observation at that rating to the crafted tools recorded for this message in turn_craft_usage.
    */
   @callable()
   async setTurnFeedback(
@@ -3846,46 +3839,34 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       throw new KinuError('bad_input', 'messageId must be a non-empty string');
     }
 
-    if (feedback === null) {
-      void this.sql`DELETE FROM turn_feedback
-        WHERE actor_id = ${this.actorHandle().actorId} AND message_id = ${messageId}`;
-
-      return { ok: true, messageId, feedback: null, rescored: 0 };
-    }
-
-    if (feedback !== 'positive' && feedback !== 'negative') {
+    if (feedback !== null && feedback !== 'positive' && feedback !== 'negative') {
       throw new KinuError('bad_input', `feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
     }
 
-    void this.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback)
-             VALUES (${this.actorHandle().actorId}, ${messageId}, ${feedback})
-             ON CONFLICT(actor_id, message_id) DO UPDATE SET feedback = excluded.feedback`;
-
     let rescored = 0;
 
-    const usageRows = this.sql<{ tool_names: string }>`
+    const usageRows = feedback === null ? [] : this.sql<{ tool_names: string }>`
       SELECT tool_names FROM turn_craft_usage
       WHERE actor_id = ${this.actorHandle().actorId} AND message_id = ${messageId} LIMIT 1`;
 
-    if (usageRows[0]?.tool_names) {
+    if (feedback !== null && usageRows[0]?.tool_names) {
       const parsedNames = v.safeParse(v.array(v.string()), JSON.parse(usageRows[0].tool_names));
       const names = parsedNames.success ? parsedNames.output : [];
 
       if (names.length > 0) {
-        updateCraftScores(this.boundSql, names, feedbackToQuality(feedback));
+        updateCraftScores(this.boundSql, names, ratingQuality(thumbsRating(feedback).score));
         rescored = names.length;
         this._cachedTools = null;
         this._cachedToolsKey = '';
       }
     }
 
-    // The explicit verdict overrides any classifier row for this turn and, when negative,
-    // corroborates provisional lessons.
+    // The thumb wins over the model's rating of this turn and, when down, corroborates provisional lessons.
     try {
       await this.engine.applyExplicitFeedback(messageId, feedback);
     } catch (err) {
       diagnostics.failure('feedback.explicit_apply_failed', toKinuError({
-        doing: 'recording an explicit turn verdict in the outcome ledger',
+        doing: 'recording a thumb in the rating ledger',
         cause: err,
         otherwise: 'io',
       }), { messageId });
@@ -3897,11 +3878,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Scoped to this actor: message ids are unique only within an actor. */
   @callable()
   async listTurnFeedback(): Promise<Record<string, 'positive' | 'negative'>> {
-    const rows = this.sql<{ message_id: string; feedback: 'positive' | 'negative' }>`
-      SELECT message_id, feedback FROM turn_feedback
-      WHERE actor_id = ${this.actorHandle().actorId}`;
-
-    return Object.fromEntries(rows.map((r) => [r.message_id, r.feedback]));
+    return Object.fromEntries(listThumbs(this.boundSql, this.actorHandle()));
   }
 
   /** Scaffold variant archive (read-only); also backs the agent.scaffoldVersions codemode helper.
@@ -3926,75 +3903,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listGepaRuns(this.boundSql, this.actorHandle(), limit);
   }
 
-  /** The persisted loss curve (replay_evals), newest first. */
+  /** Satisfaction per day, oldest first, with its interval: the Quality tab's series (evolution/ratings.ts). */
   @callable()
-  async getReplayEvals(limit = 50): Promise<ReplayEvalSummary[]> {
-    return listReplayEvals(this.boundSql, this.actorHandle(), limit);
-  }
-
-  /** K_align: correction rate per 100 graded turns, per scaffold version, with 95% Wilson
-   *  intervals, from telemetry alone. */
-  @callable()
-  async getAlignmentConvergence(): Promise<AlignmentConvergence> {
-    return alignmentConvergence(this.boundSql, this.actorHandle());
-  }
-
-  /** Classifier calibration from hand labels; reads "uncalibrated" until labels exist. */
-  @callable()
-  async getOutcomeCalibration(): Promise<CalibrationReport> {
-    return calibrationReport(this.boundSql, this.actorHandle());
-  }
-
-  /** Draw the next calibration set: turns for a human to judge blind. */
-  @callable()
-  async sampleOutcomeLabeling(size: number = DEFAULT_LABEL_BUDGET): Promise<LabelingItem[]> {
-    return sampleForLabeling(this.boundSql, this.actorHandle(), { size });
-  }
-
-  /** Append-only; ids the ledger no longer knows are reported back rather than dropping the pass. */
-  @callable()
-  async recordOutcomeLabeling(
-    labeler: string,
-    labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>,
-  ): Promise<LabelIngestResult> {
-    return ingestOutcomeLabels(this.boundSql, this.actorHandle(), { labeler, labels });
-  }
-
-  /** How the LLM panel scored against the owner's labels, and whether it cleared the
-   *  pre-registered bar to stand in for them. */
-  @callable()
-  async getOutcomeEnsemble(): Promise<EnsembleReport> {
-    return ensembleReport(this.boundSql, this.actorHandle());
-  }
-
-  /**
-   * Judges must come from vendor families other than the routed turn model (not the stored spec);
-   * the one declared exception to `MODEL_ROUTE_POLICY`, see core/src/profiles/model-route.ts.
-   */
-  @callable()
-  async runOutcomeEnsemble(specs?: string[]): Promise<EnsembleRunResult> {
-    const registry = this.providerRegistry();
-    const turnRoute = resolveModelRoute('agent', await this.routingProfile());
-
-    return runEnsemble(this.boundSql, this.actorHandle(), {
-      specs: async () => (await resolveEnsembleJudgeSelection({
-        registry,
-        specs: specs ?? null,
-        chatSpec: turnRoute?.model ?? this.getStoredModelId(),
-      })).specs,
-      judge: (spec) => ({
-        spec,
-        llm: createCompletionLLM({
-          model: registry.resolveModel(spec, this.ownedModelServices.affinityKey), spec, stage: 'judge',
-          // Cross-vendor judge spend: the actor's catalog rate cannot price it and step telemetry
-          // never saw it.
-          spend: {
-            source: 'judge', report: (report) => this.reportModelCall(report),
-            operations: this.modelOperations,
-          },
-        }),
-      }),
-    });
+  async getQuality(days = 30): Promise<QualityDay[]> {
+    return qualitySeries(this.boundSql, this.actorHandle(), { days });
   }
 
   /** One GEPA run with candidates and Pareto-front membership; Maps flattened to objects for RPC. */
@@ -4233,11 +4145,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.facts.recentTopK(limit).map((f) => ({
       key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
     }));
-  }
-
-  /** With candidateCode: the GEPA metric's rollout; without: runs the live scaffold. */
-  private runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
-    return runScaffoldCaptureText(this.scaffoldControl, task, candidateCode);
   }
 
   async getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {
@@ -4501,12 +4408,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The workspace root's read models, held to workspace.read by unit-slate-sources. */
   protected override async slateReadModel(source: SlateReadModel): Promise<JsonValue> {
     const reads = {
-      getAlignmentConvergence: () => this.getAlignmentConvergence(),
       getExecutors: () => this.getExecutors(),
       getGepaRuns: () => this.getGepaRuns(),
       getHeadRuns: () => this.getHeadRuns(),
       getMctsTree: () => this.getMctsTree(),
-      getOutcomeCalibration: () => this.getOutcomeCalibration(),
+      getQuality: () => this.getQuality(),
       getRunTimeline: () => this.getRunTimeline(),
       getToolDescriptions: () => this.getToolDescriptions(),
       getWorkspaceSnapshot: () => this.getWorkspaceSnapshot(),

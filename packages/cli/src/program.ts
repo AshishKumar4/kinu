@@ -19,7 +19,7 @@ import { statusCommand } from './commands/status';
 import { listCommand } from './commands/list';
 import { effortCommand, jobsCommand, modelCommand, toolsCommand, triggersCommand } from './commands/control';
 import {
-  alignmentCommand,
+  qualityCommand,
   eventsCommand,
   executorsCommand,
   gepaCommand,
@@ -34,7 +34,6 @@ import {
   webhookCommand,
 } from './commands/inspect';
 import { debugCommand } from './commands/debug';
-import { labelCommand } from './commands/label';
 import { exportCommand, importCommand } from './commands/export-import';
 import { ACCESS_TOKEN_SCOPES, tokensCommand } from './commands/tokens';
 import { workspaceDeleteCommand } from './commands/workspace';
@@ -399,26 +398,12 @@ export function buildProgram(): Command {
     .action(wrapAction(gepaCommand));
 
   program
-    .command('alignment <name>')
+    .command('quality <name>')
     .helpGroup(INSPECT)
-    .description('Show K_align: corrections per 100 graded turns for each scaffold version, with 95% intervals')
+    .description('Show satisfaction per day: the mean rating of the turns users answered, with 95% intervals')
+    .option('--days <n>', 'Days to show (default: 30)')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(alignmentCommand));
-
-  program
-    .command('label [action] [name] [file]')
-    .helpGroup(INSPECT)
-    .description('Label turn outcomes by hand to measure and correct the classifier (export, ingest, '
-      + 'ensemble, report), or build a corpus from Claude Code transcripts (mine, score)')
-    .option('--out <file>', 'Where to write the labeling file (export) or the corpus report (mine, score)')
-    .option('--size <n>', 'Turns to draw (export)')
-    .option('--labeler <name>', 'Who is labeling (ingest)')
-    .option('--models <a,b>', 'Judges to run, comma-separated (ensemble, score; default: one per connected vendor)')
-    .option('--root <dir>', 'Claude Code transcript root (mine, score; default: ~/.claude/projects)')
-    .option('--projects <a,b>', 'Only projects whose directory name contains one of these (mine, score)')
-    .option('--limit <n>', 'Labeled turns to put to the raters (score; default: 25)')
-    .option('--json', 'Print raw JSON')
-    .action(wrapAction(labelCommand));
+    .action(wrapAction(qualityCommand));
 
   program
     .command('connect')
@@ -518,8 +503,7 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['heads', 'kinu heads jarvis --limit 5'],
   ['debug', 'kinu debug jarvis -o jarvis.debug.jsonl'],
   ['gepa', 'kinu gepa jarvis --run --iterations 3'],
-  ['alignment', 'kinu alignment jarvis'],
-  ['label', 'kinu label export jarvis --size 20'],
+  ['quality', 'kinu quality jarvis'],
   ['connect', 'kinu connect --label studio'],
   ['desktop', 'kinu desktop status'],
   ['daemon', 'kinu daemon tick jarvis'],

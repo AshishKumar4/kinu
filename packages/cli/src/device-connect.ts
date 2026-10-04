@@ -671,7 +671,6 @@ function writePidfile(pid: number): boolean {
     fsyncSync(descriptor);
     closeSync(descriptor);
     descriptor = null;
-    enforceOwnerOnly(PID_PATH, 0o600);
     syncAgentDirectory();
 
     return true;

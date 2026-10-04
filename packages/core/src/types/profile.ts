@@ -1,5 +1,6 @@
 import * as v from 'valibot';
 import type { ReasoningEffort } from '../providers/reasoning-effort';
+import type { DecisionModel } from '../providers/decision-model';
 import type { NamedSwarmPreset } from './swarm';
 
 /** Kebab-case, lowercase-first: the same discipline role and skill names follow. */
@@ -82,6 +83,8 @@ export interface ProfileCatalog {
   accounts?: Readonly<Record<string, string>> | undefined;
   modelFallbacks?: Readonly<Record<string, readonly string[]>> | undefined;
   retries?: number | undefined;
+  /** The decision model that rates turns (`DECISION_MODELS`); absent is `DEFAULT_DECISION_MODEL`. */
+  decisionModel?: DecisionModel | undefined;
 }
 
 /** The owner's retry count when the catalog names none. */

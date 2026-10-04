@@ -3,6 +3,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnTest } from '@kinu.run/test-utils';
 
 import { DEFAULT_BOX_SIZE, type BoxSize } from '../src/sizes';
 import { devboxFailure } from '../src/errors';
@@ -25,7 +26,7 @@ class TestBox extends Devbox<unknown> {
 }
 
 const localExec: Container['exec'] = async (argv, options) => {
-  const child = Bun.spawn(argv, { cwd: options?.cwd, stdout: 'pipe', stderr: 'pipe' });
+  const child = spawnTest(argv, { cwd: options?.cwd, stdout: 'pipe', stderr: 'pipe' });
   const exitCode = child.exited;
 
   return {

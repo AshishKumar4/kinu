@@ -17,11 +17,32 @@ export interface RunOptions {
   readonly stdin?: string;
 }
 
+/** Bun otherwise inherits its launch snapshot, not the scratch environment the preload installed. */
+export function spawnTest<
+  In extends Bun.Spawn.Writable = Bun.Spawn.Writable,
+  Out extends Bun.Spawn.Readable = Bun.Spawn.Readable,
+  Err extends Bun.Spawn.Readable = Bun.Spawn.Readable,
+>(cmd: readonly string[], options?: Bun.Spawn.SpawnOptions<In, Out, Err>): Bun.Subprocess<In, Out, Err>;
+export function spawnTest<
+  In extends Bun.Spawn.Writable = Bun.Spawn.Writable,
+  Out extends Bun.Spawn.Readable = Bun.Spawn.Readable,
+  Err extends Bun.Spawn.Readable = Bun.Spawn.Readable,
+>(options: Bun.Spawn.SpawnOptions<In, Out, Err> & { cmd: string[] }): Bun.Subprocess<In, Out, Err>;
+export function spawnTest<
+  In extends Bun.Spawn.Writable,
+  Out extends Bun.Spawn.Readable,
+  Err extends Bun.Spawn.Readable,
+>(command: readonly string[] | (Bun.Spawn.SpawnOptions<In, Out, Err> & { cmd: string[] }), options?: Bun.Spawn.SpawnOptions<In, Out, Err>): Bun.Subprocess<In, Out, Err> {
+  if ('cmd' in command) return Bun.spawn({ ...command, env: command.env ?? process.env });
+
+  return Bun.spawn([...command], { ...options, env: options?.env ?? process.env });
+}
+
 /** Never `spawnSync`: bun 1.4.0-1.4.2 can spin a later one forever (oven-sh/bun#34069). */
 export async function runToExit(cmd: readonly string[], options: RunOptions = {}): Promise<Exited> {
-  const child = Bun.spawn([...cmd], {
+  const child = spawnTest(cmd, {
     cwd: options.cwd,
-    env: options.env === undefined ? undefined : { ...options.env },
+    env: options.env,
     stdin: options.stdin === undefined ? 'ignore' : new TextEncoder().encode(options.stdin),
     stdout: 'pipe',
     stderr: 'pipe',

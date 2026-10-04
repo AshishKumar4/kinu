@@ -36,7 +36,7 @@ import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
 import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline, writeFully } from './deadline';
-import { recordNotice, recordRed, recordSkipped, recordStep } from './deploy-report';
+import { recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
   CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
@@ -3426,6 +3426,8 @@ export function reportCIVerdicts(file: CIVerdictFile, url: string, report: strin
   for (const row of file.rows) {
     const gate = gates.find((candidate) => candidate.run === row.run);
 
+    if (report !== '') recordTiming(report, { phase: 'ci', what: gate?.label ?? row.run, command: row.run, seconds: row.seconds });
+
     if (row.exitCode === 0) {
       console.log('CI proved ' + row.run + ' on ' + file.sha + ' (' + url + ')');
       continue;
@@ -3905,8 +3907,16 @@ if (import.meta.main) {
   // What each row of a deploy phase is doing while it runs, beside the report (scripts/deploy-live.ts).
   const live = deployPhase === undefined || report === '' ? undefined : openDeployLive(report, deployPhase.join(','));
 
-  /** A red row, said once for the terminal and once into the deploy's report. */
-  const reportRed = (gate: (typeof pending)[number]['gate'], outcome: Awaited<ReturnType<typeof runUnderDeadline>>): void => {
+  /** One row outcome: its wall for the report, its verdict for the terminal, and every red's evidence. */
+  const reportOutcome = (gate: (typeof pending)[number]['gate'], outcome: Awaited<ReturnType<typeof runUnderDeadline>>): boolean => {
+    if (report !== '') recordTiming(report, { phase: gate.phase ?? 'source', what: gate.label, command: gate.run, seconds: outcome.seconds, silence: outcome.longestSilence });
+
+    if (outcome.exitCode === 0) {
+      console.log(`ok  ${gate.run}  (${outcome.seconds.toFixed(1)}s, silent at most ${outcome.longestSilence.toFixed(1)}s)`);
+
+      return true;
+    }
+
     const hung = outcome.exitCode === DEADLINE_EXIT_CODE;
 
     // What went wrong, said once for the terminal, where the row's output is just above, and once for the report,
@@ -3933,6 +3943,8 @@ if (import.meta.main) {
         reproduce: gate.run, finding: found, output: `${outcome.stdout}${outcome.stderr}`,
       });
     }
+
+    return false;
   };
 
   const runPending = async (entry: (typeof pending)[number]): Promise<void> => {
@@ -3984,9 +3996,7 @@ if (import.meta.main) {
       writeVerdicts(verdictPath, { sha: revision, part: ciPart ?? 'all', rows: ciRows });
     }
 
-    if (outcome.exitCode === 0) {
-      console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s, silent at most ${outcome.longestSilence.toFixed(1)}s)`);
-
+    if (reportOutcome(gate, outcome)) {
       // Only a miss re-enumerates the tree: `recordGreen` re-derives the
       // closure from what is on disk NOW, and no other path reads it.
       const proofRecorded = plan?.kind === 'miss' && recordProof(
@@ -3999,8 +4009,6 @@ if (import.meta.main) {
 
       return;
     }
-
-    reportRed(gate, outcome);
   };
 
   if (phaseRows !== undefined) {

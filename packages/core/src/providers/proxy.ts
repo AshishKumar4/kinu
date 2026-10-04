@@ -31,6 +31,9 @@ export function providerProxyCredentialsURL(origin: string): string {
  *  Cloudflare-backed providers; shared by server and clients. */
 export const USER_AI_PROXY_PATH = '/api/user/ai/v1';
 
+/** Beside it, the decision models' `/run/<model>` (`decision-model.ts`), as Workers AI serves `/ai/run` beside `/ai/v1`. */
+export const USER_AI_RUN_PATH = '/api/user/ai/run';
+
 export function cloudProxyBaseURL(origin: string): string {
   return `${origin.replace(/\/+$/, '')}${USER_AI_PROXY_PATH}`;
 }

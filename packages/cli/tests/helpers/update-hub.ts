@@ -1,6 +1,7 @@
 /**
  * A fake update hub at the daemon's two seams (HTTP origin, device socket); the daemon is the real installed
- * file. Production rule: a HELLO whose `version` is not the served build gets UPDATE; a second socket replaces the first.
+ * file. Production rule: a HELLO whose `version` is not the served build gets UPDATE; a second socket replaces the first;
+ * a refusal posted to `/pc/update-refused` is kept, in order.
  */
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -55,6 +56,10 @@ const HelloSchema = v.looseObject({
 
 const FrameSchema = v.looseObject({ id: v.optional(v.string()) });
 
+const RefusalSchema = v.object({ user: v.string(), token: v.string(), version: v.string(), runtime: v.string(), reason: v.string() });
+
+export type HubRefusal = v.InferOutput<typeof RefusalSchema>;
+
 export type HubHello = v.InferOutput<typeof HelloSchema>;
 
 export type HubFrame = v.InferOutput<typeof FrameSchema>;
@@ -82,6 +87,7 @@ export interface UpdateHub {
   served: string;
   sockets: AwaitedList<HubSocket>;
   hits: string[];
+  refusals: AwaitedList<HubRefusal>;
   close(): Promise<void>;
 }
 
@@ -107,6 +113,7 @@ export interface UpdateHubOptions {
 export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
   const sockets = new AwaitedList<HubSocket>();
   const hits: string[] = [];
+  const refusals = new AwaitedList<HubRefusal>();
   const digest = createHash('sha256').update(opts.corrupt ? new Uint8Array([0]) : opts.archive).digest('hex');
   const checksums = { [PLATFORM_ARTIFACT]: digest };
 
@@ -125,6 +132,14 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
     fetch(req, self) {
       const { pathname } = new URL(req.url);
       hits.push(pathname);
+
+      if (pathname === '/pc/update-refused') {
+        return req.json().then((body) => {
+          refusals.push(v.parse(RefusalSchema, body));
+
+          return Response.json({ ok: true });
+        });
+      }
 
       if (pathname === '/pc/connect-ticket') return Response.json({ ticket: `pct_${'b'.repeat(32)}`, expiresAt: Date.now() + 60_000 });
 
@@ -221,6 +236,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
     served: opts.served,
     sockets,
     hits,
+    refusals,
     close: async () => { await server.stop(true); },
   };
 }

@@ -8,6 +8,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
+import { vfsBasename } from '../utils/vfs-helpers';
 import * as v from 'valibot';
 import { ownerSoulDb, SOUL_PATH, UNVERIFIED_SOUL_PATH } from '../identity/soul';
 import { diagnostics, toKinuError } from '../obs/index';
@@ -199,10 +200,12 @@ export type RootMoveVfs = Pick<CredentialedVfs,
   'exists' | 'isDirectory' | 'isSymlink' | 'readlink' | 'readdir' | 'rename' | 'removeRecursive' | 'symlink' | 'unlink'
   | 'stat' | 'chown' | 'chmod'>;
 
+const NIMBUS_HOME_TARGET = vfsBasename(WORKSPACE_ROOT);
+
 export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
   const home = NIMBUS_WORKSPACE_ROOT;
 
-  if (!kernel.isSymlink(home) || kernel.readlink(home) !== WORKSPACE_ROOT) {
+  if (!kernel.isSymlink(home) || kernel.readlink(home) !== NIMBUS_HOME_TARGET) {
     if (kernel.isDirectory(home)) {
       if (kernel.exists(WORKSPACE_ROOT)) {
         moveMissing(kernel, home, WORKSPACE_ROOT);
@@ -214,7 +217,7 @@ export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
       kernel.unlink(home);
     }
 
-    kernel.symlink(WORKSPACE_ROOT, home);
+    kernel.symlink(NIMBUS_HOME_TARGET, home);
   }
 
   const homes = kernel.stat('/home');

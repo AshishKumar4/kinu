@@ -141,7 +141,7 @@ export function AgentSurface(
           <EvolutionBlock title="Self-tuning" hint="GEPA passes propose candidates for the next scaffold version.">
             <GepaView rpc={rpc} />
           </EvolutionBlock>
-          <EvolutionBlock title="Quality" hint="Replay loss, correction rate and calibration, per scaffold version.">
+          <EvolutionBlock title="Quality" hint="How satisfied you were with its turns, per day, rated from your replies and thumbs.">
             <QualityView rpc={rpc} />
           </EvolutionBlock>
         </div>

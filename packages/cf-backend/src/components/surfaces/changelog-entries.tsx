@@ -3,7 +3,7 @@ import type { ComponentType, ReactNode } from "react";
 import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
 import {
   GitBranchIcon, PackageIcon, BrainIcon,
-  SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
+  SparkleIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
   NotePencilIcon, ArrowsClockwiseIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
@@ -38,8 +38,7 @@ const KIND_ICON = {
   tool: PackageIcon,
   fact: BrainIcon,
   gepa: SparkleIcon,
-  replay: TimerIcon,
-  outcomes: ChecksIcon,
+  ratings: ChecksIcon,
   prompt_section: NotePencilIcon,
   refinement: ArrowsClockwiseIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;

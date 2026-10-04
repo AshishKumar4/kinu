@@ -40,12 +40,12 @@ sequenceDiagram
 
     User->>Agent: Message 1
     Agent->>Turn: reviewTurn(turn, followup)
-    Turn->>Turn: Derive outcome from one of five sources
-    alt outcome negative, or an errored turn nobody graded
+    Turn->>Turn: Rate it from the reply, a thumb or a pick
+    alt rated 2 or lower
         Turn->>Turn: Generate reflection → lessons row
         Turn->>Turn: Append to MEMORY.md only when corroborated
     end
-    alt outcome accepted AND tool calls > 0
+    alt rated 4 or more AND tool calls > 0
         Turn->>Turn: extractPattern() → upsert CraftStore tool
     end
 
@@ -70,54 +70,27 @@ sequenceDiagram
 
 A turn is reviewed when the next user message arrives. `AgentOrchestrator.observeUserTurn` claims the previous turn from the durable window and dispatches `reviewTurn()` (`packages/core/src/evolution/engine.ts`) with the new message as its follow-up, but only when that message continues the conversation. An interactive host or the Durable Object runs the review detached, so it never holds the turn queue. A one-shot host writes a durable row instead (`deferTurnReview`), and the next host that opens the workspace drains it through the same `reviewTurn` path.
 
-No length or duration heuristic grades a turn. Quality comes from a real turn outcome, one of `accepted`, `corrected`, `frustrated`, or `abandoned`, recorded in the `turn_outcomes` table. Outcomes come from five sources, listed in canonical order in `TURN_OUTCOME_SOURCES` (`packages/core/src/types/evolution.ts`):
+No length, duration or tool exit rates a turn. A turn's rating is the user's reply to it, recorded in `turn_ratings` (`packages/core/src/evolution/ratings.ts`; design in [EVOLUTION-REDESIGN.md](./EVOLUTION-REDESIGN.md) §1). A rating is a satisfaction score from 1 to 5, the probability that the reply corrected the turn, and what went wrong. Three sources write one, strongest first in `RATING_SOURCES`:
 
 | Source | What produced it |
 |---|---|
-| `explicit` | The user's thumbs vote, through `applyExplicitFeedback` |
-| `classifier` | The LLM verdict on a real conversational follow-up |
-| `session_end` | The session-end abandoned rule |
-| `take_pick` | Which alternate take the user picked, through `applyTakePick` |
-| `execution` | The environment's verdict on a turn no user will grade, through `executionVerdict` |
+| `thumbs` | The user's thumb, through `applyExplicitFeedback`: up is 5, down is 1 |
+| `take_pick` | Which alternate take the user picked: the delivered answer is 4, an alternate rates it 2 |
+| `model` | The decision model reading the user's reply (`rateTurn`, `RATING_QUESTIONS`) |
 
-Reflection fires on any negative outcome, and on an abandoned or ungraded turn that also errored. An LLM call writes a lesson and always records it in `lessons`. The lesson reaches the curated memory note only when corroborated, and corroboration needs a negative verdict from a user source. An `execution` verdict does not corroborate: "the turn hit an error" is not a reader confirming the lesson drawn from it. An uncorroborated lesson stays `provisional` until a later user outcome corroborates it.
+The decision model is the account's Models setting (`decisionModel` in the profile catalog), default Workers AI Clef. It answers typed questions with a probability for every allowed answer (`providers/decision-model.ts`). The cf backend runs it on the Workers AI binding, or through the owner's Cloudflare login. The CLI runs it at `/ai/run` beside the Workers AI endpoint it routes chat to (`workersAiEndpoint`: `KINU_BASE_URL`, a Cloudflare login, or the worker it is signed in to, whose `/api/user/ai/run` serves the decision models only); with none, it rates nothing. The binding's answer shape was measured on a throwaway Worker on 2026-10-02, and the first-run row `turn-rated` holds it on the deployment. A turn nobody answered stays unrated. An answered turn's reading is recorded even under a thumb or pick, which win by the ledger's precedence, so a cleared thumb falls back to it. A refusal only the owner can fix (denied, out of budget) is said once in the activity log and leaves the turn unrated; nothing retries it.
 
-## Calibrating the classifier
+Reflection fires on a turn rated 2 or lower. An LLM call writes a lesson and always records it in `lessons`. The lesson reaches the curated memory note only when corroborated, and corroboration needs the user's own negative: a thumbs-down, a pick of an alternate, or a reply the model reads as a correction with probability 0.8 or more. An uncorroborated lesson stays `provisional` until a later negative corroborates it. A turn rated 4 or more with tool calls may promote a reusable procedure.
 
-Every outcome the follow-up classifier records is a judgement, and every rate downstream counts those judgements rather than what happened: K_align, the per-scaffold outcome rates, the GEPA train/val split, and craft retirement. If the classifier misses a third of the corrections, all of those numbers are wrong by an unknown amount in an unknown direction. More turns only tighten the interval around the wrong answer. `packages/core/src/evolution/calibration.ts` and `packages/core/src/evolution/ppi.ts` correct for this with a few hand labels:
-
-```
-kinu label export <agent>            # draws ~100 turns into a file
-$EDITOR <agent>-calibration.txt         # one letter per turn (~30-45 min)
-kinu label ingest <agent> <file>     # validates, then stores
-kinu label report <agent>            # what the labels established
-```
-
-`DEFAULT_LABEL_BUDGET` is 100, sized so the file is a 30 to 45 minute read. The draw stratifies on the classifier's verdict, because a uniform sample of a ledger that is about 85% `accepted` would measure nothing about the rare verdicts. Within each stratum the draw is systematic in time. The file is blind: it shows the request, the answer, and the user's follow-up, never the classifier's verdict, because a pre-filled guess anchors the labeler on the number under test. Labels land append-only in `outcome_labels`. A re-label is a new row, and the newest wins.
-
-`kinu alignment <agent>` prints the corrected block beneath K_align when text output is selected. With no labels it reads `uncalibrated`, so the reader does not assume classifier and truth agree.
-
-### Two-model labeling panel
-
-A profile measured against last quarter's classifier says nothing about this quarter's, so calibration has to be redone, and thirty minutes each time tends to stop being paid. `packages/core/src/evolution/ensemble.ts` measures whether two models can take the job over:
-
-```
-kinu label ensemble <agent>          # two cross-family judges, same turns
-```
-
-The report gives Cohen's kappa for all three rater pairs (you to panel, you to classifier, panel to classifier) over the same turns, the panel's verdict against yours cell by cell, and the panel's sensitivity and specificity on the negative class, through the same `classifierAccuracy` estimator the classifier's own profile uses.
-
-One measurement needed care. The panel's verdict varies inside the stratum the sample drew on, so `classifierAccuracy`'s closed-form interval treats two halves of one sample as independent and comes back far too narrow. `packages/core/src/evolution/ppi.ts` records the fix, `resampledAccuracy`. Over 250 simulated calibration sets per regime at the about 100-label budget, on a 3,000-row ledger with 15% negatives, this stratified bootstrap covers at 85 to 98% against a nominal 95%. The closed form on the same split covers at 44 to 75%. The source records no date for that run, and `packages/core/tests/unit-ensemble.test.ts` pins the ordering rather than the decimals.
-
-Three conditions in `packages/core/src/evolution/ensemble.ts`, written before any of these numbers existed, decide whether the panel can stand in. First, kappa (you to panel) needs a lower bound at or above 0.60. Second, it must be at least kappa (you to classifier) on the same turns. Third, negative-class recall needs a lower bound at or above 0.70 with specificity at or above 0.90, which keeps the Rogan-Gladen denominator at or above 0.60. The second condition is the one that matters: a panel no closer to you than the classifier already is measures one flawed rater with another. Below the bar the report says the panel cannot stand in. Above it nothing switches automatically either. Passing gives grounds to draw the next set with the panel and hand-audit a slice.
+The Quality panel and `kinu quality <agent>` show satisfaction per day with its 95% interval, the corrected rate, and how many turns were rated and by whom (`qualitySeries`).
 
 ## Session-level evolution
 
 The cadence lives in `AgentOrchestrator`, not the engine. Every five turns it calls `engine.onSessionComplete()` with the accumulated turns. Five is one constant for both backends, `DEFAULT_SESSION_REFLECTION_INTERVAL` (`core/src/orchestrator/agent-orchestrator.ts`); no host setting changes it.
 
-`onSessionComplete` is selective. It needs at least 3 turns in the window, and `sessionWarrantsReflection()` requires that some turn errored, drew negative feedback, or has a negative recorded outcome. A clean session produces no reflection. When it reflects, an LLM call analyzes the window's recent lessons and records a `session_reflection` lesson. That lesson reaches the curated memory note only when a turn in the window carries a negative outcome.
+`onSessionComplete` is selective. It needs at least 3 turns in the window, and `sessionWarrantsReflection()` requires that some turn errored, drew negative feedback, or was rated 2 or lower. A clean session produces no reflection. When it reflects, an LLM call analyzes the window's recent lessons and records a `session_reflection` lesson. That lesson reaches the curated memory note only when a turn in the window carries the user's own negative.
 
-Scaffold mutation runs inside that reflection path, so the window must have reflected. It also needs at least 3 closed session windows, and it is skipped if a proposal is pending. `selectEvolutionBase()` (`core/src/scaffold/archive.ts`) picks the base from the DGM archive. With probability `1 − scaffold_explore_share` (default 0.2, `getScaffoldExploreShare` in `core/src/config/store.ts`) it branches from the live `current`. Otherwise it samples an archived `historical` or `rolled_back` variant weighted by clade-metaproductivity and inverse trial count. The clade score is the evidence-weighted pooled win rate over the candidate's whole descendant subtree, itself included, with win rates already blended with real user outcomes. That is HGM's (ICLR 2026) correction to DGM: a trial win whose children all regressed is a dead end, and the middling ancestor of every good version is worth branching off again. A candidate with no descendants scores exactly its own win rate, so a shallow archive reproduces the pre-clade policy. `maybeEvolveScaffold` reads 12 archive entries, and `renderArchiveBlock` puts the newest 8 into the proposal prompt (`core/src/evolution/engine.ts`).
+Scaffold mutation runs inside that reflection path, so the window must have reflected. It also needs at least 3 closed session windows, and it is skipped if a proposal is pending. `selectEvolutionBase()` (`core/src/scaffold/archive.ts`) picks the base from the DGM archive. With probability `1 − scaffold_explore_share` (default 0.2, `getScaffoldExploreShare` in `core/src/config/store.ts`) it branches from the live `current`. Otherwise it samples an archived `historical` or `rolled_back` variant weighted by clade-metaproductivity and inverse trial count. The clade score is the evidence-weighted pooled win rate over the candidate's whole descendant subtree, itself included, with win rates already blended with real user ratings. That is HGM's (ICLR 2026) correction to DGM: a trial win whose children all regressed is a dead end, and the middling ancestor of every good version is worth branching off again. A candidate with no descendants scores exactly its own win rate, so a shallow archive reproduces the pre-clade policy. `maybeEvolveScaffold` reads 12 archive entries, and `renderArchiveBlock` puts the newest 8 into the proposal prompt (`core/src/evolution/engine.ts`).
 
 `modifyScaffold()` then validates through 4 gates:
 
@@ -170,11 +143,11 @@ The regression veto runs first: more than `maxRegressions` losses rolls the prop
 
 ### How much of a turn a judge sees
 
-Four readers in this loop once truncated evidence to its opening (`slice(0, n)`): the shadow judge, the GEPA reflector, the turn outcome classifier, and the replay judge. A turn whose payoff lands at step 9 of 12 was invisible to them, so the loop could not select for long-horizon behaviour.
+Readers in this loop once truncated evidence to its opening (`slice(0, n)`): the shadow judge, the GEPA reflector, and the turn rater among them. A turn whose payoff lands at step 9 of 12 was invisible to them, so the loop could not select for long-horizon behaviour.
 
 `core/src/utils/evidence-window.ts` is now the single source. `evidenceWindow` keeps head and tail on an even split and names what it dropped. A tool result's head carries the command echo, while a judged trajectory carries its outcome at the end, and the outcome is what is being judged.
 
-`EVIDENCE_BUDGETS` (`core/src/types/evidence.ts`) is ordered so a reader never asks for more than the row it reads was stored at. The stored `turn_outcomes` budgets cap the whole ledger path and were widened first. GEPA's eval instances and the replay judge both read those rows: `storedUserMessage` 8,000, `storedAssistantResponse` 16,000, `storedFollowup` 8,000, `storedEvidence` 1,000. Readers sit under them: `shadowTask` 6,000, `shadowOutput` 10,000, `outcomeUserMessage` 4,000, `outcomeAssistantResponse` 8,000, `replayTask` 6,000, `replayFreshResponse` and `replayReferenceResponse` 12,000. A candidate's source stays head-truncated rather than windowed (`gepaParentSource` 16,000), because a rewrite of code whose middle was elided comes back with a hole.
+`EVIDENCE_BUDGETS` (`core/src/types/evidence.ts`) is ordered so a reader never asks for more than the row it reads was stored at. The stored `turn_ratings` budgets cap the whole ledger path and were widened first. GEPA's eval instances read those rows: `storedUserMessage` 8,000, `storedAssistantResponse` 16,000, `storedFollowup` 8,000. Readers sit under them: `shadowTask` 6,000, `shadowOutput` 10,000, `outcomeUserMessage` 4,000, `outcomeAssistantResponse` 8,000, `replayTask` 6,000, `replayFreshResponse` and `replayReferenceResponse` 12,000. A candidate's source stays head-truncated rather than windowed (`gepaParentSource` 16,000), because a rewrite of code whose middle was elided comes back with a hole.
 
 This change left the protocols, thresholds, and sampling rates above as they were, but not unaffected. The Monte Carlo that set them modelled the old evidence, and richer evidence moves decisive yield and tie rate. Those constants are due a re-run against the new budgets.
 
@@ -186,9 +159,7 @@ The archive keeps every version: a read model over `scaffold_versions` joined to
 
 CraftStore consolidation (`periodicCraftConsolidation`, `core/src/craft/consolidation.ts`) computes `effectiveScore` with the EMA (α = 0.3) and time decay on a 30-day half-life. It retires tools below 0.1 that have been used at least twice. Unscored tools are skipped. The whole pass aborts if it would empty the store: a workspace whose every tool went stale keeps a low-quality toolbox rather than an empty one.
 
-Replay eval (`runReplayEval`, `core/src/evolution/replay.ts`) re-scores labeled past turns into a loss curve, so a scaffold change is judged against a number. Every point on the curve is a mean of `DEFAULT_REPLAY_SAMPLE_SIZE` (20) judge verdicts, reported and persisted in `replay_evals.score_lo` and `score_hi` with the 95% Wilson interval around it (`core/src/utils/stats.ts`). The changelog calls a move "improved" or "declined" only when the two intervals do not overlap.
-
-GEPA train/val split (`buildOutcomeEvalSplit`, `core/src/evolution/eval-split.ts`). The reflection minibatch draws from older corrected and frustrated turns, while the newest failures are held out and scored alongside the accepted-turn regression guards. The two sets are disjoint, so a winning candidate was never optimised against the instances that picked it. When the ledger holds too few failures to hold any out, the split returns a `degeneracy` reason, and the caller reports the selection as exploratory rather than overlapping the sets.
+GEPA train/val split (`buildOutcomeEvalSplit`, `core/src/evolution/eval-split.ts`). The reflection minibatch draws from older turns rated 2 or lower, while the newest are held out and scored alongside regression guards rated 4 or more. The two sets are disjoint, so a winning candidate was never optimised against the instances that picked it. When the ledger holds too few failures to hold any out, the split returns a `degeneracy` reason, and the caller reports the selection as exploratory rather than overlapping the sets.
 
 A failed judge call is unavailable evidence, not a neutral score. Failure during
 seed scoring, reflection evaluation, or candidate scoring aborts the GEPA run;
@@ -210,8 +181,7 @@ Every self-modification shows up as a human-readable card (`core/src/evolution/c
 | `tool` | `crafted_tools` joined to `craft_scores` | `craft_retire` |
 | `fact` | `agent_facts`, collapsed into one card with children | `fact_forget` / `fact_forget_many` |
 | `gepa` | completed GEPA runs | not revertable |
-| `replay` | replay-eval scores with their intervals, plus the direction against the previous run when the intervals separate | not revertable |
-| `outcomes` | aggregated `turn_outcomes` counts | not revertable |
+| `ratings` | `turn_ratings`: mean satisfaction with its interval, the corrected rate, and each rated turn's reason | not revertable |
 | `prompt_section` | `prompt_section_versions`, keyed `<sectionId>:<version>` because versions are numbered per section | `prompt_section_rollback` |
 | `refinement` | `refinement_requests`, one card per request with one child per routed edit | the children carry the owner's own revert |
 
@@ -351,6 +321,6 @@ Evolution activity is persisted to the `evolution_events` SQL table:
 | `data` | TEXT | JSON payload (optional) |
 | `created_at` | INTEGER | Epoch milliseconds |
 
-The engine emits nine types (`EvolutionEvent`, `core/src/evolution/types.ts`): `reflection`, `craft_discovered`, `scaffold_proposed`, `consolidation`, `turn_complete`, `replay_eval`, `changelog_digest`, `experience_import` and `advisor_note`. `recordMisevolutionVeto` writes a tenth, `misevolution_veto`, directly (`core/src/safety/misevolution.ts`).
+The engine emits eight types (`EvolutionEvent`, `core/src/evolution/types.ts`): `reflection`, `craft_discovered`, `scaffold_proposed`, `consolidation`, `turn_complete`, `changelog_digest`, `experience_import` and `advisor_note`. `recordMisevolutionVeto` writes a ninth, `misevolution_veto`, directly (`core/src/safety/misevolution.ts`).
 
 This table is one of four sources the Run Timeline read model merges (`getRunTimeline`, `core/src/read-models/timeline.ts`); the others are the per-run `run_events` log, the MCTS `search_nodes` table, and detached background jobs. The merge runs server-side and does not depend on the platform, so every backend has the timeline. `kinu status` reads the same table locally.

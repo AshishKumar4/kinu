@@ -74,7 +74,7 @@ export function classifyResponseMode(assistantResponse: string): ResponseMode {
   return trimmed.length > PROSE_CHARS ? 'prose' : 'terse';
 }
 
-/** `TurnOutcomeRow` satisfies it structurally; this module imports no ledger. */
+/** A low turn rating, as the engine maps it; this module imports no ledger. */
 export interface PathologyInput {
   turnId: string | null;
   /** Not part of the cell id: severity is a statistic about a cell. */

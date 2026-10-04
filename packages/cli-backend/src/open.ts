@@ -4,7 +4,7 @@ import {
   getCurrentScaffoldVersion, memoryBytes,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, waitOnSharedWrites, type CLIRuntime } from './runtime';
-import type { LocalProviderCredentials } from './model-resolver';
+import type { LocalCloudSession, LocalProviderCredentials } from './model-resolver';
 import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
 import type { LocalActorConfig } from '@kinu.run/core';
@@ -27,6 +27,8 @@ interface CLIOpenOptions {
   llm: LLMProviderConfig | null;
   providerCredentials?: LocalProviderCredentials;
   oauthStore?: LocalOAuthStore;
+  /** The signed-in session, whose worker rates turns. */
+  cloud?: LocalCloudSession;
   cwd?: string | null;
   checkpointKeep?: number;
 }

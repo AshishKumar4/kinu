@@ -306,7 +306,7 @@ describe('stability pilot gate', () => {
         '--a', variant,
         '--b', 'null',
         '--repeats', '3',
-      ], { stdout: 'pipe', stderr: 'pipe' });
+      ], { env: process.env, stdout: 'pipe', stderr: 'pipe' });
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr.toString()).toContain('model-backed runs need --pilot-report');
@@ -512,7 +512,7 @@ describe('artifact retention — a scored run leaves evidence or it does not run
       '--run-root', tempDir('bench-retention-e2e-'),
       '--artifacts', join(tmpdir(), 'kinu-bench-swept'),
       '--limit', '1',
-    ], { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' });
+    ], { env: process.env, cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' });
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain('which is swept');
@@ -1131,7 +1131,7 @@ describe('the long-horizon check scores what was actually materialized', () => {
   function runCheck(dir: string): number {
     const [, script, encoded] = task.checks[0].command;
 
-    return Bun.spawnSync(['bun', join(REPO_ROOT, script), encoded], { cwd: dir, stdout: 'pipe', stderr: 'pipe' }).exitCode;
+    return Bun.spawnSync(['bun', join(REPO_ROOT, script), encoded], { env: process.env, cwd: dir, stdout: 'pipe', stderr: 'pipe' }).exitCode;
   }
 
   test('materializes every part, and the null control fails for want of an answer', () => {

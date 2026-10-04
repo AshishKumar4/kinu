@@ -17,8 +17,8 @@ import { initEventsHubTables } from '../src/events/hub/schema';
 import { initRunEventTables } from '../src/events/recorder';
 import { initActorClaimTables } from '../src/orchestrator/actor-claims';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
-import { initTurnOutcomeTables } from '../src/evolution/outcomes';
-import { initReplayTables } from '../src/evolution/replay';
+import { initLessonTables } from '../src/evolution/lessons';
+import { initTurnRatingTables } from '../src/evolution/ratings';
 import { initRefinementTables } from '../src/evolution/refinement';
 import { initImportedExperienceTable } from '../src/experience/imports';
 import { initHeadsTables } from '../src/heads/schema';
@@ -50,8 +50,8 @@ const OWNED = {
   initAlternateTakesTable: (db) => initAlternateTakesTable(db.execRaw),
   initExplorationRecordsTable: (db) => initExplorationRecordsTable(db.execRaw),
   initSwarmNodeRecords: (db) => initSwarmNodeRecords(db.execRaw),
-  initTurnOutcomeTables: (db) => initTurnOutcomeTables(db.execRaw),
-  initReplayTables: (db) => initReplayTables(db.execRaw),
+  initLessonTables: (db) => initLessonTables(db.execRaw),
+  initTurnRatingTables: (db) => initTurnRatingTables(db.execRaw),
   initRefinementTables: (db) => initRefinementTables(db.execRaw),
   initEventsHubTables: (db) => initEventsHubTables(db.exec),
   initHeadsTables: (db) => initHeadsTables(db.execRaw),
@@ -77,7 +77,7 @@ const OWNED = {
 
 /** The surface a workspace root has and an actor scope does not. */
 const ROOT_ONLY_TABLES = [
-  'agent_open_turns', 'fork_lineage', 'fork_staged_files', 'fork_transfer',
+  'agent_figures', 'agent_open_turns', 'fork_lineage', 'fork_staged_files', 'fork_transfer',
   'slate_file_manifest', 'slate_live_share_users', 'slate_live_shares', 'slate_publications',
   'slate_share_users', 'slate_shares', 'slate_state', 'slate_versions',
   'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity', 'workspace_soul',

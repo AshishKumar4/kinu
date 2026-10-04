@@ -1,22 +1,13 @@
-/** A tier refusing for the owner to fix is said once (T3). */
+/** A tier, or the decision model that rates turns, refusing for the owner to fix is said once (T3). */
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
 import { writeActivityLog } from '../identity/activity-log';
 import { diagnostics } from '../obs/index';
 import { describeProviderError, providerStatusOf } from '../providers/util';
-import type { TierId } from '../types/profile';
+import type { TierRefusals } from '../types/refusals';
+import { DECISION_REFUSALS } from '../providers/decision-model';
 import type { SqlExecutor } from '../types/primitives';
 
-export interface TierRefusal {
-  readonly model: string;
-  readonly cause: unknown;
-}
-
-export interface TierRefusals {
-  changes(): number;
-  refused(refusal: { readonly tier: TierId; readonly since: number; readonly refusals: readonly TierRefusal[] }): void;
-  answered(tier: TierId): void;
-}
 
 const REFUSAL_KEY = 'model_refusal:';
 
@@ -61,7 +52,7 @@ export function tierRefusals(deps: {
       });
       writeActivityLog(() => ({ sql: deps.sql, actor: deps.actor }), {
         event: 'model_tier_refused',
-        detail: `Your ${tier} tier is refusing requests. ${refusals.map(({ model, cause }) => `${model}: ${describeProviderError({ cause })}.`).join(' ')} `
+        detail: `Your ${tier === DECISION_REFUSALS ? 'decision model' : `${tier} tier`} is refusing requests. ${refusals.map(({ model, cause }) => `${model}: ${describeProviderError({ cause })}.`).join(' ')} `
           + `Change it in ${deps.settings}.`,
         elapsedMs: 0,
         createdAt: deps.now(),

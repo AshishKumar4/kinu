@@ -18,17 +18,13 @@ import {
   applyPromptSectionDecision, getPendingPromptSection,
   listPromptSectionVersions,
 } from '../prompting/section-store';
-import { listReplayEvals } from './replay';
-import {
-  listTurnOutcomes, TURN_OUTCOMES, TURN_OUTCOME_SOURCES,
-  type TurnOutcomeSource, type TurnOutcomeRow,
-} from './outcomes';
+import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
   createRefinementStore,
   type RefinementDisposition, type RefinementStage,
 } from './refinement';
 import { describePathology } from './pathology';
-import { formatScoreInterval, lossInterval, type ScoreInterval } from '../utils/stats';
+import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
 import { renderThrownChain, tolerate } from '../obs/index';
 
@@ -37,9 +33,11 @@ const ScaffoldRunEventSchema = v.object({
   toVersion: v.optional(v.number()),
 });
 
-export type ChangelogEntryKind =
-  'scaffold' | 'tool' | 'fact' | 'gepa' | 'replay' | 'outcomes' | 'prompt_section'
-  | 'refinement';
+export const CHANGELOG_ENTRY_KINDS = [
+  'scaffold', 'tool', 'fact', 'gepa', 'ratings', 'prompt_section', 'refinement',
+] as const;
+
+export type ChangelogEntryKind = (typeof CHANGELOG_ENTRY_KINDS)[number];
 
 export type ChangelogRevertAction =
   | { type: 'scaffold_rollback'; target: string }
@@ -75,7 +73,7 @@ export interface BuildChangelogOptions {
   since?: number;
   /** Default 50. */
   limit?: number;
-  /** Drop measurements ('outcomes', 'replay') and `noChange` runs before the
+  /** Drop measurements ('ratings') and `noChange` runs before the
    *  limit, so bookkeeping cannot push a real change off the page. */
   changesOnly?: boolean;
   now?: number;
@@ -361,9 +359,9 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
   return createRefinementStore(sql, actor).list(limit).map((request) => {
     const trigger = request.trigger === 'explicit'
       ? 'you asked for it'
-      : 'unresolved corrections accumulated';
+      : 'unresolved low-rated turns accumulated';
 
-    const turns = `${String(request.turnIds.length)} graded turn${request.turnIds.length === 1 ? '' : 's'}`;
+    const turns = `${String(request.turnIds.length)} rated turn${request.turnIds.length === 1 ? '' : 's'}`;
 
     const items: ChangelogEntry[] = request.routes.map((route, index) => {
       // An excerpt; the full file comes only from `showRefinement`.
@@ -421,109 +419,57 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
   });
 }
 
-type ReplayDirection = 'improved' | 'declined' | 'held' | 'reached';
+/** Per-source phrasing for a batch of ratings. */
+const RATING_BATCH_PHRASE = {
+  thumbs: "by the user's thumbs",
+  take_pick: "by the user's picks between takes",
+  model: 'by the decision model from the user\'s reply',
+} satisfies Record<RatingSource, string>;
 
-/** Improved/declined only when the intervals don't overlap. */
-function replayDirection(current: ScoreInterval, previous: ScoreInterval | undefined): ReplayDirection {
-  if (previous === undefined) return 'reached';
-
-  if (current.lo > previous.hi) return 'improved';
-
-  if (current.hi < previous.lo) return 'declined';
-
-  return 'held';
-}
-
-const REPLAY_MOVE: Record<ReplayDirection, string> = {
-  improved: 'improved to',
-  declined: 'declined to',
-  held: 'held within noise at',
-  reached: 'reached',
-};
-
-function replayEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  const rows = listReplayEvals(sql, actor, limit + 1);
-
-  return rows.slice(0, limit).map((r, index) => {
-    const direction = replayDirection(r.interval, rows.at(index + 1)?.interval);
-
-    return {
-      id: `replay:${r.id}`,
-      kind: 'replay' as const,
-      at: r.ranAt,
-      summary: `Self-test score ${REPLAY_MOVE[direction]} ${formatScoreInterval(r.interval)}`,
-      evidence: `Replay eval: score ${formatScoreInterval(r.interval)} · ` +
-        `loss ${formatScoreInterval(lossInterval(r.interval))}` +
-        (r.scaffoldVersion != null ? ` on scaffold v${r.scaffoldVersion}` : '') +
-        ` · ${r.sampleSize} labeled turns · ${r.acceptedCount} accepted / ${r.negativeCount} corrected`,
-    };
-  });
-}
-
-/** Per-source phrasing, so `execution` and `session_end` rows never claim a user reply. */
-const OUTCOME_BATCH_PHRASE = {
-  explicit: "from the user's thumbs",
-  classifier: 'from how the user replied',
-  session_end: 'from sessions ending unanswered',
-  take_pick: "from the user's picks between takes",
-  execution: 'by whether their tool calls ran',
-} satisfies Record<TurnOutcomeSource, string>;
-
-/** Why one verdict was reached; rows without `evidence` phrase from their source. */
-function outcomeItemEvidence(row: TurnOutcomeRow): string {
-  switch (row.source) {
-    case 'classifier':
-      return `the user's reply read as ${row.outcome}`
-        + (row.evidence ? `: ${row.evidence}` : '')
-        + ` · confidence ${pct(row.confidence)}`;
-    case 'execution':
-      return row.evidence
-        ?? `the turn's tool calls ${row.outcome === 'accepted' ? 'ran clean' : 'hit an error'}`;
-    case 'explicit':
-      return row.outcome === 'accepted' ? 'thumbs up from the user' : 'thumbs down from the user';
+function ratingItemEvidence(rating: TurnRating): string {
+  switch (rating.source) {
+    case 'thumbs':
+      return rating.score >= 3 ? 'thumbs up from the user' : 'thumbs down from the user';
     case 'take_pick':
-      return row.evidence ?? "the user's pick between alternate takes";
-    case 'session_end':
-      return 'the session ended with no reply to grade';
+      return rating.score >= 3 ? 'the user re-picked the delivered answer' : 'the user picked an alternate take';
+    case 'model':
+      return `the user's reply read as ${rating.score.toFixed(1)}/5`
+        + (rating.wrong !== null && rating.wrong !== 'nothing' ? `, ${rating.wrong.replaceAll('_', ' ')}` : '')
+        + ` · corrected ${pct(rating.corrected)}`;
   }
 }
 
-function outcomeEntry(
+function ratingEntry(
   sql: SqlExecutor, actor: ActorHandle, since: number | undefined, limit: number,
 ): ChangelogEntry | null {
-  const rows = listTurnOutcomes(sql, actor, { limit: 200 })
-    .filter((r) => since === undefined || r.createdAt > since);
+  const rows = listTurnRatings(sql, actor, { limit: 200, ...(since !== undefined && { since: since + 1 }) });
 
   if (rows.length === 0) return null;
-  const count = (k: string) => rows.filter((r) => r.outcome === k).length;
   const newest = rows.reduce((acc, r) => Math.max(acc, r.createdAt), 0);
+  const satisfaction = satisfactionInterval(rows.map((r) => r.score));
+  const corrected = rows.reduce((sum, r) => sum + r.corrected, 0) / rows.length;
 
-  const parts = TURN_OUTCOMES
-    .map((k) => [k, count(k)] as const)
+  const provenance = RATING_SOURCES
+    .map((source) => [source, rows.filter((r) => r.source === source).length] as const)
     .filter(([, n]) => n > 0)
-    .map(([k, n]) => `${n} ${k}`);
-
-  const provenance = TURN_OUTCOME_SOURCES
-    .map((s) => [s, rows.filter((r) => r.source === s).length] as const)
-    .filter(([, n]) => n > 0)
-    .map(([s, n]) => `${n} ${OUTCOME_BATCH_PHRASE[s]}`);
+    .map(([source, n]) => `${n} ${RATING_BATCH_PHRASE[source]}`);
 
   return {
-    id: `outcomes:${newest}:${rows.length}`,
-    kind: 'outcomes',
+    id: `ratings:${newest}:${rows.length}`,
+    kind: 'ratings',
     at: newest,
-    summary: `Graded ${rows.length} turn${rows.length === 1 ? '' : 's'} · ${provenance.join(' · ')}`,
-    evidence: parts.join(' · '),
+    summary: `Rated ${rows.length} turn${rows.length === 1 ? '' : 's'} · ${provenance.join(' · ')}`,
+    evidence: `satisfaction ${formatScoreInterval(satisfaction, 1)} of 5 · corrected ${pct(corrected)}`,
     // Bounded by the digest limit; the 200-row read is for counting only.
     items: rows.slice(0, limit).map((row) => {
-      const request = row.userMessage.trim().replace(/\s+/gu, ' ');
+      const request = row.request.trim().replace(/\s+/gu, ' ');
 
       return {
-        id: `outcome:${row.id}`,
-        kind: 'outcomes' as const,
+        id: `rating:${row.id}`,
+        kind: 'ratings' as const,
         at: row.createdAt,
-        summary: `${row.outcome}: "${request.length > 90 ? `${request.slice(0, 90)}...` : request || '(no recorded request)'}"`,
-        evidence: outcomeItemEvidence(row),
+        summary: `${row.score.toFixed(1)}/5: "${request.length > 90 ? `${request.slice(0, 90)}...` : request || '(no recorded request)'}"`,
+        evidence: ratingItemEvidence(row),
       };
     }),
   };
@@ -539,7 +485,6 @@ export function buildChangelog(
     ...scaffoldEntries(sql, actor),
     ...toolEntries(sql, limit),
     ...gepaEntries(sql, actor, limit),
-    ...replayEntries(sql, actor, limit),
     ...promptSectionEntries(sql, actor, limit),
     ...refinementEntries(sql, actor, limit),
   ].filter((e) => opts.since === undefined || e.at > opts.since);
@@ -547,13 +492,13 @@ export function buildChangelog(
   const facts = factAggregate(sql, actor, limit, opts.since);
 
   if (facts) entries.push(facts);
-  const outcomes = outcomeEntry(sql, actor, opts.since, limit);
+  const ratings = ratingEntry(sql, actor, opts.since, limit);
 
-  if (outcomes) entries.push(outcomes);
+  if (ratings) entries.push(ratings);
   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
 
   const kept = opts.changesOnly === true
-    ? entries.filter((e) => e.kind !== 'outcomes' && e.kind !== 'replay' && e.noChange !== true)
+    ? entries.filter((e) => e.kind !== 'ratings' && e.noChange !== true)
     : entries;
 
   return kept.slice(0, limit);

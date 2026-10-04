@@ -2,7 +2,7 @@
 // renderer read it. Every object is loose: the reporter adds fields freely and only these are relied on.
 import { basename } from 'node:path';
 import * as v from 'valibot';
-import { JsonValueSchema } from '@kinu.run/core';
+import { JsonValueSchema, summarizeSteps, type RunEvent } from '@kinu.run/core';
 import { TURN_OUTCOMES } from './task';
 
 const JsonRecordSchema = v.record(v.string(), JsonValueSchema);
@@ -29,14 +29,22 @@ const CheckSchema = v.looseObject({ id: v.string(), pass: v.boolean(), evidence:
 const Count = v.pipe(v.number(), v.integer(), v.minValue(0));
 
 const StepUsageSchema = v.object({
+  actor: v.string(),
+  timestamp: v.string(),
   runId: v.string(),
   stepIndex: Count,
   inputTokens: v.nullable(Count),
+  outputTokens: v.nullable(Count),
   cacheReadTokens: v.nullable(Count),
   cacheWriteTokens: v.nullable(Count),
 });
 
 export type StepUsage = v.InferOutput<typeof StepUsageSchema>;
+
+const CacheSchema = v.object({
+  hitShare: v.nullable(v.number()), ema: v.nullable(v.number()), p95: v.nullable(v.number()),
+  p99: v.nullable(v.number()), samples: Count,
+});
 
 /** One trial as the harness reported it, normalized by vitest-evals (`normalizeHarnessRun`). */
 export const HarnessRunSchema = v.looseObject({
@@ -54,11 +62,12 @@ export const HarnessRunSchema = v.looseObject({
   usage: v.looseObject({
     model: v.pipe(v.string(), v.minLength(1)),
     inputTokens: v.optional(Count),
-    outputTokens: v.optional(Count, 0),
+    outputTokens: v.optional(Count),
     metadata: v.optional(v.looseObject({
       costUsd: v.optional(v.pipe(v.number(), v.minValue(0))),
       cacheReadTokens: v.optional(Count),
       cacheWriteTokens: v.optional(Count),
+      cache: v.optional(CacheSchema),
       steps: v.optional(v.array(StepUsageSchema), []),
     }), { steps: [] }),
   }),
@@ -74,7 +83,70 @@ export const HarnessRunSchema = v.looseObject({
 
 export type HarnessRun = v.InferOutput<typeof HarnessRunSchema>;
 
-export type UsageMetadata = Pick<HarnessRun['usage']['metadata'], 'costUsd' | 'cacheReadTokens' | 'cacheWriteTokens' | 'steps'>;
+export type UsageMetadata = Pick<HarnessRun['usage']['metadata'], 'costUsd' | 'cacheReadTokens' | 'cacheWriteTokens' | 'cache' | 'steps'>;
+
+/** Public run ledgers retain each actor's request identity, including hired agents and swarm nodes. */
+export type ActorLedger = { readonly actor: string; readonly events: readonly RunEvent[] };
+
+/** Complete token totals, and Activity's cache distribution over the reported per-request rates. */
+export function summarizePromptUsage(steps: readonly StepUsage[]) {
+  const total = (field: 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'): number | undefined => {
+    if (steps.length === 0) return undefined;
+
+    let tokens = 0;
+
+    for (const step of steps) {
+      const count = step[field];
+
+      if (count === null) return undefined;
+      tokens += count;
+    }
+
+    return tokens;
+  };
+
+  const inputTokens = total('inputTokens');
+  const cacheReadTokens = total('cacheReadTokens');
+
+  const { ema, p95, p99, samples } = summarizeSteps(steps.map((step) => ({ usage: {
+    input: step.inputTokens ?? undefined, cacheRead: step.cacheReadTokens ?? undefined,
+  } })), { windowLimit: steps.length }).cacheHit;
+
+  return {
+    inputTokens, outputTokens: total('outputTokens'), cacheReadTokens, cacheWriteTokens: total('cacheWriteTokens'),
+    cache: { hitShare: inputTokens === undefined || inputTokens === 0 || cacheReadTokens === undefined ? null : cacheReadTokens / inputTokens,
+      ema, p95, p99, samples },
+  };
+}
+
+/** Each provider-reported request, oldest first. Missing counts stay unknown, never zero. */
+export function measurePromptUsage(ledgers: readonly ActorLedger[]) {
+  const steps: StepUsage[] = [];
+
+  for (const { actor, events } of ledgers) {
+    for (const event of events) {
+      if (event.type !== 'step_finish') continue;
+
+      steps.push({
+        actor, timestamp: event.timestamp, runId: event.runId, stepIndex: event.stepIndex,
+        inputTokens: event.usage?.input ?? null, outputTokens: event.usage?.output ?? null,
+        cacheReadTokens: event.usage?.cacheRead ?? null, cacheWriteTokens: event.usage?.cacheWrite ?? null,
+      });
+    }
+  }
+
+  steps.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.actor.localeCompare(b.actor)
+    || a.runId.localeCompare(b.runId) || a.stepIndex - b.stepIndex);
+
+  const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cache } = summarizePromptUsage(steps);
+  const metadata: UsageMetadata = { steps, cache };
+
+  if (cacheReadTokens !== undefined) metadata.cacheReadTokens = cacheReadTokens;
+
+  if (cacheWriteTokens !== undefined) metadata.cacheWriteTokens = cacheWriteTokens;
+
+  return { inputTokens, outputTokens, metadata };
+}
 
 const AssertionSchema = v.looseObject({
   status: v.picklist(['passed', 'failed']),

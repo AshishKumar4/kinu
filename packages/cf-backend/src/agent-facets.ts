@@ -6,7 +6,7 @@ import { relayedAnswer, remoteContextTree } from '@kinu.run/core';
 import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
-import type { AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, AgentTurnEnd, TurnRequestAt } from '@kinu.run/core';
+import type { AgentFigures, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, AgentTurnEnd, TurnRequestAt } from '@kinu.run/core';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/agent-facet';
@@ -60,7 +60,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   observe(lines: ReadableStream<Uint8Array>, call: ObservedCall) { return this.answers.observe(lines, call); }
   answerMetadata(turnId: string, narration: readonly string[]) { return this.answers.answerMetadata(turnId, narration); }
   finishTurn(turnId: string, end: AgentTurnEnd) { return this.answers.finishTurn(turnId, end); }
-  failTurn(turnId: string, failure: string) { return this.answers.failTurn(turnId, failure); }
+  failTurn(turnId: string, failure: string, figures: AgentFigures) { return this.answers.failTurn(turnId, failure, figures); }
   getAuth(key: string, opts?: AuthRequest) { return this.answers.getAuth(key, opts); }
   listCredentials() { return this.answers.listCredentials(); }
   relayDevice(provider: RelayedProvider) { return this.answers.relayDevice(provider); }
@@ -125,7 +125,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   observe(lines: ReadableStream<Uint8Array>, call: ObservedCall) { return relayedAnswer(this.host().observe(lines, call)); }
   answerMetadata(turnId: string, narration: readonly string[]) { return relayedAnswer(this.host().answerMetadata(turnId, narration)); }
   finishTurn(turnId: string, end: AgentTurnEnd) { return relayedAnswer(this.host().finishTurn(turnId, end)); }
-  failTurn(turnId: string, failure: string) { return relayedAnswer(this.host().failTurn(turnId, failure)); }
+  failTurn(turnId: string, failure: string, figures: AgentFigures) { return relayedAnswer(this.host().failTurn(turnId, failure, figures)); }
   getAuth(key: string, opts?: AuthRequest) { return relayedAnswer(this.host().getAuth(key, opts)); }
   listCredentials() { return relayedAnswer(this.host().listCredentials()); }
   relayDevice(provider: RelayedProvider) { return relayedAnswer(this.host().relayDevice(provider)); }

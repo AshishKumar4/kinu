@@ -6,7 +6,7 @@ import { platformFact, type EvalAccount, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalNameSlug, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import { gatherEvidence, writeEvidence, type WorkspaceEvidence } from './evidence';
-import { HarnessRunSchema, type StepUsage, type UsageMetadata } from './results';
+import { HarnessRunSchema, measurePromptUsage, type ActorLedger } from './results';
 import type { KinuPublicSession } from './session';
 import { claimTrialAccount, trialTarget } from './slot';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } from './target';
@@ -84,46 +84,6 @@ function memoryReset(message: string): boolean {
   return MEMORY_RESETS.some((reset) => message.includes(reset));
 }
 
-/** Prompt usage from the public ledger, complete totals only: a partial denominator would overstate cache hits. */
-export function measurePromptUsage(events: readonly RunEvent[]) {
-  const steps: StepUsage[] = [];
-
-  for (const event of events) {
-    if (event.type !== 'step_finish') continue;
-    steps.push({
-      runId: event.runId, stepIndex: event.stepIndex,
-      inputTokens: event.usage?.input ?? null,
-      cacheReadTokens: event.usage?.cacheRead ?? null,
-      cacheWriteTokens: event.usage?.cacheWrite ?? null,
-    });
-  }
-
-  const total = (field: 'inputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'): number | undefined => {
-    if (steps.length === 0) return undefined;
-
-    let tokens = 0;
-
-    for (const step of steps) {
-      const count = step[field];
-
-      if (count === null) return undefined;
-      tokens += count;
-    }
-
-    return tokens;
-  };
-
-  const metadata: UsageMetadata = { steps };
-
-  for (const field of ['cacheReadTokens', 'cacheWriteTokens'] as const) {
-    const tokens = total(field);
-
-    if (tokens !== undefined) metadata[field] = tokens;
-  }
-
-  return { inputTokens: total('inputTokens'), metadata };
-}
-
 /** A turn whose runs the deployment ended in error measured the deployment, not the agent. */
 function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): EvalTurnOutcome {
   const failed = events.find((event) => event.type === 'run_end' && !before.has(event.runId)
@@ -137,7 +97,7 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
 
 /** What a turn tells its trial while it waits: how many steps its runs have recorded (a stream that dropped shows no
  *  more, and the ledger does), and through `watching` the jobs it waits on. */
-type TurnHooks = { readonly stepped: (steps: number) => void; readonly watching: WatchOptions };
+type TurnHooks = { readonly stepped: (steps: number) => void; readonly watching: WatchOptions; readonly previousTurns: readonly EvalTurnResult[] };
 
 /** Where a trial records what stopped it early, and how long the turn it stopped had run. */
 type StopRecord = { readonly turns: EvalTurnResult[]; readonly errors: HarnessError[]; readonly turnWallMs: number };
@@ -165,7 +125,7 @@ function recordStop(thrown: { readonly cause: unknown }, { turns, errors, turnWa
 }
 
 /** One turn: its seeded files, the prompt, the wait until the workspace settles, and the checks. */
-async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, { stepped, watching }: TurnHooks): Promise<EvalTurnResult> {
+async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, { stepped, watching, previousTurns }: TurnHooks): Promise<EvalTurnResult> {
   if (turn.fresh) {
     await timeline.span('evict', async () => {
       await session.abortActivation();
@@ -222,7 +182,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
   const checks: EvalCheck[] = cut.length === 0 ? [] : [{ id: CUT_REPORTED_COMPLETED, pass: false, evidence: { runs: cut } }];
   const verify = turn.verify;
 
-  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies).collect(verify)));
+  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies, previousTurns).collect(verify)));
   const afterEviction = turn.verifyAfterEviction;
 
   if (afterEviction !== undefined && checks.every((check) => check.pass)) {
@@ -231,7 +191,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
       session.disconnect();
       await session.connect();
 
-      return new EvalVerifier(session, replies).collect(afterEviction);
+      return new EvalVerifier(session, replies, previousTurns).collect(afterEviction);
     }));
   }
 
@@ -245,13 +205,15 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
  * ended: nothing grades it, and the deploy's kill follows its cancel within seconds.
  */
 async function closeWorkspace(session: KinuPublicSession, evidence: EvalTask['evidence'] | null, errors: HarnessError[], timeline: TrialTimeline): Promise<{
-  events: RunEvent[]; costUsd: number | undefined; workspace: WorkspaceEvidence;
+  events: RunEvent[]; ledgers: ActorLedger[]; costUsd: number | undefined; workspace: WorkspaceEvidence;
 }> {
   let events: RunEvent[] = [];
+  let ledgers: ActorLedger[] = [];
   let costUsd: number | undefined;
 
   try {
     events = [...await timeline.span('ledger', () => session.runEvents())];
+    ledgers = await timeline.span('request usage', () => session.actorLedgers(events));
     costUsd = (await timeline.span('spend', () => session.spend())).total.usd;
   } catch (error) {
     errors.push({ name: 'InfraError', message: `the trial's ledger could not be read: ${renderThrownChain({ cause: error })}` });
@@ -269,7 +231,7 @@ async function closeWorkspace(session: KinuPublicSession, evidence: EvalTask['ev
     errors.push({ name: message.includes(INFRA_FAILURE_MARKER) ? 'InfraError' : 'EvalCleanupError', message });
   }
 
-  return { events, costUsd, workspace };
+  return { events, ledgers, costUsd, workspace };
 }
 
 /**
@@ -372,6 +334,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
               if (recorded > steps) say(`turn ${String(turnNumber)}, step ${String(steps = recorded)}, off the ledger`);
             },
             watching: { waiting: say, cancelled: stop },
+            previousTurns: turns,
           });
 
           say(`turn ${String(turnNumber)} ${result.outcome.status} in ${String(Math.round(result.turnWallMs / 1000))}s, `
@@ -387,8 +350,8 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
       timeline.mark('close');
 
-      const { events, costUsd, workspace } = session === undefined
-        ? { events: [], costUsd: undefined, workspace: { files: new Map(), slates: null, data: [], unread: ['no workspace was opened'] } }
+      const { events, ledgers, costUsd, workspace } = session === undefined
+        ? { events: [], ledgers: [], costUsd: undefined, workspace: { files: new Map(), slates: null, data: [], unread: ['no workspace was opened'] } }
         : await closeWorkspace(session, stop.aborted ? null : task.evidence, errors, timeline);
 
       try {
@@ -402,7 +365,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       }
 
       const metrics = measure(events);
-      const promptUsage = measurePromptUsage(events);
+      const promptUsage = measurePromptUsage(ledgers);
       const usageMetadata = promptUsage.metadata;
 
       if (costUsd !== undefined) usageMetadata.costUsd = costUsd;
@@ -437,7 +400,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         events: transcript,
         usage: {
           provider: input.model.split('/')[0] ?? 'unknown', model: input.model, toolCalls: metrics.toolCalls,
-          inputTokens: promptUsage.inputTokens, outputTokens: metrics.outputTokens,
+          inputTokens: promptUsage.inputTokens, outputTokens: promptUsage.outputTokens,
           metadata: usageMetadata,
         },
         errors: scrubbed,

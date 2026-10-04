@@ -50,7 +50,7 @@ from harbor.utils.env import parse_bool_env_value
 
 from bench.harbor.build import REPO_ROOT, KinuBuild, build_kinu_binary
 from bench.harbor.corpus import CorpusIdentity, resolve_for_trial
-from bench.harbor.trajectory import build_trajectory, read_events, read_grading, read_spend
+from bench.harbor.trajectory import build_trajectory, read_events, read_ratings, read_spend
 from bench.isolation import assert_throwaway_home
 from bench.model_endpoint import (
     DEFAULT_KINU_AI_BASE_URL,
@@ -73,10 +73,9 @@ ENV_PATH = INSTALL_ROOT / "kinu.env"
 LOG_NAME = "kinu.jsonl"
 STDERR_LOG_NAME = "kinu-stderr.txt"
 CREATE_LOG_NAME = "kinu-create.txt"
-#: The turn_outcomes read taken after the turn. A benchmark cannot ask a person
-#: whether the turn was any good, so whether the turn was GRADED AT ALL is the
-#: measurement that decides if this trial's arm state means anything.
-ALIGNMENT_NAME = "kinu-alignment.json"
+#: Human ratings read after the turn. A headless trial has no person to reply,
+#: so rated=0 is expected unless a reactive user replied, not a probe failure.
+QUALITY_NAME = "kinu-quality.json"
 SPEND_NAME = "kinu-spend.json"
 
 DEFAULT_BASE_URL = DEFAULT_KINU_AI_BASE_URL
@@ -284,30 +283,29 @@ class KinuAgent(BaseInstalledAgent):
                 ),
             )
         finally:
-            # Read the turn_outcomes ledger the turn just wrote, before the
-            # container is destroyed with it. An arm's `evolve` kwarg says what
-            # was CONFIGURED; this says whether the machinery reached a verdict on
-            # the turn at all, which is the difference between a contrast and an
-            # inert one.
+            # Retain human ratings and whole-workspace spend before the container
+            # is destroyed. Tool exits never rate turns: a headless trial normally
+            # has rated=0 unless a reactive user replied, which is a finding and
+            # not a failure of the arm or the probe.
             #
             # In `finally` because Harbor runs the whole of `run()` under
             # `asyncio.wait_for` (harbor/trial/trial.py:450-462), so an
             # agent-phase timeout cancels everything sequenced after the turn.
             # That lost the probe on exactly the trials that most need
             # explaining: `make-doom-for-mips` timed out in both arms and neither
-            # could say whether its turn had been graded. A `finally` await runs
+            # could retain its evidence. A `finally` await runs
             # to completion and the TimeoutError still reaches Harbor unchanged,
             # measured on this asyncio version rather than assumed.
             await self._probe_evidence(environment, workspace)
 
     async def _probe_evidence(self, environment: BaseEnvironment, workspace: str) -> None:
-        """Read the existing grading and whole-workspace spend commands on every exit.
+        """Read human ratings and whole-workspace spend commands on every exit.
 
         One missing channel must not prevent the other, or replace the original
         agent exception. The native spend ledger includes completed model calls
         even when an interrupted turn never emitted a turn_end.
         """
-        for command, filename in (("alignment", ALIGNMENT_NAME), ("spend", SPEND_NAME)):
+        for command, filename in (("quality", QUALITY_NAME), ("spend", SPEND_NAME)):
             try:
                 await self.exec_as_agent(
                     environment,
@@ -350,17 +348,16 @@ class KinuAgent(BaseInstalledAgent):
         except OSError as exc:
             self.logger.debug(f"Failed to write Kinu trajectory: {exc}")
 
-        grading = read_grading(self.logs_dir / ALIGNMENT_NAME)
-        if grading is None:
+        ratings = read_ratings(self.logs_dir / QUALITY_NAME)
+        if ratings is None:
             self.logger.warning(
-                f"grading: UNREADABLE — no parseable {ALIGNMENT_NAME}. This trial "
-                "cannot say whether its turn was graded, so it cannot support a "
-                "claim about its arm's mechanism."
+                f"ratings: UNREADABLE — no parseable {QUALITY_NAME}. This trial "
+                "has missing rating evidence, not a measured zero."
             )
         else:
             self.logger.info(
-                f"grading: {grading.execution_graded} execution-graded, "
-                f"{grading.user_graded} user-graded, {grading.abandoned} abandoned"
+                f"ratings: {ratings.rated} rated, {ratings.by_thumbs} by thumbs, "
+                f"{ratings.turns} turns reviewed"
             )
 
         # Only the fields the provider actually reported: the usage dict is
@@ -401,11 +398,10 @@ class KinuAgent(BaseInstalledAgent):
             "activity_events": summary.activity_events,
             "evolution_events": summary.evolution_events,
             "evolution_fired": len(summary.evolution_events) > 0,
-            # How many turns reached a verdict, from turn_outcomes rather than
-            # from any event's wording. `null` is missing evidence — the probe
-            # left nothing readable — and is deliberately not three zeros, which
-            # is what a live but inert arm looks like.
-            "turn_grading": grading.as_dict() if grading else None,
+            # Ratings come only from a person, never tool exits or event wording.
+            # `null` is an unreadable probe; zero ratings is a valid headless
+            # finding unless a reactive user replied, not a mechanism failure.
+            "turn_ratings": ratings.as_dict() if ratings is not None else None,
             "turns_completed": sum(
                 1 for e in summary.evolution_events if e["event"] == "turn_complete"
             ),

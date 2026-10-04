@@ -99,14 +99,12 @@ export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
 
 /** Model steps, tool calls, failed tool calls and waits on the model provider's rate limit, counted off the ledger. A
  *  `stall` wait is the provider failing to send anything, not the limit, and the run's own rows carry it. */
-export function measure(events: readonly RunEvent[]): EvalMetrics & { inputTokens: number; outputTokens: number } {
-  let modelTurns = 0, toolCalls = 0, toolErrors = 0, providerWaits = 0, providerWaitMs = 0, inputTokens = 0, outputTokens = 0;
+export function measure(events: readonly RunEvent[]): EvalMetrics {
+  let modelTurns = 0, toolCalls = 0, toolErrors = 0, providerWaits = 0, providerWaitMs = 0;
 
   for (const event of events) {
     if (event.type === 'step_finish') {
       modelTurns += 1;
-      inputTokens += event.usage?.input ?? 0;
-      outputTokens += event.usage?.output ?? 0;
     } else if (event.type === 'tool_call_end') {
       toolCalls += 1;
 
@@ -117,7 +115,7 @@ export function measure(events: readonly RunEvent[]): EvalMetrics & { inputToken
     }
   }
 
-  return { modelTurns, toolCalls, toolErrors, providerWaits, providerWaitMs, inputTokens, outputTokens };
+  return { modelTurns, toolCalls, toolErrors, providerWaits, providerWaitMs };
 }
 
 /**

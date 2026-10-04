@@ -25,7 +25,7 @@ export const ADVISOR_SEVERITY_LABEL = {
   blocker: 'Blocker',
 } as const satisfies Readonly<Record<AdvisorSeverity, string>>;
 
-/** Order matches {@link buildAdvisorPrompt}. `missed-capability` is the signal `turn_outcomes` cannot carry:
+/** Order matches {@link buildAdvisorPrompt}. `missed-capability` is the signal `turn_ratings` cannot carry:
  *  a capability the turn had and did not use. */
 const ADVISOR_NOTE_CLASSES = ['wrong-work', 'missed-capability', 'dissatisfaction'] as const;
 

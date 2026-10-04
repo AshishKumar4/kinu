@@ -1,7 +1,7 @@
 /** Credential-free checks for the first-run corpus, gating, and record admission. */
 import { describe, expect, test } from 'bun:test';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join, relative } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 
@@ -24,6 +24,10 @@ import { CAPABILITY_ROWS, ENTRY_ROWS, PAGE_ROWS, STRIP_ROWS } from './surfaces';
 const GATE = 'bun run gate:first-run';
 
 const RUNNER = 'scripts/first-run-tier.sh';
+
+const RUNTIME = resolve(import.meta.dirname, '../../node_modules/.bin/bun');
+
+const RUNNER_ENV = (): NodeJS.ProcessEnv => ({ ...process.env, PATH: `${dirname(RUNTIME)}:${process.env.PATH ?? ''}` });
 
 /** Every case file this tier holds, off the ONE enumeration and narrowed only by
  *  the predicate `scripts/sources.ts` exports for it. */
@@ -140,8 +144,8 @@ describe('the first-run corpus is the set this tier runs', () => {
     // daemon beside it is a third machine in the measurement. Asked of vitest
     // itself, per project, so the partition is what the runner selects.
     const selected = (project: string): string[] => {
-      const listed = spawnSync('bun', ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts',
-        '--project', project, '--filesOnly', '--json'], { cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
+      const listed = spawnSync(RUNTIME, ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts',
+        '--project', project, '--filesOnly', '--json'], { env: RUNNER_ENV(), cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
 
       expect(listed.status, listed.stderr).toBe(0);
 
@@ -171,8 +175,7 @@ describe('the first-run corpus is the set this tier runs', () => {
     // Collecting a case imports it, under Bun as the tier runs it, which the partition above never does. On
     // 2026-09-25 35 cases failed there at import (`import { z } from 'zod'` in core came back undefined), and only a
     // deploy's post-publish wave would have shown it.
-    const listed = spawnSync('bun', ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts', '--json'],
-      { cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
+    const listed = spawnSync(RUNTIME, ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts', '--json'], { env: RUNNER_ENV(), cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
 
     expect(listed.status, listed.stderr).toBe(0);
   });

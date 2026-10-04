@@ -9,7 +9,7 @@ import type { ServerWebSocket } from 'bun';
 import type { Browser, Page } from 'puppeteer';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { runToExit } from '@kinu.run/test-utils';
+import { spawnTest, runToExit } from '@kinu.run/test-utils'
 import { withBrowser } from '../../scripts/live-app-harness';
 import { frameLedger, HOST_NETWORK_CHANGED, hostNetworkChange, recordDeadEnds, settledAfter, until, waitOn } from '../../scripts/product-flows';
 
@@ -202,7 +202,7 @@ test('only a module graph that the host\'s network change alone failed is the ho
  * kill named only the wait. Ended the way the row's bound ends it, the run names what the page kept sending.
  */
 test('a wait on a page that never goes quiet, ended from outside, names what the page kept sending', async () => {
-  const child = Bun.spawn(['bun', UNSETTLED_PAGE_SCENARIO], { stdout: 'pipe', stderr: 'pipe' });
+  const child = spawnTest(['bun', UNSETTLED_PAGE_SCENARIO], { stdout: 'pipe', stderr: 'pipe' });
   const stderr = new Response(child.stderr).text();
   const reader = child.stdout.getReader();
   let said = '';

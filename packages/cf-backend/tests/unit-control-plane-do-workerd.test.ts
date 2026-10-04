@@ -3,6 +3,7 @@
  * `bun`, not `node`: the fixture reads `wrangler.jsonc` through `scripts/jsonc.ts`, like the deploy gates.
  */
 import { describe, expect, test } from 'bun:test';
+import { spawnTest } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const runner = new URL('./fixtures/control-plane-do-workerd.mjs', import.meta.url).pathname;
@@ -60,7 +61,7 @@ const ResultSchema = v.object({
 /** One run shared by every assertion below. */
 const settled = (async () => {
   // `process.execPath`, not a bare `'bun'` resolved against the inherited PATH.
-  const spawned = Bun.spawn([process.execPath, runner], {
+  const spawned = spawnTest([process.execPath, runner], {
     cwd: repoRoot, stdout: 'pipe', stderr: 'pipe',
   });
 
