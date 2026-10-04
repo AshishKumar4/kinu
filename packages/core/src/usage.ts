@@ -128,6 +128,30 @@ export function normalizeUsage(usage: LanguageModelUsage | undefined): Usage {
   return out;
 }
 
+const SamplingsSchema = v.object({
+  iterations: v.pipe(v.array(v.looseObject({ input_tokens: v.number(), cache_read_input_tokens: ReportedCount, cache_creation_input_tokens: ReportedCount })), v.minLength(1)),
+  cache_read_input_tokens: ReportedCount,
+  cache_creation_input_tokens: ReportedCount,
+});
+
+/**
+ * The prompt the provider last answered from, where it reports each sampling of one request (Anthropic's `iterations`:
+ * a server-side compaction summarizes, then answers from the summary). `input` bills every sampling; this is the size
+ * the next request starts from. Undefined where no samplings are reported, and `input` is that size.
+ */
+export function answeredPromptTokens(usage: LanguageModelUsage | undefined): number | undefined {
+  const raw = v.safeParse(SamplingsSchema, usage?.raw);
+
+  if (!raw.success) return undefined;
+  const last = raw.output.iterations[raw.output.iterations.length - 1];
+
+  if (last === undefined) return undefined;
+
+  return last.input_tokens
+    + (last.cache_read_input_tokens ?? raw.output.cache_read_input_tokens ?? 0)
+    + (last.cache_creation_input_tokens ?? raw.output.cache_creation_input_tokens ?? 0);
+}
+
 /** Gate for writing a usage row: a silent provider carries no usage rather than fabricated zeros. */
 export function usageReported(usage: Usage): boolean {
   return USAGE_FIELDS.some((f) => usage[f] !== undefined);

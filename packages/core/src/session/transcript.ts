@@ -11,6 +11,7 @@ import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from 
 import { rowText, turnAuthor } from '../utils/ui-message';
 import type { Page, PositionCursor, PositionPageRequest } from './page';
 import type { ContextSelection } from './context';
+import { isServerCompaction } from '../providers/server-compaction';
 
 export interface ConversationPartReference extends MessagePartReference { textRange?: { readonly start: number; readonly length: number } }
 
@@ -110,6 +111,9 @@ function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role'
   const calls = new Map<string, JsonObject>();
 
   for (const part of parts) {
+    // The provider's compaction summary is for the model, not the owner.
+    if (isServerCompaction(part.providerOptions)) continue;
+
     if (part.type === 'tool-call') {
       const id = v.parse(v.string(), part.toolCallId);
       const call: JsonObject = { type: `tool-${v.parse(v.string(), part.toolName)}`, toolCallId: id, state: 'input-available', input: part.input ?? null };

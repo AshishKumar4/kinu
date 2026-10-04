@@ -78,7 +78,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
       approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
       revokeInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
       clearConversation: async () => null,
-      compact: async () => {},
+      compact: async () => 'folded' as const,
     },
     connect: async () => {},
     subscribe: (listener: (e: AgentClientEvent) => void) => {

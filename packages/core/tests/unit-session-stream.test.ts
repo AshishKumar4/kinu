@@ -69,6 +69,22 @@ test('a streamed answer joins the working context only when it seals', async () 
   } finally { s.testSql.close(); }
 });
 
+test('the provider\'s compaction summary is kept with its mark, so the next request replays it as one', async () => {
+  const s = setup();
+  const mark = { anthropic: { type: 'compaction' } };
+
+  try {
+    const { stream } = await s.turn('t1');
+    await stream.nativePart({ type: 'text-start', id: '0', providerMetadata: mark });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'Summary so far.' });
+    await stream.nativePart({ type: 'text-end', id: '0' });
+    const final: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'Summary so far.', providerOptions: mark }] };
+    await stream.nativeStep({ messages: [final], toolResults: [] });
+
+    expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
+  } finally { s.testSql.close(); }
+});
+
 test('a failed ledger write rolls back its step, and a committed step is published only after commit', async () => {
   const s = setup();
 

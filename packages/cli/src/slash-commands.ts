@@ -1,6 +1,6 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
-import { fmtUsd, limitLines, MAIN_ACCOUNT, specWithoutAccount, usageTotal } from '@kinu.run/core';
+import { fmtUsd, limitLines, MAIN_ACCOUNT, SERVER_COMPACTION_MIN_TOKENS, specWithoutAccount, usageTotal, type CompactOutcome } from '@kinu.run/core';
 import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
@@ -524,11 +524,16 @@ function resumeCommand(): SlashOutcome {
   };
 }
 
+const COMPACTED: Readonly<Record<CompactOutcome, string>> = {
+  folded: 'Folded this conversation into a summary; its last exchanges stay as they were.',
+  armed: 'Your next message asks the model\'s provider to fold this conversation into a summary; its last exchanges stay as they were.',
+  nothing: `This conversation is under the ${SERVER_COMPACTION_MIN_TOKENS.toLocaleString('en-US')} tokens its model's provider folds; nothing to fold yet.`,
+};
+
 async function compactCommand({ client, command }: SlashContext): Promise<SlashOutcome> {
   if (!client.localControls) return { kind: 'unknown', command };
-  await client.localControls.compact();
 
-  return { kind: 'text', text: 'Folded this conversation into a summary; its last exchanges stay as they were.' };
+  return { kind: 'text', text: COMPACTED[await client.localControls.compact()] };
 }
 
 function stopCommand({ client }: SlashContext): SlashOutcome {

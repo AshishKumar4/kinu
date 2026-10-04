@@ -25,6 +25,8 @@ export interface StepLike {
   toolResults?: ReadonlyArray<unknown>;
   /** Normalized by the caller holding the SDK object; carries fields no SDK type expresses. */
   usage?: Usage;
+  /** The prompt the step's request answered from, where it differs from `usage.input` (a server-side compaction). */
+  promptTokens?: number;
   /** `messages` is cumulative across the turn; the per-step delta is taken here. */
   response?: { modelId?: string; messages?: readonly ModelMessage[] };
   /** The request body this step sent and when; a cache warm replays the turn's last one. */
@@ -217,7 +219,9 @@ export class TurnAccumulator {
 
   /** A step that reported nothing leaves the previous value standing; a reported 0 overwrites. */
   private noteLastRequest(ctx: StepLike, usage: Usage): void {
-    if (usage.input !== undefined) this.lastPromptTokens = usage.input;
+    const prompt = ctx.promptTokens ?? usage.input;
+
+    if (prompt !== undefined) this.lastPromptTokens = prompt;
 
     const sent = ctx.request;
 

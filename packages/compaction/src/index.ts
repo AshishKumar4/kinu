@@ -4,6 +4,8 @@ export * from '@better-compact/core';
 
 export { kinuCodec, kinuConventions, kinuSpec, type ToolPairHandle } from './codec';
 
+export { type AttachmentDeps } from './attachments';
+
 export {
   createCompactionExtension,
   createSharedPrefixCompactor,

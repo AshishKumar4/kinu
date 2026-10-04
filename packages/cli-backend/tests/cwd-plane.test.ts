@@ -19,6 +19,7 @@ import {
 import { createHeadRuntime } from './actor-fixture';
 import { registerLocalActor } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
+import { compactedScreenshots, screenshot } from '../../compaction/tests/helpers';
 import { PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV } from '../src/model-resolver';
 
 /** Every name the harness reads a credential from, as the declaring modules name them. */
@@ -658,6 +659,23 @@ test('the agent\'s own space is real files beside its database, and only its wor
   expect(await file({ action: 'read', path: join(space, 'home/main/notes.md') })).toContain('scratch');
   // The shell is the machine's, and its HOME is the one `~` names.
   expect((await present(rt.shell, 'the shell').exec('echo "$HOME"')).stdout.trim()).toBe(rt.planes.home);
+});
+
+// The attachment rung's link (better-compact 0.3.0) names the own space's file, so the agent opens a moved-out
+// screenshot again from the folder it works in. The cloud's twin is cf-backend's unit-attachment-links.
+test('the file tool shows the agent a screenshot the rung moved out, from the link it left in the own space', async () => {
+  const { state, project } = roots('cwd-plane-attachment');
+  const rt = agentRuntime(state, 'shots', project);
+  const { links } = await compactedScreenshots(rt);
+  const file = present(buildBuiltinTools({ rt, conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool');
+  const read = await toolExecute(file)({ action: 'read', path: links[0] ?? '' });
+
+  expect(links[0]).toStartWith('vfs://home/main/attachments/');
+  expect(existsSync(join(state, 'shots', (links[0] ?? '').slice('vfs://'.length)))).toBe(true);
+  expect(await present(file.toModelOutput, 'the image output')({ toolCallId: 'reopen', input: {}, output: read })).toEqual({
+    type: 'content',
+    value: [{ type: 'text', text: `${links[0]}: image/png 1280x800, 40000 bytes` }, { type: 'image-data', data: screenshot(0), mediaType: 'image/png' }],
+  });
 });
 
 describe('SOUL.md is the owner\'s', () => {
