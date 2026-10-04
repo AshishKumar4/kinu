@@ -1,9 +1,10 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS, VfsDirentType } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The host filesystem as a file plane, via node:fs. Writes snapshot into the
  * bound shell's shadow-git checkpoints, so /undo covers them.
  */
 
+import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { Effect } from 'effect';
@@ -11,6 +12,23 @@ import type { FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsMount } fro
 import { SLATES_ROOT, WORKSPACE_ROOT, withMountTable, workspacePath } from '@kinu.run/core';
 import { syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { settle, tolerateAsync } from '@kinu.run/core/obs';
+
+/** `file` is a regular file only (Nimbus 0.15); Nimbus stats what a listing calls `unknown`. */
+function hostDirentType(entry: Dirent): VfsDirentType {
+  if (entry.isSymbolicLink()) return 'symlink';
+
+  if (entry.isDirectory()) return 'directory';
+
+  if (entry.isFile()) return 'file';
+
+  if (entry.isFIFO()) return 'fifo';
+
+  if (entry.isSocket()) return 'socket';
+
+  if (entry.isBlockDevice()) return 'block';
+
+  return entry.isCharacterDevice() ? 'character' : 'unknown';
+}
 
 function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
   throw toVfsError(input.error, input.syscall, input.path);
@@ -39,11 +57,7 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
     },
     async readdir(path) {
       try {
-        return (await fs.readdir(path, { withFileTypes: true })).map((entry) => {
-          if (entry.isSymbolicLink()) return { name: entry.name, type: 'symlink' as const };
-
-          return { name: entry.name, type: entry.isDirectory() ? 'directory' as const : 'file' as const };
-        });
+        return (await fs.readdir(path, { withFileTypes: true })).map((entry) => ({ name: entry.name, type: hostDirentType(entry) }));
       }
       catch (error) { throwVfsError({ error, syscall: 'scandir', path }); }
     },

@@ -11,7 +11,7 @@ import type { AgentRuntime, DeferredApprovalChannel, LLMProviderConfig, ShellApp
 import { ConversationSearchStore, buildBuiltinTools, discoverSkills, initWorkspaceSchema, reviewCommand, SLATES_ROOT, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { present, scratchDir, toolExecute } from '@kinu.run/test-utils';
+import { present, scratchDir, spawnTest, toolExecute } from '@kinu.run/test-utils';
 import {
   createCLIRuntime, createHostShell, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
   type CLIRuntime,
@@ -197,6 +197,19 @@ describe('a fork over the bound directory', () => {
   });
 });
 
+describe('listing the bound directory', () => {
+  test('names a FIFO by its kind: a listing says file for a regular file only, so Nimbus stats only what it cannot name', async () => {
+    const { state, project } = roots('cwd-plane-kinds');
+    const rt = agentRuntime(state, 'solo', project);
+    writeFileSync(join(project, 'plain.txt'), 'x');
+    expect(await spawnTest(['mkfifo', join(project, 'pipe')]).exited).toBe(0);
+
+    const kinds = (await rt.storage.vfs.readdir(project)).filter((entry) => ['plain.txt', 'pipe'].includes(entry.name));
+
+    expect(kinds.map((entry) => `${entry.name}:${entry.type}`).sort()).toEqual(['pipe:fifo', 'plain.txt:file']);
+  });
+});
+
 describe('addressing the bound directory', () => {
   test('neither the folder nor the agent\'s own space can be removed or renamed away', async () => {
     const { state, project } = roots('cwd-plane-home-anchor');
@@ -214,6 +227,8 @@ describe('addressing the bound directory', () => {
 
     expect(readFileSync(join(project, 'keep.txt'), 'utf8')).toBe('the project survives');
     expect(existsSync(join(space, 'agent.db'))).toBe(true);
+    // A plane with no rename carries it as mv does, and a refused carry leaves nothing behind.
+    expect(readdirSync(state).filter((entry) => entry.startsWith('.nimbus-move-') || entry === 'renamed')).toEqual([]);
   });
 
   test('a relative path and the real path name the folder\'s file; the own space\'s spellings name its own', async () => {

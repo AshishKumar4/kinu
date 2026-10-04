@@ -141,7 +141,7 @@ function measurementContext(rt: AgentRuntime): MeasurementContext | null {
 
   if (!shell) return null;
 
-  return { vfs: rt.storage.vfs, exec: (command) => shell.exec(command), nodeIsolated: rt.nodeIsolated };
+  return { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
 }
 
 /** The measured baseline reported alongside a candidate, or null (*Measured baseline*). */

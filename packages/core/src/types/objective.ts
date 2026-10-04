@@ -11,7 +11,6 @@ import type { JsonValue } from '../utils/json';
 export interface MeasurementContext {
   readonly vfs: VFS;
   readonly exec: (command: string) => Promise<ExecOutcome>;
-  readonly nodeIsolated?: boolean;
 }
 
 /** No default: guessing "higher is better" silently inverts every cost. */
