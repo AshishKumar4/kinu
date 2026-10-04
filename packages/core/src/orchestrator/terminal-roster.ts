@@ -7,6 +7,7 @@ import type { WorkMode } from '../types/turn';
 import type { RunEndReason } from './turn-lifecycle';
 import type { TurnContinuity } from './agent-orchestrator';
 import type { OwedEffect } from './terminal-effects';
+import type { OwedTerminalEffectsInput } from './chat-session';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import { isPlaceholderMission } from '../identity/soul';
 import * as v from 'valibot';
@@ -48,7 +49,7 @@ export interface TerminalTurnParts {
   readonly completionGate?: { readonly text: string };
   /** Claimed because enqueueing is asynchronous and must survive a process cut. */
   readonly overflowRetry?: boolean;
-  /** The one output-limit continuation (core `owesOutputLimitContinuation`), for a backend whose loop cannot continue in the turn; `runChat` passes nothing. */
+  /** The one output-limit continuation turn (core `owesOutputLimitContinuation`), after the turn's own continuation was cut too. */
   readonly outputContinuation?: boolean;
   /** Decided by the caller, the only one that reads the list and the outcome together. */
   readonly taskReminder?: { readonly text: string };
@@ -66,6 +67,16 @@ export interface TerminalTurnParts {
     readonly sequenceId: string;
     /** A Stop: wakes no one. */
     readonly quiet?: true;
+  };
+}
+
+/** The parts the chat loop decides, mapped here once so no backend drops one. */
+export function chatTurnParts(input: Pick<OwedTerminalEffectsInput, 'credited' | 'overflowRetry' | 'outputContinuation' | 'taskReminder'>): TerminalTurnParts {
+  return {
+    credited: input.credited,
+    ...(input.overflowRetry && { overflowRetry: true }),
+    ...(input.outputContinuation && { outputContinuation: true }),
+    ...(input.taskReminder !== null && { taskReminder: { text: input.taskReminder.text } }),
   };
 }
 

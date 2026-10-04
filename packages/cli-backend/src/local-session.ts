@@ -63,9 +63,8 @@ import { TierIdSchema,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES,
-  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, readMission,
-  branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
-  eventDrainTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
+  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, readMission,
+  branchesTerminalEffect, chatTerminalEffects,
   SUBORDINATE_REPORT_STATUSES,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
   terminalEffect,
@@ -1896,13 +1895,8 @@ export class LocalAgentSession {
       evolutionEnabled: this.turnLearns,
     };
 
-    const parts: Writable<TerminalTurnParts> = {};
-    parts.credited = input.credited;
+    const parts: Writable<TerminalTurnParts> = { ...chatTurnParts(input) };
     parts.branches = this.pendingBranches.map(({ id, task }) => ({ id, task }));
-
-    if (input.taskReminder !== null) parts.taskReminder = { text: input.taskReminder.text };
-
-    if (input.overflowRetry) parts.overflowRetry = true;
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
 
@@ -1989,12 +1983,7 @@ export class LocalAgentSession {
           };
         },
       }),
-      overflow_retry: overflowRetryTerminalEffect(() => this.chat),
-      task_reminder: taskReminderTerminalEffect(() => this.chat),
-
-      turn_record: turnRecordTerminalEffect(this.actorSession.orchestrator),
-      turn_lessons: turnLessonsTerminalEffect(this.engine),
-      event_drain: eventDrainTerminalEffect(this.actorSession.orchestrator),
+      ...chatTerminalEffects({ chat: () => this.chat, orchestrator: this.actorSession.orchestrator, engine: this.engine }),
 
       // The CLI's lanes run elsewhere (evolution on its own queue); the row keeps the roster whole.
       improvement_lanes: terminalEffect({

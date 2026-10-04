@@ -255,7 +255,7 @@ import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
 import {
-  terminalEffect, declareTerminalRoster, isDefinitiveTerminalFailure,
+  terminalEffect, chatTurnParts, declareTerminalRoster, isDefinitiveTerminalFailure,
   branchesTerminalEffect,
   type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnFacts,
   type TerminalTurnParts,
@@ -2358,13 +2358,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const parts: TerminalTurnParts = {
       // Over the row the transcript is about to persist, so a cut turn's announcement replays from it.
       turnEndExtensions: true,
-      credited: input.credited,
+      ...chatTurnParts(input),
       craftedToolsUsed: this.acc.craftedToolsUsed(),
       eventReplies: { answered: input.answeredDeliveries, requestId: input.messageId },
       branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
-      overflowRetry: input.overflowRetry,
-      outputContinuation: input.outputContinuation,
-      taskReminder: input.taskReminder ?? undefined,
       // Owed only when the actor reviews turns, as the lane it replaced was started only then.
       advisor: this.actorSession.reviewsTurns
         ? projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) })

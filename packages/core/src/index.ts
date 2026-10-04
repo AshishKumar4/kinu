@@ -10,7 +10,7 @@ export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, 
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
-  declareTerminalRoster,
+  chatTurnParts, declareTerminalRoster,
   type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
@@ -20,10 +20,7 @@ export {
 } from './orchestrator/terminal-transition';
 
 export {
-  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
-  outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
-  eventDrainTerminalEffect,
+  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, branchesTerminalEffect,
   terminalEffectKey, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
