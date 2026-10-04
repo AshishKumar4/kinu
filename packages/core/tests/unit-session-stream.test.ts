@@ -145,6 +145,29 @@ test('a late native finish after a terminal seal cannot duplicate the tool row',
   } finally { s.testSql.close(); }
 });
 
+test('a program following an unfinished native delegation retains both outputs and settles every part', async () => {
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    const native = 'the native delegation stopped here '.repeat(12);
+    const authored = 'the program continued';
+    await stream.nativePart({ type: 'text-start', id: 'partial' });
+    await stream.nativePart({ type: 'text-delta', id: 'partial', text: native });
+    await stream.observe({ type: 'text-delta', delta: authored, source: 'scaffold' });
+    // A program's own step finishes with no response messages, as the scaffold transform yields it.
+    await stream.observe({ type: 'step-finish', stepIndex: 1, responseMessages: [], source: 'scaffold' });
+    await stream.settle();
+    const messages = (await s.history.materialize()).messages.filter((message) => message.role === 'assistant');
+
+    expect(messages).toEqual([
+      { role: 'assistant', content: [{ type: 'text', text: native }] },
+      { role: 'assistant', content: [{ type: 'text', text: authored }] },
+    ]);
+    expect(s.open()).toEqual([]);
+  } finally { s.testSql.close(); }
+});
+
 test('a program can delegate to native inference and then retain its own text and tool step', async () => {
   const s = setup();
 

@@ -332,12 +332,10 @@ export class SessionStream {
 
   private async observeScaffold(event: ChatEvent): Promise<void> {
     if (this.nativeProducer) {
+      // A native step the program cut off seals first: its messages and the program's never share an output slot.
+      if ([this.assistant, this.tool, this.ui].some(container => container.reference !== null)) await this.sealStep(null);
       this.nativeProducer = false;
-      this.cadence.reset();
-      this.sourceOrder = 0;
-      this.assistant = this.container('assistant');
-      this.tool = this.container('tool');
-      this.ui = this.container('assistant', 2);
+      this.nextStep();
     }
 
     if (event.type === 'text-delta' || event.type === 'reasoning-delta') {
@@ -361,7 +359,9 @@ export class SessionStream {
 
 
   private container(role: 'assistant' | 'tool', slot = role === 'assistant' ? 0 : 1): StreamContainer {
-    return { id: `${this.requestId}:${this.nativeProducer ? slot : this.step * 3 + slot}`, role, slot, reference: null, working: slot !== 2, sealed: false, parts: new Map() };
+    const outputSlot = this.step * 3 + slot;
+
+    return { id: `${this.requestId}:${outputSlot}`, role, slot: outputSlot, reference: null, working: slot !== 2, sealed: false, parts: new Map() };
   }
 
   private nextStep(): void {
@@ -478,7 +478,7 @@ export class SessionStream {
   /** Joins the working context only when sealed: a revision names immutable content. */
   private openContainer(container: StreamContainer, write?: () => void): void {
     this.fenced(() => {
-      container.reference = this.history.messages.open(container.role, container.id, container.working ? 'output' : 'render', { requestId: this.requestId, slot: this.nativeProducer ? container.slot : this.step * 3 + container.slot });
+      container.reference = this.history.messages.open(container.role, container.id, container.working ? 'output' : 'render', { requestId: this.requestId, slot: container.slot });
       write?.();
     });
   }

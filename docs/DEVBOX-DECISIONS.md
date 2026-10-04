@@ -1143,6 +1143,13 @@ five message-row reads (two open-parts reads, two seals, one source binding), tw
 stream-parts reads, and four open-container/part pre-reads. All 51 stream appends
 remain; the working-context origin check and abandoned-stream recovery reads
 remain. The unchanged workerd chat-session parity fixture passes.
+
+2026-10-03 (`lane/providers-one-owner`): one output-slot rule for both producers, `step * 3 + slot` under the
+request, and a native step a program cut off seals before the program's own output opens. Before, a native container
+took bare slot 0 to 2 and a program's first step the same `step * 3 + slot` under the same request, so a program
+continuing after an unfinished native delegation failed its turn on "message identity is already recorded". Pin:
+`packages/core/tests/unit-session-stream.test.ts` "a program following an unfinished native delegation retains both
+outputs and settles every part".
 A lone surrogate from a malformed provider stream now seals as streamed, not as bun's replacement characters; valid pairs remain byte-identical.
 
 2026-10-01: the owner-approved single writer commits a native step's seals,
