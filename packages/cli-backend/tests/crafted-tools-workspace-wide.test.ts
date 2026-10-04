@@ -3,6 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema, toolsInWorkMode, type JsonValue, type LLMProviderConfig } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
@@ -26,7 +27,7 @@ describe('a crafted tool belongs to the workspace', () => {
     try {
       rt.craftStore.create({ name: 'double', description: 'doubles a number', code: 'async (n) => n * 2' });
       const seat = await session.hostNode({ nodeId: 'crafted-node', rootId: 'crafted-swarm', depth: 1 });
-      const nodeEval = toolsInWorkMode('build', { eval: hostedCodemodeTool(seat.actor, [])({}) }).eval;
+      const nodeEval = toolsInWorkMode('build', { eval: hostedCodemodeTool(seat.actor, [])({}, narrowToolSurface(undefined)) }).eval;
 
       if (nodeEval === undefined) throw new Error('the node has no eval');
       const call = () => toolExecute<{ code: string }, { result: JsonValue }>(nodeEval)({ code: 'return await tools.double(21);' });

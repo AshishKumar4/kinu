@@ -55,7 +55,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { WebSearchProvider } from '../web/index';
 import type { WorkMode } from '../types/turn';
 import type { ModelCallSink } from '../events/model-call';
-import type { BuiltinToolName } from '../tools/registry';
+import type { BuiltinToolName, ToolSurfaceNarrowing } from '../tools/registry';
 import { defaultLoopOrigin } from '../scaffold/loop-origin';
 
 /**
@@ -159,7 +159,7 @@ export interface NodeAgentDeps {
 
 
 /** A node's `eval` over the actor it runs as, whose runtime may be rebuilt for its home. */
-export type NodeCodemode = (actor: HostedActor) => (finished: ToolSet) => ToolSet[string];
+export type NodeCodemode = (actor: HostedActor) => (finished: ToolSet, reach: ToolSurfaceNarrowing) => ToolSet[string];
 
 /** One node's own actor and its per-turn seams; returned by {@link NodeAgentDeps.hostNode} because each is per actor. */
 export interface HostedNodeSeat {

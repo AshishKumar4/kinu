@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolExecutionOptions } from 'ai';
 import { codemodeSurface, DEVICE_REQUEST_OPTION, DeviceRequestOwnership, WORKSPACE_ROOT } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { createCLIRuntime } from '../src/runtime';
@@ -28,7 +29,7 @@ function shellOf(cwd?: string) {
 
 /** `eval` over a directory's runtime, called with the tool options a turn hands it. */
 function evalIn(directory: string) {
-  const { execute } = createNodeCodemodeToolFactory()({ ...codemodeSurface(runtimeOf(directory), {}), craftedTools: () => [] });
+  const { execute } = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({ ...codemodeSurface(runtimeOf(directory), {}), craftedTools: () => [] });
 
   if (!execute) throw new Error('eval has no execute');
 

@@ -19,7 +19,7 @@ import {
   isBuiltinToolName, JsonObjectSchema, collectDynamicContext, currentDateForPrompt, DynamicContextLedger, readMemoryTail,
   projectJsonValue, failedToolOutcome, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
-  WORKSPACE_RUN_ID, ConversationSearchStore, BackgroundJobRunner, BACKGROUNDABLE_TOOLS,
+  WORKSPACE_RUN_ID, ConversationSearchStore, BackgroundJobRunner, BACKGROUNDABLE_TOOLS, narrowToolSurface,
 } from '../../packages/core/src/index';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import {
@@ -153,6 +153,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     rt,
     conversations: new ConversationSearchStore(sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)),
     codemode: createNodeCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       extraProviders: [
         createAgentsCodemodeProvider(() => agents),
         web(),

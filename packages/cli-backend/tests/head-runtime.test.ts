@@ -127,6 +127,24 @@ function headStorageKey(parent: CLIRuntime, id: string): string {
   return openLocalActor(parent.actor, explorationActorKey(id)).storageKey;
 }
 
+/** A head that runs `code` through eval once, then answers. */
+function evalThenDone(code: string) {
+  let calls = 0;
+
+  return scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
+    const invoke = calls++ === 0;
+
+    return {
+      content: invoke
+        ? [{ type: 'tool-call', toolName: 'eval', toolCallId: 'program', input: JSON.stringify({ code }) }]
+        : [{ type: 'text', text: 'done' }],
+      finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    };
+  } });
+}
+
 function capturingHeadModel(
   answer: string,
   sink: (names: string[]) => void,
@@ -406,20 +424,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   test('a head advertises and invokes the workspace\'s crafted tools, as every actor does', async () => {
     const parent = makeParent();
     parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-wide doubler', code: '(input) => input.n * 2' });
-    let calls = 0;
-
-    const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
-      const invoke = calls++ === 0;
-
-      return {
-        content: invoke
-          ? [{ type: 'tool-call', toolName: 'eval', toolCallId: 'crafted', input: JSON.stringify({ code: '// Call the workspace craft\nreturn await tools.secret_echo({ n: 21 });' }) }]
-          : [{ type: 'text', text: 'done' }],
-        finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
-        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-          outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-      };
-    } });
+    const model = evalThenDone('// Call the workspace craft\nreturn await tools.secret_echo({ n: 21 });');
 
     const runtime = createCLIHeadRuntime(headDeps(model, { parentRuntime: parent }));
     await (await runtime.spawnHead(aHeadInput({ task: 'Inspect the available sandbox.' }))).run();
@@ -427,6 +432,16 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     expect(model.doStreamCalls).toHaveLength(2);
     expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain('secret_echo');
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('{"result":42}');
+  });
+
+  // Rank 36: a head's allowed tools narrowed its native surface, never the namespaces its eval bound.
+  test('a head allowed only eval reaches no workspace through it', async () => {
+    const model = evalThenDone('return `${typeof workspace.exec} ${typeof state}`;');
+
+    const runtime = createCLIHeadRuntime(headDeps(model));
+    await (await runtime.spawnHead(aHeadInput({ allowedTools: ['eval'] }))).run();
+
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('undefined object');
   });
 
   test('the prompt identifies the canonical workspace reached by its file tools', async () => {

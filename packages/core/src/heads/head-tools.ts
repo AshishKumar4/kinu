@@ -39,7 +39,8 @@ export interface HeadToolDeps {
   rt: AgentRuntime;
   /** The builtin factory builds the whole surface and narrows it afterwards, so its deps are whole. */
   conversations: ConversationRecall;
-  /** Pre-built `eval` (codemode differs per platform). A function receives the finished head surface and its result replaces `eval`. */
+  /** Pre-built `eval` (codemode differs per platform). A function receives the finished head surface and its allowed
+   *  reach, and its result replaces `eval`. */
   codemodeTool: unknown;
   webSearch: WebSearchProvider;
   /** The backend owns the spawn substrate; the budget gate lives here. */

@@ -1,7 +1,7 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shared tools and roster for non-main agents; their turns run in AgentFacet. */
 
-import { INTERRUPTED_TURN, currentDateForPrompt, type ConversationRecall, type HeadReport, isSubordinateOrigin } from '@kinu.run/core';
+import { INTERRUPTED_TURN, currentDateForPrompt, type ConversationRecall, type HeadReport, isSubordinateOrigin, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, buildHeadMessages, buildHeadSystemPrompt, callableToolNames, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type HeadInferenceDeps, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
@@ -75,7 +75,7 @@ export interface HostedActorSeams {
   /** The same provisioner the host uses, so the home a node is told about is the one it has. */
   nodeHome(actor: HostedActor): Promise<NodeWorkspace>;
   /** Typed as `Tool`: core widens `HeadToolDeps.codemodeTool` to `unknown`, this seam need not. */
-  codemodeTool(runtime: CFRuntime, webSearch: WebSearchProvider): (finished: ToolSet) => Tool;
+  codemodeTool(runtime: CFRuntime, webSearch: WebSearchProvider): (finished: ToolSet, reach: ToolSurfaceNarrowing) => Tool;
   /** The workspace journal, so a depth-2 head's spawn row and step rows join. */
   recordStep(headId: HeadId, seq: number, step: HeadStep): Promise<void>;
   readonly publishDelta: ReportHeadDelta;
@@ -696,7 +696,7 @@ export async function hostNodeSeat(
 }
 
 /** A swarm node's `eval`, over the hosted actor the node runs as. */
-export function nodeCodemodeTool(seams: HostedActorSeams, actor: HostedActor): (finished: ToolSet) => Tool {
+export function nodeCodemodeTool(seams: HostedActorSeams, actor: HostedActor): (finished: ToolSet, reach: ToolSurfaceNarrowing) => Tool {
   return settleSync(cfRuntimeOf(actor, 'a swarm node').pipe(Effect.map((runtime) => seams.codemodeTool(runtime, seams.webSearch()))));
 }
 

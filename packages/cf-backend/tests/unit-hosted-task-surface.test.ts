@@ -102,3 +102,21 @@ test('a hosted child advertises only its callable crafted surface and loses it w
   const current = requestOf(last).messages.filter((message) => message.role === 'user').at(-1);
   expect(JSON.stringify(current)).not.toContain('workspace_echo(...args');
 });
+
+// Rank 36: a hire's role narrowed its native tools, never the namespaces its eval bound.
+test("a hire's eval reaches only the namespaces its role admits", async () => {
+  const gateway = scriptedGateway([{ tool: 'eval', args: { code: 'return `${typeof workspace} ${typeof web}`;' } }]);
+  const workspace = gatewayWorkspace(gateway);
+
+  const child = await hostedSubordinateHarness(workspace, {
+    name: 'reach-prover', displayName: 'Reach prover', nameOrigin: 'user', mission: 'Say what you can reach.',
+  });
+
+  workspace.agent.harnessInstallCatalog({ ...GATEWAY_CATALOG, roles: {
+    analyst: { description: 'Web only', instructions: 'Answer from the web.', tier: 'default', preset: 'ideate', allowedTools: ['eval', 'web'] },
+  } });
+  actorOver(workspace.db, child.actor.handle.actorId).config.setRoleSelection('analyst');
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'What can you reach?');
+
+  expect(toolResults(gateway.runs)[0]).toContain('undefined object');
+});

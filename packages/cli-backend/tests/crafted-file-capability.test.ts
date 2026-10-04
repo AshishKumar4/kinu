@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite';
 import {
   createInlineExecutor, initWorkspaceSchema, selectInjectableCraftedTools, type JsonValue, type LLMProviderConfig,
 } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { scratchPath, toolExecute } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
@@ -41,7 +42,7 @@ function programs() {
     shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) }, filesOwner: 'agent',
   });
 
-  const built = createNodeCodemodeToolFactory({ extraProviders: [workspace] })({
+  const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [workspace] })({
     native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql), providers: [],
   });
 
