@@ -250,7 +250,7 @@ interface CallOutcome {
   readonly finishReason: string | undefined;
   readonly interrupted: boolean;
   readonly failure: CallFailure | null;
-  readonly open?: StepRecord;
+
 }
 
 const DEAD_STREAM = 'Model stream ended without output: the provider stream terminated prematurely '
@@ -751,6 +751,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     responsePrefix: readonly ModelMessage[],
   ): AsyncGenerator<ChatEvent, CallOutcome> {
     const callIndex = calls++;
+    const consumer = new AbortController();
+    const signal = opts.signal === undefined ? consumer.signal : AbortSignal.any([opts.signal, consumer.signal]);
 
     const operation = beginModelOperation(
       { source: 'agent', operations: opts.operations },
@@ -770,7 +772,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.stepFailure !== null],
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
       experimental_repairToolCall: repairToolCall(),
-      abortSignal: opts.signal,
+      abortSignal: signal,
       headers: { [PROVIDER_RETRIES_HEADER]: String(route.callRetries) },
       // The SDK default console.error dumped raw provider payloads; the rethrow below is the one place failures read.
       onError: ({ error }) => { call.streamError = error; },
@@ -787,7 +789,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
         return composePrepareStep({
           extensions,
-          abortSignal: opts.signal,
+          abortSignal: signal,
           cache: rollTail ? { strategy: cache.strategy } : null,
           prune: { contextWindow, modelOutputLimit },
           budget: opts.budget,
@@ -828,13 +830,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       },
     });
 
-    suppressDeferredRejections(result, () => call.interrupted || (opts.signal?.aborted ?? false));
+    suppressDeferredRejections(result, () => call.interrupted || signal.aborted);
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
     const observed = opts.observeStream?.(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) }), { index: callIndex });
 
+    let drained = false;
+
     try {
-      // Drained to the SDK's `abort` part rather than broken out of: `onAbort` has then run, and a late tool result
-      // still reaches the surfaces.
       for await (const chunk of result.fullStream) {
         const event = call.consume(chunk);
 
@@ -847,6 +849,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
         yield* call.takeStepEvents();
       }
+
+      drained = true;
     } catch (err) {
       // The signal is authoritative: a provider may throw its abort reason before `onAbort` runs.
       if (opts.signal?.aborted) call.interrupted = true;
@@ -856,8 +860,22 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         throw err;
       }
     } finally {
-      // Drained to its end before the turn settles, so the persisted answer is not short of what the client saw.
-      await observed;
+      let completed = false;
+
+      try {
+        if (!drained && call.streamError === undefined && call.stepFailure === null) consumer.abort();
+        await observed;
+        completed = drained && !call.interrupted && call.streamError === undefined;
+      } finally {
+        // A failed seal is not permission to commit its partial rows on a second attempt.
+        if (!completed && call.stepFailure === null) {
+          if (consumer.signal.aborted) call.interrupted = true;
+          const produced = call.produced();
+          const paired = settleUnpairedToolCalls(produced, opts.lostToolCall) ?? produced;
+
+          await opts.persistStep?.(call.openRecord(responsePrefix.length === 0 ? paired : [...responsePrefix, ...paired]));
+        }
+      }
     }
 
     if (call.stepFailure !== null) {
@@ -873,8 +891,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     if (failure !== null) {
       operation.failed({ cause: failure.cause });
 
-      return { steps: call.finishedSteps, produced: paired, finishReason: undefined, interrupted: false, failure,
-        open: call.openRecord(responsePrefix.length === 0 ? paired : [...responsePrefix, ...paired]) };
+      return { steps: call.finishedSteps, produced: paired, finishReason: undefined, interrupted: false, failure };
     }
 
     // A cut run never settles `result.response`/`result.steps`; read what `onAbort` handed over.
@@ -883,15 +900,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     settleModelOperation(operation, result, cut);
     const steps = cut ? call.recordedSteps : await result.steps;
 
-    if (cut) await opts.persistStep?.(call.openRecord(responsePrefix.length === 0 ? paired : [...responsePrefix, ...paired]));
-
-    return {
-      steps,
-      produced: paired,
-      finishReason: call.lastFinishReason,
-      interrupted: cut,
-      failure: null,
-    };
+    return { steps, produced: paired, finishReason: call.lastFinishReason, interrupted: cut, failure: null };
   };
 
   const takeOver = (next: ChatFallback): void => {
@@ -915,8 +924,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     if (next === undefined) throw route.exhausted(outcome.failure);
     yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: describeProviderError({ cause: outcome.failure.cause }), source: 'native' };
     const produced = responsePrefix.length === 0 ? outcome.produced : [...responsePrefix, ...outcome.produced];
-
-    if (outcome.open !== undefined) await opts.persistStep?.(outcome.open);
 
     takeOver(next);
 
