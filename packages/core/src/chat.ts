@@ -154,9 +154,9 @@ export interface ChatOptions {
   budget?: MissionGovernor;
   /** An extra stop reason; there is no step cap to combine with (see UNBOUNDED_STEPS). */
   stopWhen?: StopCondition<ToolSet>;
-  /** Each finished step, raw and as recorded, awaited, since the sink may be another DO the next request waits for; a
-   *  throw rejects the turn. */
-  onStep?: (step: StepResult<ToolSet>, record: StepRecord) => Promise<void> | void;
+  /** Each finished step, raw and as its own recorded messages, awaited, since the sink may be another DO the next request
+   *  waits for; a throw rejects the turn. */
+  onStep?: (step: StepResult<ToolSet>, messages: readonly ModelMessage[]) => Promise<void> | void;
   /** Raw SDK output for a host UI bridge; not part of the serializable ChatEvent projection. */
   onToolOutput?: (output: ChatToolOutput) => Promise<void> | void;
   /** Where each call opens and closes its `model_operation` rows, so one in flight at process death shows in
@@ -345,9 +345,13 @@ class ProviderCall {
     } };
   }
 
-  stepFinished(step: StepResult<ToolSet>, record: StepRecord, prefixLength: number): void {
+  /** Returns the step's own messages: what the record holds past this call's earlier steps. */
+  stepFinished(step: StepResult<ToolSet>, record: StepRecord, prefixLength: number): readonly ModelMessage[] {
     this.finishedSteps.push(step);
-    this.responseSoFar = prefixLength === 0 ? record.messages : record.messages.slice(prefixLength);
+    const response = prefixLength === 0 ? record.messages : record.messages.slice(prefixLength);
+    const own = response.slice(this.responseSoFar.length);
+
+    this.responseSoFar = response;
 
     for (const part of step.content) if (part.type === 'tool-call') {
       this.dispatchedCalls.delete(part.toolCallId);
@@ -355,6 +359,8 @@ class ProviderCall {
     }
 
     if (record.step !== undefined) this.pendingStepEvents.push({ ...record.step, responseMessages: record.messages });
+
+    return own;
   }
 
   nativePart(part: TextStreamPart<ToolSet>): void {
@@ -809,21 +815,21 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }),
       onStepFinish: async (step) => {
         stepSpans.finish(step);
-        let record: StepRecord | null = null;
+        let own: readonly ModelMessage[] | null = null;
 
         try {
           stepCount++;
-          record = call.stepRecord(step, stepCount, meter?.take(), responsePrefix);
+          const record = call.stepRecord(step, stepCount, meter?.take(), responsePrefix);
           await opts.persistStep?.(record);
-          call.stepFinished(step, record, responsePrefix.length);
+          own = call.stepFinished(step, record, responsePrefix.length);
         } catch (cause) {
           call.stepFailure ??= { doing: 'recording a finished model step', cause };
         }
 
-        if (call.stepFailure !== null || record === null) return;
+        if (call.stepFailure !== null || own === null) return;
 
         try {
-          await opts.onStep?.(step, record);
+          await opts.onStep?.(step, own);
         } catch (cause) {
           call.stepFailure ??= { doing: 'run the step hook', cause };
         }

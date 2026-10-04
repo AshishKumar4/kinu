@@ -60,15 +60,20 @@ export function turnArtifactBodies(sql: SqlExecutor, actor: ActorHandle, turn: {
   if (candidate === undefined || trial === null) return { bodies, trial: null };
   const now = turn.now ?? nowMs();
 
-  const [last] = sql<{ segment_id: string; arm: string }>`SELECT segment_id, arm FROM trial_turns
+  // A turn reopened under its answer id (a continuation, a process loss) keeps the segment it was recorded in.
+  const [held] = sql<{ segment_id: string }>`SELECT segment_id FROM trial_turns
+    WHERE actor_id = ${actor.actorId} AND trial_id = ${trial.trialId} AND turn_id = ${turn.answerId}`;
+
+  const [last] = held !== undefined ? [] : sql<{ segment_id: string }>`SELECT segment_id FROM trial_turns
     WHERE actor_id = ${actor.actorId} AND trial_id = ${trial.trialId} ORDER BY at DESC LIMIT 1`;
 
-  const segmentId = turn.cacheCold || last === undefined ? `seg-${nanoid()}` : last.segment_id;
+  const segmentId = held?.segment_id ?? (turn.cacheCold || last === undefined ? `seg-${nanoid()}` : last.segment_id);
   const arm = drawArm(trial.trialId, segmentId);
 
-  void sql`INSERT INTO trial_turns (actor_id, trial_id, turn_id, segment_id, arm, at)
-    VALUES (${actor.actorId}, ${trial.trialId}, ${turn.answerId}, ${segmentId}, ${arm}, ${now})
-    ON CONFLICT(actor_id, trial_id, turn_id) DO NOTHING`;
+  if (held === undefined) {
+    void sql`INSERT INTO trial_turns (actor_id, trial_id, turn_id, segment_id, arm, at)
+      VALUES (${actor.actorId}, ${trial.trialId}, ${turn.answerId}, ${segmentId}, ${arm}, ${now})`;
+  }
 
   return {
     bodies: arm === 'candidate' ? { ...bodies, [candidate.artifact_id]: candidate.body } : bodies,
