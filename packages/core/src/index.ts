@@ -212,7 +212,9 @@ export { OutputSinkSchema, ShellExecOptionsSchema, VfsRevisionSchema } from './t
 
 export { REAL_CLOCK, waitOn, every, type Clock } from './types/clock';
 
-export { referenceRoots, formatReference, type ReferenceRoot } from './vfs/references';
+export {
+  cloudPlanes, formatPath, machinePath, resolvePath, RESERVED_ROOTS, type PathPlanes, type PlaneRoot, type ResolvedPath,
+} from './vfs/resolve';
 
 export type * from './types/agent-runtime';
 
@@ -1056,7 +1058,7 @@ export {
 } from './skills/drive';
 
 export {
-  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
+  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
   type VfsMount, type MountableProvider, type MountedVfs,
   type VfsListedEntry,

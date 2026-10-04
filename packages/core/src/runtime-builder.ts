@@ -7,6 +7,7 @@ import type { AgentRuntime, CraftStore, RequestShellApproval } from './types/age
 import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';
 import type { TurnFileLedger } from './vfs/file-ledger';
+import type { PathPlanes } from './vfs/resolve';
 import { createScaffoldSurface } from './scaffold/surface';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import type { ActorHandle } from './identity/actor-handle';
@@ -28,7 +29,7 @@ export interface RuntimeComponents {
   /** This agent's own state when `vfs` is a shared plane. */
   agentStateVfs?: VFS;
   toolFiles: VFS;
-  workspaceIsMachine: boolean;
+  planes: PathPlanes;
   llm: LLM;
   executor: Executor;
   schedule: Schedule;
@@ -82,7 +83,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     storage: { vfs, home: components.home ?? WORKSPACE_ROOT, sql, execRaw, transactionSync: components.transactionSync },
     agentStateVfs,
     toolFiles: components.toolFiles,
-    workspaceIsMachine: components.workspaceIsMachine,
+    planes: components.planes,
     memory,
     executor,
     llm,

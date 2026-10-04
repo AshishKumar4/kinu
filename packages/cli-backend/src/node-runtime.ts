@@ -41,6 +41,8 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
     let shell = origin.shell;
     let router = origin.executionRouter;
     let release: (() => void) | undefined;
+    // A private home is where its relative paths and `~` land.
+    const planes = node.isolation === 'private-home' ? { ...origin.planes, cwd: node.home, home: node.home } : origin.planes;
 
     if (node.isolation === 'private-home') {
       const plane = await deps.workspace.asAgent({ cred: node.cred, home: node.home, tmp: node.tmp });
@@ -62,8 +64,8 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
       release = deps.workspace.mountTable(mounted, node.cred);
       vfs = mounted;
-      toolFiles = withApprovalGatedFiles(mounted, 'workspace', { userRoots: () => mounted.userRoots(), locate: null, parksWrites: false }, origin.approvalPolicy);
-      ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs: toolFiles, files: mounted, home: node.home, shell, filesOwner: 'agent' }));
+      toolFiles = withApprovalGatedFiles(mounted, 'workspace', { planes, userRoots: () => mounted.userRoots(), locate: null, parksWrites: false }, origin.approvalPolicy);
+      ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs: toolFiles, files: mounted, home: node.home, planes, shell, filesOwner: 'agent' }));
 
       for (const info of origin.executionRouter?.listExecutors() ?? []) {
         if (info.name === 'workspace') continue;
@@ -84,7 +86,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       storage: { ...origin.storage, vfs, home: node.isolation === 'private-home' ? node.home : origin.storage.home },
       agentStateVfs: origin.agentStateVfs,
       toolFiles,
-      workspaceIsMachine: origin.workspaceIsMachine,
+      planes,
       memory: origin.memory,
       executor: origin.executor,
       llm: origin.llm,

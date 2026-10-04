@@ -18,6 +18,7 @@ import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
+import { cloudPlanes } from '../src/vfs/resolve';
 
 /** Approvals db + actor. `deferred_approvals` is keyed `(actor_id, id)`, so a re-opened store must name the same actor. */
 function approvalsDb() {
@@ -913,7 +914,7 @@ async function driveWithQueue(perform: (plane: VFS, write: BoundFileWrite, bytes
   });
 
   const policy: ShellApprovalPolicy = { mode: () => 'strict', deferrals: queue.channel };
-  const files = withApprovalGatedFiles(plane, 'workspace', { userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, policy);
+  const files = withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, policy);
 
   return { drive, files, queue, store, woken, kernel };
 }

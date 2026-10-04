@@ -18,9 +18,6 @@ import { TaskListStore } from './task-store';
 import { clampToolResult, withClampedToolResult, type ClampToolResultOptions } from './clamp';
 import { withCheckedInput, withCheckedInputs } from './tool-schema';
 import { codemodeInputSchema } from './sandbox-contract';
-import { connectedDevices } from '../execution/device-status';
-import { deviceMountSegment } from '../execution/device-tunnel-executor';
-import { referenceRoots } from '../vfs/references';
 import { dispatchReport, ReportBodySchema, ReportToolInputSchema } from './report-tool';
 import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
 import { createFileToolSteer } from './shell-file-steer';
@@ -315,16 +312,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     ledger: deps.fileLedger ?? new TurnFileLedger(),
     budget,
     memory,
-    // Live table at render time: a machine connected mid-turn uses its own segment.
-    roots: () => {
-      const fleet = rt.deviceTransport?.status().devices;
-
-      return referenceRoots({
-        devices: connectedDevices(fleet).map((device) => deviceMountSegment(device, fleet)),
-        sandbox: router?.getProvider('sandbox') !== undefined,
-        local: rt.workspaceIsMachine,
-      });
-    },
+    planes: rt.planes,
   });
 
   // Dispatch shared with the `memory.*` codemode namespace (memory-tool.ts).

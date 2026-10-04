@@ -625,7 +625,8 @@ test('a file the agent writes is named local:// when the directory is the worksp
 
   expect(await write(agentRuntime(state, 'bound', project))).toMatchObject({ ok: true, reference: 'local://notes/plan.md' });
   expect(readFileSync(join(project, 'notes/plan.md'), 'utf8')).toBe('ship it');
-  expect(await write(agentRuntime(state, 'unbound'))).toMatchObject({ ok: true, reference: 'vfs://notes/plan.md' });
+  // A relative path is the home's, so its reference names the home (it named `/notes/plan.md` before 2026-10-04).
+  expect(await write(agentRuntime(state, 'unbound'))).toMatchObject({ ok: true, reference: 'vfs://home/main/notes/plan.md' });
 });
 
 describe('SOUL.md is the owner\'s', () => {

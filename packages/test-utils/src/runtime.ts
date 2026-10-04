@@ -7,7 +7,7 @@ import type {
   CraftStore, AgentStores, AgentsSwarmDeps, ModelCallSink,
 } from '@kinu.run/core';
 import { tool } from 'ai';
-import { codemodeInputSchema, WORKSPACE_ROOT } from '@kinu.run/core';
+import { codemodeInputSchema, WORKSPACE_ROOT, cloudPlanes } from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
 import {
   WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, WorkspaceActorDirectory, initAgentConfigTable,
@@ -136,7 +136,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
 
   const rt: AgentRuntime = {
     actor,
-    workspaceIsMachine: false,
+    planes: cloudPlanes(WORKSPACE_ROOT),
     // A test plane holds nothing of the user's.
     get toolFiles() { return rt.storage.vfs; },
     storage: {

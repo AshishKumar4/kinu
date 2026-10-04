@@ -7,7 +7,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { Database } from 'bun:sqlite';
 import type {
-  AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
+  AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution, PathPlanes,
   ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome,
 } from '@kinu.run/core';
 import type { Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
@@ -376,6 +376,12 @@ export function createCLIRuntime(
   // Where its shell starts; the cwd plane names the host directory by its host path too.
   const shellHome = cwd ?? WORKSPACE_ROOT;
 
+  // In a directory, the folder is `local://`.
+  const planes: PathPlanes = {
+    cwd: shellHome, home: shellHome, devices: null,
+    roots: [{ root: 'vfs', at: '/' }, ...(cwd === null ? [] : [{ root: 'local', at: cwd }])],
+  };
+
   const memoryStore = new MemoryStore(agentStateVfs, sql);
   memoryStore.ensureSchema();
   const memory = adaptMemory(memoryStore, agentStateVfs);
@@ -481,7 +487,7 @@ export function createCLIRuntime(
 
   if (cwd === null) workspace.mountTable(agentVfs);
   // Only the agent's tools: the shell and the owner's views keep `agentVfs`.
-  const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(cwd, agentVfs), approvalPolicy);
+  const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(cwd, agentVfs, planes), approvalPolicy);
 
   const limits = hostResourceLimits();
 
@@ -489,6 +495,7 @@ export function createCLIRuntime(
     vfs: toolFiles,
     files: agentVfs,
     home: shellHome,
+    planes,
     memory,
     craftStore,
     shell,
@@ -506,7 +513,7 @@ export function createCLIRuntime(
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => writeTransaction(db, write),
-    workspaceIsMachine: cwd !== null,
+    planes,
     actor, sql,
     execRaw,
     vfs: agentVfs,
@@ -700,7 +707,8 @@ async function buildCLIHeadRuntime(
   const executionRouter = new DefaultExecutionRouter();
 
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs: withApprovalGatedFiles(vfs, 'workspace', directoryFileReach(parent.cwd ?? null, null), parent.approvalPolicy), files: vfs, home: parent.storage.home,
+    vfs: withApprovalGatedFiles(vfs, 'workspace', directoryFileReach(parent.cwd ?? null, null, parent.planes), parent.approvalPolicy), files: vfs, home: parent.storage.home,
+    planes: parent.planes,
     memory: parent.memory, craftStore: parent.craftStore, shell, sql,
     // The same machine the parent's shell runs on.
     filesOwner: parent.cwd ? 'user' : 'agent',
@@ -759,8 +767,8 @@ async function buildCLIHeadRuntime(
     // programs; with the default, the parent would execute its head's source.
     scaffoldPath: actorScaffoldPath(opts.actorBinding),
     actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, home: parent.storage.home, agentStateVfs,
-    toolFiles: withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(parent.cwd ?? null, agentVfs), parent.approvalPolicy),
-    workspaceIsMachine: parent.workspaceIsMachine,
+    toolFiles: withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(parent.cwd ?? null, agentVfs, parent.planes), parent.approvalPolicy),
+    planes: parent.planes,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,
     executionRouter, shell,

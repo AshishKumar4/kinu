@@ -5,6 +5,8 @@ import { Effect } from 'effect';
 import { CODE_WORK_DID_NOT_START, diagnostics, KinuError, type ErrorCode } from '../obs/index';
 import { boundWriteCommand, type WriteSubject } from './bound-write';
 import type { ShellCallJob } from '../types/primitives';
+import { machinePath } from '../vfs/resolve';
+import { workspacePath } from '../vfs/workspace-path';
 
 export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 
@@ -488,25 +490,11 @@ function shellSteps(command: string): ShellStep[] {
   return steps;
 }
 
-function normalizedPath(path: string): string {
-  const parts: string[] = [];
-
-  for (const part of path.split('/')) {
-    if (part === '..') parts.pop();
-    else if (part !== '' && part !== '.') parts.push(part);
-  }
-
-  return `/${parts.join('/')}`;
-}
-
+/** `~name` is another account's home, which the shell would expand: unknown here. */
 function shellPath(word: ShellWord, cwd: string, home: string): string | null {
-  if (word === null) return null;
+  if (word === null || (word.startsWith('~') && word !== '~' && !word.startsWith('~/'))) return null;
 
-  if (word === '~' || word.startsWith('~/')) return normalizedPath(home + word.slice(1));
-
-  if (word.startsWith('~')) return null;
-
-  return normalizedPath(word.startsWith('/') ? word : `${cwd}/${word}`);
+  return machinePath(word, { cwd, home });
 }
 
 function underRoots(path: string, roots: readonly string[]): boolean {
@@ -515,7 +503,7 @@ function underRoots(path: string, roots: readonly string[]): boolean {
 
 /** On a user mount, by its first segment or once `..` resolves. */
 export function onUserRoots(path: string, roots: readonly string[]): boolean {
-  return path.startsWith('/') && (roots.includes(`/${path.split('/')[1] ?? ''}`) || underRoots(normalizedPath(path), roots));
+  return path.startsWith('/') && (roots.includes(`/${path.split('/')[1] ?? ''}`) || underRoots(workspacePath(path, '/'), roots));
 }
 
 /** null: unknown; `undefined`: not a `cd`. */

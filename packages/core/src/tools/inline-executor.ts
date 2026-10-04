@@ -29,6 +29,7 @@ import { TurnFileLedger } from '../vfs/file-ledger';
 import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
 import type { JsonValue } from '../utils/json';
+import { cloudPlanes, type PathPlanes } from '../vfs/resolve';
 
 const StringSchema = v.string();
 
@@ -62,6 +63,8 @@ export interface InlineExecutorDeps {
   vfs: VFS;
   /** Absent: {@link WORKSPACE_ROOT}, the root's. */
   home?: string;
+  /** Absent: the cloud's planes over `home`. */
+  planes?: PathPlanes;
   /** The owner's files surface; absent: `vfs`, the plane the tools reach. */
   files?: VFS;
   memory: Memory;
@@ -125,6 +128,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const currentFileDispatch = () => createFileDispatcher({
     vfs,
     home: deps.home ?? WORKSPACE_ROOT,
+    planes: deps.planes ?? cloudPlanes(deps.home ?? WORKSPACE_ROOT),
     ledger: currentLedger(),
     budget: currentBudget(),
     memory,

@@ -25,7 +25,7 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
-import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type PortHolders } from '@kinu.run/core';
+import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type PortHolders, cloudPlanes } from '@kinu.run/core';
 import type { ActorReference, HostedNodeHome, TierRefusals } from '@kinu.run/core';
 import { mountActorFiles } from './workspace-host';
 
@@ -380,8 +380,10 @@ export function createCFRuntime(
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
   const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
 
+  const planes = cloudPlanes(home);
+
   const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
-    userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
+    planes, userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
   }, approvalPolicy);
 
   executionRouter.register(createNimbusWorkspaceExecutor({
@@ -391,7 +393,7 @@ export function createCFRuntime(
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
-      vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell,
+      vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell, planes,
       sql,
       ledger: () => access.acc?.().files,
       budget: () => access.acc?.().context,
@@ -551,7 +553,7 @@ export function createCFRuntime(
     storage: { vfs: agentFileVfs, home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
     toolFiles,
-    workspaceIsMachine: false,
+    planes,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
