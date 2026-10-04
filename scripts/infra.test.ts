@@ -24,7 +24,7 @@ import {
 } from './infra-manifest';
 import {
   type AccessApplicationView, type ContainerApplication, type Deployment, accessCovering, accessDestinations, accessOverreach,
-  edgeResponds, namespaceBinding, routeAnswer,
+  edgeResponds, namespaceBinding, routeAnswer, secretListing,
 } from './infra-cloudflare';
 import {
   type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observe, observedRow, phaseFrom, supplyDrift,
@@ -1100,6 +1100,20 @@ describe('the first staging deploy is refused for nothing it creates', () => {
  */
 describe('an empty account reaches its first deploy', () => {
   const staging = deriveInfrastructure('staging');
+
+  // wrangler 4.145's `secret list` on a Worker that does not exist, recorded 2026-10-04 against the live account.
+  const missingWorker = {
+    ok: false, stdout: '', code: 1,
+    stderr: '\u001b[31m✘ \u001b[41;31m[\u001b[41;97mERROR\u001b[41;31m]\u001b[0m \u001b[1mWorker "kinu-bootstrap-probe-1791089222" not found.\u001b[0m\n'
+    + '\n'
+    + '  \n'
+    + '  If this is a new Worker, run `wrangler deploy` first to create it.\n'
+    + '  Otherwise, check that the Worker name is correct and you\'re logged into the right account.\n'
+    + '\n'
+    + '\n'
+    + '🪵  Logs were written to "/home/operator/.config/.wrangler/logs/wrangler.log"\n',
+  };
+
   const required = [...SUPPLY.keys()].filter((name) => SUPPLY.get(name)?.handling !== 'config-var' && requiredIn(name, staging.worker));
 
   /** The Worker and what is bound to it are observed for real; nothing else here needs an account. */
@@ -1113,8 +1127,16 @@ describe('an empty account reaches its first deploy', () => {
 
   const findings = async (phase: Phase, live: Deployment, held: readonly string[]) => audit({
     infrastructure: staging, rows: await account(live), unreadFields: [], phase,
-    supplied: supplyRows(staging.worker, live.state === 'absent' ? { state: 'absent' } : { state: 'present', detail: 'listed', names: held }),
+    supplied: supplyRows(staging.worker, live.state === 'absent' ? secretListing(missingWorker) : { state: 'present', detail: 'listed', names: held }),
   }).findings;
+
+  test("wrangler's word that the Worker is missing is an absence, and no other failure is", () => {
+    expect(secretListing(missingWorker)).toEqual({ state: 'absent' });
+
+    for (const stderr of ['✘ [ERROR] Authentication error [code: 10000]', 'sh: 1: wrangler: not found']) {
+      expect(secretListing({ ok: false, stdout: '', stderr, code: 1 }).state).toBe('unknown');
+    }
+  });
 
   test('before provisioning, the gate refuses the deploy for the missing secrets alone', async () => {
     const refused = await findings('full', { state: 'absent' }, []);

@@ -232,11 +232,12 @@ export class BackgroundJobRunner {
   }
 
   private createJob(id: string, { kind, input, mode, controller }: Pick<DetachRequest, 'kind' | 'input' | 'mode' | 'controller'>): string {
+    // Held before it is running: a process sweeping in between would otherwise reclaim it from its creator.
+    this.deps.holder?.hold(id);
     this.deps.store.create({
       id, kind, workMode: mode, input: serializeJobResult({ value: input }), now: Date.now(),
       label: describeJobInput(kind, input),
     });
-    this.deps.holder?.hold(id);
     this.controllers.set(id, controller);
 
     return id;
@@ -245,6 +246,8 @@ export class BackgroundJobRunner {
   /** Null means another retry already owns the source row. */
   createRetry(request: BackgroundRetryRequest): string | null {
     const id = newJobId();
+
+    this.deps.holder?.hold(id);
 
     const created = this.deps.store.createRetry({
       sourceId: request.sourceId,
@@ -257,7 +260,6 @@ export class BackgroundJobRunner {
     });
 
     if (!created) return null;
-    this.deps.holder?.hold(id);
     this.controllers.set(id, request.controller);
 
     return id;
