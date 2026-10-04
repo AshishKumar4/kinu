@@ -73,7 +73,6 @@ async function workspaceThatHired(home: string, name: string, subagent: { name: 
       currentTask: null,
       createdAt: Date.now(),
       dismissedAt: null,
-      lifetime: 'durable',
       taskEventId: null,
     });
   } finally {

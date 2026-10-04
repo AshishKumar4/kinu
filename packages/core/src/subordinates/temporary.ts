@@ -196,7 +196,7 @@ export function createTemporaryAgentPort(deps: {
         name, actorReference: null, deleteRequested: false,
         birth: { creationId, assignment, seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME, origin: request.lane ? 'evolution' : 'agent' } },
         status: 'working', currentTask: task, createdAt: startedAt,
-        dismissedAt: null, lifetime: TEMPORARY_LIFETIME, taskEventId: null,
+        dismissedAt: null, taskEventId: null,
       });
 
       try {
