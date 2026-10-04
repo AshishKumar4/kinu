@@ -38,6 +38,11 @@ const INVENTORY_REV = `${RT}/disk-inventory.rev`;
 
 const NEXT_INVENTORY = `${RT}/disk-inventory.next`;
 
+const NEXT_INVENTORY_REV = `${RT}/disk-inventory.next.rev`;
+
+const KEEP_INVENTORY = `{ [ ! -e ${shellPath(NEXT_INVENTORY)} ] || mv ${shellPath(NEXT_INVENTORY)} ${shellPath(INVENTORY)}; } `
+  + `&& mv ${shellPath(NEXT_INVENTORY_REV)} ${shellPath(INVENTORY_REV)}`;
+
 const CHANGES = `${RT}/disk-changes`;
 
 const STAGED_BY_AN_OLDER_IMAGE = `${RT}/disk-stage`;
@@ -374,11 +379,11 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     return bytes;
   });
 
-  /** The pre-pack inventory and a delta's digests are the baseline once the record names the layer. */
+  /** Held under its rev before the record: a keep lost after the record is redone next save. */
   const advance = (state: DiskChainState, expectedRev: number | null, staged: boolean) => Effect.gen(function* () {
+    yield* run('holding the inventory', `printf %s ${String(state.rev)} > ${shellPath(NEXT_INVENTORY_REV)}`);
     yield* attempt('io', () => ports.writeState(state, expectedRev));
-    yield* run('keeping the inventory', `mv ${shellPath(NEXT_INVENTORY)} ${shellPath(INVENTORY)} && printf %s ${String(state.rev)} > ${shellPath(INVENTORY_REV)}`
-      + (staged ? ` && ${blockSwapCommand(`${BLOCKS}.next`, state.rev)}` : ''));
+    yield* run('keeping the inventory', KEEP_INVENTORY + (staged ? ` && ${blockSwapCommand(`${BLOCKS}.next`, state.rev)}` : ''));
   });
 
   const commitBase = (prior: DiskChainState | null, at: number) => Effect.gen(function* () {
@@ -466,6 +471,8 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     const state = yield* attempt('io', () => ports.readState());
 
     yield* attempt('io', () => ports.mountStore());
+
+    if (state !== null && (yield* read(NEXT_INVENTORY_REV)) === String(state.rev)) yield* run('keeping the inventory', KEEP_INVENTORY);
     const recovered = yield* recovery();
     const recovering = recovered !== null;
     const baseline = yield* read(INVENTORY_REV);
