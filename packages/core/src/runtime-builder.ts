@@ -41,6 +41,7 @@ export interface RuntimeComponents {
   executionRouter?: ExecutionRouter;
   /** Required by the `shell` tool's workspace fast path and the `eval` new-Function fallback. */
   shell?: Shell;
+  nodeIsolated?: boolean;
   /** Host backends only. */
   checkpoints?: FileCheckpoints;
   /** Only a backend with a live interactive surface (the CLI's ACP channel) supplies this. */
@@ -95,6 +96,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     ...(components.decide !== undefined && { decide: components.decide }),
     executionRouter: components.executionRouter,
     shell: components.shell,
+    nodeIsolated: components.nodeIsolated,
     checkpoints: components.checkpoints,
     setShellApprovalChannel: components.setShellApprovalChannel,
     setTurnFileLedgerProvider: components.setTurnFileLedgerProvider,
