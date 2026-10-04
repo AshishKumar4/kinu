@@ -160,25 +160,19 @@ export class BackgroundJobStore {
   }
 
   /**
-   * Claim a running job for re-drive: atomically bump epoch, attempts and attempt clock, and clear the
-   * served `resume_after`. Null when no longer running.
+   * Claim a running job for re-drive, compared and set on the epoch the claimant read: bump epoch, attempts and
+   * attempt clock, and clear the served `resume_after`. Null when it moved on or stopped running: another claimed it.
    */
-  reclaim(id: string, now = Date.now()): JobClaim | null {
+  reclaim(id: string, epoch: number, now = Date.now()): JobClaim | null {
     this.actor.assertCurrent();
-    void this.sql`UPDATE background_jobs
+
+    const row = this.sql<{ epoch: number; resume_attempts: number }>`UPDATE background_jobs
       SET epoch = epoch + 1, resume_attempts = resume_attempts + 1, attempt_started_at = ${now},
           resume_after = NULL
-      WHERE actor_id=${this.actorId} AND id=${id} AND status='running'`;
+      WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch}
+      RETURNING epoch, resume_attempts`[0];
 
-    const rows = this.sql<{ epoch: number; resume_attempts: number; status: string }>`
-      SELECT epoch, resume_attempts, status FROM background_jobs
-      WHERE actor_id=${this.actorId} AND id=${id} LIMIT 1`;
-
-    const row = rows[0];
-
-    if (!row || row.status !== 'running') return null;
-
-    return { epoch: row.epoch, attempts: row.resume_attempts };
+    return row === undefined ? null : { epoch: row.epoch, attempts: row.resume_attempts };
   }
 
   /** Earliest next-attempt instant; absolute so it survives eviction. Running rows only. */

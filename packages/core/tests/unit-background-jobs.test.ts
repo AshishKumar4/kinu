@@ -85,7 +85,7 @@ describe('BackgroundJobStore', () => {
     s.create({ id: 'e', kind: 'think', workMode: 'build', now: 1 });
     expect(s.epochOf('e')).toBe(0);
 
-    const claim = s.reclaim('e');
+    const claim = s.reclaim('e', s.epochOf('e') ?? -1);
     expect(claim).toEqual({ epoch: 1, attempts: 1 });
     expect(s.epochOf('e')).toBe(1);
 
@@ -96,18 +96,28 @@ describe('BackgroundJobStore', () => {
     expect(s.get('e')?.status).toBe('completed');
     expect(s.get('e')?.result).toBe('live result');
 
-    expect(s.reclaim('e')).toBeNull();
+    expect(s.reclaim('e', s.epochOf('e') ?? -1)).toBeNull();
   });
 
   test('reclaim bumps epoch + attempts monotonically across repeated eviction', () => {
     const s = newStore();
     s.create({ id: 'r', kind: 'think', workMode: 'build', now: 1 });
-    expect(s.reclaim('r')).toEqual({ epoch: 1, attempts: 1 });
-    expect(s.reclaim('r')).toEqual({ epoch: 2, attempts: 2 });
-    expect(s.reclaim('r')).toEqual({ epoch: 3, attempts: 3 });
+    expect(s.reclaim('r', s.epochOf('r') ?? -1)).toEqual({ epoch: 1, attempts: 1 });
+    expect(s.reclaim('r', s.epochOf('r') ?? -1)).toEqual({ epoch: 2, attempts: 2 });
+    expect(s.reclaim('r', s.epochOf('r') ?? -1)).toEqual({ epoch: 3, attempts: 3 });
     expect(s.get('r')?.epoch).toBe(3);
     expect(s.get('r')?.resumeAttempts).toBe(3);
-    expect(s.reclaim('missing')).toBeNull();
+    expect(s.reclaim('missing', s.epochOf('missing') ?? -1)).toBeNull();
+  });
+
+  test('two claims on the epoch both read: one wins, and the other is refused rather than claiming again', () => {
+    const s = newStore();
+    s.create({ id: 'c', kind: 'think', workMode: 'build', now: 1 });
+    const read = s.epochOf('c') ?? -1;
+
+    expect(s.reclaim('c', read)).toEqual({ epoch: 1, attempts: 1 });
+    expect(s.reclaim('c', read)).toBeNull();
+    expect(s.get('c')).toMatchObject({ epoch: 1, resumeAttempts: 1 });
   });
 
   test('the armed next attempt is a column: written, read back, and cleared by the claim that serves it', () => {
@@ -122,7 +132,7 @@ describe('BackgroundJobStore', () => {
     expect(s.listRunning().items[0]?.resumeAfter).toBe(5_000);
     expect(s.list()[0]?.resumeAfter).toBe(5_000);
 
-    expect(s.reclaim('w', 6_000)).toEqual({ epoch: 1, attempts: 1 });
+    expect(s.reclaim('w', s.epochOf('w') ?? -1, 6_000)).toEqual({ epoch: 1, attempts: 1 });
     expect(s.get('w')?.resumeAfter).toBeNull();
     expect(s.resumesInWorkspace()).toEqual([]);
   });

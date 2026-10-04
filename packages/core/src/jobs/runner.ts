@@ -67,6 +67,9 @@ export interface JobHolder {
   hold(jobId: string): void;
   /** Another live process runs it: it is that process's, not an orphan. */
   heldElsewhere(jobId: string): boolean;
+  /** One write against every process sharing the store: `held` while another live one runs it, else `claim`'s
+   *  answer, the job held here when it is not null. */
+  take<Claim>(jobId: string, claim: () => Claim | null): Claim | null | 'held';
 }
 
 export interface JobRetirement {
@@ -762,10 +765,12 @@ export class BackgroundJobRunner {
         return await this.deferRecovery(job, job.resumeAfter);
       }
 
-      const claim = this.deps.store.reclaim(jobId, now);
+      const reclaim = () => this.deps.store.reclaim(jobId, job.epoch, now);
+      const claim = this.deps.holder?.take(jobId, reclaim) ?? reclaim();
+
+      if (claim === 'held') return { state: 'held', job };
 
       if (!claim) return { state: 'none' }; // lost the race — another activation reclaimed it
-      this.deps.holder?.hold(jobId);
       // Armed before the drive: an eviction during it cannot write the wait afterwards.
       this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.attempts - 1));
       this.deps.logActivity?.('bg_job_resume', `${job.kind} -> ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
