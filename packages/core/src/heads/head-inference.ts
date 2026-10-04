@@ -72,7 +72,7 @@ export interface HeadToolCall extends ToolCallRecord {
   outcome: ToolOutcome;
 }
 
-import { permitInPlan } from '../execution/work-mode';
+import { callableToolNames, permitInPlan } from '../execution/work-mode';
 import type { Clock } from '../types/clock';
 
 const RecordEvidenceInputSchema = z.object({
@@ -639,7 +639,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   const conversation: ModelMessage[] = [];
 
   const system = deps.framing?.system
-    ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
+    ?? buildHeadSystemPrompt(input, callableToolNames(input.mode, deps.tools), deps.workspaceLayout);
 
   const modelContext = { ...promptModelContext(deps.model), ...deps.window };
 

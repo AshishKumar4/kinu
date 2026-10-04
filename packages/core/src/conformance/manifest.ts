@@ -198,6 +198,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       },
       cli: WIRED,
     },
+    // Which local process runs each job (jobs/process-holder.ts), so a starting one leaves a live one's alone.
+    background_job_holders: {
+      'cf-orchestrator': {
+        absent: 'a Durable Object is one process: every running job at its start was orphaned by the activation before it',
+      },
+      'cf-subordinate': {
+        absent: 'a Durable Object is one process: every running job at its start was orphaned by the activation before it',
+      },
+      cli: WIRED,
+    },
     // The Agents SDK Lifecycle's job queue, created on first use; Kinu's two wakes (`wake-jobs.ts`) are its rows.
     cf_agents_jobs: {
       'cf-orchestrator': LAZY_ON_FIRST_USE('the first wake a job arms'),

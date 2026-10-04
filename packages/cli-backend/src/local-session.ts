@@ -2942,9 +2942,7 @@ export class LocalAgentSession {
           if (narrowing.allowsTool(name)) native[name] = entry;
         }
 
-        return createNodeCodemodeToolFactory({
-          extraProviders: narrowing.narrowProviders(this.codemodeProviders(mode)),
-        })({ ...surface, native });
+        return createNodeCodemodeToolFactory({ extraProviders: this.codemodeProviders(mode), reach: narrowing })({ ...surface, native });
       },
       agents: this.agentsToolDeps(mode),
       roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),
