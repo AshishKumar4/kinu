@@ -769,10 +769,14 @@ export {
 
 export {
   acceptedMediaForModel,
+  attachmentBytes,
   sanitizeAttachmentsForModel,
+  storeAttachment,
   type AttachmentPolicy,
   type MediaModality,
 } from './prompting/attachment-sanitizer';
+
+export { rasterImage, type RasterImage } from './utils/raster-image';
 
 export {
   DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type RuntimeFacts, type DynamicTask, type MissingCapability,

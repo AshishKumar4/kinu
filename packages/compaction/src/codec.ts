@@ -6,6 +6,7 @@
 
 import type {
   AssistantModelMessage,
+  FilePart,
   ModelMessage,
   ToolCallPart,
   ToolModelMessage,
@@ -51,7 +52,22 @@ export interface ToolPairHandle {
   call: ToolCallPart;
   inlineResult?: ToolResultPart;
   result?: ToolResultPart;
+  offloaded?: ReadonlyMap<string, string>;
 }
+
+export interface CarriedMedia {
+  readonly id: string;
+  readonly kind: 'image' | 'file';
+  readonly mediaType: string | undefined;
+  readonly data: FilePart['data'];
+  readonly source: object;
+}
+
+type ResultSide = 'result' | 'inline';
+
+const PAYLOAD_ENTRIES: ReadonlySet<string> = new Set(['image-data', 'file-data', 'media']);
+
+const RASTER_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 const TOOL_PAIR_HANDLE = Symbol('kinu-tool-pair');
 
@@ -145,6 +161,116 @@ export const kinuSpec: LadderSpec = {
     assistantRunsStage,
   ],
 };
+
+export function carriedMedia(item: Item): readonly CarriedMedia[] {
+  if (item.kind === 'opaque') {
+    const part = v.safeParse(MediaPartSchema, item.handle);
+
+    if (!part.success || isRemote(part.output.type === 'image' ? part.output.image : part.output.data)) return [];
+    const { output } = part;
+
+    return output.type === 'image'
+      ? [{ id: 'part', kind: 'image', mediaType: output.mediaType, data: output.image, source: output }]
+      : [{ id: 'part', kind: RASTER_TYPES.has(output.mediaType) ? 'image' : 'file', mediaType: output.mediaType, data: output.data, source: output }];
+  }
+
+  if (item.kind !== 'tool') return [];
+  const pair = pairOf(item);
+
+  return (['result', 'inline'] as const).flatMap((side) => {
+    const output = resultOn(pair, side)?.output;
+
+    if (output?.type !== 'content') return [];
+
+    return output.value.flatMap((entry, index): CarriedMedia[] => {
+      const id = `${side}:${index}`;
+
+      if (!PAYLOAD_ENTRIES.has(entry.type) || !('data' in entry) || pair.offloaded?.has(id)) return [];
+      const image = entry.type === 'image-data' || RASTER_TYPES.has(entry.mediaType);
+
+      return [{ id, kind: image ? 'image' : 'file', mediaType: entry.mediaType, data: entry.data, source: entry }];
+    });
+  });
+}
+
+export function withoutMedia(item: Item, id: string, text: string): Item {
+  if (item.kind === 'opaque') return { kind: 'synthetic', key: item.key, text };
+
+  if (item.kind !== 'tool') return item;
+  const pair: StoredToolPairHandle = { ...pairOf(item), [TOOL_PAIR_HANDLE]: true };
+
+  return { ...item, handle: { ...pair, offloaded: new Map([...(pair.offloaded ?? []), [id, text]]) } };
+}
+
+const MediaPartSchema = v.variant('type', [
+  v.looseObject({ type: v.literal('image'), image: v.custom<FilePart['data']>(() => true), mediaType: v.optional(v.string()) }),
+  v.looseObject({ type: v.literal('file'), data: v.custom<FilePart['data']>(() => true), mediaType: v.string() }),
+]);
+
+function isRemote(data: FilePart['data']): boolean {
+  return data instanceof URL || (isString(data) && /^https?:\/\//u.test(data));
+}
+
+function resultOn(pair: ToolPairHandle, side: ResultSide): ToolResultPart | undefined {
+  return side === 'result' ? pair.result : pair.inlineResult;
+}
+
+function sentResult(pair: ToolPairHandle, side: ResultSide, placed: ReadonlyMap<string, string> = new Map()): ToolResultPart | undefined {
+  const part = resultOn(pair, side);
+  const output = part?.output;
+
+  if (part === undefined || output?.type !== 'content' || ![...pair.offloaded?.keys() ?? []].some((id) => id.startsWith(`${side}:`))) return part;
+
+  const value = output.value.flatMap((entry, index) => {
+    const id = `${side}:${index}`;
+    const left = placed.get(id) ?? pair.offloaded?.get(id);
+
+    if (left === undefined) return [entry];
+
+    return left === '' ? [] : [{ type: 'text' as const, text: left }];
+  });
+
+  return { ...part, output: value.length === 0 ? { type: 'text', value: '' } : { type: 'content', value } };
+}
+
+interface Placement {
+  readonly sent: ReadonlyMap<ToolResultPart, ToolResultPart>;
+  readonly consumed: ReadonlySet<Item>;
+}
+
+function placeReferences(turn: Turn): Placement {
+  const sent = new Map<ToolResultPart, ToolResultPart>();
+  const consumed = new Set<Item>();
+
+  for (const item of turn.items) {
+    if (item.kind !== 'tool') continue;
+    const pair = pairOf(item);
+
+    if (pair.offloaded === undefined) continue;
+
+    const references = turn.items.filter((candidate) => candidate.kind === 'synthetic'
+      && candidate.provenance?.origin === 'attachment-reference' && candidate.provenance.sources[0] === item.key);
+
+    const placed = new Map<string, string>();
+
+    for (const [index, id] of [...pair.offloaded.keys()].entries()) {
+      const reference = references[index];
+
+      if (reference?.kind !== 'synthetic') continue;
+      placed.set(id, reference.text);
+      consumed.add(reference);
+    }
+
+    for (const side of ['result', 'inline'] as const) {
+      const original = resultOn(pair, side);
+      const changed = sentResult(pair, side, placed);
+
+      if (original !== undefined && changed !== undefined && changed !== original) sent.set(original, changed);
+    }
+  }
+
+  return { sent, consumed };
+}
 
 /** A Turn is one user message, or one assistant message plus its `tool` answers; orphans form their own run. */
 function groupMessages(messages: ModelMessage[]): ModelMessage[][] {
@@ -290,12 +416,13 @@ function decodeTurn(turn: Turn): ModelMessage[] {
   const group = turn.handle;
 
   const survival = collectSurvival(turn.items);
+  const placement = placeReferences(turn);
   const hasAssistant = group.some((message) => message.role === 'assistant');
   const out: ModelMessage[] = [];
 
   for (const message of group) {
     if (message.role === 'assistant') {
-      const rebuilt = rebuildAssistant(message, turn.items);
+      const rebuilt = rebuildAssistant(message, turn.items, placement);
 
       if (rebuilt) out.push(rebuilt);
     } else if (message.role === 'user') {
@@ -303,7 +430,7 @@ function decodeTurn(turn: Turn): ModelMessage[] {
 
       if (rebuilt) out.push(rebuilt);
     } else if (message.role === 'tool') {
-      const rebuilt = rebuildToolMessage(message, survival);
+      const rebuilt = rebuildToolMessage(message, survival, placement);
 
       if (rebuilt) out.push(rebuilt);
     } else if (survival.handles.has(message)) {
@@ -346,6 +473,7 @@ function collectSurvival(items: Item[]): Survival {
 function rebuildAssistant(
   message: AssistantModelMessage,
   items: Item[],
+  placement: Placement,
 ): AssistantModelMessage | null {
   if (isString(message.content)) {
     const textSurvives = items.some((item) => item.kind === 'text' && item.handle === message);
@@ -359,7 +487,7 @@ function rebuildAssistant(
 
   if (
     !items.some((item) => item.kind === 'synthetic') &&
-    message.content.every((part) => assistantPartSurvives(part, items))
+    message.content.every((part) => assistantPartSurvives(part, items) && !(part.type === 'tool-result' && placement.sent.has(part)))
   ) {
     return message;
   }
@@ -392,12 +520,12 @@ function rebuildAssistant(
       if (stub) parts.push({ type: 'text', text: stub.text });
       else if (assistantPartSurvives(part, items)) parts.push(part);
     } else if (assistantPartSurvives(part, items)) {
-      parts.push(part);
+      parts.push(part.type === 'tool-result' ? placement.sent.get(part) ?? part : part);
     }
   }
 
   for (const item of items) {
-    if (item.kind === 'synthetic' && !isToolStub(item)) {
+    if (item.kind === 'synthetic' && item.text !== '' && !isToolStub(item) && !placement.consumed.has(item)) {
       parts.push({ type: 'text', text: item.text });
     }
   }
@@ -447,7 +575,7 @@ function rebuildUser(message: UserModelMessage, items: Item[]): UserModelMessage
 
   for (const item of items) {
     if (item.kind === 'synthetic') {
-      parts.push({ type: 'text', text: item.text });
+      if (item.text !== '') parts.push({ type: 'text', text: item.text });
     } else if ((item.kind === 'text' || item.kind === 'opaque') && isUserPart(item.handle)
       && originalParts.has(item.handle)) {
       parts.push(item.handle);
@@ -465,16 +593,20 @@ function sameParts<T>(left: T[], right: T[]): boolean {
   return left.length === right.length && left.every((part, index) => part === right[index]);
 }
 
-function rebuildToolMessage(message: ToolModelMessage, survival: Survival): ToolModelMessage | null {
-  const parts = message.content.filter((part) =>
-    part.type === 'tool-result'
-      ? survival.results.has(part) || survival.handles.has(part)
-      : survival.handles.has(part),
-  );
+function rebuildToolMessage(message: ToolModelMessage, survival: Survival, placement: Placement): ToolModelMessage | null {
+  const parts: ToolModelMessage['content'] = [];
 
-  if (parts.length === message.content.length) return message;
+  for (const part of message.content) {
+    if (part.type !== 'tool-result') {
+      if (survival.handles.has(part)) parts.push(part);
+    } else if (survival.results.has(part) || survival.handles.has(part)) {
+      parts.push(placement.sent.get(part) ?? part);
+    }
+  }
 
   if (parts.length === 0) return null;
+
+  if (sameParts(parts, message.content)) return message;
 
   return { ...message, content: parts };
 }
@@ -523,10 +655,12 @@ function charsOfItem(item: Item): number {
 
 function charsOfPair(pair: ToolPairHandle): number {
   let chars = pair.call.toolName.length + jsonLength({ value: pair.call.input });
+  const inline = sentResult(pair, 'inline');
+  const result = sentResult(pair, 'result');
 
-  if (pair.inlineResult) chars += charsOfResultOutput(pair.inlineResult);
+  if (inline) chars += charsOfResultOutput(inline);
 
-  if (pair.result) chars += charsOfResultOutput(pair.result);
+  if (result) chars += charsOfResultOutput(result);
 
   return chars;
 }
@@ -537,6 +671,10 @@ function charsOfResultOutput(part: ToolResultPart): number {
   if (output.type === 'text') return output.value.length;
 
   if (output.type === 'json') return jsonLength({ value: output.value });
+
+  if (output.type === 'content') {
+    return output.value.reduce((sum, entry) => sum + (PAYLOAD_ENTRIES.has(entry.type) ? ESTIMATED_MEDIA_CHARS : jsonLength({ value: entry })), 0);
+  }
 
   return jsonLength({ value: output });
 }
@@ -566,7 +704,7 @@ function jsonLength(input: { value: unknown }): number {
 }
 
 function formatToolPair(pair: ToolPairHandle): string {
-  const result = pair.result ?? pair.inlineResult;
+  const result = sentResult(pair, 'result') ?? sentResult(pair, 'inline');
 
   return [
     `[tool:${pair.call.toolName}] callId=${pair.call.toolCallId}`,

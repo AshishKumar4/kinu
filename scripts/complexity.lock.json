@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-04",
-  "files": 2968,
-  "functions": 74175,
+  "files": 2978,
+  "functions": 74505,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -170,10 +170,6 @@
       "complexity": 31
     },
     {
-      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
-      "complexity": 31
-    },
-    {
       "key": "tests/first-run/exploration.first-run.ts#describe>liveTest>run",
       "complexity": 31
     },
@@ -239,6 +235,10 @@
     },
     {
       "key": "packages/core/src/slates/capability-graph.ts#riskOf",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
       "complexity": 29
     },
     {

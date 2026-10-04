@@ -673,6 +673,7 @@ export class LocalAgentSession {
       onOutcome: ({ outcome }) => {
         if (outcome !== 'replayed') this.actorSession.dynamic.reset();
       },
+      attachments: { files: () => this.rt, model: () => this.effectiveModelSpec() },
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(
       () => this.cachedModel ?? this.defaultModel("a head with no model of its own"),
