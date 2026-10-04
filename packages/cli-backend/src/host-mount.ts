@@ -8,7 +8,7 @@ import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { FileCheckpoints, FileReach, MountedVfs } from '@kinu.run/core';
-import { NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT, workspacePath } from '@kinu.run/core';
+import { SLATES_ROOT, WORKSPACE_ROOT, workspacePath } from '@kinu.run/core';
 import { syscallError, toVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
 
@@ -93,11 +93,10 @@ function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: st
 
     if (isAbsolute(path) && withinRoot(root, direct)) return { hostPath: direct, outside: false };
     const named = workspacePath(path, WORKSPACE_ROOT);
-    const home = [WORKSPACE_ROOT, NIMBUS_WORKSPACE_ROOT].find((at) => named === at || named.startsWith(`${at}/`));
 
     if (named === '/') return { hostPath: root, outside: false };
 
-    if (home !== undefined) return { hostPath: resolve(root, `.${named.slice(home.length)}`), outside: false };
+    if (named === WORKSPACE_ROOT || named.startsWith(`${WORKSPACE_ROOT}/`)) return { hostPath: resolve(root, `.${named.slice(WORKSPACE_ROOT.length)}`), outside: false };
 
     if (named === SLATES_ROOT || named.startsWith(`${SLATES_ROOT}/`)) return { hostPath: resolve(root, `.${named}`), outside: false };
 

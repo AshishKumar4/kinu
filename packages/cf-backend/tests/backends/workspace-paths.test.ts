@@ -58,18 +58,18 @@ for (const name of testBackends()) {
 
         for (const path of [
           'notes/item.txt', './notes/item.txt', './/notes/./item.txt', 'notes/deep/../item.txt',
-          '/home/main/notes/item.txt', '/home//main/notes/item.txt', '/home/user/notes/item.txt',
+          '/home/main/notes/item.txt', '/home//main/notes/item.txt',
           '/home/main/notes/item.txt/',
         ]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
 
-        await plane.write('/home/user/notes/./item.txt', 'two');
+        await plane.write('/home/main/notes/./item.txt', 'two');
         expect(await plane.read('notes/item.txt')).toMatchObject({ content: 'two' });
 
         if (plane.hostFile !== null) expect(plane.hostFile('notes/item.txt')).toBe('two');
 
-        for (const path of ['', '.', './', '/home/main/', '/home/user/']) {
+        for (const path of ['', '.', './', '/home/main/']) {
           expect((await plane.list(path)).map((entry) => entry.name)).toContain('notes');
         }
 

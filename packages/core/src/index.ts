@@ -1002,7 +1002,7 @@ export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, 
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  workspacePath, NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT,
+  workspacePath, SLATES_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {

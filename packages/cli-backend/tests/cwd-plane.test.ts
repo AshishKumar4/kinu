@@ -212,7 +212,7 @@ describe('listing the bound directory', () => {
 
 describe('addressing the bound directory', () => {
   test('bare virtual homes cannot remove or rename the bound project directory', async () => {
-    for (const home of ['/home/main', '/home/user']) {
+    for (const home of ['/home/main']) {
       const { state, project } = roots('cwd-plane-home-anchor');
       const rt = agentRuntime(state, 'solo', project);
       const rename = present(rt.storage.vfs.rename?.bind(rt.storage.vfs), 'the mounted rename route');
