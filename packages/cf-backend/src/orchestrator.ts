@@ -62,11 +62,11 @@ import {
 } from "./actor-hosting";
 import {
   admitHostedTask, hostedDelegationBudget, hostedRetryTools, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
-  reportSettlesRun, hostedTaskEnding, reclaimSettledExplorationActors,
+  hostedTaskEnding, reclaimSettledExplorationActors,
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
-import type { ReportToolDeps } from "@kinu.run/core";
+import { publishSubordinateReport, temporaryRunSettles, type ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
@@ -1044,18 +1044,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const report: ReportToolDeps = {
       report: async (input) => {
-        // A run-settling report is the answer.
-        const settles = reportSettlesRun(input.status, 'report_tool');
-
-        const relayed = await relayHostedReport(this.hostedSeams(), turn.actor, {
+        const relayed = await publishSubordinateReport({ mode: turn.input.mode, reports: turn.reports }, {
           status: input.status, content: input.content, origin: 'report_tool',
-          mode: 'build', sequenceId: `live:${turn.actor.record.name}:${nanoid()}`,
-          handoff: input.handoff,
-          ...(settles && { answers: turn.turnId }),
-        });
-
-        turn.reports.spoke = true;
-        turn.reports.settled ||= settles;
+          sequenceId: `live:${turn.actor.record.name}:${nanoid()}`, handoff: input.handoff,
+        }, (published) => relayHostedReport(this.hostedSeams(), turn.actor, {
+          // A run-settling report is the answer.
+          ...published, ...(temporaryRunSettles({ status: published.status, origin: published.origin }) && { answers: turn.turnId }),
+        }));
 
         return { id: relayed.id, disposition: relayed.disposition };
       },
