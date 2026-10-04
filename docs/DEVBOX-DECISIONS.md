@@ -1166,10 +1166,19 @@ messages. The request-time reclassification is gone. The failed/success/image
 regression compares the live and re-driven tool-message bytes, not just the
 last answer or the error's words.
 
-Provenance is stamped where each event is produced. An extra async-generator
-wrapper had delayed consumption enough for the model's fourth request to miss
-the nudge after three failed tools; removing that hop restores the nudge at
-that request without delaying live output or adding a consumer mode switch.
+Provenance is stamped where each event is produced, without an extra
+async-generator hop. The undelayed steering regression receives its nudge on
+the fourth request. Logical tool hooks still run from event consumption, so
+that timing is not guaranteed for a delayed consumer.
+
+2026-10-03: a native record is finalized on provider failure and an early
+consumer return or exception. A completed tool can precede `finish-step`;
+tying its record to the consumer lost it on those exits. The consumer-throw
+regression failed before this change and passes after it. A real HTTP model
+stream and early-return caller retained the completed call once; the local
+session also retained a real memory save after its provider disconnected.
+Closing a consumer aborts that model call before awaiting its live tee;
+provider failures retain their classification, including overflow recovery.
 
 D25. A wake proves a recycle only after the stop confirms (`b6a6ace00`,
 2026-09-04). The 2026-09-04 rerun (`kinu-devbox-bench-20260904142724`) saw

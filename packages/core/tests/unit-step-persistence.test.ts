@@ -1,12 +1,39 @@
 import { describe, test, expect } from 'bun:test';
 import { stepCountIs, tool, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { runChat, type ChatEvent } from '../src/chat';
+import { runChat, type ChatEvent, type StepRecord } from '../src/chat';
+import { MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { createChatModel } from '../src/llm';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { KinuError, renderThrownChain } from '../src/obs/index';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
+
+test('a consumer throwing after a tool result still records the completed native call once', async () => {
+  const records: StepRecord[] = [];
+
+  const model = new MockLanguageModelV3({ doStream: async ({ abortSignal }) => ({ stream: new ReadableStream<LanguageModelV3StreamPart>({
+    start(controller) {
+      controller.enqueue({ type: 'stream-start', warnings: [] });
+      controller.enqueue({ type: 'tool-call', toolCallId: 'kept', toolName: 'save', input: '{"note":"retained"}' });
+      abortSignal?.addEventListener('abort', () => controller.close(), { once: true });
+    },
+  }) }) });
+
+  const consume = async () => {
+    for await (const event of runChat({ model, system: 'sys', history: [{ role: 'user', content: 'save the note' }],
+      tools: { save: tool({ inputSchema: z.object({ note: z.string() }), execute: async () => ({ written: true }) }) },
+      persistStep: async (record) => { records.push(record); },
+      observeStream: async chunks => { for await (const part of chunks) void part; },
+    })) if (event.type === 'tool-result') throw new Error('the consumer failed after seeing the tool result');
+  };
+
+  await expect(consume()).rejects.toThrow('the consumer failed after seeing the tool result');
+  expect(records.flatMap((record) => record.toolResults)).toMatchObject([
+    { args: { note: 'retained' }, event: { toolCallId: 'kept', toolName: 'save', success: true, output: { written: true } } },
+  ]);
+});
 
 function sse(events: string[]): string {
   return events.map((event) => `data: ${event}\n\n`).join('');

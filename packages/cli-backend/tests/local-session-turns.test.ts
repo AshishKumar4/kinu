@@ -77,6 +77,45 @@ test('parallel native calls retain their SDK identities after reverse completion
   }
 });
 
+test('a provider failing after a real tool result retains that completed call exactly once', async () => {
+  const { db, rt } = workspaceRuntime();
+  rt.actor.config.setDisplayNameOrigin('Failed provider', 'user');
+  let provider: ReadableStreamDefaultController<LanguageModelV2StreamPart> | undefined;
+
+  const model = new TestLanguageModelV2({ doStream: async () => ({
+    stream: new ReadableStream<LanguageModelV2StreamPart>({ start(controller) {
+      provider = controller;
+      controller.enqueue({ type: 'stream-start', warnings: [] });
+      controller.enqueue({ type: 'tool-call', toolCallId: 'completed-save', toolName: 'memory',
+        input: JSON.stringify({ action: 'save', topic: 'completed', content: 'saved before the provider failed' }) });
+    } }),
+    warnings: [],
+  }) });
+
+  const observed: SessionEvent[] = [];
+
+  const session = new LocalAgentSession({ rt, db, model, noAutoEvolve: true, onEvent: (event) => {
+    observed.push(event);
+
+    if (event.type !== 'tool-result' || event.toolCallId !== 'completed-save') return;
+
+    if (provider === undefined) throw new Error('the model stream is not open');
+    provider.error(new Error('the provider disconnected after the completed tool'));
+  } });
+
+  try {
+    await session.send('Save a durable note.', { id: crypto.randomUUID() });
+    expect(observed.filter((event) => event.type === 'tool-result')).toMatchObject([{ toolCallId: 'completed-save', success: true }]);
+    const run = present(session.listRuns().items[0], 'the failed provider left an active run');
+    const calls = session.getRunEvents(run.runId).filter((event) => event.type === 'tool_call_end');
+
+    expect(calls).toMatchObject([{ toolCallId: 'completed-save', name: 'memory', outcome: { success: true } }]);
+    const ended = observed.find((event) => event.type === 'turn-end');
+
+    expect(ended?.turn.hadError).toBe(true);
+  } finally { await session.end(); db.close(); }
+});
+
 test('a native ledger failure cannot finish an uncommitted step or add its usage to the turn', async () => {
   const { db, rt } = workspaceRuntime();
   const events: SessionEvent[] = [];
