@@ -143,6 +143,7 @@ async function send(number, size) {
   if (etagOf(part) !== digest.toString('hex')) throw new Error('the store holds part ' + number + ' as ' + etagOf(part) + ', not ' + digest.toString('hex'));
 
   if (number > 1 && !md5(read(number, size)).equals(digest)) throw new Error('part ' + number + ' changed after it was uploaded');
+  pace();
   digests[number - 1] = digest;
 
   // Punching a range waits for its pages to be written, so it runs beside the loop, never in it.
@@ -175,6 +176,15 @@ function sizeNow() {
   }
 }
 
+/** At most a window waits on the disk. The archiver writes up to 7 GB/s, so this runs often; never once the loop ended. */
+function pace() {
+  if (exit !== undefined || failure !== undefined) return;
+  const waiting = sizeNow() - freedThrough * partBytes + partBytes;
+
+  if (waiting > windowBytes && !stopped) stopped = child.kill('SIGSTOP');
+  else if (waiting <= windowBytes / 2 && stopped) stopped = !child.kill('SIGCONT');
+}
+
 async function abort(error) {
   const archiverFailed = exit !== undefined && exit !== 0;
 
@@ -200,17 +210,15 @@ try {
   while (exit === undefined && failure === undefined) {
     const size = sizeNow();
 
+    pace();
+
     while (pending.size < inFlight && next * partBytes + MARGIN <= size) {
       if (uploadId === undefined) await open();
       start(next++, size);
+      pace();
     }
 
-    // At most a window of the archive waits on the disk; the archiver stops until uploads free it.
-    const waiting = size - freedThrough * partBytes + partBytes;
-
-    if (waiting > windowBytes && !stopped) stopped = child.kill('SIGSTOP');
-    else if (waiting <= windowBytes / 2 && stopped) stopped = !child.kill('SIGCONT');
-    await Promise.race([exited, new Promise((resolve) => { setTimeout(resolve, 50); }), ...pending]);
+    await Promise.race([exited, new Promise((resolve) => { setTimeout(resolve, 5); }), ...pending]);
   }
 
   if (stopped) child.kill('SIGCONT');
