@@ -4,6 +4,8 @@
  * graph (the workerd test project cannot compile the production `Env`).
  * Derived from the user plane's root secret under a distinct label.
  */
+import { Data, Effect } from 'effect';
+import { settle } from '../obs/effect';
 import { hmacSha256Hex } from '../utils/crypto';
 import * as v from 'valibot';
 
@@ -41,10 +43,10 @@ const ADMIN_LABEL = 'kinu.control-plane.admin.v1';
 
 const derived = new Map<string, Promise<string>>();
 
-function controlToken(env: ControlSecretEnv, label: string): Promise<string> {
+function controlToken(env: ControlSecretEnv, label: string): Effect.Effect<string> {
   const secret = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
 
-  if (!secret) throw new ControlPlaneUnconfiguredError();
+  if (!secret) return Effect.die(new ControlPlaneUnconfiguredError());
   const key = `${label}\u0000${secret}`;
   let pending = derived.get(key);
 
@@ -53,7 +55,9 @@ function controlToken(env: ControlSecretEnv, label: string): Promise<string> {
     derived.set(key, pending);
   }
 
-  return pending;
+  const derivation = pending;
+
+  return Effect.promise(() => derivation);
 }
 
 export interface ControlSecretEnv {
@@ -61,51 +65,49 @@ export interface ControlSecretEnv {
 }
 
 /** Maps to a deliberate 503: the plane is unconfigured, not broken. */
-export class ControlPlaneUnconfiguredError extends Error {
+export class ControlPlaneUnconfiguredError extends Data.TaggedError('ControlPlaneUnconfiguredError')<{ readonly message: string }> {
   constructor() {
-    super(
-      'The control plane is not configured: CREDENTIAL_ENCRYPTION_KEY is not set. '
-      + 'See docs/DEPLOYMENT.md.',
-    );
-    this.name = 'ControlPlaneUnconfiguredError';
+    super({ message: 'The control plane is not configured: CREDENTIAL_ENCRYPTION_KEY is not set. '
+      + 'See docs/DEPLOYMENT.md.' });
   }
 }
 
 /** Cannot read across users or mutate. */
-export async function internalCaller(env: ControlSecretEnv): Promise<ControlCaller> {
-  return { controlToken: await controlToken(env, INGEST_LABEL) };
+export function internalCaller(env: ControlSecretEnv): Promise<ControlCaller> {
+  return settle(Effect.map(controlToken(env, INGEST_LABEL), (token) => ({ controlToken: token })));
 }
 
 /** Only `adminCaller` in `admin-caller.ts` should call this; it requires proof of an operator. */
-export async function adminControlToken(env: ControlSecretEnv): Promise<ControlCaller> {
-  return { controlToken: await controlToken(env, ADMIN_LABEL) };
+export function adminControlToken(env: ControlSecretEnv): Promise<ControlCaller> {
+  return settle(Effect.map(controlToken(env, ADMIN_LABEL), (token) => ({ controlToken: token })));
 }
 
 /** workerd erases the subclass across RPC and keeps `name`, so a caller reads the name, never `instanceof`. */
-class ControlDeniedError extends Error {
+class ControlDeniedError extends Data.TaggedError('ControlDeniedError')<{ readonly message: string }> {
   constructor(message: string) {
-    super(message);
-    this.name = 'ControlDeniedError';
+    super({ message });
   }
 }
 
 /** Fails closed. Both derivations are computed before comparing, so branch order leaks nothing. */
-export async function requireControl(
+export function requireControl(
   env: ControlSecretEnv,
   caller: PresentedCaller,
   capability: ControlCapability,
 ): Promise<ControlGrade> {
-  const grade = await resolveGrade(env, caller);
-  const required = CONTROL_PLANE_CAPABILITIES[capability];
+  return settle(Effect.gen(function* () {
+    const grade = yield* resolveGrade(env, caller);
+    const required = CONTROL_PLANE_CAPABILITIES[capability];
 
-  if (grade === null || GRADE_RANK[grade] < GRADE_RANK[required]) {
-    throw new ControlDeniedError(
-      `${capability} requires the control plane's ${required} capability. `
-      + `This caller ${grade === null ? 'presented no recognized capability' : `holds only ${grade}`}.`,
-    );
-  }
+    if (grade === null || GRADE_RANK[grade] < GRADE_RANK[required]) {
+      return yield* Effect.die(new ControlDeniedError(
+        `${capability} requires the control plane's ${required} capability. `
+        + `This caller ${grade === null ? 'presented no recognized capability' : `holds only ${grade}`}.`,
+      ));
+    }
 
-  return grade;
+    return grade;
+  }));
 }
 
 /** Wider than `ControlCaller`: the RPC caller chooses what to send, and the gate must refuse it. */
@@ -115,23 +117,23 @@ const ControlCallerSchema: v.GenericSchema<ControlCaller> = v.object({
   controlToken: v.pipe(v.string(), v.nonEmpty()),
 });
 
-async function resolveGrade(
+function resolveGrade(
   env: ControlSecretEnv, caller: PresentedCaller,
-): Promise<ControlGrade | null> {
+): Effect.Effect<ControlGrade | null> {
   const parsed = v.safeParse(ControlCallerSchema, caller);
 
-  if (!parsed.success) return null;
+  if (!parsed.success) return Effect.succeed(null);
   const token = parsed.output.controlToken;
 
-  const [ingest, admin] = await Promise.all([
+  return Effect.all([
     controlToken(env, INGEST_LABEL),
     controlToken(env, ADMIN_LABEL),
-  ]);
+  ], { concurrency: 'unbounded' }).pipe(Effect.map(([ingest, admin]): ControlGrade | null => {
+    if (token === admin) return 'admin';
 
-  if (token === admin) return 'admin';
+    if (token === ingest) return 'ingest';
 
-  if (token === ingest) return 'ingest';
-
-  return null;
+    return null;
+  }));
 }
 

@@ -53,7 +53,7 @@ export interface BenchInferenceProxy {
   usage(): BenchInferenceUsage;
   /** Wait until every cloned response body has been inspected. */
   settle(): Promise<void>;
-  stop(closeActiveConnections?: boolean): void;
+  stop(closeActiveConnections?: boolean): Promise<void>;
 }
 
 export interface BenchInferenceProxyOptions {

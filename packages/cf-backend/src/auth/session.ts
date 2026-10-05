@@ -1,5 +1,7 @@
 // Cookies are opaque HttpOnly session handles; KV stores only their hashes.
 
+import { Cause, Data, Effect } from 'effect';
+import { settle, settleSync } from '@kinu.run/core/obs';
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, EVAL_TRIAL_ACCOUNTS, parseEvalAccount, timingSafeEqual,
 } from '@kinu.run/core';
@@ -68,10 +70,9 @@ export function isFreshAuthTime(authTimeMs: number | null | undefined, now = Dat
     && now - authTimeMs <= STEP_UP_WINDOW_MS;
 }
 
-export class AuthError extends Error {
+export class AuthError extends Data.TaggedError('AuthError')<{ readonly message: string; readonly cause?: unknown }> {
   constructor(public readonly status: number, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'AuthError';
+    super({ message, ...(options?.cause !== undefined && { cause: options.cause }) });
   }
 }
 
@@ -92,14 +93,11 @@ export function readCookie(request: Request, name: string): string | null {
 
     if (!raw) return null;
 
-    try {
-      return decodeURIComponent(raw);
-    } catch (malformed) {
-      // Invalid percent-encoding is not a cookie we wrote: treat as absent.
-      if (!(malformed instanceof URIError)) throw malformed;
-
-      return null;
-    }
+    // Invalid percent-encoding is not a cookie we wrote: treat as absent.
+    return settleSync(Effect.catchCause(
+      Effect.sync((): string | null => decodeURIComponent(raw)),
+      (failed) => (Cause.squash(failed) instanceof URIError ? Effect.succeed(null) : Effect.failCause(failed)),
+    ));
   }
 
   return null;
@@ -124,68 +122,71 @@ export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv {
 /** `[::1]` keeps its brackets because `URL.hostname` does. */
 const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'];
 
-export async function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Promise<AuthIdentity> {
-  const sessionToken = readSessionToken(request);
+export function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Promise<AuthIdentity> {
+  return settle(Effect.gen(function* () {
+    const sessionToken = readSessionToken(request);
 
-  if (sessionToken) {
-    assertSessionBindings(env);
+    if (sessionToken) {
+      if (!hasSessionBindings(env)) {
+        return yield* Effect.die(new AuthError(500, `${env.AUTH_KV ? 'UserDO' : 'AUTH_KV'} binding is not configured`));
+      }
 
-    try {
-      const identity = await verifySession(env, sessionToken);
+      const identity = yield* Effect.catchCause(Effect.promise(() => verifySession(env, sessionToken)), (failed) => {
+        const e = Cause.squash(failed);
+
+        if (!(e instanceof SessionAuthorityUnavailableError)) return Effect.failCause(failed);
+
+        // Unreachable authority is not an expired cookie: 401 would force a
+        // sign-in the same outage cannot complete.
+        return Effect.die(new AuthError(503, e.message, { cause: e }));
+      });
 
       if (identity) return identity;
-    } catch (e) {
-      if (!(e instanceof SessionAuthorityUnavailableError)) throw e;
-      // Unreachable authority is not an expired cookie: 401 would force a
-      // sign-in the same outage cannot complete.
-      throw new AuthError(503, e.message, { cause: e });
+
+      return yield* Effect.die(new AuthError(401, 'Kinu session expired. Sign in again.'));
     }
 
-    throw new AuthError(401, 'Kinu session expired. Sign in again.');
-  }
+    // The dev identity requires possession, never mere absence of a cookie:
+    // loopback, or the shared secret (none configured grants nothing).
+    if (env.DEV_USER_EMAIL) {
+      const presented = request.headers.get(DEV_IDENTITY_HEADER);
 
-  // The dev identity requires possession, never mere absence of a cookie:
-  // loopback, or the shared secret (none configured grants nothing).
-  if (env.DEV_USER_EMAIL) {
-    const presented = request.headers.get(DEV_IDENTITY_HEADER);
+      const held = LOOPBACK_HOSTS.includes(new URL(request.url).hostname)
+        || (env.DEV_IDENTITY_SECRET !== undefined
+          && presented !== null
+          && timingSafeEqual(presented, env.DEV_IDENTITY_SECRET));
 
-    const held = LOOPBACK_HOSTS.includes(new URL(request.url).hostname)
-      || (env.DEV_IDENTITY_SECRET !== undefined
-        && presented !== null
-        && timingSafeEqual(presented, env.DEV_IDENTITY_SECRET));
+      if (held) {
+        const email = yield* evalAccountEmail(env.DEV_USER_EMAIL, request.headers.get(DEV_IDENTITY_ACCOUNT_HEADER));
 
-    if (held) {
-      const email = evalAccountEmail(env.DEV_USER_EMAIL, request.headers.get(DEV_IDENTITY_ACCOUNT_HEADER));
-
-      return { userId: await deriveUserId(email), email, sub: 'dev', provider: 'dev', authTime: Date.now() };
+        return { userId: yield* Effect.promise(() => deriveUserId(email)), email, sub: 'dev', provider: 'dev', authTime: Date.now() } satisfies AuthIdentity;
+      }
     }
-  }
 
-  if (!env.AUTH_KV) {
-    throw new AuthError(500, 'Browser auth is not configured (AUTH_KV binding missing)');
-  }
+    if (!env.AUTH_KV) {
+      return yield* Effect.die(new AuthError(500, 'Browser auth is not configured (AUTH_KV binding missing)'));
+    }
 
-  throw new AuthError(401, 'No Kinu session in request');
+    return yield* Effect.die(new AuthError(401, 'No Kinu session in request'));
+  }));
 }
 
 /** `eval@x` → `eval+devices@x`: a separate user, so its machines reach no other eval account's workspaces. */
-function evalAccountEmail(email: string, account: string | null): string {
-  if (account === null) return email;
+function evalAccountEmail(email: string, account: string | null): Effect.Effect<string> {
+  if (account === null) return Effect.succeed(email);
   const named = parseEvalAccount(account);
 
   if (named === null) {
-    throw new AuthError(400, `Unknown eval account "${account}": one of ${EVAL_ACCOUNTS.join(', ')}, or trial-1 to trial-${String(EVAL_TRIAL_ACCOUNTS)}`);
+    return Effect.die(new AuthError(400, `Unknown eval account "${account}": one of ${EVAL_ACCOUNTS.join(', ')}, or trial-1 to trial-${String(EVAL_TRIAL_ACCOUNTS)}`));
   }
 
   const at = email.lastIndexOf('@');
 
-  return `${email.slice(0, at)}+${named}${email.slice(at)}`;
+  return Effect.succeed(`${email.slice(0, at)}+${named}${email.slice(at)}`);
 }
 
-function assertSessionBindings<Id>(env: AuthEnv<Id>): asserts env is AuthEnv<Id> & AuthStoreEnv<Id> {
-  if (!env.AUTH_KV) throw new AuthError(500, 'AUTH_KV binding is not configured');
-
-  if (!env.UserDO) throw new AuthError(500, 'UserDO binding is not configured');
+function hasSessionBindings<Id>(env: AuthEnv<Id>): env is AuthEnv<Id> & AuthStoreEnv<Id> {
+  return Boolean(env.AUTH_KV) && Boolean(env.UserDO);
 }
 
 /** Methods a site can be made to issue cross-site without reading the reply. */

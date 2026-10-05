@@ -2,6 +2,8 @@
  * `/shared/blueprint/:id`: read-only, no workspace chrome; the viewer may have no account.
  * A secret-shaped scan hit is reported by location, never content.
  */
+import { showing, detach } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 import { useEffect, useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
@@ -12,7 +14,6 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
 import type { WorkspaceEntry } from "@/lib/user-api";
-import { showRejection } from "@/hooks/use-async-resource";
 
 export const BINDING_KIND_LABEL: Record<SlateBindingKind, string> = {
   mcp: "MCP server",
@@ -116,10 +117,12 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
   useEffect(() => {
     if (fixture !== undefined) return;
     let live = true;
-    const failed = showRejection(setErr, () => live);
+    const failed = showing((chain) => { if (live) setErr(chain); });
 
-    getBlueprint(id).then((loaded) => { if (live) setView(loaded); }).catch(failed);
-    signedInEmail().then((who) => { if (live) setEmail(who); }).catch(failed);
+    detach(Effect.all([
+      Effect.catchCause(Effect.map(Effect.promise(() => getBlueprint(id)), (loaded) => { if (live) setView(loaded); }), failed),
+      Effect.catchCause(Effect.map(Effect.promise(() => signedInEmail()), (who) => { if (live) setEmail(who); }), failed),
+    ], { concurrency: 'unbounded' }));
 
     return () => { live = false; };
   }, [fixture, id]);

@@ -83,9 +83,9 @@ export function createDirectWorkersAIFetch(
 
     return settle(Effect.tryPromise({ try: () => running, catch: (cause) => ({ cause }) }).pipe(
       Effect.matchEffect({
-        onSuccess: (answer) => Effect.promise(() => (route.stream
+        onSuccess: (answer) => (route.stream
           ? streamedResponse(answer, route.model, startedAt)
-          : completedResponse(answer, route.model))),
+          : Effect.promise(() => completedResponse(answer, route.model))),
         onFailure: (failed) => {
           const failure = toKinuError({ doing: `Workers AI binding inference for ${route.model}`, cause: failed.cause, otherwise: 'io' });
 
@@ -162,75 +162,69 @@ async function completedResponse(
   return openAICompletion(v.parse(JsonObjectSchema, JSON.parse(text)), model);
 }
 
-async function streamedResponse(
+function streamedResponse(
   answer: Response | ReadableStream<Uint8Array> | JsonObject,
   model: string,
   startedAt: number,
-): Promise<Response> {
+): Effect.Effect<Response> {
   if (answer instanceof Response) {
-    if (!answer.ok) return upstreamRefusal(answer, model);
+    if (!answer.ok) return Effect.promise(() => upstreamRefusal(answer, model));
     const contentType = answer.headers.get('content-type') ?? '';
 
-    if (!answer.body) return unstreamable(model, 'a bodyless response');
+    if (!answer.body) return Effect.succeed(unstreamable(model, 'a bodyless response'));
 
-    if (!contentType.includes('text/event-stream')) return unstreamable(model, contentType);
+    if (!contentType.includes('text/event-stream')) return Effect.succeed(unstreamable(model, contentType));
 
     return sseResponse(answer.body, model, startedAt);
   }
 
   if (answer instanceof ReadableStream) return sseResponse(answer, model, startedAt);
 
-  return unstreamable(model, 'a JSON completion');
+  return Effect.succeed(unstreamable(model, 'a JSON completion'));
 }
 
 /** The first read is awaited before responding so an empty or JSON head is refused with a status code, not a dying stream.
  *  The producer may never close after `data: [DONE]`; the terminal watcher ends the stream there. */
-async function sseResponse(
+function sseResponse(
   body: ReadableStream<Uint8Array>,
   model: string,
   startedAt: number,
-): Promise<Response> {
-  const reader = body.getReader();
-  let first: Awaited<ReturnType<typeof reader.read>>;
-
-  try {
-    first = await reader.read();
-  } catch (cause) {
+): Effect.Effect<Response> {
+  return Effect.gen(function* () {
+    const reader = body.getReader();
     // Release the lock so the binding body never stays locked behind the error.
+    const first = yield* Effect.onError(Effect.promise(() => reader.read()), () => Effect.sync(() => reader.releaseLock()));
+
+    // Release in `finally` so even a cancel rejection cannot leave the lock held.
+    const refuseEarly = async (reason: string): Promise<Response> => {
+      try {
+        await reader.cancel();
+      } finally {
+        reader.releaseLock();
+      }
+
+      return unstreamable(model, reason);
+    };
+
+    if (first.done) return yield* Effect.promise(() => refuseEarly('an empty stream'));
+
+    const head = new TextDecoder().decode(first.value).trimStart();
+
+    if (head.startsWith('{') || head.startsWith('[')) return yield* Effect.promise(() => refuseEarly('a JSON completion'));
+
+    diagnostics.event('workers_ai.direct_stream_first_byte', {
+      model,
+      ms: Date.now() - startedAt,
+      bytes: first.value.byteLength,
+    });
+
     reader.releaseLock();
 
-    throw cause;
-  }
-
-  // Release in `finally` so even a cancel rejection cannot leave the lock held.
-  const refuseEarly = async (reason: string): Promise<Response> => {
-    try {
-      await reader.cancel();
-    } finally {
-      reader.releaseLock();
-    }
-
-    return unstreamable(model, reason);
-  };
-
-  if (first.done) return refuseEarly('an empty stream');
-
-  const head = new TextDecoder().decode(first.value).trimStart();
-
-  if (head.startsWith('{') || head.startsWith('[')) return refuseEarly('a JSON completion');
-
-  diagnostics.event('workers_ai.direct_stream_first_byte', {
-    model,
-    ms: Date.now() - startedAt,
-    bytes: first.value.byteLength,
+    return new Response(
+      watchSseTerminal(body, first.value).pipeThrough(openAIChunkTransform(model)),
+      { headers: { 'content-type': 'text/event-stream' } },
+    );
   });
-
-  reader.releaseLock();
-
-  return new Response(
-    watchSseTerminal(body, first.value).pipeThrough(openAIChunkTransform(model)),
-    { headers: { 'content-type': 'text/event-stream' } },
-  );
 }
 
 /** Upstream event-stream frames in, OpenAI chunk frames out. A frame with a live choice is forwarded verbatim;

@@ -1,7 +1,7 @@
 // The device relay (docs/DEPLOYMENT.md § Codex egress). Frame names are mirrored in packages/pc-agent/src/index.js.
 import * as v from 'valibot';
 import { base64ToBytes } from '../utils/base64';
-import { tolerate } from '../obs/expected-failure';
+import { tolerate } from '../obs/effect';
 import { toKinuError } from '../obs/error';
 
 export const DEVICE_RELAY = {

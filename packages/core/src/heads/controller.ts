@@ -3,6 +3,8 @@
  * Heads settle independently (Promise.allSettled).
  */
 
+import { Cause, Effect, Result } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid';
 import { REAL_CLOCK, type Clock } from '../types/clock';
@@ -127,22 +129,24 @@ export class HeadController {
    * The unfinished run for this task if there is one, else a fresh id, so a re-drive of a detached
    * fork reuses its run. Reclaimed heads are re-run under their derived ids, not retired.
    */
-  private resolveTopLevelRun(task: string): HeadId {
-    const journal = this.journal;
+  private resolveTopLevelRun(task: string): Effect.Effect<HeadId> {
+    return Effect.gen({ self: this }, function* () {
+      const journal = this.journal;
 
-    if (!isRootJournal(journal)) {
-      // A facet's port reaching this is a wiring error: minting a fresh id would split the run.
-      throw new Error(
-        'A top-level split must run against the ROOT workspace journal: run reclamation reads every '
-        + 'unfinished run in the store. A recursive split has to pass parentHeadId.',
-      );
-    }
+      if (!isRootJournal(journal)) {
+        // A facet's port reaching this is a wiring error: minting a fresh id would split the run.
+        return yield* Effect.die(new Error(
+          'A top-level split must run against the ROOT workspace journal: run reclamation reads every '
+          + 'unfinished run in the store. A recursive split has to pass parentHeadId.',
+        ));
+      }
 
-    return journal.findResumableRun(task) ?? nanoid();
+      return journal.findResumableRun(task) ?? nanoid();
+    });
   }
 
   /** Full split, await, merge cycle; fires `onPhase` on split (real head IDs) and on merge. */
-  async run(opts: ({ parentHeadId: null } | { parentHeadId: HeadId; parentDepth: number }) & {
+  run(opts: ({ parentHeadId: null } | { parentHeadId: HeadId; parentDepth: number }) & {
     rootId?: HeadId;
     inheritedContext: SerializedMessage[];
     request: SplitRequest;
@@ -153,113 +157,110 @@ export class HeadController {
     missionLabels?: readonly string[];
     onPhase?: (event: SplitPhaseEvent) => void;
   }): Promise<MergeResult> {
-    const rootId = opts.rootId ?? opts.parentHeadId ?? this.resolveTopLevelRun(opts.request.rationale);
-    const strategy: MergeStrategy = opts.request.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
+    return settle(Effect.gen({ self: this }, function* () {
+      const rootId = opts.rootId ?? opts.parentHeadId ?? (yield* this.resolveTopLevelRun(opts.request.rationale));
+      const strategy: MergeStrategy = opts.request.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
 
-    const parentBudget = opts.parentBudget;
+      const parentBudget = opts.parentBudget;
 
-    if (parentBudget.maxDepth <= 0) {
-      throw new Error('Cannot split: max depth reached');
-    }
+      if (parentBudget.maxDepth <= 0) {
+        return yield* Effect.die(new Error('Cannot split: max depth reached'));
+      }
 
-    if (opts.request.heads.length === 0) {
-      throw new Error('Cannot split: no head tasks provided');
-    }
+      if (opts.request.heads.length === 0) {
+        return yield* Effect.die(new Error('Cannot split: no head tasks provided'));
+      }
 
-    const childBudget = deriveChildBudget(parentBudget);
+      const childBudget = deriveChildBudget(parentBudget);
 
-    // Only the root owns run identity and final settlement. Nested reports share its journal.
-    if (opts.parentHeadId === null) {
-      const splitRecorded = this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
+      // Only the root owns run identity and final settlement. Nested reports share its journal.
+      if (opts.parentHeadId === null) {
+        const splitRecorded = this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
 
-      if (splitRecorded !== undefined) await splitRecorded;
-    }
+        if (splitRecorded !== undefined) yield* Effect.promise(() => splitRecorded);
+      }
 
-    // A spawn that throws settles only its own head and never reaches Promise.all.
-    const spawnPromises = opts.request.heads.map(async (h, idx): Promise<SpawnedHead | HeadReport> => {
-      // Derived from the parent and slot, never minted: a re-drive re-opens the same row via
-      // `HeadJournal.insertSpawn`. Keyed on the parent, which is unique, not the root.
-      const id = `${opts.parentHeadId ?? rootId}-d${childBudget.maxDepth + 1}-${idx}`;
+      // A failed spawn settles only its own head; spawns start in order, synchronously.
+      const settled = yield* Effect.forEach(opts.request.heads, (h, idx) => Effect.gen({ self: this }, function* () {
+        // Derived from the parent and slot, never minted: a re-drive re-opens the same row via
+        // `HeadJournal.insertSpawn`. Keyed on the parent, which is unique, not the root.
+        const id = `${opts.parentHeadId ?? rootId}-d${childBudget.maxDepth + 1}-${idx}`;
 
-      const input: HeadInput = {
-        id,
-        rootId,
-        parentId: opts.parentHeadId,
-        depth: opts.parentHeadId === null ? 1 : opts.parentDepth + 1,
-        task: h.task,
-        mode: opts.mode,
-        rationale: h.rationale,
-        inheritedContext: opts.inheritedContext,
-        budget: childBudget,
-        // Per-head model wins over the parent default.
-        model: h.model ?? opts.model,
-        allowedTools: h.allowedTools,
-        mergeStrategy: strategy,
-        // A fork explores under the loop it forks from, via the per-kind default.
-        loop: defaultLoopOrigin('swarm'),
-        ...forkMission(opts.missionLabels),
-      };
-
-      // A local journal writes the row before this returns; nothing may push that write behind a microtask.
-      const spawnRecorded = this.journal.insertSpawn(input);
-
-      if (spawnRecorded !== undefined) await spawnRecorded;
-
-      try {
-        return await this.runtime.spawnHead(input);
-      } catch (err) {
-        // Nothing ran: usage is unknown (`{}`), and the reason travels in `errorMessage`.
-        const failed: HeadReport = {
+        const input: HeadInput = {
           id,
-          status: 'errored',
-          summary: 'Head failed to spawn before producing a report.',
-          evidence: [],
-          decisions: [],
-          artifactRefs: [],
-          fileChanges: [],
-          childHeadIds: [],
-          toolCalls: [],
-          stepCount: 0,
-          usage: {},
-          wallClockMs: 0,
-          errorMessage: renderThrownChain({ cause: err }),
+          rootId,
+          parentId: opts.parentHeadId,
+          depth: opts.parentHeadId === null ? 1 : opts.parentDepth + 1,
+          task: h.task,
+          mode: opts.mode,
+          rationale: h.rationale,
+          inheritedContext: opts.inheritedContext,
+          budget: childBudget,
+          // Per-head model wins over the parent default.
+          model: h.model ?? opts.model,
+          allowedTools: h.allowedTools,
+          mergeStrategy: strategy,
+          // A fork explores under the loop it forks from, via the per-kind default.
+          loop: defaultLoopOrigin('swarm'),
+          ...forkMission(opts.missionLabels),
         };
 
-        await this.journal.recordReport(failed);
+        // A local journal writes the row before this returns; nothing may push that write behind a microtask.
+        const spawnRecorded = this.journal.insertSpawn(input);
 
-        return failed;
+        if (spawnRecorded !== undefined) yield* Effect.promise(() => spawnRecorded);
+
+        return yield* Effect.catchCause(Effect.promise((): Promise<SpawnedHead | HeadReport> => this.runtime.spawnHead(input)), (spawnFailed) => Effect.gen({ self: this }, function* () {
+          // Nothing ran: usage is unknown (`{}`), and the reason travels in `errorMessage`.
+          const failed: HeadReport = {
+            id,
+            status: 'errored',
+            summary: 'Head failed to spawn before producing a report.',
+            evidence: [],
+            decisions: [],
+            artifactRefs: [],
+            fileChanges: [],
+            childHeadIds: [],
+            toolCalls: [],
+            stepCount: 0,
+            usage: {},
+            wallClockMs: 0,
+            errorMessage: renderThrownChain({ cause: Cause.squash(spawnFailed) }),
+          };
+
+          yield* Effect.promise(async () => this.journal.recordReport(failed));
+
+          return failed;
+        }));
+      }), { concurrency: 'unbounded' });
+
+      // Only heads that spawned hold a handle; the split event carries exactly these ids.
+      const handles: SpawnedHead[] = [];
+
+      for (const s of settled) {
+        if ('run' in s) handles.push(s);
       }
-    });
 
-    const settled = await Promise.all(spawnPromises);
-    // Only heads that spawned hold a handle; the split event carries exactly these ids.
-    const handles: SpawnedHead[] = [];
+      const startedAt = this.clock.now();
 
-    for (const s of settled) {
-      if ('run' in s) handles.push(s);
-    }
+      opts.onPhase?.({
+        kind: 'split',
+        rootId,
+        headIds: handles.map((h) => h.id),
+        rationale: opts.request.rationale,
+      });
 
-    const startedAt = this.clock.now();
-
-    opts.onPhase?.({
-      kind: 'split',
-      rootId,
-      headIds: handles.map((h) => h.id),
-      rationale: opts.request.rationale,
-    });
-
-    const reports = await Promise.all(
-      settled.map(async (s): Promise<HeadReport> => {
+      const reports = yield* Effect.forEach(settled, (s) => {
         // A failed-spawn head rejoins in its original slot so the merge still sees every head.
-        if (!('run' in s)) return s;
+        if (!('run' in s)) return Effect.succeed(s);
         const h = s;
 
-        try {
-          const report = await h.run();
-          await this.journal.recordReport(report);
+        return Effect.catchCause(Effect.gen({ self: this }, function* () {
+          const report = yield* Effect.promise(() => h.run());
+          yield* Effect.promise(async () => this.journal.recordReport(report));
 
           return report;
-        } catch (err) {
+        }), (runFailed) => Effect.gen({ self: this }, function* () {
           const failed: HeadReport = {
             id: h.id,
             status: 'errored',
@@ -273,40 +274,40 @@ export class HeadController {
             // The head never reported, so its usage is unknown: `{}`, not zeros.
             usage: {},
             wallClockMs: this.clock.now() - startedAt,
-            errorMessage: renderThrownChain({ cause: err }),
+            errorMessage: renderThrownChain({ cause: Cause.squash(runFailed) }),
           };
 
-          await this.journal.recordReport(failed);
+          yield* Effect.promise(async () => this.journal.recordReport(failed));
 
           return failed;
-        }
-      }),
-    );
+        }));
+      }, { concurrency: 'unbounded' });
 
-    const headScores = await this.scoreHeads(rootId, reports, opts.request.rationale, opts.mode);
+      const headScores = yield* Effect.promise(() => this.scoreHeads(rootId, reports, opts.request.rationale, opts.mode));
 
-    const mergeResult = await this.merge({
-      reports,
-      rationale: opts.request.rationale,
-      strategy,
-      inheritedContext: opts.inheritedContext,
-      parentBudget,
-      mode: opts.mode,
-      headIds: reports.map((r) => r.id),
-      headScores,
-    });
+      const mergeResult = yield* Effect.promise(() => this.merge({
+        reports,
+        rationale: opts.request.rationale,
+        strategy,
+        inheritedContext: opts.inheritedContext,
+        parentBudget,
+        mode: opts.mode,
+        headIds: reports.map((r) => r.id),
+        headScores,
+      }));
 
-    if (opts.parentHeadId === null) await this.journal.cacheMerge(rootId, mergeResult.mergedNarrative);
-    opts.onPhase?.({
-      kind: 'merge',
-      rootId,
-      cost: mergeResult.costSummary,
-      mergedNarrative: mergeResult.mergedNarrative,
-      fileChanges: mergeResult.fileChanges,
-      blindSpots: mergeResult.blindSpots,
-    });
+      if (opts.parentHeadId === null) yield* Effect.promise(async () => this.journal.cacheMerge(rootId, mergeResult.mergedNarrative));
+      opts.onPhase?.({
+        kind: 'merge',
+        rootId,
+        cost: mergeResult.costSummary,
+        mergedNarrative: mergeResult.mergedNarrative,
+        fileChanges: mergeResult.fileChanges,
+        blindSpots: mergeResult.blindSpots,
+      });
 
-    return mergeResult;
+      return mergeResult;
+    }));
   }
 
   /**
@@ -378,135 +379,131 @@ export class HeadController {
   }
 
   /** The merge prompt carries each head's full evidence and artifacts so no finding is lost. */
-  async merge(request: MergeRequest): Promise<MergeResult> {
-    const { reports, rationale, strategy, inheritedContext, parentBudget, mode } = request;
-    const headIds = request.headIds ?? reports.map((r) => r.id);
-    const headScores = request.headScores ?? [];
-    const grounded = mode !== 'plan' && this.runtime.grounding != null;
-    const costSummary = summarizeCost(reports, parentBudget);
-    const fileChanges = collectFileChanges(reports);
+  merge(request: MergeRequest): Promise<MergeResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const { reports, rationale, strategy, inheritedContext, parentBudget, mode } = request;
+      const headIds = request.headIds ?? reports.map((r) => r.id);
+      const headScores = request.headScores ?? [];
+      const grounded = mode !== 'plan' && this.runtime.grounding != null;
+      const costSummary = summarizeCost(reports, parentBudget);
+      const fileChanges = collectFileChanges(reports);
 
-    // Every head stopped without banking a finding: report deterministically. A model asked to narrate
-    // this invents a cause.
-    if (costSummary.headsWithFindings === 0) {
-      return {
-        mergedNarrative: emptySplitNarrative(reports, rationale),
-        selectedDecisions: [],
+      // Every head stopped without banking a finding: report deterministically. A model asked to narrate
+      // this invents a cause.
+      if (costSummary.headsWithFindings === 0) {
+        return {
+          mergedNarrative: emptySplitNarrative(reports, rationale),
+          selectedDecisions: [],
+          unresolvedQuestions: [],
+          recommendations: [],
+          // No head observed anything, so there is no negative space to report.
+          blindSpots: [],
+          evidenceAggregate: [],
+          headIds,
+          headScores,
+          fileChanges,
+          grounded,
+          costSummary,
+        };
+      }
+
+      const prompt = buildMergePrompt({ reports, rationale, strategy, inheritedContext, headScores: grounded ? headScores : [] });
+
+      const fallback = (errMsg: string): MergeResult => ({
+        mergedNarrative: fallbackNarrative(reports, rationale, errMsg),
+        selectedDecisions: reports.flatMap((r) => r.decisions),
         unresolvedQuestions: [],
         recommendations: [],
-        // No head observed anything, so there is no negative space to report.
         blindSpots: [],
-        evidenceAggregate: [],
+        evidenceAggregate: reports.flatMap((r) => r.evidence),
+        headIds,
+        headScores,
+        fileChanges,
+        grounded,
+        costSummary,
+      });
+
+      const merged = yield* Effect.result(this.synthesize(prompt, rationale, grounded));
+
+      if (Result.isFailure(merged)) return fallback(merged.failure);
+      const output = merged.success;
+
+      return {
+        mergedNarrative: output.narrative,
+        selectedDecisions: output.selected_decisions,
+        unresolvedQuestions: output.unresolved_questions,
+        recommendations: output.recommendations,
+        blindSpots: output.blind_spots,
+        evidenceAggregate: reports.flatMap((r) => r.evidence),
         headIds,
         headScores,
         fileChanges,
         grounded,
         costSummary,
       };
-    }
-
-    const prompt = buildMergePrompt({ reports, rationale, strategy, inheritedContext, headScores: grounded ? headScores : [] });
-
-    const fallback = (errMsg: string): MergeResult => ({
-      mergedNarrative: fallbackNarrative(reports, rationale, errMsg),
-      selectedDecisions: reports.flatMap((r) => r.decisions),
-      unresolvedQuestions: [],
-      recommendations: [],
-      blindSpots: [],
-      evidenceAggregate: reports.flatMap((r) => r.evidence),
-      headIds,
-      headScores,
-      fileChanges,
-      grounded,
-      costSummary,
-    });
-
-    const merged = await this.synthesize(prompt, rationale, grounded);
-
-    if (!merged.ok) return fallback(merged.error);
-
-    return {
-      mergedNarrative: merged.output.narrative,
-      selectedDecisions: merged.output.selected_decisions,
-      unresolvedQuestions: merged.output.unresolved_questions,
-      recommendations: merged.output.recommendations,
-      blindSpots: merged.output.blind_spots,
-      evidenceAggregate: reports.flatMap((r) => r.evidence),
-      headIds,
-      headScores,
-      fileChanges,
-      grounded,
-      costSummary,
-    };
+    }));
   }
 
-  /** Returns the surfaced error reason when every sample fails; the caller renders the per-head fallback. */
-  private async synthesize(
+  /** Fails with the first sample error when every sample fails; the caller renders the per-head fallback. */
+  private synthesize(
     prompt: string,
     rationale: string,
     grounded: boolean,
-  ): Promise<{ ok: true; output: MergeOutput } | { ok: false; error: string }> {
+  ): Effect.Effect<MergeOutput, string> {
     const g = grounded ? this.runtime.grounding : undefined;
     const k = Math.max(1, g?.mergeSamples ?? 1);
 
-    const sampleOne = async (): Promise<{ ok: true; output: MergeOutput } | { ok: false; error: string }> => {
-      let out: MergeOutput;
-
-      try {
-        out = await this.runtime.mergeLLM(prompt, MergeOutputSchema);
-      } catch (err) {
-        return { ok: false, error: renderThrownChain({ cause: err }) };
-      }
-
+    const sampleOne = Effect.tryPromise({
+      try: () => this.runtime.mergeLLM(prompt, MergeOutputSchema),
+      catch: (err) => renderThrownChain({ cause: err }),
+    }).pipe(Effect.flatMap((out) => {
       const parse = v.safeParse(MergeOutputSchema, out);
 
       return parse.success
-        ? { ok: true, output: parse.output }
-        : { ok: false, error: `merge schema invalid: ${parse.issues.map((i) => i.message).join('; ')}` };
-    };
+        ? Effect.succeed(parse.output)
+        : Effect.fail(`merge schema invalid: ${parse.issues.map((i) => i.message).join('; ')}`);
+    }));
 
-    if (k === 1 || !g) return sampleOne();
+    if (k === 1 || !g) return sampleOne;
 
-    const results = await Promise.all(Array.from({ length: k }, sampleOne));
-    const samples = results.filter((r): r is { ok: true; output: MergeOutput } => r.ok).map((r) => r.output);
+    return Effect.gen(function* () {
+      const results = yield* Effect.forEach(Array.from({ length: k }), () => Effect.result(sampleOne), { concurrency: 'unbounded' });
+      const samples = results.filter(Result.isSuccess).map((r) => r.success);
 
-    if (samples.length === 0) {
-      const firstError = results.find((r): r is { ok: false; error: string } => !r.ok);
+      if (samples.length === 0) return yield* Effect.fail(results.find(Result.isFailure)?.failure ?? 'all merge samples failed');
 
-      return { ok: false, error: firstError?.error ?? 'all merge samples failed' };
-    }
+      if (samples.length === 1) return samples[0];
 
-    if (samples.length === 1) return { ok: true, output: samples[0] };
+      // Settled, as in scoreHeads: a rejecting judge must not discard valid samples and the head_merge row.
+      const judge = g.judge ?? g.explorer;
 
-    // Settled, as in scoreHeads: a rejecting judge must not discard valid samples and the head_merge row.
-    const judge = g.judge ?? g.explorer;
+      const settled = yield* Effect.promise(() => Promise.allSettled(
+        samples.map(async (s) => ({ sample: s, score: await scoreMergeNarrative(judge, rationale, s.narrative) })),
+      ));
 
-    const settled = await Promise.allSettled(
-      samples.map(async (s) => ({ sample: s, score: await scoreMergeNarrative(judge, rationale, s.narrative) })),
-    );
+      const scored = settled.map((outcome, i) => {
+        if (outcome.status === 'fulfilled') return outcome.value;
+        // The reason itself, not its `message` — see scoreHeads.
+        diagnostics.failure(
+          'merge.sample_score_failed',
+          toKinuError({ doing: 'score a merge sample', cause: outcome.reason, otherwise: 'unavailable' }),
+          { sampleIndex: i },
+        );
 
-    const scored = settled.map((outcome, i) => {
-      if (outcome.status === 'fulfilled') return outcome.value;
-      // The reason itself, not its `message` — see scoreHeads.
-      diagnostics.failure(
-        'merge.sample_score_failed',
-        toKinuError({ doing: 'score a merge sample', cause: outcome.reason, otherwise: 'unavailable' }),
-        { sampleIndex: i },
+        return { sample: samples[i], score: null };
+      });
+
+      const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);
+
+      if (usable.length === 0) return samples[0];
+      const medianScore = median(usable.map((x) => x.score));
+
+      const winner = usable.reduce((best, cur) =>
+        Math.abs(cur.score - medianScore) < Math.abs(best.score - medianScore) ? cur : best,
       );
 
-      return { sample: samples[i], score: null };
+      return winner.sample;
     });
-
-    const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);
-
-    if (usable.length === 0) return { ok: true, output: samples[0] };
-    const medianScore = median(usable.map((x) => x.score));
-
-    const winner = usable.reduce((best, cur) =>
-      Math.abs(cur.score - medianScore) < Math.abs(best.score - medianScore) ? cur : best,
-    );
-
-    return { ok: true, output: winner.sample };
   }
 }
 

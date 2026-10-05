@@ -2,19 +2,19 @@
  * Typed client for `/api/drive/*`; the session rides the HttpOnly cookie.
  * Folders upload as one zip (core's `packZip`) so the object lands the whole set or none.
  */
+import { Data, Effect } from 'effect';
 import {
   DriveListingSchema, MarkedSkillSchema, packZip, type DriveListing, type FileText, type JsonValue, type MarkedSkill,
 } from '@kinu.run/core';
-import { tolerateAsync } from '@kinu.run/core/obs';
+import { tolerateAsync, settle } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
 import * as v from 'valibot';
 
 const ErrorBody = v.object({ error: v.string() });
 
-class DriveApiError extends Error {
+class DriveApiError extends Data.TaggedError('DriveApiError')<{ readonly message: string }> {
   constructor(readonly status: number, message: string) {
-    super(message);
-    this.name = 'DriveApiError';
+    super({ message });
   }
 }
 
@@ -115,41 +115,43 @@ export function inlineUrl(path: string): string {
 const PREVIEW_BYTES = 256 * 1024;
 
 /** A prefix of the file's text; no revision, so the viewer is read-only. */
-export async function readDriveText(path: string, cap = PREVIEW_BYTES): Promise<FileText> {
-  const res = await fetch(inlineUrl(path), { signal: AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) });
+export function readDriveText(path: string, cap = PREVIEW_BYTES): Promise<FileText> {
+  return settle(Effect.gen(function* () {
+    const res = yield* Effect.promise(async () => fetch(inlineUrl(path), { signal: AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) }));
 
-  if (!res.ok) throw await failure(res);
+    if (!res.ok) return yield* Effect.die((yield* Effect.promise(async () => failure(res))));
 
-  if (res.body === null) return { content: '' };
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  let truncated = false;
+    if (res.body === null) return { content: '' };
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    let truncated = false;
 
-  while (size < cap) {
-    const { done, value } = await reader.read();
+    while (size < cap) {
+      const { done, value } = yield* Effect.promise(async () => reader.read());
 
-    if (done) break;
-    chunks.push(value);
-    size += value.byteLength;
-  }
+      if (done) break;
+      chunks.push(value);
+      size += value.byteLength;
+    }
 
-  if (size >= cap) {
-    truncated = true;
-    await reader.cancel();
-  }
+    if (size >= cap) {
+      truncated = true;
+      yield* Effect.promise(async () => reader.cancel());
+    }
 
-  const bytes = new Uint8Array(size);
-  let offset = 0;
+    const bytes = new Uint8Array(size);
+    let offset = 0;
 
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
 
-  const shown = bytes.subarray(0, Math.min(size, cap));
+    const shown = bytes.subarray(0, Math.min(size, cap));
 
-  if (shown.includes(0)) return { error: 'This file is not text. Download it to open it.' };
+    if (shown.includes(0)) return { error: 'This file is not text. Download it to open it.' };
 
-  return { content: new TextDecoder().decode(shown), truncated };
+    return { content: new TextDecoder().decode(shown), truncated };
+  }));
 }

@@ -5,11 +5,12 @@
  * `waitUntil` is a no-op in a DO, so ledger write and delivery run inside the answering invocation.
  */
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { DevboxIncident, IncidentStage, RestoreClockPhase } from '@kinu.run/devbox';
 // Pure subpath: the barrel loads `cloudflare:workers`, which exists only under workerd.
 import { INCIDENT_REASON_MAX_CHARS } from '@kinu.run/devbox/incidents';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { attempt, settleLogged, settle } from '@kinu.run/core/obs';
 import type { ErrorCode } from '@kinu.run/core/obs';
 import type { RecoveryRowInput, RowOutcome } from '@kinu.run/core/analytics';
 import type {
@@ -153,113 +154,104 @@ export function lifecycleIncident(incident: DevboxIncident, attempts: number): S
 }
 
 /** `body` crossed a DO RPC boundary; this is its parse boundary. `rejected` is a caller bug, not transient. */
-export async function acceptSandboxLifecycleIncident(
+export function acceptSandboxLifecycleIncident(
   deps: SandboxLifecycleDeps,
   body: JsonValue,
   now: number,
 ): Promise<SandboxLifecycleIncidentResult> {
-  const parsed = v.safeParse(SandboxLifecycleIncidentSchema, body);
+  return settle(Effect.gen(function* () {
+    const parsed = v.safeParse(SandboxLifecycleIncidentSchema, body);
 
-  if (!parsed.success) {
-    // `refused`, not `failed`: `bad_input` is a refusal (core's CODE_IS_REFUSAL).
-    deps.recordRecovery({
-      stage: '', outcome: 'refused', code: 'bad_input', attempts: 0, durationMs: 0,
-    });
+    if (!parsed.success) {
+      // `refused`, not `failed`: `bad_input` is a refusal (core's CODE_IS_REFUSAL).
+      deps.recordRecovery({
+        stage: '', outcome: 'refused', code: 'bad_input', attempts: 0, durationMs: 0,
+      });
 
-    // Prefix the path: a value mismatch (e.g. the version) does not name its field.
-    const named = parsed.issues.map((issue) => {
-      const path = v.getDotPath(issue);
+      // Prefix the path: a value mismatch (e.g. the version) does not name its field.
+      const named = parsed.issues.map((issue) => {
+        const path = v.getDotPath(issue);
 
-      return path === null ? issue.message : `${path}: ${issue.message}`;
-    });
+        return path === null ? issue.message : `${path}: ${issue.message}`;
+      });
 
-    return {
-      status: 'rejected',
-      reason: `malformed sandbox lifecycle failure: ${named.join('; ')}`,
+      return {
+        status: 'rejected',
+        reason: `malformed sandbox lifecycle failure: ${named.join('; ')}`,
+      };
+    }
+
+    const incident = parsed.output;
+
+    // Read before the insert, which would overwrite it.
+    const before = readDeliveryState(deps.sql, incident.incidentId);
+    // Duration spans from the first report: how long the agent went untold.
+    const firstSeenAt = before?.firstSeenAt ?? now;
+
+    const recordSettlement = (outcome: RowOutcome, code: ErrorCode | ''): void => {
+      deps.recordRecovery({
+        stage: incident.stage,
+        outcome,
+        code,
+        attempts: incident.attempts,
+        durationMs: now - firstSeenAt,
+      });
     };
-  }
 
-  const incident = parsed.output;
+    if (before !== null && before.announcedAt !== null && before.outcome !== null
+      && before.outcome !== 'undelivered') {
+      // `ok`: the agent has been told; a repeat is the container's conservative retry.
+      recordSettlement('ok', '');
+      deps.logActivity?.('sandbox_incident_duplicate', `${incident.stage}: ${incident.incidentId}`);
 
-  // Read before the insert, which would overwrite it.
-  const before = readDeliveryState(deps.sql, incident.incidentId);
-  // Duration spans from the first report: how long the agent went untold.
-  const firstSeenAt = before?.firstSeenAt ?? now;
+      return { status: 'queued', incidentId: incident.incidentId, duplicate: true };
+    }
 
-  const recordSettlement = (outcome: RowOutcome, code: ErrorCode | ''): void => {
-    deps.recordRecovery({
-      stage: incident.stage,
-      outcome,
-      code,
-      attempts: incident.attempts,
-      durationMs: now - firstSeenAt,
-    });
-  };
-
-  if (before !== null && before.announcedAt !== null && before.outcome !== null
-    && before.outcome !== 'undelivered') {
-    // `ok`: the agent has been told; a repeat is the container's conservative retry.
-    recordSettlement('ok', '');
-    deps.logActivity?.('sandbox_incident_duplicate', `${incident.stage}: ${incident.incidentId}`);
-
-    return { status: 'queued', incidentId: incident.incidentId, duplicate: true };
-  }
-
-  // Row lands before delivery so a lost delivery stays re-deliverable; `first_seen_at` is written once.
-  void deps.sql`INSERT INTO sandbox_lifecycle_incidents
+    // Row lands before delivery so a lost delivery stays re-deliverable; `first_seen_at` is written once.
+    void deps.sql`INSERT INTO sandbox_lifecycle_incidents
       (incident_id, first_seen_at, announced_at, outcome)
     VALUES (${incident.incidentId}, ${now}, NULL, NULL)
     ON CONFLICT(incident_id) DO NOTHING`;
 
-  const metadata: JsonObject = {
-    incidentId: incident.incidentId,
-    stage: incident.stage,
-  };
+    const metadata: JsonObject = {
+      incidentId: incident.incidentId,
+      stage: incident.stage,
+    };
 
-  if (incident.processId !== undefined) metadata.processId = incident.processId;
+    if (incident.processId !== undefined) metadata.processId = incident.processId;
 
-  if (incident.port !== undefined) metadata.port = incident.port;
+    if (incident.port !== undefined) metadata.port = incident.port;
 
-  const signal: AgentSignal = {
-    kind: SANDBOX_LIFECYCLE_SIGNAL_KIND,
-    text: incidentText(incident),
-    metadata,
-    // Without it `inbox.send` is non-idempotent and a re-delivery lands as a second message.
-    idempotencyKey: sandboxLifecycleIncidentKey(incident.incidentId),
-  };
+    const signal: AgentSignal = {
+      kind: SANDBOX_LIFECYCLE_SIGNAL_KIND,
+      text: incidentText(incident),
+      metadata,
+      // Without it `inbox.send` is non-idempotent and a re-delivery lands as a second message.
+      idempotencyKey: sandboxLifecycleIncidentKey(incident.incidentId),
+    };
 
-  let outcome: SendOutcome;
+    // Passed on so the container retries; the unannounced row makes that safe.
+    const outcome: SendOutcome = yield* attempt({ doing: 'announcing a sandbox lifecycle failure to the agent', otherwise: 'io' }, () => deps.inbox.send(signal)).pipe(
+      Effect.tapError((error) => Effect.sync(() => { recordSettlement('failed', error.code); })),
+    );
 
-  try {
-    outcome = await deps.inbox.send(signal);
-  } catch (cause) {
-    // Re-thrown so the container retries; the row stays unannounced, so the retry is safe.
-    const error = toKinuError({
-      doing: 'announcing a sandbox lifecycle failure to the agent',
-      cause,
-      otherwise: 'io',
-    });
-
-    recordSettlement('failed', error.code);
-    throw error;
-  }
-
-  const landed = outcome !== 'undelivered';
-  void deps.sql`UPDATE sandbox_lifecycle_incidents
+    const landed = outcome !== 'undelivered';
+    void deps.sql`UPDATE sandbox_lifecycle_incidents
     SET outcome = ${outcome}, announced_at = ${landed ? now : null}
     WHERE incident_id = ${incident.incidentId}`;
-  // No code: the signal seam returns an outcome, not a classifiable cause.
-  recordSettlement(landed ? 'ok' : 'failed', '');
-  deps.logActivity?.(
-    landed ? 'sandbox_incident_announced' : 'sandbox_incident_undelivered',
-    `${incident.stage}: ${incident.incidentId}`,
-  );
+    // No code: the signal seam returns an outcome, not a classifiable cause.
+    recordSettlement(landed ? 'ok' : 'failed', '');
+    deps.logActivity?.(
+      landed ? 'sandbox_incident_announced' : 'sandbox_incident_undelivered',
+      `${incident.stage}: ${incident.incidentId}`,
+    );
 
-  return {
-    status: landed ? 'queued' : 'undelivered',
-    incidentId: incident.incidentId,
-    duplicate: false,
-  };
+    return {
+      status: landed ? 'queued' : 'undelivered',
+      incidentId: incident.incidentId,
+      duplicate: false,
+    };
+  }));
 }
 
 function incidentWhere(incident: SandboxLifecycleIncident): string {
@@ -291,13 +283,7 @@ export function restoreNotices(tell: () => Promise<void>): (phase: RestoreClockP
     if (phase !== 'opened' && phase !== 'settled') return;
 
     told = told.then(async () => {
-      try {
-        await tell();
-      } catch (cause) {
-        diagnostics.failure('sandbox.starting_notice_failed', toKinuError({
-          doing: 'telling the workspace its sandbox is starting or ready', cause, otherwise: 'unavailable',
-        }));
-      }
+      await settleLogged('sandbox.starting_notice_failed', { doing: 'telling the workspace its sandbox is starting or ready', otherwise: 'unavailable' }, () => tell());
     });
   };
 }

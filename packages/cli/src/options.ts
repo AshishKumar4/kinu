@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import type { CloudWebhookTriggerInput } from './cloud-api';
 import type { JsonObject, JsonValue } from '@kinu.run/core';
 import { JsonObjectSchema, nonEmptyString } from '@kinu.run/core';
@@ -6,28 +8,35 @@ import * as v from 'valibot';
 export const MODEL_OPTION_FLAG = '--model';
 
 export function parsePositiveInt(value: string, label: string): number {
-  const parsed = Number.parseInt(value, 10);
+  return settleSync(Effect.gen(function* () {
+    const parsed = Number.parseInt(value, 10);
 
-  if (!Number.isFinite(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
+    if (!Number.isFinite(parsed) || parsed < 1) return yield* Effect.die(new Error(`${label} must be a positive integer`));
 
-  return parsed;
+    return parsed;
+  }));
 }
 
 export function parseTime(value: string, label: string): number {
-  if (/^\d+$/.test(value)) return Number(value);
-  const parsed = Date.parse(value);
+  return settleSync(Effect.gen(function* () {
+    if (/^\d+$/.test(value)) return Number(value);
+    const parsed = Date.parse(value);
 
-  if (!Number.isFinite(parsed)) throw new Error(`Invalid ${label}: ${value}`);
+    if (!Number.isFinite(parsed)) return yield* Effect.die(new Error(`Invalid ${label}: ${value}`));
 
-  return parsed;
+    return parsed;
+  }));
 }
 
 export function oneOfFlag<T extends string>(value: string | undefined, flag: string, allowed: readonly [T, ...T[]]): T {
-  const raw = (value ?? allowed[0]).toLowerCase();
-  const hit = allowed.find((option) => option === raw);
+  return settleSync(Effect.gen(function* () {
+    const raw = (value ?? allowed[0]).toLowerCase();
+    const hit = allowed.find((option) => option === raw);
 
-  if (hit !== undefined) return hit;
-  throw new Error(`${flag} must be ${allowed.slice(0, -1).join(', ')}, or ${allowed.at(-1)}`);
+    if (hit !== undefined) return hit;
+
+    return yield* Effect.die(new Error(`${flag} must be ${allowed.slice(0, -1).join(', ')}, or ${allowed.at(-1)}`));
+  }));
 }
 
 export function normalizeWebhookAuthMode(value: string | undefined): CloudWebhookTriggerInput['auth_mode'] {

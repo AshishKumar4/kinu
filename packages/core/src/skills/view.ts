@@ -3,7 +3,9 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 
 
 import type { VfsMount } from '../vfs/mounts';
-import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { syscallError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
 import { BUILTIN_SKILL_FILES } from './builtins';
 import { compareSkillNames, listSkillFiles, resolveSkillFile, type SkillFile } from './discover';
@@ -61,52 +63,59 @@ export function skillsMount(plane: () => VFS): VfsMount {
     return real === null ? null : plane().stat(real);
   };
 
-  const contents = async (path: string): Promise<{ readonly text: Uint8Array } | { readonly real: string }> => {
-    const located = await locate(path);
+  const contents = (path: string): Effect.Effect<{ readonly text: Uint8Array } | { readonly real: string }, VfsError> => Effect.gen(function* () {
+    const located = yield* Effect.promise(() => locate(path));
 
     if (located?.kind === 'builtin' && located.rest === SKILL_FOLDER_FILE) return { text: encoder.encode(located.text) };
     const real = located?.kind === 'file' ? source(located) : null;
 
-    if (real === null) throw absent(path, 'open');
+    if (real === null) return yield* Effect.fail(absent(path, 'open'));
 
     return { real };
-  };
+  });
 
   const files: VFS = {
-    async readFile(path) {
-      const at = await contents(path);
+    readFile(path) {
+      return settle(Effect.gen(function* () {
+        const at = yield* contents(path);
 
-      return 'text' in at ? at.text : plane().readFile(at.real);
+        return 'text' in at ? at.text : yield* Effect.promise(async () => plane().readFile(at.real));
+      }));
     },
     // `cat` reads in ranges.
-    async readRange(path, offset, length) {
-      const at = await contents(path);
-      const whole = plane();
+    readRange(path, offset, length) {
+      return settle(Effect.gen(function* () {
+        const at = yield* contents(path);
+        const whole = plane();
 
-      if ('text' in at) return at.text.slice(offset, offset + length);
+        if ('text' in at) return at.text.slice(offset, offset + length);
 
-      return whole.readRange ? whole.readRange(at.real, offset, length) : (await whole.readFile(at.real)).slice(offset, offset + length);
+        return yield* Effect.promise(async () => whole.readRange ? whole.readRange(at.real, offset, length) : (await whole.readFile(at.real)).slice(offset, offset + length));
+      }));
     },
-    async readdir(path) {
-      const located = await locate(path);
+    readdir(path) {
+      return settle(Effect.gen(function* () {
+        const located = yield* Effect.promise(() => locate(path));
 
-      if (located === null) {
-        if (path.split('/').some((segment) => segment !== '')) throw absent(path, 'scandir');
-        const names = [...Object.keys(BUILTIN_SKILL_FILES), ...(await listSkillFiles(plane())).map((file) => file.name)];
+        if (located === null) {
+          if (path.split('/').some((segment) => segment !== '')) return yield* Effect.fail(absent(path, 'scandir'));
+          const names = [...Object.keys(BUILTIN_SKILL_FILES), ...(yield* Effect.promise(() => listSkillFiles(plane()))).map((file) => file.name)];
 
-        return names.sort(compareSkillNames).map((name) => ({ name, type: 'directory' }));
-      }
+          return names.sort(compareSkillNames).map((name) => ({ name, type: 'directory' }));
+        }
 
-      if (located.rest === '' && (located.kind === 'builtin' || located.file.folder === null)) return [{ name: SKILL_FOLDER_FILE, type: 'file' }];
+        if (located.rest === '' && (located.kind === 'builtin' || located.file.folder === null)) return [{ name: SKILL_FOLDER_FILE, type: 'file' }];
 
-      if (located.kind === 'builtin' || located.file.folder === null) throw absent(path, 'scandir');
+        if (located.kind === 'builtin' || located.file.folder === null) return yield* Effect.fail(absent(path, 'scandir'));
+        const folder = located.file.folder;
 
-      return plane().readdir(located.rest === '' ? located.file.folder : `${located.file.folder}/${located.rest}`);
+        return yield* Effect.promise(async () => plane().readdir(located.rest === '' ? folder : `${folder}/${located.rest}`));
+      }));
     },
     stat,
-    async writeFile(path) { throw readOnly(path, 'open'); },
-    async unlink(path) { throw readOnly(path, 'unlink'); },
-    async mkdir(path) { throw readOnly(path, 'mkdir'); },
+    writeFile(path) { return settle(Effect.fail(readOnly(path, 'open'))); },
+    unlink(path) { return settle(Effect.fail(readOnly(path, 'unlink'))); },
+    mkdir(path) { return settle(Effect.fail(readOnly(path, 'mkdir'))); },
   };
 
   // Skills live in the owner's Drive too.

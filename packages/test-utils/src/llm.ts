@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import type { JsonValue, LLM, TemporaryAgentPort, TemporaryRunRequest } from '@kinu.run/core';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
@@ -64,15 +66,17 @@ const DEFAULT_TOOL_OPTIONS: ToolExecutionOptions<unknown> = {
 export function toolExecute<Args, Result>(
   entry: ExecutableTool<Args, Result>,
 ): (args: Args, options?: ToolExecutionOptions<unknown>) => Promise<Result> {
-  const execute = entry.execute;
+  return settleSync(Effect.gen(function* () {
+    const execute = entry.execute;
 
-  if (!execute) {
-    throw new Error('toolExecute: the tool has no execute (was it built with a different name?)');
-  }
+    if (!execute) {
+      return yield* Effect.die(new Error('toolExecute: the tool has no execute (was it built with a different name?)'));
+    }
 
-  return async (args, options = DEFAULT_TOOL_OPTIONS) => {
-    return await execute(args, options);
-  };
+    return async (args, options = DEFAULT_TOOL_OPTIONS) => {
+      return await execute(args, options);
+    };
+  }));
 }
 
 /** A hire port whose advisors answer when the test says so, as the ingress stores a helper's answer. */

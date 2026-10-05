@@ -12,6 +12,7 @@ import {
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { scratchDir } from '@kinu.run/test-utils';
+import { placeLocalWorkspace } from './helpers/local-refs';
 
 const repoRoot = resolve(import.meta.dir, '../../..');
 
@@ -20,6 +21,7 @@ const DUMMY_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:
 /** A local workspace whose ledger holds one model call per entry, each paid by `account`. */
 async function localWorkspace(home: string, name: string, calls: ReadonlyArray<{ usage: Usage; usd: number; account: CallAccount }>) {
   mkdirSync(join(home, name), { recursive: true });
+  placeLocalWorkspace(home, name);
   const db = new Database(join(home, name, 'agent.db'));
 
   try {

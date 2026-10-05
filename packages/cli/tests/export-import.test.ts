@@ -7,7 +7,7 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import {
@@ -153,10 +153,8 @@ describe('kinu export / import', () => {
   });
 
   test('a local workspace round-trips through an archive', async () => {
-    const home = scratch('kinu-export-local-');
+    const { home } = placedWorkspace();
     const out = scratch('kinu-export-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
-    seedWorkspace(join(mkdirp(home, 'scout'), 'agent.db'));
 
     const archive = join(out, 'scout.kinu.jsonl');
     const exported = await result(runCli(home, ['export', 'scout', '-o', archive]));
@@ -240,12 +238,13 @@ describe('kinu export / import', () => {
       expect(calls.every((c) => c.method === 'exportWorkspaceArchive')).toBe(true);
       expect(calls[0].cursor).toBeNull();
 
-      const imported = await result(runCli(home, ['import', archive]));
+      // The cloud ref holds the name here, so the local copy takes its own.
+      const imported = await result(runCli(home, ['import', archive, '--name', 'skywriter-local']));
       expect(imported.stderr).toBe('');
       expect(imported.exitCode).toBe(0);
-      expect(imported.stdout).toContain('Imported workspace skywriter');
+      expect(imported.stdout).toContain('Imported workspace skywriter-local');
 
-      const db = restoredDb(home, 'skywriter');
+      const db = restoredDb(home, 'skywriter-local');
       expect(db.query(`SELECT COUNT(*) AS n FROM conversation_entries`).get()).toEqual({ n: 301 });
       expect(entryText(db, 'm7')).toBe('note 7 with "quotes"');
       db.close();
@@ -334,12 +333,26 @@ describe('kinu export / import', () => {
     db.close();
   });
 
+  // 2026-10-04: a restored copy works in the folder it was imported from, so a name it cannot hold is refused first.
+  test('an import under a name a cloud workspace holds is refused, and no workspace is written', async () => {
+    const home = scratch('kinu-export-claimed-');
+    const out = scratch('kinu-export-claimed-out-');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {
+      oldbot: { name: 'oldbot', mode: 'cloud', cloudName: 'oldbot', createdAt: '', updatedAt: '' },
+    }, aliases: {} }));
+    const bareDatabase = join(out, 'oldbot.agent.db');
+    seedWorkspace(bareDatabase);
+
+    const imported = await result(runCli(home, ['import', bareDatabase]));
+    expect(imported.exitCode).not.toBe(0);
+    expect(imported.stderr).toContain('"oldbot" already names a cloud workspace');
+    expect(existsSync(join(home, 'oldbot', 'agent.db'))).toBe(false);
+  });
+
   test('a database or an archive an older Kinu made is refused by name, and no workspace is written', async () => {
-    const home = scratch('kinu-export-genesis-');
+    const { home } = placedWorkspace();
     const out = scratch('kinu-export-genesis-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
-    const current = join(mkdirp(home, 'scout'), 'agent.db');
-    seedWorkspace(current);
+    const current = join(home, 'scout', 'agent.db');
 
     const archive = join(out, 'scout.kinu.jsonl');
     expect((await result(runCli(home, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
@@ -370,10 +383,8 @@ describe('kinu export / import', () => {
   });
 
   test('a truncated archive leaves no workspace behind', async () => {
-    const home = scratch('kinu-export-damaged-');
+    const { home } = placedWorkspace();
     const out = scratch('kinu-export-damaged-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
-    seedWorkspace(join(mkdirp(home, 'scout'), 'agent.db'));
 
     const archive = join(out, 'scout.kinu.jsonl');
     await result(runCli(home, ['export', 'scout', '-o', archive]));

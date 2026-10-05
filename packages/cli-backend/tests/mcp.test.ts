@@ -12,7 +12,7 @@ import { connectMcpServers } from '../src/mcp';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { createLocalProfileAuthority, resolverModelPlane } from '../src/profile-authority';
-import { scratchPath, scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import { scratchPath, scriptedTurnModel, toolExecute, scratchDir } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -67,6 +67,7 @@ function sessionWithModel(model: LanguageModel) {
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const rt = createCLIRuntime(db, {
+    cwd: scratchDir('workspace-folder'),
     llm: DUMMY_LLM,
   });
 
@@ -260,7 +261,7 @@ function latestDeclarations(prompt: string): string {
 function sessionWithWindows(model: LanguageModel, windows: Readonly<Record<string, number>>) {
   const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
   rt.actor.config.setLearning(false);
 

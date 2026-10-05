@@ -147,7 +147,7 @@ async function main(): Promise<void> {
   }
 
   const usage = proxy.usage();
-  proxy.stop(true);
+  await proxy.stop(true);
 
   if (usage.unmeteredResponses > 0) {
     const usageError = `${usage.unmeteredResponses} successful inference response(s) omitted token usage`;

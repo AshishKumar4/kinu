@@ -3,6 +3,8 @@
  * against ground truth. Expressed as an `EvalScoreRow` so a run record carries it beside the
  * behavioural covariates; no LLM judge.
  */
+import { Effect } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { EvalScoreRow } from './eval-run';
 
@@ -37,27 +39,29 @@ const OutcomeSchema = v.pipe(
  * or an empty detail is a broken verifier, and must publish no number.
  */
 export function outcomeRow(outcome: TaskOutcome): EvalScoreRow {
-  const parsed = v.safeParse(OutcomeSchema, outcome);
+  return settleSync(Effect.gen(function* () {
+    const parsed = v.safeParse(OutcomeSchema, outcome);
 
-  if (!parsed.success) {
-    throw new Error(
-      `invalid ${TASK_OUTCOME} verdict: ${parsed.issues.map((i) => i.message).join('; ')} `
-      + `(received reached=${String(outcome.reached)}, total=${String(outcome.total)})`,
-    );
-  }
+    if (!parsed.success) {
+      return yield* Effect.die(new Error(
+        `invalid ${TASK_OUTCOME} verdict: ${parsed.issues.map((i) => i.message).join('; ')} `
+        + `(received reached=${String(outcome.reached)}, total=${String(outcome.total)})`,
+      ));
+    }
 
-  const { reached, total, detail, measured } = parsed.output;
+    const { reached, total, detail, measured } = parsed.output;
 
-  const row: EvalScoreRow = {
-    name: TASK_OUTCOME,
-    asserts: 'the agent solved the task, measured against the task\'s own ground truth',
-    eligible: total,
-    passed: reached,
-    rate: reached / total,
-    detail,
-  };
+    const row: EvalScoreRow = {
+      name: TASK_OUTCOME,
+      asserts: 'the agent solved the task, measured against the task\'s own ground truth',
+      eligible: total,
+      passed: reached,
+      rate: reached / total,
+      detail,
+    };
 
-  return measured === undefined ? row : { ...row, measured };
+    return measured === undefined ? row : { ...row, measured };
+  }));
 }
 
 /** One machine-checked subgoal's verdict and evidence, shared by every count-graded family. */

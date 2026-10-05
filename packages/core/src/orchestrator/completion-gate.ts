@@ -10,7 +10,8 @@ import type { ExecOutcome } from '../execution/exec-result';
 import { formatExecResult } from '../execution/exec-result';
 import { clampToolResult } from '../tools/clamp';
 import type { Storage } from '../types/primitives';
-import { diagnostics, renderThrownChain } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { diagnostics, renderThrownChain, settle } from '../obs/index';
 
 /** `kinuEvent` on the gate's turn; the turn pump recognises the confirming turn by it. */
 export const COMPLETION_GATE_EVENT = 'completion_gate';
@@ -26,32 +27,31 @@ export const COMPLETION_PROBE_COMMANDS = ['pwd', 'ls -la', 'git status --short']
 export const COMPLETION_TASK_ECHO_MAX_CHARS = 2_000;
 
 /** Null when nothing could be read; the caller must then not gate. */
-export async function observeCompletionState(deps: {
+export function observeCompletionState(deps: {
   exec: (command: string) => Promise<ExecOutcome>;
   files?: Pick<Storage, 'vfs' | 'home'>;
 }): Promise<string | null> {
-  const blocks: string[] = [];
+  return settle(Effect.gen(function* () {
+    const blocks: string[] = [];
 
-  for (const command of COMPLETION_PROBE_COMMANDS) {
-    let outcome: ExecOutcome;
+    for (const command of COMPLETION_PROBE_COMMANDS) {
+      const outcome = yield* Effect.catchCause(Effect.promise((): Promise<ExecOutcome | null> => deps.exec(command)), (failed) => Effect.sync(() => {
+        // Named so a gate that saw nothing never reads as one that never looked.
+        diagnostics.event('completion.probe_skipped', {
+          command, error: renderThrownChain({ cause: Cause.squash(failed) }),
+        });
 
-    try {
-      outcome = await deps.exec(command);
-    } catch (error) {
-      // Named so a gate that saw nothing never reads as one that never looked.
-      diagnostics.event('completion.probe_skipped', {
-        command, error: renderThrownChain({ cause: error }),
-      });
-      continue;
+        return null;
+      }));
+
+      if (outcome === null || (command.startsWith('git ') && (outcome.exitCode ?? 0) !== 0)) continue;
+      blocks.push(`$ ${command}\n${formatExecResult(outcome).trim()}`);
     }
 
-    if (command.startsWith('git ') && (outcome.exitCode ?? 0) !== 0) continue;
-    blocks.push(`$ ${command}\n${formatExecResult(outcome).trim()}`);
-  }
+    if (blocks.length === 0) return null;
 
-  if (blocks.length === 0) return null;
-
-  return clampToolResult(blocks.join('\n\n'), { files: deps.files });
+    return yield* Effect.promise(() => clampToolResult(blocks.join('\n\n'), { files: deps.files }));
+  }));
 }
 
 export function completionGateText(opts: { task: string; observed: string }): string {

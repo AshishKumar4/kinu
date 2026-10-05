@@ -1,6 +1,8 @@
 // One DNS label `<handle>-<token>-<workspace>`, parsed positionally; fixed-width fields leave room for
 // `WORKSPACE_ADDRESS_MAX`, so no workspace address is ever truncated.
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { workspaceAddressRefusal } from '../identity/naming';
 
 const HANDLE_RE = /^[a-f0-9]{10}$/;
@@ -42,14 +44,16 @@ export function buildSlateShareHost(parts: {
   workspace: string;
   suffix: string;
 }): string | null {
-  const { handle, token, workspace, suffix } = parts;
+  return settleSync(Effect.gen(function* () {
+    const { handle, token, workspace, suffix } = parts;
 
-  if (!HANDLE_RE.test(handle)) throw new Error('Invalid slate share handle');
+    if (!HANDLE_RE.test(handle)) return yield* Effect.die(new Error('Invalid slate share handle'));
 
-  if (!TOKEN_RE.test(token)) throw new Error('Invalid slate share token');
+    if (!TOKEN_RE.test(token)) return yield* Effect.die(new Error('Invalid slate share token'));
 
-  if (workspaceAddressRefusal(workspace) !== null) return null;
-  const label = `${handle}-${token}-${workspace}`;
+    if (workspaceAddressRefusal(workspace) !== null) return null;
+    const label = `${handle}-${token}-${workspace}`;
 
-  return label.length > 63 ? null : `${label}.${suffix}`;
+    return label.length > 63 ? null : `${label}.${suffix}`;
+  }));
 }

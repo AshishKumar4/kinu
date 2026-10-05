@@ -1,9 +1,10 @@
 /** Typed client for `/api/shared/*` and the public blueprint read; the session rides the HttpOnly cookie. */
+import { Effect } from 'effect';
 import {
   BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema,
   type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareVisibility,
 } from '@kinu.run/core';
-import { tolerateAsync } from '@kinu.run/core/obs';
+import { tolerateAsync, settle } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
 import * as v from 'valibot';
 
@@ -58,14 +59,16 @@ export function forkLiveShare(input: { live: string; ownerWorkspace: string; wor
 
 const MeSchema = v.object({ user: v.nullable(v.object({ email: v.string() })) });
 
-export async function signedInEmail(): Promise<string | null> {
-  const res = await fetch('/api/auth/me', { signal: AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) });
+export function signedInEmail(): Promise<string | null> {
+  return settle(Effect.gen(function* () {
+    const res = yield* Effect.promise(async () => fetch('/api/auth/me', { signal: AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) }));
 
-  if (res.status === 401) return null;
+    if (res.status === 401) return null;
 
-  if (!res.ok) throw new Error(`GET /api/auth/me → ${res.status} ${await errorDetail(res)}`);
+    if (!res.ok) return yield* Effect.die(new Error(`GET /api/auth/me → ${res.status} ${yield* Effect.promise(async () => errorDetail(res))}`));
 
-  return v.parse(MeSchema, await res.json()).user?.email ?? null;
+    return v.parse(MeSchema, yield* Effect.promise(async () => res.json())).user?.email ?? null;
+  }));
 }
 
 /** Answers the row and its URL (null where this deployment cannot sign one). */

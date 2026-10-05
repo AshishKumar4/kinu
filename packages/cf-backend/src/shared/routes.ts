@@ -3,6 +3,7 @@
  * checked before any object is touched, and the owner's object re-reads the row every call (S6). No credential crosses (S8).
  */
 import { Hono } from 'hono';
+import { Result } from 'effect';
 import * as v from 'valibot';
 import {
   err, json, safeJson, retryTransientDO,
@@ -186,7 +187,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
   if (!body) return err(400, 'Body must be { workspace, slate, version, include?, emails? }');
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
-  if (!claim.ok) return err(claim.status, claim.error);
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
   const owned = workspaceOwner(env, body.workspace);
   const published = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'publish', id: body.slate, version: body.version, include: body.include });
 
@@ -228,7 +229,7 @@ async function fork(request: Request, env: Env, identity: AuthIdentity): Promise
   // The target is proven mine before the owner's object is asked for bytes.
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
-  if (!claim.ok) return err(claim.status, claim.error);
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
 
   const bundle = 'blueprint' in body
     ? await blueprintBundle(env, body.blueprint)
@@ -269,7 +270,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity, own
   if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork? }');
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
-  if (!claim.ok) return err(claim.status, claim.error);
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
 
   const owned = workspaceOwner(env, body.workspace);
 
@@ -308,7 +309,7 @@ async function revoke(request: Request, env: Env, identity: AuthIdentity): Promi
   if (!body) return err(400, 'Body must be { workspace, share }');
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
-  if (!claim.ok) return err(claim.status, claim.error);
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
   const revoked = await workspaceOwner(env, body.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: body.share });
 
   if (!revoked.ok) return err(revoked.reason === 'missing' ? 404 : 409, revoked.error);

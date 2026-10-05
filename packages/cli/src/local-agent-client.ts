@@ -27,6 +27,7 @@ import {
   loadConfigFile,
   readProviderRevision,
   resolveCloudSession,
+  resolveLocalAgent,
   resolveMcpServers,
   resolveProviderCredentials,
 } from './config';
@@ -77,7 +78,7 @@ interface LocalAgentClientOptions {
   oneShot?: boolean;
   transcript?: CliSessionOptions;
   surface?: InvocationSurface;
-  /** The ref's recorded placement, shared by peers. Absent leaves the runtime on its in-database plane. */
+  /** The folder it works in; absent, the ref's recorded one. */
   cwd?: string;
 }
 
@@ -99,7 +100,7 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     llm: llmConfig, providerCredentials, oauthStore,
     ...(cloud !== null && { cloud }),
     checkpointKeep: loadConfigFile().checkpointKeep,
-    cwd: opts.cwd,
+    cwd: opts.cwd ?? resolveLocalAgent(name).cwd,
   };
 
   const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);

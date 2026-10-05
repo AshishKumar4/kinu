@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-04",
-  "files": 2980,
-  "functions": 74535,
+  "measuredAt": "2026-10-05",
+  "files": 2994,
+  "functions": 77639,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -58,15 +58,7 @@
       "complexity": 38
     },
     {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
-      "complexity": 37
-    },
-    {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
-      "complexity": 37
-    },
-    {
-      "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison",
       "complexity": 37
     },
     {
@@ -76,6 +68,14 @@
     {
       "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 37
+    },
+    {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
+      "complexity": 36
+    },
+    {
+      "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
+      "complexity": 36
     },
     {
       "key": "packages/core/src/tui/input-state.ts#reduceInput",
@@ -178,14 +178,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 30
-    },
-    {
-      "key": "packages/cli-backend/src/opencode-provider.ts#discoverModels",
-      "complexity": 30
-    },
-    {
       "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
       "complexity": 30
     },
@@ -215,6 +207,10 @@
     },
     {
       "key": "packages/cf-backend/tests/helpers/actor-harness.ts#chatSessionTurns>admit",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
       "complexity": 29
     },
     {
@@ -282,15 +278,7 @@
       "complexity": 28
     },
     {
-      "key": "packages/cli/src/commands/debug.ts#writeDebugBundle",
-      "complexity": 28
-    },
-    {
       "key": "packages/cli/src/config.ts#resolveLLMConfig",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/execution/hub-device-transport.ts#createHubDeviceTransport>rpc",
       "complexity": 28
     },
     {

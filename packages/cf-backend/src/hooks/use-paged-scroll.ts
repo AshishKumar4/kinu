@@ -1,6 +1,8 @@
 /** `exhausted` is set only by a `status: 'end'` page; a failure sets `error`. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatHistoryEntry, Page, PositionCursor, PositionPageRequest, SeekCursor } from "@kinu.run/core";
+import { Cause, Effect, type Exit } from "effect";
+import { hold } from "@kinu.run/core/obs";
 import { describeError } from "@/hooks/use-async-resource";
 
 export interface PagedScroll<Item> {
@@ -29,7 +31,7 @@ function usePageLoads(pageSize: number) {
   const [error, setError] = useState<string | null>(null);
 
   // The page in flight. A ref, not state: several scroll handlers in one frame would all read an uncommitted `null`.
-  const inFlight = useRef<Promise<void> | null>(null);
+  const inFlight = useRef<Promise<Exit.Exit<void>> | null>(null);
   const walk = useRef(0);
   const size = useRef({ limit: pageSize, landedAt: -Infinity });
 
@@ -52,28 +54,27 @@ function usePageLoads(pageSize: number) {
 
     size.current.limit = limit;
     setLoading(true);
-    inFlight.current = (async () => {
+    inFlight.current = hold(Effect.gen(function* () {
       // Decided after the handler: `reset` or unmount may have retired this walk.
-      let thrown: { cause: unknown } | null = null;
+      const thrown = yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+        const publish = yield* Effect.promise(read);
 
-      try {
-        const publish = await read();
+        if (generation === walk.current) {
+          publish();
+          setError(null);
+        }
 
-        if (generation !== walk.current) return;
-        publish();
-        setError(null);
-      } catch (err) {
-        thrown = { cause: err };
-      } finally {
+        return null;
+      }), (failed) => Effect.succeed({ cause: Cause.squash(failed) })), Effect.sync(() => {
         if (generation === walk.current) {
           inFlight.current = null;
           size.current.landedAt = performance.now();
           setLoading(false);
         }
-      }
+      }));
 
       if (thrown !== null && generation === walk.current) setError(describeError(thrown));
-    })();
+    }));
   }, []);
 
   const retire = useCallback(() => {

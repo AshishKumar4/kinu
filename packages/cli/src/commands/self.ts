@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { isSameBuild } from '@kinu.run/core';
@@ -20,45 +22,47 @@ function servedVersionLabel(served: { version: string } | null): string {
   return isSameBuild(VERSION, served.version) ? OK(`${served.version} (current)`) : WARN(`${served.version}. Run: kinu update`);
 }
 
-export async function updateCommand(target: string | undefined, opts: UpdateOptions): Promise<void> {
-  const what = target ?? 'self';
+export function updateCommand(target: string | undefined, opts: UpdateOptions): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const what = target ?? 'self';
 
-  if (what !== 'self' && what !== 'kinu') throw new Error('Usage: kinu update [self] [--origin <url>]');
-  const origin = resolveCloudOrigin(opts);
+    if (what !== 'self' && what !== 'kinu') return yield* Effect.die(new Error('Usage: kinu update [self] [--origin <url>]'));
+    const origin = resolveCloudOrigin(opts);
 
-  if (opts.background) return refreshInBackground(origin);
-  ensureBinDir();
-  const path = join(BIN_DIR, 'kinu');
-  // Null: the server lacks the endpoint or is unreachable; only the launcher is refreshed.
-  const served = await fetchServedVersion(origin);
+    if (opts.background) return yield* Effect.promise(async () => refreshInBackground(origin));
+    ensureBinDir();
+    const path = join(BIN_DIR, 'kinu');
+    // Null: the server lacks the endpoint or is unreachable; only the launcher is refreshed.
+    const served = yield* Effect.promise(async () => fetchServedVersion(origin));
 
-  if (served) {
-    await updateConfigFile((c) => { c.updateCheckedAt = Date.now(); c.updateLatestSeen = served.version; });
-  }
+    if (served) {
+      yield* Effect.promise(async () => updateConfigFile((c) => { c.updateCheckedAt = Date.now(); c.updateLatestSeen = served.version; }));
+    }
 
-  if (served && (opts.force || !isSameBuild(VERSION, served.version))) {
-    await refreshCliTree(origin, served.version);
-    console.log(`${OK('✓')} Installed ${ACCENT(served.version)} ${DIM(`(was ${VERSION}; applies on the next launch)`)}`);
-  } else if (served) {
-    console.log(`${OK('✓')} Already on the latest version ${ACCENT(VERSION)}`);
-  } else {
-    console.log(`${WARN('!')} ${origin} published no build version; the CLI at ${DIM(CLI_CURRENT)} was left as it is`);
-  }
+    if (served && (opts.force || !isSameBuild(VERSION, served.version))) {
+      yield* Effect.promise(async () => refreshCliTree(origin, served.version));
+      console.log(`${OK('✓')} Installed ${ACCENT(served.version)} ${DIM(`(was ${VERSION}; applies on the next launch)`)}`);
+    } else if (served) {
+      console.log(`${OK('✓')} Already on the latest version ${ACCENT(VERSION)}`);
+    } else {
+      console.log(`${WARN('!')} ${origin} published no build version; the CLI at ${DIM(CLI_CURRENT)} was left as it is`);
+    }
 
-  const res = await fetch(`${origin}/downloads/kinu`, { cache: 'no-store' });
+    const res = yield* Effect.promise(async () => fetch(`${origin}/downloads/kinu`, { cache: 'no-store' }));
 
-  if (!res.ok) throw new Error(`Update download failed: HTTP ${res.status}`);
-  const script = await res.text();
+    if (!res.ok) return yield* Effect.die(new Error(`Update download failed: HTTP ${res.status}`));
+    const script = yield* Effect.promise(async () => res.text());
 
-  if (existsSync(path) && readFileSync(path, 'utf-8') === script) {
+    if (existsSync(path) && readFileSync(path, 'utf-8') === script) {
+      chmodSync(path, 0o755);
+
+      return;
+    }
+
+    writeFileSync(path, script, { mode: 0o755 });
     chmodSync(path, 0o755);
-
-    return;
-  }
-
-  writeFileSync(path, script, { mode: 0o755 });
-  chmodSync(path, 0o755);
-  console.log(`${OK('✓')} Updated ${ACCENT('kinu')} ${DIM(path)}`);
+    console.log(`${OK('✓')} Updated ${ACCENT('kinu')} ${DIM(path)}`);
+  }));
 }
 
 /** Silent unless it fails: several of these may run from the day's first commands. */

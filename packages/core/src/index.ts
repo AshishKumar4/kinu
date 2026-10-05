@@ -217,7 +217,8 @@ export {
 } from './read-models/file-links';
 
 export {
-  cloudPlanes, findPlaneReferences, formatPath, machinePath, referencedPath, resolvePath, RESERVED_ROOTS, type PathPlanes, type PlaneRoot, type ResolvedPath,
+  cloudPlanes, findPlaneReferences, formatPath, localPlanes, machinePath, referencedPath, referencePrefixes, resolvePath, RESERVED_ROOTS,
+  type PathPlanes, type ResolvedPath,
 } from './vfs/resolve';
 
 export type * from './types/agent-runtime';
@@ -527,7 +528,7 @@ export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendant
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
 export {
-  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, registerLocalNode, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
+  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
 } from './state/local-actors';
 
 // open-38: one physical workspace SQLite for every logical actor.

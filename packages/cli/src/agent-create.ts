@@ -22,7 +22,7 @@ import {
   ensureAgentHome,
   loadConfigFile,
   localWorkspaceMembers,
-  readWorkspaceIdentityId,
+  placeLocalWorkspace,
   requireAuthConfig,
   requireLLMConfig,
   resolveAgentRef,
@@ -225,21 +225,12 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   }
 
   db.close();
-  // Publication. Past here an unregistered agent.db is converged by adoption (`adoptUnplacedLocalAgent`).
+  // Publication. A crash before the ref below is written leaves a database with no folder, which every open refuses.
   renameSync(partial, dbPath);
   // The checkpointed (empty) sidecars belong to a name that no longer exists.
   discardPartialWorkspace(partial);
 
-  await upsertAgentConfig({
-    name,
-    mode: 'local',
-    localName: name,
-    alias: input.alias === '' ? undefined : input.alias,
-    cwd,
-    workspaceId,
-    // The db's durable id, so creation and adoption record the same identity.
-    identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
-  });
+  await placeLocalWorkspace({ name, cwd, workspaceId, alias: input.alias === '' ? undefined : input.alias });
   const aliasPath = input.alias ? await writeAliasShim(name, input.alias) : undefined;
   ensureLocalDaemonRunning();
 

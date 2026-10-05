@@ -1,5 +1,6 @@
 // Pins the DO retry seam per failure class. Reset strings come from
 // PLATFORM_CATALOG['do.reset.transient'], the entry the classifier cites, so they cannot drift.
+import { Result } from 'effect';
 import { describe, test, expect } from 'bun:test';
 import { PLATFORM_CATALOG } from '@kinu.run/core';
 import { retryTransientDO, classifyTransientDO } from '@kinu.run/core';
@@ -190,30 +191,30 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
 
   test('one dropped membership read does not fail the request', async () => {
     const result = await claimOwnedWorkspace(envWith({ dropHasWorkspace: 1 }), USER, 'drop-retry');
-    expect(result.ok).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
   });
 
   test('a platform failure that persists reports 503, not 500', async () => {
-    expect(await claimFailure('persist-503', CONNECTION_LOST)).toMatchObject({ ok: false, status: 503 });
+    expect(await claimFailure('persist-503', CONNECTION_LOST)).toMatchObject({ failure: { status: 503 } });
   });
 
   test('a genuine ownership collision still reports 403', async () => {
     expect(await claimFailure('collision-403', 'collision-403 is owned by a different user'))
-      .toMatchObject({ ok: false, status: 403 });
+      .toMatchObject({ failure: { status: 403 } });
   });
 
   test('an application failure is still ours to own, at 500', async () => {
     expect(await claimFailure('schema-fault', 'no such table: workspace_identity'))
-      .toMatchObject({ ok: false, status: 500 });
+      .toMatchObject({ failure: { status: 500 } });
   });
 
   test('a dropped capability reconcile reports 503, a schema fault 500', async () => {
     await expect(claimOwnedWorkspace(
       envWith({ capabilityError: new Error(CONNECTION_LOST) }), USER, 'reconcile-drop'))
-      .resolves.toMatchObject({ ok: false, status: 503 });
+      .resolves.toMatchObject({ failure: { status: 503 } });
     await expect(claimOwnedWorkspace(
       envWith({ capabilityError: new Error('no such column: capability_hash') }), USER, 'reconcile-schema'))
-      .resolves.toMatchObject({ ok: false, status: 500 });
+      .resolves.toMatchObject({ failure: { status: 500 } });
   });
 
   // staging f62dfcb9, 2026-10-01 01:07Z: 180 workspaces of one account at once overloaded its UserDO, and ~128 trials died on
@@ -222,16 +223,16 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     const overloaded = Object.assign(new Error('Durable Object is overloaded.'), { retryable: true, overloaded: true });
 
     await expect(claimOwnedWorkspace(envWith({ capabilityError: overloaded }), USER, 'reconcile-overloaded'))
-      .resolves.toMatchObject({ ok: false, status: 503 });
-    expect(await claimFailure('claim-overloaded', 'Durable Object is overloaded.')).toMatchObject({ ok: false, status: 503 });
+      .resolves.toMatchObject({ failure: { status: 503 } });
+    expect(await claimFailure('claim-overloaded', 'Durable Object is overloaded.')).toMatchObject({ failure: { status: 503 } });
   });
 
   test('a warm request skips the registry read', async () => {
     const reads: string[] = [];
     const env = envWith({ membershipAnswers: [true], registryReads: reads });
-    expect((await claimOwnedWorkspace(env, USER, 'warm-cache')).ok).toBe(true);
+    expect(Result.isSuccess(await claimOwnedWorkspace(env, USER, 'warm-cache'))).toBe(true);
     expect(reads).toEqual(['warm-cache']);
-    expect((await claimOwnedWorkspace(env, USER, 'warm-cache')).ok).toBe(true);
+    expect(Result.isSuccess(await claimOwnedWorkspace(env, USER, 'warm-cache'))).toBe(true);
     expect(reads).toEqual(['warm-cache']);
   });
 
@@ -241,7 +242,7 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     const result = await claimOwnedWorkspace(
       envWith({ membershipAnswers: [false], claims }), USER, 'unproven-404');
 
-    expect(result).toMatchObject({ ok: false, status: 404 });
+    expect(result).toMatchObject({ failure: { status: 404 } });
     expect(claims).toEqual([]);
   });
 
@@ -255,12 +256,12 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
       capabilitySucceeds: 1,
     });
 
-    expect((await claimOwnedWorkspace(env, USER, 'evicted-404')).ok).toBe(true);
+    expect(Result.isSuccess(await claimOwnedWorkspace(env, USER, 'evicted-404'))).toBe(true);
     // The UserDO's registry re-check contradicts the stale proof: 404, proof discarded.
     await expect(claimOwnedWorkspace(env, USER, 'evicted-404'))
-      .resolves.toMatchObject({ ok: false, status: 404 });
+      .resolves.toMatchObject({ failure: { status: 404 } });
     await expect(claimOwnedWorkspace(env, USER, 'evicted-404'))
-      .resolves.toMatchObject({ ok: false, status: 404 });
+      .resolves.toMatchObject({ failure: { status: 404 } });
     expect(reads).toEqual(['evicted-404', 'evicted-404']);
   });
 });

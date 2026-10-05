@@ -3,7 +3,7 @@
  * or not, head or node, any depth) goes through this instance. The announcement carries an id, never
  * a row: readers re-read the ledger.
  */
-import { diagnostics, toKinuError } from '../obs';
+import { settleLoggedSync } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { HeadJournal } from './journal';
@@ -46,14 +46,8 @@ export class LiveHeadJournal extends HeadJournal {
 
   /** After the write, and it must never fail it: a listener failure is reported, not thrown. */
   private announce(headId: HeadId): void {
-    try {
+    settleLoggedSync('head.activity_announce_failed', { doing: 'announcing a head journal write to open clients', otherwise: 'unavailable' }, () => {
       this.listener(headId);
-    } catch (err) {
-      diagnostics.failure('head.activity_announce_failed', toKinuError({
-        doing: 'announcing a head journal write to open clients',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { headId });
-    }
+    }, { headId });
   }
 }

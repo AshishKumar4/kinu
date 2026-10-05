@@ -13,8 +13,8 @@ import { TAVILY_CRED_KEY } from '../credentials/validate';
 import { TOOL_REACH } from '../tools/registry';
 import { readExecSignal } from '../execution/signal';
 import { codemodeText } from '../tools/sandbox-contract';
-import { attemptInItsWords, diagnostics, KinuError, settle, toKinuError, tolerate } from '../obs/index';
-import { Effect } from 'effect';
+import { attempt, attemptInItsWords, diagnostics, inItsWords, KinuError, settle, tolerate } from '../obs/index';
+import { Data, Effect } from 'effect';
 import type { CodemodeProvider } from '../types/codemode';
 
 import { bytesToBase64 } from '../utils/base64';
@@ -96,8 +96,10 @@ const MAX_FETCH_BYTES = 2_000_000;
 /** WHATWG Fetch's redirect bound (https://fetch.spec.whatwg.org/#http-redirect-fetch). */
 const MAX_REDIRECTS = 20;
 
-class WebFetchError extends Error {
-  override readonly name = 'WebFetchError';
+class WebFetchError extends Data.TaggedError('WebFetchError')<{ readonly message: string; readonly cause?: unknown }> {
+  constructor(message: string, options?: { readonly cause: unknown }) {
+    super(options === undefined ? { message } : { message, cause: options.cause });
+  }
 }
 
 /**
@@ -123,32 +125,27 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   // Detached: workerd's fetch throws "Illegal invocation" when called as `deps.fetch`.
   const fetchImpl = deps.fetch;
 
-  const convert = async (html: string, url: string): Promise<string> => {
-    if (!deps.htmlToMarkdown) return localHtmlToMarkdown(html);
+  const convert = (html: string, url: string): Effect.Effect<string> => {
+    const toMarkdown = deps.htmlToMarkdown;
 
-    try {
-      return stripBase64Images(await deps.htmlToMarkdown(html, { url }));
-    } catch (error) {
-      diagnostics.failure(
-        'web.convert_failed',
-        toKinuError({ doing: 'convert fetched HTML to markdown', cause: error, otherwise: 'io' }),
-      );
+    if (!toMarkdown) return Effect.sync(() => localHtmlToMarkdown(html));
 
-      return localHtmlToMarkdown(html);
-    }
+    return attempt({ doing: 'convert fetched HTML to markdown', otherwise: 'io' }, async () => stripBase64Images(await toMarkdown(html, { url }))).pipe(
+      Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('web.convert_failed', failure);
+
+        return localHtmlToMarkdown(html);
+      })),
+    );
   };
 
-  async function tavilyAuth(): Promise<AuthResolution | null> {
-    return deps.getAuth ? await deps.getAuth(TAVILY_CRED_KEY) : null;
-  }
-
-  async function tavilySearch(
+  const tavilySearch = (
     query: string,
     limit: number,
     { headers, baseURL = TAVILY_API }: AuthResolution,
     signal: AbortSignal | undefined,
-  ): Promise<WebSearchResponse> {
-    const res = await fetchImpl(new URL('search', baseURL.endsWith('/') ? baseURL : `${baseURL}/`).href, {
+  ): Effect.Effect<WebSearchResponse> => Effect.gen(function* () {
+    const res = yield* Effect.promise(() => fetchImpl(new URL('search', baseURL.endsWith('/') ? baseURL : `${baseURL}/`).href, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify({
@@ -158,85 +155,88 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         search_depth: 'basic',
       }),
       signal,
-    });
+    }));
 
-    if (res.status === 429) throw new WebFetchError('Tavily rate limit (429): retry shortly');
+    if (res.status === 429) return yield* Effect.die(new WebFetchError('Tavily rate limit (429): retry shortly'));
 
     if (!res.ok) {
-      const body = await res.text();
-      throw new WebFetchError(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`);
+      const body = yield* Effect.promise(() => res.text());
+
+      return yield* Effect.die(new WebFetchError(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`));
     }
 
-    try {
-      const json = v.parse(TavilyResponseSchema, await res.json());
+    const read = Effect.tryPromise({
+      try: async (): Promise<WebSearchResponse> => {
+        const json = v.parse(TavilyResponseSchema, await res.json());
 
-      const safe = (json.results ?? []).flatMap((r) => {
-        const url = r.url;
+        const safe = (json.results ?? []).flatMap((r) => {
+          const url = r.url;
 
-        return url !== undefined && isSafeUrl(url) ? [{ ...r, url }] : [];
-      });
-
-      const results: WebSearchResult[] = safe
-        .slice(0, limit)
-        .map((r, i) => {
-          const title = r.title?.trim();
-
-          return {
-            title: title === undefined || title === '' ? r.url : title,
-            url: r.url,
-            snippet: stripBase64Images((r.content ?? '').trim()).slice(0, 600),
-            date: r.published_date === '' ? undefined : r.published_date,
-            position: i + 1,
-          };
+          return url !== undefined && isSafeUrl(url) ? [{ ...r, url }] : [];
         });
 
-      const answer = json.answer?.trim();
+        const results: WebSearchResult[] = safe
+          .slice(0, limit)
+          .map((r, i) => {
+            const title = r.title?.trim();
 
-      return { query, answer: answer === '' ? undefined : answer, results, source: 'tavily' };
-    } catch (error) {
-      if (signal?.aborted === true) throw error;
-      throw new WebFetchError('Tavily search returned an unreadable response', { cause: error });
-    }
-  }
+            return {
+              title: title === undefined || title === '' ? r.url : title,
+              url: r.url,
+              snippet: stripBase64Images((r.content ?? '').trim()).slice(0, 600),
+              date: r.published_date === '' ? undefined : r.published_date,
+              position: i + 1,
+            };
+          });
 
-  async function duckDuckGoSearch(query: string, limit: number, signal: AbortSignal | undefined): Promise<WebSearchResponse> {
+        const answer = json.answer?.trim();
+
+        return { query, answer: answer === '' ? undefined : answer, results, source: 'tavily' };
+      },
+      catch: (cause) => ({ cause }),
+    });
+
+    return yield* Effect.catch(read, (failed) => Effect.die(signal?.aborted === true
+      ? failed.cause
+      : new WebFetchError('Tavily search returned an unreadable response', { cause: failed.cause })));
+  });
+
+  const duckDuckGoSearch = (query: string, limit: number, signal: AbortSignal | undefined): Effect.Effect<WebSearchResponse> => Effect.gen(function* () {
     const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
 
-    const res = await fetchImpl(endpoint, {
+    const res = yield* Effect.promise(() => fetchImpl(endpoint, {
       headers: {
         'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
         accept: 'text/html',
       },
       signal,
-    });
+    }));
 
     if (res.status === 429 || res.status === 202) {
-      throw new WebFetchError('DuckDuckGo rate-limited the request: retry shortly, or connect a Tavily key for reliable search');
+      return yield* Effect.die(new WebFetchError('DuckDuckGo rate-limited the request: retry shortly, or connect a Tavily key for reliable search'));
     }
 
-    if (!res.ok) throw new WebFetchError(`web search failed (${res.status})`);
-    const html = await res.text();
+    if (!res.ok) return yield* Effect.die(new WebFetchError(`web search failed (${res.status})`));
+    const html = yield* Effect.promise(() => res.text());
     const results = parseDuckDuckGoHtml(html, limit);
 
     return { query, results, source: 'duckduckgo' };
-  }
+  });
 
-  const judged = async (url: string): Promise<URL> => {
-    let parsed: URL;
+  const judged = (url: string): Effect.Effect<URL> => Effect.gen(function* () {
+    const parsed = yield* Effect.try({ try: () => assertSafeUrl(url), catch: (cause) => ({ cause }) }).pipe(
+      Effect.catch((failed) => Effect.die(failed.cause instanceof UnsafeUrlError
+        ? new WebFetchError(failed.cause.reason, { cause: failed.cause })
+        : failed.cause)),
+    );
 
-    try {
-      parsed = assertSafeUrl(url);
-    } catch (error) {
-      if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, { cause: error });
-      throw error;
-    }
+    const resolve = deps.resolve;
+    const refusal = resolve === undefined ? null : yield* Effect.promise(() => refusedResolution(parsed, resolve));
 
-    const refusal = deps.resolve === undefined ? null : await refusedResolution(parsed, deps.resolve);
-
-    if (refusal !== null) throw new WebFetchError(refusal);
+    if (refusal !== null) return yield* Effect.die(new WebFetchError(refusal));
 
     return parsed;
-  };
+  });
 
   const browserRun = (url: string): Effect.Effect<{ readonly transport: QuickActionTransport; readonly target: URL }, KinuError> => {
     const access = deps.browser;
@@ -244,7 +244,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     if ('missing' in access) return Effect.fail(new KinuError('unavailable', access.missing));
 
     return Effect.map(
-      attemptInItsWords('denied', () => judged(url)),
+      inItsWords('denied', judged(url)),
       (target) => ({ transport: access.quickActions, target }),
     );
   };
@@ -270,7 +270,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     // The plain fetch's cap on the page it converts, with the size the page had.
     const html = new TextEncoder().encode(result);
     const kept = html.length > MAX_FETCH_BYTES ? new TextDecoder('utf-8', { fatal: false }).decode(html.subarray(0, MAX_FETCH_BYTES)) : result;
-    const markdown = (yield* attemptInItsWords('io', () => convert(kept, finalUrl))).trim();
+    const markdown = (yield* convert(kept, finalUrl)).trim();
     const note = kept === result ? '' : `\n\n[fetch truncated: kept the first ${MAX_FETCH_BYTES} of ${html.length} bytes]`;
 
     return {
@@ -295,81 +295,84 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   });
 
   return {
-    async search(query, opts) {
-      const q = query.trim();
+    search(query, opts) {
+      return settle(Effect.gen(function* () {
+        const q = query.trim();
 
-      if (!q) throw new WebFetchError('search query is empty');
-      const limit = clampLimit(opts?.limit);
-      const auth = await tavilyAuth();
+        if (!q) return yield* Effect.die(new WebFetchError('search query is empty'));
+        const limit = clampLimit(opts?.limit);
+        const getAuth = deps.getAuth;
+        const auth = getAuth ? yield* Effect.promise(() => getAuth(TAVILY_CRED_KEY)) : null;
 
-      if (auth) return tavilySearch(q, limit, auth, opts?.signal);
+        if (auth) return yield* tavilySearch(q, limit, auth, opts?.signal);
 
-      return duckDuckGoSearch(q, limit, opts?.signal);
+        return yield* duckDuckGoSearch(q, limit, opts?.signal);
+      }));
     },
 
-    async fetch(url, opts) {
-      const parsed = await judged(url);
+    fetch(url, opts) {
+      return settle(Effect.gen(function* () {
+        const parsed = yield* judged(url);
 
-      // Redirects followed manually so every Location passes the SSRF guard.
-      let finalUrl = parsed.toString();
-      let hop: Response;
+        // Redirects followed manually so every Location passes the SSRF guard.
+        let finalUrl = parsed.toString();
+        let hop: Response;
 
-      for (let redirects = 0; ; redirects++) {
-        if (redirects > 0) await judged(finalUrl);
+        for (let redirects = 0; ; redirects++) {
+          if (redirects > 0) yield* judged(finalUrl);
+          const from = finalUrl;
 
-        hop = await fetchImpl(finalUrl, {
-          headers: {
-            // Markdown-for-Agents: Cloudflare-proxied zones answer with markdown.
-            accept: 'text/markdown, text/html;q=0.9, text/plain;q=0.8',
-            'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
-          },
-          redirect: 'manual',
-          signal: opts?.signal,
-        });
+          hop = yield* Effect.promise(() => fetchImpl(from, {
+            headers: {
+              // Markdown-for-Agents: Cloudflare-proxied zones answer with markdown.
+              accept: 'text/markdown, text/html;q=0.9, text/plain;q=0.8',
+              'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
+            },
+            redirect: 'manual',
+            signal: opts?.signal,
+          }));
 
-        const location =
-          hop.status === 301 || hop.status === 302 || hop.status === 303 || hop.status === 307 || hop.status === 308
-            ? hop.headers.get('location')
-            : null;
+          const location =
+            hop.status === 301 || hop.status === 302 || hop.status === 303 || hop.status === 307 || hop.status === 308
+              ? hop.headers.get('location')
+              : null;
 
-        if (!location) break;
+          if (!location) break;
 
-        if (redirects >= MAX_REDIRECTS) {
-          throw new WebFetchError(`too many redirects (over ${MAX_REDIRECTS}) for ${parsed.toString()}`);
+          if (redirects >= MAX_REDIRECTS) {
+            return yield* Effect.die(new WebFetchError(`too many redirects (over ${MAX_REDIRECTS}) for ${parsed.toString()}`));
+          }
+
+          const next = yield* Effect.try({ try: () => new URL(location, from), catch: (cause) => ({ cause }) }).pipe(
+            Effect.catch((failed) => Effect.die(new WebFetchError(`redirect from ${from} names an unparseable location`, { cause: failed.cause }))),
+          );
+
+          finalUrl = next.toString();
         }
 
-        let next: URL;
+        if (hop.status === 429) return yield* Effect.die(new WebFetchError('fetch rate-limited (429): retry shortly'));
 
-        try {
-          next = new URL(location, finalUrl);
-        } catch (error) {
-          throw new WebFetchError(`redirect from ${finalUrl} names an unparseable location`, { cause: error });
-        }
+        if (!hop.ok) return yield* Effect.die(new WebFetchError(`fetch failed (${hop.status}) for ${finalUrl}`));
+        const contentType = hop.headers.get('content-type') ?? '';
+        const answered = hop;
+        const { bytes, clipped } = yield* Effect.promise(() => readCappedBody(answered, MAX_FETCH_BYTES));
+        const raw = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
 
-        finalUrl = next.toString();
-      }
+        const markdown = looksLikeHtml(raw, contentType)
+          ? yield* convert(raw, finalUrl)
+          : stripBase64Images(raw);
 
-      if (hop.status === 429) throw new WebFetchError('fetch rate-limited (429): retry shortly');
+        const note = clipped
+          ? `\n\n[fetch truncated: kept the first ${MAX_FETCH_BYTES} of more than ${MAX_FETCH_BYTES} bytes]`
+          : '';
 
-      if (!hop.ok) throw new WebFetchError(`fetch failed (${hop.status}) for ${finalUrl}`);
-      const contentType = hop.headers.get('content-type') ?? '';
-      const { bytes, clipped } = await readCappedBody(hop, MAX_FETCH_BYTES);
-      const raw = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-
-      const markdown = looksLikeHtml(raw, contentType)
-        ? await convert(raw, finalUrl)
-        : stripBase64Images(raw);
-
-      const note = clipped
-        ? `\n\n[fetch truncated: kept the first ${MAX_FETCH_BYTES} of more than ${MAX_FETCH_BYTES} bytes]`
-        : '';
-
-      return {
-        url: finalUrl,
-        title: extractTitle(raw) || extractMarkdownTitle(markdown) || undefined,
-        retrievedAt: new Date().toISOString(),
-        markdown: markdown.trim() + note,
-      };
+        return {
+          url: finalUrl,
+          title: extractTitle(raw) || extractMarkdownTitle(markdown) || undefined,
+          retrievedAt: new Date().toISOString(),
+          markdown: markdown.trim() + note,
+        };
+      }));
     },
 
     render: (url, opts) => settle(renderPage(url, opts?.engine ?? 'kitesurf', opts?.signal)),

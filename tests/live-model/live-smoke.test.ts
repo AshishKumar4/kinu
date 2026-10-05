@@ -511,12 +511,12 @@ describe('Live Smoke — one real turn per backend', () => {
         llm: LLM_CONFIG,
       });
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-      // No directory bound, for the reason tests/live-model/harness.ts states at
-      // length: an episode reaches every registered executor, and a bound
-      // workspace shell runs in the repo this suite was launched from.
-      // Asserted rather than trusted, immediately below.
-      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM_CONFIG });
-      requireSandboxedExecutors('live-smoke', rt);
+      // The episode's own scratch folder, for the reason tests/live-model/harness.ts
+      // states: an episode reaches every registered executor, and its shell works
+      // where the workspace's folder is. Asserted rather than trusted, immediately below.
+      const folder = scratchDir('live-smoke-work');
+      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM_CONFIG, cwd: folder });
+      requireSandboxedExecutors('live-smoke', rt, folder);
 
       const toolNames: string[] = [];
       let errorMessage: string | null = null;

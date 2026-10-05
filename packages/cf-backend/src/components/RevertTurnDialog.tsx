@@ -1,11 +1,12 @@
 /** Only the conversation is always revertible; workspace and sandbox files have no snapshot store. File restore is offered only when the device checkpoint store answers. */
+import { Cause, Effect } from 'effect';
 import { startTransition, useCallback, useEffect, useState } from "react";
 import { Button } from "@cloudflare/kumo";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
 import {
   deviceHistoryNote, type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestorePlan, type Rpc,
 } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 
@@ -33,39 +34,35 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
   useEffect(() => {
     let current = true;
 
-    startTransition(async () => {
-      try {
-        // Keyed on the turn in the store: retention is per directory but the limit is global, so a filtered window loses checkpoints.
-        const listing = await rpc<FileCheckpointListing>("listFileCheckpoints", [200, messageId]);
+    startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      // Keyed on the turn in the store: retention is per directory but the limit is global, so a filtered window loses checkpoints.
+      const listing = yield* Effect.promise(async () => rpc<FileCheckpointListing>("listFileCheckpoints", [200, messageId]));
 
-        if (current) {
-          setCheckpoints(listing.availability.available ? listing.entries : []);
-          setHistoryNote(deviceHistoryNote(listing));
-        }
-      } catch (cause) {
-        if (current) setDeviceFailure(renderThrownChain({ cause }));
-      } finally {
-        if (current) setChecked(true);
+      if (current) {
+        setCheckpoints(listing.availability.available ? listing.entries : []);
+        setHistoryNote(deviceHistoryNote(listing));
       }
-    });
+    }), showing((chain) => {
+      if (current) setDeviceFailure(chain);
+    })), Effect.sync(() => {
+      if (current) setChecked(true);
+    }))));
 
     return () => { current = false; };
   }, [messageId, rpc]);
 
-  const revert = useCallback(async (): Promise<string | null> => {
+  const revert = useCallback((): Promise<string | null> => settle(Effect.gen(function* () {
     setBusy(true);
 
-    try {
-      await rpc("revertConversation", [messageId]);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => rpc("revertConversation", [messageId]));
       onReverted();
 
       return null;
-    } catch (cause) {
-      return renderThrownChain({ cause });
-    } finally {
+    }), (failed) => Effect.sync(() => renderThrownChain({ cause: Cause.squash(failed) }))), Effect.sync(() => {
       setBusy(false);
-    }
-  }, [messageId, rpc, onReverted]);
+    }));
+  })), [messageId, rpc, onReverted]);
 
   const revertConversation = useCallback(async () => {
     const reverted = await revert();
@@ -74,26 +71,26 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
     if (reverted === null) onClose();
   }, [revert, onClose]);
 
-  const revertWithFiles = useCallback(async () => {
-    const reverted = await revert();
+  const revertWithFiles = useCallback(() => detach(Effect.gen(function* () {
+    const reverted = yield* Effect.promise(async () => revert());
     setFailure(reverted);
 
     if (reverted !== null) return;
     setBusy(true);
 
-    try {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       const plans: FileRestorePlan[] = [];
 
-      for (const entry of checkpoints) plans.push(await rpc<FileRestorePlan>("planFileRestore", [entry.dir, entry.id]));
+      for (const entry of checkpoints) plans.push(yield* Effect.promise(async () => rpc<FileRestorePlan>("planFileRestore", [entry.dir, entry.id])));
       onRestorePlan({ entries: [...checkpoints], dirs: plans.map((plan) => plan.dir), files: plans.flatMap((plan) => plan.files) });
       onClose();
-    } catch (cause) {
+    }), showing((chain) => {
       // The conversation is already reverted: stay open reporting the file outcome.
-      setFailure(renderThrownChain({ cause }));
-    } finally {
+      setFailure(chain);
+    })), Effect.sync(() => {
       setBusy(false);
-    }
-  }, [revert, checkpoints, rpc, onRestorePlan, onClose]);
+    }));
+  })), [revert, checkpoints, rpc, onRestorePlan, onClose]);
 
   return (
     <Modal
@@ -109,7 +106,7 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
             Revert conversation and device files
           </Button>
         )}
-        <FilledButton onClick={revertConversation} disabled={busy} data-revert-action="conversation">
+        <FilledButton onClick={(...args: Parameters<typeof revertConversation>) => detach(Effect.promise(async () => revertConversation(...args)))} disabled={busy} data-revert-action="conversation">
           Revert conversation
         </FilledButton>
       </>}

@@ -60,6 +60,12 @@ const ASKED_OF_THE_MACHINE: readonly ExecutorCapability[] = [
 const notConnected = (): Refusal => refusalOf(new KinuError('unavailable', NOT_CONNECTED));
 
 /** Fallback code for an unrecognised failure; a classified cause keeps its more precise code. */
+function deviceCall<A>(doing: string, run: () => Promise<A>): Effect.Effect<A | Refusal> {
+  return Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) }).pipe(Effect.catch((failed) => Effect.succeed(isDeviceNotConnectedError(failed)
+    ? notConnected()
+    : refusalOf(deviceFailure({ doing, cause: failed.cause })))));
+}
+
 function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
   return toKinuError({ ...input, otherwise: 'io' });
 }
@@ -91,24 +97,26 @@ const execCancelFailed = (reason: string): string =>
 
 /** Stops a running command and reports what that achieved; answers instead of throwing (abort path).
  *  Only an answer naming this request confirms anything. */
-async function terminateDeviceExec(
+function terminateDeviceExec(
   rpc: DeviceTransport['rpc'],
   requestId: string,
   deviceId?: string,
-): Promise<string> {
-  try {
-    const answer = parseDeviceCancelAnswer(requestId, await rpc(
+): Effect.Effect<string> {
+  return Effect.match(Effect.tryPromise({
+    try: async () => parseDeviceCancelAnswer(requestId, await rpc(
       DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL], deviceId === undefined ? undefined : { deviceId },
-    ));
+    )),
+    catch: (cause) => ({ cause }),
+  }), {
+    onSuccess: (answer) => (answer.cancelled === 'terminated' ? EXEC_TERMINATED : EXEC_NOTHING_RUNNING),
+    onFailure: (failed) => {
+      if (isDeviceUnknownMethodError(failed)) return EXEC_CANCEL_UNSUPPORTED;
 
-    return answer.cancelled === 'terminated' ? EXEC_TERMINATED : EXEC_NOTHING_RUNNING;
-  } catch (err) {
-    if (isDeviceUnknownMethodError({ cause: err })) return EXEC_CANCEL_UNSUPPORTED;
+      if (isDeviceNotConnectedError(failed)) return EXEC_CANCEL_UNCONFIRMED;
 
-    if (isDeviceNotConnectedError({ cause: err })) return EXEC_CANCEL_UNCONFIRMED;
-
-    return execCancelFailed(renderThrownChain({ cause: err }));
-  }
+      return execCancelFailed(renderThrownChain(failed));
+    },
+  });
 }
 
 /**
@@ -218,9 +226,12 @@ export function createDeviceTunnelExecutor(
     const s = transport.status();
     const live = (s.devices ?? []).filter((d) => d.connected);
     const named = live[0] ?? s.devices?.[0];
-    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox'>> = {};
+    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox' | 'mounts'>> = {};
 
     if (named) identity.label = named.name;
+
+    // Only a fleet the hub listed has segments to name.
+    if (s.devices !== undefined) identity.mounts = live.map((device) => deviceMountSegment(device, s.devices));
     // Per-device answers count only when exactly one machine is live.
     const perDeviceReach = live.length === 1 ? live[0].granted : undefined;
     const granted = perDeviceReach ?? s.workspaceGranted;
@@ -273,7 +284,90 @@ export function createDeviceTunnelExecutor(
     return memo;
   };
 
-  const files = deviceFleetFiles(transport, consent);
+  // Fleet composite file plane: `/pc/<segment>/...` is that machine's `/...`, fleet of one included, so paths survive
+  // a second machine joining. Unknown segment refuses with the connected names, never an empty listing.
+  const routes = (): DeviceRoute[] => {
+    const fleet = transport.status().devices;
+
+    return connectedDevices(fleet).map((device) => ({
+      segment: deviceMountSegment(device, fleet),
+      view: deviceFiles(transport, consent, device.id),
+    }));
+  };
+
+  const routeOf = (path: string): { view: DeviceVFS; rest: string } | null => {
+    const trimmed = path.replace(/^\/+/, '');
+
+    if (trimmed === '') return null;
+    const slash = trimmed.indexOf('/');
+    const first = slash === -1 ? trimmed : trimmed.slice(0, slash);
+    const rest = slash === -1 ? '/' : trimmed.slice(slash);
+    const route = routes().find((r) => r.segment === first);
+
+    return route ? { view: route.view, rest } : null;
+  };
+
+
+  /** Dispatches by first segment. Root "/" is handled by readdir/stat/exists. Without a fleet snapshot the unnamed view
+   *  goes to the hub. */
+  const dispatch = <T>(path: string, op: (view: DeviceVFS, native: string) => Awaitable<T>): Effect.Effect<T, VfsError> => Effect.suspend(() => {
+    if (connectedDevices(transport.status().devices).length === 0) {
+      return Effect.promise(async () => op(deviceFiles(transport, consent, undefined), path));
+    }
+
+    const route = routeOf(path);
+
+    return route
+      ? Effect.promise(async () => op(route.view, route.rest))
+      : Effect.fail(noSuchDevice(transport.status().devices, path.replace(/^\/+/, '').split('/')[0] ?? ''));
+  });
+
+  const isFleetRoot = (path: string): boolean =>
+    (path.replace(/\/+$/, '') === '' || path.replace(/\/+$/, '') === '/');
+
+  const files: DeviceVFS = {
+    // The mount root is a roster, not a directory, so it cannot be a working directory.
+    homeDir: async () => '/',
+    readFile(path) {
+      return settle(dispatch(path, (view, native) => view.readFile(native)));
+    },
+    readRange(path, offset, length) {
+      return settle(dispatch(path, (view, native) => view.readRange(native, offset, length)));
+    },
+    writeFile(path, data) {
+      return settle(dispatch(path, (view, native) => view.writeFile(native, data)));
+    },
+    writeFileWithReport(path, data) {
+      return settle(dispatch(path, (view, native) => view.writeFileWithReport(native, data)));
+    },
+    async readdir(path) {
+      if (isFleetRoot(path)) return routes().map((route) => ({ name: route.segment, type: 'directory' }));
+
+      return settle(dispatch(path, (view, native) => view.readdir(native)));
+    },
+    async stat(path, options): Promise<VfsStat | null> {
+      if (isFleetRoot(path)) return { size: 0, mtimeMs: 0, type: 'directory' };
+
+      if (connectedDevices(transport.status().devices).length === 0) {
+        return deviceFiles(transport, consent, undefined).stat(path, options);
+      }
+
+      const route = routeOf(path);
+
+      // Answered here so listing /pc never asks a machine to stat a `/` its consent boundary refuses.
+      if (route?.rest === '/') return { size: 0, mtimeMs: 0, type: 'directory' };
+
+      if (route) return route.view.stat(route.rest, options);
+
+      return settle(dispatch(path, (view, native) => view.stat(native, options)));
+    },
+    unlink(path) {
+      return settle(dispatch(path, (view, native) => view.unlink(native)));
+    },
+    mkdir(path, opts) {
+      return settle(dispatch(path, (view, native) => view.mkdir(native, opts)));
+    },
+  };
 
   const tools: ExecutorProvider['tools'] = {
     exec: {
@@ -302,13 +396,11 @@ export function createDeviceTunnelExecutor(
         const call = machineShellCall(command, options, { home: '~', scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
         const held = options.name === undefined ? undefined : `${deviceId ?? ''}\u0000${options.name}`;
 
-        try {
-          return await names.hold(held, callJob(options), async () => {
-            // Minted before sending, so a cancel or detach can name the process group.
+        return settle(Effect.tryPromise({
+          try: () => names.hold(held, callJob(options), async () => {
             const requestId = nextDeviceRequestId();
             const ownership = readDeviceOwnershipContext({ context: args[1] });
             ownership.report?.(requestId);
-            // Read per call: a detached scope owns this command from the insert.
             const backgroundJobId = ownership.owner?.() ?? null;
             const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
 
@@ -319,29 +411,25 @@ export function createDeviceTunnelExecutor(
             if (backgroundJobId !== null) execOpts.backgroundJobId = backgroundJobId;
 
             const result = await raceAbort(
-              // No transport deadline: abort, turn cancellation and tunnel liveness still bound it.
-              () => rpc('exec', [call.command], execOpts),
-              signal,
-              EXEC_NOT_STARTED,
-              () => terminateDeviceExec(rpc, requestId, deviceId),
+              () => rpc('exec', [call.command], execOpts), signal, EXEC_NOT_STARTED,
+              () => settle(terminateDeviceExec(rpc, requestId, deviceId)),
             );
 
             const settled = call.settle(v.parse(DeviceExecResultSchema, result));
 
             return reportsCwd({ context: args[1] }) ? commandResultAt(settled) : commandResult(settled);
-          }, (message) => refusalOf(new KinuError('unavailable', message)));
-        } catch (err) {
-          if (isAbortError(err)) throw err;
+          }, (message) => refusalOf(new KinuError('unavailable', message))),
+          catch: (cause) => ({ cause }),
+        }).pipe(Effect.catch((failed) => {
+          if (isAbortError(failed.cause)) return Effect.die(failed.cause);
 
-          if (isDeviceNotConnectedError({ cause: err })) return notConnected();
+          if (isDeviceNotConnectedError(failed)) return Effect.succeed(notConnected());
 
           // Tier refusal with a named fix, not a transport fault; not prefixed with the command.
-          if (isSandboxUnavailableError({ cause: err })) {
-            return refusalOf(new KinuError('denied', renderThrownChain({ cause: err })));
-          }
+          if (isSandboxUnavailableError(failed)) return Effect.succeed(refusalOf(new KinuError('denied', renderThrownChain(failed))));
 
-          return refusalOf(deviceFailure({ doing: `device exec \`${command}\``, cause: err }));
-        }
+          return Effect.succeed(refusalOf(deviceFailure({ doing: `device exec \`${command}\``, cause: failed.cause })));
+        })));
       },
     },
 
@@ -355,18 +443,14 @@ export function createDeviceTunnelExecutor(
           return refusalOf(new KinuError('bad_input', 'device readFile: path must be a string'));
         }
 
-        try {
-          const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
+        return settle(deviceCall(`device readFile ${path}`, async () => {
+        const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
 
-          if (target.kind === 'refusal') return target.refusal;
-          const view = target.view;
+        if (target.kind === 'refusal') return target.refusal;
+        const view = target.view;
 
-          return v.parse(v.string(), await readText(view, path));
-        } catch (err) {
-          if (isDeviceNotConnectedError({ cause: err })) return notConnected();
-
-          return refusalOf(deviceFailure({ doing: `device readFile ${path}`, cause: err }));
-        }
+        return v.parse(v.string(), await readText(view, path));
+        }));
       },
     },
 
@@ -384,28 +468,24 @@ export function createDeviceTunnelExecutor(
           return refusalOf(new KinuError('bad_input', 'device writeFile: content must be a string'));
         }
 
-        try {
-          const target = resolveForCall(transport, readDeviceSelection({ context: args[2] }));
+        return settle(deviceCall(`device writeFile ${path}`, async () => {
+        const target = resolveForCall(transport, readDeviceSelection({ context: args[2] }));
 
-          if (target.kind === 'refusal') return target.refusal;
-          const view = deviceFiles(transport, consent, target.deviceId);
+        if (target.kind === 'refusal') return target.refusal;
+        const view = deviceFiles(transport, consent, target.deviceId);
 
-          const written = Effect.andThen(
-            approveOverwrite(policy, transport, target.deviceId, { view, path, content }),
-            Effect.promise(() => view.writeFileWithReport(path, new TextEncoder().encode(content))),
-          );
+        const written = Effect.andThen(
+          approveOverwrite(policy, transport, target.deviceId, { view, path, content }),
+          Effect.promise(() => view.writeFileWithReport(path, new TextEncoder().encode(content))),
+        );
 
-          const said = `Written ${content.length} bytes to ${path}`;
+        const said = `Written ${content.length} bytes to ${path}`;
 
-          return await settle(Effect.match(written, {
-            onFailure: refusalOf,
-            onSuccess: (answer) => answer ? `${said}\n${uncheckpointedSentence(answer.uncheckpointed, 'this write')}` : said,
-          }));
-        } catch (err) {
-          if (isDeviceNotConnectedError({ cause: err })) return notConnected();
-
-          return refusalOf(deviceFailure({ doing: `device writeFile ${path}`, cause: err }));
-        }
+        return await settle(Effect.match(written, {
+          onFailure: refusalOf,
+          onSuccess: (answer) => answer ? `${said}\n${uncheckpointedSentence(answer.uncheckpointed, 'this write')}` : said,
+        }));
+        }));
       },
     },
 
@@ -419,18 +499,14 @@ export function createDeviceTunnelExecutor(
           return refusalOf(new KinuError('bad_input', 'device readdir: path must be a string'));
         }
 
-        try {
-          const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
+        return settle(deviceCall(`device readdir ${path ?? '/'}`, async () => {
+        const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
 
-          if (target.kind === 'refusal') return target.refusal;
-          const view = target.view;
+        if (target.kind === 'refusal') return target.refusal;
+        const view = target.view;
 
-          return (await view.readdir(path ?? await view.homeDir())).map(({ name }) => name);
-        } catch (err) {
-          if (isDeviceNotConnectedError({ cause: err })) return notConnected();
-
-          return refusalOf(deviceFailure({ doing: `device readdir ${path ?? '/'}`, cause: err }));
-        }
+        return (await view.readdir(path ?? await view.homeDir())).map(({ name }) => name);
+        }));
       },
     },
 
@@ -445,18 +521,14 @@ export function createDeviceTunnelExecutor(
           return refusalOf(new KinuError('bad_input', 'device exists: path must be a string'));
         }
 
-        try {
-          const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
+        return settle(deviceCall(`device exists ${path}`, async () => {
+        const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
 
-          if (target.kind === 'refusal') return target.refusal;
-          const view = target.view;
+        if (target.kind === 'refusal') return target.refusal;
+        const view = target.view;
 
-          return await nimbusExists(view, path);
-        } catch (err) {
-          if (isDeviceNotConnectedError({ cause: err })) return notConnected();
-
-          return refusalOf(deviceFailure({ doing: `device exists ${path}`, cause: err }));
-        }
+        return await nimbusExists(view, path);
+        }));
       },
     },
   };
@@ -465,14 +537,16 @@ export function createDeviceTunnelExecutor(
     name: 'device',
     files,
     // The fleet plane opens at the roster; a named machine opens at its own dir.
-    homeDir: async (segment?: string) => {
-      if (segment === undefined) return '/';
-      const fleet = transport.status().devices;
-      const named = connectedDevices(fleet).find((device) => deviceMountSegment(device, fleet) === segment);
+    homeDir: (segment?: string) => {
+      return settle(Effect.gen(function* () {
+        if (segment === undefined) return '/';
+        const fleet = transport.status().devices;
+        const named = connectedDevices(fleet).find((device) => deviceMountSegment(device, fleet) === segment);
 
-      if (named === undefined) throw noSuchDevice(fleet, segment);
+        if (named === undefined) return yield* Effect.die(noSuchDevice(fleet, segment));
 
-      return deviceFiles(transport, consent, named.id).homeDir();
+        return yield* Effect.promise(() => deviceFiles(transport, consent, named.id).homeDir());
+      }));
     },
     kind: 'device',
     filesOwner: 'user',
@@ -486,15 +560,13 @@ export function createDeviceTunnelExecutor(
     },
     isAvailable: () => transport.status().connected,
     getStatus,
-    connect: async () => {
-      try {
-        await rpc('exec', ['echo connected']);
-      } catch (err) {
-        // Classified so callers read the same `unavailable` the tools return.
-        if (isDeviceNotConnectedError({ cause: err })) throw new KinuError('unavailable', NOT_CONNECTED, { cause: err });
-        throw err;
-      }
-    },
+    connect: () => settle(Effect.tryPromise({ try: () => rpc('exec', ['echo connected']), catch: (cause) => ({ cause }) }).pipe(
+      Effect.asVoid,
+      // Classified so callers read the same `unavailable` the tools return.
+      Effect.catch((failed) => (isDeviceNotConnectedError(failed)
+        ? Effect.fail(new KinuError('unavailable', NOT_CONNECTED, { cause: failed.cause }))
+        : Effect.die(failed.cause))),
+    )),
     disconnect: async () => { /* the hub owns the socket lifecycle */ },
     tools,
     types: `/**
@@ -623,48 +695,46 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
         ?? deviceFailure({ doing: `${method} on the device`, cause }),
     });
 
-  const effectiveRoot = async (): Promise<string> => {
-    const explicit = await consent.consentedRoot(deviceId);
-
-    if (explicit) return trimmed(explicit);
-    throw new VfsError(
+  const effectiveRoot = (): Effect.Effect<string, VfsError> => Effect.flatMap(Effect.promise(() => consent.consentedRoot(deviceId)), (explicit) => (explicit
+    ? Effect.succeed(trimmed(explicit))
+    : Effect.fail(new VfsError(
       'EACCES',
       'this device reported no consented directory, so the base tier reaches nothing on it: '
         + 'run `kinu connect` on the machine, in the directory this workspace should see',
       '/',
-    );
-  };
+    ))));
 
   /** Where the view opens, distinct from its reach: the full tier has no root. */
-  const openingDir = async (): Promise<string> => {
-    const root = await consent.consentedRoot(deviceId);
+  const openingDir = (): Effect.Effect<string, VfsError> => Effect.gen(function* () {
+    const root = yield* Effect.promise(() => consent.consentedRoot(deviceId));
 
     if (root) return trimmed(root);
-    const home = await consent.deviceHome(deviceId);
+    const home = yield* Effect.promise(() => consent.deviceHome(deviceId));
 
     if (home) return trimmed(home);
-    throw new VfsError('EACCES', 'this device reported neither a consented directory nor a home', '/');
-  };
 
-  const guard = async (path: string, op: string): Promise<string | null> => {
-    const scope = await consent.scope(deviceId);
+    return yield* Effect.fail(new VfsError('EACCES', 'this device reported neither a consented directory nor a home', '/'));
+  });
+
+  const guarded = (path: string, op: string): Effect.Effect<string | null, VfsError> => Effect.gen(function* () {
+    const scope = yield* Effect.promise(() => consent.scope(deviceId));
 
     if (scope === 'unconfined') return null;
 
     if (scope === 'sandboxed' && AGENT_TMP_PATHS.some((tmp) => path === tmp || path.startsWith(`${tmp}/`))) return null;
-    const root = await effectiveRoot();
+    const root = yield* effectiveRoot();
 
-    // A device that named no directory threw above rather than widening to `/`.
+    // A device that named no directory failed above rather than widening to `/`.
     if (!(root === '/' || path === root || path.startsWith(`${root}/`))) {
-      throw syscallError('EACCES', op, path, {
+      return yield* Effect.fail(syscallError('EACCES', op, path, {
         detail: `outside the consented device directory '${root}': the agent sees the folder the owner `
           + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. Ask the owner to consent that directory`,
-      });
+      }));
     }
 
     // The daemon's realpath check is authoritative; this lexical check is a cheap first line.
     return root;
-  };
+  });
 
   /** Bytes that survive a utf-8 round-trip byte-exactly may use the text protocol; others go base64.
    *  Tested by round trip because a non-fatal decode substitutes U+FFFD. */
@@ -710,12 +780,10 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     return bytes;
   });
 
-  const guarded = (path: string, op: string) => Effect.promise(() => guard(path, op));
-
   /** The step toward a confined root: Nimbus stats each directory on a path. */
-  const towardRoot = (path: string) => Effect.promise(async (): Promise<string | null> => {
-    if (await consent.scope(deviceId) === 'unconfined') return null;
-    const root = await effectiveRoot();
+  const towardRoot = (path: string): Effect.Effect<string | null, VfsError> => Effect.gen(function* () {
+    if ((yield* Effect.promise(() => consent.scope(deviceId))) === 'unconfined') return null;
+    const root = yield* effectiveRoot();
     const prefix = path === '/' ? '/' : `${path}/`;
 
     return root !== path && root.startsWith(prefix) ? root.slice(prefix.length).split('/')[0] || null : null;
@@ -739,15 +807,13 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   });
 
   return {
-    homeDir: openingDir,
+    homeDir: () => settle(openingDir()),
     readFile: (path) => settle(Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, 0, null))),
 
-    async readRange(path, offset, length) {
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-        throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
-      }
-
-      return settle(Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, offset, length)));
+    readRange(path, offset, length) {
+      return settle(Effect.suspend(() => (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0
+        ? Effect.fail(syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' }))
+        : Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, offset, length)))));
     },
 
     writeFile: (path, data) => settle(Effect.asVoid(writeReported(path, data))),
@@ -823,7 +889,7 @@ export function deviceMountSegment(device: DeviceFleetEntry, fleet: readonly Dev
 }
 
 /** Stated absence for a path under no live machine, listing the connected segments. */
-function noSuchDevice(fleet: readonly DeviceFleetEntry[] | undefined, first: string): Error {
+function noSuchDevice(fleet: readonly DeviceFleetEntry[] | undefined, first: string): VfsError {
   const segments = connectedDevices(fleet).map((d) => deviceMountSegment(d, fleet)).join(', ');
   const offline = fleet?.some((d) => !d.connected && deviceMountSegment(d, fleet) === first) === true;
 
@@ -839,89 +905,3 @@ interface DeviceRoute {
   readonly view: DeviceVFS;
 }
 
-/**
- * Fleet composite file plane: `/pc/<segment>/...` is that machine's `/...`, fleet of one included, so paths survive a
- * second machine joining. Unknown segment refuses with the connected names, never an empty listing.
- */
-function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent): DeviceVFS {
-  const routes = (): DeviceRoute[] => {
-    const fleet = transport.status().devices;
-
-    return connectedDevices(fleet).map((device) => ({
-      segment: deviceMountSegment(device, fleet),
-      view: deviceFiles(transport, consent, device.id),
-    }));
-  };
-
-  const routeOf = (path: string): { view: DeviceVFS; rest: string } | null => {
-    const trimmed = path.replace(/^\/+/, '');
-
-    if (trimmed === '') return null;
-    const slash = trimmed.indexOf('/');
-    const first = slash === -1 ? trimmed : trimmed.slice(0, slash);
-    const rest = slash === -1 ? '/' : trimmed.slice(slash);
-    const route = routes().find((r) => r.segment === first);
-
-    return route ? { view: route.view, rest } : null;
-  };
-
-
-  /** Dispatches by first segment. Root "/" is handled by readdir/stat/exists. Without a fleet snapshot the unnamed view
-   *  goes to the hub. */
-  const dispatch = async <T>(path: string, op: (view: DeviceVFS, native: string) => Awaitable<T>): Promise<T> => {
-    if (connectedDevices(transport.status().devices).length === 0) {
-      return op(deviceFiles(transport, consent, undefined), path);
-    }
-
-    const route = routeOf(path);
-
-    if (!route) throw noSuchDevice(transport.status().devices, path.replace(/^\/+/, '').split('/')[0] ?? '');
-
-    return op(route.view, route.rest);
-  };
-
-  const isFleetRoot = (path: string): boolean =>
-    (path.replace(/\/+$/, '') === '' || path.replace(/\/+$/, '') === '/');
-
-  return {
-    // The mount root is a roster, not a directory, so it cannot be a working directory.
-    homeDir: async () => '/',
-    async readFile(path) {
-      return dispatch(path, (view, native) => view.readFile(native));
-    },
-    async readRange(path, offset, length) {
-      return dispatch(path, (view, native) => view.readRange(native, offset, length));
-    },
-    async writeFile(path, data) {
-      await dispatch(path, (view, native) => view.writeFile(native, data));
-    },
-    async writeFileWithReport(path, data) {
-      return dispatch(path, (view, native) => view.writeFileWithReport(native, data));
-    },
-    async readdir(path) {
-      if (isFleetRoot(path)) return routes().map((route) => ({ name: route.segment, type: 'directory' }));
-
-      return dispatch(path, (view, native) => view.readdir(native));
-    },
-    async stat(path, options): Promise<VfsStat | null> {
-      if (isFleetRoot(path)) return { size: 0, mtimeMs: 0, type: 'directory' };
-
-      if (connectedDevices(transport.status().devices).length === 0) {
-        return deviceFiles(transport, consent, undefined).stat(path, options);
-      }
-
-      const route = routeOf(path);
-
-      // Answered here so listing /pc never asks a machine to stat a `/` its consent boundary refuses.
-      if (route?.rest === '/') return { size: 0, mtimeMs: 0, type: 'directory' };
-
-      return route ? route.view.stat(route.rest, options) : dispatch(path, (view, native) => view.stat(native, options));
-    },
-    async unlink(path) {
-      await dispatch(path, (view, native) => view.unlink(native));
-    },
-    async mkdir(path, opts) {
-      await dispatch(path, (view, native) => view.mkdir(native, opts));
-    },
-  };
-}

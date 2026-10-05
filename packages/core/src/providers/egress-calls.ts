@@ -1,6 +1,7 @@
 import { APICallError } from 'ai';
 import { abortCause } from '../utils/abort';
-import { renderThrownChain } from '../obs/index';
+import { Effect, Result } from 'effect';
+import { renderThrownChain, settle } from '../obs/index';
 
 export const EGRESS_REFUSAL_HEADER = 'x-kinu-egress-refusal';
 
@@ -20,41 +21,39 @@ function startRefusal(reason: string): Response {
 export class EgressCalls {
   readonly #live = new Map<string, AbortController>();
 
-  async run(callId: string, work: {
+  run(callId: string, work: {
     readonly start: (signal: AbortSignal) => Promise<void>;
     readonly fetch: (signal: AbortSignal) => Promise<Response>;
   }): Promise<Response> {
-    const controller = new AbortController();
-    this.#live.set(callId, controller);
-    const end = (): void => { this.#live.delete(callId); };
+    return settle(Effect.gen({ self: this }, function* () {
+      const controller = new AbortController();
+      this.#live.set(callId, controller);
+      const end = (): void => { this.#live.delete(callId); };
 
-    try {
-      await work.start(controller.signal);
-    } catch (cause) {
-      end();
+      const started = yield* Effect.result(Effect.tryPromise({ try: () => work.start(controller.signal), catch: (cause) => ({ cause }) }));
 
-      if (controller.signal.aborted) throw abortCause(controller.signal);
+      if (Result.isFailure(started)) {
+        end();
 
-      return startRefusal(renderThrownChain({ cause }));
-    }
+        if (controller.signal.aborted) return yield* Effect.die(abortCause(controller.signal));
 
-    let response: Response;
+        return startRefusal(renderThrownChain(started.failure));
+      }
 
-    try {
-      controller.signal.throwIfAborted();
-      response = await work.fetch(controller.signal);
-    } catch (cause) {
-      end();
-      throw cause;
-    }
+      const response = yield* Effect.onError(Effect.promise(async () => {
+        controller.signal.throwIfAborted();
 
-    if (response.body === null) {
-      end();
+        return work.fetch(controller.signal);
+      }), () => Effect.sync(end));
 
-      return response;
-    }
+      if (response.body === null) {
+        end();
 
-    return new Response(response.body.pipeThrough(new TransformStream({ flush: end })), response);
+        return response;
+      }
+
+      return new Response(response.body.pipeThrough(new TransformStream({ flush: end })), response);
+    }));
   }
 
   cancel(callId: string): void {

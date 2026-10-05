@@ -3,6 +3,7 @@
  * which `bun:sqlite` passing does not prove workerd supports. Production recorder; only the SqlExecutor
  * adapter is local.
  */
+import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import {
   bindActorHandle, initRunEventTables, RunEventRecorder, WORKSPACE_RUN_ID,
@@ -29,7 +30,7 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
     return this._actor ??= bindActorHandle(this.sql, {
       actorId: 'spend-probe-actor', workspaceId: 'spend-probe-workspace', parentActorId: null,
       name: 'spend-probe', storageKey: 'agent:spend-probe-actor',
-    }, () => {});
+    }, () => Effect.void);
   }
 
   private _actor: ActorHandle | undefined;

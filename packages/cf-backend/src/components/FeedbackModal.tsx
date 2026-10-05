@@ -6,7 +6,8 @@ import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { Modal } from "./ui/Modal";
 import { inputCls } from "./ui/form";
-import { diagnostics, renderThrownChain, toKinuError, tolerateAsync } from "@kinu.run/core/obs";
+import { Cause, Effect } from "effect";
+import { detach, diagnostics, renderThrownChain, toKinuError, tolerateAsync } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import {
   capturePage,
@@ -95,8 +96,8 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
     // Wait one frame so the dialog paints before the clone; otherwise the page is captured mid-reflow.
     requestAnimationFrame(() => {
       if (generation !== captureGeneration.current) return;
-      void capturePage().then(
-        (capture) => {
+      detach(Effect.matchCause(Effect.promise(() => capturePage()), {
+        onSuccess: (capture) => {
           if (generation !== captureGeneration.current) return;
           setShot(tooLarge(capture.blob.size)
             ? {
@@ -105,8 +106,8 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
             }
             : { phase: "ready", capture });
         },
-        captureFailed,
-      );
+        onFailure: (failed) => captureFailed(Cause.squash(failed)),
+      }));
     });
   }, []);
 
@@ -141,19 +142,22 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
       if (live) setShot({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
     };
 
-    void createImageBitmap(shot.capture.blob).then((decoded) => {
-      if (!live) {
-        decoded.close();
+    detach(Effect.matchCause(Effect.promise(() => createImageBitmap(shot.capture.blob)), {
+      onSuccess: (decoded) => {
+        if (!live) {
+          decoded.close();
 
-        return;
-      }
+          return;
+        }
 
-      setBitmap((current) => {
-        current?.close();
+        setBitmap((current) => {
+          current?.close();
 
-        return decoded;
-      });
-    }, decodeFailed);
+          return decoded;
+        });
+      },
+      onFailure: (failed) => decodeFailed(Cause.squash(failed)),
+    }));
 
     return () => { live = false; };
   }, [shot]);
@@ -256,34 +260,33 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
     form.set(FEEDBACK_FIELDS.workspace, workspaceOf(location.pathname));
     form.set(FEEDBACK_FIELDS.annotated, marks.length > 0 ? "1" : "0");
 
-    const attach = shot.phase === "ready"
-      ? flatten(shot.capture, marks).then((blob) => {
+    detach(Effect.catchCause(Effect.gen(function* () {
+      if (shot.phase === "ready") {
+        const blob = yield* Effect.promise(() => flatten(shot.capture, marks));
+
         if (tooLarge(blob.size)) {
-          throw new Error(`the annotated screenshot is ${String(Math.ceil(blob.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit`);
+          return yield* Effect.die(new Error(`the annotated screenshot is ${String(Math.ceil(blob.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit`));
         }
 
         form.set(FEEDBACK_FIELDS.screenshot, new File([blob], "feedback.png", { type: FEEDBACK_SCREENSHOT_TYPE }));
-      })
-      : Promise.resolve();
+      }
 
-    void attach
-      .then(() => fetch(FEEDBACK_ENDPOINT, { method: "POST", body: form, signal: attempt.signal }))
-      .then(async (response) => {
-        // A non-endpoint body (e.g. proxy HTML) parses to {}; the status then carries the failure.
-        const parsed = v.safeParse(
-          FeedbackReplySchema,
-          await tolerateAsync(() => response.json(), 'malformed-input'),
-        );
+      const response = yield* Effect.promise(() => fetch(FEEDBACK_ENDPOINT, { method: "POST", body: form, signal: attempt.signal }));
 
-        const reply = parsed.success ? parsed.output : {};
+      // A non-endpoint body (e.g. proxy HTML) parses to {}; the status then carries the failure.
+      const parsed = v.safeParse(
+        FeedbackReplySchema,
+        yield* Effect.promise(() => tolerateAsync(() => response.json(), 'malformed-input')),
+      );
 
-        if (!response.ok) {
-          throw new Error(reply.error ?? `the server answered ${String(response.status)}`);
-        }
+      const reply = parsed.success ? parsed.output : {};
 
-        setSend({ phase: "sent", id: reply.id ?? "" });
-      })
-      .catch(sendFailed);
+      if (!response.ok) {
+        return yield* Effect.die(new Error(reply.error ?? `the server answered ${String(response.status)}`));
+      }
+
+      setSend({ phase: "sent", id: reply.id ?? "" });
+    }), (failed) => Effect.sync(() => sendFailed(Cause.squash(failed)))));
   }, [location.pathname, marks, shot, trimmed]);
 
   const stop = useCallback(() => {

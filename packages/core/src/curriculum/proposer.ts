@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle, settleSync } from '../obs/effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 // Voyager-style curriculum (arXiv:2305.16291) plus an Absolute Zero (arXiv:2505.03335) learnability
 // filter: keep tasks at the "barely succeeds" sweet spot (success rate ~0.3–0.7).
@@ -126,69 +128,71 @@ Propose ${count} candidate tasks. Each should:
   ${jsonArrayOnlyInstruction()}`;
 }
 
-export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<ProposedTask[]> {
-  const window = opts.learnabilityWindow ?? [0.3, 0.7];
-  const count = opts.count ?? 5;
+export function proposeNextTasks(opts: CurriculumProposerOpts): Promise<ProposedTask[]> {
+  return settle(Effect.gen(function* () {
+    const window = opts.learnabilityWindow ?? [0.3, 0.7];
+    const count = opts.count ?? 5;
 
-  if (!Number.isInteger(count) || count < 1) {
-    throw new Error(`proposeNextTasks: count must be an integer >= 1 (got ${count})`);
-  }
-
-  const [lo, hi] = window;
-
-  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo < 0 || hi > 1 || lo > hi) {
-    throw new Error(`proposeNextTasks: learnabilityWindow must be [lo, hi] with 0 <= lo <= hi <= 1 (got [${lo}, ${hi}])`);
-  }
-
-  const ctx = collectContext(opts.rt);
-  const prompt = buildPrompt(ctx, count, window);
-
-  const parsed = extractJsonArray(await opts.judge.complete(prompt));
-  const result = v.safeParse(ProposalListSchema, parsed);
-
-  if (!result.success) {
-    throw new Error(`Curriculum response schema invalid: ${result.issues.map(i => i.message).join('; ')}`);
-  }
-
-  const filtered = result.output.filter(p => p.predictedSuccess >= lo && p.predictedSuccess <= hi);
-
-  if (result.output.length > 0 && filtered.length === 0) {
-    let nearest = 0;
-    let nearestDistance = Infinity;
-
-    for (const p of result.output) {
-      const distance = p.predictedSuccess < lo ? lo - p.predictedSuccess : p.predictedSuccess - hi;
-
-      if (distance < nearestDistance) { nearestDistance = distance; nearest = p.predictedSuccess; }
+    if (!Number.isInteger(count) || count < 1) {
+      return yield* Effect.die(new Error(`proposeNextTasks: count must be an integer >= 1 (got ${count})`));
     }
 
-    throw new Error(`proposeNextTasks: no proposal survived the learnability window [${lo}, ${hi}] (judge returned ${result.output.length}); nearest predictedSuccess was ${nearest}`);
-  }
+    const [lo, hi] = window;
 
-  const now = Date.now();
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo < 0 || hi > 1 || lo > hi) {
+      return yield* Effect.die(new Error(`proposeNextTasks: learnabilityWindow must be [lo, hi] with 0 <= lo <= hi <= 1 (got [${lo}, ${hi}])`));
+    }
 
-  const proposals: ProposedTask[] = filtered.slice(0, count).map((p) => ({
-    id: `prop-${nanoid()}`,
-    task: p.task,
-    rationale: p.rationale,
-    predictedSuccess: p.predictedSuccess,
-    targetsSkills: p.targetsSkills,
-    proposedAt: now,
-    status: 'pending' as const,
+    const ctx = collectContext(opts.rt);
+    const prompt = buildPrompt(ctx, count, window);
+
+    const parsed = extractJsonArray(yield* Effect.promise(() => opts.judge.complete(prompt)));
+    const result = v.safeParse(ProposalListSchema, parsed);
+
+    if (!result.success) {
+      return yield* Effect.die(new Error(`Curriculum response schema invalid: ${result.issues.map(i => i.message).join('; ')}`));
+    }
+
+    const filtered = result.output.filter(p => p.predictedSuccess >= lo && p.predictedSuccess <= hi);
+
+    if (result.output.length > 0 && filtered.length === 0) {
+      let nearest = 0;
+      let nearestDistance = Infinity;
+
+      for (const p of result.output) {
+        const distance = p.predictedSuccess < lo ? lo - p.predictedSuccess : p.predictedSuccess - hi;
+
+        if (distance < nearestDistance) { nearestDistance = distance; nearest = p.predictedSuccess; }
+      }
+
+      return yield* Effect.die(new Error(`proposeNextTasks: no proposal survived the learnability window [${lo}, ${hi}] (judge returned ${result.output.length}); nearest predictedSuccess was ${nearest}`));
+    }
+
+    const now = Date.now();
+
+    const proposals: ProposedTask[] = filtered.slice(0, count).map((p) => ({
+      id: `prop-${nanoid()}`,
+      task: p.task,
+      rationale: p.rationale,
+      predictedSuccess: p.predictedSuccess,
+      targetsSkills: p.targetsSkills,
+      proposedAt: now,
+      status: 'pending' as const,
+    }));
+
+    opts.rt.actor.assertCurrent();
+
+    for (const p of proposals) {
+      void opts.rt.storage.sql`
+        INSERT INTO proposed_tasks
+          (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
+        VALUES (${opts.rt.actor.actorId}, ${p.id}, ${p.task}, ${p.rationale}, ${p.predictedSuccess},
+                ${JSON.stringify(p.targetsSkills)}, ${p.proposedAt}, ${p.status})`;
+      markStoreChanged(opts.rt.storage.sql);
+    }
+
+    return proposals;
   }));
-
-  opts.rt.actor.assertCurrent();
-
-  for (const p of proposals) {
-    void opts.rt.storage.sql`
-      INSERT INTO proposed_tasks
-        (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
-      VALUES (${opts.rt.actor.actorId}, ${p.id}, ${p.task}, ${p.rationale}, ${p.predictedSuccess},
-              ${JSON.stringify(p.targetsSkills)}, ${p.proposedAt}, ${p.status})`;
-    markStoreChanged(opts.rt.storage.sql);
-  }
-
-  return proposals;
 }
 
 export function listProposedTasks(rt: AgentRuntime, status?: ProposedTask['status']): ProposedTask[] {
@@ -224,16 +228,18 @@ export function listProposedTasks(rt: AgentRuntime, status?: ProposedTask['statu
 export function updateProposedTaskStatus(
   rt: AgentRuntime, id: string, status: ProposedTask['status'],
 ): void {
-  rt.actor.assertCurrent();
+  return settleSync(Effect.gen(function* () {
+    rt.actor.assertCurrent();
 
-  const existing = rt.storage.sql<{ id: string }>`SELECT id FROM proposed_tasks
-    WHERE actor_id = ${rt.actor.actorId} AND id = ${id} LIMIT 1`;
+    const existing = rt.storage.sql<{ id: string }>`SELECT id FROM proposed_tasks
+      WHERE actor_id = ${rt.actor.actorId} AND id = ${id} LIMIT 1`;
 
-  if (existing.length === 0) {
-    throw new Error(`updateProposedTaskStatus: unknown proposed task id "${id}"`);
-  }
+    if (existing.length === 0) {
+      return yield* Effect.die(new Error(`updateProposedTaskStatus: unknown proposed task id "${id}"`));
+    }
 
-  void rt.storage.sql`UPDATE proposed_tasks SET status = ${status}
-    WHERE actor_id = ${rt.actor.actorId} AND id = ${id}`;
-  markStoreChanged(rt.storage.sql);
+    void rt.storage.sql`UPDATE proposed_tasks SET status = ${status}
+      WHERE actor_id = ${rt.actor.actorId} AND id = ${id}`;
+    markStoreChanged(rt.storage.sql);
+  }));
 }

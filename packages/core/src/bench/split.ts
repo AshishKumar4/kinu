@@ -1,6 +1,8 @@
 // The sealed split: held-out tasks no adaptation loop ever sees. Membership is a
 // salted hash of the task id; `SealedSplit` exposes aggregates only; the runner's
 // sandbox excludes the corpus; every evaluation is counted in an append-only ledger.
+import { Effect } from 'effect';
+import { settle, settleSync } from '../obs/effect';
 import { fnv1a64 } from '../utils/fnv1a';
 import { pairedBinaryComparison, unitHash } from './stats';
 import type { BootstrapOptions, PairedBinaryStats, PairedOutcome } from './stats';
@@ -56,34 +58,36 @@ export interface SealedValidation {
 }
 
 /** Bounded, stop-on-first-success retries: `1 + retries` attempts at most. */
-export async function validateWithRetries(
+export function validateWithRetries(
   retries: number,
   check: (attempt: number) => Promise<{ ok: boolean; detail: string }>,
 ): Promise<TaskValidation> {
-  if (!Number.isInteger(retries) || retries < 0) throw new Error(`validate retries must be a non-negative integer, got ${retries}`);
-  const budget = retries + 1;
-  let first = '';
+  return settle(Effect.gen(function* () {
+    if (!Number.isInteger(retries) || retries < 0) return yield* Effect.die(new Error(`validate retries must be a non-negative integer, got ${retries}`));
+    const budget = retries + 1;
+    let first = '';
 
-  for (let attempt = 1; attempt <= budget; attempt++) {
-    const { ok, detail } = await check(attempt);
+    for (let attempt = 1; attempt <= budget; attempt++) {
+      const { ok, detail } = yield* Effect.promise(() => check(attempt));
 
-    if (attempt === 1) first = detail;
+      if (attempt === 1) first = detail;
 
-    if (ok) {
-      return {
-        ok: true,
-        attempts: attempt,
-        passedOnAttempt: attempt,
-        detail: attempt === 1 ? detail : `FLAKY: ${detail}, but attempt 1 failed (${first})`,
-      };
+      if (ok) {
+        return {
+          ok: true,
+          attempts: attempt,
+          passedOnAttempt: attempt,
+          detail: attempt === 1 ? detail : `FLAKY: ${detail}, but attempt 1 failed (${first})`,
+        };
+      }
+
+      if (attempt === budget) {
+        return { ok: false, attempts: attempt, passedOnAttempt: null, detail: `failed all ${budget} attempt(s): ${detail}` };
+      }
     }
 
-    if (attempt === budget) {
-      return { ok: false, attempts: attempt, passedOnAttempt: null, detail: `failed all ${budget} attempt(s): ${detail}` };
-    }
-  }
-
-  throw new Error('unreachable: the retry budget is at least 1');
+    return yield* Effect.die(new Error('unreachable: the retry budget is at least 1'));
+  }));
 }
 
 export class SealedSplit {
@@ -161,26 +165,28 @@ export interface PartitionOptions {
 }
 
 export function partitionCorpus(tasks: readonly BenchTask[], opts: PartitionOptions = {}): BenchCorpus {
-  const salt = opts.salt ?? SEAL_SALT;
-  const sealedFraction = opts.sealedFraction ?? DEFAULT_SEALED_FRACTION;
+  return settleSync(Effect.gen(function* () {
+    const salt = opts.salt ?? SEAL_SALT;
+    const sealedFraction = opts.sealedFraction ?? DEFAULT_SEALED_FRACTION;
 
-  if (!Number.isFinite(sealedFraction) || sealedFraction < 0 || sealedFraction > 1) {
-    throw new Error(`sealedFraction must be in [0, 1], got ${sealedFraction}`);
-  }
+    if (!Number.isFinite(sealedFraction) || sealedFraction < 0 || sealedFraction > 1) {
+      return yield* Effect.die(new Error(`sealedFraction must be in [0, 1], got ${sealedFraction}`));
+    }
 
-  const ids = new Set<string>();
+    const ids = new Set<string>();
 
-  for (const t of tasks) {
-    if (ids.has(t.id)) throw new Error(`duplicate bench task id: ${t.id}`);
-    ids.add(t.id);
-  }
+    for (const t of tasks) {
+      if (ids.has(t.id)) return yield* Effect.die(new Error(`duplicate bench task id: ${t.id}`));
+      ids.add(t.id);
+    }
 
-  const dev: BenchTask[] = [];
-  const sealed: BenchTask[] = [];
+    const dev: BenchTask[] = [];
+    const sealed: BenchTask[] = [];
 
-  for (const t of tasks) (splitOf(t.id, salt, sealedFraction) === 'sealed' ? sealed : dev).push(t);
+    for (const t of tasks) (splitOf(t.id, salt, sealedFraction) === 'sealed' ? sealed : dev).push(t);
 
-  return { dev, sealed: new SealedSplit(sealed), salt, sealedFraction, manifestHash: manifestHash(tasks) };
+    return { dev, sealed: new SealedSplit(sealed), salt, sealedFraction, manifestHash: manifestHash(tasks) };
+  }));
 }
 
 export function promptLeaksFix(prompt: string, patch: string): string | null {

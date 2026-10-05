@@ -6,8 +6,8 @@ import type {
 } from './types';
 import { parseModelSpec } from './types';
 import { StaleModelList } from './util';
-import { Effect } from 'effect';
-import { KinuError, renderThrownChain, settleSync } from '../obs/index';
+import { Effect, Result } from 'effect';
+import { KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
 
 export interface DynamicProviderSource {
@@ -65,18 +65,18 @@ async function chosenCredentialKey(deps: ProviderDeps, providerId: string, key: 
 export function accountDeps<Deps extends ProviderDeps>(deps: Deps, providerId: string, named?: string): Deps {
   const chosen = (): string | undefined => named ?? deps.accountFor?.(providerId);
 
-  const soleKey = async (key: string): Promise<string | null> => {
-    const accounts = storedAccounts(key, await deps.listCredentialKeys?.() ?? []);
+  const soleKey = (key: string): Effect.Effect<string | null, KinuError> => Effect.gen(function* () {
+    const accounts = storedAccounts(key, (yield* Effect.promise(async () => deps.listCredentialKeys?.())) ?? []);
     const [only, ...others] = accounts;
 
     if (only === undefined || only === MAIN_ACCOUNT) return null;
 
     if (others.length > 0) {
-      throw new KinuError('bad_input', `${providerId} has the accounts ${accounts.join(', ')} and none is its default.`);
+      return yield* new KinuError('bad_input', `${providerId} has the accounts ${accounts.join(', ')} and none is its default.`);
     }
 
     return accountCredentialKey(key, only);
-  };
+  });
 
   const answered = (key: string, auth: AuthResolution): AuthResolution => {
     const stored: AuthResolution = { headers: auth.headers, credentialKey: key };
@@ -89,34 +89,38 @@ export function accountDeps<Deps extends ProviderDeps>(deps: Deps, providerId: s
   return {
     ...deps,
     accountFor: undefined,
-    async getAuth(key, opts) {
-      const account = chosen();
+    getAuth(key, opts) {
+      return settle(Effect.gen(function* () {
+        const account = chosen();
 
-      if (account !== undefined) {
-        const stored = accountCredentialKey(key, account);
-        const auth = await deps.getAuth(stored, opts);
+        if (account !== undefined) {
+          const stored = accountCredentialKey(key, account);
+          const auth = yield* Effect.promise(() => deps.getAuth(stored, opts));
 
-        if (auth === null) throw new KinuError('missing', `No usable ${providerId} credential for the account "${account}".`);
+          if (auth === null) return yield* new KinuError('missing', `No usable ${providerId} credential for the account "${account}".`);
 
-        return answered(stored, auth);
-      }
+          return answered(stored, auth);
+        }
 
-      const main = await deps.getAuth(key, opts);
+        const main = yield* Effect.promise(() => deps.getAuth(key, opts));
 
-      if (main !== null) return answered(key, main);
-      const sole = await soleKey(key);
+        if (main !== null) return answered(key, main);
+        const sole = yield* soleKey(key);
 
-      if (sole === null) return null;
-      const auth = await deps.getAuth(sole, opts);
+        if (sole === null) return null;
+        const auth = yield* Effect.promise(() => deps.getAuth(sole, opts));
 
-      return auth === null ? null : answered(sole, auth);
+        return auth === null ? null : answered(sole, auth);
+      }));
     },
-    async hasCredential(key) {
-      const account = chosen();
+    hasCredential(key) {
+      return settle(Effect.gen(function* () {
+        const account = chosen();
 
-      if (account !== undefined) return deps.hasCredential(accountCredentialKey(key, account));
+        if (account !== undefined) return yield* Effect.promise(() => deps.hasCredential(accountCredentialKey(key, account)));
 
-      return await deps.hasCredential(key) || await soleKey(key) !== null;
+        return (yield* Effect.promise(() => deps.hasCredential(key))) || (yield* soleKey(key)) !== null;
+      }));
     },
   };
 }
@@ -132,33 +136,28 @@ export function createProviderRegistry(): ProviderRegistry {
   let dynamic: DynamicProviderSource | null = null;
 
   /** Static plus servable dynamic providers; a dynamic enumeration failure is one reported failure. */
-  async function allProviders(deps: ProviderDeps): Promise<{
-    providers: ModelProvider[];
-    failures: ProviderFailure[];
-  }> {
+  function allProviders(deps: ProviderDeps): Effect.Effect<{ providers: ModelProvider[]; failures: ProviderFailure[] }> {
     const providers = [...ordered];
+    const source = dynamic;
 
-    if (!dynamic) return { providers, failures: [] };
+    if (!source) return Effect.succeed({ providers, failures: [] });
 
-    try {
-      for (const id of await dynamic.listIds(deps)) {
-        if (byId.has(id)) continue;
-        const provider = dynamic.get(id);
+    return Effect.match(Effect.tryPromise({ try: () => source.listIds(deps), catch: (cause) => ({ cause }) }), {
+      onSuccess: (ids) => {
+        for (const id of ids) {
+          if (byId.has(id)) continue;
+          const provider = source.get(id);
 
-        if (provider) providers.push(provider);
-      }
-    } catch (err) {
-      return {
+          if (provider) providers.push(provider);
+        }
+
+        return { providers, failures: [] };
+      },
+      onFailure: (failed) => ({
         providers,
-        failures: [{
-          provider: CATALOG_SOURCE_ID,
-          label: 'models.dev catalog',
-          reason: providerFailureReason({ error: err }),
-        }],
-      };
-    }
-
-    return { providers, failures: [] };
+        failures: [{ provider: CATALOG_SOURCE_ID, label: 'models.dev catalog', reason: providerFailureReason({ error: failed.cause }) }],
+      }),
+    });
   }
 
   function providerFor(providerId: string): ModelProvider | undefined {
@@ -166,20 +165,14 @@ export function createProviderRegistry(): ProviderRegistry {
   }
 
   /** Probes concurrently, answering in registration order; no deadline, which would read slow as absent. */
-  async function probeEach<T>(
+  function probeEach<T>(
     providers: readonly ModelProvider[],
     probe: (provider: ModelProvider) => Promise<T>,
-  ): Promise<Array<
-    | { readonly provider: ModelProvider; readonly ok: true; readonly value: T }
-    | { readonly provider: ModelProvider; readonly ok: false; readonly error: unknown }
-  >> {
-    return Promise.all(providers.map(async (provider) => {
-      try {
-        return { provider, ok: true as const, value: await probe(provider) };
-      } catch (error) {
-        return { provider, ok: false as const, error };
-      }
-    }));
+  ): Effect.Effect<Array<{ readonly provider: ModelProvider; readonly result: Result.Result<T, unknown> }>> {
+    return Effect.forEach(providers, (provider) => Effect.map(
+      Effect.result(Effect.tryPromise({ try: () => probe(provider), catch: (cause) => cause })),
+      (result) => ({ provider, result }),
+    ), { concurrency: 'unbounded' });
   }
 
   return {
@@ -201,71 +194,71 @@ export function createProviderRegistry(): ProviderRegistry {
 
     list() { return [...ordered]; },
 
-    async listProviders(deps) {
-      const { providers, failures } = await allProviders(deps);
-      const out: ProviderInfo[] = [];
+    listProviders(deps) {
+      return settle(Effect.gen(function* () {
+        const { providers, failures } = yield* allProviders(deps);
+        const out: ProviderInfo[] = [];
 
-      for (const probed of await probeEach(providers, async (p) => {
-        const own = accountDeps(deps, p.id);
-        const available = await p.isAvailable(own);
-        const info: ProviderInfo = { id: p.id, label: p.label, available };
+        for (const probed of yield* probeEach(providers, async (p) => {
+          const own = accountDeps(deps, p.id);
+          const available = await p.isAvailable(own);
+          const info: ProviderInfo = { id: p.id, label: p.label, available };
 
-        if (!available && p.unavailableReason) info.unavailableReason = await p.unavailableReason(own);
+          if (!available && p.unavailableReason) info.unavailableReason = await p.unavailableReason(own);
 
-        return info;
-      })) {
-        out.push(probed.ok ? probed.value : {
-          id: probed.provider.id,
-          label: probed.provider.label,
-          available: false,
-          unavailableReason: providerFailureReason({ error: probed.error }),
-        });
-      }
-
-      for (const failure of failures) {
-        out.push({ id: failure.provider, label: failure.label, available: false, unavailableReason: failure.reason });
-      }
-
-      return out;
-    },
-
-    async listAllModels(deps) {
-      const { providers, failures: sourceFailures } = await allProviders(deps);
-      const models: Array<ModelInfo & { provider: string }> = [];
-      const failures = [...sourceFailures];
-      const keys = await deps.listCredentialKeys?.() ?? [];
-
-      const accounts = Object.fromEntries(providers.flatMap((p) => {
-        const stored = p.credentialKey === undefined ? [] : storedAccounts(p.credentialKey, keys);
-
-        return stored.length === 0 ? [] : [[p.id, stored]];
-      }));
-
-      // `null`: unavailable, which is not a failure.
-      for (const probed of await probeEach(providers, async (p) => {
-        const own = accountDeps(deps, p.id);
-
-        return await p.isAvailable(own) ? await p.listModels(own) : null;
-      })) {
-        if (!probed.ok) {
-          if (probed.error instanceof StaleModelList) {
-            for (const m of probed.error.models) models.push({ ...m, provider: probed.provider.id });
-          }
-
-          failures.push({
-            provider: probed.provider.id,
+          return info;
+        })) {
+          out.push(Result.isSuccess(probed.result) ? probed.result.success : {
+            id: probed.provider.id,
             label: probed.provider.label,
-            reason: providerFailureReason({ error: probed.error }),
+            available: false,
+            unavailableReason: providerFailureReason({ error: probed.result.failure }),
           });
-          continue;
         }
 
-        if (probed.value === null) continue;
+        for (const failure of failures) {
+          out.push({ id: failure.provider, label: failure.label, available: false, unavailableReason: failure.reason });
+        }
 
-        for (const m of probed.value) models.push({ ...m, provider: probed.provider.id });
-      }
+        return out;
+      }));
+    },
 
-      return { models, failures, accounts };
+    listAllModels(deps) {
+      return settle(Effect.gen(function* () {
+        const { providers, failures: sourceFailures } = yield* allProviders(deps);
+        const models: Array<ModelInfo & { provider: string }> = [];
+        const failures = [...sourceFailures];
+        const keys = (yield* Effect.promise(async () => deps.listCredentialKeys?.())) ?? [];
+
+        const accounts = Object.fromEntries(providers.flatMap((p) => {
+          const stored = p.credentialKey === undefined ? [] : storedAccounts(p.credentialKey, keys);
+
+          return stored.length === 0 ? [] : [[p.id, stored]];
+        }));
+
+        // `null`: unavailable, which is not a failure.
+        for (const probed of yield* probeEach(providers, async (p) => {
+          const own = accountDeps(deps, p.id);
+
+          return await p.isAvailable(own) ? await p.listModels(own) : null;
+        })) {
+          if (Result.isFailure(probed.result)) {
+            const error = probed.result.failure;
+
+            if (error instanceof StaleModelList) {
+              for (const m of error.models) models.push({ ...m, provider: probed.provider.id });
+            }
+
+            failures.push({ provider: probed.provider.id, label: probed.provider.label, reason: providerFailureReason({ error }) });
+            continue;
+          }
+
+          for (const m of probed.result.success ?? []) models.push({ ...m, provider: probed.provider.id });
+        }
+
+        return { models, failures, accounts };
+      }));
     },
 
     resolve(spec, deps) {

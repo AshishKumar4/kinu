@@ -16,7 +16,7 @@ import {
   type ToolKind,
 } from '@agentclientprotocol/sdk';
 import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { settleLogged } from '@kinu.run/core/obs';
 import { literalText } from '@kinu.run/core/tui';
 import { STEP_RESTART_NOTICE, type AgentClient, type AgentClientEvent } from '../agent-client';
 import { toAgentPrompt } from './prompt';
@@ -133,16 +133,8 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
     sessionId: SessionId,
     update: SessionNotification['update'],
   ): Promise<void> => {
-    try {
-      await client.notify(CLIENT_METHODS.session_update, { sessionId, update });
-    } catch (cause) {
-      // An undelivered update must not fail its turn; report on stderr because stdout carries the protocol.
-      diagnostics.failure(
-        'acp.session_update_undelivered',
-        toKinuError({ doing: 'delivering an acp session/update notification', cause, otherwise: 'io' }),
-        { sessionId },
-      );
-    }
+    // An undelivered update must not fail its turn; report on stderr because stdout carries the protocol.
+    await settleLogged('acp.session_update_undelivered', { doing: 'delivering an acp session/update notification', otherwise: 'io' }, () => client.notify(CLIENT_METHODS.session_update, { sessionId, update }), { sessionId });
   };
 
   const toUpdate = (event: AgentClientEvent): SessionNotification['update'] | null => {

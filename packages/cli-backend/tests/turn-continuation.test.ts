@@ -103,7 +103,7 @@ function workspaceDb() {
   const db = new Database(scratchPath('turn-continuation', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
-  return { db, rt: createCLIRuntime(db, { llm: DUMMY_LLM }) };
+  return { db, rt: createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM }) };
 }
 
 /** One process's session answering each of `texts` in turn; `beforeNext` runs before every turn after the first. */
@@ -137,7 +137,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
   test('the continuation seals the run it re-opened, so a third process re-opens nothing', async () => {
     const db = new Database(scratchPath('turn-continuation', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
     const eventsA = new AwaitedList<SessionEvent>();
     rt.actor.config.setLearning(false);
@@ -175,7 +175,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
   test('a turn re-opened after its process died is counted once as resumed, with the steps it kept', async () => {
     const db = new Database(scratchPath('turn-continuation', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const logger = createRecordingLogger();
     const restore = setDiagnosticsSink(logger);
 
@@ -208,7 +208,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
   test('a re-opened turn keeps the person\u2019s request after this turn\u2019s runtime context on every step', async () => {
     const db = new Database(scratchPath('turn-continuation', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     await rt.storage.vfs.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
     await writeText(rt.storage.vfs, workspaceSkillPath('focused'), '---\nname: focused\ndescription: a memory-only skill\nallowed_tools: [memory]\n---\nFocus on memory only.\n');
 
@@ -266,7 +266,7 @@ async function resumed(cut: Step, finish: Step): Promise<{
 }> {
   const db = new Database(scratchPath('turn-continuation', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
   const eventsA = new AwaitedList<SessionEvent>();
   rt.actor.config.setLearning(false);

@@ -6,6 +6,7 @@
  * ownership claim as the per-agent API.
  */
 
+import { Cause, Effect, Result } from 'effect';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
@@ -32,7 +33,7 @@ import { claimOwnedWorkspace, type WorkspaceOwnerClaim, type WorkspaceRegistry }
 import type { SessionAuthority } from "./auth/store";
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { authoredRefusal, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { authoredRefusal, diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '@kinu.run/core/obs';
 import { beneath, routeError, type FamilyEnv } from './api/context';
 
 const corsHeaders = {
@@ -86,7 +87,9 @@ function mcpToolFailure(failure: { tool: string; cause: unknown }): string {
   return renderThrownChain({ cause: error });
 }
 
-function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
+type McpAnswering = <A>(tool: string, work: () => Promise<A>, failed: (failure: string) => A) => Promise<A>;
+
+function buildServer(resolveAgent: McpResolver, agentName: string, answer: McpAnswering): McpServer {
   const server = new McpServer({
     name: `kinu-${agentName}`,
     version: "1.0.0",
@@ -104,23 +107,19 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
         limit: z.number().int().min(1).max(50).optional().describe("Max results (default 10)."),
       },
     },
-    async ({ query, limit }) => {
-      try {
-        const agent = await resolveAgent(agentName);
-        const hits = await agent.searchMemoryHybrid(query, limit ?? 10);
+    async ({ query, limit }) => answer("search_memory", async () => {
+      const agent = await resolveAgent(agentName);
+      const hits = await agent.searchMemoryHybrid(query, limit ?? 10);
 
-        const text = hits.length === 0
-          ? "(no matches)"
-          : hits.map((h) =>
-              `[${h.path}:${h.startLine}-${h.endLine}] ` +
-              `(rrf ${h.rrfScore.toFixed(3)}, sources: ${h.sources.join('+')})\n${h.snippet}`,
-            ).join("\n\n");
+      const text = hits.length === 0
+        ? "(no matches)"
+        : hits.map((h) =>
+            `[${h.path}:${h.startLine}-${h.endLine}] ` +
+            `(rrf ${h.rrfScore.toFixed(3)}, sources: ${h.sources.join('+')})\n${h.snippet}`,
+          ).join("\n\n");
 
-        return { content: [{ type: "text", text }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `search_memory error: ${mcpToolFailure({ tool: "search_memory", cause: err })}` }] };
-      }
-    },
+      return { content: [{ type: "text", text }] };
+    }, (failure) => ({ content: [{ type: "text", text: `search_memory error: ${failure}` }] })),
   );
 
   server.registerTool(
@@ -129,16 +128,12 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
       description: "Append a note to the agent's long-term memory (memory/MEMORY.md). FTS-indexed for later search.",
       inputSchema: { content: z.string().describe("Note text.") },
     },
-    async ({ content }) => {
-      try {
-        const agent = await resolveAgent(agentName);
-        await agent.saveNoteFromMcp(content);
+    async ({ content }) => answer("save_note", async () => {
+      const agent = await resolveAgent(agentName);
+      await agent.saveNoteFromMcp(content);
 
-        return { content: [{ type: "text", text: "Note saved." }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `save_note error: ${mcpToolFailure({ tool: "save_note", cause: err })}` }] };
-      }
-    },
+      return { content: [{ type: "text", text: "Note saved." }] };
+    }, (failure) => ({ content: [{ type: "text", text: `save_note error: ${failure}` }] })),
   );
 
   server.registerTool(
@@ -147,26 +142,22 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
       description: "List the agent's built-in and crafted tools (skills), each with a quality score.",
       inputSchema: {},
     },
-    async () => {
-      try {
-        const agent = await resolveAgent(agentName);
-        const out = await agent.getToolList();
-        const lines: string[] = [];
-        lines.push(`## Built-in (${out.builtIn.length})`);
+    async () => answer("list_skills", async () => {
+      const agent = await resolveAgent(agentName);
+      const out = await agent.getToolList();
+      const lines: string[] = [];
+      lines.push(`## Built-in (${out.builtIn.length})`);
 
-        for (const b of out.builtIn) lines.push(`- ${b}`);
-        lines.push("");
-        lines.push(`## Crafted (${out.crafted.length})`);
+      for (const b of out.builtIn) lines.push(`- ${b}`);
+      lines.push("");
+      lines.push(`## Crafted (${out.crafted.length})`);
 
-        for (const c of out.crafted) {
-          lines.push(`- ${c.name} (q=${c.qualityScore.toFixed(2)}, uses=${c.usageCount}): ${c.description}`);
-        }
-
-        return { content: [{ type: "text", text: lines.join("\n") }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `list_skills error: ${mcpToolFailure({ tool: "list_skills", cause: err })}` }] };
+      for (const c of out.crafted) {
+        lines.push(`- ${c.name} (q=${c.qualityScore.toFixed(2)}, uses=${c.usageCount}): ${c.description}`);
       }
-    },
+
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    }, (failure) => ({ content: [{ type: "text", text: `list_skills error: ${failure}` }] })),
   );
 
   server.registerTool(
@@ -178,25 +169,21 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
         useShadowOverride: z.boolean().optional().describe("If true, runs the pending proposed scaffold instead of the current one."),
       },
     },
-    async ({ task, useShadowOverride }) => {
-      try {
-        const agent = await resolveAgent(agentName);
+    async ({ task, useShadowOverride }) => answer("run_scaffold_once", async () => {
+      const agent = await resolveAgent(agentName);
 
-        const result = await agent.runScaffoldOnce(task, useShadowOverride ? { useShadowOverride: true } : undefined);
+      const result = await agent.runScaffoldOnce(task, useShadowOverride ? { useShadowOverride: true } : undefined);
 
-        const summary = [
-          `ok=${result.ok}, doneEmitted=${result.doneEmitted}, emits=${result.emitCount}, ms=${result.durationMs}`,
-          result.error ? `error: ${result.error}` : '',
-          `events:`,
-          ...result.events.slice(0, 10).map((e) => `  - ${e.type}: ${JSON.stringify(e).slice(0, 120)}`),
-          result.nativeEvents > 0 ? `  (+${String(result.nativeEvents)} native model chunks not carried)` : '',
-        ].filter(Boolean).join("\n");
+      const summary = [
+        `ok=${result.ok}, doneEmitted=${result.doneEmitted}, emits=${result.emitCount}, ms=${result.durationMs}`,
+        result.error ? `error: ${result.error}` : '',
+        `events:`,
+        ...result.events.slice(0, 10).map((e) => `  - ${e.type}: ${JSON.stringify(e).slice(0, 120)}`),
+        result.nativeEvents > 0 ? `  (+${String(result.nativeEvents)} native model chunks not carried)` : '',
+      ].filter(Boolean).join("\n");
 
-        return { content: [{ type: "text", text: summary }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `run_scaffold_once error: ${mcpToolFailure({ tool: "run_scaffold_once", cause: err })}` }] };
-      }
-    },
+      return { content: [{ type: "text", text: summary }] };
+    }, (failure) => ({ content: [{ type: "text", text: `run_scaffold_once error: ${failure}` }] })),
   );
 
   server.registerTool(
@@ -205,16 +192,12 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
       description: "Return what evolution has in flight: the scaffold proposal awaiting the owner, the live trial, and the edits waiting for one.",
       inputSchema: {},
     },
-    async () => {
-      try {
-        const agent = await resolveAgent(agentName);
-        const status = await agent.getEvolutionStatus();
+    async () => answer("get_evolution_status", async () => {
+      const agent = await resolveAgent(agentName);
+      const status = await agent.getEvolutionStatus();
 
-        return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `get_evolution_status error: ${mcpToolFailure({ tool: "get_evolution_status", cause: err })}` }] };
-      }
-    },
+      return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
+    }, (failure) => ({ content: [{ type: "text", text: `get_evolution_status error: ${failure}` }] })),
   );
 
   server.registerTool(
@@ -227,22 +210,18 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
         after: z.string().optional(),
       },
     },
-    async ({ limit, after }) => {
-      try {
-        const agent = await resolveAgent(agentName);
-        const page = await agent.listRuns({ limit: limit ?? 20, cursor: after ? { after } : undefined });
-        const lines = page.items.map((r) => `- ${r.runId}: ${r.eventCount} events @ ${r.lastTs}`);
+    async ({ limit, after }) => answer("list_runs", async () => {
+      const agent = await resolveAgent(agentName);
+      const page = await agent.listRuns({ limit: limit ?? 20, cursor: after ? { after } : undefined });
+      const lines = page.items.map((r) => `- ${r.runId}: ${r.eventCount} events @ ${r.lastTs}`);
 
-        if (lines.length === 0) return { content: [{ type: "text", text: "(no runs yet)" }] };
-        lines.push(page.status === 'more'
-          ? `(more runs before these: call again with after: ${JSON.stringify(page.next.after)})`
-          : "(that is every run)");
+      if (lines.length === 0) return { content: [{ type: "text", text: "(no runs yet)" }] };
+      lines.push(page.status === 'more'
+        ? `(more runs before these: call again with after: ${JSON.stringify(page.next.after)})`
+        : "(that is every run)");
 
-        return { content: [{ type: "text", text: lines.join("\n") }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `list_runs error: ${mcpToolFailure({ tool: "list_runs", cause: err })}` }] };
-      }
-    },
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    }, (failure) => ({ content: [{ type: "text", text: `list_runs error: ${failure}` }] })),
   );
 
   server.registerTool(
@@ -255,21 +234,17 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
         limit: z.number().int().min(1).max(RUN_EVENT_LIMIT_MAX).optional(),
       },
     },
-    async ({ runId, since, limit }) => {
-      try {
-        const agent = await resolveAgent(agentName);
+    async ({ runId, since, limit }) => answer("list_run_events", async () => {
+      const agent = await resolveAgent(agentName);
 
-        const events = await agent.getRunEvents(runId, { since, limit: limit ?? 100 });
+      const events = await agent.getRunEvents(runId, { since, limit: limit ?? 100 });
 
-        const text = events.length === 0
-          ? "(no events)"
-          : events.map((e) => `[${e.eventIndex}] ${e.type}: ${JSON.stringify(e).slice(0, 200)}`).join("\n");
+      const text = events.length === 0
+        ? "(no events)"
+        : events.map((e) => `[${e.eventIndex}] ${e.type}: ${JSON.stringify(e).slice(0, 200)}`).join("\n");
 
-        return { content: [{ type: "text", text }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `list_run_events error: ${mcpToolFailure({ tool: "list_run_events", cause: err })}` }] };
-      }
-    },
+      return { content: [{ type: "text", text }] };
+    }, (failure) => ({ content: [{ type: "text", text: `list_run_events error: ${failure}` }] })),
   );
 
   // Ownership is enforced at the transport gate (claimOwnedWorkspace); peer/turn seams re-check it inside the DO.
@@ -284,20 +259,16 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
         "or the turn queue rejected it: either way nothing ran).",
       inputSchema: { text: z.string().min(1).describe("The task / instruction for the agent to act on.") },
     },
-    async ({ text }) => {
-      try {
-        const agent = await resolveAgent(agentName);
-        const result: EnqueueTurnResult = await agent.runTaskFromMcp(text);
+    async ({ text }) => answer("run_task", async () => {
+      const agent = await resolveAgent(agentName);
+      const result: EnqueueTurnResult = await agent.runTaskFromMcp(text);
 
-        const msg = result.status === "queued"
-          ? "Task queued: the agent will run it on its turn loop."
-          : "Task skipped: a newer turn pre-empted it, or the turn queue rejected it. Nothing ran.";
+      const msg = result.status === "queued"
+        ? "Task queued: the agent will run it on its turn loop."
+        : "Task skipped: a newer turn pre-empted it, or the turn queue rejected it. Nothing ran.";
 
-        return { content: [{ type: "text", text: msg }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `run_task error: ${mcpToolFailure({ tool: "run_task", cause: err })}` }] };
-      }
-    },
+      return { content: [{ type: "text", text: msg }] };
+    }, (failure) => ({ content: [{ type: "text", text: `run_task error: ${failure}` }] })),
   );
 
   server.registerTool(
@@ -312,23 +283,19 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
         topic: z.string().optional().describe("Short topic label (default \"message\")."),
       },
     },
-    async ({ agent: peer, message, topic }) => {
-      try {
-        const agent = await resolveAgent(agentName);
-        const peerMessage: PeerMessageInput = { agent: peer, message };
+    async ({ agent: peer, message, topic }) => answer("send_peer", async () => {
+      const agent = await resolveAgent(agentName);
+      const peerMessage: PeerMessageInput = { agent: peer, message };
 
-        if (topic) peerMessage.topic = topic;
-        const outcome: PeerSendOutcome = await agent.sendPeerFromMcp(peerMessage);
+      if (topic) peerMessage.topic = topic;
+      const outcome: PeerSendOutcome = await agent.sendPeerFromMcp(peerMessage);
 
-        const text = outcome.status === "rejected"
-          ? `send_peer rejected: ${outcome.reason}`
-          : `Message ${outcome.status} to ${peer} (id ${outcome.message_id}).`;
+      const text = outcome.status === "rejected"
+        ? `send_peer rejected: ${outcome.reason}`
+        : `Message ${outcome.status} to ${peer} (id ${outcome.message_id}).`;
 
-        return { content: [{ type: "text", text }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `send_peer error: ${mcpToolFailure({ tool: "send_peer", cause: err })}` }] };
-      }
-    },
+      return { content: [{ type: "text", text }] };
+    }, (failure) => ({ content: [{ type: "text", text: `send_peer error: ${failure}` }] })),
   );
 
   server.registerTool(
@@ -337,20 +304,16 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
       description: "List the owner's other agents (this agent excluded): the valid targets for send_peer.",
       inputSchema: {},
     },
-    async () => {
-      try {
-        const agent = await resolveAgent(agentName);
-        const peers = await agent.listPeersFromMcp();
+    async () => answer("list_peers", async () => {
+      const agent = await resolveAgent(agentName);
+      const peers = await agent.listPeersFromMcp();
 
-        const text = peers.length === 0
-          ? "(no other agents on this owner's roster)"
-          : peers.map((p) => `- ${p.name}${p.displayName ? ` (${p.displayName})` : ""}`).join("\n");
+      const text = peers.length === 0
+        ? "(no other agents on this owner's roster)"
+        : peers.map((p) => `- ${p.name}${p.displayName ? ` (${p.displayName})` : ""}`).join("\n");
 
-        return { content: [{ type: "text", text }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `list_peers error: ${mcpToolFailure({ tool: "list_peers", cause: err })}` }] };
-      }
-    },
+      return { content: [{ type: "text", text }] };
+    }, (failure) => ({ content: [{ type: "text", text: `list_peers error: ${failure}` }] })),
   );
 
   server.registerResource(
@@ -361,16 +324,12 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
       description: "Full content of the agent's long-term memory file.",
       mimeType: "text/markdown",
     },
-    async (uri) => {
-      try {
-        const agent = await resolveAgent(agentName);
-        const content = await agent.getMemoryContent();
+    async (uri) => answer("memory", async () => {
+      const agent = await resolveAgent(agentName);
+      const content = await agent.getMemoryContent();
 
-        return { contents: [{ uri: uri.href, text: content, mimeType: "text/markdown" }] };
-      } catch (err) {
-        return { contents: [{ uri: uri.href, text: `(error: ${mcpToolFailure({ tool: "memory", cause: err })})`, mimeType: "text/plain" }] };
-      }
-    },
+      return { contents: [{ uri: uri.href, text: content, mimeType: "text/markdown" }] };
+    }, (failure) => ({ contents: [{ uri: uri.href, text: `(error: ${failure})`, mimeType: "text/plain" }] })),
   );
 
   return server;
@@ -388,30 +347,28 @@ export interface McpEnv<Id> extends
 }
 
 /** CLI bearer token first, then browser session / DEV_USER_EMAIL. */
-async function authenticateMcpCaller<Id>(
+function authenticateMcpCaller<Id>(
   request: Request,
   env: McpEnv<Id>,
-): Promise<{ userId: string } | Response> {
+): Effect.Effect<{ userId: string } | Response> {
   if (readBearer(request)) {
-    const result = await authenticateCliToken(request, env);
+    return Effect.map(Effect.promise(() => authenticateCliToken(request, env)), (result) => {
+      if (Result.isFailure(result)) return withCors(Response.json({ error: result.failure }, { status: 401 }));
 
-    if (!result.ok) return withCors(Response.json({ error: result.error }, { status: 401 }));
+      if (result.success.kind !== 'session') {
+        // Scoped CI access tokens are CLI-API-only; MCP accepts interactive session tokens only.
+        return withCors(Response.json({ error: 'MCP requires an interactive CLI session token. Sign in with: kinu auth' }, { status: 403 }));
+      }
 
-    if (result.identity.kind !== 'session') {
-      // Scoped CI access tokens are CLI-API-only; MCP accepts interactive session tokens only.
-      return withCors(Response.json({ error: 'MCP requires an interactive CLI session token. Sign in with: kinu auth' }, { status: 403 }));
-    }
-
-    return { userId: result.identity.userId };
+      return { userId: result.success.userId };
+    });
   }
 
-  try {
-    return { userId: (await authenticateRequest(request, env)).userId };
-  } catch (e) {
-    if (!(e instanceof AuthError)) throw e;
+  return Effect.catchCause(Effect.map(Effect.promise(() => authenticateRequest(request, env)), (identity) => ({ userId: identity.userId })), (failed) => {
+    const e = Cause.squash(failed);
 
-    return withCors(Response.json({ error: e.message }, { status: e.status }));
-  }
+    return e instanceof AuthError ? Effect.succeed(withCors(Response.json({ error: e.message }, { status: e.status }))) : Effect.failCause(failed);
+  });
 }
 
 const MCP_PREFIX = '/mcp/v1';
@@ -423,42 +380,46 @@ export function mcpRoutes<Bindings extends McpEnv<unknown>>(
 
   routes.options('/mcp/v1/*', beneath<FamilyEnv<Bindings, object>>(MCP_PREFIX, async () => new Response(null, { headers: corsHeaders })));
 
-  routes.all('/mcp/v1/*', beneath<FamilyEnv<Bindings, object>>(MCP_PREFIX, async (c) => serveMcp(c.req.raw, c.env, resolveAgent(c.env))));
+  routes.all('/mcp/v1/*', beneath<FamilyEnv<Bindings, object>>(MCP_PREFIX, (c) => settle(serveMcp(c.req.raw, c.env, resolveAgent(c.env), (tool, work, failed) => settle(
+    Effect.catchCause(Effect.promise(work), (cause) => Effect.sync(() => failed(mcpToolFailure({ tool, cause: Cause.squash(cause) })))),
+  )))));
 
   routes.onError((cause, c) => withCors(routeError(cause, c)));
 
   return routes;
 }
 
-async function serveMcp<Id>(request: Request, env: McpEnv<Id>, resolveAgent: McpResolver): Promise<Response> {
-  const segments = new URL(request.url).pathname.slice(`${MCP_PREFIX}/`.length).split("/").filter(Boolean);
-  const agentName = segments[0] ? decodeURIComponent(segments[0]) : '';
+function serveMcp<Id>(request: Request, env: McpEnv<Id>, resolveAgent: McpResolver, answer: McpAnswering): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const segments = new URL(request.url).pathname.slice(`${MCP_PREFIX}/`.length).split("/").filter(Boolean);
+    const agentName = segments[0] ? decodeURIComponent(segments[0]) : '';
 
-  if (!agentName) {
-    return withCors(Response.json(
-      { error: "missing agent name in MCP path; use /mcp/v1/<agentName>" },
-      { status: 400 },
-    ));
-  }
+    if (!agentName) {
+      return withCors(Response.json(
+        { error: "missing agent name in MCP path; use /mcp/v1/<agentName>" },
+        { status: 400 },
+      ));
+    }
 
-  const caller = await authenticateMcpCaller(request, env);
+    const caller = yield* authenticateMcpCaller(request, env);
 
-  if (caller instanceof Response) return caller;
-  const owned = await claimOwnedWorkspace(env, caller.userId, agentName);
+    if (caller instanceof Response) return caller;
+    const owned = yield* Effect.promise(() => claimOwnedWorkspace(env, caller.userId, agentName));
 
-  if (!owned.ok) {
-    return withCors(Response.json({ error: owned.error }, { status: owned.status }));
-  }
+    if (Result.isFailure(owned)) {
+      return withCors(Response.json({ error: owned.failure.error }, { status: owned.failure.status }));
+    }
 
-  try {
-    const transport = new WebStandardStreamableHTTPServerTransport();
-    const server = buildServer(resolveAgent, agentName);
-    await server.connect(transport);
-    const resp = await transport.handleRequest(request);
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const transport = new WebStandardStreamableHTTPServerTransport();
+        const server = buildServer(resolveAgent, agentName, answer);
+        await server.connect(transport);
 
-    return withCors(resp);
-  } catch (cause) {
-    throw toKinuError({ doing: 'serving an MCP request', cause, otherwise: 'io' });
-  }
+        return withCors(await transport.handleRequest(request));
+      },
+      catch: (cause) => toKinuError({ doing: 'serving an MCP request', cause, otherwise: 'io' }),
+    });
+  });
 }
 

@@ -6,7 +6,8 @@ import type { ClaimFence, MessageReference, StoredPart, StreamPartInput, Prepare
 import type { SessionPayload } from '../session/payload';
 import { isParsedJsonObject, jsonObjectElements, projectJsonValue, type JsonObject } from '../utils/json';
 import { encodeModelMessage } from '../session/message-codec';
-import { diagnostics, renderThrownChain, KinuError } from '../obs/index';
+import { diagnostics, KinuError } from '../obs/index';
+import { toolErrorOutput } from '../tools/outcome';
 import { serialQueue } from '@kinu.run/agent-utils';
 import { flushSignal, partialFlushCadence, type PartialFlushSignal } from './flush-cadence';
 
@@ -285,7 +286,7 @@ export class SessionStream {
       case 'tool-result':
       case 'tool-error': {
         const output = part.type === 'tool-error'
-          ? { type: 'error-text', value: renderThrownChain({ cause: part.error }) }
+          ? toolErrorOutput({ cause: part.error })
           : toolOutput({ value: part.output });
 
         await this.publish({ container: part.providerExecuted ? this.assistant : this.tool, key: `result:${part.toolCallId}`,
@@ -350,7 +351,7 @@ export class SessionStream {
       await this.publish({ container: this.assistant, key: `call:${event.toolCallId}`, descriptor: { type: 'tool-call', toolCallId: event.toolCallId, toolName: event.toolName, input: event.args }, delta: null });
       this.tick('content');
     } else if (event.type === 'tool-result') {
-      const output = event.success ? { type: 'text', value: event.result } : { type: 'error-text', value: event.error ?? event.result };
+      const output = event.success ? { type: 'text', value: event.result } : toolErrorOutput({ cause: event.error ?? event.result }, event);
       await this.publish({ container: this.tool, key: `result:${event.toolCallId}`, descriptor: { type: 'tool-result', toolCallId: event.toolCallId, toolName: event.toolName, output }, delta: null });
       this.tick('settled');
     } else if (event.type === 'step-finish') {

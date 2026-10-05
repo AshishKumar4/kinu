@@ -7,6 +7,8 @@
  * Steer-as-Branch runs are excluded by `STEER_BRANCH_RUN_ID_PREFIX`.
  */
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { SqlExecutor } from '../types/primitives';
 import { boundedInt } from '../utils/bounds';
 import { seekPage, StaleCursorError, type Page, type SeekCursor } from '../session/page';
@@ -51,14 +53,16 @@ export function listForkRuns(
   cursor: SeekCursor | null = null,
   limit = DEFAULT_FORK_PAGE,
 ): Page<ForkRunSummary> {
-  actor.assertCurrent();
-  const page = boundedInt(limit, DEFAULT_FORK_PAGE, 1, MAX_FORK_PAGE);
-  const after = cursor === null ? null : parseForkAnchor(cursor.after);
-  const over = page + 1;
+  return settleSync(Effect.gen(function* () {
+    actor.assertCurrent();
+    const page = boundedInt(limit, DEFAULT_FORK_PAGE, 1, MAX_FORK_PAGE);
+    const after = cursor === null ? null : yield* parseForkAnchor(cursor.after);
+    const over = page + 1;
 
-  const positions = queryPositions({ sql, actorId: actor.actorId, limit: over, rootId: null, after });
+    const positions = queryPositions({ sql, actorId: actor.actorId, limit: over, rootId: null, after });
 
-  return seekPage(readRuns(sql, actor.actorId, null, positions), page, forkAnchor);
+    return seekPage(readRuns(sql, actor.actorId, null, positions), page, forkAnchor);
+  }));
 }
 
 /** One exact run, including runs older than the current page. */
@@ -80,17 +84,19 @@ function forkAnchor(run: ForkRunSummary): string {
   return `${run.startedAt}:${run.id}`;
 }
 
-function parseForkAnchor(after: string): ForkAnchor {
-  const split = after.indexOf(':');
-  const startedAt = Number(after.slice(0, split));
-  const id = after.slice(split + 1);
+function parseForkAnchor(after: string): Effect.Effect<ForkAnchor> {
+  return Effect.gen(function* () {
+    const split = after.indexOf(':');
+    const startedAt = Number(after.slice(0, split));
+    const id = after.slice(split + 1);
 
-  // Malformed is stale: an empty page would falsely report the runs behind it as exhausted.
-  if (split < 1 || !Number.isFinite(startedAt) || id === '') {
-    throw new StaleCursorError('fork list', after);
-  }
+    // Malformed is stale: an empty page would falsely report the runs behind it as exhausted.
+    if (split < 1 || !Number.isFinite(startedAt) || id === '') {
+      return yield* Effect.die(new StaleCursorError('fork list', after));
+    }
 
-  return { startedAt, id };
+    return { startedAt, id };
+  });
 }
 
 interface RunPosition {

@@ -2,6 +2,7 @@
  * The `db` capability on real Durable Object SQLite, run from the real dynamic-Worker sandbox. Defends platform
  * behaviour bun:sqlite cannot: `transactionSync` rolling back a failed batch with its `db_op` evidence, and `… RETURNING` row counts.
  */
+import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { createCodeTool } from '@cloudflare/codemode/ai';
@@ -136,9 +137,7 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     const stale = bindActorHandle(this.sql, {
       actorId: 'actor-gone', workspaceId: 'ws-db-probe', parentActorId: null,
       name: 'gone', storageKey: 'agent:gone',
-    }, () => {
-      if (!live) throw new Error('actor actor-gone is no longer bound');
-    });
+    }, () => (live ? Effect.void : Effect.die(new Error('actor actor-gone is no longer bound'))));
 
     const store = this.store(stale);
     store.createTable({

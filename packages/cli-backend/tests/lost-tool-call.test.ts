@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import { existsSync, readFileSync } from 'node:fs';
 import { initWorkspaceSchema, mcpToolKey, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
-import { scratchPath } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -60,7 +60,7 @@ async function until(holds: () => boolean): Promise<void> {
 test('a call cut off after its effect runs once, and the model is told it may have taken effect', async () => {
   const db = new Database(scratchPath('lost-tool-call', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   const marks = scratchPath('lost-tool-call', 'marks.txt');
   const lines = () => existsSync(marks) ? readFileSync(marks, 'utf8').split('\n').filter(Boolean).length : 0;
 

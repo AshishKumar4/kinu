@@ -885,7 +885,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     new InstructionApprovalStore(
       rt.storage.sql,
       rt.actor,
-      `local:${realpathSync(process.cwd())}`,
+      `local:${realpathSync(rt.cwd)}`,
     )
       .revoke(FOCUSED_PATH);
     await session.send('/focused remember this', { id: crypto.randomUUID() });
@@ -902,7 +902,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     new InstructionApprovalStore(
       rt.storage.sql,
       rt.actor,
-      `local:${realpathSync(process.cwd())}`,
+      `local:${realpathSync(rt.cwd)}`,
     )
       .approve(FOCUSED_PATH, instructionDigest(FOCUSED_SKILL));
 
@@ -1446,7 +1446,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
   ) {
     const db = new Database(scratchPath('local-session-review', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     // The rating rides rt.decide and the reflection rt.llm.complete; both are stubbed so the review runs offline.
     const completions: string[] = [];
 

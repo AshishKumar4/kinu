@@ -1,5 +1,6 @@
 /** Ownership of `:name` is proven before any workspace route runs, and only then indexed. */
 import type { MiddlewareHandler } from 'hono';
+import { Result } from 'effect';
 import { err } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { observeWorkspaceUse } from '../control-plane/index-feed';
@@ -31,13 +32,13 @@ export const workspaceGate: MiddlewareHandler<WorkspaceEnv> = async (c, next) =>
   const name = decodeURIComponent(rawParam(c, 'name'));
   const claim = await claimOwnedWorkspace(c.env, identity.userId, name);
 
-  if (!claim.ok) return err(claim.status, claim.error);
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
 
   observeWorkspaceUse(c.env, identity, name, { retain: c.executionCtx });
 
   c.set('workspace', {
     name,
-    agent: claim.agent,
+    agent: claim.success,
     request: new Request(c.req.raw, { headers: appendIdentityHeaders(c.req.raw.headers, identity) }),
   });
   await next();

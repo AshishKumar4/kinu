@@ -237,12 +237,11 @@ describe('virtual workspace grouping', () => {
     ...over,
   });
 
-  test('peers group by their {cwd, workspaceId} pair; unplaced and cloud rows keep their own buckets', () => {
+  test('peers group by their {cwd, workspaceId} pair; cloud rows keep their own bucket', () => {
     const grouped = groupAgentWorkspaces([
       row({ name: 'lead', mode: 'local', cwd: ROOT, workspaceId: 'shop' }),
       row({ name: 'writer', mode: 'local', cwd: ROOT, workspaceId: 'docs' }),
       row({ name: 'fixer', mode: 'local', cwd: ROOT, workspaceId: 'shop' }),
-      row({ name: 'oldbot', mode: 'local' }),
       row({ name: 'jarvis', mode: 'cloud', cloudName: 'jarvis' }),
       row({ name: 'faraway', mode: 'local', cwd: '/elsewhere/repo', workspaceId: 'other' }),
     ], ROOT);
@@ -252,14 +251,12 @@ describe('virtual workspace grouping', () => {
       `${ROOT}:docs:writer`,
       '/elsewhere/repo:other:faraway',
     ]);
-    expect(grouped.unplaced.map((agent) => agent.name)).toEqual(['oldbot']);
     expect(grouped.remote.map((agent) => agent.name)).toEqual(['jarvis']);
   });
 
   test('a placed row without a recorded workspaceId falls back to the directory slug, matching placement', () => {
     expect(agentWorkspaceKey(row({ name: 'a', mode: 'local', cwd: '/repo/My Shop!' }), ROOT))
       .toBe('/repo/My Shop!\u0000my-shop');
-    expect(agentWorkspaceKey(row({ name: 'a', mode: 'local' }), ROOT)).toBe('unplaced');
     expect(agentWorkspaceKey(row({ name: 'a', mode: 'cloud' }), ROOT)).toBeNull();
     const grouped = groupAgentWorkspaces([row({ name: 'a', mode: 'local', cwd: ROOT })], ROOT);
     expect(grouped.workspaces).toEqual([{ cwd: ROOT, workspaceId: 'shop', agents: [row({ name: 'a', mode: 'local', cwd: ROOT })] }]);
@@ -267,7 +264,8 @@ describe('virtual workspace grouping', () => {
 });
 
 describe('the sidebar roster for one directory', () => {
-  test('lists this project, unplaced agents, and cloud refs — never another project, and never merged duplicates', async () => {
+  // 2026-10-04: a workspace without a recorded folder is refused at open, so no roster lists it (no Unplaced group).
+  test('lists this project and cloud refs — never another project, never a workspace without a folder, and never merged duplicates', async () => {
     const home = scratchDir('agent-list');
     const projectDir = realpathSync(scratchDir('agent-proj'));
     const otherDir = realpathSync(scratchDir('agent-other'));
@@ -282,9 +280,9 @@ describe('the sidebar roster for one directory', () => {
       writeFileSync(join(home, name, 'agent.db'), '');
     }
 
-    const oldbotDb = new Database(join(home, 'oldbot', 'agent.db'));
-    createCLIRuntime(oldbotDb, { llm: null, agentName: 'oldbot' }).actor.config.setDisplayName('Old Bot');
-    oldbotDb.close();
+    const writerDb = new Database(join(home, 'writer', 'agent.db'));
+    createCLIRuntime(writerDb, { llm: null, agentName: 'writer', cwd: projectDir }).actor.config.setDisplayName('Writer Bot');
+    writerDb.close();
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       agents: {
         lead: localRef('lead', projectDir, 'shop'),
@@ -328,26 +326,22 @@ describe('the sidebar roster for one directory', () => {
       grouped: v.object({
         projectRoot: v.string(),
         workspaces: v.array(v.object({ cwd: v.string(), workspaceId: v.string(), agents: v.array(RowSchema) })),
-        unplaced: v.array(RowSchema),
         remote: v.array(RowSchema),
       }),
     }), JSON.parse(proc.stdout));
 
+    // Placed agents by workspace then name, then the account's cloud workspaces; oldbot, stray and the local
+    // audit database record no folder here, so they are listed nowhere.
     expect(parsed.agents.map((agent) => `${agent.mode}:${agent.name}`)).toEqual([
-      // Placed agents by workspace then name, then unplaced workspaces, then the account's cloud workspaces.
       'local:writer', 'local:fixer', 'local:lead',
-      'local:audit', 'local:oldbot', 'local:stray',
       'cloud:audit', 'cloud:jarvis',
     ]);
-    const oldbot = parsed.agents.find((agent) => agent.name === 'oldbot');
-    expect(oldbot?.label).toBe('Old Bot');
-    expect(oldbot?.cwd).toBeUndefined();
-    expect(oldbot?.workspaceId).toBeUndefined();
+    // The title comes from the workspace database.
+    expect(parsed.agents.find((agent) => agent.name === 'writer')?.label).toBe('Writer Bot');
     expect(parsed.grouped.workspaces.map((group) => `${group.workspaceId}:${group.agents.map((agent) => agent.name).join('+')}`)).toEqual([
       'docs:writer',
       'shop:fixer+lead',
     ]);
-    expect(parsed.grouped.unplaced.map((agent) => agent.name)).toEqual(['audit', 'oldbot', 'stray']);
     expect(parsed.grouped.remote.map((agent) => `${agent.mode}:${agent.name}`)).toEqual(['cloud:audit', 'cloud:jarvis']);
   });
 });
@@ -401,7 +395,8 @@ describe('the local roster is one function', () => {
     }), JSON.parse(proc.stdout));
 
     const names = (lines: string[]) => ['alpha', 'beta', 'gamma'].filter((name) => lines.some((line) => line.includes(name)));
-    expect(names(parsed.listed)).toEqual(['alpha', 'beta', 'gamma']);
+    // gamma's database has no ref, so no folder: neither command lists it.
+    expect(names(parsed.listed)).toEqual(['alpha', 'beta']);
     expect(names(parsed.transcripted)).toEqual(names(parsed.listed));
   });
 });

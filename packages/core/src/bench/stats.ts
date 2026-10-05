@@ -2,6 +2,8 @@
 // The unit of pairing is the task, not the attempt: repeats are collapsed to a
 // per-task pass rate first, since counting attempts as pairs is pseudoreplication.
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { fnv1a64 } from '../utils/fnv1a';
 import { seededRandom } from '../utils/stats';
 
@@ -13,26 +15,28 @@ const DEFAULT_BOOTSTRAP_ITERATIONS = 10_000;
 
 /** Inverse standard-normal CDF (Acklam's rational approximation, |ε| < 1.15e-9). */
 export function normalQuantile(p: number): number {
-  if (!(p > 0 && p < 1)) throw new Error(`normalQuantile: p must be in (0,1), got ${p}`);
-  const a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.383577518672690e2, -3.066479806614716e1, 2.506628277459239];
-  const b = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
-  const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
-  const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
-  const pLow = 0.02425;
+  return settleSync(Effect.gen(function* () {
+    if (!(p > 0 && p < 1)) return yield* Effect.die(new Error(`normalQuantile: p must be in (0,1), got ${p}`));
+    const a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.383577518672690e2, -3.066479806614716e1, 2.506628277459239];
+    const b = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
+    const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+    const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
+    const pLow = 0.02425;
 
-  if (p < pLow) {
-    const q = Math.sqrt(-2 * Math.log(p));
+    if (p < pLow) {
+      const q = Math.sqrt(-2 * Math.log(p));
 
-    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
-      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
-  }
+      return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+        ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+    }
 
-  if (p > 1 - pLow) return -normalQuantile(1 - p);
-  const q = p - 0.5;
-  const r = q * q;
+    if (p > 1 - pLow) return -normalQuantile(1 - p);
+    const q = p - 0.5;
+    const r = q * q;
 
-  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
-    (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+      (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  }));
 }
 
 function logGamma(x: number): number {
@@ -221,24 +225,26 @@ export interface TaskRepeatSummary {
 
 /** One row per task from here on, so k attempts can never count as k pairs. */
 export function summarizeRepeats(outcome: PairedOutcome): TaskRepeatSummary {
-  const repeats = outcome.a.length;
+  return settleSync(Effect.gen(function* () {
+    const repeats = outcome.a.length;
 
-  if (repeats === 0) throw new Error(`task ${outcome.taskId} has no attempts`);
+    if (repeats === 0) return yield* Effect.die(new Error(`task ${outcome.taskId} has no attempts`));
 
-  if (outcome.b.length !== repeats) {
-    throw new Error(`task ${outcome.taskId} ran ${repeats} baseline attempts but ${outcome.b.length} candidate attempts: a paired design cannot compare unequal repeats`);
-  }
+    if (outcome.b.length !== repeats) {
+      return yield* Effect.die(new Error(`task ${outcome.taskId} ran ${repeats} baseline attempts but ${outcome.b.length} candidate attempts: a paired design cannot compare unequal repeats`));
+    }
 
-  const passesA = outcome.a.filter(Boolean).length;
-  const passesB = outcome.b.filter(Boolean).length;
+    const passesA = outcome.a.filter(Boolean).length;
+    const passesB = outcome.b.filter(Boolean).length;
 
-  return {
-    taskId: outcome.taskId, repeats, passesA, passesB,
-    rateA: passesA / repeats, rateB: passesB / repeats,
-    allA: passesA === repeats, allB: passesB === repeats,
-    flakyA: passesA > 0 && passesA < repeats,
-    flakyB: passesB > 0 && passesB < repeats,
-  };
+    return {
+      taskId: outcome.taskId, repeats, passesA, passesB,
+      rateA: passesA / repeats, rateB: passesB / repeats,
+      allA: passesA === repeats, allB: passesB === repeats,
+      flakyA: passesA > 0 && passesA < repeats,
+      flakyB: passesB > 0 && passesB < repeats,
+    };
+  }));
 }
 
 /** Exact paired test over tasks, cluster bootstrap CI, and a resolution statement.
@@ -247,91 +253,93 @@ export function pairedBinaryComparison(
   outcomes: readonly PairedOutcome[],
   opts: BootstrapOptions & { power?: number } = {},
 ): PairedBinaryStats {
-  const alpha = opts.alpha ?? DEFAULT_ALPHA;
-  const power = opts.power ?? DEFAULT_POWER;
-  const summaries = outcomes.map(summarizeRepeats);
-  const pairs = summaries.length;
-  const repeats = summaries[0]?.repeats ?? 1;
+  return settleSync(Effect.gen(function* () {
+    const alpha = opts.alpha ?? DEFAULT_ALPHA;
+    const power = opts.power ?? DEFAULT_POWER;
+    const summaries = outcomes.map(summarizeRepeats);
+    const pairs = summaries.length;
+    const repeats = summaries[0]?.repeats ?? 1;
 
-  for (const s of summaries) {
-    if (s.repeats !== repeats) {
-      throw new Error(`task ${s.taskId} ran ${s.repeats} repeats but the split ran ${repeats}: a split with ragged repeats has no single pass^k`);
+    for (const s of summaries) {
+      if (s.repeats !== repeats) {
+        return yield* Effect.die(new Error(`task ${s.taskId} ran ${s.repeats} repeats but the split ran ${repeats}: a split with ragged repeats has no single pass^k`));
+      }
     }
-  }
 
-  let bothPass = 0, bothFail = 0, tiedPartial = 0, onlyA = 0, onlyB = 0;
-  let flakyA = 0, flakyB = 0, flakyEither = 0;
-  let allA = 0, allB = 0, rateSumA = 0, rateSumB = 0, squaredDiff = 0;
+    let bothPass = 0, bothFail = 0, tiedPartial = 0, onlyA = 0, onlyB = 0;
+    let flakyA = 0, flakyB = 0, flakyEither = 0;
+    let allA = 0, allB = 0, rateSumA = 0, rateSumB = 0, squaredDiff = 0;
 
-  for (const s of summaries) {
-    if (s.rateA > s.rateB) onlyA++;
-    else if (s.rateB > s.rateA) onlyB++;
-    else if (s.allA) bothPass++;
-    else if (s.passesA === 0) bothFail++;
-    else tiedPartial++;
+    for (const s of summaries) {
+      if (s.rateA > s.rateB) onlyA++;
+      else if (s.rateB > s.rateA) onlyB++;
+      else if (s.allA) bothPass++;
+      else if (s.passesA === 0) bothFail++;
+      else tiedPartial++;
 
-    if (s.flakyA) flakyA++;
+      if (s.flakyA) flakyA++;
 
-    if (s.flakyB) flakyB++;
+      if (s.flakyB) flakyB++;
 
-    if (s.flakyA || s.flakyB) flakyEither++;
+      if (s.flakyA || s.flakyB) flakyEither++;
 
-    if (s.allA) allA++;
+      if (s.allA) allA++;
 
-    if (s.allB) allB++;
-    rateSumA += s.rateA;
-    rateSumB += s.rateB;
-    squaredDiff += (s.rateB - s.rateA) ** 2;
-  }
+      if (s.allB) allB++;
+      rateSumA += s.rateA;
+      rateSumB += s.rateB;
+      squaredDiff += (s.rateB - s.rateA) ** 2;
+    }
 
-  const discordant = onlyA + onlyB;
-  const discordanceRate = pairs === 0 ? 0 : discordant / pairs;
-  const dispersion = pairs === 0 ? 0 : squaredDiff / pairs;
-  const passAtOneA = pairs === 0 ? 0 : rateSumA / pairs;
-  const passAtOneB = pairs === 0 ? 0 : rateSumB / pairs;
-  const passAllA = pairs === 0 ? 0 : allA / pairs;
-  const passAllB = pairs === 0 ? 0 : allB / pairs;
+    const discordant = onlyA + onlyB;
+    const discordanceRate = pairs === 0 ? 0 : discordant / pairs;
+    const dispersion = pairs === 0 ? 0 : squaredDiff / pairs;
+    const passAtOneA = pairs === 0 ? 0 : rateSumA / pairs;
+    const passAtOneB = pairs === 0 ? 0 : rateSumB / pairs;
+    const passAllA = pairs === 0 ? 0 : allA / pairs;
+    const passAllB = pairs === 0 ? 0 : allB / pairs;
 
-  const diffs = summaries.map((s) => s.rateB - s.rateA);
-  const { mean: effect, ci } = pairedBootstrapCI(diffs, { ...opts, alpha });
-  const pValue = binomialTwoSidedP(onlyB, discordant);
-  const mde = minimumDetectableEffect({ pairs, dispersion, alpha, power });
-  const resolutionRatio = Number.isFinite(mde) && mde > 0 ? Math.abs(effect) / mde : 0;
-  const resolvable = resolutionRatio >= 1;
-  const significant = pValue < alpha;
-  const pairsNeededForObserved = requiredPairs(effect, { dispersion, alpha, power });
+    const diffs = summaries.map((s) => s.rateB - s.rateA);
+    const { mean: effect, ci } = pairedBootstrapCI(diffs, { ...opts, alpha });
+    const pValue = binomialTwoSidedP(onlyB, discordant);
+    const mde = minimumDetectableEffect({ pairs, dispersion, alpha, power });
+    const resolutionRatio = Number.isFinite(mde) && mde > 0 ? Math.abs(effect) / mde : 0;
+    const resolvable = resolutionRatio >= 1;
+    const significant = pValue < alpha;
+    const pairsNeededForObserved = requiredPairs(effect, { dispersion, alpha, power });
 
-  const smallSample = discordant > 0 && discordant < 10;
-  // The floor comes from `discordant`, the set the p-value is computed over.
-  const floor = floorPValue(discordant);
-  const canReachSignificance = discordant > 0 && floor <= alpha;
+    const smallSample = discordant > 0 && discordant < 10;
+    // The floor comes from `discordant`, the set the p-value is computed over.
+    const floor = floorPValue(discordant);
+    const canReachSignificance = discordant > 0 && floor <= alpha;
 
-  let verdict: string;
+    let verdict: string;
 
-  if (pairs === 0) verdict = 'no pairs ran: nothing to conclude';
-  else if (discordant === 0) verdict = `variants never disagreed on ${pairs} tasks: this corpus cannot separate them`;
-  else if (!canReachSignificance) {
-    verdict = `UNDECIDABLE: ${discordant} of ${pairs} task(s) differed between the arms, and the smallest p `
-      + `that many differing pairs can produce is ${floor.toFixed(4)} > alpha ${alpha}: no outcome here `
-      + `could have established an effect. It needs at least ${minimumPairsForSignificance(alpha)} `
-      + 'DIFFERING pairs, which more tasks make possible but do not guarantee';
-  }
-  else if (significant && resolvable) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) and above the design's resolution (${fmtPp(mde)})`;
-  else if (significant) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) but below the design's 80%-power threshold of ${fmtPp(mde)}: suggestive, not established; ${pairsNeededForObserved} pairs would settle it`;
-  else verdict = `no detectable difference (p=${pValue.toFixed(4)}); this design resolves ${fmtPp(mde)}, so effects below that are invisible`;
+    if (pairs === 0) verdict = 'no pairs ran: nothing to conclude';
+    else if (discordant === 0) verdict = `variants never disagreed on ${pairs} tasks: this corpus cannot separate them`;
+    else if (!canReachSignificance) {
+      verdict = `UNDECIDABLE: ${discordant} of ${pairs} task(s) differed between the arms, and the smallest p `
+        + `that many differing pairs can produce is ${floor.toFixed(4)} > alpha ${alpha}: no outcome here `
+        + `could have established an effect. It needs at least ${minimumPairsForSignificance(alpha)} `
+        + 'DIFFERING pairs, which more tasks make possible but do not guarantee';
+    }
+    else if (significant && resolvable) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) and above the design's resolution (${fmtPp(mde)})`;
+    else if (significant) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) but below the design's 80%-power threshold of ${fmtPp(mde)}: suggestive, not established; ${pairsNeededForObserved} pairs would settle it`;
+    else verdict = `no detectable difference (p=${pValue.toFixed(4)}); this design resolves ${fmtPp(mde)}, so effects below that are invisible`;
 
-  if (smallSample) verdict += ` [only ${discordant} discordant pairs: the p-value is exact, the ${fmtPp(mde)} threshold is a normal approximation and loose here]`;
+    if (smallSample) verdict += ` [only ${discordant} discordant pairs: the p-value is exact, the ${fmtPp(mde)} threshold is a normal approximation and loose here]`;
 
-  if (repeats > 1) verdict += ` [${repeats} repeats × ${pairs} tasks = ${pairs * repeats} attempts per variant, but still ${pairs} independent pairs: repeats buy precision within a task, never more tasks]`;
+    if (repeats > 1) verdict += ` [${repeats} repeats × ${pairs} tasks = ${pairs * repeats} attempts per variant, but still ${pairs} independent pairs: repeats buy precision within a task, never more tasks]`;
 
-  return {
-    pairs, repeats, attemptsPerVariant: pairs * repeats,
-    bothPass, bothFail, tiedPartial, onlyA, onlyB, discordant, discordanceRate, dispersion,
-    passAtOneA, passAtOneB, passAllA, passAllB, flakyA, flakyB, flakyEither,
-    effect, effectAll: passAllB - passAllA, ci, pValue, alpha, power,
-    mde, resolutionRatio, resolvable, significant, smallSample,
-    floorPValue: floor, canReachSignificance, pairsNeededForObserved, verdict,
-  };
+    return {
+      pairs, repeats, attemptsPerVariant: pairs * repeats,
+      bothPass, bothFail, tiedPartial, onlyA, onlyB, discordant, discordanceRate, dispersion,
+      passAtOneA, passAtOneB, passAllA, passAllB, flakyA, flakyB, flakyEither,
+      effect, effectAll: passAllB - passAllA, ci, pValue, alpha, power,
+      mde, resolutionRatio, resolvable, significant, smallSample,
+      floorPValue: floor, canReachSignificance, pairsNeededForObserved, verdict,
+    };
+  }));
 }
 
 export function fmtPp(x: number): string {

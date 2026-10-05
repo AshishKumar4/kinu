@@ -3,6 +3,7 @@
  * Delete needs revoked shares too: their recipients still hold the `sharesReceived_add` row.
  * Worker code only: it claims ownership via the session plane and derives ids from emails.
  */
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { retryTransientDO, type UserCaller } from '@kinu.run/core';
 import {
@@ -14,7 +15,7 @@ import type { ObjectNamespace } from '@kinu.run/core';
 import type { UserDO } from './user-do';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
 import { deriveUserId } from '../auth/store';
-import { KinuError } from '@kinu.run/core/obs';
+import { KinuError, settle } from '@kinu.run/core/obs';
 
 const ShareRowSchema = v.object({
   id: v.string(), slate: v.string(), createdAt: v.number(), revokedAt: v.nullable(v.number()),
@@ -36,46 +37,50 @@ export interface SharesGivenEnv<Id>
   UserDO: ObjectNamespace<Id, ShareRosterAuthority>;
 }
 
-async function sharesGiven<Id>(
+function sharesGiven<Id>(
   env: SharesGivenEnv<Id>, owner: UserCaller, userId: string,
-): Promise<WorkspaceShares[]> {
-  const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-  const answer: WorkspaceShares[] = [];
+): Effect.Effect<WorkspaceShares[], KinuError> {
+  return Effect.gen(function* () {
+    const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
+    const answer: WorkspaceShares[] = [];
 
-  for (const workspace of await userDO.listActiveWorkspaces(owner)) {
-    const claim = await claimOwnedWorkspace(env, userId, workspace.name);
+    for (const workspace of (yield* Effect.promise(async () => userDO.listActiveWorkspaces(owner)))) {
+      const claim = yield* Effect.promise(async () => claimOwnedWorkspace(env, userId, workspace.name));
 
-    if (!claim.ok) continue;
+      if (Result.isFailure(claim)) continue;
 
-    const owned = workspaceOwner(env, workspace.name);
-    const listing = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'shares' });
+      const owned = workspaceOwner(env, workspace.name);
+      const listing = yield* Effect.promise(async () => owned.slateAs(ROOT_SLATE_CALLER, { op: 'shares' }));
 
-    if (!listing.ok) throw new KinuError('io', `listing blueprints of ${workspace.name}: ${listing.reason}: ${listing.error}`);
-    answer.push({ workspace: workspace.name, shares: v.parse(v.array(ShareRowSchema), listing.value) });
-  }
+      if (!listing.ok) return yield* new KinuError('io', `listing blueprints of ${workspace.name}: ${listing.reason}: ${listing.error}`);
+      answer.push({ workspace: workspace.name, shares: v.parse(v.array(ShareRowSchema), listing.value) });
+    }
 
-  return answer;
+    return answer;
+  });
 }
 
 /**
  * Must run before the account's own object is torn down: recipients are listed only in the
  * workspaces teardown destroys. Idempotent, so a retried delete does no harm here.
  */
-export async function forgetSharesGiven<Id>(
+export function forgetSharesGiven<Id>(
   env: SharesGivenEnv<Id>, userId: string, owner: UserCaller,
 ): Promise<{ recipients: number }> {
-  const emails = new Set<string>();
+  return settle(Effect.gen(function* () {
+    const emails = new Set<string>();
 
-  for (const { shares } of await sharesGiven(env, owner, userId)) {
-    for (const share of shares) {
-      for (const email of share.users) emails.add(email.toLowerCase());
+    for (const { shares } of (yield* sharesGiven(env, owner, userId))) {
+      for (const share of shares) {
+        for (const email of share.users) emails.add(email.toLowerCase());
+      }
     }
-  }
 
-  for (const email of emails) {
-    const recipient = env.UserDO.get(env.UserDO.idFromName(await deriveUserId(email)));
-    await retryTransientDO('sharesReceived_forget', () => recipient.sharesReceived_forget(owner, userId));
-  }
+    for (const email of emails) {
+      const recipient = env.UserDO.get(env.UserDO.idFromName(yield* Effect.promise(async () => deriveUserId(email))));
+      yield* Effect.promise(async () => retryTransientDO('sharesReceived_forget', () => recipient.sharesReceived_forget(owner, userId)));
+    }
 
-  return { recipients: emails.size };
+    return { recipients: emails.size };
+  }));
 }

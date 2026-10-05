@@ -1,3 +1,5 @@
+import { Effect, Cause } from 'effect';
+import { detach } from '@kinu.run/core/obs';
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { DatabaseIcon, GaugeIcon } from "@phosphor-icons/react";
@@ -27,17 +29,18 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
   const load = useCallback(() => rpc<GepaRunRow[]>("getGepaRuns", [20]), [rpc]);
   const { resource, reload } = useAsyncResource(load);
 
-  const open = useCallback(async (runId: string) => {
+  const open = useCallback((runId: string) => detach(Effect.gen(function* () {
     setSel(runId);
     setDetail({ status: "loading" });
 
-    try {
-      const runDetail = await rpc<GepaRunDetail>("getGepaRun", [runId]);
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const runDetail = yield* Effect.promise(async () => rpc<GepaRunDetail>("getGepaRun", [runId]));
       setDetail(loadSucceeded(runDetail));
-    } catch (cause) {
+    }), (failed) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
       setDetail((previous) => loadFailed(previous, { cause }));
-    }
-  }, [rpc]);
+    }));
+  })), [rpc]);
 
   const runs = lastValue(resource);
 

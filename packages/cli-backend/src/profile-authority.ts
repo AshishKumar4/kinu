@@ -3,6 +3,7 @@
  * jobs). Built with the runtime, not the session: a session-less runtime must still route.
  */
 
+import { Effect } from 'effect';
 import type {
   AgentConfigStore, PinnedProfile, ProfileAuthorityInputs, ProfileCatalog, ProfileCatalogEnvelope,
   ProviderListing, ProviderSnapshotRead, ResolvedTurnProfile, RunEventInput, WorkMode,
@@ -13,7 +14,7 @@ import {
   profileCatalogDigest, resolveAgentTurnProfile,
 } from '@kinu.run/core';
 import type { LocalModelResolver } from './model-resolver';
-import { diagnostics } from '@kinu.run/core/obs';
+import { diagnostics, settleSync } from '@kinu.run/core/obs';
 
 /** The spec a runtime with no model registry reports; static planes are test-only. */
 export const STATIC_MODEL_SPEC = 'local/static';
@@ -42,12 +43,15 @@ export interface LocalProfileModelPlane {
 export function staticModelPlane(): LocalProfileModelPlane {
   return {
     normalizeSpec(spec) {
-      const trimmed = (spec ?? '').trim();
+      return settleSync(Effect.gen(function* () {
+        const trimmed = (spec ?? '').trim();
 
-      if (!trimmed || trimmed === STATIC_MODEL_SPEC) return STATIC_MODEL_SPEC;
-      throw new Error(
-        'Model switching is unavailable for this local runtime; open it with a modelResolver.',
-      );
+        if (!trimmed || trimmed === STATIC_MODEL_SPEC) return STATIC_MODEL_SPEC;
+
+        return yield* Effect.die(new Error(
+          'Model switching is unavailable for this local runtime; open it with a modelResolver.',
+        ));
+      }));
     },
     listModels: () => Promise.resolve({ models: [STATIC_MODEL_SPEC], failures: [] }),
   };

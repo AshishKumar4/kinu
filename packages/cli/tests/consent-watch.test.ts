@@ -1,5 +1,6 @@
 // Shared device-consent watcher; each case awaits the poll it needs, so nothing sleeps for a number.
 import { describe, expect, test } from 'bun:test';
+
 import type {
   DeviceConsentDecision,
   DeviceConsentSurface,

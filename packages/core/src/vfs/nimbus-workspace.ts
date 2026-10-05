@@ -35,7 +35,6 @@ import { atVfsPath } from './errno';
 import type { MountedVfs } from './mounts';
 import { shellMounts, type ShellMounts, type ShellMountTable } from './shell-mounts';
 
-export { workspaceToolchainCapabilities } from './workspace-runtimes';
 
 export type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 

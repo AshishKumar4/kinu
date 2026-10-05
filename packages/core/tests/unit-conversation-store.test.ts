@@ -1,5 +1,6 @@
 /** Conversation store reads, seeded through the canonical writers. */
 
+import { Effect } from 'effect';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { answersForDrainTurns, conversationTurnPair, forkPointExists } from '../src/identity/conversation-store';
@@ -56,7 +57,7 @@ describe('the message count — the default chat alone', () => {
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
     await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'u2', origin: 'input', message: { role: 'user', content: 'second ask' } });
     await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'a2', origin: 'output', message: { role: 'assistant', content: 'second answer' } });
-    s.history.revertTo(CHAT_SESSION_ID, 'u2', () => {});
+    s.history.revertTo(CHAT_SESSION_ID, 'u2', () => Effect.void);
 
     expect(s.transcript.count()).toBe(2);
 
@@ -71,7 +72,7 @@ describe('the message count — the default chat alone', () => {
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
     await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'u2', origin: 'input', message: { role: 'user', content: 'second ask' } });
     await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'a2', origin: 'output', message: { role: 'assistant', content: 'second answer' } });
-    s.history.revertTo(CHAT_SESSION_ID, 'u2', () => {});
+    s.history.revertTo(CHAT_SESSION_ID, 'u2', () => Effect.void);
 
     const stored = () => s.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE session_id=${CHAT_SESSION_ID} ORDER BY rowid`.map((row) => row.id);
 

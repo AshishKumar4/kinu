@@ -1,3 +1,5 @@
+import { Cause, Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { TierIdSchema, isValidRoleId } from '../types/profile';
 import { isWorkMode, type WorkMode } from '../types/turn';
@@ -38,88 +40,101 @@ export type SubordinateBirth = v.InferOutput<typeof SubordinateBirthSchema>;
 const inFlight = new WeakMap<SubordinateRosterStore, Map<string, Promise<ActorReference>>>();
 
 /** Resume only the request that the roster admitted before its first await. */
-export async function finishSubordinateBirth(
+export function finishSubordinateBirth(
   roster: SubordinateRosterStore,
   runtime: SubordinateRuntime,
   name: string,
 ): Promise<ActorReference> {
-  const entry = roster.requireExisting(name);
-  const birth = entry.birth;
+  return settle(Effect.gen(function* () {
+    const entry = roster.requireExisting(name);
+    const birth = entry.birth;
 
-  if (entry.deleteRequested) throw new KinuError('cancelled', 'The admitted actor birth is cancelled.');
+    if (entry.deleteRequested) return yield* new KinuError('cancelled', 'The admitted actor birth is cancelled.');
 
-  if (!birth) {
-    if (!entry.actorReference) throw new KinuError('missing', 'The subordinate has no registered actor reference.');
+    if (!birth) {
+      if (!entry.actorReference) return yield* new KinuError('missing', 'The subordinate has no registered actor reference.');
 
-    return entry.actorReference;
-  }
-
-  let pending = inFlight.get(roster);
-
-  if (!pending) { pending = new Map(); inFlight.set(roster, pending); }
-
-  const existing = pending.get(birth.creationId);
-
-  if (existing) return await existing;
-
-  const work = (async (): Promise<ActorReference> => {
-    const reference = await runtime.spawn({ ...birth.seed, creationId: birth.creationId });
-    roster.attachActor(name, birth.creationId, reference);
-
-    if (roster.requireExisting(name).deleteRequested) throw new KinuError('cancelled', 'The admitted actor birth is cancelled.');
-
-    if (birth.assignment) {
-      const handoff = await runtime.assign(name, { ...birth.assignment, creationId: birth.creationId });
-
-      if (roster.requireExisting(name).birth?.creationId !== birth.creationId) throw new KinuError('denied', 'The birth admission no longer owns this assignment.');
-      roster.recordAssignmentEvent(name, handoff.eventId);
+      return entry.actorReference;
     }
 
-    roster.finishBirth(name, birth.creationId);
+    let pending = inFlight.get(roster);
 
-    return reference;
-  })();
+    if (!pending) { pending = new Map(); inFlight.set(roster, pending); }
 
-  pending.set(birth.creationId, work);
+    const existing = pending.get(birth.creationId);
 
-  try {
-    return await work;
-  } catch (cause) {
-    const error = toKinuError({ doing: 'completing an admitted actor birth', cause, otherwise: 'unavailable' });
+    if (existing) return yield* Effect.promise(() => existing);
 
-    if (error.code !== 'io' && error.code !== 'unavailable') roster.cancelBirth(name, birth.creationId);
-    throw error;
-  } finally {
-    if (pending.get(birth.creationId) === work) pending.delete(birth.creationId);
-  }
+    const work = ((): Promise<ActorReference> => {
+      return settle(Effect.gen(function* () {
+        const reference = yield* Effect.promise(() => runtime.spawn({ ...birth.seed, creationId: birth.creationId }));
+        roster.attachActor(name, birth.creationId, reference);
+
+        if (roster.requireExisting(name).deleteRequested) return yield* new KinuError('cancelled', 'The admitted actor birth is cancelled.');
+
+        const assignment = birth.assignment;
+
+        if (assignment) {
+          const handoff = yield* Effect.promise(() => runtime.assign(name, { ...assignment, creationId: birth.creationId }));
+
+          if (roster.requireExisting(name).birth?.creationId !== birth.creationId) return yield* new KinuError('denied', 'The birth admission no longer owns this assignment.');
+          roster.recordAssignmentEvent(name, handoff.eventId);
+        }
+
+        roster.finishBirth(name, birth.creationId);
+
+        return reference;
+      }));
+    })();
+
+    pending.set(birth.creationId, work);
+    const held = pending;
+
+    return yield* Effect.ensuring(Effect.catchCause(Effect.promise(() => work), (failed) => {
+      const error = toKinuError({ doing: 'completing an admitted actor birth', cause: Cause.squash(failed), otherwise: 'unavailable' });
+
+      if (error.code !== 'io' && error.code !== 'unavailable') roster.cancelBirth(name, birth.creationId);
+
+      return Effect.fail(error);
+    }), Effect.sync(() => {
+      if (held.get(birth.creationId) === work) held.delete(birth.creationId);
+    }));
+  }));
 }
 
 /** The existing maintenance owner resumes these intents after an interruption. */
-export async function recoverSubordinateLifecycles(roster: SubordinateRosterStore, runtime: SubordinateRuntime): Promise<boolean> {
-  for (const entry of roster.pendingDeletions()) {
-    let reference = entry.actorReference;
+export function recoverSubordinateLifecycles(roster: SubordinateRosterStore, runtime: SubordinateRuntime): Promise<boolean> {
+  return settle(Effect.gen(function* () {
+    for (const entry of roster.pendingDeletions()) {
+      let reference = entry.actorReference;
 
-    if (!reference) {
-      if (!entry.birth) throw new KinuError('missing', 'The deletion intent has no actor or admitted creation identity.');
-      reference = await runtime.cancelBirth({ ...entry.birth.seed, creationId: entry.birth.creationId });
-      roster.attachActor(entry.name, entry.birth.creationId, reference);
-    } else {
-      await runtime.dismiss(entry.name, { keepHistory: false, interrupt: true }, reference);
+      if (!reference) {
+        const birth = entry.birth;
+
+        if (!birth) return yield* new KinuError('missing', 'The deletion intent has no actor or admitted creation identity.');
+        reference = yield* Effect.promise(async () => runtime.cancelBirth({ ...birth.seed, creationId: birth.creationId }));
+        roster.attachActor(entry.name, birth.creationId, reference);
+      } else {
+        const held = reference;
+
+        yield* Effect.promise(async () => runtime.dismiss(entry.name, { keepHistory: false, interrupt: true }, held));
+      }
+
+      roster.removeActor(entry.name, reference);
     }
 
-    roster.removeActor(entry.name, reference);
-  }
+    for (const entry of roster.pendingBirths()) {
+      yield* Effect.catchCause(Effect.gen(function* () {
+        yield* Effect.promise(async () => finishSubordinateBirth(roster, runtime, entry.name));
+      }), (failed) => Effect.gen(function* () {
+        const cause = Cause.squash(failed);
+        const error = toKinuError({ doing: 'recovering an admitted actor birth', cause, otherwise: 'unavailable' });
 
-  for (const entry of roster.pendingBirths()) {
-    try {
-      await finishSubordinateBirth(roster, runtime, entry.name);
-    } catch (cause) {
-      const error = toKinuError({ doing: 'recovering an admitted actor birth', cause, otherwise: 'unavailable' });
-
-      if (error.code === 'io' || error.code === 'unavailable') throw error;
-      diagnostics.failure('subordinate.birth_recovery_failed', error, { subordinate: entry.name });
+        if (error.code === 'io' || error.code === 'unavailable') return yield* Effect.die(error);
+        diagnostics.failure('subordinate.birth_recovery_failed', error, { subordinate: entry.name });
+      }));
     }
-  }
 
-  return roster.hasPendingBirths() || roster.pendingDeletions().length > 0;
+    return roster.hasPendingBirths() || roster.pendingDeletions().length > 0;
+  }));
 }

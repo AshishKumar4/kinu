@@ -11,17 +11,19 @@ import { boundRunEventQuery, RUN_EVENT_LIMIT_MAX, type RunEventType, type Stored
 import * as v from 'valibot';
 import { resumeIndexFromLastEventId } from '@kinu.run/core';
 import { waitOn, type Clock } from "@kinu.run/core";
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { diagnostics, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import { rawParam, type FamilyEnv } from './api/context';
 import type { WorkspaceVariables } from './api/workspace';
 
 /** Record each 500 as a fleet signal. The workspace name is user text, so the row names the surface instead. */
-function reportRouteFailure(input: { surface: string; cause: unknown }): Response {
-  const { surface, cause } = input;
-  const error = toKinuError({ doing: `answering a ${surface} request for the durable run-event log`, cause, otherwise: 'unavailable' });
-  diagnostics.failure('http.run_events_failed', error, { source: surface });
+function reportingAs(surface: string): (failed: Cause.Cause<unknown>) => Effect.Effect<Response> {
+  return (failed) => Effect.sync(() => {
+    const error = toKinuError({ doing: `answering a ${surface} request for the durable run-event log`, cause: Cause.squash(failed), otherwise: 'unavailable' });
+    diagnostics.failure('http.run_events_failed', error, { source: surface });
 
-  return Response.json({ error: renderThrownChain({ cause: error }) }, { status: 500 });
+    return Response.json({ error: renderThrownChain({ cause: error }) }, { status: 500 });
+  });
 }
 
 const SSE_POLL_MS = 500;
@@ -64,7 +66,7 @@ export function runEventsRoutes<Bindings extends object>(
 ): Hono<FamilyEnv<Bindings, WorkspaceVariables>> {
   const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables>>();
 
-  routes.on('GET', [RUNS, `${RUNS}/`], async (c) => {
+  routes.on('GET', [RUNS, `${RUNS}/`], (c) => {
     const url = new URL(c.req.url);
 
     // Forwarded raw: `listRuns` validates it in core for every caller.
@@ -75,16 +77,14 @@ export function runEventsRoutes<Bindings extends object>(
     // The page's own `next`, echoed verbatim, so a caller can tell a full page from the end.
     const after = url.searchParams.get('after');
 
-    try {
-      const stub = await resolverFor(c.env)(c.get('workspace').name);
+    return settle(Effect.catchCause(Effect.gen(function* () {
+      const stub = yield* Effect.promise(() => resolverFor(c.env)(c.get('workspace').name));
 
-      return Response.json(await stub.listRuns({ limit, cursor: after ? { after } : undefined }));
-    } catch (cause) {
-      return reportRouteFailure({ surface: 'runs', cause });
-    }
+      return Response.json(yield* Effect.promise(() => stub.listRuns({ limit, cursor: after ? { after } : undefined })));
+    }), reportingAs('runs')));
   });
 
-  routes.on('GET', [`${RUNS}/:run/events`, `${RUNS}/:run/events/`], async (c) => {
+  routes.on('GET', [`${RUNS}/:run/events`, `${RUNS}/:run/events/`], (c) => {
     const url = new URL(c.req.url);
 
     // The read-model's own closed parser; it reads NaN as "unstated".
@@ -94,15 +94,16 @@ export function runEventsRoutes<Bindings extends object>(
       types: parseTypesParam(url.searchParams.get('types')),
     });
 
-    try {
-      const stub = await resolverFor(c.env)(c.get('workspace').name);
+    return settle(Effect.catchCause(Effect.gen(function* () {
+      const stub = yield* Effect.promise(() => resolverFor(c.env)(c.get('workspace').name));
       const runId = rawParam(c, 'run');
       const events: string[] = [];
       let since = opts.since;
 
       // Joined from the object's bounded pages.
       while (events.length < opts.limit) {
-        const page = await stub.getRunEventText(runId, { ...opts, since, limit: opts.limit - events.length });
+        const from = since;
+        const page = yield* Effect.promise(() => stub.getRunEventText(runId, { ...opts, since: from, limit: opts.limit - events.length }));
 
         if (page.length === 0) break;
 
@@ -113,9 +114,7 @@ export function runEventsRoutes<Bindings extends object>(
       }
 
       return new Response(`[${events.join(',')}]`, { headers: { 'content-type': 'application/json' } });
-    } catch (cause) {
-      return reportRouteFailure({ surface: 'events', cause });
-    }
+    }), reportingAs('events')));
   });
 
   routes.on('GET', [`${RUNS}/:run/stream`, `${RUNS}/:run/stream/`], async (c) => {

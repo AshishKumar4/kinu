@@ -54,7 +54,7 @@ import { TierIdSchema,
   EvolutionEngine,
   readMemoryTail,
   agentsActionsFor, betaSwarms, type ProfileCatalog,
-  facetHomeProvisioner, facetHomeReleaser, actorHomeName, explorationActorKey,
+  actorHomeName, explorationActorKey,
   type HeadSeat, type HostedNodeSeat, type NodeIdentity, type ModelPricing,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
@@ -149,10 +149,10 @@ import { TierIdSchema,
   type ChatTurnInput, type CompactOutcome, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
-  diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, type Refusal,
+  diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, detach, type Refusal,
 } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
-import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
+import { localActorDirectory, nodeWorkspace, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { OS_LEASE_PROCESS } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
@@ -489,7 +489,7 @@ export class LocalAgentSession {
     this.rt = opts.rt;
     this.clock = opts.clock ?? REAL_CLOCK;
     this.oneShot = opts.oneShot === true;
-    this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
+    this.cwd = opts.cwd ?? this.rt.cwd;
     this.workspaceTitleSource = opts.workspaceTitle ?? null;
     this.ancestors = opts.ancestors;
     this.fallbackModel = opts.model ?? null;
@@ -1117,18 +1117,16 @@ export class LocalAgentSession {
 
   /** Skips a window outliving the session so consumed events never bind to a dead pump's turn. */
   setTimer(fn: () => Promise<void>, ms: number): void {
-    setTimeout(async () => {
-      if (this.chat.closed) return;
-
-      try {
-        await fn();
-      } catch (cause) {
-        diagnostics.failure(
-          'drain.timer_callback_failed',
-          toKinuError({ doing: 'running the drain-debounce timer callback', cause, otherwise: 'io' }),
-        );
-      }
-    }, ms);
+    setTimeout(() => detach(Effect.promise(async () => { if (this.chat.closed) return;
+    
+    try {
+      await fn();
+    } catch (cause) {
+      diagnostics.failure(
+        'drain.timer_callback_failed',
+        toKinuError({ doing: 'running the drain-debounce timer callback', cause, otherwise: 'io' }),
+      );
+    } })), ms);
   }
 
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
@@ -1537,22 +1535,20 @@ export class LocalAgentSession {
     this.clearLocalAlarm();
     this.scheduledAlarmAt = ts;
     const delay = Math.max(0, ts - Date.now());
-    this.alarmTimer = setTimeout(async () => {
-      this.alarmTimer = null;
-      this.scheduledAlarmAt = null;
-
-      try {
-        await this.fireDueTriggers();
-      } catch (cause) {
-        const failure = toKinuError({
-          doing: 'firing the triggers due on this wake',
-          cause,
-          otherwise: 'io',
-        });
-
-        diagnostics.failure('schedule.due_triggers_failed', failure);
-      }
-    }, Math.min(delay, 2_147_483_647));
+    this.alarmTimer = setTimeout(() => detach(Effect.promise(async () => { this.alarmTimer = null;
+    this.scheduledAlarmAt = null;
+    
+    try {
+      await this.fireDueTriggers();
+    } catch (cause) {
+      const failure = toKinuError({
+        doing: 'firing the triggers due on this wake',
+        cause,
+        otherwise: 'io',
+      });
+    
+      diagnostics.failure('schedule.due_triggers_failed', failure);
+    } })), Math.min(delay, 2_147_483_647));
   }
 
   private clearLocalAlarm(): void {
@@ -1765,7 +1761,7 @@ export class LocalAgentSession {
       agentsActions: resolvedAgentActions,
       // A session with no roster substrate never advertises the temporary rung.
       temporaryAsk: this.teamDeps?.temporary !== undefined,
-      backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
+      backend: 'cli-local',
       roleSection: profile.role,
       model: { id: turnSpec },
       // Read here: the builder is the byte-stable cacheable prefix and does no I/O.
@@ -2070,29 +2066,27 @@ export class LocalAgentSession {
     this.clearTerminalRetry();
     this.terminalRetryAt = atMs;
 
-    const timer = setTimeout(async () => {
-      this.clearTerminalRetry();
-
-      // Job sweep first, in its own try: this timer is also a deferred job's wake, and only
-      // `recoverBackgroundJobs` reaches `recoverOrphans` otherwise.
-      try {
-        await this.jobRunner.recoverDueResumes();
-      } catch (cause) {
-        diagnostics.failure('jobs.due_resume_failed', toKinuError({
-          doing: 'resuming a background job whose next attempt came due', cause, otherwise: 'unavailable',
-        }));
-      }
-
-      try {
-        await this.recoverTerminalTransitions();
-      } catch (cause) {
-        const failure = toKinuError({
-          doing: 'retrying the effects a settled turn still owed', cause, otherwise: 'unavailable',
-        });
-
-        diagnostics.failure('turn.terminal_retry_failed', failure);
-      }
-    }, Math.max(0, atMs - Date.now()));
+    const timer = setTimeout(() => detach(Effect.promise(async () => { this.clearTerminalRetry();
+    
+    // Job sweep first, in its own try: this timer is also a deferred job's wake, and only
+    // `recoverBackgroundJobs` reaches `recoverOrphans` otherwise.
+    try {
+      await this.jobRunner.recoverDueResumes();
+    } catch (cause) {
+      diagnostics.failure('jobs.due_resume_failed', toKinuError({
+        doing: 'resuming a background job whose next attempt came due', cause, otherwise: 'unavailable',
+      }));
+    }
+    
+    try {
+      await this.recoverTerminalTransitions();
+    } catch (cause) {
+      const failure = toKinuError({
+        doing: 'retrying the effects a settled turn still owed', cause, otherwise: 'unavailable',
+      });
+    
+      diagnostics.failure('turn.terminal_retry_failed', failure);
+    } })), Math.max(0, atMs - Date.now()));
 
     timer.unref();
     this.terminalRetryTimer = timer;
@@ -2361,7 +2355,7 @@ export class LocalAgentSession {
   /** The model as the turn names it, after the same normalisation the request uses. */
   private runtimeFacts(profile: ResolvedTurnProfile, cwd?: string): RuntimeFacts {
     return {
-      backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
+      backend: 'cli-local',
       model: { id: this.profiles().normalizeSpec(profile.tier.model) },
       cwd,
       date: currentDateForPrompt(),
@@ -2456,11 +2450,7 @@ export class LocalAgentSession {
       installedBuild: null,
       // The seater's observer if any; `nodeSeats` tells the builder a head row seats a node.
       runtimeFor: (bound) => buildLocalActorRuntime(this.rt, bound, this.pendingWriteObserver(bound.reference.actorId), this.nodeSeats.has(bound.reference.actorId)),
-      filesFor: async (bound) => {
-        if (!this.rt.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
-
-        return this.rt.filesForActor(bound.handle);
-      },
+      filesFor: (bound) => this.rt.filesForActor(bound.handle),
       orchestrationFor: (bound) => createLocalOrchestration({
         runtime: bound.runtime,
         history: bound.stores.history,
@@ -2490,11 +2480,8 @@ export class LocalAgentSession {
     this.lastSystemPromptHash = hash;
   }
 
-  /** Swarm nodes run in this process as hosted actors, with homes from the uid-0 view. */
+  /** Swarm nodes run in this process as hosted actors over the workspace's own folder and space. */
   private buildAgentsSwarmDeps(): AgentsSwarmDeps {
-    const nodeHome = this.rt.nodeHome;
-    const nodeRuntime = this.rt.nodeRuntime;
-
     return {
       rt: this.rt,
       // A factory: wave deps are shallow-copied per child, so a shared actor would share one claim ledger.
@@ -2509,19 +2496,8 @@ export class LocalAgentSession {
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
       // picks the spec; a swarm with a profile refuses rather than run the caller's model.
       resolveModel: (spec: string) => this.resolveModelForSpec(spec),
-      // `facetHomeProvisioner` keyed on the node actor's storage key (`head-` namespace). Built per
-      // swarm call; a runtime without a host reports `shared-origin-plane`.
-      provisionNodeHome: nodeHome === undefined
-        ? undefined
-        : () => async (node) => {
-          const actor = registerLocalNode(this.rt.actor, node);
-
-          return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(actorHomeName({ origin: 'swarm', storageKey: actor.storageKey }));
-        },
-      // Wired from the same runtime as the host, so the uid and filesystem cannot come from different workspaces.
-      runtimeForNodeWorkspace: nodeRuntime === undefined
-        ? undefined
-        : () => (home, node) => nodeRuntime(home, registerLocalNode(this.rt.actor, node), this.rt),
+      // Nodes work in the folder the user opened, on the shared plane: a real folder has no uid registry for a private home.
+      provisionNodeHome: () => (node) => nodeWorkspace(node),
     };
   }
   /** Team transport from the owning LocalAgentHost; absent, team actions are structurally missing. */
@@ -2788,8 +2764,7 @@ export class LocalAgentSession {
         await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
           const agentName = actorHomeName(binding);
 
-          if (this.rt.space) cleanupFacetScratch(this.rt.space, agentName);
-          else if (this.rt.nodeHome) await facetHomeReleaser(this.rt.nodeHome())(agentName);
+          cleanupFacetScratch(this.rt.space, agentName);
         });
       },
     };

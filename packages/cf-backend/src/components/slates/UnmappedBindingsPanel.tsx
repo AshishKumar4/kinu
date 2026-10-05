@@ -1,4 +1,6 @@
 /** Forked slate's bindings to connect before preview, read from the admitted tree's `package.json`. */
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
@@ -43,14 +45,14 @@ export function UnmappedBindingsPanel({ slate, title, rpc, onOpen, fixture }: {
 }) {
   const [opening, setOpening] = useState(false);
 
-  const load = useCallback(async (): Promise<SlateBindingDeclaration[]> => {
+  const load = useCallback((): Promise<SlateBindingDeclaration[]> => settle(Effect.gen(function* () {
     if (fixture !== undefined) return fixture;
-    const file = v.parse(FileTextSchema, await rpc("readExecutorFile", [PLANE, `${SLATES_ROOT}/${slate}/package.json`]));
+    const file = v.parse(FileTextSchema, yield* Effect.promise(async () => rpc("readExecutorFile", [PLANE, `${SLATES_ROOT}/${slate}/package.json`])));
 
-    if (file.content === undefined) throw new Error(file.error ?? "package.json could not be read");
+    if (file.content === undefined) return yield* Effect.die(new Error(file.error ?? "package.json could not be read"));
 
     return describeBindings(parseSlateProject(JSON.parse(file.content)));
-  }, [fixture, rpc, slate]);
+  })), [fixture, rpc, slate]);
 
   const { resource, reload } = useAsyncResource(load, undefined, slate);
 

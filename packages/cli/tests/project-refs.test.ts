@@ -11,17 +11,14 @@ import { resolveAgentTarget } from '../src/agent-target';
 import { openWorkspaceCLI } from '@kinu.run/cli-backend';
 import {
   AGENT_HOME,
-  adoptUnplacedLocalAgent,
   agentDbPath,
   agentDir,
   defaultVirtualWorkspaceId,
   listAgentDirs,
   listLocalRefsAllProjects,
-  listUnplacedAgentNames,
   loadConfigFile,
   localWorkspaceMembers,
   readWorkspaceDisplayName,
-  readWorkspaceIdentityId,
   resolveLocalAgent,
   updateConfigFile,
   upsertAgentConfig,
@@ -93,7 +90,8 @@ async function create(name: string, cwd: string, workspaceId?: string): Promise<
   });
 }
 
-function unplacedWorkspace(name: string, identityId: string): string {
+/** A workspace database no ref records, so it has no folder. */
+function bareWorkspace(name: string, identityId: string): string {
   mkdirSync(agentDir(name), { recursive: true });
   workspaces.push(name);
   const dbPath = agentDbPath(name);
@@ -203,79 +201,46 @@ describe('renaming changes no identity and moves no database', () => {
     const cwd = project();
     const created = await create('renamed-label', cwd, 'bound');
     const dbPath = createdDbPath(created);
-    const identity = readWorkspaceIdentityId(dbPath);
-
-    if (identity === null) throw new Error(`the workspace at ${dbPath} carries no identity`);
     // Recorded on the ref: `resolveLocalAgent` compares later databases against it, so leaving it unset
     // would silently disable the mismatch guard.
-    expect(loadConfigFile().agents?.['renamed-label']?.identityId).toBe(identity);
+    expect(loadConfigFile().agents?.['renamed-label']?.identityId).toEqual(expect.any(String));
 
     // The human name lives in the workspace database, never mirrored into config.json.
     renameLocalAgent('renamed-label', 'Second Thoughts');
     expect(loadConfigFile().agents?.['renamed-label']?.displayName).toBeUndefined();
 
-    const resolved = await resolveLocalAgent('renamed-label', { cwd });
+    const resolved = resolveLocalAgent('renamed-label');
     expect(readWorkspaceDisplayName(dbPath)).toBe('Second Thoughts');
-    expect(resolved.placement).toBe('recorded');
+    expect(resolved.cwd).toBe(cwd);
     expect(resolved.workspaceId).toBe('bound');
+    // Resolving passed the identity guard, so the database is the one the ref recorded.
     expect(resolved.dbPath).toBe(dbPath);
-    expect(readWorkspaceIdentityId(dbPath)).toBe(identity);
     expect(localWorkspaceMembers('bound', cwd).map((ref) => ref.name)).toEqual(['renamed-label']);
   });
 
-  test('a project directory that moved rebinds on the next open instead of vanishing', async () => {
+  // 2026-10-04: no adoption. A folder that is gone leaves the workspace with none, so it is refused, never rebound.
+  test('a project folder that moved is refused at open and listed nowhere, never rebound', async () => {
     const from = project();
-    const created = await create('moved-project', from, 'bound');
-    const dbPath = createdDbPath(created);
-    const identity = readWorkspaceIdentityId(dbPath);
+    await create('moved-project', from, 'bound');
+    renameSync(from, `${from}-moved`);
 
-    const to = `${from}-moved`;
-    renameSync(from, to);
-
-    expect(listAgentDirs(from)).toEqual([]);
-    // Membership, not equality: another file in the same process may own unplaced rows.
-    expect(listUnplacedAgentNames()).toContain('moved-project');
-
-    const rebound = await resolveLocalAgent('moved-project', { cwd: to, workspaceId: 'bound' });
-    expect(rebound.placement).toBe('adopted');
-    expect(rebound.cwd).toBe(to);
-    expect(rebound.dbPath).toBe(dbPath);
-    expect(readWorkspaceIdentityId(dbPath)).toBe(identity);
-    expect(listAgentDirs(to)).toEqual(['moved-project']);
-  });
-});
-
-describe('workspaces the old launcher placed in the install tree', () => {
-  test('are unplaced, so the next open in a project adopts them', async () => {
-    // The launcher used to cd into ~/.kinu/cli/current, so every workspace it created was placed there; once the CLI
-    // runs in the project, a placement under the install tree would hide those workspaces from every project.
-    const install = join(AGENT_HOME, 'cli', 'current');
-    mkdirSync(install, { recursive: true });
-    const created = await create('install-placed', install, 'install');
-    const dbPath = createdDbPath(created);
-    const to = project();
-
-    expect(listUnplacedAgentNames()).toContain('install-placed');
-    expect(listLocalRefsAllProjects().map((ref) => ref.name)).not.toContain('install-placed');
-
-    const opened = await resolveLocalAgent('install-placed', { cwd: to, workspaceId: 'mine' });
-    expect(opened.placement).toBe('adopted');
-    expect(opened.dbPath).toBe(dbPath);
-    expect(listAgentDirs(to)).toEqual(['install-placed']);
+    expect(listLocalRefsAllProjects().map((ref) => ref.name)).not.toContain('moved-project');
+    expect(await messageOf(() => resolveLocalAgent('moved-project'))).toContain('has no folder');
+    expect(loadConfigFile().agents?.['moved-project']?.cwd).toBe(from);
   });
 });
 
 describe('a backend is stated, not inferred from a file', () => {
   test('a configured cloud ref wins over a local database of the same name', async () => {
-    unplacedWorkspace('twin', 'ws-twin');
+    bareWorkspace('twin', 'ws-twin');
     await upsertAgentConfig({ name: 'twin', mode: 'cloud', cloudName: 'twin' });
 
     expect(resolveAgentTarget('twin').mode).toBe('cloud');
-    expect(await messageOf(async () => await resolveLocalAgent('twin'))).toContain('this needs a local one');
+    expect(await messageOf(() => resolveLocalAgent('twin'))).toContain('this needs a local one');
   });
 
   test('an unconfigured name addressing both is refused, naming both candidates', async () => {
-    const dbPath = unplacedWorkspace('both-ways', 'ws-both');
+    const dbPath = bareWorkspace('both-ways', 'ws-both');
     await upsertAgentConfig({ name: 'remote-key', mode: 'cloud', cloudName: 'both-ways' });
 
     const message = await messageOf(() => resolveAgentTarget('both-ways'));
@@ -304,7 +269,7 @@ describe('a backend is stated, not inferred from a file', () => {
   test('the machine is the workspace: a placed ref opens its shell in the placement, and offers no other machine', async () => {
     const cwd = project();
     const created = await create('placed-shell', cwd);
-    const local = await resolveLocalAgent('placed-shell');
+    const local = resolveLocalAgent('placed-shell');
     const db = new Database(createdDbPath(created));
 
     try {
@@ -319,48 +284,23 @@ describe('a backend is stated, not inferred from a file', () => {
   });
 });
 
-describe('an unplaced workspace is adopted one at a time', () => {
-  test('an unplaced workspace belongs to no project until something opens it', async () => {
+describe('a local workspace works in the folder its ref records', () => {
+  // 2026-10-04: no adoption. A database no ref places is refused at open; it is never placed in the caller's folder.
+  test('a workspace without a folder is refused at open, and nothing is recorded for it', async () => {
     const cwd = project();
-    unplacedWorkspace('unplaced-one', 'ws-unplaced-one');
-    unplacedWorkspace('unplaced-two', 'ws-unplaced-two');
+    bareWorkspace('no-folder', 'ws-no-folder');
 
+    expect(await messageOf(() => resolveLocalAgent('no-folder'))).toContain('has no folder');
+    expect(loadConfigFile().agents?.['no-folder']).toBeUndefined();
     expect(listAgentDirs(cwd)).toEqual([]);
-    expect(listUnplacedAgentNames()).toEqual(expect.arrayContaining(['unplaced-one', 'unplaced-two']));
-
-    const read = await resolveLocalAgent('unplaced-one', { cwd, adopt: false });
-    expect(read.placement).toBe('unplaced');
-    expect(read.dbPath).toBe(agentDbPath('unplaced-one'));
-    expect(listUnplacedAgentNames()).toEqual(expect.arrayContaining(['unplaced-one', 'unplaced-two']));
-
-    const opened = await resolveLocalAgent('unplaced-one', { cwd, workspaceId: 'adopted' });
-    expect(opened.placement).toBe('adopted');
-    expect(opened.cwd).toBe(cwd);
-    expect(opened.workspaceId).toBe('adopted');
-    expect(listAgentDirs(cwd)).toEqual(['unplaced-one']);
-    expect(listUnplacedAgentNames()).toContain('unplaced-two');
-    expect(listUnplacedAgentNames()).not.toContain('unplaced-one');
-  });
-
-  test('adoption records the database identity, and re-adoption is a no-op', async () => {
-    const cwd = project();
-    unplacedWorkspace('keyed', 'ws-keyed');
-
-    await adoptUnplacedLocalAgent('keyed', { cwd, workspaceId: 'first' });
-    expect(loadConfigFile().agents?.keyed?.identityId).toBe('ws-keyed');
-
-    const other = project();
-    expect((await adoptUnplacedLocalAgent('keyed', { cwd: other, workspaceId: 'second' })).cwd).toBe(cwd);
-    expect((await resolveLocalAgent('keyed', { cwd })).placement).toBe('recorded');
-    expect(listAgentDirs(other)).toEqual([]);
   });
 
   test('a name reused for a different database is refused, not silently rebound', async () => {
-    const cwd = project();
-    unplacedWorkspace('recycled', 'ws-original');
-    await adoptUnplacedLocalAgent('recycled', { cwd, workspaceId: 'bound' });
+    const created = await create('recycled', project(), 'bound');
+    const original = loadConfigFile().agents?.recycled?.identityId;
 
-    const db = new Database(agentDbPath('recycled'));
+    if (original === undefined) throw new Error('creation recorded no identity');
+    const db = new Database(createdDbPath(created));
 
     try {
       db.query('UPDATE workspace_identity SET id = ?').run('ws-replacement');
@@ -368,13 +308,9 @@ describe('an unplaced workspace is adopted one at a time', () => {
       db.close();
     }
 
-    const message = await messageOf(async () => await resolveLocalAgent('recycled', { cwd }));
-    expect(message).toContain('ws-original');
+    const message = await messageOf(() => resolveLocalAgent('recycled'));
+    expect(message).toContain(original);
     expect(message).toContain('ws-replacement');
-  });
-
-  test('adopting a name with no database is refused', async () => {
-    expect(await messageOf(async () => await adoptUnplacedLocalAgent('never-existed'))).toContain('not found at');
   });
 });
 
@@ -382,17 +318,9 @@ describe('the project directory holds no state', () => {
   test('creating and opening an agent writes nothing under the project', async () => {
     const cwd = project();
     const created = await create('no-litter', cwd, 'solo');
-    await resolveLocalAgent('no-litter', { cwd });
+    resolveLocalAgent('no-litter');
 
     expect(readdirSync(cwd)).toEqual([]);
     expect(createdDbPath(created)).toBe(join(AGENT_HOME, 'no-litter', 'agent.db'));
-  });
-
-  test('adopting an unplaced workspace writes nothing under the project', async () => {
-    const cwd = project();
-    unplacedWorkspace('no-litter-unplaced', 'ws-no-litter');
-    await adoptUnplacedLocalAgent('no-litter-unplaced', { cwd, workspaceId: 'solo' });
-
-    expect(readdirSync(cwd)).toEqual([]);
   });
 });

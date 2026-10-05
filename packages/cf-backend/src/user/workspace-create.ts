@@ -1,3 +1,4 @@
+import { Effect, Cause } from 'effect';
 import {
   DEFAULT_ROLE_ID,
   defaultSpecFor,
@@ -7,7 +8,7 @@ import {
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, logged, renderThrownChain, toKinuError, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from '@kinu.run/core';
@@ -63,81 +64,76 @@ export interface CreateCloudWorkspaceRequest<Id> {
   input: CreateCloudWorkspaceInput;
 }
 
-export async function createCloudWorkspaceForUser<Id>(
+export function createCloudWorkspaceForUser<Id>(
   request: CreateCloudWorkspaceRequest<Id>,
 ): Promise<WorkspaceEntry> {
-  const { env, userId, userDO, caller, input } = request;
-  const trimmedPurpose = input.purpose?.trim() ?? '';
-  const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
+  return settle(Effect.gen(function* () {
+    const { env, userId, userDO, caller, input } = request;
+    const trimmedPurpose = input.purpose?.trim() ?? '';
+    const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
 
-  const menu = await listAvailableModels(env, userId, caller);
+    const menu = yield* Effect.promise(async () => listAvailableModels(env, userId, caller));
 
-  // Refused when no first turn could run (`defaultSpecFor`). Only a named model is pinned: an unpinned workspace
-  // follows the account's default tier, as on the CLI. The error copy is surface-specific.
-  const servable = defaultSpecFor(
-    input.model ?? (await userDO.getWorkspaceProfileCatalog(caller)).catalog.tiers.default.model,
-    menu.models.map((entry) => entry.spec),
-  );
+    // Refused when no first turn could run (`defaultSpecFor`). Only a named model is pinned: an unpinned workspace
+    // follows the account's default tier, as on the CLI. The error copy is surface-specific.
+    const servable = defaultSpecFor(
+      input.model ?? (yield* Effect.promise(async () => userDO.getWorkspaceProfileCatalog(caller))).catalog.tiers.default.model,
+      menu.models.map((entry) => entry.spec),
+    );
 
-  if (!servable) {
-    throw new KinuError('unavailable', 'Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
-  }
-
-  const identity = createInitialCloudAgentIdentity(input, purpose);
-
-  // Only this call knows whether the title is the owner's choice or the mission's first line.
-  const registered = await userDO.registerWorkspace(
-    caller, identity.name, identity.displayName, { purpose, nameOrigin: identity.nameOrigin },
-  );
-
-  // A 'reserved' row is an uncommitted fork transfer's reservation; a create may not take it.
-  if (registered.status === 'reserved') {
-    throw new KinuError('bad_input', `Workspace name conflict: "${identity.name}" is being created by a transfer that has not finished. Choose another name or try again once it lands.`);
-  }
-
-  const entry = registered.entry;
-
-  // Already this owner's workspace: re-running birth would reseed SOUL.md, reset the baseline,
-  // and open a second genesis turn. Return it unchanged so retries and races are idempotent.
-  if (registered.status === 'active') return entry;
-
-  try {
-    const initialization: InitializeOrchestratorInput<Id> = {
-      env, userId, userDO, agentName: entry.name, displayName: entry.displayName,
-      nameOrigin: identity.nameOrigin, model: input.model,
-    };
-
-    if (purpose) initialization.mission = purpose;
-
-    if (input.reasoningEffort) initialization.reasoningEffort = input.reasoningEffort;
-
-    if (input.role) initialization.role = input.role;
-    await initializeOrchestrator(initialization);
-    // Index only after claimOwner succeeds: the DO name is global, roster rows are per-account.
-    // Non-fatal: the registry row is the truth and the drilldown reconciles from it.
-    await indexNewWorkspace(env, {
-      userId, name: entry.name, displayName: entry.displayName, createdAt: entry.createdAt,
-    });
-
-    // No pre-turn naming call: the genesis turn's durable `auto_title` effect replaces the stand-in
-    // title for every caller, retried until it lands.
-
-    return entry;
-  } catch (err) {
-    // Only reached for a row this create inserted (`active` returned above), so undo is safe.
-    // A rollback failure is recorded separately; the original fault still propagates.
-    try {
-      await rollbackRegistration({ env, userId, userDO, caller, entry, cause: err });
-    } catch (rollbackFailure) {
-      diagnostics.failure('workspace.create_rollback_unexpected', toKinuError({
-        doing: 'undoing a failed workspace create',
-        cause: rollbackFailure,
-        otherwise: 'unavailable',
-      }), { workspace: entry.name });
+    if (!servable) {
+      return yield* new KinuError('unavailable', 'Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
     }
 
-    throw err;
-  }
+    const identity = yield* createInitialCloudAgentIdentity(input, purpose);
+
+    // Only this call knows whether the title is the owner's choice or the mission's first line.
+    const registered = yield* Effect.promise(async () => userDO.registerWorkspace(
+      caller, identity.name, identity.displayName, { purpose, nameOrigin: identity.nameOrigin },
+    ));
+
+    // A 'reserved' row is an uncommitted fork transfer's reservation; a create may not take it.
+    if (registered.status === 'reserved') {
+      return yield* new KinuError('bad_input', `Workspace name conflict: "${identity.name}" is being created by a transfer that has not finished. Choose another name or try again once it lands.`);
+    }
+
+    const entry = registered.entry;
+
+    // Already this owner's workspace: re-running birth would reseed SOUL.md, reset the baseline,
+    // and open a second genesis turn. Return it unchanged so retries and races are idempotent.
+    if (registered.status === 'active') return entry;
+
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const initialization: InitializeOrchestratorInput<Id> = {
+        env, userId, userDO, agentName: entry.name, displayName: entry.displayName,
+        nameOrigin: identity.nameOrigin, model: input.model,
+      };
+
+      if (purpose) initialization.mission = purpose;
+
+      if (input.reasoningEffort) initialization.reasoningEffort = input.reasoningEffort;
+
+      if (input.role) initialization.role = input.role;
+      yield* Effect.promise(async () => initializeOrchestrator(initialization));
+      // Index only after claimOwner succeeds: the DO name is global, roster rows are per-account.
+      // Non-fatal: the registry row is the truth and the drilldown reconciles from it.
+      yield* Effect.promise(async () => indexNewWorkspace(env, {
+        userId, name: entry.name, displayName: entry.displayName, createdAt: entry.createdAt,
+      }));
+
+      // No pre-turn naming call: the genesis turn's durable `auto_title` effect replaces the stand-in
+      // title for every caller, retried until it lands.
+
+      return entry;
+    }), (failed) => Effect.gen(function* () {
+      const err = Cause.squash(failed);
+      // Only reached for a row this create inserted (`active` returned above), so undo is safe.
+      // A rollback failure is recorded separately; the original fault still propagates.
+      yield* logged('workspace.create_rollback_unexpected', { doing: 'undoing a failed workspace create', otherwise: 'unavailable' }, rollbackRegistration({ env, userId, userDO, caller, entry, cause: err }), { workspace: entry.name });
+
+      return yield* Effect.failCause(failed);
+    }));
+  }));
 }
 
 /**
@@ -145,42 +141,46 @@ export async function createCloudWorkspaceForUser<Id>(
  * `releaseWorkspaceReservation` (never contacts it); otherwise `removeWorkspace`, which fails
  * closed and leaves the rows standing (recorded, tolerated). A release failure propagates.
  */
-async function rollbackRegistration<Id>(input: {
+function rollbackRegistration<Id>(input: {
   env: CreateCloudWorkspaceEnv<Id>;
   userId: string;
   userDO: CloudWorkspaceRegistry;
   caller: UserCaller;
   entry: WorkspaceEntry;
   cause: unknown;
-}): Promise<void> {
-  const { env, userId, userDO, caller, entry } = input;
-  const contested = OWNED_BY_ANOTHER.test(renderThrownChain({ cause: input.cause }));
+}): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    const { env, userId, userDO, caller, entry } = input;
+    const contested = OWNED_BY_ANOTHER.test(renderThrownChain({ cause: input.cause }));
 
-  try {
-    if (contested) {
-      await userDO.releaseWorkspaceReservation(caller, entry.name, entry.createdAt);
-    } else {
-      await userDO.removeWorkspace(caller, entry.name, userId);
-    }
-  } catch (cause) {
-    const failure = toKinuError({
-      doing: contested
-        ? 'releasing the roster row a failed create reserved'
-        : 'tearing down the workspace a failed create registered',
-      cause,
-      otherwise: 'unavailable',
+    const undo = contested
+      ? Effect.promise(() => userDO.releaseWorkspaceReservation(caller, entry.name, entry.createdAt))
+      : Effect.promise(() => userDO.removeWorkspace(caller, entry.name, userId));
+
+    const undone = yield* Effect.catchCause(Effect.as(undo, true), (failed) => {
+      const failure = toKinuError({
+        doing: contested
+          ? 'releasing the roster row a failed create reserved'
+          : 'tearing down the workspace a failed create registered',
+        cause: Cause.squash(failed),
+        otherwise: 'unavailable',
+      });
+
+      if (contested) return Effect.fail(failure);
+
+      return Effect.sync(() => {
+        diagnostics.failure('workspace.create_rollback_failed', failure, {
+          workspace: entry.name, contested,
+        });
+
+        return false;
+      });
     });
 
-    if (contested) throw failure;
-    diagnostics.failure('workspace.create_rollback_failed', failure, {
-      workspace: entry.name, contested,
-    });
-
-    return;
-  }
-
-  // Unconditional: tombstoning a row that was never written is a no-op.
-  await unindexWorkspace(env, { userId, name: entry.name });
+    if (!undone) return;
+    // Unconditional: tombstoning a row that was never written is a no-op.
+    yield* Effect.promise(() => unindexWorkspace(env, { userId, name: entry.name }));
+  });
 }
 
 /** `claimOwner`'s refusal for another account's name. Matched by message because error classes
@@ -196,34 +196,36 @@ interface InitialCloudAgentIdentity {
 function createInitialCloudAgentIdentity(
   input: CreateCloudWorkspaceInput,
   purpose: string | undefined,
-): InitialCloudAgentIdentity {
-  const requestedName = input.name?.trim();
+): Effect.Effect<InitialCloudAgentIdentity, KinuError> {
+  return Effect.gen(function* () {
+    const requestedName = input.name?.trim();
 
-  if (requestedName) {
-    // The name is the object's permanent address; refuse names no preview hostname could carry.
-    const refusal = workspaceAddressRefusal(requestedName);
+    if (requestedName) {
+      // The name is the object's permanent address; refuse names no preview hostname could carry.
+      const refusal = workspaceAddressRefusal(requestedName);
 
-    if (refusal !== null) throw new KinuError('bad_input', `Invalid workspace name: ${refusal}`);
+      if (refusal !== null) return yield* new KinuError('bad_input', `Invalid workspace name: ${refusal}`);
 
-    const named = input.displayName?.trim() ?? '';
+      const named = input.displayName?.trim() ?? '';
+
+      return {
+        name: requestedName,
+        displayName: named === '' ? requestedName : named,
+        nameOrigin: 'user',
+      };
+    }
+
+    const requestedDisplayName = input.displayName?.trim() ?? '';
+    const fallback = fallbackWorkspaceIdentity(purpose ?? '', crypto.randomUUID());
 
     return {
-      name: requestedName,
-      displayName: named === '' ? requestedName : named,
-      nameOrigin: 'user',
+      name: fallback.name,
+      // 'auto': `fallback.displayName` is a stand-in the genesis turn's `auto_title` effect replaces;
+      // recorded as 'user', nothing could replace it (#18).
+      displayName: requestedDisplayName === '' ? fallback.displayName : requestedDisplayName,
+      nameOrigin: requestedDisplayName === '' ? 'auto' : 'user',
     };
-  }
-
-  const requestedDisplayName = input.displayName?.trim() ?? '';
-  const fallback = fallbackWorkspaceIdentity(purpose ?? '', crypto.randomUUID());
-
-  return {
-    name: fallback.name,
-    // 'auto': `fallback.displayName` is a stand-in the genesis turn's `auto_title` effect replaces;
-    // recorded as 'user', nothing could replace it (#18).
-    displayName: requestedDisplayName === '' ? fallback.displayName : requestedDisplayName,
-    nameOrigin: requestedDisplayName === '' ? 'auto' : 'user',
-  };
+  });
 }
 
 

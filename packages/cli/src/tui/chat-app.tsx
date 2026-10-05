@@ -109,8 +109,8 @@ import {
   type TuiAgentSource,
   type TuiAgentSummary,
 } from './tui-shell';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { Result } from 'effect';
+import { detach, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { Effect, Result } from 'effect';
 import { readParkedNotice } from '../parked-actions';
 
 /** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
@@ -1551,9 +1551,8 @@ function ChatScene({
     const abort = new AbortController();
 
     const unsubscribe = client.subscribe((event) => {
-      if (clientGenerationRef.current === generation && !abort.signal.aborted) {
-        return handleClientEvent(event);
-      }
+      if (clientGenerationRef.current !== generation || abort.signal.aborted) return;
+      detach(Effect.promise(() => handleClientEvent(event)));
     });
 
     let replayTask: Promise<void> | null = null;
@@ -1811,6 +1810,13 @@ function ChatScene({
     subagentHistory: () => subagentScrollRef.current,
   };
 
+  const runComposerInputEffects = useCallback((effects: InputEffect[]) => {
+    const task = runInputEffects(effects);
+
+    if (!task) return;
+    detach(Effect.promise(() => task));
+  }, [runInputEffects]);
+
   const composerKeys: ComposerKeyDeps = {
     input: inputRef,
     promptHistory,
@@ -1825,14 +1831,14 @@ function ChatScene({
     focusInput: () => inputRef.current?.focus(),
     addError,
     dispatchInput,
-    runInputEffects,
+    runInputEffects: runComposerInputEffects,
     hasUserMessages: () => messages.some((message) => message.role === 'user'),
     openSurface: setActiveSurface,
   };
 
   const sceneKeys = { ...sceneKeyHandlers(surfaceKeys), ...composerKeyHandlers(composerKeys) };
   const modalKeys = modalKeyHandlers(surfaceKeys);
-  useKeyboard(async (key) => {
+  useKeyboard((key) => detach(Effect.promise(async () => {
     draftEditing.changed();
 
     if (shellApproval.pending) {
@@ -1883,7 +1889,7 @@ function ChatScene({
 
     // Each handler owns its preventDefault.
     return await (modalActive ? modalKeys : sceneKeys)[result.actionId]?.(key);
-  });
+  })));
 
   const onInputSubmit = useCallback(() => {
     if (overlayOpen) return;
@@ -1956,15 +1962,14 @@ function ChatScene({
           onSelect={(setting) => {
             setActiveSurface(null);
 
-            if (setting.command === '/model') return openModelPicker();
-
             if (setting.command.endsWith(' ')) {
               setInputText(setting.command);
 
               return;
             }
 
-            return handleSubmit(setting.command);
+            const task = setting.command === '/model' ? openModelPicker() : handleSubmit(setting.command);
+            detach(Effect.promise(() => task));
           }}
         />
       );
@@ -2021,7 +2026,7 @@ function ChatScene({
           terminal={{ width: sceneWidth, height }}
           loading={modelPicker.loading}
           error={modelPicker.error}
-          onSelect={selectModel}
+          onSelect={(spec) => detach(Effect.promise(() => selectModel(spec)))}
           test={(spec, signal) => client.testModel(spec, signal)}
         />
       );
@@ -2032,7 +2037,7 @@ function ChatScene({
         <ChangelogOverlay
           view={changelogView}
           terminal={{ width: sceneWidth, height }}
-          onSelect={revertChangelogEntry}
+          onSelect={(entry) => detach(Effect.promise(() => revertChangelogEntry(entry)))}
         />
       );
     }
@@ -2042,7 +2047,7 @@ function ChatScene({
         <TakesOverlay
           set={takesView}
           terminal={{ width: sceneWidth, height }}
-          onSelect={(candidate) => pickTake(takesView, candidate)}
+          onSelect={(candidate) => detach(Effect.promise(() => pickTake(takesView, candidate)))}
         />
       );
     }
@@ -2052,7 +2057,7 @@ function ChatScene({
         <WalkbackOverlay
           candidates={walkbackList}
           terminal={{ width: sceneWidth, height }}
-          onSelect={performWalkback}
+          onSelect={(candidate) => detach(Effect.promise(() => performWalkback(candidate)))}
         />
       );
     }
@@ -2073,7 +2078,7 @@ function ChatScene({
       navigationFocused={navigationOpen}
       onNavigationOverlayChange={setNavigationOpen}
       onNavigationFocusChange={handleNavigationFocusChange}
-      onAgentSelect={switchWorkspace}
+      onAgentSelect={(selection) => detach(Effect.promise(() => switchWorkspace(selection)))}
     >
     <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
       <StatusBar
@@ -2082,7 +2087,8 @@ function ChatScene({
         model={modelSpec}
         reasoningEffort={effort}
         onModelSelect={() => {
-          if (!overlayOpen) return openModelPicker();
+          if (overlayOpen) return;
+          detach(Effect.promise(openModelPicker));
         }}
         connected={ready}
         scaffoldVersion={status?.scaffoldVersion}
@@ -2155,7 +2161,12 @@ function ChatScene({
             syncComposerRows();
           }}
           onCursorChange={draftEditing.cursorMoved}
-          onSubmit={onInputSubmit}
+          onSubmit={() => {
+            const task = onInputSubmit();
+
+            if (!task) return;
+            detach(Effect.promise(() => task));
+          }}
           style={{
             backgroundColor: colors.background.user,
             focusedBackgroundColor: colors.background.user,
@@ -2400,7 +2411,7 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
 
   globalExit = exit;
 
-  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, exit);
+  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, () => detach(Effect.promise(exit)));
 
   root.render(<ChatApp {...renderOptions} onClientChange={(client) => { currentClient = client; }} />);
 

@@ -1,3 +1,4 @@
+import { Effect, Cause } from 'effect';
 import { Fragment, startTransition, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
 import { useParams, useLocation, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -32,7 +33,7 @@ import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
 import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
-import { filesFocusOf, hasComparableTakes, type FilesFocus } from "@kinu.run/core";
+import { cloudPlanes, filesFocusOf, hasComparableTakes, referencePrefixes, WORKSPACE_ROOT, type FilesFocus } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
@@ -50,7 +51,7 @@ import { nestedAgent, type AgentLinkIds } from "@/pages/nested-agent";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
-import { renderThrownChain, settleLogged } from "@kinu.run/core/obs";
+import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 
 /** Composed key: Kumo's `Button` requires a `shape` prop, `anti-slop/no-shape-in-symbol-names`
@@ -255,18 +256,18 @@ function ForkModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const submit = useCallback(async () => {
+  const submit = useCallback(() => detach(Effect.gen(function* () {
     if (busy) return;
     setBusy(true);
     setErr(null);
 
-    try {
-      await onSubmit(name.trim());
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => onSubmit(name.trim()));
+    }), showing((chain) => {
+      setErr(chain);
       setBusy(false);
-    }
-  }, [name, busy, onSubmit]);
+    }));
+  })), [name, busy, onSubmit]);
 
   return (
     <Modal
@@ -360,8 +361,8 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
           headDeltas={main.headDeltas} onSelect={() => undefined} />
       </div>
       {/* The workspace holds every running worker, whoever started the swarm; its siblings run on. */}
-      <ViewOnlyBar running={working} onStop={() => settleLogged("agents.stop_failed", { doing: "stop a swarm worker", otherwise: "io" },
-        () => main.rpc("stopSwarmWorker", [nodeId]))} />
+      <ViewOnlyBar running={working} onStop={() => detach(Effect.promise(async () => settleLogged("agents.stop_failed", { doing: "stop a swarm worker", otherwise: "io" },
+        () => main.rpc("stopSwarmWorker", [nodeId]))))} />
     </div>
   );
 }
@@ -491,6 +492,7 @@ function SubordinateChatColumn({
 }) {
   const state = useKinu({ workspace, subordinate: subName });
   const live = state.liveness.kind === "live";
+  const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
 
   // No model write from an agent pane: only the workspace pin is honoured, and the
   // snapshot carries the actor's effective model, rendered read-only.
@@ -614,8 +616,8 @@ function SubordinateChatColumn({
           onRecover={state.recoverTurn}
           onStop={stop}
           mode={{ value: ui.mode, onChange: ui.setMode }}
-          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={state.setModel} size="xs"
-            effort={{ value: as?.reasoningEffort ?? null, onChange: state.setReasoningEffort }} />}
+          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={(...args: Parameters<typeof state.setModel>) => detach(Effect.promise(async () => state.setModel(...args)))} size="xs"
+            effort={{ value: as?.reasoningEffort ?? null, onChange: pickEffort }} />}
           notices={[
             ...(loadNotices(state.error, state.retryLoad)),
             ...(state.newerDeployedBuild ? [{
@@ -674,22 +676,20 @@ export default function WorkspacePage() {
   const creatingAgentRef = useRef(false);
   const [createAgentError, setCreateAgentError] = useState<string | null>(null);
 
-  const createAndOpenAgent = useCallback(async () => {
+  const createAndOpenAgent = useCallback(() => settle(Effect.gen(function* () {
     if (!agentId || creatingAgentRef.current) return;
     creatingAgentRef.current = true;
     setCreatingAgent(true);
     setCreateAgentError(null);
 
-    try {
-      const created = await state.createSubordinate();
-      await navigate(`/workspace/${agentId}/agents/${created.name}`);
-    } catch (cause) {
-      setCreateAgentError(renderThrownChain({ cause }));
-    } finally {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const created = yield* Effect.promise(async () => state.createSubordinate());
+      yield* Effect.promise(async () => navigate(`/workspace/${agentId}/agents/${created.name}`));
+    }), showing(setCreateAgentError)), Effect.sync(() => {
       creatingAgentRef.current = false;
       setCreatingAgent(false);
-    }
-  }, [agentId, navigate, state.createSubordinate]);
+    }));
+  })), [agentId, navigate, state.createSubordinate]);
 
   // `setModel` records failure on `state.error` and rolls the picker back itself.
   const setModel = state.setModel;
@@ -699,6 +699,8 @@ export default function WorkspacePage() {
   }, [setModel]);
 
   const [sideErrors, setSideErrors] = useState<Partial<Record<SideSource, string>>>({});
+
+  const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
 
   const reportSide = useCallback((source: SideSource, message: string | null) => {
     setSideErrors((prev) => {
@@ -711,6 +713,10 @@ export default function WorkspacePage() {
       return next;
     });
   }, []);
+
+  const sideFailed = useCallback((source: SideSource) => (failed: Cause.Cause<unknown>) => Effect.sync(() => {
+    reportSide(source, describeError({ cause: Cause.squash(failed) }));
+  }), [reportSide]);
 
   // ?altitude=supervise deep-links to Supervise (/triggers/:id redirect, settings' Automations link).
   const [altitude, setAltitude] = useState<Altitude>(
@@ -748,7 +754,9 @@ export default function WorkspacePage() {
     show("Files");
   }, [show]);
 
-  const fileLinks = useMemo(() => ({ roots: ['vfs', 'sandbox'], open: openFile }), [openFile]);
+  // Every prefix, and each live machine's own name: `<name>://x` opens that machine's file in Files.
+  const machines = useMemo(() => state.executors.flatMap((executor) => executor.mounts ?? []), [state.executors]);
+  const fileLinks = useMemo(() => ({ roots: referencePrefixes(cloudPlanes(WORKSPACE_ROOT), machines), open: openFile }), [machines, openFile]);
   const [landingFile, setLandingFile] = useState<string | null>(() => new URLSearchParams(location.search).get("file"));
 
   useEffect(() => {
@@ -806,16 +814,12 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     if (!agentId) return;
-    startTransition(async () => {
-      try {
-        // A visit the roster did not take is a gone workspace, which the page's own missing state already shows.
-        await touchWorkspace(agentId);
-        reportSide("visit", null);
-      } catch (cause) {
-        reportSide("visit", describeError({ cause }));
-      }
-    });
-  }, [agentId, reportSide]);
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      // A visit the roster did not take is a gone workspace, which the page's own missing state already shows.
+      yield* Effect.promise(async () => touchWorkspace(agentId));
+      reportSide("visit", null);
+    }), sideFailed("visit"))));
+  }, [agentId, reportSide, sideFailed]);
 
   // Steer-as-Branch: runs the draft as a parallel head while the live turn continues.
   const [branchNotice, setBranchNotice] = useState<string | null>(null);
@@ -826,16 +830,12 @@ export default function WorkspacePage() {
     if (!t || !live || ui.mode === "plan") return;
     setBranchNotice(null);
     // Clear the draft only once the branch is accepted, and only if it was not edited meanwhile.
-    startTransition(async () => {
-      try {
-        const result = await state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t]);
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      const result = yield* Effect.promise(async () => state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t]));
 
-        if (result.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
-        else setBranchNotice(result.reason ?? "Branching is unavailable right now.");
-      } catch (cause) {
-        setBranchNotice(renderThrownChain({ cause }));
-      }
-    });
+      if (result.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
+      else setBranchNotice(result.reason ?? "Branching is unavailable right now.");
+    }), showing(setBranchNotice))));
   }, [chatInput, ui.mode, live, state]);
 
   const { notice: steerNotice, send: handleSend, stop: handleStop } = useSteerActions({
@@ -854,16 +854,12 @@ export default function WorkspacePage() {
   const [feedbackByMessage, setFeedbackByMessage] = useState<Record<string, 'positive' | 'negative'>>({});
   useEffect(() => {
     if (state.connectionStatus !== "connected") return;
-    startTransition(async () => {
-      try {
-        const loaded = await state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback');
-        setFeedbackByMessage(loaded);
-        reportSide("feedback", null);
-      } catch (cause) {
-        reportSide("feedback", describeError({ cause }));
-      }
-    });
-  }, [state.connectionStatus, state.rpc, reportSide]);
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      const loaded = yield* Effect.promise(async () => state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback'));
+      setFeedbackByMessage(loaded);
+      reportSide("feedback", null);
+    }), sideFailed("feedback"))));
+  }, [state.connectionStatus, state.rpc, reportSide, sideFailed]);
 
   // Refreshed when a turn settles: a settled /branch redirect may have produced a fresh set.
   const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
@@ -892,17 +888,13 @@ export default function WorkspacePage() {
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
     if (state.connectionStatus !== "connected" || live) return;
-    startTransition(async () => {
-      try {
-        const loaded = await state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes');
-        setTakesByTurn(loaded);
-        reportSide("takes", null);
-      } catch (cause) {
-        reportSide("takes", describeError({ cause }));
-      }
-    });
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      const loaded = yield* Effect.promise(async () => state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes'));
+      setTakesByTurn(loaded);
+      reportSide("takes", null);
+    }), sideFailed("takes"))));
     // settledBranchCount: a branch settling after the turn ended persists a fresh set.
-  }, [state.connectionStatus, live, state.rpc, settledBranchCount, reportSide]);
+  }, [state.connectionStatus, live, state.rpc, settledBranchCount, reportSide, sideFailed]);
 
   const onPickTake = useCallback(async (takeId: string, nodeId: string): Promise<TakePickOutcome> => {
     const result = await state.rpc<TakePickOutcome>('pickAlternateTake', [takeId, nodeId]);
@@ -920,24 +912,24 @@ export default function WorkspacePage() {
   const [restorePlan, setRestorePlan] = useState<DeviceRestorePlan | null>(null);
   const [restoring, setRestoring] = useState(false);
 
-  const applyRestore = useCallback(async () => {
+  const applyRestore = useCallback(() => detach(Effect.gen(function* () {
     if (!restorePlan) return;
     setRestoring(true);
 
-    try {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       for (const entry of restorePlan.entries) {
-        await state.rpc('restoreFileCheckpoint', [entry.dir, entry.id]);
+        yield* Effect.promise(async () => state.rpc('restoreFileCheckpoint', [entry.dir, entry.id]));
       }
 
       setRestoreNotice(`Restored ${restorePlan.files.length} ${restorePlan.files.length === 1 ? "file" : "files"}. Run restore again to undo it.`);
       setRestorePlan(null);
-    } catch (err) {
-      setRestoreNotice(`Restore failed: ${renderThrownChain({ cause: err })}`);
+    }), showing((chain) => {
+      setRestoreNotice(`Restore failed: ${chain}`);
       setRestorePlan(null);
-    } finally {
+    })), Effect.sync(() => {
       setRestoring(false);
-    }
-  }, [restorePlan, state.rpc]);
+    }));
+  })), [restorePlan, state.rpc]);
 
   const onMessageFeedback = useCallback(async (mid: string, fb: 'positive' | 'negative' | null) => {
     await state.rpc('setTurnFeedback', [mid, fb]);
@@ -1157,7 +1149,7 @@ export default function WorkspacePage() {
             {state.pendingConsents.length > 0 && (
               <div className="p-thread-column space-y-2 pb-1">
                 {state.pendingConsents.map((c) => (
-                  <DeviceConsentCard key={c.consentId} consent={c} onResolve={state.resolveConsent} />
+                  <DeviceConsentCard key={c.consentId} consent={c} onResolve={(...args: Parameters<typeof state.resolveConsent>) => detach(Effect.promise(async () => state.resolveConsent(...args)))} />
                 ))}
               </div>
             )}
@@ -1180,8 +1172,8 @@ export default function WorkspacePage() {
                   onAdd: attachments.add,
                   onRemove: attachments.remove,
                 }}
-                modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs"
-                  effort={{ value: as?.reasoningEffort ?? null, onChange: state.setReasoningEffort }} />}
+                modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={(...args: Parameters<typeof onPickModel>) => detach(Effect.promise(async () => onPickModel(...args)))} size="xs"
+                  effort={{ value: as?.reasoningEffort ?? null, onChange: pickEffort }} />}
                 notices={[
                   ...(loadNotices(state.error, state.retryLoad)),
                   ...(state.newerDeployedBuild ? [{
@@ -1229,7 +1221,7 @@ export default function WorkspacePage() {
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
             previewStarting={state.previewStarting}
-            onRefreshPorts={state.refreshExposedPorts}
+            onRefreshPorts={(...args: Parameters<typeof state.refreshExposedPorts>) => detach(Effect.promise(async () => state.refreshExposedPorts(...args)))}
             plan={visiblePlan}
             snapshot={state.snapshot}
             onRetryLoad={state.retryLoad}
@@ -1245,9 +1237,9 @@ export default function WorkspacePage() {
             lastActiveExecutor={state.lastActiveExecutor}
             onExecute={state.executeInExecutor}
             backgroundJobs={state.backgroundJobs}
-            onRefreshJobs={state.refreshBackgroundJobs}
+            onRefreshJobs={(...args: Parameters<typeof state.refreshBackgroundJobs>) => detach(Effect.promise(async () => state.refreshBackgroundJobs(...args)))}
             pendingActions={state.pendingActions}
-            onRefreshQueue={state.refreshPendingActions}
+            onRefreshQueue={(...args: Parameters<typeof state.refreshPendingActions>) => detach(Effect.promise(async () => state.refreshPendingActions(...args)))}
             onChangelogSeen={state.clearChangelogUnseen}
             slates={state.slates}
             slateReloads={state.slateReloads}
@@ -1269,15 +1261,15 @@ export default function WorkspacePage() {
           sourceName={shownTitle}
           messagesUpToHere={messagesUpTo(transcript, forkFor, state.agentStatus?.messageCount, { positions, inFlight: turnRows(transcript, live) })}
           onCancel={() => setForkFor(null)}
-          onSubmit={async (name) => {
-            try {
-              const result = await state.forkAgent(forkFor, name ? { name } : undefined);
-              setForkFor(null);
-              await navigate(result.url);
-            } catch (err) {
-              throw err instanceof Error ? err : new Error(String(err));
-            }
-          }}
+          onSubmit={(name) => settle(Effect.catchCause(Effect.gen(function* () {
+            const result = yield* Effect.promise(async () => state.forkAgent(forkFor, name ? { name } : undefined));
+            setForkFor(null);
+            yield* Effect.promise(async () => navigate(result.url));
+          }), (failed) => Effect.gen(function* () {
+            const err = Cause.squash(failed);
+
+            return yield* Effect.die(err instanceof Error ? err : new Error(String(err)));
+          })))}
         />
       )}
 

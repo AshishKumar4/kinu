@@ -1,3 +1,5 @@
+import { Data, Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Shared by the drive and its viewer: the plane's name, the one write path, and which pane a path
@@ -33,10 +35,9 @@ export function viewerKindOf(path: string): ViewerKind {
   return inlineType === "application/pdf" ? "pdf" : "text";
 }
 
-export class FileWriteConflict extends Error {
+export class FileWriteConflict extends Data.TaggedError('FileWriteConflict')<{ readonly message: string }> {
   constructor(readonly currentRevision: VfsRevision) {
-    super('This file changed after you opened it.');
-    this.name = 'FileWriteConflict';
+    super({ message: 'This file changed after you opened it.' });
   }
 }
 
@@ -121,29 +122,32 @@ export function sandboxedHtml(source: string): string {
   return `<meta http-equiv="Content-Security-Policy" content="${csp}">${source}`;
 }
 
-export async function putFileBytes(
+export function putFileBytes(
   href: string,
   body: Blob | string,
   expectedRevision?: VfsRevision,
 ): Promise<void> {
-  const headers = expectedRevision === undefined
-    ? undefined
-    : { "If-Match": JSON.stringify(expectedRevision) };
+  return settle(Effect.gen(function* () {
+    const headers = expectedRevision === undefined
+      ? undefined
+      : { "If-Match": JSON.stringify(expectedRevision) };
 
-  const response = await fetch(href, { method: "PUT", body, headers });
+    const response = yield* Effect.promise(() => fetch(href, { method: "PUT", body, headers }));
 
-  if (response.ok) return;
-  const text = await response.text();
+    if (response.ok) return;
+    const text = yield* Effect.promise(() => response.text());
 
-  const parsed = v.safeParse(
-    v.object({ error: v.optional(v.string()), revision: v.optional(VfsRevisionSchema) }),
-    tolerate<unknown>(() => JSON.parse(text), "malformed-input"),
-  );
+    const parsed = v.safeParse(
+      v.object({ error: v.optional(v.string()), revision: v.optional(VfsRevisionSchema) }),
+      tolerate<unknown>(() => JSON.parse(text), "malformed-input"),
+    );
 
-  if (response.status === 412 && parsed.success && parsed.output.revision !== undefined) {
-    throw new FileWriteConflict(parsed.output.revision);
-  }
+    if (response.status === 412 && parsed.success && parsed.output.revision !== undefined) {
+      return yield* Effect.die(new FileWriteConflict(parsed.output.revision));
+    }
 
-  const detail = parsed.success ? parsed.output.error : text.trim() || undefined;
-  throw new Error(detail ?? `the write was refused (${String(response.status)})`);
+    const detail = parsed.success ? parsed.output.error : text.trim() || undefined;
+
+    return yield* Effect.die(new Error(detail ?? `the write was refused (${String(response.status)})`));
+  }));
 }

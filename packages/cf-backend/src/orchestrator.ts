@@ -230,8 +230,8 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { Effect } from 'effect';
-import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type Refusal } from "@kinu.run/core/obs";
+import { Cause, Effect } from 'effect';
+import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusing, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { ownerContainer, type CodexContainer } from "./egress/codex-egress-route";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
@@ -371,6 +371,26 @@ function clampLimit(requested: number | undefined, max: number): number {
 
 /** agents 0.24's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
 const PERSISTED_NAME_KEY = '__ps_name';
+
+/** An alarm phase's failure: marked on its span and recorded, so the tick goes on to its next phase. */
+function phaseFailed(
+  span: ScopedSpan,
+  doing: { readonly doing: string; readonly otherwise: ErrorCode },
+  record: (failure: KinuError) => void,
+): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
+  return recording(doing, (failure) => {
+    span.fail(failure);
+    record(failure);
+  });
+}
+
+/** A terminal step's refusal as the pane reads it, or null once the step is done. */
+function terminalStep(step: Effect.Effect<unknown>, doing: string): Effect.Effect<{ error: string } | null> {
+  return Effect.matchCause(step, {
+    onSuccess: () => null,
+    onFailure: (failed) => ({ error: terminalRefusal({ doing, cause: Cause.squash(failed) }) }),
+  });
+}
 
 /** A terminal that cannot open: the owner's pane reads the whole chain. */
 function terminalRefusal(failure: { doing: string; cause: unknown }): string {
@@ -1190,10 +1210,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /**
-   * The journal is the workspace's: `head_journal` → `head_steps` joins need spawn/report rows and
-   * step rows in one database, so a depth-2 head stays readable.
-   */
+  /** The workspace journal keeps split ancestry and step reports together. */
   private async runHostedSplit(parent: HeadInput, request: HeadSplitRequest): Promise<HeadSplitResult> {
     const journal: HeadJournalPort = {
       recordSplit: async (rootId, rationale, spawnedAt) => { await this.headJournalRecordSplit(rootId, rationale, spawnedAt); },
@@ -1210,11 +1227,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return await runHeadSplit(new HeadController(runtimeForSplit, journal, REAL_CLOCK), parent, request);
   }
-
-  /**
-   * Home provisioning stays in this isolate: `confinePrincipal` has no RPC, so the host provisions
-   * each actor's home via `facetHomeHost()` before building its runtime (`actor-hosting.ts`).
-   */
 
   /** Reached by RPC, or via `fetch` for a WebSocket upgrade, which cannot cross RPC as a 101. */
   async routeWorkspacePreview(
@@ -1434,7 +1446,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (below.length === 0) return;
 
-    this.detachOwned(async () => {
+    this.detachOwned(Effect.promise(async () => {
       for (const actor of below) {
         const reference = actorReferenceOf(actor);
         const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
@@ -1458,7 +1470,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           await this.actorHost().retire(actorReferenceOf(hirer), actorRetirementFor({ reference, name: actor.name, keepHistory: true, interrupt: true }));
         }
       }
-    });
+    }));
   }
 
   /** A waiting hired agent holds no transcript; its rows reopen it. A running job keeps its runtime to the settle's turn. */
@@ -1654,7 +1666,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // (which closes the same leases when it finishes a transition).
     let owed: ReadonlyMap<string, string> = new Map<string, string>();
 
-    try {
+    await settleLogged('event.stale_delivery_unbind_failed', { doing: 'unbinding event deliveries a dead activation left leased', otherwise: 'io' }, async () => {
       owed = await this.owedDrainReplies();
 
       const reconciledEventIds = this.eventLog.unbindStale(
@@ -1665,27 +1677,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         diagnostics.event('event.deliveries_repended', { workspace: this.name, events: reconciledEventIds.length });
         this.orch.scheduleDrain();
       }
-    } catch (err) {
-      diagnostics.failure('event.stale_delivery_unbind_failed', toKinuError({
-        doing: 'unbinding event deliveries a dead activation left leased',
-        cause: err,
-        otherwise: 'io',
-      }), { workspace: this.name });
-    }
+    }, { workspace: this.name });
 
     // One reply's failure leaves only its lease open (keeping the wake armed for it);
     // the other owed replies and the terminal replay below still run.
     for (const [drainTurnId, answer] of owed) {
-      try {
+      await settleLogged('event.owed_reply_failed', { doing: 'finishing an event reply a drained turn still owes', otherwise: 'io' }, async () => {
         const closed = await this.completeEventBatch(drainTurnId, answer);
         diagnostics.event('event.owed_reply_resumed', { drainTurnId, closed });
-      } catch (err) {
-        diagnostics.failure('event.owed_reply_failed', toKinuError({
-          doing: 'finishing an event reply a drained turn still owes',
-          cause: err,
-          otherwise: 'io',
-        }), { drainTurnId });
-      }
+      }, { drainTurnId });
     }
 
     await this.agentTurns.reconcile();
@@ -1868,15 +1868,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private armOwedWorkWake(reason: keyof typeof WAKE_ARM_FAILURE): void {
     const failure = WAKE_ARM_FAILURE[reason];
 
-    this.detachOwned(async () => {
-      try {
-        await this.scheduleTerminalRetry(Date.now());
-      } catch (cause) {
-        diagnostics.failure(failure.event, toKinuError({
-          doing: failure.doing, cause, otherwise: 'io',
-        }), { workspace: this.name });
-      }
-    });
+    this.detachOwned(logged(failure.event, { doing: failure.doing, otherwise: 'io' }, () => this.scheduleTerminalRetry(Date.now()), { workspace: this.name }));
   }
 
   /**
@@ -1891,15 +1883,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const next = this.nextWakeAt(Date.now());
 
     if (next === null) return;
-    this.detachOwned(async () => {
-      try {
-        await this.wakes.arm(KINU_TIMER_JOB, next);
-      } catch (cause) {
-        diagnostics.failure('schedule.durable_wake_arm_failed', toKinuError({
-          doing: 'arming the wake a pending reaction needs', cause, otherwise: 'io',
-        }), { workspace: this.name });
-      }
-    });
+    this.detachOwned(logged('schedule.durable_wake_arm_failed', { doing: 'arming the wake a pending reaction needs', otherwise: 'io' }, () => this.wakes.arm(KINU_TIMER_JOB, next), { workspace: this.name }));
   }
 
   /** Every pass runs (no short-circuit): each owns a different table and is budgeted and idempotent. */
@@ -1978,12 +1962,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.runActorDirectory({ actorId, workspaceId, parentActorId }, [], operation);
   }
 
-  async applyActorDirectory(caller: ActorReference, path: readonly string[], operation: ChildActorOperation): Promise<ActorDirectoryResult | Refusal> {
-    try {
-      return await this.runActorDirectory(caller, path, operation);
-    } catch (cause) {
-      return refusalOf(toKinuError({ doing: 'applying a root actor directory operation', cause, otherwise: 'io' }));
-    }
+  applyActorDirectory(caller: ActorReference, path: readonly string[], operation: ChildActorOperation): Promise<ActorDirectoryResult | Refusal> {
+    return settle(Effect.gen({ self: this }, function* () {
+      return yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
+        return yield* Effect.promise(async () => this.runActorDirectory(caller, path, operation));
+      }), refusing('applying a root actor directory operation', 'io'));
+    }));
   }
 
   private async runActorDirectory(caller: ActorReference, path: readonly string[], operation: ChildActorOperation): Promise<ActorDirectoryResult> {
@@ -2037,17 +2021,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
 
   /** The edge's one resolution of a name or `/`-joined path to the actor id everything downstream keys on. */
-  async resolveHostedActorRoute(target: string): Promise<{ ok: true; actorId: string } | Refusal> {
-    try {
-      if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
-      const actor = this.hostedTarget(target);
+  resolveHostedActorRoute(target: string): Promise<{ ok: true; actorId: string } | Refusal> {
+    return settle(Effect.gen({ self: this }, function* () {
+      return yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
+        if (!this.getOwnerUserId()) return yield* new KinuError('denied', 'The workspace has no owner.');
+        const actor = this.hostedTarget(target);
 
-      if (actor === null) throw new KinuError('missing', 'The actor is not available for client execution.');
+        if (actor === null) return yield* new KinuError('missing', 'The actor is not available for client execution.');
 
-      return { ok: true, actorId: actor.handle.actorId };
-    } catch (cause) {
-      return refusalOf(toKinuError({ doing: 'resolving a hosted actor chat path', cause, otherwise: 'io' }));
-    }
+        return { ok: true as const, actorId: actor.handle.actorId };
+      }), refusing('resolving a hosted actor chat path', 'io'));
+    }));
   }
 
   /** Each step a live subordinate its parent's roster still employs: a dismissal keeps rows, not chat. */
@@ -2146,7 +2130,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       admitted: (id) => this.agentStores(actorId).admitted(id),
       send: (input) => whenActorTakesInput(this.boundSql, actorId, () => sendNow(input)),
       interrupt: () => {
-        this.detachOwned(() => this.agentTurns.interrupt(actorId));
+        this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));
         this.stopSubtree(actorId);
       },
       clear: async () => { await (await facet()).clear(snapshot()); },
@@ -2248,40 +2232,42 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision. */
-  async claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
-    if (!userId) throw new KinuError('bad_input', 'userId required');
+  claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!userId) return yield* new KinuError('bad_input', 'userId required');
 
-    // A hash, not a boolean: the UserDO compares it to its registration so any mismatch gets repaired.
-    const capabilityHash = await this.workspaceCapabilityHash();
-    const current = this.getOwnerUserId();
+      // A hash, not a boolean: the UserDO compares it to its registration so any mismatch gets repaired.
+      const capabilityHash = yield* Effect.promise(async () => this.workspaceCapabilityHash());
+      const current = this.getOwnerUserId();
 
-    if (current === null) {
-      const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
+      if (current === null) {
+        const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
 
-      if (exists.length === 0) {
-        this.bearWorkspace(this.name, userId);
-      } else {
-        this.actorHandle();
-        void this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
+        if (exists.length === 0) {
+          this.bearWorkspace(this.name, userId);
+        } else {
+          this.actorHandle();
+          void this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
+        }
+
+        this._ownerUserId = userId;
+        this.invalidateModelCaches();
+        yield* Effect.promise(async () => this.ensureOwnedScaffold());
+
+        // Detached: the loop is never built inside the init gate.
+        if (exists.length === 0) this.detachOwned(Effect.sync(() => { this.chatLoop.measureSessionStart(); }));
+
+        return { owner: userId, capabilityHash };
       }
 
-      this._ownerUserId = userId;
-      this.invalidateModelCaches();
-      await this.ensureOwnedScaffold();
+      if (current !== userId) {
+        return yield* new KinuError('denied', `Agent owned by a different user (stored=${current.slice(0, 8)}..., caller=${userId.slice(0, 8)}...)`);
+      }
 
-      // Detached: the loop is never built inside the init gate.
-      if (exists.length === 0) this.detachOwned(async () => { this.chatLoop.measureSessionStart(); });
-
-      return { owner: userId, capabilityHash };
-    }
-
-    if (current !== userId) {
-      throw new KinuError('denied', `Agent owned by a different user (stored=${current.slice(0, 8)}..., caller=${userId.slice(0, 8)}...)`);
-    }
-
-    // No scaffold probe here: this runs on every authenticated request. An interrupted bootstrap
-    // is finished by beforeTurn, which awaits ensureOwnedScaffold before reading workspace files.
-    return { owner: current, capabilityHash };
+      // No scaffold probe here: this runs on every authenticated request. An interrupted bootstrap
+      // is finished by beforeTurn, which awaits ensureOwnedScaffold before reading workspace files.
+      return { owner: current, capabilityHash };
+    }));
   }
 
   // The reactor lives on the core AgentOrchestrator. Ingress uses the debounced
@@ -2555,37 +2541,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (namespace === undefined) return;
 
     if (this.config.get(SANDBOX_STARTING) == null && this.config.get(SANDBOX_REFUSED) == null) return;
-    this.detachOwned(async () => {
-      try {
-        await this.sandboxRestore(await namespace.getByName(sandboxIdForWorkspace(this.name)).restoreStatus());
-      } catch (cause) {
-        diagnostics.failure('sandbox.restore_recheck_failed', toKinuError({
-          doing: "reading the sandbox's restore state", cause, otherwise: 'unavailable',
-        }), { workspace: this.name });
-      }
-    });
+    this.detachOwned(logged('sandbox.restore_recheck_failed', { doing: "reading the sandbox's restore state", otherwise: 'unavailable' }, async () => {
+      await this.sandboxRestore(await namespace.getByName(sandboxIdForWorkspace(this.name)).restoreStatus());
+    }, { workspace: this.name }));
   }
 
   /** Every open re-registers, so an object that hibernated or lost its row is told again. */
   private watchDeviceStatus(watching: boolean): void {
     if (this.getOwnerUserId() === null) return;
-    this.detachOwned(async () => {
-      try {
-        const { stub, caller } = await this.userHub();
-        await stub.watchDeviceStatus(caller, watching);
+    this.detachOwned(Effect.catchCause(Effect.gen({ self: this }, function* () {
+      const { stub, caller } = yield* Effect.promise(() => this.userHub());
+      yield* Effect.promise(() => stub.watchDeviceStatus(caller, watching));
 
-        if (!watching) return;
-        const opened = this.rt.deviceTransport.status();
+      if (!watching) return;
+      const opened = this.rt.deviceTransport.status();
 
-        if (!sameDeviceStatus(await this.rt.deviceTransport.refreshStatus(), opened)) {
-          this.liveReadsMoved(['getExecutors', 'getToolDescriptions']);
-        }
-      } catch (cause) {
-        diagnostics.failure('device.watch_failed', toKinuError({
-          doing: watching ? 'asking to hear device changes' : 'leaving the device-change list', cause, otherwise: 'unavailable',
-        }), { workspace: this.name });
+      if (!sameDeviceStatus(yield* Effect.promise(() => this.rt.deviceTransport.refreshStatus()), opened)) {
+        this.liveReadsMoved(['getExecutors', 'getToolDescriptions']);
       }
-    });
+    }), (failed) => Effect.sync(() => {
+      diagnostics.failure('device.watch_failed', toKinuError({
+        doing: watching ? 'asking to hear device changes' : 'leaving the device-change list', cause: Cause.squash(failed), otherwise: 'unavailable',
+      }), { workspace: this.name });
+    })));
   }
 
   async sandboxStopped(): Promise<void> {
@@ -2605,7 +2583,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Detached: the re-read calls back into a UserDO that may be mid socket handler. */
   async devicesMoved(): Promise<{ watching: boolean }> {
     if ([...this.getConnections()].length === 0) return { watching: false };
-    this.detachOwned(async () => { await this.rt.deviceTransport.refreshStatus(); });
+    this.detachOwned(Effect.asVoid(Effect.promise(() => this.rt.deviceTransport.refreshStatus())));
 
     return { watching: true };
   }
@@ -2700,17 +2678,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async hydrateTitle(): Promise<void> {
     if (!this.getOwnerUserId()) return;
 
-    try {
-      const { stub, caller } = await this.userHub();
-      this._titleCache = await stub.getWorkspaceTitle(caller, this.name);
-      this._titleHydrated = true;
-    } catch (err) {
-      diagnostics.failure('workspace.title_hydration_failed', toKinuError({
-        doing: 'reading the root registry title for this workspace',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    }
+    await settleLogged('workspace.title_hydration_failed', { doing: 'reading the root registry title for this workspace', otherwise: 'unavailable' },
+      () => this.hydrateTitleInputs(), { workspace: this.name });
   }
 
   private titleState(): { displayName: string; nameOrigin: NameOrigin } {
@@ -2797,27 +2766,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async listBackgroundJobs(limit = 20, actor?: string): Promise<ListedBackgroundJob[]> {
-    const { store, actorId } = actor === undefined
-      ? { store: this.jobs, actorId: this.actorHandle().actorId }
-      : (({ child }) => ({ store: child.stores.jobs, actorId: child.reference.actorId }))(this.hostedChild(actor));
+  listBackgroundJobs(limit = 20, actor?: string): Promise<ListedBackgroundJob[]> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const child = actor === undefined ? undefined : yield* this.hostedChild(actor);
+      const store = child === undefined ? this.jobs : child.child.stores.jobs;
+      const actorId = child === undefined ? this.actorHandle().actorId : child.child.reference.actorId;
+      const live = this.jobAuthorities.live(actorId);
 
-    const live = this.jobAuthorities.live(actorId);
-
-    return listBackgroundJobs(store, limit, (jobId) => live?.runner.output.tail(jobId));
+      return listBackgroundJobs(store, limit, (jobId) => live?.runner.output.tail(jobId));
+    }));
   }
 
   /** A pane naming `actor` acts on its jobs alone. */
   private jobOperation<Outcome extends { ok: boolean }>(
     operation: string, jobId: string, actor: string | undefined, run: (authority: JobAuthority) => Promise<Outcome> | Outcome,
   ): Effect.Effect<Outcome, KinuError> {
-    const authority = this.jobAuthorities.owning(jobId) ?? this.jobAuthorities.root();
+    return Effect.gen({ self: this }, function* () {
+      const authority = this.jobAuthorities.owning(jobId) ?? this.jobAuthorities.root();
 
-    if (actor !== undefined && authority.actorId !== this.hostedChild(actor).child.reference.actorId) {
-      return Effect.fail(new KinuError('denied', `Job ${jobId} is not ${actor}'s.`));
-    }
+      if (actor !== undefined && authority.actorId !== (yield* this.hostedChild(actor)).child.reference.actorId) {
+        return yield* Effect.fail(new KinuError('denied', `Job ${jobId} is not ${actor}'s.`));
+      }
 
-    return Effect.promise(async () => this.countJobOperation(operation, await run(authority)));
+      return yield* Effect.promise(async () => this.countJobOperation(operation, await run(authority)));
+    });
   }
 
   /** Wrapped at one boundary so the retry ratio is visible across all four sites.
@@ -3202,7 +3174,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // The alarm owns recovery authority. Core retains verified claims as owed,
     // settles unverified ones indeterminate, and leaves live actors untouched.
 
-    try {
+    await settleLogged('actor.turn_recovery_failed', { doing: 'rebuilding the hosted turns an eviction interrupted', otherwise: 'io' }, async () => {
       const host = this.actorHost();
       const rootActorId = this.actorHandle().actorId;
       const rootIsLive = () => this._inFlight || this.actorSession.turnOpen;
@@ -3227,12 +3199,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           };
         },
       });
-
-    } catch (cause) {
-      diagnostics.failure('actor.turn_recovery_failed', toKinuError({
-        doing: 'rebuilding the hosted turns an eviction interrupted', cause, otherwise: 'io',
-      }), { workspace: this.name });
-    }
+    }, { workspace: this.name });
 
     await this.recoverAgentTurns();
     // Retained claims still fence new work; verification alone is not execution.
@@ -3247,7 +3214,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ).length > 0) return true;
     this.activationRecoveryPending = false;
 
-    try {
+    await settleLogged('head.journal_reconcile_failed', { doing: 'reconciling fork-journal heads a dead activation left running', otherwise: 'io' }, async () => {
       await reconcileInterruptedForks({
         now: this.activationStartedAt,
         journal: this.headJournal,
@@ -3276,13 +3243,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         logActivity: (event, detail) => this.logActivity(event, detail),
       });
       await this.reclaimSettledExplorationActors();
-    } catch (cause) {
-      diagnostics.failure('head.journal_reconcile_failed', toKinuError({
-        doing: 'reconciling fork-journal heads a dead activation left running',
-        cause,
-        otherwise: 'io',
-      }), { workspace: this.name });
-    }
+    }, { workspace: this.name });
 
     return await super.maintenanceWork();
   }
@@ -3291,20 +3252,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Must run after `reconcileInterruptedForks` so an `interrupted` head reads as resumable, not terminal.
    */
   protected async reclaimSettledExplorationActors(): Promise<void> {
-    try {
+    await settleLogged('actor.reconciliation_failed', { doing: 'retiring exploration actors left behind by a reset', otherwise: 'unavailable' }, async () => {
       const { retired } = await reclaimSettledExplorationActors(this.hostedSeams(), {
         readHead: (id) => this.headJournal.readHead(id),
         hasLiveExploration: () => this.hasLiveExploration(),
       });
 
       if (retired > 0) diagnostics.event('actor.settled_retired', { retired });
-    } catch (err) {
-      diagnostics.failure('actor.reconciliation_failed', toKinuError({
-        doing: 'retiring exploration actors left behind by a reset',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    }
+    }, { workspace: this.name });
   }
 
   /**
@@ -3345,22 +3300,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async _kinuTimerTick(): Promise<void> {
     const now = Date.now();
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
-      await tick.span('alarm.due_triggers', async (span) => {
-        try {
-          const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
-          span.setAttribute('kinu.triggers_fired', fired);
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 'firing the triggers due on this wake',
-            cause: err,
-            otherwise: 'io',
-          });
-
-          // `fail`, not rethrow: the tick continues to the next phase, so the span must be marked failed.
-          span.fail(failure);
-          diagnostics.failure('schedule.due_triggers_failed', failure);
-        }
-      });
+      // A phase's failure is `fail`ed on its span, not rethrown: the tick continues to the next phase.
+      await tick.span('alarm.due_triggers', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const { fired } = yield* Effect.promise(() => fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now));
+        span.setAttribute('kinu.triggers_fired', fired);
+      }), phaseFailed(span, { doing: 'firing the triggers due on this wake', otherwise: 'io' }, (failure) => {
+        diagnostics.failure('schedule.due_triggers_failed', failure);
+      }))));
 
       // `nextWakeAt` folds `nextPendingDrainAt`, so pending events owe a drain here (D6). The condition
       // uses the same reader and clock as the re-arm so the two cannot disagree about whether it was due.
@@ -3393,120 +3339,78 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       // Durable re-drive of pending outbound peer messages (eviction recovery and backoff retries).
-      await tick.span('alarm.peer_dispatch', async (span) => {
-        try {
-          await this.peerHub.dispatchOutbox(now);
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 're-driving the pending outbound peer messages',
-            cause: err,
-            otherwise: 'unavailable',
-          });
-
-          span.fail(failure);
+      await tick.span('alarm.peer_dispatch', (span) => settle(Effect.catchCause(
+        Effect.promise(() => this.peerHub.dispatchOutbox(now)),
+        phaseFailed(span, { doing: 're-driving the pending outbound peer messages', otherwise: 'unavailable' }, (failure) => {
           diagnostics.failure('peer.outbox_dispatch_failed', failure);
-        }
-      });
+        }),
+      )));
 
       // Re-drive `pending` outbound email; the stored Message-ID makes re-send idempotent (SPEC §7.4).
-      await tick.span('alarm.email_reconcile', async (span) => {
-        try {
+      await tick.span('alarm.email_reconcile', (span) => settle(Effect.catchCause(
+        Effect.promise(async () => {
           if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 'reconciling indeterminate outbound email',
-            cause: err,
-            otherwise: 'unavailable',
-          });
-
-          span.fail(failure);
+        }),
+        phaseFailed(span, { doing: 'reconciling indeterminate outbound email', otherwise: 'unavailable' }, (failure) => {
           diagnostics.failure('email.outbox_reconcile_failed', failure);
-        }
-      });
+        }),
+      )));
 
       // Sibling phase because `nextWakeAt` folds the warm row. The lane re-checks the request counter,
       // so a turn started after the arm suppresses the refresh.
-      await tick.span('alarm.cache_warm', async (span) => {
-        try {
-          const warmed = await this.cacheWarming.runDue(now);
-          span.setAttribute('kinu.cache_warmed', warmed !== null);
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 'refreshing the prompt-cache prefix this wake was armed for',
-            cause: err,
-            otherwise: 'unavailable',
-          });
-
-          span.fail(failure);
-          diagnostics.failure('cache.warm_failed', failure);
-        }
-      });
+      await tick.span('alarm.cache_warm', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const warmed = yield* Effect.promise(() => this.cacheWarming.runDue(now));
+        span.setAttribute('kinu.cache_warmed', warmed !== null);
+      }), phaseFailed(span, { doing: 'refreshing the prompt-cache prefix this wake was armed for', otherwise: 'unavailable' }, (failure) => {
+        diagnostics.failure('cache.warm_failed', failure);
+      }))));
 
       // A failed sleep-time run is not retried by this chain; the settled instant is released first so
       // it cannot answer due on every re-arm. The next completed turn re-arms.
-      await tick.span('alarm.sleep_time', async (span) => {
-        try {
-          const ran = await this.runSleepTimeIfDue(now);
-          span.setAttribute('kinu.sleep_time_ran', ran);
-        } catch (err) {
-          this.config.delete(SLEEP_TIME_SETTLED_AT);
+      await tick.span('alarm.sleep_time', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const ran = yield* Effect.promise(() => this.runSleepTimeIfDue(now));
+        span.setAttribute('kinu.sleep_time_ran', ran);
+      }), (failed) => Effect.suspend(() => {
+        this.config.delete(SLEEP_TIME_SETTLED_AT);
 
-          const failure = toKinuError({
-            doing: 'running the sleep-time compute this wake was armed for',
-            cause: err,
-            otherwise: 'unavailable',
-          });
-
-          span.fail(failure);
-
+        return phaseFailed(span, { doing: 'running the sleep-time compute this wake was armed for', otherwise: 'unavailable' }, (failure) => {
           if (isDefinitiveTerminalFailure(failure.code)) {
             this.logActivity('terminal_effect_abandoned', `memory compression failed: ${failure.message}, so it is not retried`);
           }
 
           diagnostics.failure('memory.sleep_time_wake_failed', failure);
-        }
-      });
+        })(failed);
+      }))));
 
       // Soonest-wins arm, so it never clobbers a sooner wake armed during dispatch. Awaited: this link
       // keeps the timer chain alive.
-      await tick.span('alarm.timer_rearm', async (span) => {
-        try {
-          const next = this.nextWakeAt(now);
-          span.setAttribute('kinu.rearmed', next !== null);
+      await tick.span('alarm.timer_rearm', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const next = this.nextWakeAt(now);
+        span.setAttribute('kinu.rearmed', next !== null);
 
-          if (next !== null) await this.wakes.arm(KINU_TIMER_JOB, next);
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 're-arming the wake that keeps the timer chain alive',
-            cause: err,
-            otherwise: 'io',
-          });
+        if (next !== null) yield* Effect.promise(() => this.wakes.arm(KINU_TIMER_JOB, next));
+      }), (failed) => {
+        const failure = toKinuError({ doing: 're-arming the wake that keeps the timer chain alive', cause: Cause.squash(failed), otherwise: 'io' });
 
-          span.fail(failure);
-          diagnostics.failure('schedule.timer_rearm_failed', failure);
-          // Rethrown: this failure loses the next wake. An uncaught alarm throw makes the runtime redeliver
-          // it (tests/workerd/do-alarm.test.ts), and the redelivered tick re-arms from durable state.
-          throw failure;
-        }
-      });
+        span.fail(failure);
+        diagnostics.failure('schedule.timer_rearm_failed', failure);
 
-      await tick.span('alarm.slate_pictures', async (span) => {
+        // Rethrown: this failure loses the next wake. An uncaught alarm throw makes the runtime redeliver
+        // it (tests/workerd/do-alarm.test.ts), and the redelivered tick re-arms from durable state.
+        return Effect.fail(failure);
+      })));
+
+      await tick.span('alarm.slate_pictures', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
         const capture = this.pictureCapture();
 
         if (capture === null) return;
+        const changed = yield* Effect.promise(() => this.pictures.captureDue(capture, now));
+        span.setAttribute('kinu.pictures_changed', changed);
 
-        try {
-          const changed = await this.pictures.captureDue(capture, now);
-          span.setAttribute('kinu.pictures_changed', changed);
-
-          if (changed) this.overviewChanged();
-        } catch (err) {
-          const failure = toKinuError({ doing: 'photographing the slates due a picture', cause: err, otherwise: 'unavailable' });
-
-          span.fail(failure);
-          diagnostics.failure('slate.pictures_failed', failure);
-        }
-      });
+        if (changed) this.overviewChanged();
+      }), phaseFailed(span, { doing: 'photographing the slates due a picture', otherwise: 'unavailable' }, (failure) => {
+        diagnostics.failure('slate.pictures_failed', failure);
+      }))));
     });
   }
 
@@ -3675,39 +3579,41 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * The pair settles into Alternate Takes on this turn; progress streams as 'branch_status'.
    */
   @callable()
-  async branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
-    const task = text.trim();
+  branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const task = text.trim();
 
-    if (!task) throw new KinuError('bad_input', 'branchTurn requires the redirect text');
+      if (!task) return yield* new KinuError('bad_input', 'branchTurn requires the redirect text');
 
-    if (!this._inFlight) {
-      return { accepted: false, reason: 'No turn is running: send it as a normal message instead.' };
-    }
+      if (!this._inFlight) {
+        return { accepted: false, reason: 'No turn is running: send it as a normal message instead.' };
+      }
 
-    if (this.turnWorkMode() === 'plan') {
-      return { accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' };
-    }
+      if (this.turnWorkMode() === 'plan') {
+        return { accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' };
+      }
 
-    const runtime = this.getCFHeadRuntime();
+      const runtime = this.getCFHeadRuntime();
 
-    if (!runtime) {
-      return { accepted: false, reason: 'Branching needs an agent owner (heads require UserDO access).' };
-    }
+      if (!runtime) {
+        return { accepted: false, reason: 'Branching needs an agent owner (heads require UserDO access).' };
+      }
 
-    const id = newBranchId();
-    // Read before the await: the branch charges the turn the owner redirected, not whichever runs next.
-    const missionLabels = this.budget.scope;
-    const inheritedContext = await this.readInheritedContext();
-    this._pendingBranches.push({
-      id, task,
-      handle: startBranchHead(runtime, this.headJournal, {
-        id, task, inheritedContext, missionLabels,
-      }),
-    });
-    this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
-    this.logActivity('branch_start', task.slice(0, 120));
+      const id = newBranchId();
+      // Read before the await: the branch charges the turn the owner redirected, not whichever runs next.
+      const missionLabels = this.budget.scope;
+      const inheritedContext = yield* Effect.promise(async () => this.readInheritedContext());
+      this._pendingBranches.push({
+        id, task,
+        handle: startBranchHead(runtime, this.headJournal, {
+          id, task, inheritedContext, missionLabels,
+        }),
+      });
+      this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
+      this.logActivity('branch_start', task.slice(0, 120));
 
-    return { accepted: true, branchId: id };
+      return { accepted: true, branchId: id };
+    }));
   }
 
   private broadcastBranchStatus(event: BranchStatusEvent): void {
@@ -3871,48 +3777,42 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * EMA observation at that rating to the crafted tools recorded for this message in turn_craft_usage.
    */
   @callable()
-  async setTurnFeedback(
+  setTurnFeedback(
     messageId: string,
     feedback: 'positive' | 'negative' | null,
   ): Promise<{ ok: true; messageId: string; feedback: 'positive' | 'negative' | null; rescored: number }> {
-    if (messageId.length === 0) {
-      throw new KinuError('bad_input', 'messageId must be a non-empty string');
-    }
+    return settle(Effect.gen({ self: this }, function* () {
+      if (messageId.length === 0) {
+        return yield* new KinuError('bad_input', 'messageId must be a non-empty string');
+      }
 
-    if (feedback !== null && feedback !== 'positive' && feedback !== 'negative') {
-      throw new KinuError('bad_input', `feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
-    }
+      if (feedback !== null && feedback !== 'positive' && feedback !== 'negative') {
+        return yield* new KinuError('bad_input', `feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
+      }
 
-    let rescored = 0;
+      let rescored = 0;
 
-    const usageRows = feedback === null ? [] : this.sql<{ tool_names: string }>`
+      const usageRows = feedback === null ? [] : this.sql<{ tool_names: string }>`
       SELECT tool_names FROM turn_craft_usage
       WHERE actor_id = ${this.actorHandle().actorId} AND message_id = ${messageId} LIMIT 1`;
 
-    if (feedback !== null && usageRows[0]?.tool_names) {
-      const parsedNames = v.safeParse(v.array(v.string()), JSON.parse(usageRows[0].tool_names));
-      const names = parsedNames.success ? parsedNames.output : [];
+      if (feedback !== null && usageRows[0]?.tool_names) {
+        const parsedNames = v.safeParse(v.array(v.string()), JSON.parse(usageRows[0].tool_names));
+        const names = parsedNames.success ? parsedNames.output : [];
 
-      if (names.length > 0) {
-        updateCraftScores(this.boundSql, names, ratingQuality(thumbsRating(feedback).score));
-        rescored = names.length;
-        this._cachedTools = null;
-        this._cachedToolsKey = '';
+        if (names.length > 0) {
+          updateCraftScores(this.boundSql, names, ratingQuality(thumbsRating(feedback).score));
+          rescored = names.length;
+          this._cachedTools = null;
+          this._cachedToolsKey = '';
+        }
       }
-    }
 
-    // The thumb wins over the model's rating of this turn and, when down, corroborates provisional lessons.
-    try {
-      await this.engine.applyExplicitFeedback(messageId, feedback);
-    } catch (err) {
-      diagnostics.failure('feedback.explicit_apply_failed', toKinuError({
-        doing: 'recording a thumb in the rating ledger',
-        cause: err,
-        otherwise: 'io',
-      }), { messageId });
-    }
+      // The thumb wins over the model's rating of this turn and, when down, corroborates provisional lessons.
+      yield* Effect.promise(async () => settleLogged('feedback.explicit_apply_failed', { doing: 'recording a thumb in the rating ledger', otherwise: 'io' }, () => this.engine.applyExplicitFeedback(messageId, feedback), { messageId }));
 
-    return { ok: true, messageId, feedback, rescored };
+      return { ok: true, messageId, feedback, rescored };
+    }));
   }
 
   /** Scoped to this actor: message ids are unique only within an actor. */
@@ -3947,7 +3847,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** One GEPA run with candidates and Pareto-front membership; Maps flattened to objects for RPC. */
   @callable()
-  async getGepaRun(runId: string): Promise<{
+  getGepaRun(runId: string): Promise<{
     run: GepaRunSummary | null;
     candidates: Array<{
       id: string; parentId: string | null; source: string;
@@ -3956,24 +3856,28 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }>;
     pareto: Array<{ candidateId: string; instanceId: string; score: number }>;
   }> {
-    try {
-      const run = listGepaRuns(this.boundSql, this.actorHandle(), 200).find((r) => r.runId === runId) ?? null;
+    return settle(Effect.gen({ self: this }, function* () {
+      return yield* Effect.catchCause(Effect.sync(() => {
+        const run = listGepaRuns(this.boundSql, this.actorHandle(), 200).find((r) => r.runId === runId) ?? null;
 
-      const candidates = loadGepaCandidates(this.boundSql, this.actorHandle(), runId).map((c) => ({
-        id: c.id, parentId: c.parentId, source: c.source,
-        scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
-        aggregateScore: c.aggregateScore, createdAt: c.createdAt,
+        const candidates = loadGepaCandidates(this.boundSql, this.actorHandle(), runId).map((c) => ({
+          id: c.id, parentId: c.parentId, source: c.source,
+          scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
+          aggregateScore: c.aggregateScore, createdAt: c.createdAt,
+        }));
+
+        // The membership table is core's; no raw SELECT across the package boundary.
+        const pareto = loadGepaParetoFront(this.boundSql, this.actorHandle(), runId);
+
+        return { run, candidates, pareto };
+      }), (failed) => Effect.gen({ self: this }, function* () {
+        const error = Cause.squash(failed);
+
+        if (classify({ cause: error }) !== 'sqlite-missing-table') return yield* Effect.failCause(failed);
+
+        return { run: null, candidates: [], pareto: [] };
       }));
-
-      // The membership table is core's; no raw SELECT across the package boundary.
-      const pareto = loadGepaParetoFront(this.boundSql, this.actorHandle(), runId);
-
-      return { run, candidates, pareto };
-    } catch (error) {
-      if (classify({ cause: error }) !== 'sqlite-missing-table') throw error;
-
-      return { run: null, candidates: [], pareto: [] };
-    }
+    }));
   }
 
   /** The store the change-set reads, as the session user whose plane the root actor's is. */
@@ -4079,19 +3983,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Owner-scoped ('interactive'); workspace capability tiers do not gate it.
    */
   @callable()
-  async exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
-    const ownerUserId = this.getOwnerUserId();
+  exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const ownerUserId = this.getOwnerUserId();
 
-    if (!ownerUserId) throw new KinuError('unavailable', 'Cannot export an unclaimed workspace.');
-    const workspace = this.hostedWorkspace().bundle;
+      if (!ownerUserId) return yield* new KinuError('unavailable', 'Cannot export an unclaimed workspace.');
+      const workspace = this.hostedWorkspace().bundle;
 
-    return readWorkspaceArchivePage(this.ctx.storage.sql, {
-      workspace: this.name,
-      source: 'cloud',
-      cursor: parseArchiveCursor(cursor),
-      store: workspaceArchiveStore(workspace),
-      agents: this.agentArchiveSource(),
-    });
+      return yield* Effect.promise(async () => readWorkspaceArchivePage(this.ctx.storage.sql, {
+        workspace: this.name,
+        source: 'cloud',
+        cursor: parseArchiveCursor(cursor),
+        store: workspaceArchiveStore(workspace),
+        agents: this.agentArchiveSource(),
+      }));
+    }));
   }
 
   /** Retired ones hold their stores until destroyed. */
@@ -4120,23 +4026,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Tear down per-agent resources (Sandbox first), then wipe this DO; called by UserDO.removeWorkspace.
    * Not @callable: destruction must go through UserDO's ownership check.
    */
-  async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
-    if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new KinuError('bad_input', 'invalid expected owner user id');
+  destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) return yield* new KinuError('bad_input', 'invalid expected owner user id');
 
-    // No owner: a creation that died before its claim, or storage from before a reset. The caller
-    // `removeWorkspace` already verified ownership through the user's roster.
-    let ownerUserId = this.wipe?.ownerUserId ?? null;
+      // No owner: a creation that died before its claim, or storage from before a reset. The caller
+      // `removeWorkspace` already verified ownership through the user's roster.
+      let ownerUserId = this.wipe?.ownerUserId ?? null;
 
-    if (this.wipe === undefined && this.storageRefusal === undefined) ownerUserId = this.getOwnerUserId();
+      if (this.wipe === undefined && this.storageRefusal === undefined) ownerUserId = this.getOwnerUserId();
 
-    if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) throw new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
+      if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) return yield* new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
 
-    if (this.wipe === undefined) await this.releaseOutsideState();
+      if (this.wipe === undefined) yield* Effect.promise(async () => this.releaseOutsideState());
 
-    this.wipe ??= { ownerUserId, done: this.wipeStorage() };
-    await this.wipe.done;
+      const wipe = this.wipe ??= { ownerUserId, done: this.wipeStorage() };
+      yield* Effect.promise(() => wipe.done);
 
-    return { ok: true };
+      return { ok: true };
+    }));
   }
 
   private async releaseOutsideState(): Promise<void> {
@@ -4183,20 +4091,27 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  async getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {
-    if (actor !== undefined && this.isAgent(actor)) return await this.agentStores(actor).turnRequests(turnId);
+  getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (actor !== undefined && this.isAgent(actor)) return yield* Effect.promise(() => this.agentStores(actor).turnRequests(turnId));
 
-    return turnRequestIndex(this.turnRequestSources(actor), turnId);
+      return turnRequestIndex(yield* this.turnRequestSources(actor), turnId);
+    }));
   }
 
-  async getTurnRequest(
+  getTurnRequest(
     turnId: string, at: { readonly epoch: number; readonly revision: number; readonly from?: number; readonly actor?: string },
   ): Promise<TurnRequestPage> {
-    const read = { turnId, epoch: at.epoch, revision: at.revision, ...(at.from !== undefined && { from: at.from }) };
+    return settle(Effect.gen({ self: this }, function* () {
+      const read = { turnId, epoch: at.epoch, revision: at.revision, ...(at.from !== undefined && { from: at.from }) };
+      const actor = at.actor;
 
-    if (at.actor !== undefined && this.isAgent(at.actor)) return await this.agentStores(at.actor).turnRequest(read);
+      if (actor !== undefined && this.isAgent(actor)) return yield* Effect.promise(() => this.agentStores(actor).turnRequest(read));
 
-    return await turnRequestPage(this.turnRequestSources(at.actor), read);
+      const sources = yield* this.turnRequestSources(actor);
+
+      return yield* Effect.promise(() => turnRequestPage(sources, read));
+    }));
   }
 
   /** Not @callable: the audited `workspace.turn_read`. */
@@ -4213,15 +4128,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       : await this.getTurnRequest(read.turnId, { ...read.at, ...(read.actor !== undefined && { actor: read.actor }) });
   }
 
-  private turnRequestSources(actorId: string | undefined): AgentStores {
+  private turnRequestSources(actorId: string | undefined): Effect.Effect<AgentStores, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      if (actorId === undefined) return this.stores;
+      const host = this.actorHost();
+      const record = host.describe(actorId);
 
-    if (actorId === undefined) return this.stores;
-    const host = this.actorHost();
-    const record = host.describe(actorId);
+      if (record === null) return yield* new KinuError('missing', 'The actor is not registered in this workspace.');
 
-    if (record === null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
-
-    return host.bindStores({ actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId }).stores;
+      return host.bindStores({ actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId }).stores;
+    });
   }
 
   /** For resume, pass the last seen `since` index; returns events strictly after it. */
@@ -4240,12 +4156,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
-    const owner = this.getOwnerUserId();
+  inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const owner = this.getOwnerUserId();
 
-    if (!owner) throw new KinuError('denied', 'The workspace has no owner.');
+      if (!owner) return yield* new KinuError('denied', 'The workspace has no owner.');
 
-    return this.inspectSubordinateStorage(request, { owner, workspace: this.name });
+      return yield* Effect.promise(async () => this.inspectSubordinateStorage(request, { owner, workspace: this.name }));
+    }));
   }
 
   /**
@@ -4254,40 +4172,44 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   /** Resolved through the directory under this root's handle, so a name only reaches this root's children. */
   private hostedChild(target: string) {
-    if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
-    const actor = this.hostedTarget(target);
+    return Effect.gen({ self: this }, function* () {
+      if (!this.getOwnerUserId()) return yield* new KinuError('denied', 'The workspace has no owner.');
+      const actor = this.hostedTarget(target);
 
-    if (actor === null) throw new KinuError('missing', `"${target}" is not an agent of this workspace.`);
+      if (actor === null) return yield* new KinuError('missing', `"${target}" is not an agent of this workspace.`);
 
-    return { entry: actor.entry, child: this.actorHost().bindStores(actor.handle) };
+      return { entry: actor.entry, child: this.actorHost().bindStores(actor.handle) };
+    });
   }
 
   @callable()
-  async getActorSnapshot(name: string) {
-    const { entry, child } = this.hostedChild(name);
+  getActorSnapshot(name: string) {
+    return settle(Effect.gen({ self: this }, function* () {
+      const { entry, child } = yield* this.hostedChild(name);
 
-    // The effective model: the actor's own pin, else the workspace's, else its tier's, with its source.
-    const { profile } = await this.hostedActorProfile({
-      actor: child.handle, availableTools: [], workMode: 'build',
-    });
+      // The effective model: the actor's own pin, else the workspace's, else its tier's, with its source.
+      const { profile } = yield* Effect.promise(async () => this.hostedActorProfile({
+        actor: child.handle, availableTools: [], workMode: 'build',
+      }));
 
-    return {
-      name: entry.name,
-      // The id every frame broadcast for this actor is stamped with; the pane uses it to filter frames.
-      actorId: child.handle.actorId,
-      displayName: child.stores.config.getDisplayName() ?? entry.name,
-      role: child.stores.config.getRoleSelection(),
-      mission: entry.birth?.seed.mission ?? '',
-      model: { model: profile.tier.model, source: profile.tier.source },
-      reasoningEffort: profile.tier.reasoningEffort,
-      activePlan: child.stores.planReviews.getActive(CHAT_SESSION_ID),
-      // Counted in the store: the pane holds only a window.
-      messageCount: await this.agentStores(child.handle.actorId).messageCount(),
-      // Read with the child's actor id; same rule as `pendingSteerRuns()`: a steer is a row bound to a turn.
-      pendingSteers: new PendingSendStore(this.boundSql, child.handle.actorId).restore()
-        .filter((row) => row.turnId !== null)
-        .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null })),
-    };
+      return {
+        name: entry.name,
+        // The id every frame broadcast for this actor is stamped with; the pane uses it to filter frames.
+        actorId: child.handle.actorId,
+        displayName: child.stores.config.getDisplayName() ?? entry.name,
+        role: child.stores.config.getRoleSelection(),
+        mission: entry.birth?.seed.mission ?? '',
+        model: { model: profile.tier.model, source: profile.tier.source },
+        reasoningEffort: profile.tier.reasoningEffort,
+        activePlan: child.stores.planReviews.getActive(CHAT_SESSION_ID),
+        // Counted in the store: the pane holds only a window.
+        messageCount: yield* Effect.promise(async () => this.agentStores(child.handle.actorId).messageCount()),
+        // Read with the child's actor id; same rule as `pendingSteerRuns()`: a steer is a row bound to a turn.
+        pendingSteers: new PendingSendStore(this.boundSql, child.handle.actorId).restore()
+          .filter((row) => row.turnId !== null)
+          .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null })),
+      };
+    }));
   }
 
   /**
@@ -4295,15 +4217,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * facets must not reach. A hint: readers re-verify via owner-gated `inspectSubordinate`; a stub
    * call carries no caller identity.
    */
-  async announceSubordinatePlan(reference: WorkspacePlanReference): Promise<void> {
-    const parsed = v.parse(WorkspacePlanReferenceSchema, reference);
-    const name = parsed.path[0];
+  announceSubordinatePlan(reference: WorkspacePlanReference): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const parsed = v.parse(WorkspacePlanReferenceSchema, reference);
+      const name = parsed.path[0];
 
-    if (!name || !this.subordinateRoster.get(name)) {
-      throw new KinuError('denied', 'This workspace has no such plan actor.');
-    }
+      if (!name || !this.subordinateRoster.get(name)) {
+        return yield* new KinuError('denied', 'This workspace has no such plan actor.');
+      }
 
-    this.broadcastToActor(null, JSON.stringify({ type: 'workspace_plan_updated', reference: parsed }));
+      this.broadcastToActor(null, JSON.stringify({ type: 'workspace_plan_updated', reference: parsed }));
+    }));
   }
 
   @callable()
@@ -4381,29 +4305,33 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Delivers a task signal through the same seam as the event→turn reactor and background-job wake.
    * The words come from the MCP client's operator, so the signal names its author. */
-  async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
-    const trimmed = text.trim();
+  runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const trimmed = text.trim();
 
-    if (!trimmed) throw new KinuError('bad_input', 'run_task requires non-empty text');
+      if (!trimmed) return yield* new KinuError('bad_input', 'run_task requires non-empty text');
 
-    const outcome = await this.orch.inbox.send({
-      kind: 'mcp', text: trimmed,
-      metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
-    });
+      const outcome = yield* Effect.promise(async () => this.orch.inbox.send({
+        kind: 'mcp', text: trimmed,
+        metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
+      }));
 
-    return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
+      return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
+    }));
   }
 
   /** Fire-and-forget over the peer-deps transport; owner + same-owner roster gate is enforced there. */
-  async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
-    if (!input?.agent || !input?.message) throw new KinuError('bad_input', 'send_peer requires agent and message');
+  sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!input?.agent || !input?.message) return yield* new KinuError('bad_input', 'send_peer requires agent and message');
 
-    return this.getPeersToolDeps().send({
-      agent: input.agent,
-      topic: (input.topic ?? '').trim() || 'message',
-      message: input.message,
-      mode: 'build',
-    });
+      return yield* Effect.promise(async () => this.getPeersToolDeps().send({
+        agent: input.agent,
+        topic: (input.topic ?? '').trim() || 'message',
+        message: input.message,
+        mode: 'build',
+      }));
+    }));
   }
 
   /** The owner's other agents, self excluded. */
@@ -4686,15 +4614,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!signal) return { started: false };
     // The send admits the turn before its first await; only the wait is detached.
     const sent = this.orch.inbox.send(signal);
-    this.detachOwned(async () => {
-      try {
-        await this.keepAliveWhile(() => sent);
-      } catch (cause) {
-        diagnostics.failure('genesis.turn_failed', toKinuError({
-          doing: "taking the workspace's first turn", cause, otherwise: 'unavailable',
-        }), { workspace: this.name });
-      }
-    });
+    this.detachOwned(logged('genesis.turn_failed', { doing: "taking the workspace's first turn", otherwise: 'unavailable' }, async () => { await this.keepAliveWhile(() => sent); }, { workspace: this.name }));
 
     return { started: true };
   }
@@ -5035,46 +4955,45 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // In flight, it owes the wake a failure would arm.
     if (retry !== null) this.overviewRetry = { at: Date.now() + recoveryBackoffMs(retry.attempts + 1), attempts: retry.attempts };
-    this.detachOwned(async () => {
-      let failed: KinuError | null = null;
+    let failed: KinuError | null = null;
 
-      try {
-        while (this.overviewDirty) {
-          this.overviewDirty = false;
-          const overview = await this.foldOverview();
-          const pushed = JSON.stringify(overview);
+    this.detachOwned(Effect.ensuring(Effect.catchCause(Effect.gen({ self: this }, function* () {
+      while (this.overviewDirty) {
+        this.overviewDirty = false;
+        const overview = yield* Effect.promise(() => this.foldOverview());
+        const pushed = JSON.stringify(overview);
 
-          if (pushed === this.pushedOverview) continue;
+        if (pushed === this.pushedOverview) continue;
 
-          // Installing a token pushes.
-          if (this.workspaceCapabilityToken() === null) {
-            this.overviewDirty = true;
-            break;
-          }
-
-          const { stub, caller } = await this.userHub();
-          await stub.putWorkspaceOverview(caller, this.name, overview);
-          this.pushedOverview = pushed;
+        // Installing a token pushes.
+        if (this.workspaceCapabilityToken() === null) {
+          this.overviewDirty = true;
+          break;
         }
 
-        this.overviewRetry = null;
-      } catch (cause) {
-        this.overviewDirty = true;
-        const failure = toKinuError({ doing: "pushing this workspace's tile to its owner's roster", cause, otherwise: 'unavailable' });
-        const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
-        // A refusal meets the next push.
-        const retrying = failure.code === 'unavailable' || failure.code === 'timeout';
-        failed = failure;
-        this.overviewRetry = retrying ? { at: Date.now() + recoveryBackoffMs(attempts), attempts } : null;
-        diagnostics.failure('workspace.overview_push_failed', failure, { workspace: this.name, attempts, retrying });
-
-        if (this.overviewRetry !== null) await this.scheduleTerminalRetry(this.overviewRetry.at);
-      } finally {
-        this.overviewPushing = false;
-
-        for (const settleWaiter of this.overviewSettlers.splice(0)) settleWaiter(failed);
+        const { stub, caller } = yield* Effect.promise(() => this.userHub());
+        yield* Effect.promise(() => stub.putWorkspaceOverview(caller, this.name, overview));
+        this.pushedOverview = pushed;
       }
-    });
+
+      this.overviewRetry = null;
+    }), (cause) => Effect.gen({ self: this }, function* () {
+      this.overviewDirty = true;
+      const failure = toKinuError({ doing: "pushing this workspace's tile to its owner's roster", cause: Cause.squash(cause), otherwise: 'unavailable' });
+      const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
+      // A refusal meets the next push.
+      const retrying = failure.code === 'unavailable' || failure.code === 'timeout';
+      failed = failure;
+      const next = retrying ? { at: Date.now() + recoveryBackoffMs(attempts), attempts } : null;
+      this.overviewRetry = next;
+      diagnostics.failure('workspace.overview_push_failed', failure, { workspace: this.name, attempts, retrying });
+
+      if (next !== null) yield* Effect.promise(() => this.scheduleTerminalRetry(next.at));
+    })), Effect.sync(() => {
+      this.overviewPushing = false;
+
+      for (const settleWaiter of this.overviewSettlers.splice(0)) settleWaiter(failed);
+    })));
   }
 
   /** Once its card moved, or the failure that left the list behind. */
@@ -5084,21 +5003,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await new Promise<KinuError | null>((resolve) => { this.overviewSettlers.push(resolve); });
   }
 
-  @callable() async executeInExecutor(executorId: string, command: string, device?: string) {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-    const run = await runOnExecutor(this.rt.executionRouter, executorId, command, device);
+  @callable() executeInExecutor(executorId: string, command: string, device?: string) {
+    return settle(Effect.gen({ self: this }, function* () {
+      const router = this.rt.executionRouter;
 
-    if (run.kind === 'refused') return { error: run.error, refusal: run.refusal };
+      if (!router) return { error: 'no execution router' };
+      const run = yield* Effect.promise(() => runOnExecutor(router, executorId, command, device));
 
-    const output = run.kind === 'ran'
-      ? { stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode, ...(run.refusal && { refusal: run.refusal }) }
-      : { stdout: '', stderr: run.error, exitCode: 1, refusal: run.refusal };
+      if (run.kind === 'refused') return { error: run.error, refusal: run.refusal };
 
-    this.recordExecutorOutput(executorId, command, run.kind === 'ran' ? output : { stdout: null, stderr: run.error, exitCode: 1 });
-    // The UI terminal renders only from broadcasts, so a failure is broadcast too.
-    this.broadcast(JSON.stringify({ type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now() }));
+      const output = run.kind === 'ran'
+        ? { stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode, ...(run.refusal && { refusal: run.refusal }) }
+        : { stdout: '', stderr: run.error, exitCode: 1, refusal: run.refusal };
 
-    return run.kind === 'ran' ? output : { error: run.error, exitCode: 1, refusal: run.refusal };
+      this.recordExecutorOutput(executorId, command, run.kind === 'ran' ? output : { stdout: null, stderr: run.error, exitCode: 1 });
+      // The UI terminal renders only from broadcasts, so a failure is broadcast too.
+      this.broadcast(JSON.stringify({ type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now() }));
+
+      return run.kind === 'ran' ? output : { error: run.error, exitCode: 1, refusal: run.refusal };
+    }));
   }
 
   /** Directory listing read off each executor's own raw handle, in that environment's paths. */
@@ -5234,63 +5157,52 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Terminal preflight via the sandbox lane's own `ensureReady` (egress grants, /workspace).
    * Not @callable: called by the terminal HTTP route (see terminal-route.ts). */
-  async prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
+  prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
     // The owner's machine has no container to warm; it only needs to be attached.
-    if (executorId === 'device') {
-      const device = this.rt.deviceTransport.status();
+      if (executorId === 'device') {
+        const device = this.rt.deviceTransport.status();
 
-      if (device.connected) return { ok: true };
+        if (device.connected) return { ok: true };
 
-      if (device.registered) return { error: 'That machine is offline. Run `kinu connect` on it.' };
+        if (device.registered) return { error: 'That machine is offline. Run `kinu connect` on it.' };
 
-      return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
-    }
-
-    if (executorId === 'workspace') {
-      try {
-        await this.hostedWorkspace().terminal();
-
-        return { ok: true };
-      } catch (cause) {
-        return { error: terminalRefusal({ doing: 'composing the workspace runtime for a terminal', cause }) };
+        return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
       }
-    }
 
-    if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
-    const handle = this.rt.sandboxHandle;
+      if (executorId === 'workspace') {
+        return (yield* terminalStep(Effect.promise(async () => this.hostedWorkspace().terminal()), 'composing the workspace runtime for a terminal')) ?? { ok: true };
+      }
 
-    if (!handle) return { error: 'the sandbox container is not configured for this workspace' };
+      if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
+      const handle = this.rt.sandboxHandle;
 
-    try {
-      await handle.ensureReady();
+      if (!handle) return { error: 'the sandbox container is not configured for this workspace' };
 
-      return { ok: true };
-    } catch (cause) {
-      return { error: terminalRefusal({ doing: 'preparing the sandbox container for a terminal', cause }) };
-    }
+      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the sandbox container for a terminal')) ?? { ok: true };
+    }));
   }
 
   /**
    * Opens via this object because only it holds the workspace capability token the hub needs.
    * `user` is the object holding both sockets; the route sends the pane's upgrade there.
    */
-  async openDeviceTerminal(
+  openDeviceTerminal(
     window: { cols: number; rows: number },
   ): Promise<{ session: string; user: string } | { error: string }> {
-    const user = this.getOwnerUserId();
+    return settle(Effect.suspend(() => {
+      const user = this.getOwnerUserId();
 
-    if (!user) return { error: 'this workspace has no owner yet' };
+      if (!user) return Effect.succeed({ error: 'this workspace has no owner yet' });
 
-    try {
-      const opened = await this.requireOwnerUserDO().openDeviceTerminal(
-        await this.userCaller(), this.workspaceName(), window,
-      );
-
-      return { session: opened.session, user };
-    } catch (cause) {
       // Each refusal the user object authors (no device, an older daemon, consent) reaches the pane as written.
-      return { error: terminalRefusal({ doing: 'opening a terminal on this machine', cause }) };
-    }
+      return Effect.matchCause(Effect.promise(async () => this.requireOwnerUserDO().openDeviceTerminal(
+        await this.userCaller(), this.workspaceName(), window,
+      )), {
+        onSuccess: (opened) => ({ session: opened.session, user }),
+        onFailure: (failed) => ({ error: terminalRefusal({ doing: 'opening a terminal on this machine', cause: Cause.squash(failed) }) }),
+      });
+    }));
   }
 
   /** Workspace port registrations live in Nimbus, so they stay authoritative after a restart. */
@@ -5321,44 +5233,55 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return { ports: [], error: `${executorId} cannot list exposed ports` };
     }
 
-    try {
-      const ports = await provider.listExposedPorts();
+    const listing = provider.listExposedPorts;
 
-      return { ports: ports.map(({ port, name, url }) => ({ port, url, name })) };
-    } catch (error) {
-      return {
-        ports: [],
-        error: error instanceof Error && error.message
-          ? error.message
-          : `Couldn't list ${executorId} preview ports`,
-      };
-    }
+    return settle(Effect.matchCause(Effect.promise(() => listing.call(provider)), {
+      onSuccess: (ports) => ({ ports: ports.map(({ port, name, url }) => ({ port, url, name })) }),
+      onFailure: (failed) => {
+        const error = Cause.squash(failed);
+
+        return {
+          ports: [],
+          error: error instanceof Error && error.message
+            ? error.message
+            : `Couldn't list ${executorId} preview ports`,
+        };
+      },
+    }));
   }
 
   /** `actor` names a child of this workspace: the read is its own config. */
-  @callable() async getReasoningEffort(actor?: string): Promise<{ effort: ReasoningEffort | null }> {
-    return getReasoningEffort(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config);
+  private actorConfig(actor: string | undefined) {
+    return actor === undefined ? Effect.succeed(this.config) : Effect.map(this.hostedChild(actor), ({ child }) => child.stores.config);
   }
 
-  @callable() async setReasoningEffort(effort: ReasoningEffort | null, actor?: string) {
-    return setReasoningEffort(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, effort);
+  @callable() getReasoningEffort(actor?: string): Promise<{ effort: ReasoningEffort | null }> {
+    return settle(Effect.map(this.actorConfig(actor), (config) => getReasoningEffort(config)));
   }
 
-  @callable() async getProviderAccounts(actor?: string) {
-    return getProviderAccounts(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config);
+  @callable() setReasoningEffort(effort: ReasoningEffort | null, actor?: string) {
+    return settle(Effect.map(this.actorConfig(actor), (config) => setReasoningEffort(config, effort)));
   }
 
-  @callable() async setProviderAccount(provider: string, account: string | null, actor?: string) {
-    const set = setProviderAccount(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, provider, account);
+  @callable() getProviderAccounts(actor?: string) {
+    return settle(Effect.map(this.actorConfig(actor), (config) => getProviderAccounts(config)));
+  }
 
-    await this.modelSettingsChanged();
+  @callable() setProviderAccount(provider: string, account: string | null, actor?: string) {
+    return settle(Effect.gen({ self: this }, function* () {
+      const set = setProviderAccount(yield* this.actorConfig(actor), provider, account);
 
-    return set;
+      yield* Effect.promise(async () => this.modelSettingsChanged());
+
+      return set;
+    }));
   }
 
   /** A hosted actor's own model pin, over the workspace's for its turns. */
-  @callable() async setActorModel(actor: string, spec: string) {
-    return setModel(this.modelSetting(this.hostedChild(actor).child.stores.config, () => {}), spec);
+  @callable() setActorModel(actor: string, spec: string) {
+    return settle(Effect.gen({ self: this }, function* () {
+      return setModel(this.modelSetting((yield* this.hostedChild(actor)).child.stores.config, () => {}), spec);
+    }));
   }
 
   @callable() async proposeCurriculumTasks(count?: number) {
@@ -5382,18 +5305,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return (await settledWorkspaceSoul(this.hostedWorkspace().bundle)) ?? '';
   }
 
-  @callable() async setSoul(soul: string) {
-    const text = soul.trim();
+  @callable() setSoul(soul: string) {
+    return settle(Effect.gen({ self: this }, function* () {
+      const text = soul.trim();
 
-    if (!text) throw new KinuError('bad_input', 'SOUL.md cannot be empty.');
-    const ownerUserId = this.getOwnerUserId();
+      if (!text) return yield* new KinuError('bad_input', 'SOUL.md cannot be empty.');
+      const ownerUserId = this.getOwnerUserId();
 
-    if (!ownerUserId) throw new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
-    await writeWorkspaceSoul(this.hostedWorkspace().bundle, text);
-    // The next turn re-reads the soul from its row.
-    this._cachedSoulText = null;
+      if (!ownerUserId) return yield* new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
+      yield* Effect.promise(() => writeWorkspaceSoul(this.hostedWorkspace().bundle, text));
+      // The next turn re-reads the soul from its row.
+      this._cachedSoulText = null;
 
-    return { soul: text, purpose: summarizeSoul(text) };
+      return { soul: text, purpose: summarizeSoul(text) };
+    }));
   }
 
   @callable() async getEvolutionConfig(): Promise<EvolutionConfigView> {
@@ -5417,40 +5342,44 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * the transport. See docs/WORKSPACES.md for the full spec.
    */
   @callable()
-  async forkAgent(
+  forkAgent(
     untilMessageId: string,
     opts?: { name?: string },
   ): Promise<{ id: string; name: string; url: string; forkPointMs: number }> {
-    // Check first: a fork of an unclaimed workspace has nobody to own the copy.
-    this.requireOwnerForFork();
+    return settle(Effect.gen({ self: this }, function* () {
+      // Check first: a fork of an unclaimed workspace has nobody to own the copy.
+      yield* this.requireOwnerForFork();
 
-    const fork = await forkWorkspace({
-      sql: this.boundSql,
-      actor: this.rt.actor,
-      // One pin of the workspace files, exported a page and a frame of chunks at a time: a fork holds one frame.
-      vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle),
-      artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
-      sourceName: this.name,
-      busy: () => this._inFlight,
-      transport: this.forkTransport,
-    }, untilMessageId, opts);
+      const fork = yield* Effect.promise(async () => forkWorkspace({
+        sql: this.boundSql,
+        actor: this.rt.actor,
+        // One pin of the workspace files, exported a page and a frame of chunks at a time: a fork holds one frame.
+        vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle),
+        artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
+        sourceName: this.name,
+        busy: () => this._inFlight,
+        transport: this.forkTransport,
+      }, untilMessageId, opts));
 
-    return {
-      id: fork.workspaceId,
-      name: fork.name,
-      url: `/workspace/${fork.name}`,
-      forkPointMs: fork.forkPointMs,
-    };
+      return {
+        id: fork.workspaceId,
+        name: fork.name,
+        url: `/workspace/${fork.name}`,
+        forkPointMs: fork.forkPointMs,
+      };
+    }));
   }
 
   /** A hosted fork needs the owner for both source session and target file plane; refuse
    * unclaimed workspaces before a roster name is reserved. */
-  private requireOwnerForFork(): string {
-    const ownerUserId = this.getOwnerUserId();
+  private requireOwnerForFork(): Effect.Effect<string, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const ownerUserId = this.getOwnerUserId();
 
-    if (!ownerUserId) throw new KinuError('unavailable', 'cannot fork an unclaimed workspace');
+      if (!ownerUserId) return yield* new KinuError('unavailable', 'cannot fork an unclaimed workspace');
 
-    return ownerUserId;
+      return ownerUserId;
+    });
   }
 
   /** Reaches a not-yet-existing workspace DO by name and carries the snapshot via raw-copy RPC. */
@@ -5513,44 +5442,46 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Receive one bounded frame from the source DO. Not callable from public WS/HTTP; only the
    * source cross-DO stub reaches this. */
-  async rawCopyFromFork(
+  rawCopyFromFork(
     forkName: string,
     frame: ForkFrame,
     ownerUserId: string,
   ): Promise<ForkFrameAck> {
-    if (!ownerUserId) throw new KinuError('bad_input', 'fork owner is required');
-    const currentOwner = this.getOwnerUserId();
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!ownerUserId) return yield* new KinuError('bad_input', 'fork owner is required');
+      const currentOwner = this.getOwnerUserId();
 
-    if (currentOwner && currentOwner !== ownerUserId) return { ok: false, reason: 'owned_by_another_user' };
+      if (currentOwner && currentOwner !== ownerUserId) return { ok: false, reason: 'owned_by_another_user' };
 
-    // Owner is the only identity datum written before commit (Nimbus file-plane precondition);
-    // the rest publishes together in the writer transaction.
-    const identity = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
+      // Owner is the only identity datum written before commit (Nimbus file-plane precondition);
+      // the rest publishes together in the writer transaction.
+      const identity = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
 
-    if (identity.length === 0) {
-      this.bearWorkspace(forkName, ownerUserId);
-    } else {
-      void this.sql`UPDATE workspace_identity SET owner_user_id = ${ownerUserId}`;
-    }
+      if (identity.length === 0) {
+        this.bearWorkspace(forkName, ownerUserId);
+      } else {
+        void this.sql`UPDATE workspace_identity SET owner_user_id = ${ownerUserId}`;
+      }
 
-    this._ownerUserId = ownerUserId;
-    this.invalidateModelCaches();
+      this._ownerUserId = ownerUserId;
+      this.invalidateModelCaches();
 
-    const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);
-    const outcome = await receiver.accept(frame);
+      const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);
+      const outcome = yield* Effect.promise(async () => receiver.accept(frame));
 
-    // Publication does this once; an already-settled transfer only answers with the fork that landed.
-    if (outcome.status === 'published') {
-      await this.ensureOwnedScaffold();
-      await this.resetWorkspaceBaseline();
-    }
+      // Publication does this once; an already-settled transfer only answers with the fork that landed.
+      if (outcome.status === 'published') {
+        yield* Effect.promise(async () => this.ensureOwnedScaffold());
+        yield* Effect.promise(async () => this.resetWorkspaceBaseline());
+      }
 
-    const accepted = outcome.status === 'staged' || outcome.status === 'want' ? outcome : {
-      status: 'published' as const, agentId: this.ctx.id.toString(),
-      capabilityHash: await this.workspaceCapabilityHash(), forkPointMs: outcome.result.forkPointMs,
-    };
+      const accepted = outcome.status === 'staged' || outcome.status === 'want' ? outcome : {
+        status: 'published' as const, agentId: this.ctx.id.toString(),
+        capabilityHash: yield* Effect.promise(async () => this.workspaceCapabilityHash()), forkPointMs: outcome.result.forkPointMs,
+      };
 
-    return { ok: true, ...accepted };
+      return { ok: true, ...accepted };
+    }));
   }
 
 
@@ -5578,30 +5509,32 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Not @callable: creation is step-up gated in the web and CLI trigger routes only. */
-  async createDurableWebhook(opts: {
+  createDurableWebhook(opts: {
     label: string;
     auth_mode: 'hmac' | 'bearer' | 'mtls';
     secret?: string;
     accepted_content_type?: string;
     rate_limit_per_min?: number;
   }) {
-    // Read before the row is written: a trigger whose URL cannot be signed is unreachable.
-    const routeSecret = webhookRouteSecret(this.env);
+    return settle(Effect.gen({ self: this }, function* () {
+      // Read before the row is written: a trigger whose URL cannot be signed is unreachable.
+      const routeSecret = webhookRouteSecret(this.env);
 
-    if (routeSecret === null) throw new KinuError('unavailable', WEBHOOK_ROUTE_UNAVAILABLE);
-    const now = Date.now();
-    // Core decides and stores the secret; an hmac/bearer trigger without one refuses every delivery.
-    const webhook = await registerDurableWebhook(this.triggerRegistry, this.webhookSecrets, opts, now);
+      if (routeSecret === null) return yield* new KinuError('unavailable', WEBHOOK_ROUTE_UNAVAILABLE);
+      const now = Date.now();
+      // Core decides and stores the secret; an hmac/bearer trigger without one refuses every delivery.
+      const webhook = yield* Effect.promise(async () => registerDurableWebhook(this.triggerRegistry, this.webhookSecrets, opts, now));
 
-    return {
-      trigger_id: webhook.trigger_id,
-      url: await webhookRoutePath(routeSecret, {
-        workspaceName: this.name, triggerId: webhook.trigger_id,
-      }),
-      auth_mode: webhook.auth_mode,
-      // The secret is returned once here and never again.
-      secret: webhook.secret,
-    };
+      return {
+        trigger_id: webhook.trigger_id,
+        url: yield* Effect.promise(async () => webhookRoutePath(routeSecret, {
+          workspaceName: this.name, triggerId: webhook.trigger_id,
+        })),
+        auth_mode: webhook.auth_mode,
+        // The secret is returned once here and never again.
+        secret: webhook.secret,
+      };
+    }));
   }
 
   /** Revoke a trigger and delete its plaintext secret in the same host call.
@@ -5617,6 +5550,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
+
    * Open one refinement; returns the durable request at `requested` — the refiner runs
    * on the off-turn cadence pass. The nudge is detached; eviction only costs an unfinished step.
    */

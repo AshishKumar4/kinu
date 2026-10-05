@@ -3,10 +3,12 @@ import { Database } from 'bun:sqlite';
 import { createCLIRuntime } from '../src/runtime';
 import { localActorDirectory, actorHomeName } from '@kinu.run/core';
 import { SessionPayloads } from '../../core/src/session/payload';
+import { scratchDir, scratchPath } from '@kinu.run/test-utils';
 
-test('large canonical payloads use the issued child home and deny sibling reads', async () => {
-  const db = new Database(':memory:');
-  const runtime = createCLIRuntime(db, { llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' } });
+// The homes are directories of the own space (2026-10-04); the uid wall between siblings was the in-SQLite plane's.
+test('large canonical payloads use the issued child home', async () => {
+  const db = new Database(scratchPath('workspace', 'agent.db'));
+  const runtime = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' } });
 
   try {
     const { directory } = localActorDirectory(runtime.actor);
@@ -23,8 +25,8 @@ test('large canonical payloads use the issued child home and deny sibling reads'
     const leftPlane = await filesForActor(left);
     const rightPlane = await filesForActor(right);
     expect(payload.path.startsWith(`${leftPlane.artifactDirectory}/`)).toBe(true);
+    expect(rightPlane.artifactDirectory).not.toBe(leftPlane.artifactDirectory);
     expect(await payloads.read(payload)).toBe(text);
-    await expect(rightPlane.vfs.readFile(payload.path)).rejects.toMatchObject({ code: 'EACCES' });
   } finally {
     db.close();
   }
@@ -32,8 +34,8 @@ test('large canonical payloads use the issued child home and deny sibling reads'
 
 // A home is named by storage key: two parents may each hire a `helper`, and one name would be one home for both.
 test('two hires of one name under two parents keep separate homes, named as the shell and retirement name them', async () => {
-  const db = new Database(':memory:');
-  const runtime = createCLIRuntime(db, { llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' } });
+  const db = new Database(scratchPath('workspace', 'agent.db'));
+  const runtime = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' } });
 
   try {
     const { directory } = localActorDirectory(runtime.actor);
@@ -45,8 +47,8 @@ test('two hires of one name under two parents keep separate homes, named as the 
     const [a, b] = [await runtime.filesForActor(mine), await runtime.filesForActor(theirs)];
 
     expect(a.artifactDirectory).not.toBe(b.artifactDirectory);
-    expect(a.artifactDirectory.startsWith(`/home/${actorHomeName({ origin: 'agent', storageKey: mine.storageKey })}/`)).toBe(true);
-    expect(b.artifactDirectory.startsWith(`/home/${actorHomeName({ origin: 'agent', storageKey: theirs.storageKey })}/`)).toBe(true);
+    expect(a.artifactDirectory.startsWith(`${runtime.space}/home/${actorHomeName({ origin: 'agent', storageKey: mine.storageKey })}/`)).toBe(true);
+    expect(b.artifactDirectory.startsWith(`${runtime.space}/home/${actorHomeName({ origin: 'agent', storageKey: theirs.storageKey })}/`)).toBe(true);
   } finally {
     db.close();
   }

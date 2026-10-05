@@ -20,7 +20,7 @@ describe('openWorkspaceCLI', () => {
     const db = new Database(dbPath);
     await createWorkspace(db, { name: 'jarvis', purpose: 'Run the household and the lab.', llm: DUMMY_LLM });
 
-    const { info } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { info } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
     expect(info.soul).toContain('Run the household and the lab.');
     expect(info.purpose).toBe('Run the household and the lab.');
@@ -48,7 +48,7 @@ describe('openWorkspaceCLI', () => {
     await reader.read();
     const db = new Database(dbPath);
 
-    expect((await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM })).info.purpose).toBe('Run the lab.');
+    expect((await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM })).info.purpose).toBe('Run the lab.');
     db.close();
     await holder.exited;
   });
@@ -71,7 +71,7 @@ describe('openWorkspaceCLI', () => {
     db.run("INSERT INTO file_chunks VALUES ('c1', 0, ?)", [new TextEncoder().encode("the user's work\n")]);
     const tables = db.query('SELECT name, sql FROM sqlite_master ORDER BY name').all();
 
-    await expect(openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM })).rejects.toThrow(/made by an older Kinu.*kinu create/s);
+    await expect(openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM })).rejects.toThrow(/made by an older Kinu.*kinu create/s);
     expect(db.query('SELECT name, sql FROM sqlite_master ORDER BY name').all()).toEqual(tables);
     expect(db.query('SELECT path FROM inodes').all()).toEqual([{ path: 'home/main/notes/plan.md' }]);
     db.close();

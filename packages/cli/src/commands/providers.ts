@@ -1,3 +1,4 @@
+import { Cause, Effect } from 'effect';
 import { deleteCloudCredential, listCloudCredentials } from '../cloud-api';
 import { API_KEY_PROVIDERS, CONFIG_PATH, bumpProviderRevision, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
 import { readDefaultAccounts, readDefaultTier } from '../profiles';
@@ -7,7 +8,7 @@ import { holdsAccounts, readProviderConnections } from './provider-connect';
 import { canonicalProviderName, connectOptions, connectProviderOnConsole } from './setup';
 import * as v from 'valibot';
 import { MAIN_ACCOUNT, accountCredentialKey, catalogCredKey, isAccountName } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
 import { signOutChatGptLogin } from '@kinu.run/cli-backend';
 
 type ProviderAction = 'list' | 'connect' | 'disconnect' | 'default';
@@ -38,129 +39,139 @@ interface LocalCredential {
   credKey?: string;
 }
 
-export async function providersCommand(
+export function providersCommand(
   actionOrProvider: string | undefined,
   providerArg: string | undefined,
   accountArg: string | undefined,
   opts: { origin?: string; model?: string; local?: boolean },
 ): Promise<void> {
-  const { action, provider, raw, account } = parseArgs(actionOrProvider, providerArg, accountArg);
+  return settle(Effect.gen(function* () {
+    const { action, provider, raw, account } = yield* parseArgs(actionOrProvider, providerArg, accountArg);
 
-  if (action === 'list') {
-    await printProviders();
+    if (action === 'list') {
+      yield* Effect.promise(async () => printProviders());
 
-    return;
-  }
+      return;
+    }
 
-  if (action === 'default') {
-    await setDefaultAccount(raw, account);
+    if (action === 'default') {
+      yield* setDefaultAccount(raw, account);
 
-    return;
-  }
+      return;
+    }
 
-  if (action === 'disconnect' && !provider && raw) {
-    await disconnectAccountProvider(raw, account);
+    if (action === 'disconnect' && !provider && raw) {
+      yield* disconnectAccountProvider(raw, account);
 
-    return;
-  }
+      return;
+    }
 
-  if (!provider) {
-    throw new Error(`Choose a provider to ${action}: cloudflare, claude, chatgpt, openai, openrouter, anthropic, openai-compatible, or opencode.`);
-  }
+    if (!provider) {
+      return yield* Effect.die(new Error(`Choose a provider to ${action}: cloudflare, claude, chatgpt, openai, openrouter, anthropic, openai-compatible, or opencode.`));
+    }
 
-  if (action === 'disconnect') {
-    await (account === MAIN_ACCOUNT ? disconnectProvider(provider) : disconnectAccount(provider, account));
+    if (action === 'disconnect') {
+      yield* (account === MAIN_ACCOUNT ? disconnectProvider(provider) : disconnectAccount(provider, account));
 
-    return;
-  }
+      return;
+    }
 
-  await connectProviderOnConsole(provider, { ...connectOptions(opts), account });
+    yield* Effect.promise(async () => connectProviderOnConsole(provider, { ...connectOptions(opts), account }));
+  }));
 }
 
 function parseArgs(
   actionOrProvider: string | undefined,
   providerArg: string | undefined,
   accountArg: string | undefined,
-): ParsedProviderArgs {
-  if (!actionOrProvider) return { action: 'list', account: MAIN_ACCOUNT };
+): Effect.Effect<ParsedProviderArgs> {
+  return Effect.gen(function* () {
+    if (!actionOrProvider) return { action: 'list', account: MAIN_ACCOUNT };
 
-  const first = actionOrProvider.trim().toLowerCase();
-  const verbs = ['list', 'ls', 'status', 'default', 'connect', 'login', 'add', 'disconnect', 'remove', 'rm', 'delete'];
-  const named = verbs.includes(first) ? accountArg : providerArg;
-  const account = named?.trim().toLowerCase() ?? MAIN_ACCOUNT;
+    const first = actionOrProvider.trim().toLowerCase();
+    const verbs = ['list', 'ls', 'status', 'default', 'connect', 'login', 'add', 'disconnect', 'remove', 'rm', 'delete'];
+    const named = verbs.includes(first) ? accountArg : providerArg;
+    const account = named?.trim().toLowerCase() ?? MAIN_ACCOUNT;
 
-  if (!isAccountName(account)) throw new Error(`"${named}" is not an account name: use a-z, 0-9 and dashes.`);
+    if (!isAccountName(account)) return yield* Effect.die(new Error(`"${named}" is not an account name: use a-z, 0-9 and dashes.`));
 
-  if (first === 'list' || first === 'ls' || first === 'status') return { action: 'list', account };
+    if (first === 'list' || first === 'ls' || first === 'status') return { action: 'list', account };
 
-  if (first === 'default') return { action: 'default', raw: providerArg, account: named === undefined ? '' : account };
+    if (first === 'default') return { action: 'default', raw: providerArg, account: named === undefined ? '' : account };
 
-  if (first === 'connect' || first === 'login' || first === 'add') {
-    return { action: 'connect', provider: providerArg ? normalizeProvider(providerArg) : undefined, account };
-  }
-
-  if (first === 'disconnect' || first === 'remove' || first === 'rm' || first === 'delete') {
-    // May be a models.dev provider connected in the web UI; resolved against the account, not rejected here.
-    return { action: 'disconnect', provider: providerArg ? maybeProvider(providerArg) : undefined, raw: providerArg, account };
-  }
-
-  return { action: 'connect', provider: normalizeProvider(actionOrProvider), account };
-}
-
-function specProviderId(name: string): string {
-  const canonical = canonicalProviderName(name);
-
-  if (canonical === 'openai-compatible' || canonical === 'opencode' || canonical === 'cloudflare') {
-    throw new Error(`${canonical} holds one account: accounts are for openai, openrouter, anthropic, chatgpt, claude and API keys connected in the web app.`);
-  }
-
-  return canonical;
-}
-
-async function setDefaultAccount(name: string | undefined, account: string): Promise<void> {
-  if (!name || account === '') throw new Error('Name the provider and the account: kinu provider default <provider> <account>.');
-  const provider = specProviderId(name);
-  await updateDefaultAccount(provider, account);
-  console.log('');
-  console.log(`${OK('✓')} ${ACCENT(provider)} models that name no account now run on ${ACCENT(account)}.`);
-  const connected = (await readProviderConnections()).states.find((state) => state.descriptor.id === provider);
-
-  if (connected !== undefined && account !== MAIN_ACCOUNT && !(connected.accounts ?? []).includes(account)) {
-    console.log(`${WARN('!')} No ${provider} account named ${account} is connected yet: kinu provider connect ${provider} ${account}`);
-  }
-}
-
-async function disconnectAccount(provider: ProviderName, account: string): Promise<void> {
-  if (!holdsAccounts(provider)) throw new Error(`${provider} holds one account.`);
-  console.log('');
-  let removed = false;
-
-  if (provider === 'chatgpt') {
-    removed = await signOutChatGpt(account);
-  } else {
-    await updateConfigFile((config) => {
-      const accounts = config.providers?.[provider]?.accounts;
-      removed = accounts?.[account] !== undefined;
-      delete accounts?.[account];
-    });
-  }
-
-  if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from this machine.`);
-  const cloud = provider === 'chatgpt' || provider === 'claude' ? null : resolveCloudSession();
-
-  if (cloud && provider !== 'chatgpt' && provider !== 'claude') {
-    const credKey = accountCredentialKey(API_KEY_PROVIDERS[provider], account);
-
-    if ((await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey)) {
-      await deleteCloudCredential(cloud.origin, cloud.token, credKey);
-      console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from your Kinu account.`);
-      removed = true;
+    if (first === 'connect' || first === 'login' || first === 'add') {
+      return { action: 'connect', provider: providerArg ? (yield* normalizeProvider(providerArg)) : undefined, account };
     }
-  }
 
-  if (!removed) console.log(`${WARN('!')} No ${provider} account named ${account} was connected. Nothing to remove.`);
-  await forgetDefaultAccount(provider, account);
-  await bumpProviderRevision();
+    if (first === 'disconnect' || first === 'remove' || first === 'rm' || first === 'delete') {
+      // May be a models.dev provider connected in the web UI; resolved against the account, not rejected here.
+      return { action: 'disconnect', provider: providerArg ? maybeProvider(providerArg) : undefined, raw: providerArg, account };
+    }
+
+    return { action: 'connect', provider: yield* normalizeProvider(actionOrProvider), account };
+  });
+}
+
+function specProviderId(name: string): Effect.Effect<string> {
+  return Effect.gen(function* () {
+    const canonical = canonicalProviderName(name);
+
+    if (canonical === 'openai-compatible' || canonical === 'opencode' || canonical === 'cloudflare') {
+      return yield* Effect.die(new Error(`${canonical} holds one account: accounts are for openai, openrouter, anthropic, chatgpt, claude and API keys connected in the web app.`));
+    }
+
+    return canonical;
+  });
+}
+
+function setDefaultAccount(name: string | undefined, account: string): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    if (!name || account === '') return yield* Effect.die(new Error('Name the provider and the account: kinu provider default <provider> <account>.'));
+    const provider = yield* specProviderId(name);
+    yield* Effect.promise(async () => updateDefaultAccount(provider, account));
+    console.log('');
+    console.log(`${OK('✓')} ${ACCENT(provider)} models that name no account now run on ${ACCENT(account)}.`);
+    const connected = (yield* Effect.promise(async () => readProviderConnections())).states.find((state) => state.descriptor.id === provider);
+
+    if (connected !== undefined && account !== MAIN_ACCOUNT && !(connected.accounts ?? []).includes(account)) {
+      console.log(`${WARN('!')} No ${provider} account named ${account} is connected yet: kinu provider connect ${provider} ${account}`);
+    }
+  });
+}
+
+function disconnectAccount(provider: ProviderName, account: string): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    if (!holdsAccounts(provider)) return yield* Effect.die(new Error(`${provider} holds one account.`));
+    console.log('');
+    let removed = false;
+
+    if (provider === 'chatgpt') {
+      removed = yield* Effect.promise(async () => signOutChatGpt(account));
+    } else {
+      yield* Effect.promise(async () => updateConfigFile((config) => {
+        const accounts = config.providers?.[provider]?.accounts;
+        removed = accounts?.[account] !== undefined;
+        delete accounts?.[account];
+      }));
+    }
+
+    if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from this machine.`);
+    const cloud = provider === 'chatgpt' || provider === 'claude' ? null : resolveCloudSession();
+
+    if (cloud && provider !== 'chatgpt' && provider !== 'claude') {
+      const credKey = accountCredentialKey(API_KEY_PROVIDERS[provider], account);
+
+      if ((yield* Effect.promise(async () => listCloudCredentials(cloud.origin, cloud.token))).some((c) => c.key === credKey)) {
+        yield* Effect.promise(async () => deleteCloudCredential(cloud.origin, cloud.token, credKey));
+        console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from your Kinu account.`);
+        removed = true;
+      }
+    }
+
+    if (!removed) console.log(`${WARN('!')} No ${provider} account named ${account} was connected. Nothing to remove.`);
+    yield* Effect.promise(async () => forgetDefaultAccount(provider, account));
+    yield* Effect.promise(async () => bumpProviderRevision());
+  });
 }
 
 async function forgetDefaultAccount(provider: string, account: string): Promise<void> {
@@ -245,96 +256,102 @@ const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
 ]);
 
 /** Only credentials Kinu stores; the account is `kinu logout`, and opencode owns its login. */
-async function disconnectProvider(provider: ProviderName): Promise<void> {
-  console.log('');
+function disconnectProvider(provider: ProviderName): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    console.log('');
 
-  if (provider === 'cloudflare') {
-    console.log(`${WARN('!')} Cloudflare and Workers AI connect through your Kinu account.`);
-    console.log(DIM('  Sign out with: kinu logout'));
-    console.log(DIM('  To disconnect Cloudflare itself, revoke it in Account settings in the Kinu app.'));
+    if (provider === 'cloudflare') {
+      console.log(`${WARN('!')} Cloudflare and Workers AI connect through your Kinu account.`);
+      console.log(DIM('  Sign out with: kinu logout'));
+      console.log(DIM('  To disconnect Cloudflare itself, revoke it in Account settings in the Kinu app.'));
 
-    return;
-  }
-
-  if (provider === 'opencode') {
-    console.log(`${WARN('!')} Kinu stores no opencode credential; it uses your opencode sign-in.`);
-    console.log(DIM('  Sign out of opencode itself: opencode auth logout'));
-    warnDefaultModelFor(provider);
-    // Kinu holds nothing here, but a resident session must re-probe that tool's login.
-    await bumpProviderRevision();
-
-    return;
-  }
-
-  // No cloud copy and no environment variable: the machine's own sign-in is the whole credential.
-  if (provider === 'chatgpt') {
-    if (await signOutChatGpt(MAIN_ACCOUNT)) console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from this machine.`);
-    else console.log(`${WARN('!')} ${provider} was not connected. Nothing to remove.`);
-    warnDefaultModelFor(provider);
-    await bumpProviderRevision();
-
-    return;
-  }
-
-  const credential = LOCAL_CREDENTIALS.get(provider);
-
-  if (!credential) throw new Error(`No local credential for ${provider}.`);
-  let removed = false;
-  await updateConfigFile((config) => {
-    if (config.providers) removed = credential.clear(config.providers);
-  });
-
-  if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from this machine.`);
-
-  // Most connections use the account copy; otherwise the provider keeps working.
-  const cloud = credential.credKey ? resolveCloudSession() : null;
-
-  if (cloud && credential.credKey) {
-    try {
-      await deleteCloudCredential(cloud.origin, cloud.token, credential.credKey);
-      console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from your Kinu account.`);
-      removed = true;
-    } catch (e) {
-      console.log(`${WARN('!')} Could not reach your Kinu account: ${renderThrownChain({ cause: e })}`);
+      return;
     }
-  }
 
-  if (!removed) console.log(`${WARN('!')} ${provider} was not connected. Nothing to remove.`);
+    if (provider === 'opencode') {
+      console.log(`${WARN('!')} Kinu stores no opencode credential; it uses your opencode sign-in.`);
+      console.log(DIM('  Sign out of opencode itself: opencode auth logout'));
+      warnDefaultModelFor(provider);
+      // Kinu holds nothing here, but a resident session must re-probe that tool's login.
+      yield* Effect.promise(async () => bumpProviderRevision());
 
-  warnDefaultModelFor(provider);
-  // Published even when no row was found, so a resident session stops offering a revoked provider.
-  await bumpProviderRevision();
+      return;
+    }
 
-  const live = credential.envVars.filter((name) => process.env[name]);
+    // No cloud copy and no environment variable: the machine's own sign-in is the whole credential.
+    if (provider === 'chatgpt') {
+      if (yield* Effect.promise(async () => signOutChatGpt(MAIN_ACCOUNT))) console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from this machine.`);
+      else console.log(`${WARN('!')} ${provider} was not connected. Nothing to remove.`);
+      warnDefaultModelFor(provider);
+      yield* Effect.promise(async () => bumpProviderRevision());
 
-  if (live.length > 0) {
-    console.log(`${WARN('!')} ${live.join(' and ')} ${live.length > 1 ? 'are' : 'is'} still set in this environment.`);
-    console.log(DIM('  Environment variables take precedence over the config file. Unset them to disconnect.'));
-  }
+      return;
+    }
+
+    const credential = LOCAL_CREDENTIALS.get(provider);
+
+    if (!credential) return yield* Effect.die(new Error(`No local credential for ${provider}.`));
+    let removed = false;
+    yield* Effect.promise(async () => updateConfigFile((config) => {
+      if (config.providers) removed = credential.clear(config.providers);
+    }));
+
+    if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from this machine.`);
+
+    // Most connections use the account copy; otherwise the provider keeps working.
+    const credKey = credential.credKey;
+    const cloud = credKey ? resolveCloudSession() : null;
+
+    if (cloud && credKey) {
+      yield* Effect.catchCause(Effect.gen(function* () {
+        yield* Effect.promise(async () => deleteCloudCredential(cloud.origin, cloud.token, credKey));
+        console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from your Kinu account.`);
+        removed = true;
+      }), (failed) => Effect.sync(() => {
+        const e = Cause.squash(failed);
+        console.log(`${WARN('!')} Could not reach your Kinu account: ${renderThrownChain({ cause: e })}`);
+      }));
+    }
+
+    if (!removed) console.log(`${WARN('!')} ${provider} was not connected. Nothing to remove.`);
+
+    warnDefaultModelFor(provider);
+    // Published even when no row was found, so a resident session stops offering a revoked provider.
+    yield* Effect.promise(async () => bumpProviderRevision());
+
+    const live = credential.envVars.filter((name) => process.env[name]);
+
+    if (live.length > 0) {
+      console.log(`${WARN('!')} ${live.join(' and ')} ${live.length > 1 ? 'are' : 'is'} still set in this environment.`);
+      console.log(DIM('  Environment variables take precedence over the config file. Unset them to disconnect.'));
+    }
+  });
 }
 
 /** A models.dev provider connected in the web UI: a catalog id, not a named provider. */
-async function disconnectAccountProvider(name: string, account: string): Promise<void> {
-  const cloud = resolveCloudSession();
-  console.log('');
+function disconnectAccountProvider(name: string, account: string): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const cloud = resolveCloudSession();
+    console.log('');
 
-  if (!cloud) {
-    throw new Error(`Unknown provider "${name}". Sign in with \`kinu auth\` to disconnect a provider held by your account.`);
-  }
+    if (!cloud) {
+      return yield* Effect.die(new Error(`Unknown provider "${name}". Sign in with \`kinu auth\` to disconnect a provider held by your account.`));
+    }
 
-  const provider = name.trim().toLowerCase();
-  const credKey = accountCredentialKey(catalogCredKey(provider), account);
-  const connected = (await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey);
+    const provider = name.trim().toLowerCase();
+    const credKey = accountCredentialKey(catalogCredKey(provider), account);
+    const connected = (yield* Effect.promise(async () => listCloudCredentials(cloud.origin, cloud.token))).some((c) => c.key === credKey);
 
-  if (!connected) {
-    throw new Error(`Neither this machine nor your Kinu account has a "${name}" credential. Run \`kinu provider list\` to see what is connected.`);
-  }
+    if (!connected) {
+      return yield* Effect.die(new Error(`Neither this machine nor your Kinu account has a "${name}" credential. Run \`kinu provider list\` to see what is connected.`));
+    }
 
-  await deleteCloudCredential(cloud.origin, cloud.token, credKey);
-  console.log(`${OK('✓')} Removed the ${ACCENT(account === MAIN_ACCOUNT ? name : `${name} ${account}`)} credential from your Kinu account.`);
-  await forgetDefaultAccount(provider, account);
-  warnDefaultModelPrefixes([`${name}/`]);
-  await bumpProviderRevision();
+    yield* Effect.promise(async () => deleteCloudCredential(cloud.origin, cloud.token, credKey));
+    console.log(`${OK('✓')} Removed the ${ACCENT(account === MAIN_ACCOUNT ? name : `${name} ${account}`)} credential from your Kinu account.`);
+    yield* Effect.promise(async () => forgetDefaultAccount(provider, account));
+    warnDefaultModelPrefixes([`${name}/`]);
+    yield* Effect.promise(async () => bumpProviderRevision());
+  });
 }
 
 function warnDefaultModelFor(provider: ProviderName): void {
@@ -354,14 +371,16 @@ function maybeProvider(value: string): ProviderName | undefined {
   return parsed.success ? parsed.output : undefined;
 }
 
-function normalizeProvider(value: string): ProviderName {
-  const provider = maybeProvider(value);
+function normalizeProvider(value: string): Effect.Effect<ProviderName> {
+  return Effect.gen(function* () {
+    const provider = maybeProvider(value);
 
-  if (!provider) {
-    throw new Error('Provider must be cloudflare, claude, chatgpt, openai, openrouter, anthropic, openai-compatible, or opencode.');
-  }
+    if (!provider) {
+      return yield* Effect.die(new Error('Provider must be cloudflare, claude, chatgpt, openai, openrouter, anthropic, openai-compatible, or opencode.'));
+    }
 
-  return provider;
+    return provider;
+  });
 }
 
 async function printProviders(): Promise<void> {

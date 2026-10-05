@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/scaffold/executor.ts b/packages/core/src/scaffold/executor.ts
-index f182e225c..c690c44f1 100644
 --- a/packages/core/src/scaffold/executor.ts
 +++ b/packages/core/src/scaffold/executor.ts
-@@ -490,7 +490,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
-   let code: string;
+@@ -437,7 +437,7 @@ export function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRunResult
+       finalResult: undefined,
+     } satisfies { doneEmitted: boolean; finalResult: JsonValue | undefined };
  
-   try {
--    code = scaffoldCodeOverride ?? (await rt.identity.scaffold.read());
-+    code = (await rt.identity.scaffold.read()) ?? scaffoldCodeOverride;
-   } catch (err) {
-     const msg = `scaffold read failed: ${renderThrownChain({ cause: err })}`;
-     await emit({ type: 'error', message: msg });
+-    const read = yield* Effect.result(tried(async () => scaffoldCodeOverride ?? rt.identity.scaffold.read()));
++    const read = yield* Effect.result(tried(async () => (await rt.identity.scaffold.read()) ?? scaffoldCodeOverride));
+ 
+     if (Result.isFailure(read)) {
+       const msg = `scaffold read failed: ${renderThrownChain(read.failure)}`;

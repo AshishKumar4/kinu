@@ -3,6 +3,8 @@
  * admission expects). Gated by containment (bytes must live under the file's dir) and owner trust.
  */
 
+import { Effect, Cause } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
@@ -42,112 +44,89 @@ function errnoOf(thrown: { readonly error: unknown }): string | undefined {
  * Resolve one candidate; a symlink cycle (ELOOP) or ENOENT reports unavailable instead of failing
  * the turn. EACCES/EIO still propagate: a broken disk must not become a silently emptier prompt.
  */
-function candidateAt(dir: string, path: string): Candidate {
-  let entry;
+function candidateAt(dir: string, path: string): Effect.Effect<Candidate> {
+  return Effect.gen(function* () {
+    const entry = yield* probing(() => lstatSync(path), { ENOENT: null, ELOOP: SYMLINK_CYCLE });
 
-  try {
-    entry = lstatSync(path);
-  } catch (error) {
+    if ('answer' in entry) return entry.answer;
+
+    if (!entry.value.isFile() && !entry.value.isSymbolicLink()) return null;
+
+    const real = yield* probing(() => ({ target: realpathSync(path), realDir: realpathSync(dir) }), { ELOOP: SYMLINK_CYCLE, ENOENT: TARGET_MISSING });
+
+    if ('answer' in real) return real.answer;
+    const { target, realDir } = real.value;
+    const rel = relative(realDir, target);
+
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+      return { kind: 'unavailable', reason: 'symlink points outside its own directory' };
+    }
+
+    const stat = yield* probing(() => statSync(target), { ENOENT: TARGET_MISSING, ELOOP: SYMLINK_CYCLE });
+
+    if ('answer' in stat) return stat.answer;
+
+    if (!stat.value.isFile()) return null;
+
+    return {
+      kind: 'file',
+      bytes: stat.value.size,
+      target,
+      dev: stat.value.dev,
+      ino: stat.value.ino,
+    };
+  });
+}
+
+const SYMLINK_CYCLE: Candidate = { kind: 'unavailable', reason: 'symlink cycle' };
+
+const TARGET_MISSING: Candidate = { kind: 'unavailable', reason: 'symlink target is missing' };
+
+/** One fs read: an errno the table names is that answer; any other failure (EACCES, EIO) stays the read's own. */
+function probing<A>(read: () => A, answers: Readonly<Record<string, Candidate>>): Effect.Effect<{ readonly value: A } | { readonly answer: Candidate }> {
+  return Effect.catchCause(Effect.sync(() => ({ value: read() })), (failed) => {
+    const error = Cause.squash(failed);
     const code = errnoOf({ error });
 
-    if (code === 'ENOENT') return null;
-
-    if (code === 'ELOOP') return { kind: 'unavailable', reason: 'symlink cycle' };
-    throw error;
-  }
-
-  if (!entry.isFile() && !entry.isSymbolicLink()) return null;
-
-  let target;
-  let realDir;
-
-  try {
-    target = realpathSync(path);
-    realDir = realpathSync(dir);
-  } catch (error) {
-    const code = errnoOf({ error });
-
-    if (code === 'ELOOP') return { kind: 'unavailable', reason: 'symlink cycle' };
-
-    if (code === 'ENOENT') return { kind: 'unavailable', reason: 'symlink target is missing' };
-    throw error;
-  }
-
-  const rel = relative(realDir, target);
-
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
-    return { kind: 'unavailable', reason: 'symlink points outside its own directory' };
-  }
-
-  let stat;
-
-  try {
-    stat = statSync(target);
-  } catch (error) {
-    const code = errnoOf({ error });
-
-    if (code === 'ENOENT') return { kind: 'unavailable', reason: 'symlink target is missing' };
-
-    if (code === 'ELOOP') return { kind: 'unavailable', reason: 'symlink cycle' };
-    throw error;
-  }
-
-  if (!stat.isFile()) return null;
-
-  return {
-    kind: 'file',
-    bytes: stat.size,
-    target,
-    dev: stat.dev,
-    ino: stat.ino,
-  };
+    return code !== undefined && Object.hasOwn(answers, code) ? Effect.succeed({ answer: answers[code] ?? null }) : Effect.die(error);
+  });
 }
 
 /** The host port: the bytes are read through a descriptor proven to be the sized inode, and never past its size. */
-function readAsSized(candidate: Extract<Candidate, { kind: 'file' }>): InstructionFileRead {
+function readAsSized(candidate: Extract<Candidate, { kind: 'file' }>): Effect.Effect<InstructionFileRead> {
   const changed = (reason: string): InstructionFileRead => ({ kind: 'unavailable', reason });
-  let fd: number | undefined;
 
-  try {
-    fd = openSync(candidate.target, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const opened = fstatSync(fd);
+  return Effect.suspend(() => {
+    let fd: number | undefined;
 
-    if (opened.dev !== candidate.dev || opened.ino !== candidate.ino || opened.size !== candidate.bytes) {
-      return changed('file changed after containment check');
-    }
+    return Effect.ensuring(Effect.catchCause(Effect.sync((): InstructionFileRead => {
+      fd = openSync(candidate.target, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const opened = fstatSync(fd);
 
-    const bytes = Buffer.alloc(candidate.bytes);
-    let offset = 0;
+      if (opened.dev !== candidate.dev || opened.ino !== candidate.ino || opened.size !== candidate.bytes) {
+        return changed('file changed after containment check');
+      }
 
-    while (offset < bytes.length) {
-      const read = readSync(fd, bytes, offset, bytes.length - offset, offset);
+      const bytes = Buffer.alloc(candidate.bytes);
+      let offset = 0;
 
-      if (read === 0) break;
-      offset += read;
-    }
+      while (offset < bytes.length) {
+        const read = readSync(fd, bytes, offset, bytes.length - offset, offset);
 
-    if (offset !== bytes.length || fstatSync(fd).size !== candidate.bytes) return changed('file changed during bounded read');
+        if (read === 0) break;
+        offset += read;
+      }
 
-    return { kind: 'text', text: bytes.toString('utf8') };
-  } catch (error) {
-    const code = errnoOf({ error });
+      if (offset !== bytes.length || fstatSync(fd).size !== candidate.bytes) return changed('file changed during bounded read');
 
-    if (code === 'ENOENT' || code === 'ELOOP') return changed('file changed after containment check');
+      return { kind: 'text', text: bytes.toString('utf8') };
+    }), (failed) => {
+      const code = errnoOf({ error: Cause.squash(failed) });
 
-    throw error;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-}
-
-function hostProbe(dir: string, path: string): () => Promise<InstructionFileProbe> {
-  return async () => {
-    const candidate = candidateAt(dir, path);
-
-    if (candidate?.kind !== 'file') return candidate;
-
-    return { kind: 'file', bytes: candidate.bytes, read: async () => readAsSized(candidate) };
-  };
+      return code === 'ENOENT' || code === 'ELOOP'
+        ? Effect.succeed(changed('file changed after containment check')) : Effect.failCause(failed);
+    }), Effect.sync(() => { if (fd !== undefined) closeSync(fd); }));
+  });
 }
 
 /** Every directory from cwd up to the root, root-most first. `afterAdmission` is a test-only swap seam. */
@@ -162,7 +141,14 @@ export function discoverAgentsMd(
 
   for (;;) {
     const path = join(dir, 'AGENTS.md');
-    candidates.push({ label: path, probe: hostProbe(dir, path) });
+    const candidateDir = dir;
+    candidates.push({ label: path, probe: (): Promise<InstructionFileProbe> => settle(Effect.gen(function* () {
+      const candidate = yield* candidateAt(candidateDir, path);
+
+      if (candidate?.kind !== 'file') return candidate;
+
+      return { kind: 'file', bytes: candidate.bytes, read: () => settle(readAsSized(candidate)) };
+    })) });
     const parent = dirname(dir);
 
     if (parent === dir) break;

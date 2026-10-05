@@ -6,7 +6,8 @@ import { stableStringify } from '../safety/argument-digest';
 import { parseJsonValue } from '../utils/json';
 import { LAYERS, type Layer, type LayerObservation } from './layers';
 import type { PipelineSubjects } from './subjects';
-import { renderThrownChain } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { renderThrownChain, settle } from '../obs/index';
 
 export type Baseline = Readonly<Record<string, string>>;
 
@@ -29,35 +30,34 @@ export interface LayerGateReport {
   readonly unmeasured: readonly string[];
 }
 
-function digest(value: LayerObservation): string {
-  if (value === undefined) return fnv1a64('undefined');
+function digest(value: LayerObservation): Effect.Effect<string> {
+  if (value === undefined) return Effect.succeed(fnv1a64('undefined'));
   const serialized = JSON.stringify(value);
 
-  if (serialized === undefined) {
-    throw new Error('layer observation must be JSON-serializable');
-  }
+  if (serialized === undefined) return Effect.die(new Error('layer observation must be JSON-serializable'));
 
-  return fnv1a64(stableStringify(parseJsonValue(serialized)));
+  return Effect.sync(() => fnv1a64(stableStringify(parseJsonValue(serialized))));
 }
 
 /** A throwing probe is recorded as an observation so one broken subject scores only its own layer. */
-async function observeLayers<S>(
+function observeLayers<S>(
   subjects: S,
   layers: readonly Layer<S>[],
-): Promise<Map<string, string>> {
-  const observations = new Map<string, string>();
+): Effect.Effect<Map<string, string>> {
+  return Effect.gen(function* () {
+    const observations = new Map<string, string>();
 
-  for (const layer of layers) {
-    for (const probe of layer.probes) {
-      try {
-        observations.set(probe.id, digest(await probe.observe(subjects)));
-      } catch (err) {
-        observations.set(probe.id, digest({ threw: renderThrownChain({ cause: err }) }));
+    for (const layer of layers) {
+      for (const probe of layer.probes) {
+        observations.set(probe.id, yield* Effect.catchCause(
+          Effect.flatMap(Effect.promise(async () => probe.observe(subjects)), digest),
+          (failed) => digest({ threw: renderThrownChain({ cause: Cause.squash(failed) }) }),
+        ));
       }
     }
-  }
 
-  return observations;
+    return observations;
+  });
 }
 
 export function observePipeline(subjects: PipelineSubjects): Promise<Map<string, string>>;
@@ -68,9 +68,9 @@ export function observePipeline<S>(
 export function observePipeline<S>(
   ...input: [subjects: PipelineSubjects] | [subjects: S, layers: readonly Layer<S>[]]
 ): Promise<Map<string, string>> {
-  if (input.length === 1) return observeLayers(input[0], LAYERS);
+  if (input.length === 1) return settle(observeLayers(input[0], LAYERS));
 
-  return observeLayers(input[0], input[1]);
+  return settle(observeLayers(input[0], input[1]));
 }
 
 interface ScoringLayer {

@@ -3,6 +3,8 @@
 // asks, each part deleted once answered, so the final ask tests what survived.
 // Corpus and answer key derive from the same seed; no key exists on disk.
 
+import { Cause, Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { fnv1a64 } from '../utils/fnv1a';
 import { parseJsonValue } from '../utils/json';
 import { unitHash } from './stats';
@@ -218,38 +220,40 @@ export interface LongHorizonQuestion {
 
 /** OOLONG-Synthetic's three arities: count, enumeration, verbatim recall. */
 export function buildLongHorizonQuestions(spec: LongHorizonSpec): LongHorizonQuestion[] {
-  const entries = generateLongHorizonEntries(spec);
-  const component = pick(COMPONENTS, unitHash(`${spec.seed}:question:component`));
+  return settleSync(Effect.gen(function* () {
+    const entries = generateLongHorizonEntries(spec);
+    const component = pick(COMPONENTS, unitHash(`${spec.seed}:question:component`));
 
-  const failures = entries.filter((e) => e.component === component && e.status === 'fail');
-  const marked = entries.filter((e): e is MarkedEntry => e.marker !== undefined);
-  // Part 1 has been through the most compaction by the final ask.
-  const verbatimTarget = marked.find((e) => e.part === 1);
+    const failures = entries.filter((e) => e.component === component && e.status === 'fail');
+    const marked = entries.filter((e): e is MarkedEntry => e.marker !== undefined);
+    // Part 1 has been through the most compaction by the final ask.
+    const verbatimTarget = marked.find((e) => e.part === 1);
 
-  if (verbatimTarget === undefined) {
-    throw new Error('long-horizon corpus planted no marker in part 1: the verbatim ask has no target');
-  }
+    if (verbatimTarget === undefined) {
+      return yield* Effect.die(new Error('long-horizon corpus planted no marker in part 1: the verbatim ask has no target'));
+    }
 
-  return [
-    {
-      id: 'q-count',
-      kind: 'count',
-      text: `How many entries in the whole log have \`status: fail\` and \`component: ${component}\`? Answer with the number alone.`,
-      answer: String(failures.length),
-    },
-    {
-      id: 'q-list',
-      kind: 'list',
-      text: 'List the id of every entry in the whole log that carries a `marker:` field, in ascending order, comma-separated.',
-      answer: marked.map((e) => e.id).join(', '),
-    },
-    {
-      id: 'q-verbatim',
-      kind: 'verbatim',
-      text: `One entry is tagged \`marker: ${verbatimTarget.marker.token}\`. What is the \`value:\` recorded on that same entry?`,
-      answer: verbatimTarget.marker.value,
-    },
-  ];
+    return [
+      {
+        id: 'q-count',
+        kind: 'count',
+        text: `How many entries in the whole log have \`status: fail\` and \`component: ${component}\`? Answer with the number alone.`,
+        answer: String(failures.length),
+      },
+      {
+        id: 'q-list',
+        kind: 'list',
+        text: 'List the id of every entry in the whole log that carries a `marker:` field, in ascending order, comma-separated.',
+        answer: marked.map((e) => e.id).join(', '),
+      },
+      {
+        id: 'q-verbatim',
+        kind: 'verbatim',
+        text: `One entry is tagged \`marker: ${verbatimTarget.marker.token}\`. What is the \`value:\` recorded on that same entry?`,
+        answer: verbatimTarget.marker.value,
+      },
+    ];
+  }));
 }
 
 export interface LongHorizonAsks {
@@ -421,62 +425,62 @@ export function encodeLongHorizonSpec(spec: LongHorizonSpec): string {
 }
 
 export function decodeLongHorizonSpec(encoded: string): LongHorizonSpec {
-  let raw;
+  return settleSync(Effect.gen(function* () {
+    const raw = yield* Effect.catchCause(Effect.sync(() => parseJsonValue(encoded)), (failed) => Effect.die(new Error('long-horizon spec is not valid JSON', { cause: Cause.squash(failed) })));
 
-  try {
-    raw = parseJsonValue(encoded);
-  } catch (error) {
-    throw new Error('long-horizon spec is not valid JSON', { cause: error });
-  }
+    if (!Array.isArray(raw) || raw.length !== 6) {
+      return yield* Effect.die(new Error('long-horizon spec must be [mode, seed, entries, filler, markers, parts]'));
+    }
 
-  if (!Array.isArray(raw) || raw.length !== 6) {
-    throw new Error('long-horizon spec must be [mode, seed, entries, filler, markers, parts]');
-  }
+    const [mode, seed, entries, filler, markers, parts] = raw;
 
-  const [mode, seed, entries, filler, markers, parts] = raw;
+    if (mode !== 'digest' && mode !== 'continuation') return yield* Effect.die(new Error(`unknown long-horizon mode: ${JSON.stringify(mode)}`));
 
-  if (mode !== 'digest' && mode !== 'continuation') throw new Error(`unknown long-horizon mode: ${JSON.stringify(mode)}`);
+    if (!v.is(FiniteInteger, seed)) return yield* Effect.die(new Error(`long-horizon spec.seed must be a finite integer, got ${JSON.stringify(seed)}`));
 
-  if (!v.is(FiniteInteger, seed)) throw new Error(`long-horizon spec.seed must be a finite integer, got ${JSON.stringify(seed)}`);
+    if (!v.is(FiniteInteger, entries)) return yield* Effect.die(new Error(`long-horizon spec.entries must be a finite integer, got ${JSON.stringify(entries)}`));
 
-  if (!v.is(FiniteInteger, entries)) throw new Error(`long-horizon spec.entries must be a finite integer, got ${JSON.stringify(entries)}`);
+    if (!v.is(FiniteInteger, filler)) return yield* Effect.die(new Error(`long-horizon spec.filler must be a finite integer, got ${JSON.stringify(filler)}`));
 
-  if (!v.is(FiniteInteger, filler)) throw new Error(`long-horizon spec.filler must be a finite integer, got ${JSON.stringify(filler)}`);
+    if (!v.is(FiniteInteger, markers)) return yield* Effect.die(new Error(`long-horizon spec.markers must be a finite integer, got ${JSON.stringify(markers)}`));
 
-  if (!v.is(FiniteInteger, markers)) throw new Error(`long-horizon spec.markers must be a finite integer, got ${JSON.stringify(markers)}`);
+    if (!v.is(FiniteInteger, parts)) return yield* Effect.die(new Error(`long-horizon spec.parts must be a finite integer, got ${JSON.stringify(parts)}`));
 
-  if (!v.is(FiniteInteger, parts)) throw new Error(`long-horizon spec.parts must be a finite integer, got ${JSON.stringify(parts)}`);
+    const spec: LongHorizonSpec = {
+      mode,
+      seed, entries, filler, markers, parts,
+    };
 
-  const spec: LongHorizonSpec = {
-    mode,
-    seed, entries, filler, markers, parts,
-  };
+    assertLongHorizonSpec(spec);
 
-  assertLongHorizonSpec(spec);
-
-  return spec;
+    return spec;
+  }));
 }
 
 export function assertLongHorizonSpec(spec: LongHorizonSpec): void {
-  const positiveInt = (name: string, value: number, min: number) => {
-    if (!Number.isInteger(value) || value < min) {
-      throw new Error(`long-horizon spec.${name} must be an integer >= ${min}, got ${value}`);
+  return settleSync(Effect.gen(function* () {
+    const positiveInt = (name: string, value: number, min: number) => {
+      return Effect.gen(function* () {
+        if (!Number.isInteger(value) || value < min) {
+          return yield* Effect.die(new Error(`long-horizon spec.${name} must be an integer >= ${min}, got ${value}`));
+        }
+      });
+    };
+
+    yield* positiveInt('seed', spec.seed, 0);
+    yield* positiveInt('entries', spec.entries, 1);
+    yield* positiveInt('filler', spec.filler, 0);
+    yield* positiveInt('markers', spec.markers, 1);
+    yield* positiveInt('parts', spec.parts, 1);
+
+    if (spec.markers > spec.entries) return yield* Effect.die(new Error(`long-horizon spec plants ${spec.markers} markers in ${spec.entries} entries`));
+
+    if (spec.parts > spec.entries) return yield* Effect.die(new Error(`long-horizon spec splits ${spec.entries} entries over ${spec.parts} parts`));
+
+    if (spec.mode === 'digest' && spec.parts !== 1) return yield* Effect.die(new Error('long-horizon digest mode has exactly one part'));
+
+    if (spec.markers < spec.parts) {
+      return yield* Effect.die(new Error(`long-horizon spec plants ${spec.markers} markers over ${spec.parts} parts: every part must plant at least one, or the final ask does not depend on it`));
     }
-  };
-
-  positiveInt('seed', spec.seed, 0);
-  positiveInt('entries', spec.entries, 1);
-  positiveInt('filler', spec.filler, 0);
-  positiveInt('markers', spec.markers, 1);
-  positiveInt('parts', spec.parts, 1);
-
-  if (spec.markers > spec.entries) throw new Error(`long-horizon spec plants ${spec.markers} markers in ${spec.entries} entries`);
-
-  if (spec.parts > spec.entries) throw new Error(`long-horizon spec splits ${spec.entries} entries over ${spec.parts} parts`);
-
-  if (spec.mode === 'digest' && spec.parts !== 1) throw new Error('long-horizon digest mode has exactly one part');
-
-  if (spec.markers < spec.parts) {
-    throw new Error(`long-horizon spec plants ${spec.markers} markers over ${spec.parts} parts: every part must plant at least one, or the final ask does not depend on it`);
-  }
+  }));
 }

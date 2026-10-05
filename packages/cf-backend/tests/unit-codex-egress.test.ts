@@ -149,6 +149,32 @@ describe('the egress container forwards only the Codex API', () => {
   });
 });
 
+describe('the egress container survives an answer it cannot relay', () => {
+  test('a failure past the upstream fetch is logged and ends that response, and the forwarder keeps serving', async () => {
+    const server = Bun.spawn(['node', '--import', new URL('./fixtures/codex-egress-upstream.mjs', import.meta.url).pathname,
+      new URL('../containers/codex-egress/server.mjs', import.meta.url).pathname], { stdout: 'pipe', stderr: 'pipe' });
+
+    try {
+      const reader = server.stdout.getReader();
+      const first = await reader.read();
+      const port = Number(/listening (\d+)/.exec(new TextDecoder().decode(first.value))?.[1]);
+
+      const ask = async () => fetch(`http://127.0.0.1:${port}/`, { headers: { 'x-kinu-target': 'https://chatgpt.com/backend-api/codex/models' } })
+        .then(() => 'answered', () => 'ended');
+
+      expect(await ask()).toBe('ended');
+      // A second request reaches a live forwarder: the first failure did not end the process.
+      expect(await ask()).toBe('ended');
+      expect(server.exitCode).toBeNull();
+      server.kill();
+      await server.exited;
+      expect(await new Response(server.stderr).text()).toContain('codex_egress.request_failed');
+    } finally {
+      server.kill();
+    }
+  });
+});
+
 describe('a Stop on a call bound for the owner\'s machine', () => {
   const RESPONSES = 'https://chatgpt.com/backend-api/codex/responses';
 

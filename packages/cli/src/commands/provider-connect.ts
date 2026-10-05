@@ -1,4 +1,5 @@
 /** Provider connect flows behind a port, shared by the CLI console and the TUI onboarding step; nothing here touches stdout/stdin. */
+import { Cause, Effect } from 'effect';
 import { checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu.run/cli-backend';
 import {
   ANTHROPIC_DEFAULT_MODEL,
@@ -21,7 +22,7 @@ import {
   discoverOpenAICompatibleModels,
   type ModelInfo,
 } from '@kinu.run/core';
-import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
+import { renderThrownChain, tolerate, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { beginSignIn, deviceRegistration, planEnabled, registrationOf, type SiwcRecord } from '../../../pc-agent/src/chatgpt.js';
 import { listCloudCredentials, setCloudCredential } from '../cloud-api';
@@ -211,50 +212,52 @@ function apiKeyState(
     : { descriptor, connected: false, detail: `kinu provider connect ${id}` };
 }
 
-export async function readProviderConnections(): Promise<ProviderConnections> {
-  const config = loadConfigFile();
-  const account = await accountCredentials();
-  const held = 'credentials' in account ? account.credentials : [];
-  const providers = config.providers ?? {};
-  const defaultModel = readDefaultTier()?.model;
-  const opencode = await checkOpenCodeAvailability();
-  const heldKeys = held.map((credential) => credential.key);
-  const facts: ConnectionFacts = { providers, heldKeys, defaultModel };
+export function readProviderConnections(): Promise<ProviderConnections> {
+  return settle(Effect.gen(function* () {
+    const config = loadConfigFile();
+    const account = yield* accountCredentials();
+    const held = 'credentials' in account ? account.credentials : [];
+    const providers = config.providers ?? {};
+    const defaultModel = readDefaultTier()?.model;
+    const opencode = yield* Effect.promise(() => checkOpenCodeAvailability());
+    const heldKeys = held.map((credential) => credential.key);
+    const facts: ConnectionFacts = { providers, heldKeys, defaultModel };
 
-  const states = PROVIDER_CONNECTORS.map((descriptor): ProviderConnectionState => {
-    const hint = `kinu provider connect ${descriptor.id}`;
+    const states = PROVIDER_CONNECTORS.map((descriptor): ProviderConnectionState => {
+      const hint = `kinu provider connect ${descriptor.id}`;
 
-    switch (descriptor.id) {
-      case 'cloudflare':
-        return config.accessToken === undefined
-          ? { descriptor, connected: false, detail: hint }
-          : { descriptor, connected: true, detail: config.user?.email ?? 'your account' };
-      case 'claude':
-      case 'chatgpt': return loginState({ ...descriptor, id: descriptor.id }, facts);
-      case 'opencode':
-        if (opencode.binary && opencode.authenticated) {
-          return { descriptor, connected: true, detail: currentModel(defaultModel, 'opencode') ?? 'your opencode install' };
-        }
+      switch (descriptor.id) {
+        case 'cloudflare':
+          return config.accessToken === undefined
+            ? { descriptor, connected: false, detail: hint }
+            : { descriptor, connected: true, detail: config.user?.email ?? 'your account' };
+        case 'claude':
+        case 'chatgpt': return loginState({ ...descriptor, id: descriptor.id }, facts);
+        case 'opencode':
+          if (opencode.binary && opencode.authenticated) {
+            return { descriptor, connected: true, detail: currentModel(defaultModel, 'opencode') ?? 'your opencode install' };
+          }
 
-        return { descriptor, connected: false, detail: opencode.binary ? LOGIN_HINT_OPENCODE : hint };
-      case 'openai':
-      case 'openrouter':
-      case 'anthropic':
-      case 'openai-compatible': return apiKeyState({ ...descriptor, id: descriptor.id }, facts);
-    }
-  });
+          return { descriptor, connected: false, detail: opencode.binary ? LOGIN_HINT_OPENCODE : hint };
+        case 'openai':
+        case 'openrouter':
+        case 'anthropic':
+        case 'openai-compatible': return apiKeyState({ ...descriptor, id: descriptor.id }, facts);
+      }
+    });
 
-  const extras = [...new Set(heldKeys.map(baseCredentialKey))].filter((key) => NAMED_ACCOUNT_KEYS[key] !== true);
+    const extras = [...new Set(heldKeys.map(baseCredentialKey))].filter((key) => NAMED_ACCOUNT_KEYS[key] !== true);
 
-  const connections: ProviderConnections = {
-    states,
-    signedInEmail: config.user?.email,
-    accountExtras: extras,
-  };
+    const connections: ProviderConnections = {
+      states,
+      signedInEmail: config.user?.email,
+      accountExtras: extras,
+    };
 
-  if (!('unreachable' in account)) return connections;
+    if (!('unreachable' in account)) return connections;
 
-  return { ...connections, accountUnreachable: account.unreachable };
+    return { ...connections, accountUnreachable: account.unreachable };
+  }));
 }
 
 type AccountCredentials =
@@ -262,16 +265,15 @@ type AccountCredentials =
   | { readonly signedOut: true }
   | { readonly unreachable: string };
 
-async function accountCredentials(): Promise<AccountCredentials> {
+function accountCredentials(): Effect.Effect<AccountCredentials> {
   const cloud = resolveCloudSession();
 
-  if (!cloud) return { signedOut: true };
+  if (!cloud) return Effect.succeed({ signedOut: true });
 
-  try {
-    return { credentials: await listCloudCredentials(cloud.origin, cloud.token) };
-  } catch (error) {
-    return { unreachable: renderThrownChain({ cause: error }) };
-  }
+  return Effect.matchCause(Effect.promise(() => listCloudCredentials(cloud.origin, cloud.token)), {
+    onSuccess: (credentials): AccountCredentials => ({ credentials }),
+    onFailure: (failed): AccountCredentials => ({ unreachable: renderThrownChain({ cause: Cause.squash(failed) }) }),
+  });
 }
 
 function localApiKey(providers: NonNullable<KinuConfig['providers']>, id: ProviderConnectId): boolean {
@@ -307,37 +309,39 @@ export function holdsAccounts(id: string): id is ApiKeyProviderId | 'chatgpt' | 
 }
 
 /** Stores and answers `connected`, or stores nothing and answers `blocked`; failures the person cannot act on throw. */
-export async function connectProvider(
+export function connectProvider(
   id: ProviderConnectId,
   port: ProviderConnectPort,
   opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean; readonly account?: string } = {},
 ): Promise<ProviderConnectOutcome> {
-  const account = opts.account ?? MAIN_ACCOUNT;
+  return settle(Effect.gen(function* () {
+    const account = opts.account ?? MAIN_ACCOUNT;
 
-  if (account !== MAIN_ACCOUNT && !holdsAccounts(id)) {
-    return { kind: 'blocked', reason: `${id} holds one account here.`, hint: 'Accounts are for openai, openrouter, anthropic, chatgpt and claude.' };
-  }
+    if (account !== MAIN_ACCOUNT && !holdsAccounts(id)) {
+      return { kind: 'blocked', reason: `${id} holds one account here.`, hint: 'Accounts are for openai, openrouter, anthropic, chatgpt and claude.' };
+    }
 
-  switch (id) {
-    case 'cloudflare': return await connectCloudflare(port, opts.origin);
-    case 'claude': return await connectClaude(port, opts.model, account);
-    case 'chatgpt': return await connectChatGpt(port, opts.model, account);
-    case 'opencode': return await connectOpenCode(port, opts.model);
-    case 'openai':
-    case 'openrouter':
-    case 'anthropic':
-      return await connectApiKeyProvider(port, {
-        ...API_KEY_CONNECTORS[id],
-        prefix: id,
-        credKey: accountCredentialKey(API_KEY_PROVIDERS[id], account),
-        account,
-        model: opts.model,
-        local: opts.local ?? false,
-        store: async (key) => { await updateConfigFile((config) => withLocalApiKey(config, id, account, key)); },
-        clear: async () => { await updateConfigFile((config) => withLocalApiKey(config, id, account, null)); },
-      });
-    case 'openai-compatible': return await connectOpenAiCompatible(port, opts.model, opts.local ?? false);
-  }
+    switch (id) {
+      case 'cloudflare': return yield* Effect.promise(async () => connectCloudflare(port, opts.origin));
+      case 'claude': return yield* Effect.promise(async () => connectClaude(port, opts.model, account));
+      case 'chatgpt': return yield* Effect.promise(async () => connectChatGpt(port, opts.model, account));
+      case 'opencode': return yield* connectOpenCode(port, opts.model);
+      case 'openai':
+      case 'openrouter':
+      case 'anthropic':
+        return yield* connectApiKeyProvider(port, {
+          ...API_KEY_CONNECTORS[id],
+          prefix: id,
+          credKey: accountCredentialKey(API_KEY_PROVIDERS[id], account),
+          account,
+          model: opts.model,
+          local: opts.local ?? false,
+          store: async (key) => { await updateConfigFile((config) => withLocalApiKey(config, id, account, key)); },
+          clear: async () => { await updateConfigFile((config) => withLocalApiKey(config, id, account, null)); },
+        });
+      case 'openai-compatible': return yield* connectOpenAiCompatible(port, opts.model, opts.local ?? false);
+    }
+  }));
 }
 
 function withLocalApiKey(config: KinuConfig, id: ApiKeyProviderId, account: string, key: string | null): KinuConfig {
@@ -508,16 +512,16 @@ interface ApiKeyProvider {
   clear: () => Promise<void>;
 }
 
-async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKeyProvider): Promise<ProviderConnectOutcome> {
-  const named = provider.account !== MAIN_ACCOUNT;
-  const key = await port.ask({ label: `${provider.label} API key${named ? ` for ${provider.account}` : ''}`, secret: true });
+function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKeyProvider): Effect.Effect<ProviderConnectOutcome> {
+  return Effect.gen(function* () {
+    const named = provider.account !== MAIN_ACCOUNT;
+    const key = yield* Effect.promise(async () => port.ask({ label: `${provider.label} API key${named ? ` for ${provider.account}` : ''}`, secret: true }));
 
-  if (key.trim() === '') {
-    return { kind: 'blocked', reason: `No ${provider.label} key was given.`, hint: `Run kinu provider connect ${provider.prefix} when you have one.` };
-  }
+    if (key.trim() === '') {
+      return { kind: 'blocked', reason: `No ${provider.label} key was given.`, hint: `Run kinu provider connect ${provider.prefix} when you have one.` };
+    }
 
-  if (named) {
-    const where = await storeProviderSecret({
+    const storeKey = storeProviderSecret({
       local: provider.local,
       credKey: provider.credKey,
       credential: { kind: 'bearer', token: key },
@@ -525,130 +529,137 @@ async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKey
       clearLocally: provider.clear,
     });
 
-    return {
-      kind: 'connected',
-      summary: `Added the ${provider.label} account ${provider.account} to ${where === 'account' ? 'your Kinu account' : 'this machine'}.`,
-      detail: accountDetail(provider.prefix, provider.account),
-    };
-  }
+    if (named) {
+      const where = yield* storeKey;
 
-  const current = currentModel(readDefaultTier()?.model, provider.prefix) ?? provider.defaultModel;
-
-  const model = provider.model ?? await port.ask({ label: 'Default model', fallback: current });
-  const spec = `${provider.prefix}/${model}`;
-
-  const where = await storeProviderSecret({
-    local: provider.local,
-    credKey: provider.credKey,
-    credential: { kind: 'bearer', token: key },
-    storeLocally: () => provider.store(key),
-    clearLocally: provider.clear,
-  });
-
-  return {
-    kind: 'connected',
-    summary: where === 'account'
-      ? `Connected ${provider.label} to your Kinu account. No key stored on this machine.`
-      : `Saved ${provider.label} credentials to this machine.`,
-    detail: await defaultModelDetail(spec),
-  };
-}
-
-async function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel: string | undefined, local: boolean): Promise<ProviderConnectOutcome> {
-  const baseURL = await port.ask({ label: 'Base URL', fallback: 'http://localhost:11434/v1' });
-  const apiKey = await port.ask({ label: 'API key (use any non-empty value for local servers)', fallback: 'local', secret: true });
-  const model = requestedModel ?? await askEndpointModel(port, baseURL, apiKey);
-
-  if (model === '') {
-    return {
-      kind: 'blocked',
-      reason: `No model named, and ${baseURL} lists none at /models.`,
-      hint: 'Connect again and type the id of a model your server serves.',
-    };
-  }
-
-  const spec = `openai-compat/${model}`;
-
-  const where = await storeProviderSecret({
-    local,
-    credKey: 'openai-compat.default',
-    credential: { kind: 'openai-compat', baseURL, apiKey },
-    storeLocally: async () => { await updateConfigFile((config) => withProvider(config, { openaiCompat: { default: { baseURL, apiKey } } })); },
-    clearLocally: async () => { await updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }); },
-    // Usually Ollama or vLLM on this machine; the proxy is https-only and a Worker cannot reach loopback.
-    endpoint: baseURL,
-  });
-
-  return {
-    kind: 'connected',
-    summary: where === 'account'
-      ? 'Connected the OpenAI-compatible endpoint to your Kinu account. No key stored on this machine.'
-      : 'Saved the OpenAI-compatible endpoint credentials to this machine.',
-    detail: await defaultModelDetail(spec),
-  };
-}
-
-async function askEndpointModel(port: ProviderConnectPort, baseURL: string, apiKey: string): Promise<string> {
-  let listed: ModelInfo[] = [];
-
-  try {
-    const auth = { baseURL, headers: { Authorization: `Bearer ${apiKey}` } };
-    listed = await port.skippable(`Checking ${baseURL}/models…`, (signal) => discoverOpenAICompatibleModels(auth, fetch, signal)) ?? [];
-  } catch (cause) {
-    port.report(`Could not list the models at ${baseURL}: ${renderThrownChain({ cause })}`);
-  }
-
-  if (listed.length > 0) port.report(`${baseURL} serves: ${listed.map((entry) => entry.id).join(', ')}`);
-  const first = listed[0];
-  const answer = await port.ask(first === undefined ? { label: 'Default model' } : { label: 'Default model', fallback: first.id });
-
-  return answer.trim();
-}
-
-async function connectOpenCode(port: ProviderConnectPort, requestedModel: string | undefined): Promise<ProviderConnectOutcome> {
-  port.report('Reading your opencode auth and model configuration.');
-  const available = await checkOpenCodeAvailability();
-
-  if (!available.binary) return { kind: 'blocked', reason: 'opencode CLI not found.', hint: INSTALL_HINT_OPENCODE };
-
-  if (!available.authenticated) return { kind: 'blocked', reason: 'opencode is not authenticated.', hint: LOGIN_HINT_OPENCODE };
-  let model = requestedModel ?? '';
-
-  if (model === '') {
-    const provider = createOpenCodeProvider();
-
-    let models;
-
-    try {
-      models = await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
-    } catch (error) {
       return {
-        kind: 'blocked',
-        reason: `Could not read opencode models: ${renderThrownChain({ cause: error })}`,
-        hint: LOGIN_HINT_OPENCODE,
+        kind: 'connected',
+        summary: `Added the ${provider.label} account ${provider.account} to ${where === 'account' ? 'your Kinu account' : 'this machine'}.`,
+        detail: accountDetail(provider.prefix, provider.account),
       };
     }
 
-    const first = models[0];
+    const current = currentModel(readDefaultTier()?.model, provider.prefix) ?? provider.defaultModel;
 
-    if (first === undefined) {
-      return { kind: 'blocked', reason: 'No models found in your opencode configuration.', hint: LOGIN_HINT_OPENCODE };
+    const model = provider.model ?? (yield* Effect.promise(async () => port.ask({ label: 'Default model', fallback: current })));
+    const spec = `${provider.prefix}/${model}`;
+
+    const where = yield* storeKey;
+
+    return {
+      kind: 'connected',
+      summary: where === 'account'
+        ? `Connected ${provider.label} to your Kinu account. No key stored on this machine.`
+        : `Saved ${provider.label} credentials to this machine.`,
+      detail: yield* Effect.promise(async () => defaultModelDetail(spec)),
+    };
+  });
+}
+
+function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel: string | undefined, local: boolean): Effect.Effect<ProviderConnectOutcome> {
+  return Effect.gen(function* () {
+    const baseURL = yield* Effect.promise(() => port.ask({ label: 'Base URL', fallback: 'http://localhost:11434/v1' }));
+    const apiKey = yield* Effect.promise(() => port.ask({ label: 'API key (use any non-empty value for local servers)', fallback: 'local', secret: true }));
+    const model = requestedModel ?? (yield* askEndpointModel(port, baseURL, apiKey));
+
+    if (model === '') {
+      return {
+        kind: 'blocked',
+        reason: `No model named, and ${baseURL} lists none at /models.`,
+        hint: 'Connect again and type the id of a model your server serves.',
+      };
     }
 
-    model = first.id;
-  }
+    const spec = `openai-compat/${model}`;
 
-  await updateConfigFile((config) => withProvider(config, {}));
+    const where = yield* storeProviderSecret({
+      local,
+      credKey: 'openai-compat.default',
+      credential: { kind: 'openai-compat', baseURL, apiKey },
+      storeLocally: async () => { await updateConfigFile((config) => withProvider(config, { openaiCompat: { default: { baseURL, apiKey } } })); },
+      clearLocally: async () => { await updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }); },
+      // Usually Ollama or vLLM on this machine; the proxy is https-only and a Worker cannot reach loopback.
+      endpoint: baseURL,
+    });
 
-  return {
-    kind: 'connected',
-    summary: 'Connected OpenCode',
-    detail: `${await defaultModelDetail(`opencode/${model}`)} Kinu reads models and auth from your local opencode install at request time.`,
-  };
+    return {
+      kind: 'connected',
+      summary: where === 'account'
+        ? 'Connected the OpenAI-compatible endpoint to your Kinu account. No key stored on this machine.'
+        : 'Saved the OpenAI-compatible endpoint credentials to this machine.',
+      detail: yield* Effect.promise(() => defaultModelDetail(spec)),
+    };
+  });
+}
+
+function askEndpointModel(port: ProviderConnectPort, baseURL: string, apiKey: string): Effect.Effect<string> {
+  return Effect.gen(function* () {
+    const auth = { baseURL, headers: { Authorization: `Bearer ${apiKey}` } };
+
+    const listed = yield* Effect.catchCause(
+      Effect.promise(async (): Promise<ModelInfo[]> => await port.skippable(`Checking ${baseURL}/models…`, (signal) => discoverOpenAICompatibleModels(auth, fetch, signal)) ?? []),
+      (failed) => Effect.sync((): ModelInfo[] => {
+        port.report(`Could not list the models at ${baseURL}: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
+
+        return [];
+      }),
+    );
+
+    if (listed.length > 0) port.report(`${baseURL} serves: ${listed.map((entry) => entry.id).join(', ')}`);
+    const first = listed[0];
+    const answer = yield* Effect.promise(() => port.ask(first === undefined ? { label: 'Default model' } : { label: 'Default model', fallback: first.id }));
+
+    return answer.trim();
+  });
+}
+
+function connectOpenCode(port: ProviderConnectPort, requestedModel: string | undefined): Effect.Effect<ProviderConnectOutcome> {
+  return Effect.gen(function* () {
+    port.report('Reading your opencode auth and model configuration.');
+    const available = yield* Effect.promise(() => checkOpenCodeAvailability());
+
+    if (!available.binary) return { kind: 'blocked', reason: 'opencode CLI not found.', hint: INSTALL_HINT_OPENCODE };
+
+    if (!available.authenticated) return { kind: 'blocked', reason: 'opencode is not authenticated.', hint: LOGIN_HINT_OPENCODE };
+    let model = requestedModel ?? '';
+
+    if (model === '') {
+      const provider = createOpenCodeProvider();
+
+      const listed = yield* Effect.matchCause(Effect.promise(async () => provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false })), {
+        onSuccess: (models) => ({ models }),
+        onFailure: (failed) => ({ unread: renderThrownChain({ cause: Cause.squash(failed) }) }),
+      });
+
+      if ('unread' in listed) {
+        return {
+          kind: 'blocked',
+          reason: `Could not read opencode models: ${listed.unread}`,
+          hint: LOGIN_HINT_OPENCODE,
+        };
+      }
+
+      const first = listed.models[0];
+
+      if (first === undefined) {
+        return { kind: 'blocked', reason: 'No models found in your opencode configuration.', hint: LOGIN_HINT_OPENCODE };
+      }
+
+      model = first.id;
+    }
+
+    yield* Effect.promise(() => updateConfigFile((config) => withProvider(config, {})));
+
+    return {
+      kind: 'connected',
+      summary: 'Connected OpenCode',
+      detail: `${yield* Effect.promise(() => defaultModelDetail(`opencode/${model}`))} Kinu reads models and auth from your local opencode install at request time.`,
+    };
+  });
 }
 
 /** Signed in: the account (sealed, reachable via the provider proxy). Otherwise, or with `--local`, this machine. */
-async function storeProviderSecret(opts: {
+function storeProviderSecret(opts: {
   local: boolean;
   credKey: string;
   credential: unknown;
@@ -657,31 +668,33 @@ async function storeProviderSecret(opts: {
   clearLocally: () => Promise<void>;
   /** An endpoint the proxy cannot reach (loopback, private range, plain http) forces local storage. */
   endpoint?: string;
-}): Promise<'account' | 'local'> {
-  const reachable = opts.endpoint === undefined || reachableFromTheInternet(opts.endpoint);
-  const cloud = opts.local || !reachable ? null : resolveCloudSession();
+}): Effect.Effect<'account' | 'local'> {
+  return Effect.gen(function* () {
+    const reachable = opts.endpoint === undefined || reachableFromTheInternet(opts.endpoint);
+    const cloud = opts.local || !reachable ? null : resolveCloudSession();
 
-  if (!cloud) {
-    await opts.storeLocally();
+    if (!cloud) {
+      yield* Effect.promise(() => opts.storeLocally());
 
-    return 'local';
-  }
+      return 'local' as const;
+    }
 
-  try {
-    await setCloudCredential(cloud.origin, cloud.token, opts.credKey, decodeJsonValue({ value: opts.credential }));
-  } catch (err) {
-    // No fallback to disk: the user asked for account storage.
-    throw new Error(
-      `Your Kinu account did not accept the key (${renderThrownChain({ cause: err })}). `
-      + 'Nothing was saved. Try again, or re-run with --local to keep the key on this machine.',
-      { cause: err },
-    );
-  }
+    yield* Effect.catchCause(Effect.promise(() => setCloudCredential(cloud.origin, cloud.token, opts.credKey, decodeJsonValue({ value: opts.credential }))), (failed) => {
+      const err = Cause.squash(failed);
 
-  await opts.clearLocally();
-  await bumpProviderRevision();
+      // No fallback to disk: the user asked for account storage.
+      return Effect.die(new Error(
+        `Your Kinu account did not accept the key (${renderThrownChain({ cause: err })}). `
+        + 'Nothing was saved. Try again, or re-run with --local to keep the key on this machine.',
+        { cause: err },
+      ));
+    });
 
-  return 'account';
+    yield* Effect.promise(() => opts.clearLocally());
+    yield* Effect.promise(() => bumpProviderRevision());
+
+    return 'account' as const;
+  });
 }
 
 /** https, and not a loopback, private, link-local, IPv6 ULA or CGNAT host. */

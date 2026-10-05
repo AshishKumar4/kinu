@@ -4,13 +4,14 @@
  * bounds the tool surface. Unknown front-matter keys round-trip via `ext`.
  */
 
+import { Result } from 'effect';
 import type { JsonObject } from '../utils/json';
 import type { InstructionTrust } from '../types/instruction-trust';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 
-export type SkillParseResult =
-  | { ok: true; skill: ParsedSkill }
-  | { ok: false; error: string; line?: number };
+export interface SkillParseRefusal { readonly error: string; readonly line?: number }
+
+export type SkillParseResult = Result.Result<ParsedSkill, SkillParseRefusal>;
 
 /** A skill's front matter: everything known without holding its body. */
 export interface SkillHeader {

@@ -1,23 +1,8 @@
 import type { ModelMessage, StepResult, ToolResultPart, ToolSet } from 'ai';
-import { renderThrownChain } from '../obs/index';
-import type { JsonObject } from '../utils/json';
-import { McpToolError } from '../tools/mcp-error';
-import { failedToolOutcome } from '../tools/outcome';
+import { toolErrorOutput } from '../tools/outcome';
 import { invalidToolCallRefusal } from '../tools/tool-schema';
 
 export type ToolErrorStep = Pick<StepResult<ToolSet>, 'content' | 'response'>;
-
-function modelError(error: Error): ToolResultPart['output'] | undefined {
-  if (error instanceof McpToolError) return { type: 'error-json', value: error.response };
-  const outcome = failedToolOutcome({ cause: error });
-
-  if (outcome.reason === null) return undefined;
-  const value: JsonObject = { reason: outcome.reason, error: renderThrownChain({ cause: error }) };
-
-  if (outcome.execution !== undefined) value.execution = outcome.execution;
-
-  return { type: 'error-json', value };
-}
 
 /** Each failed call's feedback, by id; a schema refusal is read off its tool-call part, the only one holding the error. */
 function stepErrors(step: ToolErrorStep): Map<string, ToolResultPart['output'] | undefined> | undefined {
@@ -37,7 +22,7 @@ function stepErrors(step: ToolErrorStep): Map<string, ToolResultPart['output'] |
     // A duplicate id within one step is ambiguous, not permission to guess.
     errors ??= new Map();
     errors.set(part.toolCallId, errors.has(part.toolCallId) || part.providerExecuted || !(error instanceof Error)
-      ? undefined : modelError(error));
+      ? undefined : toolErrorOutput({ cause: error }));
   }
 
   return errors;

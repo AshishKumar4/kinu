@@ -12,7 +12,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 import { estimateTokens } from '../llm';
-import { diagnostics, toKinuError } from '../obs/index';
+import { Effect, Result } from 'effect';
+import { attempt, diagnostics, settle } from '../obs/index';
 import {
   readSkillFile, compareSkillNames,
   type SkillsDiscovery,
@@ -114,90 +115,87 @@ export function admitSkillsIndex(
  * the rest stay with `body: null`. Trust is settled over the exact bytes read:
  * built-ins are trusted, files only if the owner approved these bytes at this path.
  */
-export async function admitActiveSkills(opts: {
+export function admitActiveSkills(opts: {
   vfs: VFS;
   activated: ReadonlyArray<ActivatedSkill>;
   admissionTokens: number;
   trust: InstructionTrustResolver;
 }): Promise<ActiveSkillSet> {
-  let remaining = Math.max(0, opts.admissionTokens);
-  const active: ActiveSkill[] = [];
-  const reasons: Array<{ name: string; reason: ActivationReason }> = [];
+  return settle(Effect.gen(function* () {
+    let remaining = Math.max(0, opts.admissionTokens);
+    const active: ActiveSkill[] = [];
+    const reasons: Array<{ name: string; reason: ActivationReason }> = [];
 
-  for (const { skill, reason } of opts.activated) {
-    // An unreadable body defers only its own skill.
-    let source: string;
+    for (const { skill, reason } of opts.activated) {
+      // An unreadable body defers only its own skill.
+      const read = yield* Effect.result(attempt({ doing: 'admit a skill body', otherwise: 'io' }, async (): Promise<string | null> => {
+        // Stat first so a replacement that grew past the remaining allocation stays a pointer.
+        if (skill.bodyRef.kind === 'file') {
+          const stat = await opts.vfs.stat(skill.bodyRef.path);
+          const declared = stat === null ? skill.bodyRef.chars : stat.size;
 
-    try {
-      // Stat first so a replacement that grew past the remaining allocation stays a pointer.
-      if (skill.bodyRef.kind === 'file') {
-        const stat = await opts.vfs.stat(skill.bodyRef.path);
-        const declared = stat === null ? skill.bodyRef.chars : stat.size;
-
-        if (estimateTokens(declared) > remaining) {
-          active.push({ ...skill, body: null, trust: 'unverified' });
-          reasons.push({ name: skill.name, reason });
-          continue;
+          if (estimateTokens(declared) > remaining) return null;
         }
+
+        return readSkillFile(opts.vfs, skill.bodyRef, remaining);
+      }));
+
+      if (Result.isFailure(read)) diagnostics.failure('skills.admission_failed', read.failure, { skill: skill.name });
+
+      if (Result.isFailure(read) || read.success === null) {
+        active.push({ ...skill, body: null, trust: 'unverified' });
+        reasons.push({ name: skill.name, reason });
+        continue;
       }
 
-      source = await readSkillFile(opts.vfs, skill.bodyRef, remaining);
-    } catch (err) {
-      diagnostics.failure(
-        'skills.admission_failed',
-        toKinuError({ doing: 'admit a skill body', cause: err, otherwise: 'io' }),
-        { skill: skill.name },
-      );
-      active.push({ ...skill, body: null, trust: 'unverified' });
-      reasons.push({ name: skill.name, reason });
-      continue;
-    }
+      const source = read.success;
 
-    if (skill.bodyRef.kind === 'builtin') {
-      const cost = estimateTokens(source.length);
+      if (skill.bodyRef.kind === 'builtin') {
+        const cost = estimateTokens(source.length);
+
+        if (cost > remaining) {
+          // Body admission is a budget decision; the built-in's policy still narrows the tool surface.
+          active.push({ ...skill, body: null, trust: 'builtin' });
+        } else {
+          remaining -= cost;
+          active.push({ ...skill, body: source, trust: 'builtin' });
+        }
+
+        reasons.push({ name: skill.name, reason });
+        continue;
+      }
+
+      // Policy, body, budget, and trust derive from this one read, so policy cannot be swapped between reads.
+      const parsed = parseSkillFile(source, 'vfs', skill.name);
+
+      if (Result.isFailure(parsed) || parsed.success.name !== skill.name) {
+        active.push({ ...skill, body: null, trust: 'unverified' });
+        reasons.push({ name: skill.name, reason });
+        continue;
+      }
+
+      if (!reasonAllowedBySkill(parsed.success, reason)) continue;
+      const cost = estimateTokens(parsed.success.body.length);
 
       if (cost > remaining) {
-        // Body admission is a budget decision; the built-in's policy still narrows the tool surface.
-        active.push({ ...skill, body: null, trust: 'builtin' });
-      } else {
-        remaining -= cost;
-        active.push({ ...skill, body: source, trust: 'builtin' });
+        active.push({ ...parsed.success, bodyRef: skill.bodyRef, body: null, trust: 'unverified' });
+        reasons.push({ name: parsed.success.name, reason });
+        continue;
       }
 
-      reasons.push({ name: skill.name, reason });
-      continue;
+      remaining -= cost;
+      const { body, ...header } = parsed.success;
+      active.push({
+        ...header,
+        bodyRef: skill.bodyRef,
+        body,
+        trust: skillTrust(skill.bodyRef, source, opts.trust),
+      });
+      reasons.push({ name: parsed.success.name, reason });
     }
 
-    // Policy, body, budget, and trust derive from this one read, so policy cannot be swapped between reads.
-    const parsed = parseSkillFile(source, 'vfs', skill.name);
-
-    if (!parsed.ok || parsed.skill.name !== skill.name) {
-      active.push({ ...skill, body: null, trust: 'unverified' });
-      reasons.push({ name: skill.name, reason });
-      continue;
-    }
-
-    if (!reasonAllowedBySkill(parsed.skill, reason)) continue;
-    const cost = estimateTokens(parsed.skill.body.length);
-
-    if (cost > remaining) {
-      active.push({ ...parsed.skill, bodyRef: skill.bodyRef, body: null, trust: 'unverified' });
-      reasons.push({ name: parsed.skill.name, reason });
-      continue;
-    }
-
-    remaining -= cost;
-    const { body, ...header } = parsed.skill;
-    active.push({
-      ...header,
-      bodyRef: skill.bodyRef,
-      body,
-      trust: skillTrust(skill.bodyRef, source, opts.trust),
-    });
-    reasons.push({ name: parsed.skill.name, reason });
-  }
-
-  return { active, reasons };
+    return { active, reasons };
+  }));
 }
 
 /** Re-check the activation reason against the same source whose policy reaches the prompt. */

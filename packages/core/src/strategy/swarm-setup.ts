@@ -2,6 +2,7 @@
  * Setup for one swarm run: region refusals, measurement context, measured-baseline helpers and
  * run context construction. Decided once before any node expands; nothing here reads loop state.
  */
+import { Effect } from 'effect';
 import type { Clock } from '../types/clock';
 import {
   KinuError, refusalOf, type Refusal,
@@ -17,6 +18,7 @@ import type {
 } from './objective';
 
 import { renderThrownChain, type Logger } from '../obs/index';
+import { settle, settleSync } from '../obs/effect';
 import type { SqlExecutor } from '../types/primitives';
 import { initSearchTables } from '../mcts/schemas';
 import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
@@ -79,9 +81,9 @@ export function regionRefusal(resolved: ResolvedSwarm, mode: WorkMode): Refusal 
   const composition = compositionRefusal(resolved);
 
   if (composition) return composition;
-  const { config, settle } = resolved;
+  const { config } = resolved;
   const publishes = config.advance.kind !== 'pareto' && PUBLISHING_CARRIES.some((carry) => carry === config.carry.kind);
-  const planAllowed = settle === 'merge' && config.score.kind !== 'verify' && !publishes;
+  const planAllowed = resolved.settle === 'merge' && config.score.kind !== 'verify' && !publishes;
 
   return workModeRefusal(mode, planAllowed, 'Search measurement, publication or project apply');
 }
@@ -263,151 +265,159 @@ export async function prepareMeasurement(input: {
   readonly archive: ArchiveInForce | null;
   readonly log: Logger;
 }): Promise<PreparedMeasurement | Refusal> {
-  const { rt, resolved, archive, log } = input;
-const objective = resolved.objective;
-
-if (!objective) return badInput('score:"verify" with no `objective` measures nothing.');
-const measured = measuredHalf(objective);
-
-if (!measured) {
-  return unsupported(`an objective of kind "${objective.kind}" is measured per component or per `
-    + 'instance, and this run settles one answer against one number. Use kind:"scalar", or '
-    + 'kind:"witness" with a scalar `proxy`.');
+  return settle(Effect.catch(measurementPlan(input), (refusal) => Effect.succeed(refusal)));
 }
 
-if (!('kind' in measured.verify)) {
-  // A closure declares no candidate path; registering the kind supplies one (*The closed verifier registry*).
-  return unsupported('this objective supplies `verify` as a closure, which names no path a '
-    + 'candidate is written to, so this run cannot place one for it to measure. Register a '
-    + 'verifier kind and pass verify as {kind, spec}.');
-}
+function measurementPlan(input: {
+  readonly rt: AgentRuntime;
+  readonly resolved: ResolvedSwarm;
+  readonly archive: ArchiveInForce | null;
+  readonly log: Logger;
+}): Effect.Effect<PreparedMeasurement | Refusal, Refusal> {
+  return Effect.gen(function* () {
+    const { rt, resolved, archive, log } = input;
+  const objective = resolved.objective;
 
-// Order matters: kind, shell, runnability, then spec (see above).
-const kind = registeredVerifierKind(measured.verify.kind);
+  if (!objective) return badInput('score:"verify" with no `objective` measures nothing.');
+  const measured = measuredHalf(objective);
 
-if (kind === null) return unregisteredKindRefusalFor(measured.verify.kind);
-const ctx = measurementContext(rt);
-
-if (!ctx) {
-  return unavailable('this workspace has no shell, so nothing can run a measurement in it: a '
-    + 'verifier is given a filesystem and a shell and this actor was wired neither. The call is '
-    + 'well-formed; the instrument is absent.');
-}
-
-const instrumentFault = await preflightVerifier(kind, ctx);
-
-if (instrumentFault !== null) {
-  return unavailable(`the "${kind}" instrument cannot run in this workspace's shell, so no `
-    + `score:"verify" search can start here, and no \`spec\` would change that: ${instrumentFault}. `
-    + 'That is the instrument breaking rather than a candidate failing. Either take an objective '
-    + 'this workspace can measure, or DROP `objective` and re-issue the same preset: without one '
-    + 'a named preset runs a judged sweep at its own width, which needs no instrument at all. '
-    + 'Switching preset is not required and would cost this one its width and unit.');
-}
-
-const resolvedVerifier = resolveVerifier(measured.verify);
-
-if ('reason' in resolvedVerifier) return resolvedVerifier;
-const verifier = resolvedVerifier;
-let witnessVerifier: ResolvedVerifier | null = null;
-let witnessDigest: string | null = null;
-
-if (measured.witness !== null) {
-  if (!('kind' in measured.witness)) {
-    return unsupported('this witness check is a closure, which names no candidate path and '
-      + 'cannot be identified across durable runs. Register it as a verifier kind.');
+  if (!measured) {
+    return unsupported(`an objective of kind "${objective.kind}" is measured per component or per `
+      + 'instance, and this run settles one answer against one number. Use kind:"scalar", or '
+      + 'kind:"witness" with a scalar `proxy`.');
   }
 
-  const witnessKind = registeredVerifierKind(measured.witness.kind);
-
-  if (witnessKind === null) return unregisteredKindRefusalFor(measured.witness.kind);
-  const witnessFault = await preflightVerifier(witnessKind, ctx);
-
-  if (witnessFault !== null) {
-    return unavailable(`the witness instrument cannot run in this workspace: ${witnessFault}`);
+  if (!('kind' in measured.verify)) {
+    // A closure declares no candidate path; registering the kind supplies one (*The closed verifier registry*).
+    return unsupported('this objective supplies `verify` as a closure, which names no path a '
+      + 'candidate is written to, so this run cannot place one for it to measure. Register a '
+      + 'verifier kind and pass verify as {kind, spec}.');
   }
 
-  const resolvedWitness = resolveVerifier(measured.witness);
+  // Order matters: kind, shell, runnability, then spec (see above).
+  const kind = registeredVerifierKind(measured.verify.kind);
 
-  if ('reason' in resolvedWitness) return resolvedWitness;
-  witnessVerifier = resolvedWitness;
-  witnessDigest = verifierDigestOf(measured.witness, resolvedWitness.implementation);
-}
+  if (kind === null) return unregisteredKindRefusalFor(measured.verify.kind);
+  const ctx = measurementContext(rt);
 
-const proxyDigest = verifierDigestOf(measured.verify, resolvedVerifier.implementation);
+  if (!ctx) {
+    return unavailable('this workspace has no shell, so nothing can run a measurement in it: a '
+      + 'verifier is given a filesystem and a shell and this actor was wired neither. The call is '
+      + 'well-formed; the instrument is absent.');
+  }
 
-const identity = {
-  metric: measured.metric,
-  unit: measured.unit,
-  direction: measured.direction,
-  scale: measured.scale,
-  verifierDigest: witnessDigest === null
-    ? proxyDigest
-    : argumentDigest({ proxy: proxyDigest, witness: witnessDigest }),
-};
+  const instrumentFault = yield* Effect.promise(() => preflightVerifier(kind, ctx));
 
-// *Measured baseline*: measured on the workspace as found; a fault must not start the run.
-let asFound: Measurement;
+  if (instrumentFault !== null) {
+    return unavailable(`the "${kind}" instrument cannot run in this workspace's shell, so no `
+      + `score:"verify" search can start here, and no \`spec\` would change that: ${instrumentFault}. `
+      + 'That is the instrument breaking rather than a candidate failing. Either take an objective '
+      + 'this workspace can measure, or DROP `objective` and re-issue the same preset: without one '
+      + 'a named preset runs a judged sweep at its own width, which needs no instrument at all. '
+      + 'Switching preset is not required and would cost this one its width and unit.');
+  }
 
-try {
-  asFound = await verifier.verify(ctx);
-} catch (error) {
-  return unavailable(`the baseline measurement faulted, so this run cannot start: `
-    + `${renderThrownChain({ cause: error })}. That is the instrument `
-    + 'breaking rather than a candidate failing, and it fails the run by design.');
-}
+  const resolvedVerifier = resolveVerifier(measured.verify);
 
-const baseline = baselineOf(asFound, verifier.baselineKey)
-  ?? (asFound.kind === 'measured' ? asFound.value : null);
+  if ('reason' in resolvedVerifier) return resolvedVerifier;
+  const verifier = resolvedVerifier;
+  let witnessVerifier: ResolvedVerifier | null = null;
+  let witnessDigest: string | null = null;
 
-if (baseline === null) {
-  return unavailable('the baseline measurement produced no number, so there is nothing to '
-    + `normalise against: ${asFound.detail}`);
-}
+  if (measured.witness !== null) {
+    if (!('kind' in measured.witness)) {
+      return unsupported('this witness check is a closure, which names no candidate path and '
+        + 'cannot be identified across durable runs. Register it as a verifier kind.');
+    }
 
-// *Floor margin*: the run's own first measurement refutes the floor.
-if (measured.floor && breaches(measured.floor, measured.direction, baseline)) {
-  return badInput(`the workspace as found already measures ${String(baseline)} `
-    + `${measured.unit}, past a floor of ${String(measured.floor.value)} that no correct `
-    + 'solution may cross. The floor is refuted by the run\'s own baseline before any candidate '
-    + `exists. Re-derive the bound: ${measured.floor.proof}`);
-}
+    const witnessKind = registeredVerifierKind(measured.witness.kind);
 
-// *Measured baseline*: a target already met leaves no range to score on.
-if (normalisedScore({
-  value: baseline, baseline, target: measured.target,
-  direction: measured.direction, scale: measured.scale,
-}) === null) {
-  return badInput(`the target of ${String(measured.target)} ${measured.unit} is already met by `
-    + `the workspace as found, which measures ${String(baseline)}. Every candidate would `
-    + 'saturate at 1.0 and the search would have no gradient: the baseline is measured rather '
-    + `than declared, so raise the target past ${String(baseline)}.`);
-}
+    if (witnessKind === null) return unregisteredKindRefusalFor(measured.witness.kind);
+    const witnessFault = yield* Effect.promise(() => preflightVerifier(witnessKind, ctx));
 
-// The archive key must be a quantity the instrument reports; checked here, at the baseline,
-// before any candidate is expanded.
-if (archive) {
-  const cell = archiveCellOf(archive.key, asFound.measured);
+    if (witnessFault !== null) {
+      return unavailable(`the witness instrument cannot run in this workspace: ${witnessFault}`);
+    }
 
-  if (cell.kind === 'unwitnessed') {
-    return badInput(`advance:"archive" bins every candidate by \`key\`, and the descriptor has to be `
-      + `WITNESSED by the instrument rather than claimed by a node, but "${archive.key}" is not among `
-      + `the quantities kind:"${verifier.kind}" reports${cell.reported.length > 0
+    const resolvedWitness = resolveVerifier(measured.witness);
+
+    if ('reason' in resolvedWitness) return resolvedWitness;
+    witnessVerifier = resolvedWitness;
+    witnessDigest = verifierDigestOf(measured.witness, resolvedWitness.implementation);
+  }
+
+  const proxyDigest = verifierDigestOf(measured.verify, resolvedVerifier.implementation);
+
+  const identity = {
+    metric: measured.metric,
+    unit: measured.unit,
+    direction: measured.direction,
+    scale: measured.scale,
+    verifierDigest: witnessDigest === null
+      ? proxyDigest
+      : argumentDigest({ proxy: proxyDigest, witness: witnessDigest }),
+  };
+
+  // *Measured baseline*: measured on the workspace as found; a fault must not start the run.
+  const asFound: Measurement = yield* Effect.tryPromise({
+    try: () => verifier.verify(ctx),
+    catch: (error) => unavailable(`the baseline measurement faulted, so this run cannot start: `
+      + `${renderThrownChain({ cause: error })}. That is the instrument `
+      + 'breaking rather than a candidate failing, and it fails the run by design.'),
+  });
+
+  const baseline = baselineOf(asFound, verifier.baselineKey)
+    ?? (asFound.kind === 'measured' ? asFound.value : null);
+
+  if (baseline === null) {
+    return unavailable('the baseline measurement produced no number, so there is nothing to '
+      + `normalise against: ${asFound.detail}`);
+  }
+
+  // *Floor margin*: the run's own first measurement refutes the floor.
+  if (measured.floor && breaches(measured.floor, measured.direction, baseline)) {
+    return badInput(`the workspace as found already measures ${String(baseline)} `
+      + `${measured.unit}, past a floor of ${String(measured.floor.value)} that no correct `
+      + 'solution may cross. The floor is refuted by the run\'s own baseline before any candidate '
+      + `exists. Re-derive the bound: ${measured.floor.proof}`);
+  }
+
+  // *Measured baseline*: a target already met leaves no range to score on.
+  if (normalisedScore({
+    value: baseline, baseline, target: measured.target,
+    direction: measured.direction, scale: measured.scale,
+  }) === null) {
+    return badInput(`the target of ${String(measured.target)} ${measured.unit} is already met by `
+      + `the workspace as found, which measures ${String(baseline)}. Every candidate would `
+      + 'saturate at 1.0 and the search would have no gradient: the baseline is measured rather '
+      + `than declared, so raise the target past ${String(baseline)}.`);
+  }
+
+  // The archive key must be a quantity the instrument reports; checked here, at the baseline,
+  // before any candidate is expanded.
+  if (archive) {
+    const cell = archiveCellOf(archive.key, asFound.measured);
+
+    if (cell.kind === 'unwitnessed') {
+      return badInput(`advance:"archive" bins every candidate by \`key\`, and the descriptor has to be `
+        + `WITNESSED by the instrument rather than claimed by a node, but "${archive.key}" is not among `
+        + `the quantities kind:"${verifier.kind}" reports${cell.reported.length > 0
         ? `, which are: ${cell.reported.join(', ')}`
         : ' (it reports none at all)'}. Name one of those as \`key\`, or drop advance:"archive" for a `
-      + 'run with no coverage claim.');
+        + 'run with no coverage claim.');
+    }
   }
-}
 
-log.event('swarm.baseline_measured', {
-  preset: resolved.preset,
-  metric: measured.metric,
-  baseline,
-  target: measured.target,
-  kind: verifier.kind,
-});
+  log.event('swarm.baseline_measured', {
+    preset: resolved.preset,
+    metric: measured.metric,
+    baseline,
+    target: measured.target,
+    kind: verifier.kind,
+  });
 
-  return { measured, verifier, witnessVerifier, ctx, baseline, identity };
+    return { measured, verifier, witnessVerifier, ctx, baseline, identity };
+  });
 }
 
 /** The run's stores, initialised in dependency order; a workspace that never ran a search has none of these tables. */
@@ -550,36 +560,38 @@ export function resolveNodeModel(input: {
   readonly resolveModel: ((spec: string) => LanguageModel) | undefined;
   readonly runProfile: SwarmProfileSnapshot | null;
 }): { readonly model: LanguageModel; readonly spec: string | undefined } | Refusal {
-  let nodeModel = input.model;
-  let modelSpec: string | undefined;
+  return settleSync(Effect.catch(Effect.gen(function* () {
+    let nodeModel = input.model;
+    let modelSpec: string | undefined;
 
-  if (input.runProfile) {
-    const spec = input.runProfile.profile.tier.model;
-    const tier = input.runProfile.profile.tier.id;
+    if (input.runProfile) {
+      const spec = input.runProfile.profile.tier.model;
+      const tier = input.runProfile.profile.tier.id;
+      const resolveModel = input.resolveModel;
 
-    if (!input.resolveModel) {
-      return unsupported(
-        `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, but no model `
-        + 'resolver is wired in this runner, so its nodes could only run the caller\'s own '
-        + 'model while the run records the tier\'s. Wire AgentsSwarmDeps.resolveModel on this '
-        + 'backend.',
-      );
-    }
+      if (!resolveModel) {
+        return unsupported(
+          `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, but no model `
+          + 'resolver is wired in this runner, so its nodes could only run the caller\'s own '
+          + 'model while the run records the tier\'s. Wire AgentsSwarmDeps.resolveModel on this '
+          + 'backend.',
+        );
+      }
 
-    try {
-      nodeModel = input.resolveModel(spec);
+      nodeModel = yield* Effect.try({
+        try: () => resolveModel(spec),
+        catch: (error) => refusalOf(new KinuError('unavailable',
+          `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, and this `
+          + 'runtime cannot build that model, so the tier it was routed to is unreachable here. '
+          + 'Point the tier at a model this session can resolve, or give the session a resolver '
+          + 'that can.',
+          { cause: error })),
+      });
       modelSpec = spec;
-    } catch (error) {
-      return refusalOf(new KinuError('unavailable',
-        `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, and this `
-        + 'runtime cannot build that model, so the tier it was routed to is unreachable here. '
-        + 'Point the tier at a model this session can resolve, or give the session a resolver '
-        + 'that can.',
-        { cause: error }));
     }
-  }
 
-  return { model: nodeModel, spec: modelSpec };
+    return { model: nodeModel, spec: modelSpec };
+  }), (refusal) => Effect.succeed(refusal)));
 }
 
 /**
@@ -596,32 +608,38 @@ export function resolveNodeModels(input: {
   readonly models: readonly string[] | null;
   readonly resolveModel: ((spec: string) => LanguageModel) | undefined;
 }): { readonly models: readonly RoutedNodeModel[] } | Refusal {
-  if (input.models === null) return { models: [] };
+  return settleSync(Effect.catch(Effect.gen(function* () {
+    const resolveModel = input.resolveModel;
 
-  if (!input.resolveModel) {
-    return unsupported(
-      'this search routes each node through `models`, but no model resolver is wired in '
-      + 'this runner, so its nodes could only run the caller\'s own model while the call '
-      + 'names others. Wire AgentsSwarmDeps.resolveModel on this backend.',
-    );
-  }
+    if (input.models === null) return { models: [] };
 
-  const resolved: RoutedNodeModel[] = [];
-
-  for (const [index, spec] of input.models.entries()) {
-    try {
-      resolved.push({ spec, model: input.resolveModel(spec) });
-    } catch (error) {
-      return refusalOf(new KinuError('bad_input',
-        `\`models\` entry ${String(index + 1)} is ${JSON.stringify(spec)}, and this session `
-        + 'cannot build that model, so the node it would be assigned cannot run it. Name a '
-        + 'spec this session resolves, or drop `models` to run every node on the one model '
-        + 'the call resolved to.',
-        { cause: error }));
+    if (!resolveModel) {
+      return unsupported(
+        'this search routes each node through `models`, but no model resolver is wired in '
+        + 'this runner, so its nodes could only run the caller\'s own model while the call '
+        + 'names others. Wire AgentsSwarmDeps.resolveModel on this backend.',
+      );
     }
-  }
 
-  return { models: resolved };
+    const resolved: RoutedNodeModel[] = [];
+
+    for (const [index, spec] of input.models.entries()) {
+      resolved.push({
+        spec,
+        model: yield* Effect.try({
+          try: () => resolveModel(spec),
+          catch: (error) => refusalOf(new KinuError('bad_input',
+            `\`models\` entry ${String(index + 1)} is ${JSON.stringify(spec)}, and this session `
+            + 'cannot build that model, so the node it would be assigned cannot run it. Name a '
+            + 'spec this session resolves, or drop `models` to run every node on the one model '
+            + 'the call resolved to.',
+            { cause: error })),
+        }),
+      });
+    }
+
+    return { models: resolved };
+  }), (refusal) => Effect.succeed(refusal)));
 }
 
 /**

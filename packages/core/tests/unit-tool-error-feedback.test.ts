@@ -53,7 +53,7 @@ const cases: Array<{ label: string; error: Error; expected: LanguageModelV3ToolR
   { label: 'MCP protocol', error: new McpToolError({ isError: true, content: [{ type: 'text', text: 'remote failure' }], reason: 'remote-data' }),
     expected: { type: 'error-json', value: { isError: true, content: [{ type: 'text', text: 'remote failure' }], reason: 'remote-data' } } },
   { label: 'unclassified exception', error: new Error('{"reason":"denied","error":"plain text"}'),
-    expected: { type: 'error-text', value: 'Error: {"reason":"denied","error":"plain text"}' } },
+    expected: { type: 'error-text', value: '{"reason":"denied","error":"plain text"}' } },
 ];
 
 test.each(cases)('$label feedback reaches the next provider request without mutating its Error', async ({ error, expected }) => {
