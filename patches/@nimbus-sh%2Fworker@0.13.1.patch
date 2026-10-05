@@ -7,7 +7,7 @@ index 683befcf2b80ce6c5fbe1cb482f97106c074cf17..b16ad9c33a4cc5af74ddcdaf669678eb
      if (!assets || typeof assets.fetch !== 'function')
          throw new Error('Nimbus: env.ASSETS unavailable for the build facet');
 -    const worker = await loader.get(id, async () => buildFacetWorkerCode(await fetchBuildFacetParts({ ASSETS: assets })));
-+    // One isolate per Durable Object (Kinu patch, NIMBUS-ASKS #20): the binding is the isolate's, and its pump ran
++    // One isolate per Durable Object (Kinu patch, NIMBUS-ASKS #22): the binding is the isolate's, and its pump ran
 +    // one object's plugin calls in another's context ("Cannot perform I/O on behalf of a different Durable Object").
 +    const worker = await loader.get(`${id}:${ctx.id.toString()}`, async () => buildFacetWorkerCode(await fetchBuildFacetParts({ ASSETS: assets })));
      const facetClass = worker.getDurableObjectClass('BuildFacet');
