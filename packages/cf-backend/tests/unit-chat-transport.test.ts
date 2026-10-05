@@ -79,6 +79,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
       return landing instanceof Promise ? landing : Promise.resolve(landing);
     },
+    retry: () => Promise.reject(new KinuError('unavailable', 'this fake does not retry')),
     interrupt: () => { interrupts += 1; },
     clear: () => {
       clears += 1;

@@ -1265,6 +1265,9 @@
     "version TEXT",
     "update_check INTEGER NOT NULL DEFAULT 1"
   ],
+  "user_device_protocol_refusals@packages/core/src/state/user-schema.ts": [
+    "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE"
+  ],
   "user_device_retired_tokens@packages/core/src/state/user-schema.ts": [
     "token_hash TEXT PRIMARY KEY",
     "device_id TEXT NOT NULL REFERENCES user_devices(id) ON DELETE CASCADE",

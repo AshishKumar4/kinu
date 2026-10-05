@@ -1224,6 +1224,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
       getConnection: (id) => joined && id === connection.id ? connection : undefined,
       history: async () => [], admitted: async () => false,
       send: async () => { throw new Error('the re-drive accepts no second submission'); },
+      retry: async () => { throw new Error('the re-drive is not retried'); },
       interrupt: () => { throw new Error('the re-drive is not interrupted'); },
       clear: async () => { throw new Error('the re-drive is not cleared'); },
     });

@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { DEVICE_UPDATE, decodeJsonValue, type JsonValue } from '@kinu.run/core';
+import { DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE, decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO } from './helpers/device-harness';
 import { DEVICE_UPDATE_COPY } from '../src/hooks/use-device-roster';
@@ -351,6 +351,16 @@ describe('the Devices read model carries the version and the served build', () =
 
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: false }));
     expect((await devices(harness))[0]).toMatchObject({ version: '0.2.0+older', servedVersion: SERVED, update: 'off' });
+  });
+
+  test('a daemon the hub refuses for its protocol reads as needing an update, until a HELLO the hub accepts', async () => {
+    const harness = await connected();
+    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, protocolVersion: DEVICE_PROTOCOL_VERSION - 1 }));
+    expect((await devices(harness))[0]).toMatchObject({ connected: false, update: 'required' });
+
+    harness.attachDevice(harness.deviceId);
+    await harness.sendDeviceHello(hello({ version: SERVED, updateCheck: true }));
+    expect((await devices(harness))[0]).toMatchObject({ connected: true, update: 'current' });
   });
 
   test('a later HELLO without a version overwrites: the row says what THIS daemon said', async () => {

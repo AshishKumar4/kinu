@@ -170,6 +170,27 @@ describe('ChatGPT sign-in by paste-back', () => {
     harness.close();
   });
 
+  test('a sign-in the owner replaced while OpenAI answered it changes nothing, whatever it answered', async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+    const first = await web.start();
+    let second: URL | null = null;
+
+    openaiAuth(async () => {
+      if (second !== null) return tokens(second);
+      // The owner starts again while auth.openai.com is still answering the first sign-in's code.
+      second = await web.start();
+
+      return tokens(first, { scope: 'email openid profile' });
+    });
+
+    expect((await web.finish(web.returned(first))).status).toBe(503);
+
+    if (second === null) throw new Error('the first exchange never reached auth.openai.com');
+    expect(v.parse(FinishedSchema, await (await web.finish(web.returned(second))).json())).toEqual({ outcome: 'signed_in', email: 'owner@example.com' });
+    harness.close();
+  });
+
   test('an ID token minted for another sign-in\'s nonce stores nothing', async () => {
     const harness = createTestUserDO();
     const web = routes(harness);
@@ -252,4 +273,96 @@ describe('ChatGPT sign-in through a machine', () => {
     expect((await harness.userDO.chatgptPlan(owner)).machineSignIn).toEqual({ state: 'open', authorizeUrl, device: { id: deviceId, label: 'studio' } });
     harness.close();
   });
+
+  test('two machines connecting while it waits open it once, on one of them', async () => {
+    const owner = await testOwner();
+    const studioAnswers = Promise.withResolvers<void>();
+    let studio = '';
+
+    const harness = createTestUserDO({
+      deviceResponder: async (frame): Promise<JsonValue> => {
+        if (frame.method !== DEVICE_CHATGPT.signIn) return NOT_SIGNED_IN;
+
+        // The studio's daemon answers only once the laptop has finished saying HELLO.
+        if (frame.device === studio) await studioAnswers.promise;
+
+        return { authorizeUrl: `https://auth.openai.com/api/accounts/authorize?on=${frame.device ?? ''}` };
+      },
+    });
+
+    await harness.userDO.startChatGptSignIn(owner);
+    studio = (await harness.userDO.registerDevice(owner, 'studio')).deviceId;
+    const laptop = (await harness.userDO.registerDevice(owner, 'laptop')).deviceId;
+    harness.attachDaemon(studio);
+    harness.attachDaemon(laptop);
+
+    const studioHello = harness.sendDeviceHello({ type: 'HELLO' }, studio);
+    await harness.sendDeviceHello({ type: 'HELLO' }, laptop);
+    studioAnswers.resolve();
+    await studioHello;
+    await harness.joinFibers();
+
+    const opened = harness.deviceFrames.filter((frame) => frame.method === DEVICE_CHATGPT.signIn);
+    expect(opened).toHaveLength(1);
+    expect((await harness.userDO.chatgptPlan(owner)).machineSignIn).toMatchObject({ state: 'open', device: { id: opened[0]?.device } });
+    harness.close();
+  });
+
+  test('a sign-in the owner cancels while the machine opens it stays cancelled', async () => {
+    const owner = await testOwner();
+
+    const harness: TestUserDO = createTestUserDO({
+      deviceResponder: async (frame): Promise<JsonValue> => {
+        if (frame.method !== DEVICE_CHATGPT.signIn) return NOT_SIGNED_IN;
+        // The owner cancels while the machine is still answering.
+        await harness.userDO.cancelChatGptSignIn(owner);
+
+        return { authorizeUrl: 'https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client' };
+      },
+    });
+
+    await harness.userDO.startChatGptSignIn(owner);
+    const { deviceId } = await harness.userDO.registerDevice(owner, 'studio');
+    harness.attachDevice(deviceId);
+    await harness.sendDeviceHello({ type: 'HELLO' });
+    await harness.joinFibers();
+
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CHATGPT.signIn)).toHaveLength(1);
+
+    expect((await harness.userDO.chatgptPlan(owner)).machineSignIn).toBeNull();
+    harness.close();
+  });
+
+  test('signing out signs out every machine that holds the plan, and none carries it after', async () => {
+    const owner = await testOwner();
+    const signedOut = new Set<string>();
+
+    const harness = createTestUserDO({
+      deviceResponder: (frame): JsonValue => {
+        const device = frame.device ?? '';
+
+        if (frame.method === DEVICE_CHATGPT.signOut) {
+          signedOut.add(device);
+
+          return { unconfirmed: device === laptop ? 'auth.openai.com answered HTTP 500' : null };
+        }
+
+        return signedOut.has(device) ? NOT_SIGNED_IN : { ...NOT_SIGNED_IN, signedIn: true, email: 'owner@example.com', planEnabled: true };
+      },
+    });
+
+    const studio = (await harness.userDO.registerDevice(owner, 'studio')).deviceId;
+    const laptop = (await harness.userDO.registerDevice(owner, 'laptop')).deviceId;
+    harness.attachDaemon(studio);
+    harness.attachDaemon(laptop);
+    await harness.sendDeviceHello({ type: 'HELLO' }, studio);
+    await harness.sendDeviceHello({ type: 'HELLO' }, laptop);
+
+    expect(await harness.userDO.signOutChatGpt(owner)).toEqual({ unconfirmed: 'laptop: auth.openai.com answered HTTP 500' });
+    expect([...signedOut].sort()).toEqual([studio, laptop].sort());
+    expect(await harness.userDO.relayDevice(owner, 'chatgpt')).toBeNull();
+    harness.close();
+  });
 });
+
+const NOT_SIGNED_IN = { signedIn: false, email: null, planEnabled: false, planDeclined: false, pending: false, lastFailure: null, firstSignIn: false };
