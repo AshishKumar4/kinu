@@ -3,7 +3,7 @@ import type {
 } from './types';
 import * as v from 'valibot';
 import { MODEL_INPUT_MODALITIES } from './types';
-import { cloneModelInfos, positiveInteger, StaleModelList } from './util';
+import { positiveInteger, StaleModelList } from './util';
 import { nonEmptyString } from '../utils/json';
 import type { JsonValue } from '../utils/json';
 import { Effect } from 'effect';
@@ -121,7 +121,8 @@ const ModelsDevCatalogSchema = v.record(v.string(), ModelsDevProviderSchema);
 let cache: ModelsDevCache | null = null;
 
 export interface ModelsDevListOptions {
-  fallback?: readonly ModelInfo[];
+  /** models.dev is the provider's only list, so naming none of its models is a failure to show, not an empty menu. */
+  required?: boolean;
   preferredIds?: readonly string[];
   ttlMs?: number;
   toolCallOnly?: boolean;
@@ -135,7 +136,7 @@ export async function listModelsDevProviderModels(
   const stale = (failure: { readonly reason: string; readonly cause?: unknown }): StaleModelList => {
     if (failure.cause !== undefined) diagnostics.event('models_dev.catalog_fallback', { error: renderThrownChain({ cause: failure.cause }) });
 
-    return new StaleModelList(cloneModelInfos(opts.fallback), failure);
+    return new StaleModelList([], failure);
   };
 
   return settle(Effect.gen(function* () {
@@ -146,7 +147,7 @@ export async function listModelsDevProviderModels(
     const models = data[providerId]?.models;
 
     if (!models) {
-      if (opts.fallback === undefined) return [];
+      if (opts.required !== true) return [];
 
       return yield* Effect.fail(stale({ reason: `models.dev lists no ${providerId} models` }));
     }
@@ -160,7 +161,7 @@ export async function listModelsDevProviderModels(
     }
 
     if (out.length === 0) {
-      if (opts.fallback === undefined) return [];
+      if (opts.required !== true) return [];
 
       return yield* Effect.fail(stale({ reason: `models.dev lists no usable ${providerId} models` }));
     }

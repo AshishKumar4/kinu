@@ -188,7 +188,8 @@ describe('provider model catalogs', () => {
 
   const codexDeps = (fetchFn: typeof fetch) => deps({ [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } } }, fetchFn);
 
-  test('a refused Codex model list is a named failure beside the built-in list, never a silent stale list', async () => {
+  // A failed listing shows the provider's own reason and no models: a guessed list reads as the account's choices.
+  test('a refused Codex model list is a named failure with no guessed models', async () => {
     const registry = createProviderRegistry();
     registry.register(createCodexProvider({ baseURL: 'https://chatgpt.test/backend-api/codex' }));
 
@@ -196,10 +197,10 @@ describe('provider model catalogs', () => {
 
     expect(menu.failures.map((failure) => failure.provider)).toEqual(['codex']);
     expect(menu.failures[0]?.reason).toContain('HTTP 403');
-    expect(menu.models.some((model) => model.provider === 'codex' && model.id === 'gpt-5.5')).toBe(true);
+    expect(menu.models.filter((model) => model.provider === 'codex')).toEqual([]);
   });
 
-  test('an unreadable models.dev list is a named failure beside the built-in list', async () => {
+  test('an unreadable models.dev list is a named failure with no guessed models', async () => {
     const registry = createProviderRegistry();
     registry.register(createOpenAIProvider());
 
@@ -209,13 +210,11 @@ describe('provider model catalogs', () => {
     ));
 
     expect(menu.failures.map((failure) => failure.provider)).toEqual(['openai']);
-    expect(menu.models.some((model) => model.provider === 'openai')).toBe(true);
+    expect(menu.models.filter((model) => model.provider === 'openai')).toEqual([]);
   });
 
-  test('a turn keeps the built-in entry for its model when the live list is refused', async () => {
-    const info = await catalogModelInfo(createCodexProvider(), codexDeps(fetchStub(async () => blockPage())), 'gpt-5.5');
-
-    expect(info?.contextWindow).toBe(272_000);
+  test('a turn whose live list is refused has no catalog entry for its model', async () => {
+    expect(await catalogModelInfo(createCodexProvider(), codexDeps(fetchStub(async () => blockPage())), 'gpt-5.5')).toBeNull();
   });
 
   test('a Codex call refused by the block page fails once, as an unreachable network, not a login problem', async () => {

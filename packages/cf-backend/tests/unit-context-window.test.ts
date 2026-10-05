@@ -4,7 +4,6 @@ import { describe, test, expect } from "bun:test";
 import type { ModelMessage } from "ai";
 import { userCredentialSource } from './helpers/user-credentials';
 import { createAgentProviderRegistry } from "../src/providers/agent-registry";
-import { WORKERS_AI_FALLBACK_MODEL_CATALOG } from "@kinu.run/core";
 import {
   assembleTurnMessages,
   catalogModelInfo,
@@ -18,17 +17,6 @@ import {
 } from "@kinu.run/core";
 
 describe("contextWindowForModel", () => {
-  test("the offline Workers AI catalog keeps DeepSeek V4 Pro as the first default", () => {
-    expect(WORKERS_AI_FALLBACK_MODEL_CATALOG[0]).toEqual({
-      id: "@cf/zai-org/glm-5.3",
-      label: "GLM 5.3",
-      capabilities: ["tools", "streaming", "reasoning"],
-      contextWindow: 1_048_576,
-      inputModalities: ["text"],
-      reasoningEfforts: ["low", "medium", "high"],
-    });
-  });
-
   test("matches known model families on their spec", () => {
     expect(contextWindowForModel("minimax/m3").window).toBe(1_000_000);
     expect(contextWindowForModel("workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813").window).toBe(1_048_576);

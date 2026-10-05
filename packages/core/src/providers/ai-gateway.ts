@@ -12,7 +12,6 @@ import { listModelsDevProviderModels } from './models-dev';
 import { mapModelList } from './util';
 import { withRateLimitRetry } from './rate-limit-retry';
 import {
-  WORKERS_AI_FALLBACK_MODEL_CATALOG,
   WORKERS_AI_PREFERRED_MODEL_IDS,
 } from './workers-ai-catalog';
 
@@ -49,7 +48,7 @@ export function createAIGatewayProvider(): ModelProvider {
     },
     async listModels(deps): Promise<ModelInfo[]> {
       return mapModelList(listModelsDevProviderModels('cloudflare-workers-ai', deps, {
-        fallback: WORKERS_AI_FALLBACK_MODEL_CATALOG,
+        required: true,
         preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
       }), (models) => models.map((model) => ({
         ...model,

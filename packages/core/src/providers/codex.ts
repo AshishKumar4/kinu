@@ -14,7 +14,7 @@ import * as v from 'valibot';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { classify, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
-import { knownReasoningEfforts, type ReasoningEffort } from './reasoning-effort';
+import { knownReasoningEfforts } from './reasoning-effort';
 
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 
@@ -27,21 +27,6 @@ const CODEX_FAST_MODEL = 'gpt-6-luna';
 
 /** A dead ChatGPT login's remedy. */
 const CODEX_DEAD_LOGIN = 'Your ChatGPT login is no longer valid.';
-
-const CODEX_MAX_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-
-const CODEX_CAPABILITIES: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming', 'reasoning', 'vision'];
-
-/** From OMP's Codex census (catalog/src/models.json `openai-codex`, 2026-09-24). */
-const FALLBACK_MODELS: ModelInfo[] = [
-  { id: CODEX_DEFAULT_MODEL, label: 'GPT-5.5 (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] },
-  { id: 'gpt-6-sol', label: 'GPT-6 Sol (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: CODEX_MAX_EFFORTS },
-  { id: 'gpt-6-luna', label: 'GPT-6 Luna (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: CODEX_MAX_EFFORTS },
-  { id: 'gpt-6-astra', label: 'GPT-6 Astra (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 272_000, reasoningEfforts: CODEX_MAX_EFFORTS },
-  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 1_000_000, reasoningEfforts: CODEX_MAX_EFFORTS },
-  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 1_000_000, reasoningEfforts: CODEX_MAX_EFFORTS },
-  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna (Codex)', capabilities: CODEX_CAPABILITIES, contextWindow: 1_000_000, reasoningEfforts: CODEX_MAX_EFFORTS },
-];
 
 /** A refused network gets a 403 HTML page before sign-in (docs/DEPLOYMENT.md); a login refusal is JSON. */
 function networkRefused(res: Response): boolean {
@@ -93,7 +78,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         if (!auth) {
           modelCache = null;
 
-          return cloneModelInfos(FALLBACK_MODELS);
+          return [];
         }
 
         const authKey = authCacheKey(auth);
@@ -107,7 +92,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
             error: failure.cause === undefined ? failure.reason : renderThrownChain({ cause: failure.cause }),
           });
 
-          return new StaleModelList(cloneModelInfos(FALLBACK_MODELS), { ...failure, reason: `Codex models could not be read: ${failure.reason}` });
+          return new StaleModelList([], { ...failure, reason: `Codex models could not be read: ${failure.reason}` });
         };
 
         const res = yield* Effect.tryPromise({

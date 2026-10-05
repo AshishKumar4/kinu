@@ -317,23 +317,24 @@ describe('the model a new workspace starts on', () => {
 
   const byo: ModelMenuEntry = { spec: 'openai/gpt-5.5', label: 'GPT-5.5', provider: 'openai' };
   const servable = (models: ModelMenuEntry[]) => models.map((entry) => entry.spec);
+  const NONE_FAILED: ReadonlySet<string> = new Set();
 
   test('no configured default → the native Workers AI model', () => {
-    expect(defaultSpecFor(null, servable([native, byo]))).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+    expect(defaultSpecFor(null, servable([native, byo]), NONE_FAILED)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   test('the native model is chosen even when a BYO provider lists first', () => {
-    expect(defaultSpecFor(null, servable([byo, native]))).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+    expect(defaultSpecFor(null, servable([byo, native]), NONE_FAILED)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   test('a configured default wins when the account can serve it', () => {
-    expect(defaultSpecFor('openai/gpt-5.5', servable([native, byo]))).toBe('openai/gpt-5.5');
+    expect(defaultSpecFor('openai/gpt-5.5', servable([native, byo]), NONE_FAILED)).toBe('openai/gpt-5.5');
   });
 
   // No native model and nothing chosen is an error, not a fall-through to `models[0]`.
   test('no native model and no choice resolves to nothing rather than a BYO guess', () => {
-    expect(defaultSpecFor(null, servable([byo]))).toBeNull();
-    expect(defaultSpecFor('workers-ai/@cf/meta/llama-4', servable([byo]))).toBeNull();
+    expect(defaultSpecFor(null, servable([byo]), NONE_FAILED)).toBeNull();
+    expect(defaultSpecFor('workers-ai/@cf/meta/llama-4', servable([byo]), NONE_FAILED)).toBeNull();
   });
 });
 
