@@ -23,7 +23,8 @@ import {
   type AgentsToolDeps,
 } from './agents-tool';
 
-import { renderThrownChain } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { renderThrownChain, settle } from '../obs/index';
 
 /** What a program must know beyond the native schema, per member. Literals, so every backend renders the same contract. */
 const AGENTS_CODEMODE_MEMBER_DOCS = {
@@ -135,7 +136,7 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
     tools[action] = {
       planAllowed: true,
       description: memberDescription(action, initialDeps),
-      execute: (...args: unknown[]) => branchableToolCall(async () => {
+      execute: (...args: unknown[]) => branchableToolCall(() => settle(Effect.gen(function* () {
         // The node sandbox appends its exec context as a trailing argument; find it by its
         // signal and remove it from the input so it is not refused as an unknown field.
         let context: unknown;
@@ -157,23 +158,25 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
 
         if (parsedRaw?.success) Object.assign(candidate, parsedRaw.output);
         Object.assign(candidate, { action });
-        let input;
 
-        try {
-          input = parseAgentsToolInput({ input: candidate });
-        } catch (error) {
-          return { success: false, reason: 'bad_input', error: `agents.${action}: ${renderThrownChain({ cause: error })}` };
-        }
+        const parsed = yield* Effect.matchCause(Effect.sync(() => parseAgentsToolInput({ input: candidate })), {
+          onSuccess: (input) => ({ input }),
+          onFailure: (failed) => ({ refused: `agents.${action}: ${renderThrownChain({ cause: Cause.squash(failed) })}` }),
+        });
+
+        if ('refused' in parsed) return { success: false, reason: 'bad_input', error: parsed.refused };
 
         const signal = readExecSignal({ context });
 
-        try {
-          return await dispatchAgentsAction({ ...deps(), mode }, input, signal ? { abortSignal: signal } : undefined);
-        } catch (cause) {
-          if (cause instanceof MissionBudgetExhausted) return projectJsonValue({ value: cause.refusal });
-          throw cause;
-        }
-      }),
+        return yield* Effect.catchCause(
+          Effect.promise(() => dispatchAgentsAction({ ...deps(), mode }, parsed.input, signal ? { abortSignal: signal } : undefined)),
+          (failed) => {
+            const cause = Cause.squash(failed);
+
+            return cause instanceof MissionBudgetExhausted ? Effect.succeed(projectJsonValue({ value: cause.refusal })) : Effect.failCause(failed);
+          },
+        );
+      }))),
     };
   }
 

@@ -15,7 +15,8 @@ import {
   WEBHOOK_ROUTE_UNAVAILABLE, type SignedWebhookRoute,
 } from '@kinu.run/core';
 import * as v from 'valibot';
-import { authoredRefusal, diagnostics, KinuError } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { authoredRefusal, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import { rawParam, type FamilyEnv } from '../api/context';
 import { LITERAL_WORKSPACE, type WorkspaceVariables } from '../api/workspace';
 
@@ -94,7 +95,7 @@ export function hubRoutes<Bindings extends HubEnv>(
 
   routes.on('GET', [TRIGGERS, `${TRIGGERS}/`], async (c) => json({ body: await c.get('hub').listTriggers() }));
 
-  routes.on('POST', [TRIGGERS, `${TRIGGERS}/`], createTrigger);
+  routes.on('POST', [TRIGGERS, `${TRIGGERS}/`], (c) => settle(createTrigger(c)));
 
   routes.on('ALL', [TRIGGERS, `${TRIGGERS}/`], async () => err(405, 'GET or POST'));
 
@@ -161,42 +162,43 @@ export function hubRoutes<Bindings extends HubEnv>(
   return routes;
 }
 
-async function createTrigger<Bindings extends HubEnv>(c: HubContext<Bindings>): Promise<Response> {
-  const request = c.get('workspace').request;
-  // Creating a trigger is a grant (same rule as the CLI webhook route: auth/session.ts isFreshAuthTime).
-  const stepUp = requireStepUp(request);
+function createTrigger<Bindings extends HubEnv>(c: HubContext<Bindings>): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const request = c.get('workspace').request;
+    // Creating a trigger is a grant (same rule as the CLI webhook route: auth/session.ts isFreshAuthTime).
+    const stepUp = requireStepUp(request);
 
-  if (stepUp) return stepUp;
+    if (stepUp) return stepUp;
 
-  // An unsignable delivery URL is a row nothing could reach, so report it here; public delivery just 404s.
-  if (webhookRouteSecret(c.env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
-  const body = await safeJson(request, WebhookRequestSchema);
+    // An unsignable delivery URL is a row nothing could reach, so report it here; public delivery just 404s.
+    if (webhookRouteSecret(c.env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
+    const body = yield* Effect.promise(() => safeJson(request, WebhookRequestSchema));
 
-  if (!body || !body.label || !body.auth_mode) {
-    return err(400, 'label and auth_mode required');
-  }
+    const label = body?.label;
+    const authMode = body?.auth_mode;
 
-  let rateLimit: number;
+    if (!body || !label || !authMode) {
+      return err(400, 'label and auth_mode required');
+    }
 
-  try {
-    rateLimit = normalizeWebhookRateLimitPerMin(body.rate_limit_per_min);
-  } catch (cause) {
-    throw authoredRefusal({ doing: 'reading rate_limit_per_min', cause });
-  }
+    const rateLimit = yield* Effect.try({
+      try: () => normalizeWebhookRateLimitPerMin(body.rate_limit_per_min),
+      catch: (cause) => authoredRefusal({ doing: 'reading rate_limit_per_min', cause }),
+    });
 
-  try {
-    return json({
-      body: await c.get('hub').createDurableWebhook({
-        label: body.label,
-        auth_mode: body.auth_mode,
+    const created = yield* Effect.tryPromise({
+      try: () => c.get('hub').createDurableWebhook({
+        label,
+        auth_mode: authMode,
         secret: body.secret,
         accepted_content_type: body.accepted_content_type,
         rate_limit_per_min: rateLimit,
       }),
-    }, { status: 201 });
-  } catch (cause) {
-    throw authoredRefusal({ doing: 'creating this webhook', cause });
-  }
+      catch: (cause) => authoredRefusal({ doing: 'creating this webhook', cause }),
+    });
+
+    return json({ body: created }, { status: 201 });
+  });
 }
 
 export type WebhookDeliveryTarget = Pick<OrchestratorAgent, 'acceptWebhookDelivery'>;

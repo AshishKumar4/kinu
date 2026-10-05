@@ -5,6 +5,8 @@
  * packages/cf-backend/tests/unit-failure-marks.test.ts.
  */
 import { expect, test } from 'bun:test';
+import { Effect } from 'effect';
+import { detach } from '@kinu.run/core/obs';
 import type { ServerWebSocket } from 'bun';
 import type { Browser, Page } from 'puppeteer';
 import { join } from 'node:path';
@@ -159,10 +161,10 @@ test('a module the network failed is named with the browser\'s error, and a fail
 
       await recordDeadEnds(page);
       await page.setRequestInterception(true);
-      page.on('request', async (request) => {
+      page.on('request', (request) => detach(Effect.promise(async () => {
         if (request.url().endsWith('/dep.js')) await request.abort('connectionreset');
         else await request.continue();
-      });
+      })));
       await page.goto(`${app.origin}/`, { waitUntil: 'load' });
 
       await expect(until(page, 'the answer', ANSWERED)).rejects.toThrow(`${app.origin}/dep.js (net::ERR_CONNECTION_RESET)`);

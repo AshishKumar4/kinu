@@ -1,3 +1,4 @@
+import { Effect, Result } from 'effect';
 import { resolveCloudOrigin } from './config';
 import {
   ARCHIVE_SNAPSHOT_ENDED,
@@ -30,7 +31,7 @@ import {
   type ArchiveCursor,
   type ArchivePage,
 } from '@kinu.run/core';
-import { tolerateAsync } from '@kinu.run/core/obs';
+import { tolerateAsync, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 export type CloudDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
@@ -214,16 +215,18 @@ export interface AgentRpcCall<Input, T> {
   readonly args?: JsonValue[];
 }
 
-export async function callAgentRpc<Input, T = Input>(
+export function callAgentRpc<Input, T = Input>(
   { origin, token, name, method, schema, args = [] }: AgentRpcCall<Input, T>,
 ): Promise<T> {
-  const body = await cloudJson(v.object({ result: JsonValueSchema }), origin, `/api/cli/workspaces/${encodeURIComponent(name)}/rpc`, {
-    method: 'POST',
-    token,
-    body: { method, args },
-  });
+  return settle(Effect.gen(function* () {
+    const body = yield* cloudJson(v.object({ result: JsonValueSchema }), origin, `/api/cli/workspaces/${encodeURIComponent(name)}/rpc`, {
+      method: 'POST',
+      token,
+      body: { method, args },
+    });
 
-  return v.parse(schema, body.result);
+    return v.parse(schema, body.result);
+  }));
 }
 
 const ArchivePageSchema: v.GenericSchema<ArchivePage> = v.object({
@@ -231,39 +234,41 @@ const ArchivePageSchema: v.GenericSchema<ArchivePage> = v.object({
   next: v.nullable(ArchiveCursorSchema),
 });
 
-export async function cloudArchivePage(
+export function cloudArchivePage(
   origin: string, token: string, name: string, cursor: ArchiveCursor | null,
 ): Promise<ArchivePage | 'snapshot-ended'> {
-  const { status, body } = await cloudRequest(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/rpc`, {
-    method: 'POST', token, body: { method: 'exportWorkspaceArchive', args: [cursor === null ? null : decodeJsonValue({ value: cursor })] },
-  });
+  return settle(Effect.gen(function* () {
+    const { status, body } = yield* Effect.promise(async () => cloudRequest(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/rpc`, {
+      method: 'POST', token, body: { method: 'exportWorkspaceArchive', args: [cursor === null ? null : decodeJsonValue({ value: cursor })] },
+    }));
 
-  if (cloudErrorMessage(status, body) === ARCHIVE_SNAPSHOT_ENDED) return 'snapshot-ended';
-  assertCloudOk(status, body);
+    if (cloudErrorMessage(status, body) === ARCHIVE_SNAPSHOT_ENDED) return 'snapshot-ended';
+    yield* assertCloudOk(status, body);
 
-  return v.parse(v.object({ result: ArchivePageSchema }), body).result;
+    return v.parse(v.object({ result: ArchivePageSchema }), body).result;
+  }));
 }
 
-export async function startCliAuth(origin: string, deviceName: string): Promise<CliAuthStart> {
-  return cloudJson(CliAuthStartSchema, origin, '/api/cli/auth/start', {
+export function startCliAuth(origin: string, deviceName: string): Promise<CliAuthStart> {
+  return settle(cloudJson(CliAuthStartSchema, origin, '/api/cli/auth/start', {
     method: 'POST',
     body: { deviceName },
-  });
+  }));
 }
 
-export async function pollCliAuth(origin: string, deviceToken: string): Promise<CliAuthPoll> {
-  return cloudJson(CliAuthPollSchema, origin, '/api/cli/auth/poll', {
+export function pollCliAuth(origin: string, deviceToken: string): Promise<CliAuthPoll> {
+  return settle(cloudJson(CliAuthPollSchema, origin, '/api/cli/auth/poll', {
     method: 'POST',
     body: { deviceToken },
-  });
+  }));
 }
 
-export async function whoami(origin: string, token: string): Promise<{ user: { id: string; email: string; displayName?: string | null } }> {
-  return cloudJson(WhoamiSchema, origin, '/api/cli/me', { token });
+export function whoami(origin: string, token: string): Promise<{ user: { id: string; email: string; displayName?: string | null } }> {
+  return settle(cloudJson(WhoamiSchema, origin, '/api/cli/me', { token }));
 }
 
-export async function logout(origin: string, token: string): Promise<{ ok: boolean }> {
-  return cloudJson(OkSchema, origin, '/api/cli/logout', { method: 'POST', token });
+export function logout(origin: string, token: string): Promise<{ ok: boolean }> {
+  return settle(cloudJson(OkSchema, origin, '/api/cli/logout', { method: 'POST', token }));
 }
 
 const CloudCliSessionSchema = v.object({
@@ -274,52 +279,56 @@ const CloudCliSessionSchema = v.object({
 export type CloudCliSession = v.InferOutput<typeof CloudCliSessionSchema>;
 
 /** Makes an orphaned bearer reachable by something other than its own raw token. */
-export async function listCliSessions(
+export function listCliSessions(
   origin: string, token: string,
 ): Promise<{ sessions: CloudCliSession[] }> {
-  return cloudJson(v.object({ sessions: v.array(CloudCliSessionSchema) }), origin, '/api/cli/sessions', { token });
+  return settle(cloudJson(v.object({ sessions: v.array(CloudCliSessionSchema) }), origin, '/api/cli/sessions', { token }));
 }
 
-export async function revokeCliSessionByHash(
+export function revokeCliSessionByHash(
   origin: string, token: string, hash: string,
 ): Promise<{ ok: boolean }> {
-  return cloudJson(OkSchema, origin, `/api/cli/sessions/${encodeURIComponent(hash)}`, { method: 'DELETE', token });
+  return settle(cloudJson(OkSchema, origin, `/api/cli/sessions/${encodeURIComponent(hash)}`, { method: 'DELETE', token }));
 }
 
 /** Recovery when no hash can name the orphan; the owner re-authenticates afterwards. */
-export async function revokeAllCliSessions(
+export function revokeAllCliSessions(
   origin: string, token: string,
 ): Promise<{ ok: boolean; revoked: number }> {
-  return cloudJson(
+  return settle(cloudJson(
     v.object({ ok: v.boolean(), revoked: v.number() }),
     origin, '/api/cli/sessions', { method: 'DELETE', token },
-  );
+  ));
 }
 
-export async function listCloudAgents(origin: string, token: string): Promise<CloudAgent[]> {
-  return cloudJson(v.array(CloudAgentSchema), origin, '/api/cli/workspaces', { token });
+export function listCloudAgents(origin: string, token: string): Promise<CloudAgent[]> {
+  return settle(cloudJson(v.array(CloudAgentSchema), origin, '/api/cli/workspaces', { token }));
 }
 
 /** Admitted by the rule both backends share, so every field the hub sends (each model's reasoning levels
  *  included) reaches the TUI. */
-export async function getCloudAccountUsage(origin: string, token: string, refresh = false): Promise<AccountUsage> {
-  return cloudJson(AccountUsageSchema, origin, refresh ? '/api/cli/usage?refresh=1' : '/api/cli/usage', { token });
+export function getCloudAccountUsage(origin: string, token: string, refresh = false): Promise<AccountUsage> {
+  return settle(cloudJson(AccountUsageSchema, origin, refresh ? '/api/cli/usage?refresh=1' : '/api/cli/usage', { token }));
 }
 
-export async function listCloudAvailableModels(origin: string, token: string): Promise<AgentModelMenu> {
-  return normalizeModelMenu({ payload: await cloudJson(v.unknown(), origin, '/api/cli/models', { token }) });
+export function listCloudAvailableModels(origin: string, token: string): Promise<AgentModelMenu> {
+  return settle(Effect.gen(function* () {
+    return normalizeModelMenu({ payload: yield* cloudJson(v.unknown(), origin, '/api/cli/models', { token }) });
+  }));
 }
 
-export async function testCloudModel(origin: string, token: string, spec: string, signal: AbortSignal): Promise<ModelTestResult> {
-  return cloudJson(ModelTestResultSchema, origin, '/api/cli/models/test', { method: 'POST', token, body: { spec }, signal });
+export function testCloudModel(origin: string, token: string, spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+  return settle(cloudJson(ModelTestResultSchema, origin, '/api/cli/models/test', { method: 'POST', token, body: { spec }, signal }));
 }
 
 /** Always an envelope: an uncustomized account gets version 0 over the builtin catalog. */
-export async function getCloudProfile(origin: string, token: string): Promise<ProfileCatalogEnvelope> {
-  const { status, body } = await cloudRequest(origin, '/api/cli/profile', { token });
-  assertCloudOk(status, body);
+export function getCloudProfile(origin: string, token: string): Promise<ProfileCatalogEnvelope> {
+  return settle(Effect.gen(function* () {
+    const { status, body } = yield* Effect.promise(async () => cloudRequest(origin, '/api/cli/profile', { token }));
+    yield* assertCloudOk(status, body);
 
-  return v.parse(ProfileCatalogEnvelopeSchema, body);
+    return v.parse(ProfileCatalogEnvelopeSchema, body);
+  }));
 }
 
 export interface CloudProfileUpdateInput {
@@ -328,54 +337,58 @@ export interface CloudProfileUpdateInput {
   expectedVersion: number;
 }
 
-export type CloudProfileUpdateResult =
-  | { ok: true; envelope: ProfileCatalogEnvelope }
-  | { conflict: true; currentVersion: number; currentDigest: string };
+export type CloudProfileUpdateResult = Result.Result<ProfileCatalogEnvelope, { currentVersion: number; currentDigest: string }>;
 
 /** Compare-and-swap; a stale `expectedVersion` returns a structured conflict, nothing merges. */
-export async function updateCloudProfile(
+export function updateCloudProfile(
   origin: string,
   token: string,
   input: CloudProfileUpdateInput,
 ): Promise<CloudProfileUpdateResult> {
-  const { status, body } = await cloudRequest(origin, '/api/cli/profile', {
-    method: 'PUT',
-    token,
-    body: decodeJsonValue({ value: input }),
-  });
+  return settle(Effect.gen(function* () {
+    const { status, body } = yield* Effect.promise(async () => cloudRequest(origin, '/api/cli/profile', {
+      method: 'PUT',
+      token,
+      body: decodeJsonValue({ value: input }),
+    }));
 
-  if (status === 409) {
-    const conflict = v.parse(v.object({
-      error: v.string(),
-      currentVersion: v.number(),
-      currentDigest: v.string(),
-    }), body);
+    if (status === 409) {
+      const conflict = v.parse(v.object({
+        error: v.string(),
+        currentVersion: v.number(),
+        currentDigest: v.string(),
+      }), body);
 
-    return { conflict: true, currentVersion: conflict.currentVersion, currentDigest: conflict.currentDigest };
-  }
+      const stale: CloudProfileUpdateResult = Result.fail({ currentVersion: conflict.currentVersion, currentDigest: conflict.currentDigest });
 
-  assertCloudOk(status, body);
+      return stale;
+    }
 
-  return { ok: true, envelope: v.parse(ProfileCatalogEnvelopeSchema, body) };
+    yield* assertCloudOk(status, body);
+
+    const written: CloudProfileUpdateResult = Result.succeed(v.parse(ProfileCatalogEnvelopeSchema, body));
+
+    return written;
+  }));
 }
 
-export async function listCloudCredentials(origin: string, token: string): Promise<CloudCredentialSummary[]> {
-  return cloudJson(v.array(CloudCredentialSummarySchema), origin, '/api/cli/credentials', { token });
+export function listCloudCredentials(origin: string, token: string): Promise<CloudCredentialSummary[]> {
+  return settle(cloudJson(v.array(CloudCredentialSummarySchema), origin, '/api/cli/credentials', { token }));
 }
 
 /** Sealed in the account; signed-in machines reach it through the provider proxy without a copy. */
-export async function setCloudCredential(
+export function setCloudCredential(
   origin: string, token: string, key: string, credential: JsonValue,
 ): Promise<{ ok: boolean }> {
-  return cloudJson(OkSchema, origin, `/api/cli/credentials/${encodeURIComponent(key)}`, {
+  return settle(cloudJson(OkSchema, origin, `/api/cli/credentials/${encodeURIComponent(key)}`, {
     method: 'POST', token, body: credential,
-  });
+  }));
 }
 
-export async function deleteCloudCredential(
+export function deleteCloudCredential(
   origin: string, token: string, key: string,
 ): Promise<{ ok: boolean }> {
-  return cloudJson(OkSchema, origin, `/api/cli/credentials/${encodeURIComponent(key)}`, { method: 'DELETE', token });
+  return settle(cloudJson(OkSchema, origin, `/api/cli/credentials/${encodeURIComponent(key)}`, { method: 'DELETE', token }));
 }
 
 export interface CreateCloudAgentInput {
@@ -387,65 +400,67 @@ export interface CreateCloudAgentInput {
   role?: string;
 }
 
-export async function createCloudAgent(origin: string, token: string, input: CreateCloudAgentInput): Promise<CloudAgent> {
-  return cloudJson(CloudAgentSchema, origin, '/api/cli/workspaces', { method: 'POST', token, body: decodeJsonValue({ value: input }) });
+export function createCloudAgent(origin: string, token: string, input: CreateCloudAgentInput): Promise<CloudAgent> {
+  return settle(cloudJson(CloudAgentSchema, origin, '/api/cli/workspaces', { method: 'POST', token, body: decodeJsonValue({ value: input }) }));
 }
 
-export async function deleteCloudAgent(origin: string, token: string, name: string): Promise<{ ok: boolean }> {
-  return cloudJson(OkSchema, origin, `/api/cli/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE', token });
+export function deleteCloudAgent(origin: string, token: string, name: string): Promise<{ ok: boolean }> {
+  return settle(cloudJson(OkSchema, origin, `/api/cli/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE', token }));
 }
 
-export async function createCloudAgentConnectTicket(origin: string, token: string, name: string): Promise<CloudAgentConnectTicket> {
-  return cloudJson(CloudAgentConnectTicketSchema, origin, `/api/cli/workspaces/${encodeURIComponent(name)}/connect-ticket`, {
+export function createCloudAgentConnectTicket(origin: string, token: string, name: string): Promise<CloudAgentConnectTicket> {
+  return settle(cloudJson(CloudAgentConnectTicketSchema, origin, `/api/cli/workspaces/${encodeURIComponent(name)}/connect-ticket`, {
     method: 'POST',
     token,
-  });
+  }));
 }
 
 /** Route-shaped because it is step-up gated (fresh `kinu auth`) server-side, unlike table-gated RPCs. */
-export async function createCloudWebhookTrigger(
+export function createCloudWebhookTrigger(
   origin: string,
   token: string,
   name: string,
   input: CloudWebhookTriggerInput,
 ): Promise<CloudWebhookTrigger> {
-  return cloudJson(CloudWebhookTriggerSchema, origin, `/api/cli/workspaces/${encodeURIComponent(name)}/triggers/webhook`, {
+  return settle(cloudJson(CloudWebhookTriggerSchema, origin, `/api/cli/workspaces/${encodeURIComponent(name)}/triggers/webhook`, {
     method: 'POST',
     token,
     body: decodeJsonValue({ value: input }),
-  });
+  }));
 }
 
-export async function createCliAccessToken(
+export function createCliAccessToken(
   origin: string,
   token: string,
   input: { name: string; scopes: string[] },
 ): Promise<{ token: string; name: string; scopes: string[]; createdAt: number }> {
-  return cloudJson(CreatedAccessTokenSchema, origin, '/api/cli/tokens', { method: 'POST', token, body: decodeJsonValue({ value: input }) });
+  return settle(cloudJson(CreatedAccessTokenSchema, origin, '/api/cli/tokens', { method: 'POST', token, body: decodeJsonValue({ value: input }) }));
 }
 
-export async function listCliAccessTokens(origin: string, token: string): Promise<{ tokens: CloudAccessToken[] }> {
-  return cloudJson(v.object({ tokens: v.array(CloudAccessTokenSchema) }), origin, '/api/cli/tokens', { token });
+export function listCliAccessTokens(origin: string, token: string): Promise<{ tokens: CloudAccessToken[] }> {
+  return settle(cloudJson(v.object({ tokens: v.array(CloudAccessTokenSchema) }), origin, '/api/cli/tokens', { token }));
 }
 
-export async function revokeCliAccessToken(origin: string, token: string, ref: string): Promise<{ ok: boolean }> {
-  return cloudJson(OkSchema, origin, `/api/cli/tokens/${encodeURIComponent(ref)}`, { method: 'DELETE', token });
+export function revokeCliAccessToken(origin: string, token: string, ref: string): Promise<{ ok: boolean }> {
+  return settle(cloudJson(OkSchema, origin, `/api/cli/tokens/${encodeURIComponent(ref)}`, { method: 'DELETE', token }));
 }
 
-export async function registerCloudDevice(
+export function registerCloudDevice(
   origin: string, token: string, label?: string, replaces?: string,
 ): Promise<CloudDeviceRegistration> {
-  const body: Record<string, JsonValue> = {};
+  return settle(Effect.gen(function* () {
+    const body: Record<string, JsonValue> = {};
 
-  if (label) body.label = label;
+    if (label) body.label = label;
 
-  if (replaces !== undefined) body.replaces = replaces;
+    if (replaces !== undefined) body.replaces = replaces;
 
-  return cloudJson(CloudDeviceRegistrationSchema, origin, '/api/cli/devices', { method: 'POST', token, body });
+    return yield* cloudJson(CloudDeviceRegistrationSchema, origin, '/api/cli/devices', { method: 'POST', token, body });
+  }));
 }
 
-export async function listCloudDevices(origin: string, token: string): Promise<CloudDevice[]> {
-  return cloudJson(v.array(CloudDeviceSchema), origin, '/api/cli/devices', { token });
+export function listCloudDevices(origin: string, token: string): Promise<CloudDevice[]> {
+  return settle(cloudJson(v.array(CloudDeviceSchema), origin, '/api/cli/devices', { token }));
 }
 
 interface CloudRequestOpts {
@@ -480,9 +495,12 @@ async function cloudRequest(origin: string, path: string, opts: CloudRequestOpts
   return { status: res.status, body };
 }
 
-function assertCloudOk(status: number, body: JsonValue): void {
-  if (status >= 200 && status < 300) return;
-  throw new Error(cloudErrorMessage(status, body));
+function assertCloudOk(status: number, body: JsonValue): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    if (status >= 200 && status < 300) return;
+
+    return yield* Effect.die(new Error(cloudErrorMessage(status, body)));
+  });
 }
 
 function cloudErrorMessage(status: number, body: JsonValue): string {
@@ -491,17 +509,19 @@ function cloudErrorMessage(status: number, body: JsonValue): string {
   return error.success && error.output.error ? error.output.error : `HTTP ${status}`;
 }
 
-async function cloudJson<T>(
+function cloudJson<T>(
   // `unknown` input: a decoder filling a field an older hub omits reads narrower than it returns.
   schema: v.GenericSchema<unknown, T>,
   origin: string,
   path: string,
   opts: CloudRequestOpts = {},
-): Promise<T> {
-  const { status, body } = await cloudRequest(origin, path, opts);
-  assertCloudOk(status, body);
+): Effect.Effect<T> {
+  return Effect.gen(function* () {
+    const { status, body } = yield* Effect.promise(async () => cloudRequest(origin, path, opts));
+    yield* assertCloudOk(status, body);
 
-  return v.parse(schema, body);
+    return v.parse(schema, body);
+  });
 }
 
 export function defaultOrigin(opts?: { origin?: string }): string {

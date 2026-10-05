@@ -4,6 +4,8 @@
  * splitting one task would otherwise reclaim each other's root. Tables: `initHeadsTables` (schema.ts).
  */
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -314,22 +316,24 @@ export class HeadJournal {
 
   /** Newest page first, each page oldest-first; the cursor is minted on the raw row the query stopped at. */
   readStepsPage(headId: HeadId, request: PageRequest = {}): Page<HeadStep> {
-    this.actor.assertCurrent();
-    const limit = Math.max(1, Math.min(HeadJournal.STEP_PAGE.max, Math.floor(request.limit ?? HeadJournal.STEP_PAGE.limit)));
-    const over = limit + 1;
-    const after = request.cursor?.after ?? null;
-    const from = after === null ? null : this.stepAnchor(headId, after);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
+      const limit = Math.max(1, Math.min(HeadJournal.STEP_PAGE.max, Math.floor(request.limit ?? HeadJournal.STEP_PAGE.limit)));
+      const over = limit + 1;
+      const after = request.cursor?.after ?? null;
+      const from = after === null ? null : yield* this.stepAnchor(headId, after);
 
-    type Row = StepRow & { id: string };
+      type Row = StepRow & { id: string };
 
-    return mapPage(seekPage(from === null
-      ? this.sql<Row>`
+      return mapPage(seekPage(from === null
+        ? this.sql<Row>`
         SELECT id, parts_json FROM head_steps
         WHERE actor_id = ${this.actorId} AND head_id = ${headId} ORDER BY seq DESC LIMIT ${over}`
-      : this.sql<Row>`
+        : this.sql<Row>`
         SELECT id, parts_json FROM head_steps
         WHERE actor_id = ${this.actorId} AND head_id = ${headId} AND seq < ${from} ORDER BY seq DESC LIMIT ${over}`,
-      limit, (row) => row.id), (rows) => rows.slice().reverse().map(stepOf));
+        limit, (row) => row.id), (rows) => rows.slice().reverse().map(stepOf));
+    }));
   }
 
   countSteps(headId: HeadId): StepTotals {
@@ -344,14 +348,16 @@ export class HeadJournal {
   }
 
   /** StaleCursorError when the anchor names nothing, including another actor's trace. */
-  private stepAnchor(headId: HeadId, after: string): number {
-    const row = this.sql<{ seq: number }>`
+  private stepAnchor(headId: HeadId, after: string): Effect.Effect<number> {
+    return Effect.gen({ self: this }, function* () {
+      const row = this.sql<{ seq: number }>`
       SELECT seq FROM head_steps
       WHERE actor_id = ${this.actorId} AND id = ${after} AND head_id = ${headId}`[0];
 
-    if (row === undefined) throw new StaleCursorError('trace', after);
+      if (row === undefined) return yield* Effect.die(new StaleCursorError('trace', after));
 
-    return row.seq;
+      return row.seq;
+    });
   }
 
   readHead(id: HeadId): HeadJournalRow | null {

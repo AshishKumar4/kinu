@@ -3,6 +3,8 @@
  * launcher and CLI verify against {@link RELEASE_SIGNING_PUBLIC_KEY} before any byte reaches a live path.
  * The signed message is the canonical text {@link releaseMessage} builds, never JSON.
  */
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { compareCodeUnits } from '../utils/text';
 
@@ -59,13 +61,15 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /** A malformed signature is false, never a throw. */
-export async function verifyRelease(release: SignedRelease, publicKeyHex: string): Promise<boolean> {
-  const key = await crypto.subtle.importKey('raw', hexToBytes(publicKeyHex), { name: 'Ed25519' }, false, ['verify']);
-  const signature = base64ToBytes(release.signature);
+export function verifyRelease(release: SignedRelease, publicKeyHex: string): Promise<boolean> {
+  return settle(Effect.gen(function* () {
+    const key = yield* Effect.promise(async () => crypto.subtle.importKey('raw', hexToBytes(publicKeyHex), { name: 'Ed25519' }, false, ['verify']));
+    const signature = base64ToBytes(release.signature);
 
-  if (signature.byteLength !== 64) return false;
+    if (signature.byteLength !== 64) return false;
 
-  return crypto.subtle.verify('Ed25519', key, signature, releaseMessage(release.version, release.checksums));
+    return yield* Effect.promise(async () => crypto.subtle.verify('Ed25519', key, signature, releaseMessage(release.version, release.checksums)));
+  }));
 }
 
 /** Private key is PKCS#8 base64. */
@@ -80,16 +84,18 @@ function isKeyPair(generated: CryptoKey | CryptoKeyPair): generated is CryptoKey
   return 'privateKey' in generated && 'publicKey' in generated;
 }
 
-export async function generateReleaseSigningKey(): Promise<{ publicKeyHex: string; privateKeyPkcs8Base64: string }> {
-  // The Workers type union includes symmetric keys; Ed25519 must yield a pair.
-  const generated: CryptoKey | CryptoKeyPair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+export function generateReleaseSigningKey(): Promise<{ publicKeyHex: string; privateKeyPkcs8Base64: string }> {
+  return settle(Effect.gen(function* () {
+    // The Workers type union includes symmetric keys; Ed25519 must yield a pair.
+    const generated: CryptoKey | CryptoKeyPair = yield* Effect.promise(() => crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']));
 
-  if (!isKeyPair(generated)) throw new Error('the runtime answered an Ed25519 key generation with no pair');
-  const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', generated.publicKey));
-  const privateKey = new Uint8Array(await crypto.subtle.exportKey('pkcs8', generated.privateKey));
+    if (!isKeyPair(generated)) return yield* Effect.die(new Error('the runtime answered an Ed25519 key generation with no pair'));
+    const publicKey = new Uint8Array(yield* Effect.promise(() => crypto.subtle.exportKey('raw', generated.publicKey)));
+    const privateKey = new Uint8Array(yield* Effect.promise(() => crypto.subtle.exportKey('pkcs8', generated.privateKey)));
 
-  return {
-    publicKeyHex: [...publicKey].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
-    privateKeyPkcs8Base64: bytesToBase64(privateKey),
-  };
+    return {
+      publicKeyHex: [...publicKey].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
+      privateKeyPkcs8Base64: bytesToBase64(privateKey),
+    };
+  }));
 }

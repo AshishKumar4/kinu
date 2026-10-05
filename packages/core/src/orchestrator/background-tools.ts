@@ -3,6 +3,8 @@
  * The wrapper lives in `jobs/background-wrap.ts`; importing the delegation tool here keeps that leaf acyclic.
  */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { ToolExecutionOptions, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool } from '../jobs/background-wrap';
@@ -52,24 +54,26 @@ export interface BackgroundResumeRequest {
  * Re-drive an evicted/exited background job (B6). Only a search resumes; the raw agents tool re-enters its
  * durable rows. Only this path sets {@link RESUME_REDRIVE_OPTION}: a fresh call must get its own tree.
  */
-export async function resumeBackgroundJob(drive: BackgroundResumeRequest): Promise<JsonValue | undefined> {
-  const { rawTools, kind, input, mode, signal } = drive;
-  const resumed = resumableAgentsInput(kind, input);
+export function resumeBackgroundJob(drive: BackgroundResumeRequest): Promise<JsonValue | undefined> {
+  return settle(Effect.gen(function* () {
+    const { rawTools, kind, input, mode, signal } = drive;
+    const resumed = resumableAgentsInput(kind, input);
 
-  if (!resumed) throw new JobNotResumable(kind);
-  const exec = rawTools(mode).agents?.execute;
+    if (!resumed) return yield* Effect.die(new JobNotResumable(kind));
+    const exec = rawTools(mode).agents?.execute;
 
-  if (!exec) throw new JobNotResumable(kind);
+    if (!exec) return yield* Effect.die(new JobNotResumable(kind));
 
-  // Typed as a variable: the SDK options type is closed, so an extra key in a literal fails overload resolution.
-  const execOptions: ToolExecutionOptions & { [RESUME_REDRIVE_OPTION]: true } = {
-    abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
-    [RESUME_REDRIVE_OPTION]: true,
-  };
+    // Typed as a variable: the SDK options type is closed, so an extra key in a literal fails overload resolution.
+    const execOptions: ToolExecutionOptions & { [RESUME_REDRIVE_OPTION]: true } = {
+      abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
+      [RESUME_REDRIVE_OPTION]: true,
+    };
 
-  const result = await exec(resumed, execOptions);
+    const result = yield* Effect.promise(() => exec(resumed, execOptions));
 
-  return result === undefined ? undefined : decodeJsonValue({ value: result });
+    return result === undefined ? undefined : decodeJsonValue({ value: result });
+  }));
 }
 
 /**

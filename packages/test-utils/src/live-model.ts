@@ -3,6 +3,8 @@
  * `/api/user/ai/v1`, origin checked against the eval-identity allowlist; (2) AI Gateway, `AI_GATEWAY_BASE_URL` +
  * `AI_GATEWAY_AUTH` (or `KINU_BASE_URL`/`KINU_AUTH`). No baked-in default; a half-set environment is `misconfigured`, not a skip.
  */
+import { Cause, Data, Effect } from 'effect';
+import { settleSync, settle } from '@kinu.run/core/obs';
 import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
   RunEventRecorder, USER_AI_PROXY_PATH, usageReported, workspaceSpend, WORKSPACE_RUN_ID,
@@ -142,47 +144,51 @@ export interface LiveModelSession {
 
 /** Origin and bearer recovered from the resolved target, never re-read from env; throws for AI-gateway targets. */
 export function workerSession(llm: LLMProviderConfig): LiveModelSession {
-  const origin = llm.baseURL.endsWith(USER_AI_PROXY_PATH)
-    ? llm.baseURL.slice(0, -USER_AI_PROXY_PATH.length)
-    : llm.baseURL;
+  return settleSync(Effect.gen(function* () {
+    const origin = llm.baseURL.endsWith(USER_AI_PROXY_PATH)
+      ? llm.baseURL.slice(0, -USER_AI_PROXY_PATH.length)
+      : llm.baseURL;
 
-  if (origin === llm.baseURL) {
-    throw new Error(`${llm.baseURL} is not a worker AI-proxy base URL, so no worker origin can be `
-      + 'recovered from it. This target fronts a model and no Kinu deployment, so there is no '
-      + 'workspace API to reach.');
-  }
+    if (origin === llm.baseURL) {
+      return yield* Effect.die(new Error(`${llm.baseURL} is not a worker AI-proxy base URL, so no worker origin can be `
+        + 'recovered from it. This target fronts a model and no Kinu deployment, so there is no '
+        + 'workspace API to reach.'));
+    }
 
-  const header = llm.headers['Authorization'];
+    const header = llm.headers['Authorization'];
 
-  if (!header) throw new Error('the resolved worker target carries no Authorization header');
+    if (!header) return yield* Effect.die(new Error('the resolved worker target carries no Authorization header'));
 
-  return { origin, token: header.replace(/^Bearer /, '') };
+    return { origin, token: header.replace(/^Bearer /, '') };
+  }));
 }
 
 /** The live target for `suite`, or null; throws when half-configured. Prints the target or the env vars that would enable it. */
 export function liveModelTarget(suite: string): LiveModelTarget | null {
-  // Ambient credentials are not consent to spend: a live run needs `KINU_EVAL_LIVE`, set only by the tier scripts.
-  if (process.env['KINU_EVAL_LIVE'] !== '1') {
-    console.warn(`[skip] ${suite}: live suites are opt-in: run 'bun run test:live' (KINU_EVAL_LIVE=1)`);
+  return settleSync(Effect.gen(function* () {
+    // Ambient credentials are not consent to spend: a live run needs `KINU_EVAL_LIVE`, set only by the tier scripts.
+    if (process.env['KINU_EVAL_LIVE'] !== '1') {
+      console.warn(`[skip] ${suite}: live suites are opt-in: run 'bun run test:live' (KINU_EVAL_LIVE=1)`);
 
-    return null;
-  }
+      return null;
+    }
 
-  const resolved = resolveLiveModel();
+    const resolved = resolveLiveModel();
 
-  if (resolved.kind === 'misconfigured') {
-    throw new Error(`${suite}: live-model environment refuses this run; ${resolved.reason}`);
-  }
+    if (resolved.kind === 'misconfigured') {
+      return yield* Effect.die(new Error(`${suite}: live-model environment refuses this run; ${resolved.reason}`));
+    }
 
-  if (resolved.kind === 'absent') {
-    console.warn(`[skip] ${suite}: ${resolved.reason}`);
+    if (resolved.kind === 'absent') {
+      console.warn(`[skip] ${suite}: ${resolved.reason}`);
 
-    return null;
-  }
+      return null;
+    }
 
-  console.warn(`[live] ${suite}: ${resolved.target.describe}`);
+    console.warn(`[live] ${suite}: ${resolved.target.describe}`);
 
-  return resolved.target;
+    return resolved.target;
+  }));
 }
 
 /** Marker on failures caused by the environment rather than the agent; read by `scripts/skip-ratchet.ts`. */
@@ -205,10 +211,9 @@ export const TRANSIENT_PLATFORM_ERRORS: readonly string[] = [
  * result, which {@link infraBoundary} passes on unmarked. `status` is the HTTP status; a socket
  * RPC reply has none.
  */
-export class DeploymentAnswer extends Error {
+export class DeploymentAnswer extends Data.TaggedError('DeploymentAnswer')<{ readonly message: string }> {
   constructor(message: string, readonly status?: number) {
-    super(message);
-    this.name = 'DeploymentAnswer';
+    super({ message });
   }
 }
 
@@ -228,19 +233,23 @@ function platformAnswer(answer: DeploymentAnswer): boolean {
  * Run a deployment-dependent step and label its failure as infrastructure, preserving the cause,
  * unless the deployment itself answered with the failure: that is the build's result.
  */
-export async function infraBoundary<T>(boundary: string, op: () => Promise<T>): Promise<T> {
-  try {
-    return await op();
-  } catch (err) {
-    if (err instanceof DeploymentAnswer && !platformAnswer(err)) throw err;
+export function infraBoundary<T>(boundary: string, op: () => Promise<T>): Promise<T> {
+  return settle(Effect.gen(function* () {
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      return yield* Effect.promise(async () => op());
+    }), (failed) => Effect.gen(function* () {
+      const err = Cause.squash(failed);
 
-    throw new Error(
-      `${INFRA_FAILURE_MARKER}: ${boundary} did not answer: ${String(err)}. `
-      + "The environment failed here, so nothing about the agent's behaviour was measured; "
-      + 'check the deployment before reading this as a regression.',
-      { cause: err },
-    );
-  }
+      if (err instanceof DeploymentAnswer && !platformAnswer(err)) return yield* Effect.failCause(failed);
+
+      return yield* Effect.die(new Error(
+        `${INFRA_FAILURE_MARKER}: ${boundary} did not answer: ${String(err)}. `
+        + "The environment failed here, so nothing about the agent's behaviour was measured; "
+        + 'check the deployment before reading this as a regression.',
+        { cause: err },
+      ));
+    }));
+  }));
 }
 
 /** Placeholder config for skipped suites (`beforeAll` still runs); the `.invalid` host fails at DNS. */
@@ -342,12 +351,14 @@ export function recordUnmeasuredEpisode(): void {
 
 /** Record an episode declared model-free; throws if the store accounted for a call. */
 export function recordNoModelEpisode(spend: WorkspaceSpend): void {
-  if (spend.total.calls !== 0) {
-    throw new Error(`this case declared it drives no model and its store accounted for `
-      + `${String(spend.total.calls)} model call(s)`);
-  }
+  return settleSync(Effect.gen(function* () {
+    if (spend.total.calls !== 0) {
+      return yield* Effect.die(new Error(`this case declared it drives no model and its store accounted for `
+        + `${String(spend.total.calls)} model call(s)`));
+    }
 
-  spendEpisodesWithoutModel += 1;
+    spendEpisodesWithoutModel += 1;
+  }));
 }
 
 export function liveModelSpend(): LiveModelSpend {

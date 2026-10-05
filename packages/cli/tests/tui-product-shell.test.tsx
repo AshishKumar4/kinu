@@ -75,7 +75,7 @@ function GroupedShellProbe(props: {
     loading: false,
     error: null,
     reload: async () => {},
-    loadMore: props.loadMore ?? (async () => {}),
+    loadMore: props.loadMore ?? (() => {}),
   };
 
   return (
@@ -531,7 +531,7 @@ function ShellProbe(props: {
     loading: false,
     error: null,
     reload: async () => {},
-    loadMore: async () => {},
+    loadMore: () => {},
   };
 
   return (

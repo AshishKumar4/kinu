@@ -6,7 +6,7 @@
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
 import { attempt, settle } from '../obs/effect';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import type { JsonValue } from '../utils/json';
 import { DeviceTunnel, NO_DEVICE_CONNECTED, isDeviceUnknownMethodError, type TunnelSocket } from './device-tunnel';
 import { DEVICE_CHATGPT, DEVICE_RELAY, DeviceRelays, parseDeviceRelayFrame, type DeviceChatGptMethod, type DeviceRelayRequest } from './device-relay';
@@ -128,43 +128,47 @@ export class DeviceSocketHub {
  * Ask the machine which probe binaries it has and record the answer. Consent is not consulted: the query is
  * a fixed list of bare binary names and grants no reach beyond the capability row.
  */
-  async probeToolchain(deviceId: string, now: number): Promise<DeviceToolchain | null> {
-    const existing = this.probeRecord(deviceId);
+  probeToolchain(deviceId: string, now: number): Promise<DeviceToolchain | null> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const existing = this.probeRecord(deviceId);
 
-    if (existing === PROBE_UNANSWERABLE) return null;
-    const fresh = existing === null ? null : freshDeviceToolchain(existing, now);
+      if (existing === PROBE_UNANSWERABLE) return null;
+      const fresh = existing === null ? null : freshDeviceToolchain(existing, now);
 
-    if (fresh) return fresh;
+      if (fresh) return fresh;
 
-    const tunnel = this.tunnel(deviceId);
+      const tunnel = this.tunnel(deviceId);
 
-    if (!tunnel) return null;
-    let present: readonly string[];
+      if (!tunnel) return null;
 
-    try {
-      const answered = await tunnel.rpc('which', [[...TOOLCHAIN_PROBE_BINARIES]], {
-        timeoutMs: PROBE_TIMEOUT_MS,
-      });
+      const probed = yield* Effect.result(Effect.flatMap(Effect.tryPromise({
+        try: () => tunnel.rpc('which', [[...TOOLCHAIN_PROBE_BINARIES]], { timeoutMs: PROBE_TIMEOUT_MS }),
+        catch: (cause) => ({ cause }),
+      }), (answered) => {
+        const parsed = v.safeParse(WhichResultSchema, answered);
 
-      const parsed = v.safeParse(WhichResultSchema, answered);
+        return parsed.success
+          ? Effect.succeed(parsed.output.present)
+          : Effect.fail({ cause: new KinuError('io', 'device answered `which` with an unreadable payload') });
+      }));
 
-      if (!parsed.success) throw new KinuError('io', 'device answered `which` with an unreadable payload');
-      present = parsed.output.present;
-    } catch (err) {
-      // A method-missing error is durable for this connection; other failures are transient and re-asked next turn.
-      const failure = toKinuError({ doing: 'probe the device toolchain', cause: err, otherwise: 'io' });
+      if (Result.isFailure(probed)) {
+        // A method-missing error is durable for this connection; other failures are transient and re-asked next turn.
+        const failure = toKinuError({ doing: 'probe the device toolchain', cause: probed.failure.cause, otherwise: 'io' });
 
-      if (isDeviceUnknownMethodError({ cause: err })) this.recordProbe(deviceId, PROBE_UNANSWERABLE);
-      diagnostics.failure('device.toolchain_probe_failed', failure, { device: deviceId });
+        if (isDeviceUnknownMethodError(probed.failure)) this.recordProbe(deviceId, PROBE_UNANSWERABLE);
+        diagnostics.failure('device.toolchain_probe_failed', failure, { device: deviceId });
 
-      return null;
-    }
+        return null;
+      }
 
-    const answer = deviceToolchainAnswer(present, now);
-    this.recordProbe(deviceId, answer);
+      const answer = deviceToolchainAnswer(probed.success, now);
+      this.recordProbe(deviceId, answer);
 
-    return answer;
+      return answer;
+    }));
   }
+
 
   private probeRecord(deviceId: string): DeviceProbe | null {
     const ws = this.liveSocket(deviceId);

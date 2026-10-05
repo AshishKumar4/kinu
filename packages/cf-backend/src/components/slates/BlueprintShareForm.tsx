@@ -1,4 +1,5 @@
 /** The blueprint half of the share dialog; every binding ships unmapped. The live half is `LiveShareForm`. */
+import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import * as v from "valibot";
@@ -6,21 +7,22 @@ import {
   BlueprintInspectionSchema, SlateShareRecordSchema, blueprintPagePath,
   type BlueprintInspection, type Rpc, type SlateAnswer, type SlateShareRecord,
 } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { settleSync, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { inputCls } from "@/components/ui/form";
 import { SecretWarning } from "@/pages/BlueprintPage";
 import { publishBlueprint, revokeShare, type Published } from "@/lib/shared-api";
 import { EmailsField, emailsOf, Failure, Lead, StopButton } from "./ShareParts";
-import { showRejection } from "@/hooks/use-async-resource";
 
 const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })), next: v.nullable(v.string()) });
 
 export function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
-  if (!result.ok) throw new Error(`${result.reason}: ${result.error}`);
+  return settleSync(Effect.gen(function* () {
+    if (!result.ok) return yield* Effect.die(new Error(`${result.reason}: ${result.error}`));
 
-  return v.parse(schema, result.value);
+    return v.parse(schema, result.value);
+  }));
 }
 
 export interface BlueprintFixture {
@@ -75,12 +77,12 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
       return ids;
     };
 
-    Promise.all([versionIds(), rpc<SlateAnswer<unknown>>("slate", [{ op: "shares" }])]).then(([ids, rows]) => {
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => Promise.all([versionIds(), rpc<SlateAnswer<unknown>>("slate", [{ op: "shares" }])])), ([ids, rows]) => {
       if (!live) return;
       setVersions(ids);
       setVersion(ids.at(-1) ?? null);
       setShares(answered(rows, v.array(SlateShareRecordSchema)).filter((share) => share.slate === slate && share.revokedAt === null));
-    }).catch(showRejection(setErr, () => live));
+    }), showing((chain) => { if (live) setErr(chain); })));
 
     return () => { live = false; };
   }, [fixture, rpc, slate]);
@@ -89,9 +91,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
   useEffect(() => {
     if (fixture !== undefined || version === null) return;
     let live = true;
-    rpc<SlateAnswer<unknown>>("slate", [{ op: "inspect", id: slate, version, include: include === null ? undefined : [...include] }])
-      .then((result) => { if (live) setInspection(answered(result, BlueprintInspectionSchema)); })
-      .catch(showRejection(setErr, () => live));
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => rpc<SlateAnswer<unknown>>("slate", [{ op: "inspect", id: slate, version, include: include === null ? undefined : [...include] }])), (result) => { if (live) setInspection(answered(result, BlueprintInspectionSchema)); }), showing((chain) => { if (live) setErr(chain); })));
 
     return () => { live = false; };
   }, [fixture, rpc, slate, version, include]);
@@ -110,35 +110,31 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
     });
   };
 
-  const publish = useCallback(async () => {
+  const publish = useCallback(() => detach(Effect.gen(function* () {
     if (busy || version === null) return;
     setBusy(true);
     setErr(null);
 
-    try {
-      const made = await publishBlueprint({ workspace, slate, version, include: include === null ? undefined : [...include], emails: emailsOf(emails) });
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const made = yield* Effect.promise(async () => publishBlueprint({ workspace, slate, version, include: include === null ? undefined : [...include], emails: emailsOf(emails) }));
       setPublished(made);
 
       if (made.listing === 'pending') onListingPending?.();
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
-    } finally {
+    }), showing(setErr)), Effect.sync(() => {
       setBusy(false);
-    }
-  }, [busy, version, emails, workspace, slate, include, setBusy, onListingPending]);
+    }));
+  })), [busy, version, emails, workspace, slate, include, setBusy, onListingPending]);
 
-  const unshare = useCallback(async (share: string) => {
+  const unshare = useCallback((share: string) => detach(Effect.gen(function* () {
     setErr(null);
 
-    try {
-      const revoked = await revokeShare({ workspace, share });
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const revoked = yield* Effect.promise(async () => revokeShare({ workspace, share }));
       setShares((previous) => previous.filter((row) => row.id !== share));
 
       if (revoked.listing === 'pending') onListingPending?.();
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
-    }
-  }, [workspace, onListingPending]);
+    }), showing(setErr));
+  })), [workspace, onListingPending]);
 
   if (published !== null) {
     const link = `${location.origin}${blueprintPagePath(published.id)}`;
@@ -210,7 +206,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
                   <span className="min-w-0 flex-1 truncate p-meta p-text-2">
                     {new Date(share.createdAt).toLocaleDateString()}{share.users.length > 0 ? ` · ${share.users.join(", ")}` : ""}
                   </span>
-                  <StopButton onStop={() => void unshare(share.id)} disabled={busy} />
+                  <StopButton onStop={() => unshare(share.id)} disabled={busy} />
                 </li>
               ))}
             </ul>
@@ -220,7 +216,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
       </div>
       <div className="flex justify-end gap-2 border-t p-border pt-4">
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton className="h-8 px-4 text-sm" onClick={() => void publish()} disabled={busy || version === null || inspection === null} data-blueprint-publish>
+        <FilledButton className="h-8 px-4 text-sm" onClick={() => publish()} disabled={busy || version === null || inspection === null} data-blueprint-publish>
           {busy ? <><Loader size="sm" /><span className="ml-1">Publishing…</span></> : "Publish"}
         </FilledButton>
       </div>

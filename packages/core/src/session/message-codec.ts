@@ -2,6 +2,8 @@
 // Not `JSON.stringify`: it turns `Uint8Array`/`ArrayBuffer`/`URL` into different values, and a
 // context revision must round-trip exactly. The compaction `binaryReplacer` is preview-only.
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import { JsonValueSchema, isParsedJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import * as v from 'valibot';
@@ -73,8 +75,13 @@ function encodeValue(value: NativeValue): StoredValue {
   return RESERVED.some((key) => Object.hasOwn(value, key)) ? { $plain: mapped } : mapped;
 }
 
-function decodeValue(value: StoredValue): NativeValue {
-  if (Array.isArray(value)) return value.map(decodeValue);
+interface Truncation { readonly decoded: number; readonly declared: number }
+
+/** The first truncation ends the walk and refuses the message. */
+function decodeValue(value: StoredValue, truncated: Truncation[]): NativeValue {
+  if (truncated.length > 0) return null;
+
+  if (Array.isArray(value)) return value.map((item) => decodeValue(item, truncated));
 
   if (!isParsedJsonObject(value)) return value;
   const binary = Object.hasOwn(value, '$binary') ? v.safeParse(BinaryEnvelopeSchema, value) : null;
@@ -82,10 +89,7 @@ function decodeValue(value: StoredValue): NativeValue {
   if (binary?.success === true) {
     const bytes = base64ToBytes(binary.output.$binary);
 
-    if (bytes.byteLength !== binary.output.bytes) {
-      throw new KinuError('io',
-        `a stored message payload is truncated: ${bytes.byteLength} of ${binary.output.bytes} bytes decoded`);
-    }
+    if (bytes.byteLength !== binary.output.bytes) truncated.push({ decoded: bytes.byteLength, declared: binary.output.bytes });
 
     if (binary.output.buffer !== true) return bytes;
     const restored = new ArrayBuffer(bytes.byteLength);
@@ -104,40 +108,45 @@ function decodeValue(value: StoredValue): NativeValue {
   for (const key of Object.keys(inner)) {
     const item = inner[key];
 
-    if (item !== undefined) mapped[key] = decodeValue(item);
+    if (item !== undefined) mapped[key] = decodeValue(item, truncated);
   }
 
   return mapped;
 }
 
 /** Runs on write and read: stored revisions are always valid requests; corrupt rows are named. */
-function validated(message: NativeValue | ModelMessage, position: number): ModelMessage {
+function validated(message: NativeValue | ModelMessage, position: number): Effect.Effect<ModelMessage, KinuError> {
   const parsed = modelMessageSchema.safeParse(message);
 
-  if (!parsed.success) {
-    throw new KinuError('bad_input', `message ${position} is not a model message the SDK accepts`);
-  }
-
-  return parsed.data;
+  return parsed.success
+    ? Effect.succeed(parsed.data)
+    : Effect.fail(new KinuError('bad_input', `message ${position} is not a model message the SDK accepts`));
 }
 
-function nativeMessage(message: ModelMessage, position: number): NativeValue {
-  return v.parse(NativeValueSchema, validated(message, position));
+function encoded(message: ModelMessage, position: number): Effect.Effect<StoredValue, KinuError> {
+  return Effect.map(validated(message, position), (valid) => encodeValue(v.parse(NativeValueSchema, valid)));
+}
+
+function decoded(value: StoredValue, position: number): Effect.Effect<ModelMessage, KinuError> {
+  const truncated: Truncation[] = [];
+  const native = decodeValue(value, truncated);
+  const short = truncated[0];
+
+  return short === undefined
+    ? validated(native, position)
+    : Effect.fail(new KinuError('io', `a stored message payload is truncated: ${short.decoded} of ${short.declared} bytes decoded`));
 }
 
 export function encodeModelMessageValues(messages: readonly ModelMessage[]): JsonValue[] {
-  return messages.map((message, index) => encodeValue(nativeMessage(message, index)));
+  return settleSync(Effect.forEach(messages, encoded));
 }
 
 export function encodeModelMessage(message: ModelMessage): JsonObject {
-  const encoded = encodeValue(nativeMessage(message, 0));
-
-  if (!isParsedJsonObject(encoded)) throw new KinuError('bad_input', 'a native message did not encode to an object');
-
-  return encoded;
+  return settleSync(Effect.flatMap(encoded(message, 0), (value) => (isParsedJsonObject(value)
+    ? Effect.succeed(value)
+    : Effect.fail(new KinuError('bad_input', 'a native message did not encode to an object')))));
 }
 
 export function decodeModelMessageValues(values: readonly JsonValue[]): ModelMessage[] {
-  return values.map((message, index) => validated(decodeValue(message), index));
+  return settleSync(Effect.forEach(values, decoded));
 }
-

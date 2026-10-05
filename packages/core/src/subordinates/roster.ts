@@ -3,6 +3,8 @@
  * Durable and task-lifetime helpers share the table; the lifetime is the actor's, or its birth's before it exists.
  */
 
+import { Cause, Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import type { SqlExec, SqlExecRow } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -61,17 +63,15 @@ const StoredRosterEntrySchema = v.object({
   deleteRequested: v.pipe(v.union([v.literal(0), v.literal(1)]), v.transform((value) => value === 1)),
 });
 
-function parseStoredRosterRow(row: SqlExecRow): SubordinateRosterEntry {
-  try {
+function parseStoredRosterRow(row: SqlExecRow): Effect.Effect<SubordinateRosterEntry, KinuError> {
+  return Effect.catchCause(Effect.sync(() => {
     const stored = v.parse(StoredRosterEntrySchema, row);
 
     return v.parse(SubordinateRosterEntrySchema, {
       ...stored, actorReference: stored.actorReference === null ? null : parseJsonValue(stored.actorReference),
       birth: stored.birth === null ? null : parseJsonValue(stored.birth),
     });
-  } catch (cause) {
-    throw new KinuError('io', 'Stored subordinate roster data is malformed.', { cause });
-  }
+  }), (failed) => Effect.fail(new KinuError('io', 'Stored subordinate roster data is malformed.', { cause: Cause.squash(failed) })));
 }
 
 /** What a roster write stores; `origin` and `lifetime` are read from the actor, never written here. */
@@ -84,15 +84,17 @@ export interface SubordinateTitle {
 }
 
 export function subordinateTitle(entry: SubordinateRosterEntry, config: AgentConfigStore | null): SubordinateTitle {
-  if (config !== null) {
-    return { displayName: config.getDisplayName() ?? entry.name, nameOrigin: config.getNameOrigin() ?? 'auto', role: config.getRoleSelection() };
-  }
+  return settleSync(Effect.gen(function* () {
+    if (config !== null) {
+      return { displayName: config.getDisplayName() ?? entry.name, nameOrigin: config.getNameOrigin() ?? 'auto', role: config.getRoleSelection() };
+    }
 
-  const seed = entry.birth?.seed;
+    const seed = entry.birth?.seed;
 
-  if (seed === undefined) throw new KinuError('io', `Subordinate "${entry.name}" has neither an actor nor a birth.`);
+    if (seed === undefined) return yield* new KinuError('io', `Subordinate "${entry.name}" has neither an actor nor a birth.`);
 
-  return { displayName: seed.displayName, nameOrigin: seed.nameOrigin, role: seed.role };
+    return { displayName: seed.displayName, nameOrigin: seed.nameOrigin, role: seed.role };
+  }));
 }
 
 /** Only a mid-turn note on an open assignment keeps a row working; a turn's end idles it. */
@@ -166,33 +168,39 @@ export class SubordinateRosterStore {
   }
 
   attachActor(name: string, creationId: string, reference: ActorReference): void {
-    const row = this.requireExisting(name);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const row = this.requireExisting(name);
 
-    if (row.birth?.creationId !== creationId) throw new KinuError('denied', 'The birth admission no longer owns this roster name.');
+      if (row.birth?.creationId !== creationId) return yield* new KinuError('denied', 'The birth admission no longer owns this roster name.');
 
-    if (row.actorReference !== null && !sameActorReference(row.actorReference, reference)) throw new KinuError('denied', 'The roster actor reference is immutable.');
-    const child = v.parse(ActorReferenceSchema, reference);
-    this.sql.exec('UPDATE actor_subordinates SET actor_reference = ? WHERE actor_id = ? AND name = ?',
-      JSON.stringify(child), this.actorId, name);
+      if (row.actorReference !== null && !sameActorReference(row.actorReference, reference)) return yield* new KinuError('denied', 'The roster actor reference is immutable.');
+      const child = v.parse(ActorReferenceSchema, reference);
+      this.sql.exec('UPDATE actor_subordinates SET actor_reference = ? WHERE actor_id = ? AND name = ?',
+        JSON.stringify(child), this.actorId, name);
+    }));
   }
 
   finishBirth(name: string, creationId: string): void {
-    const row = this.requireExisting(name);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const row = this.requireExisting(name);
 
-    if (row.birth?.creationId !== creationId || row.actorReference === null) throw new KinuError('denied', 'The birth admission cannot complete this roster row.');
-    this.sql.exec('UPDATE actor_subordinates SET birth_request = NULL WHERE actor_id = ? AND name = ?',
-      this.actorId, name);
+      if (row.birth?.creationId !== creationId || row.actorReference === null) return yield* new KinuError('denied', 'The birth admission cannot complete this roster row.');
+      this.sql.exec('UPDATE actor_subordinates SET birth_request = NULL WHERE actor_id = ? AND name = ?',
+        this.actorId, name);
+    }));
   }
 
   /** This parent's rows in roster order, narrowed by `condition` (empty for all). */
-  private orderedRows(condition: string): SubordinateRosterEntry[] {
-    this.actor.assertCurrent();
+  private orderedRows(condition: string): Effect.Effect<SubordinateRosterEntry[], KinuError> {
+    return Effect.suspend(() => {
+      this.actor.assertCurrent();
 
-    return this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
-       WHERE actor_id = ? ${condition} ORDER BY created_at, name`,
-      this.actorId,
-    ).toArray().map(parseStoredRosterRow);
+      return Effect.forEach(this.sql.exec(
+        `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
+         WHERE actor_id = ? ${condition} ORDER BY created_at, name`,
+        this.actorId,
+      ).toArray(), parseStoredRosterRow);
+    });
   }
 
   private anyRow(condition: string): boolean {
@@ -205,7 +213,7 @@ export class SubordinateRosterStore {
   }
 
   pendingBirths(): SubordinateRosterEntry[] {
-    return this.orderedRows('AND birth_request IS NOT NULL');
+    return settleSync(this.orderedRows('AND birth_request IS NOT NULL'));
   }
 
   hasPendingBirths(): boolean {
@@ -213,22 +221,26 @@ export class SubordinateRosterStore {
   }
 
   requestDeletion(name: string, reference: ActorReference, now: number): void {
-    const row = this.requireExisting(name);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const row = this.requireExisting(name);
 
-    if (!row.actorReference || !sameActorReference(row.actorReference, reference)) throw new KinuError('denied', 'The deletion request does not own this roster row.');
-    this.sql.exec(`UPDATE actor_subordinates SET status = 'dismissed', dismissed_at = ?, delete_requested = 1 WHERE actor_id = ? AND name = ?`, now, this.actorId, name);
+      if (!row.actorReference || !sameActorReference(row.actorReference, reference)) return yield* new KinuError('denied', 'The deletion request does not own this roster row.');
+      this.sql.exec(`UPDATE actor_subordinates SET status = 'dismissed', dismissed_at = ?, delete_requested = 1 WHERE actor_id = ? AND name = ?`, now, this.actorId, name);
+    }));
   }
 
   removeActor(name: string, reference: ActorReference): void {
-    const row = this.get(name);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const row = this.get(name);
 
-    if (!row) return;
+      if (!row) return;
 
-    if (!row.actorReference || !sameActorReference(row.actorReference, reference)) throw new KinuError('denied', 'The deletion cannot remove a replacement actor.');
-    this.sql.exec(`DELETE FROM actor_subordinates WHERE actor_id = ? AND name = ?
-      AND json_extract(actor_reference, '$.actorId') = ? AND json_extract(actor_reference, '$.workspaceId') = ?
-      AND json_extract(actor_reference, '$.parentActorId') IS ?`, this.actorId, name, reference.actorId, reference.workspaceId, reference.parentActorId);
-    this.helpers.remove(name);
+      if (!row.actorReference || !sameActorReference(row.actorReference, reference)) return yield* new KinuError('denied', 'The deletion cannot remove a replacement actor.');
+      this.sql.exec(`DELETE FROM actor_subordinates WHERE actor_id = ? AND name = ?
+        AND json_extract(actor_reference, '$.actorId') = ? AND json_extract(actor_reference, '$.workspaceId') = ?
+        AND json_extract(actor_reference, '$.parentActorId') IS ?`, this.actorId, name, reference.actorId, reference.workspaceId, reference.parentActorId);
+      this.helpers.remove(name);
+    }));
   }
 
   cancelBirth(name: string, creationId: string): void {
@@ -239,7 +251,7 @@ export class SubordinateRosterStore {
   }
 
   pendingDeletions(): SubordinateRosterEntry[] {
-    return this.orderedRows('AND delete_requested = 1');
+    return settleSync(this.orderedRows('AND delete_requested = 1'));
   }
 
   hasPendingDeletions(): boolean {
@@ -252,56 +264,68 @@ export class SubordinateRosterStore {
   }
 
   get(name: string): SubordinateRosterEntry | null {
-    this.actor.assertCurrent();
+    return settleSync(this.row(name));
+  }
 
-    const rows = this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? AND name = ?`,
-      this.actorId, name,
-    ).toArray();
+  private row(name: string): Effect.Effect<SubordinateRosterEntry | null, KinuError> {
+    return Effect.suspend(() => {
+      this.actor.assertCurrent();
 
-    return rows.length === 0 ? null : parseStoredRosterRow(rows[0]);
+      const rows = this.sql.exec(
+        `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? AND name = ?`,
+        this.actorId, name,
+      ).toArray();
+
+      return rows.length === 0 ? Effect.succeed(null) : parseStoredRosterRow(rows[0]);
+    });
   }
 
   requireExisting(name: string): SubordinateRosterEntry {
-    const entry = this.get(name);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const entry = this.get(name);
 
-    if (!entry) throw new Error(`unknown subordinate "${name}"`);
+      if (!entry) return yield* Effect.die(new Error(`unknown subordinate "${name}"`));
 
-    return entry;
+      return entry;
+    }));
   }
 
   requireActive(name: string): SubordinateRosterEntry {
-    const entry = this.requireExisting(name);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const entry = this.requireExisting(name);
 
-    if (entry.status === 'dismissed') throw new Error(`subordinate "${name}" is dismissed`);
+      if (entry.status === 'dismissed') return yield* Effect.die(new Error(`subordinate "${name}" is dismissed`));
 
-    return entry;
+      return entry;
+    }));
   }
 
   list(): SubordinateRosterEntry[] {
-    return this.orderedRows(`AND status != 'dismissed'`);
+    return settleSync(this.orderedRows(`AND status != 'dismissed'`));
   }
 
   listAll(): SubordinateRosterEntry[] {
-    return this.orderedRows('');
+    return settleSync(this.orderedRows(''));
   }
 
   /** Owner history includes archived children without reopening them. */
   listPage(request: PageRequest): Page<SubordinateRosterEntry> {
-    this.actor.assertCurrent();
-    const limit = boundedInt(request.limit, 50, 1, 200);
-    const after = request.cursor?.after;
-    const anchor = after === undefined ? null : this.get(after);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
+      const limit = boundedInt(request.limit, 50, 1, 200);
+      const after = request.cursor?.after;
+      const anchor = after === undefined ? null : yield* this.row(after);
 
-    if (after !== undefined && anchor === null) throw new StaleCursorError('subordinate roster', after);
+      if (after !== undefined && anchor === null) return yield* Effect.die(new StaleCursorError('subordinate roster', after));
 
-    const rows = anchor
-      ? this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
-          WHERE actor_id = ? AND (created_at > ? OR (created_at = ? AND name > ?))
-          ORDER BY created_at, name LIMIT ?`, this.actorId, anchor.createdAt, anchor.createdAt, anchor.name, limit + 1)
-      : this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? ORDER BY created_at, name LIMIT ?`, this.actorId, limit + 1);
+      const rows = anchor
+        ? this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
+            WHERE actor_id = ? AND (created_at > ? OR (created_at = ? AND name > ?))
+            ORDER BY created_at, name LIMIT ?`, this.actorId, anchor.createdAt, anchor.createdAt, anchor.name, limit + 1)
+        : this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? ORDER BY created_at, name LIMIT ?`, this.actorId, limit + 1);
 
-    return seekPage(rows.toArray().map(parseStoredRosterRow), limit, (row) => row.name);
+      return seekPage(yield* Effect.forEach(rows.toArray(), parseStoredRosterRow), limit, (row) => row.name);
+    }));
   }
 
   /** Open an assignment on this row. `eventId` is a separate write because admission

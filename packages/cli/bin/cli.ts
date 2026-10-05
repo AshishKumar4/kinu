@@ -34,7 +34,11 @@ if (topLevelArgs.length === 1 && (topLevelArgs[0] === '--help' || topLevelArgs[0
   process.exit(0);
 }
 
-program.parse();
+// A failed command prints its chain and exits 1.
+program.parseAsync().catch((...rejection: [unknown]) => {
+  printFailure({ cause: rejection[0] });
+  process.exit(1);
+});
 
 // Once-a-day background refresh, after the command has dispatched and never
 // awaited: the check is fail-soft and bounded, and the refresh it starts is a

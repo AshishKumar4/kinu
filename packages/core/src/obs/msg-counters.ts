@@ -8,7 +8,8 @@
  * received totals live in different processes and do not subtract.
  */
 
-import { diagnostics } from './index';
+import { Effect } from 'effect';
+import { diagnostics, settle } from './index';
 import { nowMs } from '../utils/date';
 
 /** `peer` crosses a workspace boundary; `subordinate` stays inside one workspace. */
@@ -47,7 +48,7 @@ let receivedTotal = 0;
  * Hand one delegation message to its transport, timed and counted. `send` runs
  * once; its result or throw passes through unchanged.
  */
-export async function countedMsgSend<Result>(
+export function countedMsgSend<Result>(
   fact: MsgSendFact,
   send: () => Promise<Result>,
   read: (result: Result) => MsgSendResult,
@@ -55,20 +56,14 @@ export async function countedMsgSend<Result>(
   const started = nowMs();
   const concurrent = inflight;
   sentTotal += 1;
-  const sequence = sentTotal;
+  const position = { started, concurrent, sequence: sentTotal };
   inflight += 1;
 
-  try {
-    const result = await send();
-    emitSent(fact, read(result), { started, concurrent, sequence });
-
-    return result;
-  } catch (cause) {
-    emitSent(fact, { outcome: 'failed' }, { started, concurrent, sequence });
-    throw cause;
-  } finally {
-    inflight -= 1;
-  }
+  return settle(Effect.promise(send).pipe(
+    Effect.onError(() => Effect.sync(() => emitSent(fact, { outcome: 'failed' }, position))),
+    Effect.tap((result) => Effect.sync(() => emitSent(fact, read(result), position))),
+    Effect.ensuring(Effect.sync(() => { inflight -= 1; })),
+  ));
 }
 
 interface MsgSendPosition {

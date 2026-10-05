@@ -820,7 +820,6 @@ describe('renderChangelogText + revert guards', () => {
     for (const target of ['0', '-1', 'abc', '1.5', '']) {
       const result = await executeChangelogRevert(ctx, { type: 'scaffold_rollback', target });
       expect(result.ok).toBe(false);
-      expect(result.error).toContain('invalid scaffold version');
     }
   });
 

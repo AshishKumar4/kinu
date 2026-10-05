@@ -2,7 +2,8 @@ import type { VFS, VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** Write attribution happens where a write lands: sibling heads run concurrently over the same files. */
 
 
-import { diagnostics, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, settle, toKinuError } from '../obs/index';
 
 export interface WriteEvent {
   readonly path: string;
@@ -54,24 +55,25 @@ type Baseline = Pick<WriteEvent, 'before' | 'unread'>;
 
 /** Reports only after the plane accepted the mutation; the baseline read never fails the write. */
 export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T {
-  const baselineFor = async (path: string): Promise<Baseline> => {
-    if (!observer.needsBaseline(path)) return {};
+  const baselineFor = (path: string): Effect.Effect<Baseline> => {
+    if (!observer.needsBaseline(path)) return Effect.succeed({});
 
-    try {
-      const stat = await vfs.stat(path);
+    return Effect.tryPromise({
+      try: async (): Promise<Baseline> => {
+        const stat = await vfs.stat(path);
 
-      if (stat === null) return { before: null };
+        if (stat === null) return { before: null };
 
-      if ((stat.type === 'directory')) return { unread: 'directory' };
+        if ((stat.type === 'directory')) return { unread: 'directory' };
 
-      return { before: (await vfs.readFile(path)) ?? null };
-    } catch (err) {
-      diagnostics.failure('vfs.write_baseline_unreadable', toKinuError({
-        doing: 'reading what a watched write replaces', cause: err, otherwise: 'io',
-      }), { path });
+        return { before: (await vfs.readFile(path)) ?? null };
+      },
+      catch: (cause) => toKinuError({ doing: 'reading what a watched write replaces', cause, otherwise: 'io' }),
+    }).pipe(Effect.catch((failure) => Effect.sync((): Baseline => {
+      diagnostics.failure('vfs.write_baseline_unreadable', failure, { path });
 
       return { unread: 'unreadable' };
-    }
+    })));
   };
 
   const report = (path: string, baseline: Baseline, after: string | Uint8Array | null): void => {
@@ -86,28 +88,32 @@ export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T
     readdir: (path) => vfs.readdir(path),
     stat: (path, options) => vfs.stat(path, options),
     mkdir: (path, opts) => vfs.mkdir(path, opts),
-    async writeFile(path, data) {
-      const baseline = await baselineFor(path);
-      await vfs.writeFile(path, data);
-      report(path, baseline, data);
+    writeFile(path, data) {
+      return settle(Effect.gen(function* () {
+        const baseline = yield* baselineFor(path);
+        yield* Effect.promise(async () => vfs.writeFile(path, data));
+        report(path, baseline, data);
+      }));
     },
-    async unlink(path) {
-      const baseline = await baselineFor(path);
-      await vfs.unlink(path);
-      report(path, baseline, null);
+    unlink(path) {
+      return settle(Effect.gen(function* () {
+        const baseline = yield* baselineFor(path);
+        yield* Effect.promise(async () => vfs.unlink(path));
+        report(path, baseline, null);
+      }));
     },
   };
 
   if (conditional) {
     Object.assign(wrapped, {
-      writeFileIfRevision: async (path: string, data: Uint8Array, expectedRevision: VfsRevision) => {
-        const baseline = await baselineFor(path);
-        const result = await conditional(path, data, expectedRevision);
+      writeFileIfRevision: (path: string, data: Uint8Array, expectedRevision: VfsRevision) => settle(Effect.gen(function* () {
+        const baseline = yield* baselineFor(path);
+        const result = yield* Effect.promise(async () => conditional(path, data, expectedRevision));
 
         if (result.ok) report(path, baseline, data);
 
         return result;
-      },
+      })),
     });
   }
 

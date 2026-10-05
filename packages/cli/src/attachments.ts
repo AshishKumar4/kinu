@@ -116,6 +116,7 @@ interface PromptAttachmentOptions {
   planes?: PathPlanes;
 }
 
+/** A plain chain: a one-shot turn's first send races its session's start-up context measure on these ticks. */
 export async function resolvePromptAttachments(
   text: string,
   { limitBytes, cwd = process.cwd(), planes }: PromptAttachmentOptions,

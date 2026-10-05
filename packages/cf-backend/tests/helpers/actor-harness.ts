@@ -837,7 +837,7 @@ export function historyOver(
   harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actor: ActorHandle = workspaceMainActor(harness.db),
 ): SessionHistory {
   return new SessionHistory({
-    sql: sqlOver(harness.db), actor, transactionSync: (write) => write(),
+    sql: sqlOver(harness.db), actor, transactionSync: (write) => harness.db.transaction(write)(),
     files: async () => ({ vfs: workspaceFiles(harness.agent), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) }),
   });
 }

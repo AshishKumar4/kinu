@@ -1,4 +1,5 @@
 // In-memory SQL fixture: bun:sqlite behind the `SqlExecutor` template tag.
+import { Effect } from 'effect';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { bindActorHandle, type ActorHandle, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 
@@ -52,7 +53,5 @@ export function testActorHandle(
     parentActorId: null,
     name: actorId,
     storageKey: `agent:${actorId}`,
-  }, () => {
-    if (opts.live?.() === false) throw new Error(`actor ${actorId} is no longer bound`);
-  });
+  }, () => (opts.live?.() === false ? Effect.die(new Error(`actor ${actorId} is no longer bound`)) : Effect.void));
 }

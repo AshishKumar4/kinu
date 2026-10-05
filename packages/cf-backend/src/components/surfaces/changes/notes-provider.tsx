@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Cause, Effect } from "effect";
+import { detach, settle } from "@kinu.run/core/obs";
 import { AnnotationToolbar } from "@plannotator/ui/components/AnnotationToolbar";
 import { CommentPopover } from "@plannotator/ui/components/CommentPopover";
 import { AnnotationType } from "@plannotator/ui/types";
@@ -70,10 +72,11 @@ function moved(note: ReviewAnnotation, files: readonly FileDiff[]): boolean {
   return now !== null && now !== note.originalText;
 }
 
+/** Each answers the change-set notes' result; a transport failure is already folded into its `error`. */
 export interface NotesStore {
-  load(): Promise<ChangeNotesResult>;
-  save(notes: readonly ReviewAnnotation[]): Promise<ChangeNotesResult>;
-  send(): Promise<ChangeNotesResult>;
+  load(): Effect.Effect<ChangeNotesResult>;
+  save(notes: readonly ReviewAnnotation[]): Effect.Effect<ChangeNotesResult>;
+  send(): Effect.Effect<ChangeNotesResult>;
 }
 
 export interface OpenDraft {
@@ -99,33 +102,41 @@ export function NotesProvider({ baseline, files, store, initial = [], writing, n
   const touched = useRef(false);
   const failed = (...rejection: [unknown]): void => { setFailure(describeError({ cause: rejection[0] })); };
 
-  const saves = useMemo(() => (store === null ? null : createPlanAnnotationSaveQueue<ReviewAnnotation>(async (next) => {
-    const saved = await store.save(next);
-
+  const saves = useMemo(() => (store === null ? null : createPlanAnnotationSaveQueue<ReviewAnnotation>((next) => settle(Effect.map(store.save(next), (saved) => {
     setFailure(saved.ok ? null : saved.error);
 
     return saved.ok;
-  })), [store]);
+  })))), [store]);
 
   useEffect(() => {
     if (store === null) return;
     let live = true;
 
-    store.load().then((kept) => {
+    detach(Effect.catchCause(Effect.map(store.load(), (kept) => {
       if (!live) return;
 
       if (!kept.ok) setFailure(kept.error);
       else if (!touched.current) setNotes(kept.notes);
-    }).catch(failed);
+    }), (cause) => Effect.sync(() => failed(Cause.squash(cause)))));
 
     return () => { live = false; };
   }, [store]);
 
-  const change = (next: readonly ReviewAnnotation[]): void => {
+  const change = useCallback((next: readonly ReviewAnnotation[]): void => {
     touched.current = true;
     setNotes(next);
-    saves?.enqueue(next).catch(failed);
-  };
+    detach(saves === null ? Effect.void : Effect.catchCause(Effect.promise(() => saves.enqueue(next)), (cause) => Effect.sync(() => failed(Cause.squash(cause)))));
+  }, [saves]);
+
+  const send = useCallback((): void => {
+    if (store === null || sending) return;
+    setSending(true);
+    detach(Effect.ensuring(Effect.catchCause(Effect.map(store.send(), (sent) => {
+      setFailure(sent.ok ? null : sent.error);
+
+      if (sent.ok) setNotes([]);
+    }), (cause) => Effect.sync(() => failed(Cause.squash(cause)))), Effect.sync(() => { setSending(false); })));
+  }, [store, sending]);
 
   const movedIds = useMemo(() => new Set(notes.filter((note) => moved(note, files)).map((note) => note.id)), [notes, files]);
 
@@ -136,16 +147,8 @@ export function NotesProvider({ baseline, files, store, initial = [], writing, n
     select: setSelected,
     remove: (id) => change(notes.filter((note) => note.id !== id)),
     edit: (id, text) => change(notes.map((note) => (note.id === id ? { ...note, text } : note))),
-    send: () => {
-      if (store === null || sending) return;
-      setSending(true);
-      store.send().then((sent) => {
-        setFailure(sent.ok ? null : sent.error);
-
-        if (sent.ok) setNotes([]);
-      }).catch(failed).finally(() => { setSending(false); });
-    },
-  }), [notes, movedIds, draft, selected, baseline, failure, sending, store, files]);
+    send,
+  }), [notes, movedIds, draft, selected, baseline, failure, sending, files, change, send]);
 
   const add = (type: AnnotationType, text?: string): void => {
     if (draft === null) return;

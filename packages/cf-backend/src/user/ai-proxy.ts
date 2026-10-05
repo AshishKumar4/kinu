@@ -9,8 +9,9 @@ import { createDirectWorkersAIFetch, transportControls } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import { json } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
-import { JsonObjectSchema, USER_AI_PROXY_PATH, parseJsonObject, type JsonObject } from '@kinu.run/core';
-import { classify, tolerate } from '@kinu.run/core/obs';
+import { JsonObjectSchema, USER_AI_PROXY_PATH, parseJsonObject } from '@kinu.run/core';
+import { Effect } from 'effect';
+import { settle, tolerate, tolerated } from '@kinu.run/core/obs';
 import { beneath } from '../api/context';
 import { inferenceProxyGate, type CliEnv } from '../cli/routes';
 import * as v from 'valibot';
@@ -62,64 +63,62 @@ aiProxyRoutes.get(`${USER_AI_PROXY_PATH}/models`, async (c) => {
   });
 });
 
-aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/chat/completions`, async (c) => proxyChatCompletion(c.req.raw, c.env, c.get('cli').userDO));
+aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/chat/completions`, (c) => settle(proxyChatCompletion(c.req.raw, c.env, c.get('cli').userDO)));
 
 aiProxyRoutes.all(`${USER_AI_PROXY_PATH}/*`, beneath(USER_AI_PROXY_PATH, async (c) =>
   errorResponse(404, `No such AI proxy route: ${c.req.method} ${c.req.path.slice(USER_AI_PROXY_PATH.length)}`)));
 
-async function proxyChatCompletion<Id>(
+function proxyChatCompletion<Id>(
   request: Request, env: UserAIProxyEnv<Id>, userDO: UserCredentialClient,
-): Promise<Response> {
-  const body = await request.text();
-  let bodyValue: JsonObject;
-  let model: string;
+): Effect.Effect<Response> {
+  return Effect.gen(function* () {
+    const body = yield* Effect.promise(() => request.text());
 
-  try {
-    bodyValue = v.parse(JsonObjectSchema, JSON.parse(body));
-    model = v.parse(ChatCompletionRouteSchema, bodyValue).model;
-  } catch (error) {
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
+    const routed = yield* tolerated(Effect.sync(() => v.parse(ChatCompletionRouteSchema, v.parse(JsonObjectSchema, JSON.parse(body))).model), 'malformed-input');
 
-    return errorResponse(400, 'Body must be JSON with a non-empty model.');
-  }
+    if (routed === undefined) return errorResponse(400, 'Body must be JSON with a non-empty model.');
+    const model = routed;
 
-  const workersAI = model.startsWith('@cf/');
+    const workersAI = model.startsWith('@cf/');
 
-  if (!workersAI && !model.includes('/')) {
-    return errorResponse(400, `Cannot route model "${model}": use "@cf/{model}" (Workers AI) or "{provider}/{model}" (your AI Gateway).`);
-  }
+    if (!workersAI && !model.includes('/')) {
+      return errorResponse(400, `Cannot route model "${model}": use "@cf/{model}" (Workers AI) or "{provider}/{model}" (your AI Gateway).`);
+    }
 
-  if (workersAI && env.WORKERS_AI_VIA_BINDING === 'on') {
-    if (!env.AI) return errorResponse(503, 'Workers AI binding unavailable.');
+    if (workersAI && env.WORKERS_AI_VIA_BINDING === 'on') {
+      if (!env.AI) return errorResponse(503, 'Workers AI binding unavailable.');
 
-    return createDirectWorkersAIFetch(env.AI)(request.url, {
-      method: request.method,
-      headers: request.headers,
-      body,
-      signal: request.signal,
+      const ai = env.AI;
+
+      return yield* Effect.promise(() => createDirectWorkersAIFetch(ai)(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body,
+        signal: request.signal,
+      }));
+    }
+
+    const aiFetch = createCloudflareAIFetch({
+      credKey: workersAI ? CLOUDFLARE_OAUTH_CRED_KEY : CLOUDFLARE_AI_GATEWAY_CRED_KEY,
+      provider: workersAI ? 'workers-ai' : 'my-gateway',
+      modelId: model,
+      getAuth: createUserDOAuthResolver({ stub: userDO, caller: yield* Effect.promise(() => ownerCaller(env)) }),
+      placeholder: PROXY_PLACEHOLDER,
+      missingCredentialMessage: workersAI
+        ? 'Connect Cloudflare in your Kinu user settings before using Workers AI models.'
+        : 'Connect Cloudflare and select an AI Gateway in your Kinu user settings before using my-gateway models.',
+      requestHeaders: affinityHeader(request),
+      mapError: (res, resolved) => mapGatewayError(res, model, resolved.headers['cf-aig-gateway-id']),
     });
-  }
 
-  const aiFetch = createCloudflareAIFetch({
-    credKey: workersAI ? CLOUDFLARE_OAUTH_CRED_KEY : CLOUDFLARE_AI_GATEWAY_CRED_KEY,
-    provider: workersAI ? 'workers-ai' : 'my-gateway',
-    modelId: model,
-    getAuth: createUserDOAuthResolver({ stub: userDO, caller: await ownerCaller(env) }),
-    placeholder: PROXY_PLACEHOLDER,
-    missingCredentialMessage: workersAI
-      ? 'Connect Cloudflare in your Kinu user settings before using Workers AI models.'
-      : 'Connect Cloudflare and select an AI Gateway in your Kinu user settings before using my-gateway models.',
-    requestHeaders: affinityHeader(request),
-    mapError: (res, resolved) => mapGatewayError(res, model, resolved.headers['cf-aig-gateway-id']),
-  });
+    const controls = transportControls(request);
 
-  const controls = transportControls(request);
-
-  return aiFetch(`${PROXY_PLACEHOLDER}/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...controls.headers },
-    body,
-    signal: controls.signal,
+    return yield* Effect.promise(() => aiFetch(`${PROXY_PLACEHOLDER}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...controls.headers },
+      body,
+      signal: controls.signal,
+    }));
   });
 }
 

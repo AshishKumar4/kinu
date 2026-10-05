@@ -16,7 +16,7 @@ import {
   planOverflowRecovery,
   type OverflowRecoveryDecision,
 } from '../turn-failure';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, toKinuError, settleLoggedSync } from '../obs/index';
 
 /** Structural; both backends pass their RunEventRecorder. */
 export interface TurnRunRecorder {
@@ -145,7 +145,7 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   /** Lets a later process re-open the same turn where this one stopped. */
   turn?: OpenTurnIdentity;
 }): void {
-  try {
+  settleLoggedSync('turn.start_events_failed', { doing: 'emit the run/turn start events', otherwise: 'io' }, () => {
     recorder.emit(runId, {
       type: 'run_start',
       agentId: opts.agentId,
@@ -154,13 +154,7 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
       ...(opts.turn !== undefined && { turn: opts.turn }),
     });
     recorder.emit(runId, { type: 'turn_start', turnIndex: opts.turnIndex });
-  } catch (err) {
-    diagnostics.failure(
-      'turn.start_events_failed',
-      toKinuError({ doing: 'emit the run/turn start events', cause: err, otherwise: 'io' }),
-      { runId },
-    );
-  }
+  }, { runId });
 }
 
 /** Seal the run: per-turn ledgers, then turn_end, then run_end with the failure text. Never throws. */
@@ -183,7 +177,7 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   recoveries?: ExecutionRecoveryRecord | null | undefined;
   escalations?: TurnEscalationLedger | undefined;
 }): void {
-  try {
+  settleLoggedSync('turn.end_events_failed', { doing: 'emit the turn/run end events', otherwise: 'io' }, () => {
     if (opts.context?.active) {
       recorder.emit(runId, { type: 'context_budget', ...opts.context.snapshot() });
     }
@@ -221,13 +215,7 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
 
     if (opts.error) runEnd.error = opts.error;
     recorder.emit(runId, runEnd);
-  } catch (err) {
-    diagnostics.failure(
-      'turn.end_events_failed',
-      toKinuError({ doing: 'emit the turn/run end events', cause: err, otherwise: 'io' }),
-      { runId },
-    );
-  }
+  }, { runId });
 }
 
 /** The turn's record, with the struggles its steering detector saw. `durationMs` uses the accumulator's own start

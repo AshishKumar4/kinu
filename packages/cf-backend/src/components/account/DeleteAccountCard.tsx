@@ -1,9 +1,10 @@
 /** The confirm field applies `confirmsAccountDelete`, the same rule as the route. No rate limit by design; the typed phrase is the gate. */
+import { Effect } from "effect";
 import { startTransition, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { WarningIcon } from "@phosphor-icons/react";
 import { confirmsAccountDelete } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { deleteAccount } from "@/lib/user-api";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -49,7 +50,7 @@ export function DeleteAccountCard({ email }: { email: string }) {
           footer={
             <>
               <Button variant="ghost" size="sm" onClick={close} disabled={busy}>Cancel</Button>
-              <FilledButton danger disabled={!confirmed || busy} onClick={run}>
+              <FilledButton danger disabled={!confirmed || busy} onClick={(...args: Parameters<typeof run>) => detach(Effect.promise(async () => run(...args)))}>
                 {busy ? <Loader size="sm" /> : null} Delete everything
               </FilledButton>
             </>

@@ -36,7 +36,8 @@ import type { WebSearchProvider } from '../web/index';
 import { createWebTool } from './web-tool';
 import { PlanEditSchema, type SubmitPlanToolDeps } from '../types/plans';
 import type { JsonValue } from '../utils/json';
-import { diagnostics, KinuError, toKinuError, type Logger } from '../obs/index';
+import { Effect } from 'effect';
+import { attempt, diagnostics, KinuError, settle, settleSync, type Logger } from '../obs/index';
 // heads/types.ts holds no runtime import, so this edge cannot close a ring.
 import { toolsInWorkMode, permitInPlan, requireBuild } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
@@ -200,12 +201,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       BUILTIN_TOOL_DESCRIPTIONS.eval +
       ' (NOT CONFIGURED: no eval builder on this runtime)',
     inputSchema: codemodeInputSchema(),
-    execute: async (): Promise<JsonValue> => {
-      throw new KinuError('unsupported', 'eval is not configured on this runtime. The backend must supply '
-        + 'deps.prebuiltCodemodeTool to buildBuiltinTools or deps.codemode to '
-        + 'buildActorTools (CF: cf-backend/createCodemodeToolFactory; CLI: '
-        + '@kinu.run/cli-backend/createNodeCodemodeToolFactory).');
-    },
+    execute: (): Promise<JsonValue> => settle(Effect.fail(new KinuError('unsupported', 'eval is not configured on this runtime. The backend must supply '
+      + 'deps.prebuiltCodemodeTool to buildBuiltinTools or deps.codemode to '
+      + 'buildActorTools (CF: cf-backend/createCodemodeToolFactory; CLI: '
+      + '@kinu.run/cli-backend/createNodeCodemodeToolFactory).'))),
   });
 
   tools.eval = withClampedToolResult(tools.eval, {
@@ -216,94 +215,90 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   tools.shell = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.shell,
     inputSchema: shellInputSchema(shellRuntimes),
-    execute: async (args, options?: ToolExecutionOptions) => {
-      requireBuild('Native shell execution');
-      const signal = options?.abortSignal;
-      // Approval lives at the execution seam (execution/approval.ts), not here.
+    execute: (args, options?: ToolExecutionOptions) => settle(Effect.gen(function* () {
+        requireBuild('Native shell execution');
+        const signal = options?.abortSignal;
+        // Approval lives at the execution seam (execution/approval.ts), not here.
 
-      // The file steer is composed into the clamped text so one cap covers it (shell-file-steer.ts).
-      const steer = fileToolSteer(args.command);
-      const clampOpts: ClampToolResultOptions = { files: rt.storage, budget, producer: 'shell' };
+        // The file steer is composed into the clamped text so one cap covers it (shell-file-steer.ts).
+        const steer = fileToolSteer(args.command);
+        const clampOpts: ClampToolResultOptions = { files: rt.storage, budget, producer: 'shell' };
 
-      const clamp = async (result: CommandResult): Promise<string> => {
-        if (!v.is(v.string(), result)) {
-          const failure = await clampToolResult(result.error, clampOpts);
+        const clamp = (result: CommandResult): Effect.Effect<string, KinuError> => {
+          if (!v.is(v.string(), result)) {
+            return Effect.flatMap(Effect.promise(() => clampToolResult(result.error, clampOpts)), (failure) => Effect.fail(new KinuError(result.reason, failure, { execution: result.execution })));
+          }
 
-          throw new KinuError(result.reason, failure, { execution: result.execution });
+          return Effect.promise(() => clampToolResult(steer ? `${steer}\n\n${result}` : result, clampOpts));
+        };
+
+        const defaultRuntime = 'workspace';
+        const runtimeKey = args.runtime ?? defaultRuntime;
+
+        if (runtimeKey === 'workspace') {
+          if (!shell) {
+            const refusal = new KinuError(
+              'unsupported',
+              'no workspace shell available in this runtime',
+            );
+
+            logger.failure(RUN_SHELL_ABSENT, refusal, { runtime: runtimeKey });
+
+            return yield* refusal;
+          }
+
+          const result = yield* Effect.promise(() => shell.exec(args.command, shellCallOptions(args, signal, readCallJob(options))));
+
+          return yield* clamp(commandResultAt(result));
         }
 
-        return clampToolResult(steer ? `${steer}\n\n${result}` : result, clampOpts);
-      };
+        // Past here is an escalation; every exit records it, including refusals.
+        // Unknown runtime values are device nicknames resolved by the device executor.
+        const registered = router?.getProvider(runtimeKey);
+        const nickname = registered === undefined && runtimeKey !== 'sandbox' ? runtimeKey : undefined;
+        const provider = nickname === undefined ? registered : router?.getProvider('device');
 
-      const defaultRuntime = 'workspace';
-      const runtimeKey = args.runtime ?? defaultRuntime;
+        if (!provider) {
+          escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
+          // Never fall back to workspace. `unavailable` (retryable), not `unsupported`; the `error`
+          // token is matched by the install card (cf-backend WorkspacePage.tsx).
+          const refusal = new KinuError('unavailable', 'runtime_not_provisioned');
+          logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
 
-      if (runtimeKey === 'workspace') {
-        if (!shell) {
-          const refusal = new KinuError(
-            'unsupported',
-            'no workspace shell available in this runtime',
-          );
-
-          logger.failure(RUN_SHELL_ABSENT, refusal, { runtime: runtimeKey });
-          throw refusal;
+          return yield* new KinuError(refusal.code, refusal.message + ': '
+            + unprovisionedAdvice(nickname !== undefined ? 'device' : runtimeKey), { cause: refusal });
         }
 
-        return clamp(commandResultAt(await shell.exec(args.command, shellCallOptions(args, signal, readCallJob(options)))));
-      }
+        const execTool = provider.tools.exec;
 
-      // Past here is an escalation; every exit records it, including refusals.
-      // Unknown runtime values are device nicknames resolved by the device executor.
-      const registered = router?.getProvider(runtimeKey);
-      const nickname = registered === undefined && runtimeKey !== 'sandbox' ? runtimeKey : undefined;
-      const provider = nickname === undefined ? registered : router?.getProvider('device');
+        if (!execTool) {
+          escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
+          // `unsupported`: this environment has no shell; retrying cannot help.
+          const refusal = new KinuError('unsupported', 'runtime_does_not_support_exec');
+          logger.failure(RUN_RUNTIME_NO_EXEC, refusal, { runtime: runtimeKey });
 
-      if (!provider) {
-        escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
-        // Never fall back to workspace. `unavailable` (retryable), not `unsupported`; the `error`
-        // token is matched by the install card (cf-backend WorkspacePage.tsx).
-        const refusal = new KinuError('unavailable', 'runtime_not_provisioned');
-        logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
-        throw new KinuError(refusal.code, refusal.message + ': '
-          + unprovisionedAdvice(nickname !== undefined ? 'device' : runtimeKey), { cause: refusal });
-      }
+          return yield* new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
+        }
 
-      const execTool = provider.tools.exec;
+        const context = { ...shellCallOptions(args, signal, readCallJob(options)), device: nickname, reportCwd: true };
 
-      if (!execTool) {
-        escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
-        // `unsupported`: this environment has no shell; retrying cannot help.
-        const refusal = new KinuError('unsupported', 'runtime_does_not_support_exec');
-        logger.failure(RUN_RUNTIME_NO_EXEC, refusal, { runtime: runtimeKey });
-        throw new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
-      }
-
-      const context = { ...shellCallOptions(args, signal, readCallJob(options)), device: nickname, reportCwd: true };
-      let result: CommandResult;
-
-      try {
-        result = v.parse(CommandResultSchema, await execTool.execute(args.command, context));
-      } catch (caught) {
         // Classify cancellations and OOM prose here, or the durable row only records `threw`.
-        const failure = toKinuError({
-          doing: `run \`${args.command}\` on ${runtimeKey}`,
-          cause: caught,
-          otherwise: 'io',
+        const result: CommandResult = yield* attempt({ doing: `run \`${args.command}\` on ${runtimeKey}`, otherwise: 'io' },
+          async () => v.parse(CommandResultSchema, await execTool.execute(args.command, context))).pipe(
+          Effect.tapError((failure) => Effect.sync(() => {
+            escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'failed' });
+            logger.failure(RUN_ESCALATION_FAILED, failure, { runtime: runtimeKey });
+          })),
+        );
+
+        escalations.observe({
+          runtime: runtimeKey,
+          reason: args.why,
+          outcome: v.is(v.string(), result) ? 'ok' : 'failed',
         });
 
-        escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'failed' });
-        logger.failure(RUN_ESCALATION_FAILED, failure, { runtime: runtimeKey });
-        throw failure;
-      }
-
-      escalations.observe({
-        runtime: runtimeKey,
-        reason: args.why,
-        outcome: v.is(v.string(), result) ? 'ok' : 'failed',
-      });
-
-      return clamp(result);
-    },
+        return yield* clamp(result);
+    })),
   });
 
   tools.file = createFileTool({
@@ -378,10 +373,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // `mcp_` is reserved for MCP (isMcpToolKey).
   for (const name of Object.keys(tools)) {
     if (isMcpToolKey(name)) {
-      throw new Error(
+      return settleSync(Effect.die(new Error(
         `Builtin tool name '${name}' starts with the reserved 'mcp_' prefix. ` +
         `That prefix is owned by per-user MCP tools: pick a different name.`,
-      );
+      )));
     }
   }
 

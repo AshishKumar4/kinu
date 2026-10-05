@@ -7,7 +7,8 @@ import type { UserDO } from './user-do';
 import { ERROR_STATUS, ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { classifyTransientDO, retryTransientDO } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { Effect, Result } from 'effect';
+import { diagnostics, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 
 export type WorkspaceRegistry = Pick<UserDO, 'hasWorkspace' | 'ensureWorkspaceCapability'>;
 
@@ -20,9 +21,11 @@ export interface WorkspaceOwnershipEnv<Id, Agent extends WorkspaceOwnerClaim> ex
   OrchestratorAgent: ObjectNamespace<Id, Agent>;
 }
 
-export type OwnedWorkspaceResult<Agent> =
-  | { ok: true; agent: Agent }
-  | { ok: false; status: number; error: string };
+export interface OwnershipRefusal { readonly status: number; readonly error: string }
+
+export type OwnedWorkspaceResult<Agent> = Result.Result<Agent, OwnershipRefusal>;
+
+const refused = <Agent>(status: number, error: string): OwnedWorkspaceResult<Agent> => Result.fail({ status, error });
 
 /** Per-isolate proofs of registry membership; a proof skips only the registry read, never
  * claimOwner. Evicted when `ensureWorkspaceCapability`'s re-check contradicts it. */
@@ -38,83 +41,87 @@ function forgetWorkspaceMembership(userId: string, workspaceName: string): void 
 
 /** 404 when not in the caller's registry (probes must not create workspaces); 403 for a
  * cross-user collision; otherwise the failure's class: 503 for a dropped or refused platform call. */
-export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
+export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
   env: WorkspaceOwnershipEnv<Id, Agent>,
   userId: string,
   workspaceName: string,
 ): Promise<OwnedWorkspaceResult<Agent>> {
-  const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-  // Every call below is idempotent, so platform-dropped connections are retried.
-  const owner = await ownerCaller(env);
-  // Order is the security property: hasWorkspace must answer before claimOwner for anyone
-  // unproven, or a crafted name wakes an arbitrary OrchestratorAgent.
-  const membershipKey = `${userId}\u0000${workspaceName}`;
+  return settle(Effect.gen(function* () {
+    const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
+    // Every call below is idempotent, so platform-dropped connections are retried.
+    const owner = yield* Effect.promise(() => ownerCaller(env));
+    // Order is the security property: hasWorkspace must answer before claimOwner for anyone
+    // unproven, or a crafted name wakes an arbitrary OrchestratorAgent.
+    const membershipKey = `${userId}\u0000${workspaceName}`;
 
-  if (!membershipProven.has(membershipKey)) {
-    const member = await retryTransientDO('hasWorkspace',
-      () => userDO.hasWorkspace(owner, workspaceName));
+    if (!membershipProven.has(membershipKey)) {
+      const member = yield* Effect.promise(() => retryTransientDO('hasWorkspace', () => userDO.hasWorkspace(owner, workspaceName)));
 
-    if (!member) {
-      // A fresh removal answer outranks a concurrent request's proof.
-      membershipProven.delete(membershipKey);
+      if (!member) {
+        // A fresh removal answer outranks a concurrent request's proof.
+        membershipProven.delete(membershipKey);
 
-      return {
-        ok: false,
-        status: 404,
-        error: `Workspace ${workspaceName} not in your registry. Create it via POST /api/user/workspaces first.`,
-      };
+        return refused<Agent>(404, `Workspace ${workspaceName} not in your registry. Create it via POST /api/user/workspaces first.`);
+      }
+
+      if (membershipProven.size >= MEMBERSHIP_PROOF_LIMIT) membershipProven.clear();
+      membershipProven.add(membershipKey);
     }
 
-    if (membershipProven.size >= MEMBERSHIP_PROOF_LIMIT) membershipProven.clear();
-    membershipProven.add(membershipKey);
-  }
+    const agent = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName));
 
-  const agent = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName));
-  let claim: { owner: string; capabilityHash: string | null };
+    const claimed = yield* Effect.result(Effect.tryPromise({
+      try: () => retryTransientDO('claimOwner', () => agent.claimOwner(userId)),
+      catch: (cause) => ({ cause }),
+    }));
 
-  try {
-    claim = await retryTransientDO('claimOwner', () => agent.claimOwner(userId));
-  } catch (e) {
-    const message = renderThrownChain({ cause: e });
+    if (Result.isFailure(claimed)) {
+      const e = claimed.failure.cause;
+      const message = renderThrownChain({ cause: e });
 
-    if (/owned by a different user/i.test(message)) return { ok: false, status: 403, error: `Workspace ${workspaceName} belongs to another account.` };
+      if (/owned by a different user/i.test(message)) return refused<Agent>(403, `Workspace ${workspaceName} belongs to another account.`);
 
-    const transient = classifyTransientDO({ cause: e });
+      const transient = classifyTransientDO({ cause: e });
 
-    const failure = toKinuError({
-      doing: 'claiming workspace ownership', cause: e, otherwise: transient === null ? 'io' : 'unavailable',
-    });
+      const failure = toKinuError({
+        doing: 'claiming workspace ownership', cause: e, otherwise: transient === null ? 'io' : 'unavailable',
+      });
 
-    diagnostics.failure('workspace.claim_owner_failed', failure, { workspace: workspaceName, transient: transient ?? 'none' });
+      diagnostics.failure('workspace.claim_owner_failed', failure, { workspace: workspaceName, transient: transient ?? 'none' });
 
-    return { ok: false, status: ERROR_STATUS[failure.code], error: `Could not reach workspace ${workspaceName}; try again.` };
-  }
-
-  // The UserDO serializes this reconcile; it returns immediately once both sides agree.
-  try {
-    await retryTransientDO('ensureWorkspaceCapability',
-      () => userDO.ensureWorkspaceCapability(workspaceName, claim.capabilityHash));
-  } catch (e) {
-    const message = renderThrownChain({ cause: e });
-
-    // Registry contradiction refutes a cached proof; evict so deletion sticks without
-    // cross-isolate invalidation.
-    if (/not in your registry/i.test(message)) {
-      forgetWorkspaceMembership(userId, workspaceName);
-
-      return { ok: false, status: 404, error: `Workspace ${workspaceName} is not in your registry.` };
+      return refused<Agent>(ERROR_STATUS[failure.code], `Could not reach workspace ${workspaceName}; try again.`);
     }
 
-    const transient = classifyTransientDO({ cause: e });
+    // The UserDO serializes this reconcile; it returns immediately once both sides agree.
+    const provisioned = yield* Effect.result(Effect.tryPromise({
+      try: () => retryTransientDO('ensureWorkspaceCapability',
+        () => userDO.ensureWorkspaceCapability(workspaceName, claimed.success.capabilityHash)),
+      catch: (cause) => ({ cause }),
+    }));
 
-    const failure = toKinuError({
-      doing: "provisioning the workspace's capability token", cause: e, otherwise: transient === null ? 'io' : 'unavailable',
-    });
+    if (Result.isFailure(provisioned)) {
+      const e = provisioned.failure.cause;
+      const message = renderThrownChain({ cause: e });
 
-    diagnostics.failure('workspace.capability_provisioning_failed', failure, { workspace: workspaceName, transient: transient ?? 'none' });
+      // Registry contradiction refutes a cached proof; evict so deletion sticks without
+      // cross-isolate invalidation.
+      if (/not in your registry/i.test(message)) {
+        forgetWorkspaceMembership(userId, workspaceName);
 
-    return { ok: false, status: ERROR_STATUS[failure.code], error: 'Could not issue this workspace\'s capability token; try again.' };
-  }
+        return refused<Agent>(404, `Workspace ${workspaceName} is not in your registry.`);
+      }
 
-  return { ok: true, agent };
+      const transient = classifyTransientDO({ cause: e });
+
+      const failure = toKinuError({
+        doing: "provisioning the workspace's capability token", cause: e, otherwise: transient === null ? 'io' : 'unavailable',
+      });
+
+      diagnostics.failure('workspace.capability_provisioning_failed', failure, { workspace: workspaceName, transient: transient ?? 'none' });
+
+      return refused<Agent>(ERROR_STATUS[failure.code], 'Could not issue this workspace\'s capability token; try again.');
+    }
+
+    return Result.succeed(agent);
+  }));
 }

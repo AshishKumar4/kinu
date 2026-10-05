@@ -1,3 +1,4 @@
+import { Cause, Effect } from 'effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 // Runtime objects for each logical actor of one workspace database; its rows live in the workspace because the
 // SQL port is synchronous. State, serialization and `actor_id`-keyed stores are per actor and re-validate the
@@ -25,7 +26,7 @@ import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
 import { readVersionedScaffoldSource } from '../scaffold/versions';
 import { sha256Hex } from '../safety/argument-digest';
-import { diagnostics, renderThrownChain, toKinuError, type AgentTracing } from '../obs/index';
+import { attempt, diagnostics, flight, settle, settleSync, toKinuError, type AgentTracing } from '../obs/index';
 
 /** The runtime must be built over this same handle, never a second binding. */
 export interface BoundActor {
@@ -114,10 +115,10 @@ export function registeredParent(
 ): ActorReference {
   const parentId = child.parentActorId;
 
-  if (parentId === null) throw new KinuError('denied', refusal.orphan);
+  if (parentId === null) return settleSync(Effect.fail(new KinuError('denied', refusal.orphan)));
   const parent = host.describe(parentId);
 
-  if (parent === null) throw new KinuError('missing', refusal.unregistered);
+  if (parent === null) return settleSync(Effect.fail(new KinuError('missing', refusal.unregistered)));
 
   return { actorId: parent.actorId, workspaceId: parent.workspaceId, parentActorId: parent.parentActorId };
 }
@@ -155,39 +156,34 @@ function actorScopedTables(sql: SqlExecutor): readonly string[] {
 
 export function createActorHost(deps: ActorHostDeps): ActorHost {
   const slots = new Map<string, HostSlot>();
-  const opening = new Map<string, Promise<HostedActor>>();
   const ports = new Map<string, TemporaryAgentPort>();
 
-  const slotFor = (reference: ActorReference): HostSlot | null => {
+  const slotFor = (reference: ActorReference): Effect.Effect<HostSlot | null, KinuError> => {
     const slot = slots.get(reference.actorId);
 
-    if (!slot) return null;
+    if (!slot) return Effect.succeed(null);
 
-    if (!sameActorReference(slot.actor.reference, reference)) {
-      throw new KinuError('denied', 'The hosted actor reference does not match the one this root issued.');
-    }
-
-    return slot;
+    return sameActorReference(slot.actor.reference, reference)
+      ? Effect.succeed(slot)
+      : Effect.fail(new KinuError('denied', 'The hosted actor reference does not match the one this root issued.'));
   };
 
-  const bind = (reference: ActorReference) => {
+  const bind = (reference: ActorReference) => Effect.gen(function* () {
     // Ancestry is validated once here; per statement only the row and the release fence are checked.
     deps.directory.validate(reference, deps.directory.storagePath(reference));
     const record = deps.directory.retained(reference.actorId);
 
-    if (!record) throw new KinuError('missing', 'The actor is not registered in this workspace.');
+    if (!record) return yield* new KinuError('missing', 'The actor is not registered in this workspace.');
 
     if (record.workspaceId !== reference.workspaceId || record.parentActorId !== reference.parentActorId) {
-      throw new KinuError('denied', 'The actor reference does not match its workspace and parent.');
+      return yield* new KinuError('denied', 'The actor reference does not match its workspace and parent.');
     }
 
     const fence: ReleaseFence = { released: false };
 
-    const handle = deps.directory.open(reference.actorId, () => {
-      if (fence.released) {
-        throw new KinuError('missing', 'The hosted actor was released by its root.');
-      }
-    });
+    const handle = deps.directory.open(reference.actorId, () => (fence.released
+      ? Effect.fail(new KinuError('missing', 'The hosted actor was released by its root.'))
+      : Effect.void));
 
     const binding = { reference: actorReferenceOf(reference), record, handle };
 
@@ -207,32 +203,32 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     }
 
     return { bound: { ...binding, stores }, fence };
-  };
+  });
 
-  const build = async (reference: ActorReference): Promise<{ actor: HostedActor; fence: ReleaseFence }> => {
-    const { bound, fence } = bind(reference);
-    const runtime = await deps.runtimeFor(bound);
-    let built = false;
+  const build = (reference: ActorReference): Effect.Effect<{ actor: HostedActor; fence: ReleaseFence }, KinuError> => Effect.gen(function* () {
+    const { bound, fence } = yield* bind(reference);
+    const runtime = yield* Effect.promise(async () => deps.runtimeFor(bound));
 
-    try {
+    const session = Effect.gen(function* () {
       // Children need handle identity so release revokes every statement. The root's runtime
       // belongs to its opener and is never released individually, so same actor id suffices.
       const rootBinding = reference.parentActorId === null;
 
       if (runtime.actor !== bound.handle
         && !(rootBinding && runtime.actor.actorId === bound.handle.actorId)) {
-        throw new KinuError('denied', 'A hosted runtime must be built over the handle the host bound.');
+        return yield* new KinuError('denied', 'A hosted runtime must be built over the handle the host bound.');
       }
 
       // Seeded before the session so no turn is admitted without a program pointer.
-      const seed = await deps.loopFor({ ...bound, runtime });
-      await seedActorLoop(runtime, seed.parent, seed.origin);
-      const orchestration = await deps.orchestrationFor({ ...bound, runtime });
+      const seed = yield* Effect.promise(async () => deps.loopFor({ ...bound, runtime }));
+      yield* Effect.promise(() => seedActorLoop(runtime, seed.parent, seed.origin));
+      const orchestration = yield* Effect.promise(async () => deps.orchestrationFor({ ...bound, runtime }));
 
       const tracing = deps.tracing;
       const actor = { id: bound.record.actorId, kind: tracedActorKind(bound.record.origin) };
+      const parentId = reference.parentActorId;
 
-      const session = new ActorSession({
+      return new ActorSession({
         runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
         ...(deps.workspace !== undefined && { workspace: deps.workspace }),
         turns: tracing && (() => tracing().turns(actor)),
@@ -241,56 +237,42 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         recording: bound.stores.eventRecorder,
         advisorPort: () => deps.advisorPort?.(bound) ?? null,
         reviewed: bound.record.input,
-        advisor: reference.parentActorId === null ? undefined : {
+        advisor: parentId === null ? undefined : {
           config: deps.directory.main().config,
           workspace: async () => {
-            const root = await acquire(actorReferenceOf(deps.directory.main()));
+            const root = await host.acquire(actorReferenceOf(deps.directory.main()));
 
             return root.runtime.agentStateVfs ?? root.runtime.storage.vfs;
           },
           parent: async (signal) => {
             if (deps.sayToParent !== undefined) return await deps.sayToParent(reference, signal);
-            const parentId = reference.parentActorId;
-
-            if (parentId === null) throw new KinuError('missing', 'A non-root advisor has no parent actor.');
-            const parent = await acquire(actorReferenceOf(deps.directory.open(parentId)));
+            const parent = await host.acquire(actorReferenceOf(deps.directory.open(parentId)));
 
             return parent.session.orchestrator.inbox.send(signal);
           },
         },
       });
-
-      built = true;
-
-      return { actor: { ...bound, runtime, session }, fence };
-    } finally {
-      // A failed build still lets its runtime go.
-      if (!built) runtime.release?.();
-    }
-  };
-
-  const acquire = async (reference: ActorReference): Promise<HostedActor> => {
-    const live = slotFor(reference);
-
-    if (live && !live.fence.released) return live.actor;
-    const pending = opening.get(reference.actorId);
-
-    if (pending) return await pending;
-
-    const work = build(reference).then(({ actor, fence }) => {
-      slots.set(reference.actorId, { actor, fence, queue: Promise.resolve() });
-
-      return actor;
     });
 
-    opening.set(reference.actorId, work);
+    // A failed build still lets its runtime go.
+    const built = yield* Effect.onError(session, () => Effect.sync(() => runtime.release?.()));
 
-    try {
-      return await work;
-    } finally {
-      if (opening.get(reference.actorId) === work) opening.delete(reference.actorId);
-    }
-  };
+    return { actor: { ...bound, runtime, session: built }, fence };
+  });
+
+  const opened = flight((reference: ActorReference) => Effect.map(build(reference), ({ actor, fence }) => {
+    slots.set(reference.actorId, { actor, fence, queue: Promise.resolve() });
+
+    return actor;
+  }), { key: (reference) => reference.actorId });
+
+  const acquired = (reference: ActorReference): Effect.Effect<HostedActor, KinuError> => Effect.gen(function* () {
+    const live = yield* slotFor(reference);
+
+    if (live && !live.fence.released) return live.actor;
+
+    return yield* opened(reference);
+  });
 
   const drop = (slot: HostSlot): void => {
     slot.fence.released = true;
@@ -298,22 +280,18 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     slot.actor.runtime.release?.();
   };
 
-  const requireSlot = (reference: ActorReference): HostSlot => {
-    const slot = slotFor(reference);
+  const requireSlot = (reference: ActorReference): Effect.Effect<HostSlot, KinuError> => Effect.flatMap(slotFor(reference), (slot) => (!slot || slot.fence.released
+    ? Effect.fail(new KinuError('missing', 'The actor is not hosted by this root.'))
+    : Effect.succeed(slot)));
 
-    if (!slot || slot.fence.released) throw new KinuError('missing', 'The actor is not hosted by this root.');
-
-    return slot;
-  };
-
-  const release = (reference: ActorReference): void => {
+  const released = (reference: ActorReference): Effect.Effect<void, KinuError> => Effect.gen(function* () {
     // The root's fence is read by its opener; only `releaseAll` (process end) may take it.
     if (reference.parentActorId === null) {
-      throw new KinuError('denied',
+      return yield* new KinuError('denied',
         'The workspace root is not released individually; its runtime belongs to whoever opened the workspace.');
     }
 
-    const slot = slotFor(reference);
+    const slot = yield* slotFor(reference);
 
     if (!slot || slot.fence.released) {
       ports.delete(reference.actorId);
@@ -322,54 +300,53 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     }
 
     if (slot.actor.session.inFlight) {
-      throw new KinuError('denied', 'An actor holding a turn in flight cannot be released; cancel or settle the turn first.');
+      return yield* new KinuError('denied', 'An actor holding a turn in flight cannot be released; cancel or settle the turn first.');
     }
 
     drop(slot);
     ports.delete(reference.actorId);
-  };
+  });
 
-  return {
-    acquire,
-    hosted: (reference) => {
-      const slot = slotFor(reference);
-
-      return slot && !slot.fence.released ? slot.actor : null;
-    },
+  const host: ActorHost = {
+    acquire: (reference) => settle(acquired(reference)),
+    hosted: (reference) => settleSync(Effect.map(slotFor(reference), (slot) => (slot && !slot.fence.released ? slot.actor : null))),
     describe: (actorId) => deps.directory.retained(actorId),
-    bindStores: (reference) => bind(reference).bound,
+    bindStores: (reference) => settleSync(Effect.map(bind(reference), ({ bound }) => bound)),
     list: () => [...slots.values()].filter((slot) => !slot.fence.released).map((slot) => slot.actor.reference),
-    run: async <T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Promise<T> => {
-      const actor = await acquire(reference);
-      const slot = requireSlot(reference);
+    run: <T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Promise<T> => settle(Effect.gen(function* () {
+      const actor = yield* acquired(reference);
+      const slot = yield* requireSlot(reference);
       // The tail waits for settlement so a failure does not poison the next operation;
       // the caller still receives the rejection.
       const result = slot.queue.then(() => work(actor));
       slot.queue = Promise.allSettled([result]);
 
-      return await result;
-    },
-    release,
+      return yield* Effect.promise(() => result);
+    })),
+    release: (reference) => settleSync(released(reference)),
     temporary: (reference, portFor) => {
       const known = ports.get(reference.actorId);
 
       if (known !== undefined) return known;
-      const port = portFor(bind(reference).bound);
-      ports.set(reference.actorId, port);
 
-      return port;
+      return settleSync(Effect.map(bind(reference), ({ bound }) => {
+        const port = portFor(bound);
+        ports.set(reference.actorId, port);
+
+        return port;
+      }));
     },
     releaseAll: () => {
       for (const slot of slots.values()) drop(slot);
       ports.clear();
     },
-    retire: async (parent, retirement) => {
+    retire: (parent, retirement) => settle(Effect.gen(function* () {
       const record = deps.directory.retained(retirement.reference.actorId);
 
-      if (!record) throw new KinuError('missing', 'The actor is not registered in this workspace.');
+      if (!record) return yield* new KinuError('missing', 'The actor is not registered in this workspace.');
 
       if (record.name !== retirement.name) {
-        throw new KinuError('denied', 'The retirement names an alias this actor no longer holds.');
+        return yield* new KinuError('denied', 'The retirement names an alias this actor no longer holds.');
       }
 
       if (retirement.observed) {
@@ -378,28 +355,22 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
           WHERE actor_id = ${record.actorId} AND turn_id = ${retirement.observed.turnId} LIMIT 1`[0]?.epoch;
 
         if (owner !== undefined && owner > retirement.observed.epoch) {
-          throw new KinuError('denied',
+          return yield* new KinuError('denied',
             `this retirement was formed against execution epoch ${retirement.observed.epoch}, and epoch ${owner} owns the turn`);
         }
       }
 
-      const slot = slotFor(retirement.reference);
+      const slot = yield* slotFor(retirement.reference);
 
       if (slot && !slot.fence.released) {
         if (retirement.destroy || retirement.interrupt) slot.actor.session.interrupt();
 
         if (!retirement.destroy && slot.actor.session.inFlight) {
-          // A temporary agent reports from inside its turn, so its release waits.
-          // A failed turn has still settled; the re-check below bounds the wait.
-          try { await slot.queue; }
-          catch (cause) {
-            diagnostics.event('actor.retirement_waited_on_failed_turn', {
-              actor: record.name, cause: renderThrownChain({ cause }),
-            });
-          }
+          // A temporary agent reports from inside its turn, so its release waits; the queue settles, never rejects.
+          yield* Effect.promise(() => slot.queue);
 
           if (slot.actor.session.inFlight) {
-            throw new KinuError('denied', 'This actor holds a turn in flight; retire it once the turn settles.');
+            return yield* new KinuError('denied', 'This actor holds a turn in flight; retire it once the turn settles.');
           }
         }
 
@@ -415,13 +386,13 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
       if (retirement.destroy) {
         purgeActorRows(deps.storage, record.actorId);
-        await deps.discardBytes?.(record);
+        yield* Effect.promise(async () => deps.discardBytes?.(record));
       }
 
       deps.directory.apply(parent, parentPath, {
         action: 'release', name: retirement.name, reference: retirement.reference,
       });
-    },
+    })),
     installedBuild: deps.installedBuild,
     ...(deps.workspace !== undefined && { workspace: deps.workspace }),
     resumable: (limit = 50) => {
@@ -441,6 +412,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       return resumable;
     },
   };
+
+  return host;
 }
 
 // One transaction: a half-purged actor's id could be re-issued over leftover rows.
@@ -514,17 +487,12 @@ export function hostedChildTree(host: Pick<ActorHost, 'bindStores'>, events: (ch
 }
 
 /** The claim's consumed request, or why its own rows cannot be read: a failure no later sweep reads differently. */
-async function consumedEvidence(stores: AgentStores, claim: StoredActorClaim): Promise<{ readonly context: ContextRevision } | { readonly failure: KinuError }> {
-  try {
-    const context = await stores.claims.consumedContext(claim.turnId);
-
+function consumedEvidence(stores: AgentStores, claim: StoredActorClaim): Effect.Effect<{ readonly context: ContextRevision } | { readonly failure: KinuError }> {
+  return attempt({ doing: 'reading the request record of an interrupted turn', otherwise: 'io' }, () => stores.claims.consumedContext(claim.turnId)).pipe(
     // Absent is as unrecoverable as corrupt.
-    if (context === null) return { failure: new KinuError('missing', 'claimed request evidence is missing') };
-
-    return { context };
-  } catch (cause) {
-    return { failure: toKinuError({ doing: 'reading the request record of an interrupted turn', cause, otherwise: 'io' }) };
-  }
+    Effect.map((context) => (context === null ? { failure: new KinuError('missing', 'claimed request evidence is missing') } : { context })),
+    Effect.catch((failure) => Effect.succeed({ failure })),
+  );
 }
 
 function furthestStep(requests: readonly { readonly epoch: number; readonly step: number | null }[], epoch: number): number {
@@ -556,7 +524,7 @@ async function stalledRun(stores: Pick<AgentStores, 'history'>, claim: StoredAct
  * Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. An
  * unreadable claim record settles `error` once; an actor that cannot be opened stays owed.
  */
-export async function recoverActorTurns(
+export function recoverActorTurns(
   host: Pick<ActorHost, 'resumable' | 'installedBuild' | 'workspace'> & {
     acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores'> & {
       readonly session: Pick<ActorSession, 'turnOpen'>;
@@ -570,76 +538,85 @@ export async function recoverActorTurns(
   readonly active: readonly string[];
   readonly stalled: readonly ResumableActorTurn[];
 }> {
-  const verified: string[] = [];
-  const refused: string[] = [];
-  const failed: string[] = [];
-  const unreadable: string[] = [];
-  const active: string[] = [];
-  const stalled: ResumableActorTurn[] = [];
+  return settle(Effect.gen(function* () {
+    const verified: string[] = [];
+    const refused: string[] = [];
+    const failed: string[] = [];
+    const unreadable: string[] = [];
+    const active: string[] = [];
+    const stalled: ResumableActorTurn[] = [];
 
-  for (const turn of host.resumable()) {
-    try {
-      const actor = await host.acquire(turn.reference);
+    const recoverOne = (turn: ResumableActorTurn): Effect.Effect<void, KinuError> => Effect.gen(function* () {
+        const actor = yield* Effect.promise(() => host.acquire(turn.reference));
 
-      if (actor.session.turnOpen) {
-        active.push(turn.claim.turnId);
-        continue;
-      }
+        if (actor.session.turnOpen) {
+          active.push(turn.claim.turnId);
 
-      const evidence = await consumedEvidence(actor.stores, turn.claim);
+          return;
+        }
 
-      if (actor.session.turnOpen) {
-        active.push(turn.claim.turnId);
-        continue;
-      }
+        const evidence = yield* consumedEvidence(actor.stores, turn.claim);
 
-      if ('failure' in evidence) {
-        actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
-        failed.push(turn.claim.turnId);
-        diagnostics.failure('actor.turn_record_unreadable', evidence.failure, { actor: turn.record.name, turn: turn.claim.turnId });
-        recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'record_unreadable', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
-        continue;
-      }
+        if (actor.session.turnOpen) {
+          active.push(turn.claim.turnId);
 
-      const verdict = await verifyClaimedProgram(
-        turn.claim,
-        (version) => readVersionedScaffoldSource(actor.runtime, version),
-        (source) => sha256Hex(source),
-        evidence.context,
-      );
+          return;
+        }
 
-      const stalledTurn = verdict.kind === 'verified' && await stalledRun(actor.stores, turn.claim, host.installedBuild);
+        if ('failure' in evidence) {
+          actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
+          failed.push(turn.claim.turnId);
+          diagnostics.failure('actor.turn_record_unreadable', evidence.failure, { actor: turn.record.name, turn: turn.claim.turnId });
+          recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'record_unreadable', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
 
-      if (actor.session.turnOpen) {
-        active.push(turn.claim.turnId);
-        continue;
-      }
+          return;
+        }
 
-      if (stalledTurn) {
-        actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
-        stalled.push(turn);
-        diagnostics.event('actor.turn_stalled', { actor: turn.record.name, turn: turn.claim.turnId, runs: turn.claim.epoch });
-        recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'stalled', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
-        continue;
-      }
+        const verdict = yield* Effect.promise(() => verifyClaimedProgram(
+          turn.claim,
+          (version) => readVersionedScaffoldSource(actor.runtime, version),
+          (source) => sha256Hex(source),
+          evidence.context,
+        ));
 
-      if (verdict.kind === 'verified') {
-        verified.push(turn.claim.turnId);
-        continue;
-      }
+        const stalledTurn = verdict.kind === 'verified' && (yield* Effect.promise(() => stalledRun(actor.stores, turn.claim, host.installedBuild)));
 
-      actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'indeterminate');
-      refused.push(turn.claim.turnId);
-      recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'unverified', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
+        if (actor.session.turnOpen) {
+          active.push(turn.claim.turnId);
+
+          return;
+        }
+
+        if (stalledTurn) {
+          actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
+          stalled.push(turn);
+          diagnostics.event('actor.turn_stalled', { actor: turn.record.name, turn: turn.claim.turnId, runs: turn.claim.epoch });
+          recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'stalled', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
+
+          return;
+        }
+
+        if (verdict.kind === 'verified') {
+          verified.push(turn.claim.turnId);
+
+          return;
+        }
+
+        actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'indeterminate');
+        refused.push(turn.claim.turnId);
+        recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'unverified', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
+    });
+
+    for (const turn of host.resumable()) {
+      yield* Effect.catchCause(recoverOne(turn), (cause) => Effect.sync(() => {
+        // One unreadable actor must not end the sweep; this turn stays owed.
+        unreadable.push(turn.claim.turnId);
+        diagnostics.failure('actor.turn_recovery_failed', toKinuError({
+          doing: 'recovering an interrupted hosted actor turn', cause: Cause.squash(cause), otherwise: 'io',
+        }), { actor: turn.record.name });
+      }));
     }
-    catch (cause) {
-      // One unreadable actor must not end the sweep; this turn stays owed.
-      unreadable.push(turn.claim.turnId);
-      diagnostics.failure('actor.turn_recovery_failed', toKinuError({
-        doing: 'recovering an interrupted hosted actor turn', cause, otherwise: 'io',
-      }), { actor: turn.record.name });
-    }
-  }
 
-  return { verified, refused, failed, unreadable, active, stalled };
+    return { verified, refused, failed, unreadable, active, stalled };
+  }));
 }

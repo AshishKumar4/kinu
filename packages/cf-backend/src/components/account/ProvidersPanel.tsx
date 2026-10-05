@@ -2,6 +2,7 @@
  * Providers panel: one list of every provider, each with its own sign-in (Cloudflare, device code, claude.ai, API key); also mounted as a modal.
  * Each read is its own resource and fails visibly: a swallowed rejection shows a connected account as disconnected.
  */
+import { Effect } from 'effect';
 import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { Combobox, Loader } from "@cloudflare/kumo";
 import { CheckIcon, ArrowSquareOutIcon, PlugIcon } from "@phosphor-icons/react";
@@ -26,7 +27,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { ChatGptConnect, ChatGptPlanUsage } from "@/components/account/ChatGptConnect";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { showing, detach } from '@kinu.run/core/obs';
 import {
   CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
 } from '@kinu.run/core';
@@ -60,9 +61,7 @@ function UnrevokedGrants({ grants, onChanged }: { grants: readonly UnrevokedGran
           </div>
           <button
             className="p-btn-quiet inline-flex h-6.5 shrink-0 items-center px-2 text-xs"
-            onClick={async () => {
-              try { await dismissUnrevokedGrant(grant.key); onChanged(); } catch (e) { setError(renderThrownChain({ cause: e })); }
-            }}
+            onClick={() => detach(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => dismissUnrevokedGrant(grant.key)); onChanged(); }), showing(setError)))}
           >
             I revoked it
           </button>
@@ -226,12 +225,12 @@ function ProviderEntry({ provider, name, method, connected, detail, disconnect, 
   const [error, setError] = useState<string | null>(null);
   const brand = providerBrand(provider);
 
-  const leave = async () => {
+  const leave = () => Effect.gen(function* () {
     if (disconnect === undefined || !confirm(`Disconnect ${name}? Your agents lose its models.`)) return;
     setError(null);
 
-    try { await disconnect(); onChanged(); } catch (e) { setError(renderThrownChain({ cause: e })); }
-  };
+    return yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => disconnect()); onChanged(); }), showing(setError));
+  });
 
   return (
     <div className="space-y-3 px-4 py-3" data-provider={name}>
@@ -242,7 +241,7 @@ function ProviderEntry({ provider, name, method, connected, detail, disconnect, 
         <span className="ml-auto flex items-center gap-2">
           {connected ? <ConnectedBadge detail={detail} /> : <span className="p-meta p-text-3">Not connected</span>}
           {connected && disconnect !== undefined && (
-            <button type="button" onClick={leave} className={dangerQuietCls} aria-label={`Disconnect ${name}`}>Disconnect</button>
+            <button type="button" onClick={() => detach(leave())} className={dangerQuietCls} aria-label={`Disconnect ${name}`}>Disconnect</button>
           )}
         </span>
       </div>
@@ -262,15 +261,13 @@ function CloudflareAccountSection({ status, onChanged }: {
 
   if (!status?.connected || status.accounts.length < 2) return null;
 
-  const choose = async (id: string) => {
+  const choose = (id: string) => Effect.gen(function* () {
     if (!id) return;
     setSaving(true);
     setError(null);
 
-    try { await selectCloudflareAccount(id); onChanged(); }
-    catch (e) { setError(renderThrownChain({ cause: e })); }
-    finally { setSaving(false); }
-  };
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => selectCloudflareAccount(id)); onChanged(); }), showing(setError)), Effect.sync(() => { setSaving(false); }));
+  });
 
   return (
     <Field label="Workers AI account">
@@ -282,7 +279,7 @@ function CloudflareAccountSection({ status, onChanged }: {
           ...(status.selectedId === null ? [{ value: '', label: '(no account selected)' }] : []),
           ...status.accounts.map((account) => ({ value: account.id, label: account.name })),
         ]}
-        onChange={choose} />
+        onChange={(id) => detach(choose(id))} />
       {error && <p className="text-xs p-danger">{error}</p>}
     </Field>
   );
@@ -298,14 +295,12 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
 
   if (!status?.connected) return null;
 
-  const choose = async (id: string) => {
+  const choose = (id: string) => Effect.gen(function* () {
     setSaving(true);
     setError(null);
 
-    try { await selectCloudflareGateway(id || null); onChanged(); }
-    catch (e) { setError(renderThrownChain({ cause: e })); }
-    finally { setSaving(false); }
-  };
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => selectCloudflareGateway(id || null)); onChanged(); }), showing(setError)), Effect.sync(() => { setSaving(false); }));
+  });
 
   if (status.error) {
     return (
@@ -335,7 +330,7 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
           value={status.selectedId ?? ''}
           disabled={saving}
           options={[{ value: '', label: '(no gateway selected)' }, ...status.gateways.map((gw) => ({ value: gw.id, label: gw.id }))]}
-          onChange={choose} />
+          onChange={(id) => detach(choose(id))} />
       )}
       {error && <p className="text-xs p-danger">{error}</p>}
     </Field>
@@ -350,11 +345,11 @@ function CodexConnect({ onChanged }: { onChanged: () => void }) {
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  const start = useCallback(async () => {
+  const start = useCallback(() => detach(Effect.gen(function* () {
     setError(null);
 
-    try {
-      const f = await startCodexFlow();
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const f = yield* Effect.promise(async () => startCodexFlow());
       setFlow(f);
 
       const stopPolling = () => {
@@ -363,29 +358,23 @@ function CodexConnect({ onChanged }: { onChanged: () => void }) {
         setFlow(null);
       };
 
-      pollRef.current = setInterval(async () => {
-        try {
-          const result = await pollCodexFlow();
+      // A failed poll request is shown, and polling goes on.
+      pollRef.current = setInterval(() => detach(Effect.catchCause(Effect.gen(function* () {
+        const result = yield* Effect.promise(() => pollCodexFlow());
 
-          if (result.connected) {
-            stopPolling();
-            onChanged();
-          } else if (result.error) {
-            // A reported error (expired/denied/no flow) is terminal; pending returns { connected: false }.
-            stopPolling();
-            setError(result.error);
-          } else {
-            setError(null);
-          }
-        } catch (e) {
-          // The poll request itself failed: show it but keep polling.
-          setError(renderThrownChain({ cause: e }));
+        if (result.connected) {
+          stopPolling();
+          onChanged();
+        } else if (result.error) {
+          // A reported error (expired/denied/no flow) is terminal; pending returns { connected: false }.
+          stopPolling();
+          setError(result.error);
+        } else {
+          setError(null);
         }
-      }, Math.max(3, f.pollIntervalSec) * 1000);
-    } catch (e) {
-      setError(renderThrownChain({ cause: e }));
-    }
-  }, [onChanged]);
+      }), showing(setError))), Math.max(3, f.pollIntervalSec) * 1000);
+    }), showing(setError));
+  })), [onChanged]);
 
   if (flow) {
     return (
@@ -425,21 +414,24 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const run = async (step: () => Promise<void>) => {
+  const run = (step: Effect.Effect<void>) => Effect.suspend(() => {
     setBusy(true);
     setError(null);
 
-    try { await step(); } catch (e) { setError(renderThrownChain({ cause: e })); } finally { setBusy(false); }
-  };
+    return Effect.ensuring(Effect.catchCause(step, showing(setError)), Effect.sync(() => setBusy(false)));
+  });
 
-  const start = () => run(async () => { setAuthorizeUrl((await startClaudeSignIn()).url); setCode(''); });
+  const start = () => run(Effect.gen(function* () {
+    setAuthorizeUrl((yield* Effect.promise(() => startClaudeSignIn())).url);
+    setCode('');
+  }));
 
-  const finish = () => run(async () => {
-    const result = await finishClaudeSignIn(code.trim());
+  const finish = () => run(Effect.gen(function* () {
+    const result = yield* Effect.promise(() => finishClaudeSignIn(code.trim()));
 
     if (result.connected) onChanged();
     else setError(result.error ?? 'Claude did not connect.');
-  });
+  }));
 
   return (
     <div className="space-y-3">
@@ -447,11 +439,11 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
         Signing in with a Claude subscription runs Kinu on your own Claude plan. Anthropic&apos;s terms limit subscription use to its own apps, so you connect at your own risk.
       </p>
       {authorizeUrl === null ? (
-        <FilledButton onClick={start} disabled={busy}>Sign in with Claude</FilledButton>
+        <FilledButton onClick={() => detach(start())} disabled={busy}>Sign in with Claude</FilledButton>
       ) : (
         <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
           hint="The code Claude shows, or the address your browser ended on if the page did not load.">
-          <form className="flex flex-wrap gap-2" onSubmit={async (event) => { event.preventDefault(); await finish(); }}>
+          <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); detach(finish()); }}>
             <input
               value={code}
               onChange={(e) => setCode(e.target.value)}
@@ -462,7 +454,7 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
             />
             <button type="submit" disabled={busy || code.trim() === ''}
               className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">{busy ? '...' : 'Connect'}</button>
-            <button type="button" onClick={start} disabled={busy}
+            <button type="button" onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}
               className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">Start again</button>
           </form>
         </Field>
@@ -492,27 +484,25 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
   const named = accountName.trim().toLowerCase();
   const compat = selected?.id === COMPAT_ENTRY.id;
 
-  const save = async () => {
+  const save = () => Effect.gen(function* () {
     if (!selected || !apiKey.trim()) return;
     setSaving(true);
     setError(null);
 
-    try {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       if (compat) {
-        await setCredential(`openai-compat.${compatName.trim()}`, { kind: 'openai-compat', baseURL: compatBaseURL.trim(), apiKey: apiKey.trim() });
+        yield* Effect.promise(async () => setCredential(`openai-compat.${compatName.trim()}`, { kind: 'openai-compat', baseURL: compatBaseURL.trim(), apiKey: apiKey.trim() }));
       } else {
-        await setCredential(named === '' ? selected.credKey : accountCredentialKey(selected.credKey, named), { kind: 'bearer', token: apiKey.trim() });
+        yield* Effect.promise(async () => setCredential(named === '' ? selected.credKey : accountCredentialKey(selected.credKey, named), { kind: 'bearer', token: apiKey.trim() }));
       }
 
       setSelected(null);
       setApiKey(''); setAccountName(''); setCompatName(''); setCompatBaseURL('');
       onChanged();
-    } catch (e) {
-      setError(renderThrownChain({ cause: e }));
-    } finally {
+    }), showing(setError)), Effect.sync(() => {
       setSaving(false);
-    }
-  };
+    }));
+  });
 
   const target = selected === null || compat ? null : formKey(selected.credKey, named);
   const saveWord = creds.some((c) => c.key === target) ? 'Replace' : 'Save';
@@ -543,7 +533,11 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
         </Combobox.Content>
       </Combobox>
       {selected && (
-        <form className="flex flex-wrap gap-2" onSubmit={async (event) => { event.preventDefault(); await save(); }}>
+        <form className="flex flex-wrap gap-2" onSubmit={(event) => {
+          event.preventDefault();
+
+          detach(save());
+        }}>
           {compat ? (
             <>
               <input value={compatName} onChange={(e) => setCompatName(e.target.value)} placeholder="name (e.g. groq)"
@@ -602,18 +596,16 @@ function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: 
 
   if (held.length === 0) return null;
 
-  const choose = async (envelope: ProfileCatalogEnvelope, provider: string, account: string) => {
+  const choose = (envelope: ProfileCatalogEnvelope, provider: string, account: string) => Effect.gen(function* () {
     setSaving(true);
 
-    try {
-      await updateProfileCatalog({ ...envelope.catalog, accounts: { ...envelope.catalog.accounts, [provider]: account } }, envelope.version);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => updateProfileCatalog({ ...envelope.catalog, accounts: { ...envelope.catalog.accounts, [provider]: account } }, envelope.version));
       profile.reload();
-    } catch (e) {
-      alert(renderThrownChain({ cause: e }));
-    } finally {
+    }), showing(alert)), Effect.sync(() => {
       setSaving(false);
-    }
-  };
+    }));
+  });
 
   return (
     <Field label="Default account">
@@ -627,7 +619,7 @@ function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: 
                   label={`${name} default account`}
                   value={envelope.catalog.accounts?.[provider] ?? (accounts.includes(MAIN_ACCOUNT) ? MAIN_ACCOUNT : '')}
                   options={accounts.map((account) => ({ value: account, label: account }))}
-                  onChange={(account) => choose(envelope, provider, account)}
+                  onChange={(account) => detach(choose(envelope, provider, account))}
                   disabled={saving}
                   size="sm"
                 />

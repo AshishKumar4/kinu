@@ -2,7 +2,7 @@
 // it is the only sentence that tells a person what to change.
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import { settleSync, tolerate } from '../obs/index';
 
 const CLOUDFLARE_API_ROOT = 'https://api.cloudflare.com/client/v4';
@@ -45,15 +45,14 @@ export interface CloudflareErrorDetail {
   readonly message: string;
 }
 
-export class CloudflareApiError extends Error {
+export class CloudflareApiError extends Data.TaggedError('CloudflareApiError')<{ readonly message: string }> {
   constructor(
     readonly status: number,
     readonly path: string,
     readonly detail: string,
     readonly errors: readonly CloudflareErrorDetail[],
   ) {
-    super(`${path}: ${detail}`);
-    this.name = 'CloudflareApiError';
+    super({ message: `${path}: ${detail}` });
   }
 
   get code(): number {

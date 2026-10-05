@@ -10,7 +10,7 @@ function refuse(res, status, text) {
   res.end(text);
 }
 
-createServer(async (req, res) => {
+async function proxy(req, res) {
   const target = String(req.headers[TARGET_HEADER] ?? '');
   const refused = refusal(req.method, target);
 
@@ -57,4 +57,14 @@ createServer(async (req, res) => {
   }
 
   Readable.fromWeb(upstream.body).on('error', () => res.destroy()).pipe(res);
+}
+
+// Node never awaits a request listener: a failure past proxy's own handling is logged and ends the response.
+createServer((req, res) => {
+  proxy(req, res).catch((/** @type {unknown} */ error) => {
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : '';
+
+    console.error(JSON.stringify({ event: 'codex_egress.request_failed', error: String(error), cause }));
+    res.destroy();
+  });
 }).listen(PORT);

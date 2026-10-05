@@ -1,10 +1,5 @@
 /** Observability primitives; nothing here imports a backend. */
-export {
-  classify,
-  tolerate,
-  tolerateAsync,
-  type ExpectedFailure,
-} from './expected-failure';
+export { classify, type ExpectedFailure } from './expected-failure';
 
 export {
   createAgentTracing,
@@ -52,7 +47,7 @@ export {
   type Refusal,
 } from './error';
 
-export { attempt, attemptInItsWords, settle, settleSync } from './effect';
+export { attempt, attemptInItsWords, flight, hold, inItsWords, recording, refusing, settle, settleSync, showing, tolerate, tolerateAsync, tolerated } from './effect';
 
 export {
   createCompositeLogger,
@@ -61,7 +56,10 @@ export {
   createRecordingLogger,
   diagnostics,
   setDiagnosticsSink,
+  logged,
   settleLogged,
+  settleLoggedSync,
+  detach,
   RESERVED_LOG_FIELDS,
   type LogEventName,
   type LogFields,

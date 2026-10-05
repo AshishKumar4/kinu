@@ -1,4 +1,5 @@
 /** Background jobs (auto-detached >30s tool calls) as Work cards, with cancel, retry and dismiss. */
+import { Effect } from 'effect';
 import { useState, useCallback } from "react";
 import { Button } from "@cloudflare/kumo";
 import {
@@ -8,7 +9,7 @@ import {
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { jobName, lastOutputLines, shortJobId, timeAgo } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { showing, detach } from "@kinu.run/core/obs";
 
 function statusMeta(status: BackgroundJob["status"]) {
   switch (status) {
@@ -66,12 +67,12 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const act = useCallback(async (method: string) => {
+  const act = useCallback((method: string) => detach(Effect.gen(function* () {
     setBusy(true);
     setErr(null);
 
-    try {
-      const outcome = await rpc<JobControlOutcome>(method, [job.id]);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const outcome = yield* Effect.promise(async () => rpc<JobControlOutcome>(method, [job.id]));
 
       if (!outcome.ok) {
         setErr(outcome.error ?? `${method.replace("BackgroundJob", "")} was refused`);
@@ -80,13 +81,10 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
       }
 
       onRefresh();
-    }
-    catch (error) {
-      const message = renderThrownChain({ cause: error });
-      setErr(`${method.replace("BackgroundJob", "")} failed: ${message}`);
-    }
-    finally { setBusy(false); }
-  }, [rpc, onRefresh, job.id]);
+    }), showing((chain) => {
+      setErr(`${method.replace("BackgroundJob", "")} failed: ${chain}`);
+    })), Effect.sync(() => { setBusy(false); }));
+  })), [rpc, onRefresh, job.id]);
 
   const m = statusMeta(job.status);
   const Icon = m.icon;

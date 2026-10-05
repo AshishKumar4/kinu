@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import * as oauth from 'oauth4webapi';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '@kinu.run/core';
 
@@ -82,20 +84,22 @@ export function getOAuthProvider(env: OAuthProviderEnv, id: string): OAuthProvid
   return getConfiguredOAuthProviders(env).find((p) => p.id === id) ?? null;
 }
 
-export async function getAuthorizationServer(provider: OAuthProviderConfig): Promise<oauth.AuthorizationServer> {
-  if (provider.authorizationServer) return provider.authorizationServer;
+export function getAuthorizationServer(provider: OAuthProviderConfig): Promise<oauth.AuthorizationServer> {
+  return settle(Effect.gen(function* () {
+    if (provider.authorizationServer) return provider.authorizationServer;
 
-  if (!provider.issuer) throw new Error(`Provider ${provider.id} has no issuer.`);
-  const cached = discoveryCache.get(provider.issuer);
+    if (!provider.issuer) return yield* Effect.die(new Error(`Provider ${provider.id} has no issuer.`));
+    const cached = discoveryCache.get(provider.issuer);
 
-  if (cached && cached.expiresAt > Date.now()) return cached.as;
+    if (cached && cached.expiresAt > Date.now()) return cached.as;
 
-  const issuer = new URL(provider.issuer);
-  const response = await oauth.discoveryRequest(issuer, { algorithm: 'oidc' });
-  const as = await oauth.processDiscoveryResponse(issuer, response);
-  discoveryCache.set(provider.issuer, { as, expiresAt: Date.now() + DISCOVERY_TTL_MS });
+    const issuer = new URL(provider.issuer);
+    const response = yield* Effect.promise(async () => oauth.discoveryRequest(issuer, { algorithm: 'oidc' }));
+    const as = yield* Effect.promise(async () => oauth.processDiscoveryResponse(issuer, response));
+    discoveryCache.set(provider.issuer, { as, expiresAt: Date.now() + DISCOVERY_TTL_MS });
 
-  return as;
+    return as;
+  }));
 }
 
 export function clientAuth(provider: OAuthProviderConfig): oauth.ClientAuth {

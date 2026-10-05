@@ -1,5 +1,5 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
-import { tolerateAsync } from '../obs/expected-failure';
+import { tolerateAsync } from '../obs/effect';
 /**
  * AGENTS.md rendering. Backends feed files ordered root-most → nearest; the
  * nearest wins on conflict. Files are admitted on metadata before any read,

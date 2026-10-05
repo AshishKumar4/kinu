@@ -1,8 +1,8 @@
 // Envelope, provider snapshot and role to a turn's profile. A missing tier aliases `default`; a stored tier its
 // provider no longer lists runs on the account default, then Kinu's; an unlisted pin is an error.
 
-import * as v from 'valibot';
 import { Effect } from 'effect';
+import * as v from 'valibot';
 import { KinuError, settleSync } from '../obs/index';
 
 import { isWorkMode, type WorkMode } from '../types/turn';
@@ -18,7 +18,7 @@ import { TierIdSchema, tierIdsOf,
   type ProfileAuthority, type ProfileCatalogEnvelope, type RoleCatalog, type RoleId, type TierAssignment, type TierId,
 } from './catalog';
 import type { RunEventInput } from '../events/types';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, settleLoggedSync } from '../obs/index';
 import { specWithoutAccount } from '../providers/types';
 import { declaredReasoningEffort } from '../providers/reasoning-effort';
 import { currentOperationProfile } from './operation';
@@ -68,9 +68,11 @@ export async function loadProfileAuthorityInputs(input: {
   const [envelope, read] = await Promise.all([input.envelope(), input.provider()]);
   const inputs: ProfileAuthorityInputs = { envelope, provider: read.snapshot };
 
-  if (input.record) {
-    try {
-      input.record({
+  const record = input.record;
+
+  if (record) {
+    settleLoggedSync('profile.resolution_event_failed', { doing: 'recording a profile_resolution run event', otherwise: 'io' }, () => {
+      record({
         type: 'profile_resolution',
         durationMs: Date.now() - startedAt,
         providerCache: read.cache,
@@ -79,13 +81,7 @@ export async function loadProfileAuthorityInputs(input: {
         catalogVersion: envelope.version,
         authority: envelope.authority.kind,
       });
-    } catch (err) {
-      diagnostics.failure('profile.resolution_event_failed', toKinuError({
-        doing: 'recording a profile_resolution run event',
-        cause: err,
-        otherwise: 'io',
-      }));
-    }
+    });
   }
 
   return inputs;
@@ -199,198 +195,202 @@ function intersectTools(available: readonly string[], allowed: readonly string[]
 }
 
 export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurnProfile {
-  const envelope = validateProfileCatalogEnvelope({ value: input.envelope });
-  const catalogDigest = profileCatalogDigest(envelope.catalog);
+  return settleSync(Effect.gen(function* () {
+    const envelope = validateProfileCatalogEnvelope({ value: input.envelope });
+    const catalogDigest = profileCatalogDigest(envelope.catalog);
 
-  if (catalogDigest !== input.envelope.digest) {
-    throw new Error(
-      `profile catalog digest mismatch: envelope carries ${input.envelope.digest} `
-      + `but the catalog hashes to ${catalogDigest}`,
-    );
-  }
-
-  if (!isWorkMode(input.workMode)) {
-    throw new Error(`invalid work mode: ${JSON.stringify(input.workMode)}`);
-  }
-
-  if (!isValidRoleId(input.roleId)) {
-    throw new Error(`invalid role id ${JSON.stringify(input.roleId)}: must match ${ROLE_ID_RE.source}`);
-  }
-
-  let explicitTier: TierId | undefined;
-
-  if (input.explicitTier !== undefined) {
-    const parsedTier = v.safeParse(TierIdSchema, input.explicitTier);
-
-    if (!parsedTier.success) {
-      throw new Error(`invalid explicit tier: ${JSON.stringify(input.explicitTier)}`);
+    if (catalogDigest !== input.envelope.digest) {
+      return yield* Effect.die(new Error(
+        `profile catalog digest mismatch: envelope carries ${input.envelope.digest} `
+        + `but the catalog hashes to ${catalogDigest}`,
+      ));
     }
 
-    explicitTier = parsedTier.output;
-  }
+    if (!isWorkMode(input.workMode)) {
+      return yield* Effect.die(new Error(`invalid work mode: ${JSON.stringify(input.workMode)}`));
+    }
 
-  const parsedProvider = v.safeParse(ProviderCatalogSnapshotSchema, input.provider);
+    if (!isValidRoleId(input.roleId)) {
+      return yield* Effect.die(new Error(`invalid role id ${JSON.stringify(input.roleId)}: must match ${ROLE_ID_RE.source}`));
+    }
 
-  if (!parsedProvider.success) {
-    throw new Error('provider snapshot must carry {revision, availableModels} and, when '
-      + 'present, unavailableProviders as {provider, label, reason} rows');
-  }
+    let explicitTier: TierId | undefined;
 
-  const provider = parsedProvider.output;
-  // Failure rows do not name every spec they cost; while degraded, a typo fails at call time.
-  const listingComplete = provider.unavailableProviders.length === 0;
+    if (input.explicitTier !== undefined) {
+      const parsedTier = v.safeParse(TierIdSchema, input.explicitTier);
 
-  // A provider that lists nothing proves nothing.
-  const listing = new Set(provider.availableModels.map(providerOf));
+      if (!parsedTier.success) {
+        return yield* Effect.die(new Error(`invalid explicit tier: ${JSON.stringify(input.explicitTier)}`));
+      }
 
-  const listed = (spec: string): boolean => {
-    const bare = specWithoutAccount(spec);
+      explicitTier = parsedTier.output;
+    }
 
-    return provider.availableModels.includes(bare) || !listing.has(providerOf(bare));
-  };
+    const parsedProvider = v.safeParse(ProviderCatalogSnapshotSchema, input.provider);
 
-  const servable = (model: string, fallbacks: readonly string[]): boolean => !listingComplete || [model, ...fallbacks].some(listed);
+    if (!parsedProvider.success) {
+      return yield* Effect.die(new Error('provider snapshot must carry {revision, availableModels} and, when '
+        + 'present, unavailableProviders as {provider, label, reason} rows'));
+    }
 
-  const unavailable = (model: string, fallbacks: readonly string[], id: TierId): Error => new Error(
-    `model ${JSON.stringify(model)} configured for the ${id} tier `
-    + `is unavailable on provider revision ${JSON.stringify(provider.revision)}`
-    + `${fallbacks.length > 0 ? ', as is each of its fallbacks' : ''}; `
-    + 'configure a different model for the tier or pick another tier',
-  );
+    const provider = parsedProvider.output;
+    // Failure rows do not name every spec they cost; while degraded, a typo fails at call time.
+    const listingComplete = provider.unavailableProviders.length === 0;
 
-  // A pin is refused when no model of the chain is listed.
-  const requireAvailable = (model: string, fallbacks: readonly string[], id: TierId): void => {
-    if (!servable(model, fallbacks)) throw unavailable(model, fallbacks, id);
-  };
+    // A provider that lists nothing proves nothing.
+    const listing = new Set(provider.availableModels.map(providerOf));
 
-  const defaultAssignment = envelope.catalog.tiers.default;
+    const listed = (spec: string): boolean => {
+      const bare = specWithoutAccount(spec);
 
-  if (!defaultAssignment) throw new Error('profile catalog has no default tier assignment');
+      return provider.availableModels.includes(bare) || !listing.has(providerOf(bare));
+    };
 
-  /** A stored tier that cannot serve runs on the account default, then Kinu's. */
-  const serving = (id: TierId, stored: TierAssignment): TierAssignment => {
-    if (servable(stored.model, stored.fallbacks ?? [])) return stored;
+    const servable = (model: string, fallbacks: readonly string[]): boolean => !listingComplete || [model, ...fallbacks].some(listed);
 
-    const replacement = [defaultAssignment, BUILTIN_PROFILE_CATALOG.tiers.default]
-      .find((candidate) => candidate !== undefined && servable(candidate.model, candidate.fallbacks ?? []));
+    const unavailable = (model: string, fallbacks: readonly string[], id: TierId): Error => new Error(
+      `model ${JSON.stringify(model)} configured for the ${id} tier `
+      + `is unavailable on provider revision ${JSON.stringify(provider.revision)}`
+      + `${fallbacks.length > 0 ? ', as is each of its fallbacks' : ''}; `
+      + 'configure a different model for the tier or pick another tier',
+    );
 
-    if (replacement === undefined) throw unavailable(stored.model, stored.fallbacks ?? [], id);
-    diagnostics.event('profile.tier_model_unlisted', { tier: id, model: stored.model, served: replacement.model });
+    // A pin is refused when no model of the chain is listed.
+    const requireAvailable = (model: string, fallbacks: readonly string[], id: TierId): Effect.Effect<void> => {
+      return Effect.gen(function* () {
+        if (!servable(model, fallbacks)) return yield* Effect.die(unavailable(model, fallbacks, id));
+      });
+    };
 
-    return replacement;
-  };
+    const defaultAssignment = envelope.catalog.tiers.default;
 
-  const effortFor = (spec: string, wanted: ReasoningEffort): ReasoningEffort | null =>
-    declaredReasoningEffort(wanted, provider.reasoningEfforts[specWithoutAccount(spec)]);
+    if (!defaultAssignment) return yield* Effect.die(new Error('profile catalog has no default tier assignment'));
 
-  const chainFor = (model: string, tierChain: readonly string[]): readonly string[] =>
-    (envelope.catalog.modelFallbacks?.[model] ?? tierChain).filter((spec) => spec !== model);
+    /** A stored tier that cannot serve runs on the account default, then Kinu's. */
+    const serving = (id: TierId, stored: TierAssignment): TierAssignment => {
+      if (servable(stored.model, stored.fallbacks ?? [])) return stored;
 
-  const chainOf = (specs: readonly string[], wanted: ReasoningEffort): readonly TierFallback[] => Object.freeze(
-    specs.map((spec) => Object.freeze({ model: spec, reasoningEffort: effortFor(spec, wanted) })),
-  );
+      const replacement = [defaultAssignment, BUILTIN_PROFILE_CATALOG.tiers.default]
+        .find((candidate) => candidate !== undefined && servable(candidate.model, candidate.fallbacks ?? []));
 
-  const roles: RoleCatalog = { ...effectiveRoleCatalog(envelope.catalog), ...SYSTEM_ROLE_DEFINITIONS };
+      if (replacement === undefined) throw unavailable(stored.model, stored.fallbacks ?? [], id);
+      diagnostics.event('profile.tier_model_unlisted', { tier: id, model: stored.model, served: replacement.model });
 
-  const role = roles[input.roleId];
+      return replacement;
+    };
 
-  if (!role) {
-    throw new Error(`unknown role ${JSON.stringify(input.roleId)}: known roles are ${Object.keys(roles).sort().join(', ')}`);
-  }
+    const effortFor = (spec: string, wanted: ReasoningEffort): ReasoningEffort | null =>
+      declaredReasoningEffort(wanted, provider.reasoningEfforts[specWithoutAccount(spec)]);
 
-  const requested: TierId = explicitTier ?? role.tier;
+    const chainFor = (model: string, tierChain: readonly string[]): readonly string[] =>
+      (envelope.catalog.modelFallbacks?.[model] ?? tierChain).filter((spec) => spec !== model);
 
-  if (!tierIdsOf(envelope.catalog).includes(requested)) {
-    throw new Error(`unknown tier ${JSON.stringify(requested)}: known tiers are ${tierIdsOf(envelope.catalog).join(', ')}`);
-  }
+    const chainOf = (specs: readonly string[], wanted: ReasoningEffort): readonly TierFallback[] => Object.freeze(
+      specs.map((spec) => Object.freeze({ model: spec, reasoningEffort: effortFor(spec, wanted) })),
+    );
 
-  let tierId: TierId = requested;
-  let source: TierSource;
-  let stored = envelope.catalog.tiers[requested];
+    const roles: RoleCatalog = { ...effectiveRoleCatalog(envelope.catalog), ...SYSTEM_ROLE_DEFINITIONS };
 
-  if (stored) {
-    source = explicitTier !== undefined ? 'explicit' : 'role';
-  } else {
-    tierId = 'default';
-    source = 'default';
-    stored = defaultAssignment;
-  }
+    const role = roles[input.roleId];
 
-  const assignment = serving(tierId, stored);
-  let replaced: string | null = null;
+    if (!role) {
+      return yield* Effect.die(new Error(`unknown role ${JSON.stringify(input.roleId)}: known roles are ${Object.keys(roles).sort().join(', ')}`));
+    }
 
-  if (assignment !== stored) {
-    tierId = 'default';
-    source = 'default';
-    replaced = stored.model;
-  }
+    const requested: TierId = explicitTier ?? role.tier;
 
-  const tierFallbacks = assignment.fallbacks ?? [];
+    if (!tierIdsOf(envelope.catalog).includes(requested)) {
+      return yield* Effect.die(new Error(`unknown tier ${JSON.stringify(requested)}: known tiers are ${tierIdsOf(envelope.catalog).join(', ')}`));
+    }
 
-  let model = assignment.model;
+    let tierId: TierId = requested;
+    let source: TierSource;
+    let stored = envelope.catalog.tiers[requested];
 
-  for (const pin of modelPins(input)) {
-    requireAvailable(pin.model, tierFallbacks, tierId);
-    model = pin.model;
-    source = pin.source;
-    replaced = null;
-  }
+    if (stored) {
+      source = explicitTier !== undefined ? 'explicit' : 'role';
+    } else {
+      tierId = 'default';
+      source = 'default';
+      stored = defaultAssignment;
+    }
 
-  const availableTools = role.allowedTools === undefined
-    ? uniqueTools(input.availableTools)
-    : intersectTools(input.availableTools, role.allowedTools);
+    const assignment = serving(tierId, stored);
+    let replaced: string | null = null;
 
-  const skills = normalizeNames([role.skills ?? [], input.activeSkills]);
-  const workMode: WorkMode = role.plan === true ? 'plan' : input.workMode;
+    if (assignment !== stored) {
+      tierId = 'default';
+      source = 'default';
+      replaced = stored.model;
+    }
 
-  const tierSlot = (id: TierId): TierRoute => {
-    const slot = serving(id, id === 'default' ? defaultAssignment : (envelope.catalog.tiers[id] ?? defaultAssignment));
-    const wanted = slot.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT;
+    const tierFallbacks = assignment.fallbacks ?? [];
 
-    return Object.freeze({
-      model: slot.model,
-      reasoningEffort: effortFor(slot.model, wanted),
-      fallbacks: chainOf(chainFor(slot.model, slot.fallbacks ?? []), wanted),
-    });
-  };
+    let model = assignment.model;
 
-  const wantedEffort = input.explicitEffort ?? assignment.reasoningEffort ?? input.inheritedEffort ?? DEFAULT_TURN_REASONING_EFFORT;
-  const tierIds = tierIdsOf(envelope.catalog);
-  const tiers: Record<TierId, TierRoute> = {};
+    for (const pin of modelPins(input)) {
+      yield* requireAvailable(pin.model, tierFallbacks, tierId);
+      model = pin.model;
+      source = pin.source;
+      replaced = null;
+    }
 
-  for (const id of tierIds) tiers[id] = tierSlot(id);
-  Object.freeze(tiers);
+    const availableTools = role.allowedTools === undefined
+      ? uniqueTools(input.availableTools)
+      : intersectTools(input.availableTools, role.allowedTools);
 
-  const resolved = {
-    role: Object.freeze({
-      id: input.roleId,
-      label: role.label ?? deriveRoleLabel(input.roleId),
-      description: role.description,
-      instructions: role.instructions,
-    }),
-    tier: Object.freeze({
-      id: tierId,
-      source,
-      model,
-      reasoningEffort: effortFor(model, wantedEffort),
-      fallbacks: chainOf(chainFor(model, tierFallbacks), wantedEffort),
-      replaced,
-    }),
-    workMode,
-    skills: Object.freeze(skills),
-    allowedTools: Object.freeze(availableTools),
-    defaultPreset: role.preset,
-    authority: Object.freeze({ ...envelope.authority }),
-    catalogVersion: envelope.version,
-    providerRevision: provider.revision,
-    tiers: Object.freeze(tiers),
-    retries: envelope.catalog.retries ?? DEFAULT_PROVIDER_RETRIES,
-    decisionModel: envelope.catalog.decisionModel ?? DEFAULT_DECISION_MODEL,
-  };
+    const skills = normalizeNames([role.skills ?? [], input.activeSkills]);
+    const workMode: WorkMode = role.plan === true ? 'plan' : input.workMode;
 
-  const profileDigest = sha256Hex(stableStringify(v.parse(JsonValueSchema, resolved)));
+    const tierSlot = (id: TierId): TierRoute => {
+      const slot = serving(id, id === 'default' ? defaultAssignment : (envelope.catalog.tiers[id] ?? defaultAssignment));
+      const wanted = slot.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT;
 
-  return Object.freeze({ ...resolved, digest: profileDigest });
+      return Object.freeze({
+        model: slot.model,
+        reasoningEffort: effortFor(slot.model, wanted),
+        fallbacks: chainOf(chainFor(slot.model, slot.fallbacks ?? []), wanted),
+      });
+    };
+
+    const wantedEffort = input.explicitEffort ?? assignment.reasoningEffort ?? input.inheritedEffort ?? DEFAULT_TURN_REASONING_EFFORT;
+    const tierIds = tierIdsOf(envelope.catalog);
+    const tiers: Record<TierId, TierRoute> = {};
+
+    for (const id of tierIds) tiers[id] = tierSlot(id);
+    Object.freeze(tiers);
+
+    const resolved = {
+      role: Object.freeze({
+        id: input.roleId,
+        label: role.label ?? deriveRoleLabel(input.roleId),
+        description: role.description,
+        instructions: role.instructions,
+      }),
+      tier: Object.freeze({
+        id: tierId,
+        source,
+        model,
+        reasoningEffort: effortFor(model, wantedEffort),
+        fallbacks: chainOf(chainFor(model, tierFallbacks), wantedEffort),
+        replaced,
+      }),
+      workMode,
+      skills: Object.freeze(skills),
+      allowedTools: Object.freeze(availableTools),
+      defaultPreset: role.preset,
+      authority: Object.freeze({ ...envelope.authority }),
+      catalogVersion: envelope.version,
+      providerRevision: provider.revision,
+      tiers: Object.freeze(tiers),
+      retries: envelope.catalog.retries ?? DEFAULT_PROVIDER_RETRIES,
+      decisionModel: envelope.catalog.decisionModel ?? DEFAULT_DECISION_MODEL,
+    };
+
+    const profileDigest = sha256Hex(stableStringify(v.parse(JsonValueSchema, resolved)));
+
+    return Object.freeze({ ...resolved, digest: profileDigest });
+  }));
 }
 
 /** The pins a turn's model takes, weakest first: the workspace's, then the actor's own. A runtime preset takes

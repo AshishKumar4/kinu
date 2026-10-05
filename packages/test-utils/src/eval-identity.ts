@@ -3,10 +3,11 @@
  * {@link EVAL_IDENTITY_ENV.token}, never a person's stored session; no credential means skip. Target: an
  * allowlist of the two deployments, production and staging, plus loopback, failing closed. Pure over its environment.
  */
+import { Cause, Effect } from 'effect';
 import { homedir } from 'node:os';
 import * as v from 'valibot';
 import { EVAL_ACCOUNTS, USER_AI_PROXY_PATH, type EvalAccount } from '@kinu.run/core';
-import { classify, renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settleSync, tolerated } from '@kinu.run/core/obs';
 import { ambientByName, LIVE_MODEL_ENV } from './ambient-env';
 
 export const EVAL_IDENTITY_ENV = {
@@ -28,14 +29,16 @@ export const EVAL_ACCOUNT_ENV = 'KINU_EVAL_ACCOUNT';
 /** The named eval account `env` asks for, if any. A name that is no eval account throws: it must never fall back
  *  to the eval service's own. */
 export function evalAccount(env: EnvSource = process.env): EvalAccount | undefined {
-  const name = env[EVAL_ACCOUNT_ENV]?.trim();
+  return settleSync(Effect.gen(function* () {
+    const name = env[EVAL_ACCOUNT_ENV]?.trim();
 
-  if (name === undefined || name === '') return undefined;
-  const named = v.safeParse(v.picklist(EVAL_ACCOUNTS), name);
+    if (name === undefined || name === '') return undefined;
+    const named = v.safeParse(v.picklist(EVAL_ACCOUNTS), name);
 
-  if (!named.success) throw new Error(`${EVAL_ACCOUNT_ENV}=${name} names no eval account: one of ${EVAL_ACCOUNTS.join(', ')}`);
+    if (!named.success) return yield* Effect.die(new Error(`${EVAL_ACCOUNT_ENV}=${name} names no eval account: one of ${EVAL_ACCOUNTS.join(', ')}`));
 
-  return named.output;
+    return named.output;
+  }));
 }
 
 /** Whether `email` is the named eval account's own user: the server plus-addresses the eval identity's email by
@@ -111,45 +114,50 @@ export type EvalTargetVerdict =
   | { readonly kind: 'refused'; readonly origin: string; readonly reason: string };
 
 export function evalTargetVerdict(origin: string): EvalTargetVerdict {
-  const normalized = origin.trim().replace(/\/+$/, '');
+  return settleSync(Effect.gen(function* () {
+    const normalized = origin.trim().replace(/\/+$/, '');
 
-  if (!normalized) {
+    if (!normalized) {
+      return {
+        kind: 'refused',
+        origin: normalized,
+        reason: `${EVAL_IDENTITY_ENV.origin} is set to an empty value, so nothing names where this `
+          + 'run would go. Unset it to take the deployment default, or name an origin.',
+      };
+    }
+
+    // `hostname`, not `host`, so ports and IPv6 brackets need no matching.
+    const parsed = yield* Effect.matchCause(Effect.sync(() => new URL(normalized).hostname), {
+      onSuccess: (hostname) => ({ hostname }),
+      onFailure: (failed) => ({ unparsed: renderThrownChain({ cause: Cause.squash(failed) }) }),
+    });
+
+    if ('unparsed' in parsed) {
+      return {
+        kind: 'refused',
+        origin: normalized,
+        reason: `${normalized} is not a URL (${parsed.unparsed}), so no host can be checked against the eval allowlist`,
+      };
+    }
+
+    const { hostname } = parsed;
+
+    if (LOOPBACK_HOSTS.includes(hostname)) {
+      return { kind: 'allowed', origin: normalized, why: 'local' };
+    }
+
+    if (EVAL_DEPLOYMENT_ORIGINS.includes(normalized)) {
+      return { kind: 'allowed', origin: normalized, why: 'deployment' };
+    }
+
     return {
       kind: 'refused',
       origin: normalized,
-      reason: `${EVAL_IDENTITY_ENV.origin} is set to an empty value, so nothing names where this `
-        + 'run would go. Unset it to take the deployment default, or name an origin.',
+      reason: `${normalized} is not an eval target. Tests and evals run against `
+        + `${EVAL_DEPLOYMENT_ORIGINS.join(', ')} or a loopback dev server. Set ${EVAL_IDENTITY_ENV.origin} `
+        + `to one of those.`,
     };
-  }
-
-  // `hostname`, not `host`, so ports and IPv6 brackets need no matching.
-  let hostname: string;
-
-  try {
-    hostname = new URL(normalized).hostname;
-  } catch (error) {
-    return {
-      kind: 'refused',
-      origin: normalized,
-      reason: `${normalized} is not a URL (${renderThrownChain({ cause: error })}), so no host can be checked against the eval allowlist`,
-    };
-  }
-
-  if (LOOPBACK_HOSTS.includes(hostname)) {
-    return { kind: 'allowed', origin: normalized, why: 'local' };
-  }
-
-  if (EVAL_DEPLOYMENT_ORIGINS.includes(normalized)) {
-    return { kind: 'allowed', origin: normalized, why: 'deployment' };
-  }
-
-  return {
-    kind: 'refused',
-    origin: normalized,
-    reason: `${normalized} is not an eval target. Tests and evals run against `
-      + `${EVAL_DEPLOYMENT_ORIGINS.join(', ')} or a loopback dev server. Set ${EVAL_IDENTITY_ENV.origin} `
-      + `to one of those.`,
-  };
+  }));
 }
 
 /**
@@ -159,11 +167,13 @@ export function evalTargetVerdict(origin: string): EvalTargetVerdict {
  * staging run expects staging and a production run production.
  */
 export function deploymentPublicOrigin(target: string): string {
-  const verdict = evalTargetVerdict(target);
+  return settleSync(Effect.gen(function* () {
+    const verdict = evalTargetVerdict(target);
 
-  if (verdict.kind === 'refused') throw new Error(verdict.reason);
+    if (verdict.kind === 'refused') return yield* Effect.die(new Error(verdict.reason));
 
-  return verdict.why === 'deployment' ? verdict.origin : EVAL_DEPLOYMENT_ORIGIN;
+    return verdict.why === 'deployment' ? verdict.origin : EVAL_DEPLOYMENT_ORIGIN;
+  }));
 }
 
 export type EvalModelEndpointVerdict =
@@ -177,24 +187,20 @@ export type EvalModelEndpointVerdict =
  * origin bearing that route is refused rather than read as a gateway.
  */
 export function evalModelEndpointVerdict(baseUrl: string): EvalModelEndpointVerdict {
-  let url: URL;
-
-  try {
-    url = new URL(baseUrl.trim());
-  } catch (error) {
+  return settleSync(Effect.gen(function* () {
     // Not a URL: reaches nothing, and the provider stack refuses it on the first call.
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
+    const url = yield* tolerated(Effect.sync(() => new URL(baseUrl.trim())), 'malformed-input');
+
+    if (url === undefined) return { kind: 'gateway' };
+
+    const target = evalTargetVerdict(url.origin);
+
+    if (target.kind === 'allowed') return { kind: 'checked', target };
+
+    if (url.pathname.replace(/\/+$/, '') === USER_AI_PROXY_PATH) return { kind: 'checked', target };
 
     return { kind: 'gateway' };
-  }
-
-  const target = evalTargetVerdict(url.origin);
-
-  if (target.kind === 'allowed') return { kind: 'checked', target };
-
-  if (url.pathname.replace(/\/+$/, '') === USER_AI_PROXY_PATH) return { kind: 'checked', target };
-
-  return { kind: 'gateway' };
+  }));
 }
 
 export interface RefusedEvalEndpoint {

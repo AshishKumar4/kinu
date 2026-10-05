@@ -29,8 +29,10 @@
  *
  * Option shapes carry as much policy as the severities:
  * `consistent-type-assertions` is `assertionStyle: "never"`,
- * `no-floating-promises` keeps `ignoreVoid: false`, and `return-await` keeps
- * `error-handling-correctness-only`.
+ * `no-floating-promises` keeps `ignoreVoid: false`, `no-misused-promises` checks
+ * void returns only (a promise handed to a caller that never awaits it, such as
+ * `onClick={save}`, floats; the edge runs it with `detach`, or the callee's type
+ * admits a promise), and `return-await` keeps `error-handling-correctness-only`.
  *
  * Not enabled, measured 2026-09-21:
  * - `no-unnecessary-condition` needs `noUncheckedIndexedAccess`, which is off;
@@ -134,6 +136,7 @@ assert.deepEqual(
 const explicitAdditions = [
   "typescript/consistent-type-assertions",
   "typescript/no-inferrable-types",
+  "typescript/no-misused-promises",
   "typescript/no-non-null-assertion",
   "typescript/no-unnecessary-type-assertion",
   "typescript/no-unnecessary-type-parameters",
@@ -228,6 +231,11 @@ assert.deepEqual(
   "no-floating-promises must reject both bare and void-discarded promises",
 );
 assert.deepEqual(
+  config.rules["typescript/no-misused-promises"],
+  ["error", { checksVoidReturn: true, checksConditionals: false, checksSpreads: false }],
+  "no-misused-promises must refuse a promise handed where a void return is expected",
+);
+assert.deepEqual(
   config.rules["typescript/return-await"],
   ["error", "error-handling-correctness-only"],
   "return-await must stay at error-handling-correctness-only",
@@ -244,6 +252,8 @@ type RuleFixture = {
   readonly findings: number;
   readonly red: string;
   readonly green: string;
+  /** The fixture's extension when it needs JSX. */
+  readonly extension?: "tsx";
 };
 
 const fixtures: readonly RuleFixture[] = [
@@ -350,6 +360,45 @@ export function go(): void {
 export function go(): void {
   reset();
 }
+`,
+  },
+  {
+    rule: "no-misused-promises",
+    extension: "tsx",
+    findings: 3,
+    red: `declare global {
+  namespace JSX {
+    interface IntrinsicElements { button: { onClick?: () => void } }
+  }
+}
+
+declare function save(): Promise<void>;
+declare function later(run: () => void, ms: number): void;
+
+export const button = <button onClick={save} />;
+export const handlers: { onClick: () => void } = { onClick: async () => save() };
+later(save, 10);
+`,
+    green: `declare global {
+  namespace JSX {
+    interface IntrinsicElements { button: { onClick?: () => void } }
+  }
+}
+
+declare function save(): Promise<void>;
+declare function later(run: () => void, ms: number): void;
+declare function detach(run: () => Promise<void>): void;
+
+/** A surface whose caller awaits the handler admits a promise. */
+interface Awaited {
+  onClick: () => Promise<void> | void;
+}
+
+export const button = <button onClick={() => detach(save)} />;
+
+export const handlers = { onClick: save } satisfies Awaited;
+
+later(() => detach(save), 10);
 `,
   },
   {
@@ -623,14 +672,15 @@ try {
       module: "ESNext",
       moduleResolution: "Bundler",
       noEmit: true,
+      jsx: "preserve",
     },
-    include: ["*.ts"],
+    include: ["*.ts", "*.tsx"],
   });
   writeFileSync(join(red, "tsconfig.json"), tsconfig);
   writeFileSync(join(green, "tsconfig.json"), tsconfig);
   for (const fixture of fixtures) {
-    writeFileSync(join(red, `${fixture.rule}.ts`), fixture.red);
-    writeFileSync(join(green, `${fixture.rule}.ts`), fixture.green);
+    writeFileSync(join(red, `${fixture.rule}.${fixture.extension ?? "ts"}`), fixture.red);
+    writeFileSync(join(green, `${fixture.rule}.${fixture.extension ?? "ts"}`), fixture.green);
   }
 
   const redReport = lintJson(["-c", ".oxlintrc.json", "--tsconfig", join(red, "tsconfig.json"), red]);
@@ -638,7 +688,7 @@ try {
   for (const fixture of fixtures) {
     const fired = redReport.diagnostics.filter((entry) =>
       entry.code === `typescript(${fixture.rule})`
-      && basename(entry.filename ?? "") === `${fixture.rule}.ts`);
+      && basename(entry.filename ?? "") === `${fixture.rule}.${fixture.extension ?? "ts"}`);
     assert.equal(
       fired.length,
       fixture.findings,

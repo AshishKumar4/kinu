@@ -3,6 +3,7 @@
  * error, not an empty page. `Page` is a variant on `status` so a caller must narrow to observe `end`.
  */
 
+import { Data } from 'effect';
 import * as v from 'valibot';
 
 /**
@@ -89,10 +90,12 @@ export function mapPage<In, Out, Cursor = SeekCursor>(
 }
 
 /** Distinct from transport failure: a stale cursor restarts the walk; a transport failure retries. */
-export class StaleCursorError extends Error {
+export class StaleCursorError extends Data.TaggedError('StaleCursorError')<{ readonly message: string }> {
   /** `options.cause` carries the parse failure of a malformed cursor; recovery is the same restart. */
   constructor(what: string, anchor: string, options?: ErrorOptions) {
-    super(`Cannot resume this ${what}: ${JSON.stringify(anchor)} is no longer in it.`, options);
+    super({ message: `Cannot resume this ${what}: ${JSON.stringify(anchor)} is no longer in it.` });
     this.name = 'StaleCursorError';
+
+    if (options !== undefined && 'cause' in options) Object.defineProperty(this, 'cause', { value: options.cause, writable: true, configurable: true });
   }
 }

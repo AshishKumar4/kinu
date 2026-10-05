@@ -5,6 +5,8 @@
  * is re-encoded through a canvas, so no text chunk, EXIF or timestamp can survive.
  */
 
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import {
   FEEDBACK_MAX_SCREENSHOT_BYTES,
   FEEDBACK_OMIT_ATTR,
@@ -77,40 +79,44 @@ function unscrollDocument(root: Element): { transform: string } | undefined {
   return { transform: `translate(${String(scrollLeft)}px, ${String(scrollTop)}px)` };
 }
 
-async function encode(canvas: HTMLCanvasElement): Promise<Blob> {
-  const encoded = await new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(resolve, FEEDBACK_SCREENSHOT_TYPE);
+function encode(canvas: HTMLCanvasElement): Effect.Effect<Blob> {
+  return Effect.gen(function* () {
+    const encoded = yield* Effect.promise(async () => new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, FEEDBACK_SCREENSHOT_TYPE);
+    }));
+
+    if (encoded === null) return yield* Effect.die(new Error('the browser could not encode the screenshot as PNG'));
+
+    return encoded;
   });
-
-  if (encoded === null) throw new Error('the browser could not encode the screenshot as PNG');
-
-  return encoded;
 }
 
 /** The whole document. Throws rather than degrading: the caller offers a note-only report instead. */
-export async function capturePage(): Promise<Capture> {
-  // Dynamic on purpose: the only reference, so the rasteriser stays out of the entry chunk.
-  const { domToCanvas } = await import('modern-screenshot');
-  const root = document.documentElement;
-  const width = root.clientWidth;
-  const height = Math.max(root.clientHeight, root.scrollHeight);
-  let redacted = 0;
+export function capturePage(): Promise<Capture> {
+  return settle(Effect.gen(function* () {
+    // Dynamic on purpose: the only reference, so the rasteriser stays out of the entry chunk.
+    const { domToCanvas } = yield* Effect.promise(async () => import('modern-screenshot'));
+    const root = document.documentElement;
+    const width = root.clientWidth;
+    const height = Math.max(root.clientHeight, root.scrollHeight);
+    let redacted = 0;
 
-  const source = await domToCanvas(root, {
-    width,
-    height,
-    scale: captureScale(width, height),
-    // Dark themes must not be matted onto white where the document background does not paint.
-    backgroundColor: getComputedStyle(document.body).backgroundColor,
-    // Off by default in the rasteriser; a bug report must show panes where the reader scrolled them.
-    features: { restoreScrollPosition: true },
-    style: unscrollDocument(root),
-    onCloneNode: (cloned) => {
-      if (cloned instanceof Element) redacted = redactClone(cloned);
-    },
-  });
+    const source = yield* Effect.promise(async () => domToCanvas(root, {
+      width,
+      height,
+      scale: captureScale(width, height),
+      // Dark themes must not be matted onto white where the document background does not paint.
+      backgroundColor: getComputedStyle(document.body).backgroundColor,
+      // Off by default in the rasteriser; a bug report must show panes where the reader scrolled them.
+      features: { restoreScrollPosition: true },
+      style: unscrollDocument(root),
+      onCloneNode: (cloned) => {
+        if (cloned instanceof Element) redacted = redactClone(cloned);
+      },
+    }));
 
-  return { blob: await encode(source), width: source.width, height: source.height, redacted };
+    return { blob: yield* encode(source), width: source.width, height: source.height, redacted };
+  }));
 }
 
 /** In image pixel coordinates, so it survives any editor zoom. */
@@ -153,23 +159,25 @@ export function paint(
 }
 
 /** Called on send, so the bytes that leave are the bytes the reporter approved. */
-export async function flatten(capture: Capture, annotations: readonly Annotation[]): Promise<Blob> {
-  if (annotations.length === 0) return capture.blob;
-  const bitmap = await createImageBitmap(capture.blob);
+export function flatten(capture: Capture, annotations: readonly Annotation[]): Promise<Blob> {
+  return settle(Effect.gen(function* () {
+    if (annotations.length === 0) return capture.blob;
+    const bitmap = yield* Effect.promise(async () => createImageBitmap(capture.blob));
 
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const context = canvas.getContext('2d');
+    return yield* Effect.ensuring(Effect.gen(function* () {
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const context = canvas.getContext('2d');
 
-    if (context === null) throw new Error('the browser gave no 2D canvas for the annotation');
-    paint(context, bitmap, annotations, { width: bitmap.width, height: bitmap.height });
+      if (context === null) return yield* Effect.die(new Error('the browser gave no 2D canvas for the annotation'));
+      paint(context, bitmap, annotations, { width: bitmap.width, height: bitmap.height });
 
-    return await encode(canvas);
-  } finally {
-    bitmap.close();
-  }
+      return yield* encode(canvas);
+    }), Effect.sync(() => {
+      bitmap.close();
+    }));
+  }));
 }
 
 /** Mirrors the server's limit, so an over-limit capture is refused before upload. */

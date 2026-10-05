@@ -7,7 +7,8 @@
  */
 
 import type { AuthIdentity } from '../auth/session';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { diagnostics, KinuError, logged, settle, toKinuError } from '@kinu.run/core/obs';
 import { err, json, readBounded } from '@kinu.run/core';
 import { sanitizePng, type PngFault } from '@kinu.run/core';
 import {
@@ -121,11 +122,11 @@ const UNREADABLE_FORM = 'Could not read the feedback form.';
  * a malformed body; that failure is returned classified (`bad_input` unless the platform names its own)
  * so the policy answers 400, distinct from an absent form.
  */
-async function parseMultipart(
+function parseMultipart(
   url: string,
   contentType: string,
   bytes: Uint8Array,
-): Promise<FormData | KinuError> {
+): Effect.Effect<FormData | KinuError> {
   // `RequestInit.body` needs `Uint8Array<ArrayBuffer>`; `readBounded` promises `ArrayBufferLike`.
   const exact = new Uint8Array(bytes.byteLength);
   exact.set(bytes);
@@ -136,233 +137,225 @@ async function parseMultipart(
     body: exact,
   });
 
-  try {
-    return await carrier.formData();
-  } catch (cause) {
-    return toKinuError({
-      doing: 'parsing a feedback submission as multipart/form-data',
-      cause,
-      otherwise: 'bad_input',
-    });
-  }
+  return Effect.catchCause(Effect.promise(() => carrier.formData()), (failed) => Effect.succeed(toKinuError({
+    doing: 'parsing a feedback submission as multipart/form-data',
+    cause: Cause.squash(failed),
+    otherwise: 'bad_input',
+  })));
 }
 
 /** The whole submission policy over injected effects; `answerFeedback` is its one entry, tests included. */
-async function handleFeedbackSubmission(
+function handleFeedbackSubmission(
   request: Request,
   identity: AuthIdentity | null,
   deps: FeedbackDeps,
-): Promise<Response> {
-  const blank: Observed = {
-    route: '', noteLength: 0, screenshotAttempted: false, screenshotBytes: 0, annotated: false,
-  };
+): Effect.Effect<Response> {
+  return Effect.gen(function* () {
+    const blank: Observed = {
+      route: '', noteLength: 0, screenshotAttempted: false, screenshotBytes: 0, annotated: false,
+    };
 
-  if (identity === null) {
-    return refuse({ deps, status: 401, message: 'Sign in to send feedback.', reason: 'unauthenticated', observed: blank });
-  }
-
-  const contentType = request.headers.get('content-type') ?? '';
-
-  if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
-    return refuse({ deps, status: 415, message: 'Send feedback as multipart/form-data.', reason: 'bad_content_type', observed: blank });
-  }
-
-  // A declared length that cannot fit is refused before buffering; the counted read is the real bound.
-  const declared = Number(request.headers.get('content-length') ?? '');
-
-  if (Number.isFinite(declared) && declared > FEEDBACK_MAX_REQUEST_BYTES) {
-    return refuse({ deps, status: 413, message: OVER_REQUEST_LIMIT, reason: 'too_large', observed: blank });
-  }
-
-  const bounded = await readBounded(request, FEEDBACK_MAX_REQUEST_BYTES);
-
-  if (bounded === 'too_large') {
-    return refuse({ deps, status: 413, message: OVER_REQUEST_LIMIT, reason: 'too_large', observed: blank });
-  }
-
-  if (bounded instanceof KinuError) {
-    diagnostics.failure('feedback.body_unreadable', bounded);
-
-    return refuse({ deps, status: 400, message: UNREADABLE_FORM, reason: 'malformed', observed: blank });
-  }
-
-  const form = await parseMultipart(request.url, contentType, bounded);
-
-  if (form instanceof KinuError) {
-    // Recorded here: the byte count belongs to this frame, not the decoder.
-    diagnostics.failure('feedback.body_unparseable', form, { bytes: bounded.byteLength });
-
-    return refuse({ deps, status: 400, message: UNREADABLE_FORM, reason: 'malformed', observed: blank });
-  }
-
-  const note = readField(form, FEEDBACK_FIELDS.note, FEEDBACK_MAX_NOTE_CHARS);
-  const route = readField(form, FEEDBACK_FIELDS.route, FEEDBACK_MAX_ROUTE_CHARS);
-  const workspaceField = readField(form, FEEDBACK_FIELDS.workspace, FEEDBACK_MAX_ROUTE_CHARS);
-  const annotated = form.get(FEEDBACK_FIELDS.annotated) === '1';
-
-  const observed: Observed = {
-    route, noteLength: note.length, screenshotAttempted: false, screenshotBytes: 0, annotated,
-  };
-
-  const part = form.get(FEEDBACK_FIELDS.screenshot);
-  const shot = part instanceof Blob ? part : null;
-
-  if (part !== null && shot === null) {
-    return refuse({ deps, status: 415, message: 'The screenshot must be a PNG file.', reason: 'bad_content_type', observed });
-  }
-
-  if (shot !== null) {
-    // Before any refusal, so every rejection marker states a screenshot was carried.
-    observed.screenshotAttempted = true;
-    observed.screenshotBytes = shot.size;
-  }
-
-  if (shot === null && note.length === 0) {
-    return refuse({ deps, status: 400, message: 'Add a note or a screenshot before sending.', reason: 'no_content', observed });
-  }
-
-  // The workspace field is browser-supplied, so ownership is proven before storage, row or `accepted`
-  // marker. A report naming no workspace is not a claim and is not checked.
-  const attribution = workspaceField.length === 0
-    ? null
-    : await deps.attributeWorkspace(identity.userId, workspaceField);
-
-  if (attribution?.kind === 'refused') {
-    return refuse({
-      deps, status: 403,
-      message: 'That workspace is not one of yours. Send the report without a workspace, or file it from the workspace it is about.',
-      reason: 'unowned_workspace', observed,
-    });
-  }
-
-  if (attribution?.kind === 'unavailable') {
-    // Our outage: refused rather than filed silently unattributed, so the reporter can resend.
-    diagnostics.failure('feedback.workspace_unverified', toKinuError({
-      doing: 'confirming the reporter owns the workspace their report names',
-      cause: attribution.error,
-      otherwise: 'unavailable',
-    }), { feedbackRoute: feedbackRouteFamily(route) });
-
-    return refuse({
-      deps, status: 503,
-      message: 'That workspace could not be confirmed right now. Try again in a moment.',
-      reason: 'workspace_unverified', observed,
-    });
-  }
-
-  let screenshot: { key: string; bytes: Uint8Array } | null = null;
-  const id = deps.newId();
-
-  if (shot !== null) {
-    // Courtesy only: measured 2026-08-24, the runtime derives `File.type` from the filename, so the
-    // declared type proves nothing. `sanitizePng` below is the gate.
-    if (shot.type.toLowerCase() !== FEEDBACK_SCREENSHOT_TYPE) {
-      return refuse({ deps, status: 415, message: 'The screenshot must be a PNG.', reason: 'bad_content_type', observed });
+    if (identity === null) {
+      return refuse({ deps, status: 401, message: 'Sign in to send feedback.', reason: 'unauthenticated', observed: blank });
     }
 
-    if (shot.size > FEEDBACK_MAX_SCREENSHOT_BYTES) {
+    const contentType = request.headers.get('content-type') ?? '';
+
+    if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
+      return refuse({ deps, status: 415, message: 'Send feedback as multipart/form-data.', reason: 'bad_content_type', observed: blank });
+    }
+
+    // A declared length that cannot fit is refused before buffering; the counted read is the real bound.
+    const declared = Number(request.headers.get('content-length') ?? '');
+
+    if (Number.isFinite(declared) && declared > FEEDBACK_MAX_REQUEST_BYTES) {
+      return refuse({ deps, status: 413, message: OVER_REQUEST_LIMIT, reason: 'too_large', observed: blank });
+    }
+
+    const bounded = yield* Effect.promise(() => readBounded(request, FEEDBACK_MAX_REQUEST_BYTES));
+
+    if (bounded === 'too_large') {
+      return refuse({ deps, status: 413, message: OVER_REQUEST_LIMIT, reason: 'too_large', observed: blank });
+    }
+
+    if (bounded instanceof KinuError) {
+      diagnostics.failure('feedback.body_unreadable', bounded);
+
+      return refuse({ deps, status: 400, message: UNREADABLE_FORM, reason: 'malformed', observed: blank });
+    }
+
+    const form = yield* parseMultipart(request.url, contentType, bounded);
+
+    if (form instanceof KinuError) {
+      // Recorded here: the byte count belongs to this frame, not the decoder.
+      diagnostics.failure('feedback.body_unparseable', form, { bytes: bounded.byteLength });
+
+      return refuse({ deps, status: 400, message: UNREADABLE_FORM, reason: 'malformed', observed: blank });
+    }
+
+    const note = readField(form, FEEDBACK_FIELDS.note, FEEDBACK_MAX_NOTE_CHARS);
+    const route = readField(form, FEEDBACK_FIELDS.route, FEEDBACK_MAX_ROUTE_CHARS);
+    const workspaceField = readField(form, FEEDBACK_FIELDS.workspace, FEEDBACK_MAX_ROUTE_CHARS);
+    const annotated = form.get(FEEDBACK_FIELDS.annotated) === '1';
+
+    const observed: Observed = {
+      route, noteLength: note.length, screenshotAttempted: false, screenshotBytes: 0, annotated,
+    };
+
+    const part = form.get(FEEDBACK_FIELDS.screenshot);
+    const shot = part instanceof Blob ? part : null;
+
+    if (part !== null && shot === null) {
+      return refuse({ deps, status: 415, message: 'The screenshot must be a PNG file.', reason: 'bad_content_type', observed });
+    }
+
+    if (shot !== null) {
+      // Before any refusal, so every rejection marker states a screenshot was carried.
+      observed.screenshotAttempted = true;
+      observed.screenshotBytes = shot.size;
+    }
+
+    if (shot === null && note.length === 0) {
+      return refuse({ deps, status: 400, message: 'Add a note or a screenshot before sending.', reason: 'no_content', observed });
+    }
+
+    // The workspace field is browser-supplied, so ownership is proven before storage, row or `accepted`
+    // marker. A report naming no workspace is not a claim and is not checked.
+    const attribution = workspaceField.length === 0
+      ? null
+      : yield* Effect.promise(() => deps.attributeWorkspace(identity.userId, workspaceField));
+
+    if (attribution?.kind === 'refused') {
       return refuse({
-        deps, status: 413,
-        message: `That screenshot is ${String(Math.ceil(shot.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit. Send the note on its own, or capture a smaller area.`,
-        reason: 'too_large', observed,
+        deps, status: 403,
+        message: 'That workspace is not one of yours. Send the report without a workspace, or file it from the workspace it is about.',
+        reason: 'unowned_workspace', observed,
       });
     }
 
-    if (deps.store === null) {
-      return refuse({
-        deps, status: 503,
-        message: 'Screenshots are unavailable on this deployment. Your note can still be sent on its own.',
-        reason: 'storage_unavailable', observed,
-      });
-    }
-
-    // The gate: the bytes must be a PNG, and the same pass drops every metadata chunk.
-    const clean = sanitizePng(new Uint8Array(await shot.arrayBuffer()));
-
-    if ('fault' in clean) {
-      const { status, reason } = pngRefusalFor(clean.fault);
-
-      return refuse({ deps, status, message: `That screenshot could not be read: ${clean.error}`, reason, observed });
-    }
-
-    observed.screenshotBytes = clean.bytes.length;
-    screenshot = { key: `feedback/${identity.userId}/${id}.png`, bytes: clean.bytes };
-
-    // A rejected put is a lost report: answer `storage_unavailable`, never an unmarked 500.
-    try {
-      await deps.store.put(screenshot.key, screenshot.bytes);
-    } catch (cause) {
-      diagnostics.failure('feedback.screenshot_store_failed', toKinuError({
-        doing: 'writing a feedback screenshot to the object store',
-        cause,
+    if (attribution?.kind === 'unavailable') {
+      // Our outage: refused rather than filed silently unattributed, so the reporter can resend.
+      diagnostics.failure('feedback.workspace_unverified', toKinuError({
+        doing: 'confirming the reporter owns the workspace their report names',
+        cause: attribution.error,
         otherwise: 'unavailable',
-      }), { objectKey: screenshot.key, feedbackId: id });
+      }), { feedbackRoute: feedbackRouteFamily(route) });
 
       return refuse({
         deps, status: 503,
-        message: 'The screenshot could not be stored. Try again, or send the note on its own.',
-        reason: 'storage_unavailable', observed,
+        message: 'That workspace could not be confirmed right now. Try again in a moment.',
+        reason: 'workspace_unverified', observed,
       });
     }
-  }
 
-  const row: FeedbackRecord = {
-    id,
-    createdAt: deps.now(),
-    userId: identity.userId,
-    email: identity.email,
-    note,
-    route,
-    // The authority's answer, never the submitted string.
-    workspace: attribution?.workspace ?? null,
-    objectKey: screenshot?.key ?? null,
-    bytes: screenshot?.bytes.length ?? null,
-  };
+    let screenshot: { key: string; bytes: Uint8Array } | null = null;
+    const id = deps.newId();
 
-  const written = await deps.record(row);
+    if (shot !== null) {
+      // Courtesy only: measured 2026-08-24, the runtime derives `File.type` from the filename, so the
+      // declared type proves nothing. `sanitizePng` below is the gate.
+      if (shot.type.toLowerCase() !== FEEDBACK_SCREENSHOT_TYPE) {
+        return refuse({ deps, status: 415, message: 'The screenshot must be a PNG.', reason: 'bad_content_type', observed });
+      }
 
-  if ('error' in written) {
-    // Delete the now-unreferenced object; a failed delete is recorded with its key so it stays
-    // findable, and must not change the answer.
-    const store = deps.store;
+      if (shot.size > FEEDBACK_MAX_SCREENSHOT_BYTES) {
+        return refuse({
+          deps, status: 413,
+          message: `That screenshot is ${String(Math.ceil(shot.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit. Send the note on its own, or capture a smaller area.`,
+          reason: 'too_large', observed,
+        });
+      }
 
-    if (screenshot !== null && store !== null) {
-      try {
-        await store.delete(screenshot.key);
-      } catch (cause) {
-        diagnostics.failure('feedback.orphan_retained', toKinuError({
-          doing: 'deleting the screenshot of a feedback row that failed to write',
-          cause,
+      if (deps.store === null) {
+        return refuse({
+          deps, status: 503,
+          message: 'Screenshots are unavailable on this deployment. Your note can still be sent on its own.',
+          reason: 'storage_unavailable', observed,
+        });
+      }
+
+      // The gate: the bytes must be a PNG, and the same pass drops every metadata chunk.
+      const clean = sanitizePng(new Uint8Array(yield* Effect.promise(() => shot.arrayBuffer())));
+
+      if ('fault' in clean) {
+        const { status, reason } = pngRefusalFor(clean.fault);
+
+        return refuse({ deps, status, message: `That screenshot could not be read: ${clean.error}`, reason, observed });
+      }
+
+      observed.screenshotBytes = clean.bytes.length;
+      const stored = { key: `feedback/${identity.userId}/${id}.png`, bytes: clean.bytes };
+      const store = deps.store;
+      screenshot = stored;
+
+      // A rejected put is a lost report: answer `storage_unavailable`, never an unmarked 500.
+      const unstored = yield* Effect.catchCause(Effect.as(Effect.promise(() => store.put(stored.key, stored.bytes)), false), (failed) => Effect.sync(() => {
+        diagnostics.failure('feedback.screenshot_store_failed', toKinuError({
+          doing: 'writing a feedback screenshot to the object store',
+          cause: Cause.squash(failed),
           otherwise: 'unavailable',
-        }), { objectKey: screenshot.key, feedbackId: id });
+        }), { objectKey: stored.key, feedbackId: id });
+
+        return true;
+      }));
+
+      if (unstored) {
+        return refuse({
+          deps, status: 503,
+          message: 'The screenshot could not be stored. Try again, or send the note on its own.',
+          reason: 'storage_unavailable', observed,
+        });
       }
     }
 
-    return refuse({ deps, status: 500, message: 'Feedback could not be saved. Try sending it again.', reason: 'row_write_failed', observed });
-  }
+    const row: FeedbackRecord = {
+      id,
+      createdAt: deps.now(),
+      userId: identity.userId,
+      email: identity.email,
+      note,
+      route,
+      // The authority's answer, never the submitted string.
+      workspace: attribution?.workspace ?? null,
+      objectKey: screenshot?.key ?? null,
+      bytes: screenshot?.bytes.length ?? null,
+    };
 
-  deps.mark({
-    feedbackId: written.id,
-    outcome: 'accepted',
-    rejectReason: '',
-    routeFamily: feedbackRouteFamily(route),
-    hasScreenshot: screenshot !== null,
-    screenshotBytes: observed.screenshotBytes,
-    noteLength: note.length,
-    annotated,
+    const written = yield* Effect.promise(() => deps.record(row));
+
+    if ('error' in written) {
+      // Delete the now-unreferenced object; a failed delete is recorded with its key so it stays
+      // findable, and must not change the answer.
+      const store = deps.store;
+
+      if (screenshot !== null && store !== null) {
+        yield* logged('feedback.orphan_retained', { doing: 'deleting the screenshot of a feedback row that failed to write', otherwise: 'unavailable' }, () => store.delete(screenshot.key), { objectKey: screenshot.key, feedbackId: id });
+      }
+
+      return refuse({ deps, status: 500, message: 'Feedback could not be saved. Try sending it again.', reason: 'row_write_failed', observed });
+    }
+
+    deps.mark({
+      feedbackId: written.id,
+      outcome: 'accepted',
+      rejectReason: '',
+      routeFamily: feedbackRouteFamily(route),
+      hasScreenshot: screenshot !== null,
+      screenshotBytes: observed.screenshotBytes,
+      noteLength: note.length,
+      annotated,
+    });
+
+    // `satisfies` checks the literal against the declared wire shape.
+    return json({ body: { id: written.id } satisfies FeedbackAccepted }, { status: 201 });
   });
-
-  // `satisfies` checks the literal against the declared wire shape.
-  return json({ body: { id: written.id } satisfies FeedbackAccepted }, { status: 201 });
 }
 
 /** A submission is a POST. */
-export async function answerFeedback(
+export function answerFeedback(
   request: Request,
   identity: AuthIdentity | null,
   deps: FeedbackDeps,
 ): Promise<Response> {
-  if (request.method !== 'POST') return err(405, 'use POST');
-
-  return handleFeedbackSubmission(request, identity, deps);
+  return settle(request.method === 'POST' ? handleFeedbackSubmission(request, identity, deps) : Effect.succeed(err(405, 'use POST')));
 }

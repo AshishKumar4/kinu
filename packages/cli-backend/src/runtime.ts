@@ -63,7 +63,7 @@ import {
 } from './profile-authority';
 import type { LocalOAuthStore } from './oauth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
-import { diagnostics, KinuError, renderCauseChain, settleLogged, settleSync, toKinuError } from '@kinu.run/core/obs';
+import { detach, diagnostics, KinuError, renderCauseChain, settleLogged, settleSync, toKinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -350,7 +350,7 @@ function buildCLIRuntime(
         doing: 'running work this session deferred', otherwise: 'io',
       }, fn);
 
-      const timer = setTimeout(deferred, Math.max(0, ms));
+      const timer = setTimeout(() => detach(Effect.promise(deferred)), Math.max(0, ms));
       timer.unref?.();
     },
     cron: async () => {},

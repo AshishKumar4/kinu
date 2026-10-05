@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction } from "react";
 import { useAgent } from "agents/react";
+import { Effect } from "effect";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
   branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, JobOutputFrameSchema, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE,
@@ -27,7 +28,7 @@ import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
 import { looksLikeSecretField, parseMemoryNotes, type InlineSteer } from "@kinu.run/core";
-import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
+import { detach, diagnostics, KinuError, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -1177,9 +1178,11 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
     };
 
-    agent.addEventListener("open", onOpen);
+    const opened = () => detach(Effect.promise(onOpen));
 
-    return () => agent.removeEventListener("open", onOpen);
+    agent.addEventListener("open", opened);
+
+    return () => agent.removeEventListener("open", opened);
   }, [agent, refreshDeployedBuild, sessionRecovery]);
 
   // A reconnect or manual retry changes the transport identity so mounted readers reload too.
@@ -1204,7 +1207,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   useEffect(() => {
     if (connectionStatus !== "connected") return;
 
-    const id = setInterval(async () => {
+    const id = setInterval(() => detach(Effect.promise(async () => {
       if (agent.readyState !== WebSocket.OPEN) return;
 
       if (!isSubordinate) {
@@ -1220,7 +1223,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       } catch (cause) {
         setSourceError("snapshot", errorMessage({ cause }));
       }
-    }, 25_000);
+    })), 25_000);
 
     return () => clearInterval(id);
   }, [agent, connectionStatus, isSubordinate, rpc, setSourceError]);
@@ -1507,10 +1510,12 @@ export function useKinu(target?: string | KinuActorAddress) {
         }
     };
 
-    agent.addEventListener("message", handler);
+    const received = (event: MessageEvent) => detach(Effect.promise(() => handler(event)));
+
+    agent.addEventListener("message", received);
 
     return () => {
-      agent.removeEventListener("message", handler);
+      agent.removeEventListener("message", received);
       // A new socket cannot know what a running head had half-written.
       forgetDeltas();
     };
@@ -1891,7 +1896,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       return;
     }
 
-    searchTimer.current = setTimeout(async () => {
+    searchTimer.current = setTimeout(() => detach(Effect.promise(async () => {
       // Published only while this query is still the newest.
       let thrown: { cause: unknown } | null = null;
 
@@ -1914,7 +1919,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       if (thrown !== null && seq === searchSeq.current) {
         setSourceError("memory", `Memory search failed: ${errorMessage(thrown)}`);
       }
-    }, MEMORY_SEARCH_DEBOUNCE_MS);
+    })), MEMORY_SEARCH_DEBOUNCE_MS);
   }, [rpc, memoryContent, setSourceError]);
 
   /** Resolves null on success or the failure reason, which is also recorded on `error` after the

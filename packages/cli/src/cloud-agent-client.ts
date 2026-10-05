@@ -18,7 +18,7 @@ import {
   type StagedSkillResult,
   type ModelTestResult,
 } from '@kinu.run/core';
-import { attempt, diagnostics, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
+import { attempt, detach, diagnostics, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
   AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
@@ -952,8 +952,9 @@ export class CloudAgentClient implements AgentClient {
       }
     };
 
-    ws.addEventListener('close', onDrop);
-    ws.addEventListener('error', onDrop);
+    const droppedConnection = () => detach(Effect.promise(onDrop));
+    ws.addEventListener('close', droppedConnection);
+    ws.addEventListener('error', droppedConnection);
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), 15_000);

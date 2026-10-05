@@ -1,10 +1,11 @@
+import { Cause, Effect } from 'effect';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode, type RefObject } from 'react';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 
-import { diagnostics, renderThrownChain, settleLogged, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, settleLogged, toKinuError, settleSync, settle, detach } from '@kinu.run/core/obs';
 import { TUI_MARKS } from '@kinu.run/core/tui';
 
 import { AGENT_HOME, canonicalProjectRoot } from '../config';
@@ -102,10 +103,12 @@ const EMPTY_AGENT_PAGE: TuiAgentPage = Object.freeze({ items: Object.freeze([]),
 export function agentSourceFromList(list: () => readonly ListedAgent[]): TuiAgentSource {
   return {
     load(cursor) {
-      if (cursor !== null) throw new Error('The local agent list has no further page.');
-      const items = list().map((agent) => Object.freeze({ ...agent }));
+      return settleSync(Effect.gen(function* () {
+        if (cursor !== null) return yield* Effect.die(new Error('The local agent list has no further page.'));
+        const items = list().map((agent) => Object.freeze({ ...agent }));
 
-      return Object.freeze({ items: Object.freeze(items), total: items.length, nextCursor: null });
+        return Object.freeze({ items: Object.freeze(items), total: items.length, nextCursor: null });
+      }));
     },
   };
 }
@@ -119,39 +122,39 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
   sourceRef.current = source;
   const requestRef = useRef(0);
 
-  const reload = useCallback(async () => {
+  // A newer request owns the view; a superseded failure is background.
+  const failedRequest = useCallback((request: number, event: 'tui.roster_reload_superseded' | 'tui.roster_page_superseded', doing: string) =>
+    (failed: Cause.Cause<unknown>) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
+
+      if (request === requestRef.current) setError(renderThrownChain({ cause }));
+      else diagnostics.failure(event, toKinuError({ doing, cause, otherwise: 'unavailable' }));
+    }), []);
+
+  const reload = useCallback(() => settle(Effect.gen(function* () {
     const request = ++requestRef.current;
     setLoading(true);
 
-    try {
-      const next = validateAgentPage(await sourceRef.current.load(null));
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const next = yield* validateAgentPage(yield* Effect.promise(async () => sourceRef.current.load(null)));
 
       if (request !== requestRef.current) return;
       setPage(next);
       setError(null);
-    } catch (cause) {
-      if (request === requestRef.current) setError(renderThrownChain({ cause }));
-      else {
-        // A newer request owns the view; the superseded failure is background.
-        diagnostics.failure(
-          'tui.roster_reload_superseded',
-          toKinuError({ doing: 'reloading the agent roster', cause, otherwise: 'unavailable' }),
-        );
-      }
-    } finally {
+    }), failedRequest(request, 'tui.roster_reload_superseded', 'reloading the agent roster')), Effect.sync(() => {
       if (request === requestRef.current) setLoading(false);
-    }
-  }, []);
+    }));
+  })), []);
 
-  const loadMore = useCallback(async () => {
+  const loadMore = useCallback(() => detach(Effect.gen(function* () {
     const cursor = page.nextCursor;
 
     if (cursor === null || loading) return;
     const request = ++requestRef.current;
     setLoading(true);
 
-    try {
-      const next = validateAgentPage(await sourceRef.current.load(cursor));
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const next = yield* validateAgentPage(yield* Effect.promise(async () => sourceRef.current.load(cursor)));
 
       if (request !== requestRef.current) return;
       const byKey: Record<string, TuiAgentSummary> = {};
@@ -163,18 +166,10 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
         nextCursor: next.nextCursor,
       }));
       setError(null);
-    } catch (cause) {
-      if (request === requestRef.current) setError(renderThrownChain({ cause }));
-      else {
-        diagnostics.failure(
-          'tui.roster_page_superseded',
-          toKinuError({ doing: 'loading the next agent page', cause, otherwise: 'unavailable' }),
-        );
-      }
-    } finally {
+    }), failedRequest(request, 'tui.roster_page_superseded', 'loading the next agent page')), Effect.sync(() => {
       if (request === requestRef.current) setLoading(false);
-    }
-  }, [loading, page]);
+    }));
+  })), [loading, page]);
 
   useEffect(() => {
     startTransition(() => settleLogged('tui.roster_reload_failed', {
@@ -829,31 +824,33 @@ function loadThemeRegistry(directory: string): ThemeRegistry {
   return createThemeRegistry([...BUILTIN_TUI_THEMES, ...custom]);
 }
 
-function validateAgentPage(page: TuiAgentPage): TuiAgentPage {
-  if (!Number.isInteger(page.total) || page.total < page.items.length) {
-    throw new Error('Agent roster total must cover every returned row.');
-  }
-
-  const keys: Record<string, true> = {};
-
-  for (const agent of page.items) {
-    const key = agentRowKey(agent);
-
-    if (agent.name.trim() === '' || keys[key] === true) {
-      throw new Error(`Agent roster contains an invalid or duplicate entry: ${key}`);
+function validateAgentPage(page: TuiAgentPage): Effect.Effect<TuiAgentPage> {
+  return Effect.gen(function* () {
+    if (!Number.isInteger(page.total) || page.total < page.items.length) {
+      return yield* Effect.die(new Error('Agent roster total must cover every returned row.'));
     }
 
-    keys[key] = true;
-  }
+    const keys: Record<string, true> = {};
 
-  return Object.freeze({
-    items: Object.freeze(page.items.map((agent) => agent.subordinates === undefined
-      ? Object.freeze({ ...agent })
-      : Object.freeze({
-          ...agent,
-          subordinates: Object.freeze(agent.subordinates.map((subordinate) => Object.freeze({ ...subordinate }))),
-        }))),
-    total: page.total,
-    nextCursor: page.nextCursor,
+    for (const agent of page.items) {
+      const key = agentRowKey(agent);
+
+      if (agent.name.trim() === '' || keys[key] === true) {
+        return yield* Effect.die(new Error(`Agent roster contains an invalid or duplicate entry: ${key}`));
+      }
+
+      keys[key] = true;
+    }
+
+    return Object.freeze({
+      items: Object.freeze(page.items.map((agent) => agent.subordinates === undefined
+        ? Object.freeze({ ...agent })
+        : Object.freeze({
+            ...agent,
+            subordinates: Object.freeze(agent.subordinates.map((subordinate) => Object.freeze({ ...subordinate }))),
+          }))),
+      total: page.total,
+      nextCursor: page.nextCursor,
+    });
   });
 }

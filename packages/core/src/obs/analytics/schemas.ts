@@ -4,6 +4,8 @@
  * Separate datasets because AE samples per index value: audit rows must not share a sampling
  * population with turn streams. No slot holds free text; workspace and actor ids are digests.
  */
+import { Effect } from 'effect';
+import { settleSync } from '../effect';
 import type { ReservedLogField } from '../log';
 import { assertWithinPlatformLimits } from './limits';
 import { assertPublishableNames } from './privacy';
@@ -83,20 +85,18 @@ function defineSchema<const S extends AnalyticsSchema>(
 }
 
 /** 1-based, as AE's columns are. */
-function slotColumn(schema: AnalyticsSchema, kind: 'blob' | 'double', name: string): string {
+function slotColumn(schema: AnalyticsSchema, kind: 'blob' | 'double', name: string): Effect.Effect<string> {
   const at = (kind === 'blob' ? schema.blobs : schema.doubles).map((slot) => slot.name).indexOf(name);
 
-  if (at < 0) throw new RangeError(`${schema.dataset}: no ${kind} slot named "${name}"`);
-
-  return `${kind}${at + 1}`;
+  return at < 0 ? Effect.die(new RangeError(`${schema.dataset}: no ${kind} slot named "${name}"`)) : Effect.succeed(`${kind}${at + 1}`);
 }
 
 export function blobColumn<S extends AnalyticsSchema>(schema: S, name: BlobName<S>): string {
-  return slotColumn(schema, 'blob', String(name));
+  return settleSync(slotColumn(schema, 'blob', String(name)));
 }
 
 export function doubleColumn<S extends AnalyticsSchema>(schema: S, name: DoubleName<S>): string {
-  return slotColumn(schema, 'double', String(name));
+  return settleSync(slotColumn(schema, 'double', String(name)));
 }
 
 export function indexColumn(_schema: AnalyticsSchema): string {

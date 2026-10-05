@@ -1,4 +1,5 @@
 /** One-click MCP preset rows; a row's state is the account's server row tagged with its `preset_id`. */
+import { Effect } from 'effect';
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import {
@@ -15,7 +16,7 @@ import { inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
 import { PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
@@ -138,23 +139,22 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
     }
   };
 
-  const remove = async () => {
+  const remove = () => Effect.gen(function* () {
     if (!server) return;
 
     if (!confirm(`Remove "${server.name}"? All workspaces will lose access to its tools.`)) return;
 
     setErr(null);
 
-    try { await removeMcpServer(server.id); onChanged(); }
-    catch (e) { setErr(renderThrownChain({ cause: e })); }
-  };
+    return yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => removeMcpServer(server.id)); onChanged(); }), showing(setErr));
+  });
 
   const asking = openToken && !added;
 
   let trailing: ReactNode;
 
   if (added) {
-    trailing = <PresetMenu preset={preset} word={word} dot={dot} onRemove={() => void remove()} />;
+    trailing = <PresetMenu preset={preset} word={word} dot={dot} onRemove={() => detach(remove())} />;
   } else if (asking) {
     trailing = (
       <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}
@@ -164,7 +164,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
     );
   } else {
     trailing = (
-      <button type="button" data-plugin-add onClick={connect} disabled={busy}
+      <button type="button" data-plugin-add onClick={(...args: Parameters<typeof connect>) => detach(Effect.promise(async () => connect(...args)))} disabled={busy}
         aria-label={`Add ${preset.title}`} title={`Add ${preset.title}`}
         className={PLUGIN_ACTION}>
         <PlusIcon size={16} />
@@ -187,10 +187,10 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
                 aria-label={tokenLabel} placeholder={tokenLabel}
                 className={inputCls + ' min-w-0 flex-1'} />
               <button
-                onClick={async () => { await add({
+                onClick={() => detach(Effect.promise(async () => { await add({
                   presetId: preset.id,
                   headers: { Authorization: `Bearer ${token}` },
-                }); }}
+                }); }))}
                 disabled={busy || !token.trim()}
                 className="text-xs px-2 py-1.5 rounded-md p-accent-bg p-accent font-medium disabled:opacity-50">
                 {busy ? 'Connecting…' : 'Connect'}

@@ -2,7 +2,9 @@
  * The only way an agent opens a span. Context dies across `alarm()`, a wake or a cold start, so a
  * handle is revoked on settle; no `AsyncLocalStorage`, which has no revocation point.
  */
+import { Effect } from 'effect';
 import { analyticsDigest } from './analytics/privacy';
+import { settleSync } from './effect';
 import { KinuError } from './error';
 import {
   renderSelfPath, type ScopedSpan, type SpanOpenAttributes, type Tracer,
@@ -64,15 +66,8 @@ export interface AgentTracing {
   turns(actor: SpanActor): TurnTracing;
 }
 
-interface RootScope {
-  readonly root: string;
-  readonly label: string;
-  readonly actor: SpanActor;
-  readonly stamp: (span: ScopedSpan) => void;
-}
-
-function refuseEscaped(name: string, label: string, unit: 'invocation' | 'turn'): never {
-  throw new KinuError(
+function escaped(name: string, label: string, unit: 'invocation' | 'turn'): KinuError {
+  return new KinuError(
     'unsupported',
     `span ${JSON.stringify(name)} was opened after ${label} settled: the work escaped its ${unit}, `
       + 'so the span would claim coverage of time nothing measured',
@@ -93,48 +88,6 @@ export function createAgentTracing(deps: {
 
   let invocations = 0;
 
-  const scoped = <T>(scope: RootScope, fn: (handle: TracedInvocation, span: ScopedSpan) => T): T => {
-    const { root, actor, stamp } = scope;
-    const actorId = analyticsDigest(actor.id);
-    let live = true;
-
-    const open = <U>(name: string, body: (span: ScopedSpan) => U): U => deps.tracer.span(name, attributes, (span) => {
-      span.setAttribute(SPAN_ATTR_ACTOR, actorId);
-      span.setAttribute(SPAN_ATTR_ACTOR_KIND, actor.kind);
-      stamp(span);
-
-      return body(span);
-    });
-
-    const handle: TracedInvocation = {
-      span<U>(childName: string, childFn: (span: ScopedSpan) => U): U {
-        if (!live) refuseEscaped(childName, scope.label, 'invocation');
-
-        return open(childName, childFn);
-      },
-    };
-
-    return open(root, (span) => {
-      const revoke = (): void => { live = false; };
-
-      let revokesLater = false;
-
-      try {
-        const result = fn(handle, span);
-
-        if (result instanceof Promise) {
-          revokesLater = true;
-          // `then(ok, err)`, not `finally`: `finally` would derive an unhandled rejection.
-          void result.then(revoke, revoke);
-        }
-
-        return result;
-      } finally {
-        if (!revokesLater) revoke();
-      }
-    });
-  };
-
   return {
     invocation<T>(
       kind: InvocationKind,
@@ -143,11 +96,43 @@ export function createAgentTracing(deps: {
     ): T {
       invocations += 1;
       const ordinal = invocations;
+      const label = `${kind} invocation ${String(ordinal)}`;
+      const actorId = analyticsDigest(deps.actor.id);
+      let live = true;
 
-      return scoped({
-        root: `${kind}.${name}`, label: `${kind} invocation ${String(ordinal)}`, actor: deps.actor,
-        stamp: (span) => { span.setAttribute(SPAN_ATTR_INVOCATION, ordinal); },
-      }, fn);
+      const open = <U>(spanName: string, body: (span: ScopedSpan) => U): U => deps.tracer.span(spanName, attributes, (span) => {
+        span.setAttribute(SPAN_ATTR_ACTOR, actorId);
+        span.setAttribute(SPAN_ATTR_ACTOR_KIND, deps.actor.kind);
+        span.setAttribute(SPAN_ATTR_INVOCATION, ordinal);
+
+        return body(span);
+      });
+
+      const handle: TracedInvocation = {
+        span<U>(childName: string, childFn: (span: ScopedSpan) => U): U {
+          return settleSync(live ? Effect.sync(() => open(childName, childFn)) : Effect.fail(escaped(childName, label, 'invocation')));
+        },
+      };
+
+      return open(`${kind}.${name}`, (span) => {
+        const revoke = (): void => { live = false; };
+
+        let revokesLater = false;
+
+        try {
+          const result = fn(handle, span);
+
+          if (result instanceof Promise) {
+            revokesLater = true;
+            // `then(ok, err)`, not `finally`: `finally` would derive an unhandled rejection.
+            void result.then(revoke, revoke);
+          }
+
+          return result;
+        } finally {
+          if (!revokesLater) revoke();
+        }
+      });
     },
     turns(actor: SpanActor): TurnTracing {
       const actorId = analyticsDigest(actor.id);
@@ -174,19 +159,21 @@ export function createAgentTracing(deps: {
 
           return {
             begin(name) {
-              if (!live) refuseEscaped(name, 'the turn', 'turn');
+              return settleSync(Effect.gen(function* () {
+                if (!live) return yield* escaped(name, 'the turn', 'turn');
 
-              const startedAtUnit = Date.now();
-              const atStep = step;
+                const startedAtUnit = Date.now();
+                const atStep = step;
 
-              return {
-                end(unitStamp) {
-                  record(name, turn, startedAtUnit, (span) => {
-                    if (atStep !== null) span.setAttribute('kinu.step', atStep);
-                    unitStamp?.(span);
-                  });
-                },
-              };
+                return {
+                  end(unitStamp) {
+                    record(name, turn, startedAtUnit, (span) => {
+                      if (atStep !== null) span.setAttribute('kinu.step', atStep);
+                      unitStamp?.(span);
+                    });
+                  },
+                };
+              }));
             },
             atStep(next) {
               step = next;

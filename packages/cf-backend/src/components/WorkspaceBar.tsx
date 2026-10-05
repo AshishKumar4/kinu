@@ -1,11 +1,12 @@
 /** The only place a workspace's name renders inside a workspace: the one row present in both Work and Supervise. */
+import { Effect } from 'effect';
 import { useEffect, useState, type FormEvent } from "react";
 import { Tabs, type TabsItem } from "@cloudflare/kumo";
 import { Link } from "react-router-dom";
 import { CheckIcon, GitBranchIcon, PencilSimpleIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
 import type { ConnectionStatus } from "@/hooks/use-kinu";
 import { useTheme, toggleMode } from "@/hooks/use-theme";
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { showing, detach } from '@kinu.run/core/obs';
 import { fmtSpan } from "@kinu.run/core";
 import { composing } from "@/components/ui/form";
 
@@ -167,7 +168,7 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
   useEffect(() => { if (!editing) setValue(editValue ?? title); }, [editing, title, editValue]);
 
 
-  const save = async (event: FormEvent) => {
+  const save = (event: FormEvent) => Effect.gen(function* () {
     event.preventDefault();
     const displayName = value.trim();
 
@@ -175,19 +176,17 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
     setSaving(true);
     setError(null);
 
-    try {
-      await onRename(displayName);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => onRename(displayName));
       setEditing(false);
-    } catch (err) {
-      setError(renderThrownChain({ cause: err }));
-    } finally {
+    }), showing(setError)), Effect.sync(() => {
       setSaving(false);
-    }
-  };
+    }));
+  });
 
   if (editing) {
     return (
-      <form onSubmit={save} className="flex min-w-0 items-center gap-1">
+      <form onSubmit={(event) => detach(save(event))} className="flex min-w-0 items-center gap-1">
         <input
           autoFocus
           value={value}

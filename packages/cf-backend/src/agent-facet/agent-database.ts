@@ -14,7 +14,7 @@ import {
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes
 } from '@kinu.run/core';
-import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { attempt, detach, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -261,7 +261,7 @@ export class AgentDatabase {
       turnInFlight: () => false,
       closed: () => false,
       setTimer: (fn, ms) => {
-        setTimeout(() => settle(attempt({ doing: "running an agent's debounced drain", otherwise: 'io' }, fn).pipe(
+        setTimeout(() => detach(attempt({ doing: "running an agent's debounced drain", otherwise: 'io' }, fn).pipe(
           Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('agent.timer_failed', failure); })),
         )), ms);
       },

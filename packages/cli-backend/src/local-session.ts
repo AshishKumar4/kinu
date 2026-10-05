@@ -149,7 +149,7 @@ import { TierIdSchema,
   type ChatTurnInput, type CompactOutcome, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
-  diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, type Refusal,
+  diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, detach, type Refusal,
 } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, nodeWorkspace, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
@@ -1117,18 +1117,16 @@ export class LocalAgentSession {
 
   /** Skips a window outliving the session so consumed events never bind to a dead pump's turn. */
   setTimer(fn: () => Promise<void>, ms: number): void {
-    setTimeout(async () => {
-      if (this.chat.closed) return;
-
-      try {
-        await fn();
-      } catch (cause) {
-        diagnostics.failure(
-          'drain.timer_callback_failed',
-          toKinuError({ doing: 'running the drain-debounce timer callback', cause, otherwise: 'io' }),
-        );
-      }
-    }, ms);
+    setTimeout(() => detach(Effect.promise(async () => { if (this.chat.closed) return;
+    
+    try {
+      await fn();
+    } catch (cause) {
+      diagnostics.failure(
+        'drain.timer_callback_failed',
+        toKinuError({ doing: 'running the drain-debounce timer callback', cause, otherwise: 'io' }),
+      );
+    } })), ms);
   }
 
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
@@ -1537,22 +1535,20 @@ export class LocalAgentSession {
     this.clearLocalAlarm();
     this.scheduledAlarmAt = ts;
     const delay = Math.max(0, ts - Date.now());
-    this.alarmTimer = setTimeout(async () => {
-      this.alarmTimer = null;
-      this.scheduledAlarmAt = null;
-
-      try {
-        await this.fireDueTriggers();
-      } catch (cause) {
-        const failure = toKinuError({
-          doing: 'firing the triggers due on this wake',
-          cause,
-          otherwise: 'io',
-        });
-
-        diagnostics.failure('schedule.due_triggers_failed', failure);
-      }
-    }, Math.min(delay, 2_147_483_647));
+    this.alarmTimer = setTimeout(() => detach(Effect.promise(async () => { this.alarmTimer = null;
+    this.scheduledAlarmAt = null;
+    
+    try {
+      await this.fireDueTriggers();
+    } catch (cause) {
+      const failure = toKinuError({
+        doing: 'firing the triggers due on this wake',
+        cause,
+        otherwise: 'io',
+      });
+    
+      diagnostics.failure('schedule.due_triggers_failed', failure);
+    } })), Math.min(delay, 2_147_483_647));
   }
 
   private clearLocalAlarm(): void {
@@ -2070,29 +2066,27 @@ export class LocalAgentSession {
     this.clearTerminalRetry();
     this.terminalRetryAt = atMs;
 
-    const timer = setTimeout(async () => {
-      this.clearTerminalRetry();
-
-      // Job sweep first, in its own try: this timer is also a deferred job's wake, and only
-      // `recoverBackgroundJobs` reaches `recoverOrphans` otherwise.
-      try {
-        await this.jobRunner.recoverDueResumes();
-      } catch (cause) {
-        diagnostics.failure('jobs.due_resume_failed', toKinuError({
-          doing: 'resuming a background job whose next attempt came due', cause, otherwise: 'unavailable',
-        }));
-      }
-
-      try {
-        await this.recoverTerminalTransitions();
-      } catch (cause) {
-        const failure = toKinuError({
-          doing: 'retrying the effects a settled turn still owed', cause, otherwise: 'unavailable',
-        });
-
-        diagnostics.failure('turn.terminal_retry_failed', failure);
-      }
-    }, Math.max(0, atMs - Date.now()));
+    const timer = setTimeout(() => detach(Effect.promise(async () => { this.clearTerminalRetry();
+    
+    // Job sweep first, in its own try: this timer is also a deferred job's wake, and only
+    // `recoverBackgroundJobs` reaches `recoverOrphans` otherwise.
+    try {
+      await this.jobRunner.recoverDueResumes();
+    } catch (cause) {
+      diagnostics.failure('jobs.due_resume_failed', toKinuError({
+        doing: 'resuming a background job whose next attempt came due', cause, otherwise: 'unavailable',
+      }));
+    }
+    
+    try {
+      await this.recoverTerminalTransitions();
+    } catch (cause) {
+      const failure = toKinuError({
+        doing: 'retrying the effects a settled turn still owed', cause, otherwise: 'unavailable',
+      });
+    
+      diagnostics.failure('turn.terminal_retry_failed', failure);
+    } })), Math.max(0, atMs - Date.now()));
 
     timer.unref();
     this.terminalRetryTimer = timer;

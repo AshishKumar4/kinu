@@ -13,7 +13,8 @@ import { BUILTIN_SKILL_NAMES, workspaceSkillPath } from '../skills/discover';
 import { parseSkillFile, skillNameProblem } from '../skills/parse';
 
 import { vfsDirname } from '../utils/vfs-helpers';
-import { renderThrownChain } from '../obs/index';
+import { Effect, Result } from 'effect';
+import { renderThrownChain, settle } from '../obs/index';
 import {
   createRefinementStore, refinementRequestView, refinementStagingPath, releaseRefinementLane,
   type RefinementDeps, type RefinementEdit, type RefinementRequest,
@@ -55,17 +56,17 @@ export async function routeSkill(
 
   const parsed = parseSkillFile(edit.source, 'agent');
 
-  if (!parsed.ok) return refused(`the proposed file is not a valid skill: ${parsed.error}`);
-  const nameProblem = skillNameProblem(parsed.skill.name);
+  if (Result.isFailure(parsed)) return refused(`the proposed file is not a valid skill: ${parsed.failure.error}`);
+  const nameProblem = skillNameProblem(parsed.success.name);
 
   if (nameProblem !== null) return refused(`skill name ${nameProblem}`);
 
-  if (BUILTIN_SKILL_NAMES[parsed.skill.name]) {
-    return refused(`"${parsed.skill.name}" is a built-in skill: a workspace file may not claim `
+  if (BUILTIN_SKILL_NAMES[parsed.success.name]) {
+    return refused(`"${parsed.success.name}" is a built-in skill: a workspace file may not claim `
       + 'its name, because a built-in carries system placement no file has earned');
   }
 
-  const canonical = workspaceSkillPath(parsed.skill.name);
+  const canonical = workspaceSkillPath(parsed.success.name);
 
   if (edit.path !== canonical) {
     return refused(`the path must be the canonical skill path for its own name (${canonical}), `
@@ -90,7 +91,7 @@ export async function routeSkill(
       + 'differently-named skill');
   }
 
-  const staged = refinementStagingPath(request.id, parsed.skill.name);
+  const staged = refinementStagingPath(request.id, parsed.success.name);
   await vfs.mkdir(vfsDirname(staged), { recursive: true });
   await writeText(vfs, staged, edit.source);
 
@@ -148,8 +149,8 @@ export async function showRefinementRoute(
 ): Promise<StagedSkillResult> {
   const found = locate(deps, input);
 
-  if (!found.ok) return { ok: false, error: found.error };
-  const { request, route } = found;
+  if (Result.isFailure(found)) return { ok: false, error: found.failure };
+  const { request, route } = found.success;
   const source = await readStagedSkill(deps, request, route);
 
   if (source === null) {
@@ -174,9 +175,7 @@ export async function showRefinementRoute(
 
 const DECIDABLE_STAGES = new Set<RefinementStage>(['gated', 'evaluating']);
 
-type Located =
-  | { readonly ok: true; readonly request: RefinementRequest; readonly route: RefinementRoute }
-  | { readonly ok: false; readonly error: string };
+type Located = Result.Result<{ readonly request: RefinementRequest; readonly route: RefinementRoute }, string>;
 
 function locate(
   deps: RefinementDeps,
@@ -184,41 +183,30 @@ function locate(
 ): Located {
   const request = createRefinementStore(deps.control.sql, deps.control.rt.actor).get(input.requestId);
 
-  if (!request) return { ok: false, error: `no refinement ${input.requestId}` };
+  if (!request) return Result.fail(`no refinement ${input.requestId}`);
 
   if (!DECIDABLE_STAGES.has(request.stage)) {
-    return {
-      ok: false,
-      error: `refinement ${request.id} is ${request.stage}: its edits are `
-        + (request.stage === 'requested' || request.stage === 'planning'
-          ? 'not routed yet'
-          : 'already settled')
-        + ', so there is nothing for you to decide',
-    };
+    return Result.fail(`refinement ${request.id} is ${request.stage}: its edits are `
+      + (request.stage === 'requested' || request.stage === 'planning'
+        ? 'not routed yet'
+        : 'already settled')
+      + ', so there is nothing for you to decide');
   }
 
   const route = request.routes[input.routeIndex];
 
-  if (!route) {
-    return { ok: false, error: `refinement ${request.id} has no edit ${String(input.routeIndex)}` };
-  }
+  if (!route) return Result.fail(`refinement ${request.id} has no edit ${String(input.routeIndex)}`);
 
   if (route.kind !== 'skill') {
-    return {
-      ok: false,
-      error: `edit ${String(input.routeIndex)} of ${request.id} is a ${route.kind} edit and needs `
-        + 'no decision from you, only a staged skill does',
-    };
+    return Result.fail(`edit ${String(input.routeIndex)} of ${request.id} is a ${route.kind} edit and needs `
+      + 'no decision from you, only a staged skill does');
   }
 
   if (route.disposition !== 'pending_owner_approval') {
-    return {
-      ok: false,
-      error: `edit ${String(input.routeIndex)} of ${request.id} is already ${route.disposition}`,
-    };
+    return Result.fail(`edit ${String(input.routeIndex)} of ${request.id} is already ${route.disposition}`);
   }
 
-  return { ok: true, request, route };
+  return Result.succeed({ request, route });
 }
 
 export const REFINEMENT_DECISIONS = ['approve', 'reject'] as const;
@@ -243,84 +231,89 @@ export interface RefinementDecisionInput {
  * Approval writes trust for the final path first, then copies, reads back, and
  * verifies the digest before deleting the staging, so a failure is retryable.
  */
-export async function decideRefinementRoute(
+export function decideRefinementRoute(
   deps: RefinementDeps,
   input: RefinementDecisionInput,
 ): Promise<RefinementDecisionResult> {
-  releaseRefinementLane(deps.control.sql, deps.control.rt.actor.actorId);
-  const found = locate(deps, input);
+  return settle(Effect.gen(function* () {
+    releaseRefinementLane(deps.control.sql, deps.control.rt.actor.actorId);
+    const found = locate(deps, input);
 
-  if (!found.ok) return { ok: false, error: found.error };
-  const { request, route } = found;
+    if (Result.isFailure(found)) return { ok: false, error: found.failure };
+    const { request, route } = found.success;
+    const approvals = deps.approvals;
 
-  if (!deps.approvals) return { ok: false, error: 'this host wires no owner approval authority' };
+    if (!approvals) return { ok: false, error: 'this host wires no owner approval authority' };
 
-  if (input.expectedDigest !== route.digest) {
-    return {
-      ok: false,
-      error: 'that is not the edit you were shown: the proposal has changed since. Run '
-        + '`/refine show` again and decide on what it prints',
-    };
-  }
+    if (input.expectedDigest !== route.digest) {
+      return {
+        ok: false,
+        error: 'that is not the edit you were shown: the proposal has changed since. Run '
+          + '`/refine show` again and decide on what it prints',
+      };
+    }
 
-  const vfs = planeOf(deps);
-  const staged = stagedPathFor(request, route);
+    const vfs = planeOf(deps);
+    const staged = stagedPathFor(request, route);
 
-  if (input.decision === 'reject') {
-    if (await exists(vfs, staged)) await vfs.unlink(staged);
+    if (input.decision === 'reject') {
+      yield* Effect.promise(async () => {
+        if (await exists(vfs, staged)) await vfs.unlink(staged);
+      });
+
+      return patch(deps, {
+        request,
+        routeIndex: input.routeIndex,
+        next: {
+          ...route,
+          disposition: 'rejected',
+          reason: `you rejected these bytes; the staged file is deleted and nothing was written to ${route.target}`,
+        },
+        detail: `rejected: ${route.target} was never created`,
+      });
+    }
+
+    const source = yield* Effect.promise(() => readStagedSkill(deps, request, route));
+
+    if (source === null) {
+      return { ok: false, error: `the staged file for this edit is gone (${staged}): nothing to approve` };
+    }
+
+    if (instructionDigest(source) !== route.digest) {
+      return {
+        ok: false,
+        error: 'the staged bytes changed since they were proposed, so approving them would approve '
+          + 'something you were not shown. Re-run the refinement',
+      };
+    }
+
+    const existing = yield* Effect.promise(() => readText(vfs, route.target));
+
+    if (existing !== null && instructionDigest(existing) !== route.digest) {
+      return {
+        ok: false,
+        error: `${route.target} now holds different bytes: promoting onto it would overwrite `
+          + "somebody's file. The staged proposal is left where it is",
+      };
+    }
+
+    // Trust first; see the module header.
+    approvals.approve(route.target, route.digest);
+    const promoted = yield* Effect.result(promoteStagedSkill(deps, request, route));
+
+    if (Result.isFailure(promoted)) return { ok: false, error: promoted.failure };
 
     return patch(deps, {
       request,
       routeIndex: input.routeIndex,
       next: {
         ...route,
-        disposition: 'rejected',
-        reason: `you rejected these bytes; the staged file is deleted and nothing was written to ${route.target}`,
+        disposition: 'applied',
+        reason: `you approved digest ${route.digest}; ${route.target} is now trusted instructions`,
       },
-      detail: `rejected: ${route.target} was never created`,
+      detail: `approved: ${route.target} is now trusted instructions`,
     });
-  }
-
-  const source = await readStagedSkill(deps, request, route);
-
-  if (source === null) {
-    return { ok: false, error: `the staged file for this edit is gone (${staged}): nothing to approve` };
-  }
-
-  if (instructionDigest(source) !== route.digest) {
-    return {
-      ok: false,
-      error: 'the staged bytes changed since they were proposed, so approving them would approve '
-        + 'something you were not shown. Re-run the refinement',
-    };
-  }
-
-  const existing = await readText(vfs, route.target);
-
-  if (existing !== null && instructionDigest(existing) !== route.digest) {
-    return {
-      ok: false,
-      error: `${route.target} now holds different bytes: promoting onto it would overwrite `
-        + "somebody's file. The staged proposal is left where it is",
-    };
-  }
-
-  // Trust first; see the module header.
-  deps.approvals.approve(route.target, route.digest);
-  const promoted = await promoteStagedSkill(deps, request, route);
-
-  if (!promoted.ok) return { ok: false, error: promoted.error };
-
-  return patch(deps, {
-    request,
-    routeIndex: input.routeIndex,
-    next: {
-      ...route,
-      disposition: 'applied',
-      reason: `you approved digest ${route.digest}; ${route.target} is now trusted instructions`,
-    },
-    detail: `approved: ${route.target} is now trusted instructions`,
-  });
+  }));
 }
 
 interface RoutePatch {
@@ -342,10 +335,6 @@ function patch(deps: RefinementDeps, input: RoutePatch): RefinementDecisionResul
   return { ok: true, request: refinementRequestView(store.get(request.id) ?? request), detail };
 }
 
-type PromotionOutcome =
-  | { readonly ok: true; readonly moved: boolean }
-  | { readonly ok: false; readonly error: string };
-
 /**
  * Put the approved bytes at the canonical path, verify them, then clear the
  * staging. Idempotent; every settle calls it to repair a crashed promotion.
@@ -353,75 +342,64 @@ type PromotionOutcome =
  * Copy-verify-unlink because core's `VFS` has no rename; the staging outlives
  * every failure.
  */
-async function promoteStagedSkill(
+function promoteStagedSkill(
   deps: RefinementDeps,
   request: RefinementRequest,
   route: RefinementRoute,
-): Promise<PromotionOutcome> {
-  const vfs = planeOf(deps);
-  const staged = stagedPathFor(request, route);
-  const expected = route.digest;
+): Effect.Effect<boolean, string> {
+  return Effect.gen(function* () {
+    const vfs = planeOf(deps);
+    const staged = stagedPathFor(request, route);
+    const expected = route.digest;
 
-  if (expected === undefined) {
-    return { ok: false, error: `route for ${route.target} carries no digest to verify against` };
-  }
+    if (expected === undefined) return yield* Effect.fail(`route for ${route.target} carries no digest to verify against`);
 
-  const existing = await readText(vfs, route.target);
+    const existing = yield* Effect.promise(() => readText(vfs, route.target));
 
-  if (existing !== null && instructionDigest(existing) !== expected) {
-    return {
-      ok: false,
-      error: `${route.target} holds bytes that are not the approved ones: refusing to overwrite. `
-        + `The proposal is still staged at ${staged}`,
-    };
-  }
-
-  let moved = false;
-
-  if (existing === null) {
-    const source = await readStagedSkill(deps, request, route);
-
-    if (source === null) {
-      return {
-        ok: false,
-        error: `neither ${route.target} nor its staging at ${staged} exists: the approved bytes `
-          + 'are gone and cannot be reconstructed',
-      };
+    if (existing !== null && instructionDigest(existing) !== expected) {
+      return yield* Effect.fail(`${route.target} holds bytes that are not the approved ones: refusing to overwrite. `
+        + `The proposal is still staged at ${staged}`);
     }
 
-    if (instructionDigest(source) !== expected) {
-      return {
-        ok: false,
-        error: `the staging at ${staged} no longer holds the approved bytes: refusing to promote `
-          + 'something the owner did not approve',
-      };
-    }
+    let moved = false;
 
-    try {
-      await vfs.mkdir(vfsDirname(route.target), { recursive: true });
-      await writeText(vfs, route.target, source);
-    } catch (err) {
+    if (existing === null) {
+      const source = yield* Effect.promise(() => readStagedSkill(deps, request, route));
+
+      if (source === null) {
+        return yield* Effect.fail(`neither ${route.target} nor its staging at ${staged} exists: the approved bytes `
+          + 'are gone and cannot be reconstructed');
+      }
+
+      if (instructionDigest(source) !== expected) {
+        return yield* Effect.fail(`the staging at ${staged} no longer holds the approved bytes: refusing to promote `
+          + 'something the owner did not approve');
+      }
+
       // Staging is untouched, so the next settle retries.
-      return { ok: false, error: `could not write ${route.target}: ${renderThrownChain({ cause: err })}` };
+      yield* Effect.tryPromise({
+        try: async () => {
+          await vfs.mkdir(vfsDirname(route.target), { recursive: true });
+          await writeText(vfs, route.target, source);
+        },
+        catch: (cause) => `could not write ${route.target}: ${renderThrownChain({ cause })}`,
+      });
+
+      // Read back: a torn or transformed write would be trusted but unapproved.
+      const written = yield* Effect.promise(() => readText(vfs, route.target));
+
+      if (written === null || instructionDigest(written) !== expected) {
+        return yield* Effect.fail(`${route.target} did not read back as the approved bytes after writing: the `
+          + `proposal is still staged at ${staged} and the promotion can be retried`);
+      }
+
+      moved = true;
     }
 
-    // Read back: a torn or transformed write would be trusted but unapproved.
-    const written = await readText(vfs, route.target);
+    yield* Effect.promise(() => discardSkillStaging(deps, request, route));
 
-    if (written === null || instructionDigest(written) !== expected) {
-      return {
-        ok: false,
-        error: `${route.target} did not read back as the approved bytes after writing: the `
-          + `proposal is still staged at ${staged} and the promotion can be retried`,
-      };
-    }
-
-    moved = true;
-  }
-
-  await discardSkillStaging(deps, request, route);
-
-  return { ok: true, moved };
+    return moved;
+  });
 }
 
 async function discardSkillStaging(
@@ -440,29 +418,31 @@ async function discardSkillStaging(
  * Revoked or approved for other bytes: rolled_back, staging discarded. Approved
  * for these bytes: completes the promotion, or stays pending with the reason.
  */
-export async function settleSkillApproval(
+export function settleSkillApproval(
   deps: RefinementDeps,
   request: RefinementRequest,
   route: RefinementRoute,
 ): Promise<{ readonly state: 'applied' | 'rolled_back' | 'pending'; readonly reason?: string }> {
-  const standing = deps.approvals?.get(route.target);
+  return settle(Effect.gen(function* () {
+    const standing = deps.approvals?.get(route.target);
 
-  if (standing === null || standing === undefined) return { state: 'pending' };
+    if (standing === null || standing === undefined) return { state: 'pending' as const };
 
-  if (standing.decision === 'revoked' || standing.digest !== route.digest) {
-    await discardSkillStaging(deps, request, route);
+    if (standing.decision === 'revoked' || standing.digest !== route.digest) {
+      yield* Effect.promise(() => discardSkillStaging(deps, request, route));
 
-    return {
-      state: 'rolled_back',
-      reason: standing.decision === 'revoked'
-        ? 'you revoked trust for these bytes'
-        : 'the trust row moved to different bytes, so these are not in effect',
-    };
-  }
+      return {
+        state: 'rolled_back' as const,
+        reason: standing.decision === 'revoked'
+          ? 'you revoked trust for these bytes'
+          : 'the trust row moved to different bytes, so these are not in effect',
+      };
+    }
 
-  const promoted = await promoteStagedSkill(deps, request, route);
+    const promoted = yield* Effect.result(promoteStagedSkill(deps, request, route));
 
-  if (!promoted.ok) return { state: 'pending', reason: promoted.error };
+    if (Result.isFailure(promoted)) return { state: 'pending' as const, reason: promoted.failure };
 
-  return { state: 'applied' };
+    return { state: 'applied' as const };
+  }));
 }

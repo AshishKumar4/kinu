@@ -2,6 +2,7 @@
  * Design-system gallery: the real components over mock data, so signed-in surfaces can be screenshotted without auth.
  * Served by gallery.vite.config.ts; `?frame=` selects a frame (full list: the dispatch in `mount()`). /api/user/* GETs are stubbed in-page.
  */
+import { Effect } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
@@ -14,7 +15,7 @@ const IDLE_TURN: TurnLiveness = { kind: "idle" };
 
 const LIVE_TURN: TurnLiveness = { kind: "live", turnId: null };
 
-import { diagnostics, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, toKinuError, tolerate, settle } from "@kinu.run/core/obs";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
@@ -3359,25 +3360,26 @@ function ChatHistoryFrame() {
   const requests = useRef(0);
   const [calls, setCalls] = useState<string[]>([]);
 
-  const rpc: Rpc = useCallback(async <T,>(_method: string, args?: unknown[]): Promise<T> => {
+  const rpc: Rpc = useCallback(<T,>(_method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
     const [{ cursor }] = v.parse(v.tuple([v.object({ cursor: v.optional(PositionCursorSchema) })]), args);
     const request = ++requests.current;
     setCalls((prev) => [...prev, cursor === undefined ? "newest" : String(cursor.before)]);
     const settled = Promise.withResolvers<void>();
     setTimeout(settled.resolve, HISTORY_LATENCY);
-    await settled.promise;
+    yield* Effect.promise(async () => settled.promise);
 
     if (request === requests.current && failed.current) {
       failed.current = false;
-      throw new Error("stub failure");
+
+      return yield* Effect.die(new Error("stub failure"));
     }
 
     const end = Math.min(cursor?.before ?? STORED_HISTORY.length, STORED_HISTORY.length);
     const start = Math.max(0, end - HISTORY_PAGE);
     const items = STORED_HISTORY.slice(start, end);
 
-    return rpcResult(start === 0 ? { status: "end", items } : { status: "more", items, next: { before: start } }).json<T>();
-  }, []);
+    return yield* Effect.promise(() => rpcResult(start === 0 ? { status: "end", items } : { status: "more", items, next: { before: start } }).json<T>());
+  })), []);
 
   const { history, transcript } = useChatThread({ rpc, live, seeded: true });
 
@@ -3434,18 +3436,19 @@ function HistoryAuthorityFrame() {
   const failFirst = useRef(true);
   const requests = useRef(0);
 
-  const rpc: Rpc = useCallback(async <T,>(): Promise<T> => {
+  const rpc: Rpc = useCallback(<T,>(): Promise<T> => settle(Effect.gen(function* () {
     const request = ++requests.current;
-    await hold.promise;
+    yield* Effect.promise(async () => hold.promise);
 
     // StrictMode can retire a held walk: only the latest request consumes the planned failure.
     if (request === requests.current && failFirst.current) {
       failFirst.current = false;
-      throw new Error("fixture could not read the first history page");
+
+      return yield* Effect.die(new Error("fixture could not read the first history page"));
     }
 
-    return rpcResult({ status: "end", items: [] }).json<T>();
-  }, [hold]);
+    return yield* Effect.promise(() => rpcResult({ status: "end", items: [] }).json<T>());
+  })), [hold]);
 
   const { history } = useChatThread({ rpc, live: NO_HISTORY_LIVE, seeded: true });
 

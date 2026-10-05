@@ -2,6 +2,7 @@
  * One child's expansion: its prompt, inherited seed, shared conversation prefix, and
  * answer reading (*Inherited context*, *Arbitration*). Scheduling is the runner's.
  */
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { diversityAngle, siblingAngles } from '../mcts/diversity';
@@ -9,6 +10,7 @@ import { explorePrompt, type ExplorePrompt } from '../mcts/explore-prompt';
 import { extractJsonObject } from '../providers/structured';
 import { renderIssues } from '../utils/json';
 import { renderThrownChain, type Logger } from '../obs/index';
+import { settleSync } from '../obs/effect';
 import { estimateTokens } from '../llm';
 import { contextWindowForModel } from '../context-window';
 import { sha256Hex } from '../safety/argument-digest';
@@ -64,31 +66,29 @@ export function readAnswer(text: string): ReadAnswer {
   if (marker < 0) return { text: text.trim(), proposal: null, proposalError: null };
   const answer = text.slice(0, marker).trim();
   const requested = text.slice(marker + PROPOSAL_MARKER.length);
-  let json: unknown;
 
-  try {
-    json = extractJsonObject(requested);
-  } catch (error) {
-    return {
+  return settleSync(Effect.try({ try: () => extractJsonObject(requested), catch: (error) => error }).pipe(
+    Effect.map((json): ReadAnswer => {
+      const parsed = v.safeParse(BranchProposalSchema, json);
+
+      if (!parsed.success) {
+        return {
+          text: answer,
+          proposal: null,
+          proposalError: `the ${PROPOSAL_MARKER} block did not describe a branch proposal, so it could `
+            + `not be arbitrated: ${renderIssues(parsed.issues)}`,
+        };
+      }
+
+      return { text: answer, proposal: parsed.output, proposalError: null };
+    }),
+    Effect.catch((error) => Effect.succeed<ReadAnswer>({
       text: answer,
       proposal: null,
       proposalError: `the ${PROPOSAL_MARKER} block carried no readable JSON object, so the branch `
         + `could not be arbitrated: ${renderThrownChain({ cause: error })}`,
-    };
-  }
-
-  const parsed = v.safeParse(BranchProposalSchema, json);
-
-  if (!parsed.success) {
-    return {
-      text: answer,
-      proposal: null,
-      proposalError: `the ${PROPOSAL_MARKER} block did not describe a branch proposal, so it could `
-        + `not be arbitrated: ${renderIssues(parsed.issues)}`,
-    };
-  }
-
-  return { text: answer, proposal: parsed.output, proposalError: null };
+    })),
+  ));
 }
 
 /**

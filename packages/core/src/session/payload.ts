@@ -1,8 +1,9 @@
+import { Effect } from 'effect';
+import { settle, tolerateAsync } from '../obs/effect';
 import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 
 import { KinuError } from '../obs/error';
-import { classify } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
 import { JsonValueSchema, JsonObjectSchema, type JsonValue, type JsonObject } from '../utils/json';
 import { PLATFORM_CATALOG } from '../platform-catalog';
@@ -32,49 +33,56 @@ export class SessionPayloadReader {
     return this.readableFiles !== null;
   }
 
-  async read(payload: SessionPayload): Promise<JsonValue> {
-    if (payload.json !== null) return v.parse(JsonValueSchema, JSON.parse(payload.json));
-    const bytes = await this.readBytes(payload.path, payload.digest);
-
-    return v.parse(JsonValueSchema, JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+  read(payload: SessionPayload): Promise<JsonValue> {
+    return settle(this.readJson(payload));
   }
 
-  async resolveMedia(descriptor: JsonObject): Promise<JsonObject> {
-    const result = { ...descriptor };
+  private readJson(payload: SessionPayload): Effect.Effect<JsonValue, KinuError> {
+    if (payload.json !== null) return Effect.sync(() => v.parse(JsonValueSchema, JSON.parse(payload.json ?? '')));
 
-    for (const field of ['image', 'data']) {
-      const text = v.safeParse(StringAttachmentReference, result[field]);
+    return Effect.map(this.readBytes(payload.path, payload.digest), (bytes) => v.parse(JsonValueSchema, JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))));
+  }
 
-      if (text.success) {
-        const ref = text.output.$sessionStringAttachment;
-        result[field] = v.parse(v.string(), await this.read({ json: null, path: ref.path, digest: ref.digest }));
-        continue;
+  resolveMedia(descriptor: JsonObject): Promise<JsonObject> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const result = { ...descriptor };
+
+      for (const field of ['image', 'data']) {
+        const text = v.safeParse(StringAttachmentReference, result[field]);
+
+        if (text.success) {
+          const ref = text.output.$sessionStringAttachment;
+          result[field] = v.parse(v.string(), yield* this.readJson({ json: null, path: ref.path, digest: ref.digest }));
+          continue;
+        }
+
+        const reference = v.safeParse(AttachmentReference, result[field]);
+
+        if (!reference.success) continue;
+        const ref = reference.output.$sessionAttachment;
+        const bytes = yield* this.readBytes(ref.path, ref.digest);
+
+        if (bytes.byteLength !== ref.bytes) return yield* new KinuError('io', 'retained attachment length differs');
+        const binary: JsonObject = { $binary: bytesToBase64(bytes), bytes: bytes.byteLength };
+
+        if (ref.buffer !== undefined) binary.buffer = ref.buffer;
+        result[field] = binary;
       }
 
-      const reference = v.safeParse(AttachmentReference, result[field]);
-
-      if (!reference.success) continue;
-      const ref = reference.output.$sessionAttachment;
-      const bytes = await this.readBytes(ref.path, ref.digest);
-
-      if (bytes.byteLength !== ref.bytes) throw new KinuError('io', 'retained attachment length differs');
-      const binary: JsonObject = { $binary: bytesToBase64(bytes), bytes: bytes.byteLength };
-
-      if (ref.buffer !== undefined) binary.buffer = ref.buffer;
-      result[field] = binary;
-    }
-
-    return v.parse(JsonObjectSchema, result);
+      return v.parse(JsonObjectSchema, result);
+    }));
   }
 
-  protected async readBytes(path: string, digest: string): Promise<Uint8Array> {
-    if (this.readableFiles === null) throw new KinuError('unavailable', `session payload ${path} is spilled to a file this reader has no plane for`);
-    const stored = await (await this.readableFiles()).readFile(path);
-    const bytes = v.is(v.string(), stored) ? new TextEncoder().encode(stored) : stored;
+  protected readBytes(path: string, digest: string): Effect.Effect<Uint8Array, KinuError> {
+    const readable = this.readableFiles;
 
-    if (sha256Hex(bytes) !== digest) throw new KinuError('io', `session payload digest differs at ${path}`);
+    if (readable === null) return Effect.fail(new KinuError('unavailable', `session payload ${path} is spilled to a file this reader has no plane for`));
 
-    return bytes;
+    return Effect.flatMap(Effect.promise(async () => (await readable()).readFile(path)), (stored) => {
+      const bytes = v.is(v.string(), stored) ? new TextEncoder().encode(stored) : stored;
+
+      return sha256Hex(bytes) === digest ? Effect.succeed(bytes) : Effect.fail(new KinuError('io', `session payload digest differs at ${path}`));
+    });
   }
 }
 
@@ -84,68 +92,72 @@ export class SessionPayloads extends SessionPayloadReader {
     super(async () => (await files()).vfs);
   }
 
-  async prepare(value: JsonValue): Promise<SessionPayload> {
-    const json = JSON.stringify(value);
-    const bytes = new TextEncoder().encode(json);
+  prepare(value: JsonValue): Promise<SessionPayload> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const json = JSON.stringify(value);
+      const bytes = new TextEncoder().encode(json);
 
-    if (bytes.byteLength <= INLINE_BYTES) return { json, path: null, digest: null };
-    const digest = sha256Hex(bytes);
-    const directory = `${(await this.files()).artifactDirectory}/${SPILL_DIRS.eventContent}`;
-    const path = `${directory}/${digest}.json`;
-    await this.publish(path, bytes, directory);
+      if (bytes.byteLength <= INLINE_BYTES) return { json, path: null, digest: null };
+      const digest = sha256Hex(bytes);
+      const directory = `${(yield* Effect.promise(() => this.files())).artifactDirectory}/${SPILL_DIRS.eventContent}`;
+      const path = `${directory}/${digest}.json`;
+      yield* this.publish(path, bytes, directory);
 
-    return { json: null, path, digest };
+      return { json: null, path, digest };
+    }));
   }
 
   /** Only actual codec binary fields are externalized; existing URL/path references remain references. */
-  async externalizeMedia(descriptor: JsonObject): Promise<JsonObject> {
-    const stored = { ...descriptor };
+  externalizeMedia(descriptor: JsonObject): Promise<JsonObject> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const stored = { ...descriptor };
 
-    for (const field of ['image', 'data']) {
-      const text = v.safeParse(v.string(), stored[field]);
+      for (const field of ['image', 'data']) {
+        const text = v.safeParse(v.string(), stored[field]);
 
-      if (text.success && !/^https?:\/\//u.test(text.output) && !text.output.startsWith(`${SPILL_DIRS.attachments}/`)) {
-        const bytes = new TextEncoder().encode(JSON.stringify(text.output));
+        if (text.success && !/^https?:\/\//u.test(text.output) && !text.output.startsWith(`${SPILL_DIRS.attachments}/`)) {
+          const bytes = new TextEncoder().encode(JSON.stringify(text.output));
+          const digest = sha256Hex(bytes);
+          const directory = `${(yield* Effect.promise(() => this.files())).artifactDirectory}/${SPILL_DIRS.attachments}`;
+          const path = `${directory}/${digest}.json`;
+          yield* this.publish(path, bytes, directory);
+          stored[field] = { $sessionStringAttachment: { path, digest } };
+          continue;
+        }
+
+        const binary = v.safeParse(BinaryValue, stored[field]);
+
+        if (!binary.success) continue;
+        const bytes = base64ToBytes(binary.output.$binary);
+
+        if (bytes.byteLength !== binary.output.bytes) return yield* new KinuError('io', 'attachment byte length differs from its codec envelope');
         const digest = sha256Hex(bytes);
-        const directory = `${(await this.files()).artifactDirectory}/${SPILL_DIRS.attachments}`;
-        const path = `${directory}/${digest}.json`;
-        await this.publish(path, bytes, directory);
-        stored[field] = { $sessionStringAttachment: { path, digest } };
-        continue;
+        const directory = `${(yield* Effect.promise(() => this.files())).artifactDirectory}/${SPILL_DIRS.attachments}`;
+        const path = `${directory}/${digest}.bin`;
+        yield* this.publish(path, bytes, directory);
+        const reference: JsonObject = { path, digest, bytes: bytes.byteLength };
+
+        if (binary.output.buffer !== undefined) reference.buffer = binary.output.buffer;
+        stored[field] = { $sessionAttachment: reference };
       }
 
-      const binary = v.safeParse(BinaryValue, stored[field]);
-
-      if (!binary.success) continue;
-      const bytes = base64ToBytes(binary.output.$binary);
-
-      if (bytes.byteLength !== binary.output.bytes) throw new KinuError('io', 'attachment byte length differs from its codec envelope');
-      const digest = sha256Hex(bytes);
-      const directory = `${(await this.files()).artifactDirectory}/${SPILL_DIRS.attachments}`;
-      const path = `${directory}/${digest}.bin`;
-      await this.publish(path, bytes, directory);
-      const reference: JsonObject = { path, digest, bytes: bytes.byteLength };
-
-      if (binary.output.buffer !== undefined) reference.buffer = binary.output.buffer;
-      stored[field] = { $sessionAttachment: reference };
-    }
-
-    return stored;
+      return stored;
+    }));
   }
 
 
-  private async publish(path: string, bytes: Uint8Array, directory: string): Promise<void> {
-    const digest = sha256Hex(bytes);
-    const { vfs } = await this.files();
+  private publish(path: string, bytes: Uint8Array, directory: string): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const digest = sha256Hex(bytes);
+      const { vfs } = yield* Effect.promise(() => this.files());
 
-    if (!(await exists(vfs, path))) {
-      try { await vfs.mkdir(directory, { recursive: true }); }
-      catch (cause) { if (classify({ cause }) !== 'eexist') throw cause; }
+      if (!(yield* Effect.promise(() => exists(vfs, path)))) {
+        yield* Effect.promise(() => tolerateAsync(async () => vfs.mkdir(directory, { recursive: true }), 'eexist'));
+        yield* Effect.promise(async () => vfs.writeFile(path, bytes));
+      }
 
-      await vfs.writeFile(path, bytes);
-    }
-
-    await this.readBytes(path, digest);
+      yield* this.readBytes(path, digest);
+    });
   }
 
 }

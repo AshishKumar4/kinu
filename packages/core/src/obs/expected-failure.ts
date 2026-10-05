@@ -76,31 +76,3 @@ export function classify(options: { cause: unknown }): ExpectedFailure | null {
 
   return null;
 }
-
-/**
- * Runs `operation`, returning `undefined` only for the named failure; anything else is rethrown
- * as-is, unwrapped, to keep the failing frame on top.
- */
-export function tolerate<T>(operation: () => T, expected: ExpectedFailure): T | undefined {
-  try {
-    return operation();
-  } catch (caught) {
-    if (classify({ cause: caught }) !== expected) throw caught;
-
-    return undefined;
-  }
-}
-
-/** `tolerate` for an operation that rejects rather than throws. */
-export async function tolerateAsync<T>(
-  operation: () => Promise<T>,
-  expected: ExpectedFailure,
-): Promise<T | undefined> {
-  try {
-    return await operation();
-  } catch (caught) {
-    if (classify({ cause: caught }) !== expected) throw caught;
-
-    return undefined;
-  }
-}

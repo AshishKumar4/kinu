@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { CubeIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import type { Rpc } from "@kinu.run/core";
-import { attempt, renderThrownChain, settle } from "@kinu.run/core/obs";
+import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { Card, Choice, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
@@ -47,7 +47,7 @@ export function SandboxSizeRow({ rpc }: { rpc: Rpc }) {
         size="sm"
         value={state.chosen ?? ACCOUNT_DEFAULT}
         options={workspaceSizeOptions(state.account)}
-        onChange={(value) => settle(choose(value))}
+        onChange={(value) => detach(choose(value))}
         disabled={pending !== null}
       />
       {state.startRefused !== null && (
@@ -55,7 +55,7 @@ export function SandboxSizeRow({ rpc }: { rpc: Rpc }) {
           <div className="p-meta p-danger">{startRefusedNote(state.startRefused)}</div>
           <button
             data-env-start-again
-            onClick={() => settle(act("start", "starting the sandbox", "startSandbox", []))}
+            onClick={() => detach(act("start", "starting the sandbox", "startSandbox", []))}
             disabled={pending !== null}
             className="px-2 py-1 rounded-md p-t-control p-text-2 p-fill hover:p-text"
           >{pending === "start" ? "Starting…" : "Start again"}</button>
@@ -92,7 +92,7 @@ export function SandboxSizeSettings() {
               label="Default sandbox size"
               value={account ?? DEFAULT_BOX_SIZE}
               options={BOX_SIZE_ORDER.map((size) => ({ value: size, label: sandboxSizeText(size) }))}
-              onChange={(value) => settle(choose(value))}
+              onChange={(value) => detach(choose(value))}
               disabled={saving}
             />
           </Field>

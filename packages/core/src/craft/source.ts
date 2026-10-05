@@ -2,7 +2,8 @@
 // normalize to one expression; whether it is a function is checked per tool at load time.
 
 import * as acorn from 'acorn';
-import { renderThrownChain } from '../obs/index';
+import { Effect, Result } from 'effect';
+import { renderThrownChain, settleSync } from '../obs/index';
 import { CRAFTED_TOOL_BODY } from '../types/codemode';
 
 const ECMA: acorn.Options = { ecmaVersion: 'latest', sourceType: 'module', allowAwaitOutsideFunction: true };
@@ -13,18 +14,14 @@ export type CraftedSourceAdmission =
 
 /** Whether `source` parses as exactly one JavaScript expression. */
 export function parsesAsExpression(source: string): string | null {
-  try {
-    const parsed = acorn.parse(`(${source}\n)`, ECMA);
-    const [statement, extra] = parsed.body;
+  return settleSync(Effect.try({ try: () => acorn.parse(`(${source}\n)`, ECMA), catch: (cause) => ({ cause }) }).pipe(
+    Effect.map((parsed) => {
+      const [statement, extra] = parsed.body;
 
-    if (extra !== undefined || statement === undefined || statement.type !== 'ExpressionStatement') {
-      return 'the source is not a single expression';
-    }
-
-    return null;
-  } catch (cause) {
-    return renderThrownChain({ cause });
-  }
+      return extra !== undefined || statement === undefined || statement.type !== 'ExpressionStatement' ? 'the source is not a single expression' : null;
+    }),
+    Effect.catch((failed) => Effect.succeed(renderThrownChain(failed))),
+  ));
 }
 
 function topLevelDeclarations(program: acorn.Program) {
@@ -121,34 +118,32 @@ function refused(reason: string): CraftedSourceAdmission {
 
 /** Normalize crafted source to one parsed expression; a declaration named `preferredName` wins over later helpers. */
 export function admitCraftedSource(source: string, preferredName: string): CraftedSourceAdmission {
-  const trimmed = source.trim().replace(/;+\s*$/, '');
+  return settleSync(Effect.gen(function* () {
+    const trimmed = source.trim().replace(/;+\s*$/, '');
 
-  if (trimmed.length === 0) return refused('the tool source is empty');
+    if (trimmed.length === 0) return refused('the tool source is empty');
 
-  if (parsesAsExpression(trimmed) === null) return { ok: true, code: trimmed };
+    if (parsesAsExpression(trimmed) === null) return { ok: true, code: trimmed };
 
-  let program: acorn.Program;
+    const parsed = yield* Effect.result(Effect.try({ try: () => acorn.parse(trimmed, ECMA), catch: (cause) => ({ cause }) }));
 
-  try {
-    program = acorn.parse(trimmed, ECMA);
-  } catch (cause) {
-    return refused(`the tool source does not parse as JavaScript: ${renderThrownChain({ cause })}`);
-  }
+    if (Result.isFailure(parsed)) return refused(`the tool source does not parse as JavaScript: ${renderThrownChain(parsed.failure)}`);
+    const program = parsed.success;
+    const exported = exportedExpression(program, trimmed);
+    const { functions, variables } = topLevelDeclarations(program);
+    const declared = [...functions, ...variables];
 
-  const exported = exportedExpression(program, trimmed);
-  const { functions, variables } = topLevelDeclarations(program);
-  const declared = [...functions, ...variables];
+    const returned = exported
+      ?? (declared.includes(preferredName) ? preferredName : declared[declared.length - 1] ?? null);
 
-  const returned = exported
-    ?? (declared.includes(preferredName) ? preferredName : declared[declared.length - 1] ?? null);
+    if (returned === null) return refused('the tool source declares no function');
 
-  if (returned === null) return refused('the tool source declares no function');
+    const body = stripExports(program, trimmed);
+    const code = `(() => {\n${body}\nreturn (${returned});\n})()`;
+    const parseError = parsesAsExpression(code);
 
-  const body = stripExports(program, trimmed);
-  const code = `(() => {\n${body}\nreturn (${returned});\n})()`;
-  const parseError = parsesAsExpression(code);
+    if (parseError !== null) return refused(`the tool source could not be wrapped as an expression: ${parseError}`);
 
-  if (parseError !== null) return refused(`the tool source could not be wrapped as an expression: ${parseError}`);
-
-  return { ok: true, code };
+    return { ok: true, code };
+  }));
 }

@@ -1,5 +1,6 @@
 /** Hub types. Spec: docs/ARCHITECTURE.md "Events and ingress". */
 
+import { Data } from 'effect';
 import type { WorkMode } from '../../types/turn';
 import type { SubordinateInheritedContext } from '../../types/subordinates';
 import type { JsonObject, JsonValue } from '../../utils/json';
@@ -417,9 +418,8 @@ export interface ToolSurfaceContext {
   role: Role;
 }
 
-export class IngressRejectedError extends Error {
+export class IngressRejectedError extends Data.TaggedError('IngressRejectedError')<{ readonly message: string }> {
   constructor(public readonly ingress: IngressKind | 'invalid_combination', public readonly reason: string) {
-    super(`Ingress ${ingress} rejected: ${reason}`);
-    this.name = 'IngressRejectedError';
+    super({ message: `Ingress ${ingress} rejected: ${reason}` });
   }
 }

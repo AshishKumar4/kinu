@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Scaffold gate validation and rollback. */
 
@@ -121,7 +122,7 @@ describe('Scaffold rollback', () => {
                    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'original'})`;
 
     const result = await rollbackScaffold(rt, 0);
-    expect(result.ok).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
 
     const restored = await rt.identity.scaffold.read();
     expect(restored).toBe('original code');
@@ -132,8 +133,8 @@ describe('Scaffold rollback', () => {
     initScaffoldTables(rt.storage.execRaw);
 
     const result = await rollbackScaffold(rt, 999);
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain('999');
+    expect(Result.isSuccess(result)).toBe(false);
+    expect(result).toMatchObject({ failure: expect.stringContaining('999') });
   });
 });
 

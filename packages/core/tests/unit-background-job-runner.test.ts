@@ -20,6 +20,8 @@ import { makeSql, makeExecRaw, makeSqlExec, conversationsFor } from './helpers';
 import { createTestRuntime, createTestActors, toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { inWorkMode } from '../src/execution/work-mode';
+import { createSqlFiber } from '../src/execution/fiber';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { processJobHolder } from '../src/jobs/process-holder';
 import { scratchPath } from '@kinu.run/test-utils';
@@ -1399,4 +1401,45 @@ test('a recovered Plan job cannot mutate project files through a Build-shaped ca
   });
   expect(await readText(rt.storage.vfs, path)).toBe('changed');
   expect(recovered.store.get('build-write')).toMatchObject({ status: 'completed' });
+});
+
+describe('a fiber host that cannot start the run', () => {
+  test('the SQL host refuses a retired actor: jobs.fiber_start_failed is reported and no rejection is left unhandled', async () => {
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(recording);
+    const unhandled: unknown[] = [];
+
+    const onUnhandled = (...rejected: [unknown]): void => { unhandled.push(rejected[0]); };
+
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      const db = new Database(':memory:');
+      const sql = makeSql(db);
+      initBackgroundJobsTable(makeExecRaw(db));
+      const actors = createTestActors(sql, makeExecRaw(db));
+      const worker = actors.sibling('worker');
+      const store = new BackgroundJobStore(sql, worker);
+      const { host } = fakeHost();
+      const runner = new BackgroundJobRunner({ store, fiber: createSqlFiber(sql, worker), inbox: new Inbox(host) });
+      const id = runner.create('think', { q: 1 }, 'build', new AbortController());
+
+      actors.directory.apply(actors.main, [], {
+        action: 'retire', name: 'worker',
+        reference: { actorId: worker.actorId, workspaceId: worker.workspaceId, parentActorId: worker.parentActorId },
+      });
+
+      expect(() => runner.detach(id, 'think', Promise.resolve('never read'))).not.toThrow();
+      await recording.until((lines) => lines.some((line) => line.event === 'jobs.force_fail_failed'));
+      await new Promise((resolve) => { setImmediate(resolve); });
+
+      // The retired actor's rows refuse every write, so its job stays for the deletion; nothing escapes.
+      expect(recording.emitted.map((line) => line.event)).toEqual(['jobs.fiber_start_failed', 'jobs.settlement_failed', 'jobs.force_fail_failed']);
+      expect(recording.emitted[0]?.cause).toContain('no longer present');
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      restore();
+    }
+  });
 });

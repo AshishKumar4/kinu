@@ -4,7 +4,7 @@
  * derived from UserDOs and `ControlPlaneDO.replaceUserWorkspaces` repairs them.
  * The per-isolate memo only decides whether a write is worth attempting; never read to answer a request.
  */
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError, settleLogged } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
 import { internalCaller } from './admin-caller';
 import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from './stub';
@@ -108,7 +108,7 @@ export async function indexNewWorkspace<Id>(
   // No destination is not a lost write — see `hasControlPlane`.
   if (!hasControlPlane(env)) return;
 
-  try {
+  await settleLogged('control_plane.index_workspace_failed', { doing: 'indexing a newly created workspace in the control plane', otherwise: 'unavailable' }, async () => {
     const caller = await internalCaller(env);
     await controlPlaneStub(env).observeWorkspace(caller, {
       userId: target.userId,
@@ -117,13 +117,7 @@ export async function indexNewWorkspace<Id>(
       createdAt: target.createdAt,
       at: target.createdAt,
     });
-  } catch (cause) {
-    diagnostics.failure('control_plane.index_workspace_failed', toKinuError({
-      doing: 'indexing a newly created workspace in the control plane',
-      cause,
-      otherwise: 'unavailable',
-    }), { workspace: target.name });
-  }
+  }, { workspace: target.name });
 }
 
 /** Only after registry removal succeeds: a failed teardown keeps the registry row. */
@@ -133,14 +127,8 @@ export async function unindexWorkspace<Id>(
 ): Promise<void> {
   if (!hasControlPlane(env)) return;
 
-  try {
+  await settleLogged('control_plane.unindex_workspace_failed', { doing: 'tombstoning a removed workspace in the control plane', otherwise: 'unavailable' }, async () => {
     const caller = await internalCaller(env);
     await controlPlaneStub(env).forgetWorkspace(caller, target);
-  } catch (cause) {
-    diagnostics.failure('control_plane.unindex_workspace_failed', toKinuError({
-      doing: 'tombstoning a removed workspace in the control plane',
-      cause,
-      otherwise: 'unavailable',
-    }), { workspace: target.name });
-  }
+  }, { workspace: target.name });
 }

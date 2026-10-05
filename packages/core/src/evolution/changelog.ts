@@ -4,6 +4,7 @@
  * reverts dispatch to the real paths (scaffold rollback, fact forget).
  */
 
+import { Cause, Effect, Result } from 'effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
@@ -24,7 +25,7 @@ import {
 import { describePathology } from './pathology';
 import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
-import { renderThrownChain, tolerate } from '../obs/index';
+import { renderThrownChain, settle, tolerate } from '../obs/index';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.optional(v.number()),
@@ -556,7 +557,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
   if (!prev) return { ok: false, error: `scaffold v${version} has no earlier version to roll back to` };
   const restored = await rollbackScaffold(rt, prev.version);
 
-  if (!restored.ok) return { ok: false, error: restored.error };
+  if (Result.isFailure(restored)) return { ok: false, error: restored.failure };
 
   return { ok: true, detail: `rolled back to v${prev.version}` };
 }
@@ -582,66 +583,69 @@ function revertArtifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId:
   return { ok: true, detail: row.status === 'current' && row.parent === null ? `${artifactId} is back on its built-in wording` : `reverted ${artifactId} v${String(version)}` };
 }
 
-export async function executeChangelogRevert(
+export function executeChangelogRevert(
   ctx: ChangelogRevertContext,
   action: ChangelogRevertAction,
 ): Promise<ChangelogRevertResult> {
-  switch (action.type) {
-    case 'scaffold_rollback': {
-      const version = Number(action.target);
+  return settle(changelogRevert(ctx, action));
+}
 
-      if (!Number.isInteger(version) || version <= 0) {
-        return { ok: false, error: `invalid scaffold version: ${action.target}` };
+function changelogRevert(ctx: ChangelogRevertContext, action: ChangelogRevertAction): Effect.Effect<ChangelogRevertResult> {
+  return Effect.gen(function* (): Effect.gen.Return<ChangelogRevertResult> {
+    switch (action.type) {
+      case 'scaffold_rollback': {
+        const version = Number(action.target);
+
+        if (!Number.isInteger(version) || version <= 0) return { ok: false, error: `invalid scaffold version: ${action.target}` };
+
+        return yield* Effect.promise(() => revertScaffoldVersion(ctx.rt, version, ctx.events));
       }
 
-      return revertScaffoldVersion(ctx.rt, version, ctx.events);
-    }
+      case 'artifact_revert': {
+        const at = action.target.lastIndexOf('@');
+        const version = Number(action.target.slice(at + 1));
 
-    case 'artifact_revert': {
-      const at = action.target.lastIndexOf('@');
-      const version = Number(action.target.slice(at + 1));
+        if (at <= 0 || !Number.isInteger(version) || version <= 0) return { ok: false, error: `invalid artifact target: ${action.target}` };
 
-      if (at <= 0 || !Number.isInteger(version) || version <= 0) return { ok: false, error: `invalid artifact target: ${action.target}` };
-
-      return revertArtifactVersion(ctx.rt.storage.sql, ctx.rt.actor, action.target.slice(0, at), version);
-    }
-
-    case 'fact_forget': {
-      if (!ctx.facts.recall(action.target)) {
-        return { ok: false, error: `fact ${action.target} is already forgotten` };
+        return revertArtifactVersion(ctx.rt.storage.sql, ctx.rt.actor, action.target.slice(0, at), version);
       }
 
-      ctx.facts.forget(action.target);
-
-      return { ok: true, detail: `forgot fact ${action.target}` };
-    }
-
-    case 'fact_forget_many': {
-      const forgotten: string[] = [];
-      const failures: string[] = [];
-
-      for (const target of action.targets) {
-        try {
-          const result = await executeChangelogRevert(ctx, { type: 'fact_forget', target });
-
-          if (result.ok) forgotten.push(target);
-          else failures.push(`${target}: ${result.error ?? 'unknown error'}`);
-        } catch (error) {
-          failures.push(`${target}: ${renderThrownChain({ cause: error })}`);
+      case 'fact_forget': {
+        if (!ctx.facts.recall(action.target)) {
+          return { ok: false, error: `fact ${action.target} is already forgotten` };
         }
+
+        ctx.facts.forget(action.target);
+
+        return { ok: true, detail: `forgot fact ${action.target}` };
       }
 
-      if (failures.length > 0) {
-        return {
-          ok: false,
-          detail: `forgot ${forgotten.length} of ${action.targets.length} facts`,
-          error: `failed to forget ${failures.length} fact${failures.length === 1 ? '' : 's'}: ${failures.join('; ')}`,
-        };
-      }
+      case 'fact_forget_many': {
+        const forgotten: string[] = [];
+        const failures: string[] = [];
 
-      return { ok: true, detail: `forgot ${forgotten.length} fact${forgotten.length === 1 ? '' : 's'}` };
+        for (const target of action.targets) {
+          const failure = yield* Effect.matchCause(changelogRevert(ctx, { type: 'fact_forget', target }), {
+            onSuccess: (result) => result.ok ? null : (result.error ?? 'unknown error'),
+            onFailure: (failed) => renderThrownChain({ cause: Cause.squash(failed) }),
+          });
+
+          if (failure === null) forgotten.push(target);
+          else failures.push(`${target}: ${failure}`);
+        }
+
+        if (failures.length > 0) {
+          return {
+            ok: false,
+            detail: `forgot ${forgotten.length} of ${action.targets.length} facts`,
+            error: `failed to forget ${failures.length} fact${failures.length === 1 ? '' : 's'}: ${failures.join('; ')}`,
+          };
+        }
+
+        return { ok: true, detail: `forgot ${forgotten.length} fact${forgotten.length === 1 ? '' : 's'}` };
+      }
     }
-  }
+  });
 }
 
 /** Id-addressed so a digest that shifted between list and revert cannot hit

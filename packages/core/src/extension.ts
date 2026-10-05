@@ -3,6 +3,8 @@
  * Hooks are optional and run in registration order.
  */
 
+import { Cause, Effect } from 'effect';
+import { settle, settleSync } from './obs/effect';
 import type { ModelMessage, ToolSet } from 'ai';
 import type { JsonObject } from './utils/json';
 import { diagnostics, KinuError, toKinuError } from './obs/index';
@@ -79,13 +81,13 @@ export interface KinuExtension {
 }
 
 /** A hook that never settles must not hold the turn past its abort; the orphaned promise settles on its own. */
-async function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
-  if (signal === undefined) return pending;
+function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): Effect.Effect<T, KinuError> {
+  if (signal === undefined) return Effect.promise(() => pending);
 
   const cancelled = (): KinuError =>
     new KinuError('cancelled', 'the turn was cancelled while an extension hook was running', { cause: signal.reason });
 
-  if (signal.aborted) throw cancelled();
+  if (signal.aborted) return Effect.fail(cancelled());
   let onAbort: (() => void) | undefined;
 
   const aborted = new Promise<never>((_, reject) => {
@@ -93,11 +95,9 @@ async function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefi
     signal.addEventListener('abort', onAbort, { once: true });
   });
 
-  try {
-    return await Promise.race([pending, aborted]);
-  } finally {
+  return Effect.ensuring(Effect.promise(() => Promise.race([pending, aborted])), Effect.sync(() => {
     if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
-  }
+  }));
 }
 
 export class ExtensionHost {
@@ -119,27 +119,29 @@ export class ExtensionHost {
 
   /** Throws on a name collision so a plugin never silently shadows another's tool. */
   tools(): ToolSet {
-    const merged: ToolSet = {};
-    const owners = new Map<string, string>();
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const merged: ToolSet = {};
+      const owners = new Map<string, string>();
 
-    for (const ext of this.extensions) {
-      const contributed = ext.registerTools?.();
+      for (const ext of this.extensions) {
+        const contributed = ext.registerTools?.();
 
-      if (!contributed) continue;
+        if (!contributed) continue;
 
-      for (const [name, tool] of Object.entries(contributed)) {
-        const prior = owners.get(name);
+        for (const [name, tool] of Object.entries(contributed)) {
+          const prior = owners.get(name);
 
-        if (prior) {
-          throw new Error(`extension "${ext.name}" registers tool "${name}" already registered by "${prior}"`);
+          if (prior) {
+            return yield* Effect.die(new Error(`extension "${ext.name}" registers tool "${name}" already registered by "${prior}"`));
+          }
+
+          owners.set(name, ext.name);
+          merged[name] = tool;
         }
-
-        owners.set(name, ext.name);
-        merged[name] = tool;
       }
-    }
 
-    return merged;
+      return merged;
+    }));
   }
 
   /** Stays synchronous until a hook returns a Promise, which promotes only this invocation to the awaited path. */
@@ -157,7 +159,7 @@ export class ExtensionHost {
       });
 
       if (next instanceof Promise) {
-        return this.continuePrepareStep({ start: index + 1, ctx, messages, changed, first: next });
+        return settle(this.continuePrepareStep({ start: index + 1, ctx, messages, changed, first: next }));
       }
 
       if (next) {
@@ -169,94 +171,98 @@ export class ExtensionHost {
     return changed ? messages : undefined;
   }
 
-  private async continuePrepareStep(resume: PrepareStepResumption): Promise<ModelMessage[] | undefined> {
-    const { ctx, messages } = resume;
-    const firstResult = await untilAborted(resume.first, ctx.abortSignal);
-    let current = firstResult ?? messages;
-    let rewritten = resume.changed || firstResult !== undefined;
+  private continuePrepareStep(resume: PrepareStepResumption): Effect.Effect<ModelMessage[] | undefined, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const { ctx, messages } = resume;
+      const firstResult = yield* untilAborted(resume.first, ctx.abortSignal);
+      let current = firstResult ?? messages;
+      let rewritten = resume.changed || firstResult !== undefined;
 
-    for (let index = resume.start; index < this.extensions.length; index += 1) {
-      const next = await untilAborted(Promise.resolve(this.extensions[index]?.prepareStep?.({
-        stepNumber: ctx.stepNumber,
-        messages: current,
-        abortSignal: ctx.abortSignal,
-      })), ctx.abortSignal);
+      for (let index = resume.start; index < this.extensions.length; index += 1) {
+        const next = yield* untilAborted(Promise.resolve(this.extensions[index]?.prepareStep?.({
+          stepNumber: ctx.stepNumber,
+          messages: current,
+          abortSignal: ctx.abortSignal,
+        })), ctx.abortSignal);
 
-      if (next) {
-        current = next;
-        rewritten = true;
+        if (next) {
+          current = next;
+          rewritten = true;
+        }
       }
-    }
 
-    return rewritten ? current : undefined;
+      return rewritten ? current : undefined;
+    });
   }
 
   /** Fail-open, except cancellation, oom and a `strict` hook the owner asked for (/compact), which propagate. */
-  private async guardHook<T>(
+  private guardHook<T>(
     hook: string,
     extension: string,
     run: () => T | Promise<T>,
     guard: { readonly signal?: AbortSignal | undefined; readonly strict?: boolean } = {},
-  ): Promise<T | undefined> {
-    try {
-      return await untilAborted(Promise.resolve(run()), guard.signal);
-    } catch (err) {
-      const failure = toKinuError({ doing: `run an extension ${hook} hook`, cause: err, otherwise: 'io' });
+  ): Effect.Effect<T | undefined, KinuError> {
+    const ran = Effect.suspend(() => untilAborted(Promise.resolve(run()), guard.signal));
 
-      if (failure.code === 'cancelled' || failure.code === 'oom' || guard.strict === true) throw failure;
-      diagnostics.failure('extension.hook_failed', failure, { extension, hook });
+    return Effect.catchCause(ran, (cause) => {
+      const failure = toKinuError({ doing: `run an extension ${hook} hook`, cause: Cause.squash(cause), otherwise: 'io' });
 
-      return undefined;
-    }
+      if (failure.code === 'cancelled' || failure.code === 'oom' || guard.strict === true) return Effect.fail(failure);
+
+      return Effect.sync(() => {
+        diagnostics.failure('extension.hook_failed', failure, { extension, hook });
+
+        return undefined;
+      });
+    });
   }
 
-  async runTransformContext(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
-    let current: readonly ModelMessage[] = ctx.messages;
-    let out: ModelMessage[] | undefined;
+  runTransformContext(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
+    return settle(Effect.gen({ self: this }, function* () {
+      let current: readonly ModelMessage[] = ctx.messages;
+      let out: ModelMessage[] | undefined;
 
-    for (const ext of this.extensions) {
-      if (!ext.transformContext) continue;
+      for (const ext of this.extensions) {
+        if (!ext.transformContext) continue;
 
-      const next = await this.guardHook(
-        'transformContext',
-        ext.name,
-        () => ext.transformContext?.({ ...ctx, messages: current }),
-        { signal: ctx.abortSignal, strict: ctx.trigger === 'user' },
-      );
+        const next = yield* this.guardHook(
+          'transformContext',
+          ext.name,
+          () => ext.transformContext?.({ ...ctx, messages: current }),
+          { signal: ctx.abortSignal, strict: ctx.trigger === 'user' },
+        );
 
-      if (next) {
-        out = next;
-        current = next;
+        if (next) {
+          out = next;
+          current = next;
+        }
       }
-    }
 
-    return out;
+      return out;
+    }));
   }
 
-  private async observe(
+  private observe(
     hook: 'onTurnStart' | 'onToolCall' | 'onToolResult' | 'onTurnEnd',
     call: (ext: KinuExtension) => void | Promise<void>,
-  ): Promise<void> {
-    for (const ext of this.extensions) {
-      if (ext[hook] === undefined) continue;
-      await this.guardHook(hook, ext.name, () => call(ext));
-    }
+  ): Effect.Effect<void, KinuError> {
+    return Effect.forEach(this.extensions, (ext) => (ext[hook] === undefined ? Effect.void : this.guardHook(hook, ext.name, () => call(ext))), { discard: true });
   }
 
-  async emitTurnStart(ctx: TurnStartContext): Promise<void> {
-    await this.observe('onTurnStart', (ext) => ext.onTurnStart?.(ctx));
+  emitTurnStart(ctx: TurnStartContext): Promise<void> {
+    return settle(this.observe('onTurnStart', (ext) => ext.onTurnStart?.(ctx)));
   }
 
-  async emitToolCall(ctx: ToolCallContext): Promise<void> {
-    await this.observe('onToolCall', (ext) => ext.onToolCall?.(ctx));
+  emitToolCall(ctx: ToolCallContext): Promise<void> {
+    return settle(this.observe('onToolCall', (ext) => ext.onToolCall?.(ctx)));
   }
 
-  async emitToolResult(ctx: ToolResultContext): Promise<void> {
-    await this.observe('onToolResult', (ext) => ext.onToolResult?.(ctx));
+  emitToolResult(ctx: ToolResultContext): Promise<void> {
+    return settle(this.observe('onToolResult', (ext) => ext.onToolResult?.(ctx)));
   }
 
-  async emitTurnEnd(ctx: TurnEndContext): Promise<void> {
-    await this.observe('onTurnEnd', (ext) => ext.onTurnEnd?.(ctx));
+  emitTurnEnd(ctx: TurnEndContext): Promise<void> {
+    return settle(this.observe('onTurnEnd', (ext) => ext.onTurnEnd?.(ctx)));
   }
 
 }

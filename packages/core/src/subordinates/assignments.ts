@@ -4,6 +4,8 @@
  * A failed run leaves its lease open; `unbindStale` re-pends it after the grace.
  */
 
+import { Cause, Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { EventLog } from '../events/hub/log';
 import type { SubordinateInheritedContext } from '../types/subordinates';
 import type { WorkMode } from '../types/turn';
@@ -38,46 +40,46 @@ export interface DrainAssignmentsOptions {
   onFailure(thrown: { readonly cause: unknown }): void;
 }
 
-export async function drainAssignments(
+export function drainAssignments(
   log: EventLog,
   opts: DrainAssignmentsOptions,
 ): Promise<{ consumed: number; truncated: boolean }> {
-  log.unbindStale(opts.staleMs, opts.now);
+  return settle(Effect.gen(function* () {
+    log.unbindStale(opts.staleMs, opts.now);
 
-  let remaining = opts.budget;
-  let consumed = 0;
-  let truncated = false;
+    let remaining = opts.budget;
+    let consumed = 0;
+    let truncated = false;
 
-  for (const event of log.pending({ variant: 'subordinate_task', limit: opts.budget })) {
-    if (remaining <= 0) {
-      truncated = true;
-      break;
-    }
+    for (const event of log.pending({ variant: 'subordinate_task', limit: opts.budget })) {
+      if (remaining <= 0) {
+        truncated = true;
+        break;
+      }
 
-    if (event.variant !== 'subordinate_task') continue;
+      if (event.variant !== 'subordinate_task') continue;
 
-    if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') continue;
+      if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') continue;
 
-    // Read with the batch: a Stop since then dismissed it.
-    if (!log.pending({ variant: 'subordinate_task' }).some((row) => row.id === event.id)) continue;
-    const turnId = `evt-${nanoid()}`;
-    log.markConsumed(event.id, turnId, 0);
-    remaining -= 1;
-    consumed += 1;
+      // Read with the batch: a Stop since then dismissed it.
+      if (!log.pending({ variant: 'subordinate_task' }).some((row) => row.id === event.id)) continue;
+      const turnId = `evt-${nanoid()}`;
+      log.markConsumed(event.id, turnId, 0);
+      remaining -= 1;
+      consumed += 1;
 
-    try {
-      await opts.run({
+      yield* Effect.catchCause(Effect.promise(() => opts.run({
         body: event.payload.body,
         mode: event.payload.kinu_mode,
         sequenceId: event.id,
         turnId,
         inheritedContext: event.payload.inherited_context,
         messageId: event.payload.message_id,
-      });
-    } catch (cause) {
-      opts.onFailure({ cause });
+      })), (failed) => Effect.sync(() => {
+        opts.onFailure({ cause: Cause.squash(failed) });
+      }));
     }
-  }
 
-  return { consumed, truncated };
+    return { consumed, truncated };
+  }));
 }

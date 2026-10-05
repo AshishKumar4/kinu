@@ -225,7 +225,7 @@ async function main(): Promise<void> {
   } finally {
     await proxy.settle();
     db.close();
-    proxy.stop(true);
+    await proxy.stop(true);
   }
 
   const usage = proxy.usage();

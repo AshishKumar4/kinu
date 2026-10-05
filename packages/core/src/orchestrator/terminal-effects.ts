@@ -4,6 +4,7 @@
  * (mismatch: blocked), the recorded input, and a disposition plus schedule; definitive failures end one unrun.
  * `TerminalTransitions.end` settles only when no row is owed.
  */
+import { Data, Result } from 'effect';
 import * as v from 'valibot';
 
 import { parseJsonValue, JsonValueSchema, type JsonValue } from '../utils/json';
@@ -236,7 +237,7 @@ export function branchesTerminalEffect(deps: {
             { entry, turnId, liveText, settlementKey: id },
           );
 
-          return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
+          return { status: 'completed', detail: Result.isSuccess(outcome) ? undefined : outcome.failure };
         }
       }
 
@@ -256,14 +257,14 @@ export function branchesTerminalEffect(deps: {
         task, report, turnId, sessionId: deps.sessionId, liveText, settlementKey: id,
       });
 
-      deps.broadcast(outcome.ok
+      deps.broadcast(Result.isSuccess(outcome)
         ? {
           type: 'branch_status', status: 'settled', branchId: id, task,
-          takeSetId: outcome.set.id, turnId: turnId ?? '',
+          takeSetId: outcome.success.id, turnId: turnId ?? '',
         }
-        : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.reason });
+        : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.failure });
 
-      return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
+      return { status: 'completed', detail: Result.isSuccess(outcome) ? undefined : outcome.failure };
     },
   });
 }
@@ -336,10 +337,9 @@ export interface OwedEffect {
 }
 
 /** A deterministic interruption. Never caught by the per-effect handler: it must leave the sequence as an eviction would. */
-export class TerminalEffectInterrupt extends Error {
+export class TerminalEffectInterrupt extends Data.TaggedError('TerminalEffectInterrupt')<{ readonly message: string }> {
   constructor(phase: TerminalEffectPhase, name: TerminalEffectName, scope: string) {
-    super(`terminal effect ${name}${scope === '' ? '' : `:${scope}`} interrupted ${phase} its side effect`);
-    this.name = 'TerminalEffectInterrupt';
+    super({ message: `terminal effect ${name}${scope === '' ? '' : `:${scope}`} interrupted ${phase} its side effect` });
   }
 }
 

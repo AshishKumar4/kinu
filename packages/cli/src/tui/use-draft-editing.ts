@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { useCallback, useRef, type RefObject } from 'react';
 import type { CliRenderer, TextareaRenderable } from '@opentui/core';
+import { Cause, Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 
 interface DraftSnapshot { text: string; cursor: number }
 
@@ -63,34 +65,32 @@ export function useDraftEditing(input: RefObject<TextareaRenderable | null>, ren
     editor.cursorOffset = previous.cursor;
   }, [input]);
 
-  const external = useCallback(async (text: string): Promise<string> => {
+  const external = useCallback((text: string): Promise<string> => settle(Effect.gen(function* () {
     const visual = process.env.VISUAL?.trim();
-  const command = visual === undefined || visual === '' ? process.env.EDITOR?.trim() : visual;
+    const command = visual === undefined || visual === '' ? process.env.EDITOR?.trim() : visual;
 
-    if (!command) throw new Error('Set VISUAL or EDITOR to open an external editor.');
-    const directory = await mkdtemp(join(tmpdir(), 'kinu-draft-'));
+    if (!command) return yield* Effect.die(new Error('Set VISUAL or EDITOR to open an external editor.'));
+    const directory = yield* Effect.promise(() => mkdtemp(join(tmpdir(), 'kinu-draft-')));
     const path = join(directory, 'prompt.txt');
-    await writeFile(path, text, { mode: 0o600 });
+    yield* Effect.promise(() => writeFile(path, text, { mode: 0o600 }));
     renderer.suspend();
 
-    try {
-      const process = Bun.spawn(['/bin/sh', '-c', `${command} "$1"`, 'kinu-editor', path], {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const child = Bun.spawn(['/bin/sh', '-c', `${command} "$1"`, 'kinu-editor', path], {
         stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
       });
 
-      const exitCode = await process.exited;
+      const exitCode = yield* Effect.promise(() => child.exited);
 
-      if (exitCode !== 0) throw new Error(`Editor exited ${exitCode}. Draft retained at ${path}`);
-      const edited = await readFile(path, 'utf8');
-      await rm(directory, { recursive: true });
+      if (exitCode !== 0) return yield* Effect.die(new Error(`Editor exited ${exitCode}. Draft retained at ${path}`));
+      const edited = yield* Effect.promise(() => readFile(path, 'utf8'));
+      yield* Effect.promise(() => rm(directory, { recursive: true }));
 
       return edited;
-    } catch (cause) {
-      throw new Error(`External editor did not finish. Draft retained at ${path}`, { cause });
-    } finally {
+    }), (failed) => Effect.die(new Error(`External editor did not finish. Draft retained at ${path}`, { cause: Cause.squash(failed) }))), Effect.sync(() => {
       renderer.resume();
-    }
-  }, [renderer]);
+    }));
+  })), [renderer]);
 
   return { replace, changed, cursorMoved, reset, undo, external };
 }

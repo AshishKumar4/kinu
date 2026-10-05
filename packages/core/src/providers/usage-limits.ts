@@ -1,6 +1,7 @@
 // OMP ai/src/usage.
 import * as v from 'valibot';
-import { KinuError, diagnostics, renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, diagnostics, renderThrownChain, settle } from '../obs/index';
 import { baseCredentialKey, accountOf } from '../credentials/accounts';
 import { fmtSpan, fmtUsd } from '../utils/format';
 import { OPENROUTER_BASE_URL } from './openrouter';
@@ -51,13 +52,16 @@ export interface LimitRead {
   readonly signal?: AbortSignal;
 }
 
-async function getJson<T>(schema: v.GenericSchema<T>, read: LimitRead, url: string, ask: { readonly headers: Readonly<Record<string, string>>; readonly what: string }): Promise<T> {
-  const { headers, what } = ask;
-  const response = await read.fetch(url, { headers: { accept: 'application/json', ...read.headers, ...headers }, ...(read.signal !== undefined && { signal: read.signal }) });
+function getJson<T>(schema: v.GenericSchema<T>, read: LimitRead, url: string, ask: { readonly headers: Readonly<Record<string, string>>; readonly what: string }): Effect.Effect<T, KinuError> {
+  return Effect.gen(function* () {
+    const { headers, what } = ask;
+    const response = yield* Effect.promise(() => read.fetch(url, { headers: { accept: 'application/json', ...read.headers, ...headers }, ...(read.signal !== undefined && { signal: read.signal }) }));
 
-  if (!response.ok) throw new KinuError(response.status === 401 || response.status === 403 ? 'denied' : 'unavailable', `${what} answered HTTP ${String(response.status)} for the ${read.account} account`);
+    if (!response.ok) return yield* new KinuError(response.status === 401 || response.status === 403 ? 'denied' : 'unavailable', `${what} answered HTTP ${String(response.status)} for the ${read.account} account`);
+    const json: unknown = yield* Effect.promise(() => response.json());
 
-  return v.parse(schema, await response.json());
+    return v.parse(schema, json);
+  });
 }
 
 const isoMs = (value: string | null | undefined): number | undefined => {
@@ -78,32 +82,32 @@ const ClaudeUsageSchema = v.object({
   limits: v.nullish(v.array(v.unknown())),
 });
 
-async function claudeLimits(read: LimitRead): Promise<readonly LimitWindow[]> {
-  const body = await getJson(ClaudeUsageSchema, read, 'https://api.anthropic.com/api/oauth/usage', { headers: { 'anthropic-beta': 'oauth-2025-04-20' }, what: 'Claude' });
+function claudeLimits(read: LimitRead): Effect.Effect<readonly LimitWindow[], KinuError> {
+  return Effect.map(getJson(ClaudeUsageSchema, read, 'https://api.anthropic.com/api/oauth/usage', { headers: { 'anthropic-beta': 'oauth-2025-04-20' }, what: 'Claude' }), (body) => {
+    const buckets = ([['5h', body.five_hour], ['weekly', body.seven_day], ['weekly Opus', body.seven_day_opus], ['weekly Sonnet', body.seven_day_sonnet]] as const)
+      .flatMap(([name, bucket]) => (bucket?.utilization === undefined || bucket.utilization === null ? [] : [{
+        name, usedPercent: bucket.utilization, ...(isoMs(bucket.resets_at) !== undefined && { resetsAt: isoMs(bucket.resets_at) }),
+      }]));
 
-  const buckets = ([['5h', body.five_hour], ['weekly', body.seven_day], ['weekly Opus', body.seven_day_opus], ['weekly Sonnet', body.seven_day_sonnet]] as const)
-    .flatMap(([name, bucket]) => (bucket?.utilization === undefined || bucket.utilization === null ? [] : [{
-      name, usedPercent: bucket.utilization, ...(isoMs(bucket.resets_at) !== undefined && { resetsAt: isoMs(bucket.resets_at) }),
-    }]));
+    const named = new Set<string>(buckets.map((window) => window.name));
 
-  const named = new Set<string>(buckets.map((window) => window.name));
+    // Per-model caps are `weekly_scoped` limits (OMP usage/claude.ts:119-146).
+    const scoped = (body.limits ?? []).flatMap((raw): LimitWindow[] => {
+      const entry = v.safeParse(ClaudeLimitEntrySchema, raw);
+      const display = entry.success ? entry.output.scope?.model?.display_name?.trim() : undefined;
 
-  // Per-model caps are `weekly_scoped` limits (OMP usage/claude.ts:119-146).
-  const scoped = (body.limits ?? []).flatMap((raw): LimitWindow[] => {
-    const entry = v.safeParse(ClaudeLimitEntrySchema, raw);
-    const display = entry.success ? entry.output.scope?.model?.display_name?.trim() : undefined;
+      if (!entry.success || entry.output.kind !== 'weekly_scoped' || display === undefined || display === '') return [];
+      const name = `weekly ${display}`;
 
-    if (!entry.success || entry.output.kind !== 'weekly_scoped' || display === undefined || display === '') return [];
-    const name = `weekly ${display}`;
+      if (named.has(name) || (entry.output.percent === undefined || entry.output.percent === null)) return [];
+      named.add(name);
+      const resetsAt = isoMs(entry.output.resets_at);
 
-    if (named.has(name) || (entry.output.percent === undefined || entry.output.percent === null)) return [];
-    named.add(name);
-    const resetsAt = isoMs(entry.output.resets_at);
+      return [{ name, usedPercent: entry.output.percent, ...(resetsAt !== undefined && { resetsAt }) }];
+    });
 
-    return [{ name, usedPercent: entry.output.percent, ...(resetsAt !== undefined && { resetsAt }) }];
+    return [...buckets, ...scoped];
   });
-
-  return [...buckets, ...scoped];
 }
 
 const CodexWindowSchema = v.nullish(v.object({
@@ -119,18 +123,18 @@ function windowName(seconds: number | null | undefined): string {
   return seconds === null || seconds === undefined ? 'window' : fmtSpan(seconds * 1_000).replaceAll(' ', '');
 }
 
-async function codexLimits(read: LimitRead, now: number): Promise<readonly LimitWindow[]> {
-  const body = await getJson(CodexUsageSchema, read, 'https://chatgpt.com/backend-api/wham/usage', { headers: {}, what: 'ChatGPT' });
+function codexLimits(read: LimitRead, now: number): Effect.Effect<readonly LimitWindow[], KinuError> {
+  return Effect.map(getJson(CodexUsageSchema, read, 'https://chatgpt.com/backend-api/wham/usage', { headers: {}, what: 'ChatGPT' }), (body) => {
+    return [body.rate_limit?.primary_window, body.rate_limit?.secondary_window].flatMap((window) => {
+      if (window?.used_percent === undefined || window.used_percent === null) return [];
 
-  return [body.rate_limit?.primary_window, body.rate_limit?.secondary_window].flatMap((window) => {
-    if (window?.used_percent === undefined || window.used_percent === null) return [];
+      let resetsAt: number | undefined;
 
-    let resetsAt: number | undefined;
+      if (window.reset_at !== undefined && window.reset_at !== null) resetsAt = window.reset_at * 1_000;
+      else if (window.reset_after_seconds !== undefined && window.reset_after_seconds !== null) resetsAt = now + window.reset_after_seconds * 1_000;
 
-    if (window.reset_at !== undefined && window.reset_at !== null) resetsAt = window.reset_at * 1_000;
-    else if (window.reset_after_seconds !== undefined && window.reset_after_seconds !== null) resetsAt = now + window.reset_after_seconds * 1_000;
-
-    return [{ name: windowName(window.limit_window_seconds), usedPercent: window.used_percent, ...(resetsAt !== undefined && { resetsAt }) }];
+      return [{ name: windowName(window.limit_window_seconds), usedPercent: window.used_percent, ...(resetsAt !== undefined && { resetsAt }) }];
+    });
   });
 }
 
@@ -138,12 +142,12 @@ const OpenRouterKeySchema = v.object({
   data: v.object({ limit: v.nullable(v.number()), limit_remaining: v.nullable(v.number()), limit_reset: v.optional(v.nullable(v.string()), null) }),
 });
 
-async function openRouterLimits(read: LimitRead): Promise<readonly LimitWindow[]> {
-  const { data } = await getJson(OpenRouterKeySchema, read, `${OPENROUTER_BASE_URL}/key`, { headers: {}, what: 'OpenRouter' });
+function openRouterLimits(read: LimitRead): Effect.Effect<readonly LimitWindow[], KinuError> {
+  return Effect.map(getJson(OpenRouterKeySchema, read, `${OPENROUTER_BASE_URL}/key`, { headers: {}, what: 'OpenRouter' }), ({ data }) => {
+    if (data.limit === null || data.limit_remaining === null) return [];
 
-  if (data.limit === null || data.limit_remaining === null) return [];
-
-  return [{ name: 'credit', used: data.limit - data.limit_remaining, limit: data.limit, ...(data.limit_reset !== null && { resets: data.limit_reset }) }];
+    return [{ name: 'credit', used: data.limit - data.limit_remaining, limit: data.limit, ...(data.limit_reset !== null && { resets: data.limit_reset }) }];
+  });
 }
 
 const OpenCodeGoWindowSchema = v.nullish(v.object({ percent: v.number(), resetsAt: v.nullish(v.string()) }));
@@ -151,15 +155,15 @@ const OpenCodeGoWindowSchema = v.nullish(v.object({ percent: v.number(), resetsA
 // Undocumented.
 const OpenCodeGoUsageSchema = v.object({ rolling: OpenCodeGoWindowSchema, weekly: OpenCodeGoWindowSchema, monthly: OpenCodeGoWindowSchema });
 
-async function openCodeGoLimits(read: LimitRead): Promise<readonly LimitWindow[]> {
-  const body = await getJson(OpenCodeGoUsageSchema, read, 'https://opencode.ai/zen/go/v1/usage', { headers: {}, what: 'OpenCode Go' });
-
-  return ([['5h', body.rolling], ['weekly', body.weekly], ['monthly', body.monthly]] as const).flatMap(([name, window]) => (window === undefined || window === null ? [] : [{
-    name, usedPercent: window.percent, ...(isoMs(window.resetsAt) !== undefined && { resetsAt: isoMs(window.resetsAt) }),
-  }]));
+function openCodeGoLimits(read: LimitRead): Effect.Effect<readonly LimitWindow[], KinuError> {
+  return Effect.map(getJson(OpenCodeGoUsageSchema, read, 'https://opencode.ai/zen/go/v1/usage', { headers: {}, what: 'OpenCode Go' }), (body) => {
+    return ([['5h', body.rolling], ['weekly', body.weekly], ['monthly', body.monthly]] as const).flatMap(([name, window]) => (window === undefined || window === null ? [] : [{
+      name, usedPercent: window.percent, ...(isoMs(window.resetsAt) !== undefined && { resetsAt: isoMs(window.resetsAt) }),
+    }]));
+  });
 }
 
-const LIMIT_READERS = new Map<string, { readonly provider: string; readonly read: (read: LimitRead, now: number) => Promise<readonly LimitWindow[]>; readonly undocumented?: true }>([
+const LIMIT_READERS = new Map<string, { readonly provider: string; readonly read: (read: LimitRead, now: number) => Effect.Effect<readonly LimitWindow[], KinuError>; readonly undocumented?: true }>([
   ['claude.oauth', { provider: 'claude', read: claudeLimits }],
   ['codex.oauth', { provider: 'codex', read: codexLimits }],
   ['openrouter.bearer', { provider: 'openrouter', read: openRouterLimits }],
@@ -189,21 +193,21 @@ export class LimitCache {
   }> {
     const readable = sources.filter((source) => limitReadable(source.key));
 
-    const settled = await Promise.allSettled(readable.map(async (source): Promise<LimitReport> => {
+    const settled = await Promise.allSettled(readable.map((source) => settle(Effect.gen({ self: this }, function* () {
       const cached = this.#reports.get(source.key);
 
       if (cached !== undefined && opts.refresh !== true && this.now() - cached.at < LIMIT_TTL_MS) return cached;
       const reader = LIMIT_READERS.get(baseCredentialKey(source.key));
-      const headers = await source.headers();
+      const headers = yield* Effect.promise(() => source.headers());
 
-      if (reader === undefined || headers === null) throw new KinuError('missing', `${source.key} is not connected`);
+      if (reader === undefined || headers === null) return yield* new KinuError('missing', `${source.key} is not connected`);
       const account = accountOf(source.key);
-      const windows = await reader.read({ account, headers, fetch: source.fetch ?? opts.fetch ?? fetch }, this.now());
+      const windows = yield* reader.read({ account, headers, fetch: source.fetch ?? opts.fetch ?? fetch }, this.now());
       const report: LimitReport = { provider: reader.provider, account, at: this.now(), windows, ...(reader.undocumented && { undocumented: true }) };
       this.#reports.set(source.key, report);
 
       return report;
-    }));
+    }))));
 
     const limits: LimitReport[] = [];
     const limitsUnread: LimitUnread[] = [];

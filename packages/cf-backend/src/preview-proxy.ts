@@ -1,5 +1,6 @@
 /** Native container previews: a published capability is checked before a DO is addressed. */
-import { diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { Effect } from "effect";
+import { diagnostics, recording, settle } from "@kinu.run/core/obs";
 import { escapeHtml } from "@kinu.run/core";
 import { containPreviewResponse, sandboxPreviewLabelOf } from "@kinu.run/core";
 import { isKinuSandboxId } from "@kinu.run/core";
@@ -48,22 +49,20 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
     );
   }
 
-  try {
+  const devbox = env.KinuDevbox;
+
+  return settle(Effect.catchCause(Effect.promise(async () => {
     const forwarded = new URL(request.url);
     forwarded.pathname = `/_devbox/preview/${label.port}/${encodeURIComponent(label.token)}${forwarded.pathname}`;
 
-    const response = await env.KinuDevbox.getByName(label.sandboxId).fetch(new Request(forwarded, new Request(request, {
+    const response = await devbox.getByName(label.sandboxId).fetch(new Request(forwarded, new Request(request, {
       headers: sanitizePreviewRequestHeaders(request.headers),
     })));
 
     return containPreviewResponse(response);
-  } catch (cause) {
-    diagnostics.failure('preview.forward_failed', toKinuError({
-      doing: 'reaching the restored container preview', cause, otherwise: 'unavailable',
-    }), { sandboxId: label.sandboxId, port: label.port });
-
-    return renderNotReadyPage(url.hostname);
-  }
+  }), (failed) => Effect.as(recording({ doing: 'reaching the restored container preview', otherwise: 'unavailable' }, (failure) => {
+    diagnostics.failure('preview.forward_failed', failure, { sandboxId: label.sandboxId, port: label.port });
+  })(failed), renderNotReadyPage(url.hostname))));
 }
 
 function renderNotReadyPage(host: string): Response {

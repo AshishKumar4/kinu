@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
+import { detach } from '@kinu.run/core/obs';
 import type { Page } from 'puppeteer';
 
 import { contrast, rgba, withGallery, type Gallery } from '../../scripts/gallery-harness';
@@ -986,7 +988,7 @@ beforeAll(async () => {
 
       const page = await openLanding(DESKTOP, false, async (target) => {
         await target.setRequestInterception(true);
-        target.on('request', async (request) => {
+        target.on('request', (request) => detach(Effect.promise(async () => {
           if (!/PlanReviewView-/u.test(request.url())) {
             await request.continue();
 
@@ -995,7 +997,7 @@ beforeAll(async () => {
 
           held.push(() => request.continue());
           requested.resolve();
-        });
+        })));
       });
 
       const cues = await page.evaluate(() => window.__kinuLandingMovie?.cues);
