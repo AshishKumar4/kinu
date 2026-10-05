@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Tool failures retain their evidence in interrupted transcripts.** Live parts, provider requests and resumed history now use one encoder for failure codes, command exit metadata and MCP protocol responses, while ordinary exceptions remain text.
 - **Cloud eval calls await authored code.** The adapter no longer sends an asynchronous program through the synchronous Effect runner, so MCP calls, slate previews and crafted tools retain their real outcomes.
 - **Invalid scaffold rollback targets are refused before SQL.** Empty, non-integer and non-numeric version strings cannot reach the version lookup.
 - **Typed failure edges retain the beta and instruction-file contracts.** A disabled swarm still names its beta setting, and each deferred AGENTS.md probe keeps its own containing directory; bounded reads retain their inode checks and descriptor cleanup.

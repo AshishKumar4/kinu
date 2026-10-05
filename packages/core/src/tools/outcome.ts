@@ -4,9 +4,27 @@ import * as v from 'valibot';
 import { KinuError, renderThrownChain, classifyErrorCode, settle } from '../obs/index';
 import { FileRefusalError } from '../types/file-edits';
 import { BindingFailureSchema, ToolFailureValueSchema, type BindingFailure, type ToolOutcome } from '../types/tool-outcome';
-import type { JsonValue } from '../utils/json';
+import type { JsonObject, JsonValue } from '../utils/json';
+import { McpToolError } from './mcp-error';
 
 export { ToolOutcomeSchema, type ToolOutcome } from '../types/tool-outcome';
+
+/** One failure representation for live parts, provider requests and resumed history. */
+export function toolErrorOutput(
+  input: Parameters<typeof renderThrownChain>[0],
+  outcome?: Extract<ToolOutcome, { success: false }>,
+): { readonly type: 'error-json'; readonly value: JsonValue } | { readonly type: 'error-text'; readonly value: string } {
+  if (input.cause instanceof McpToolError) return { type: 'error-json', value: input.cause.response };
+  const failure = outcome ?? failedToolOutcome(input);
+  const error = renderThrownChain(input);
+
+  if (failure.reason === null) return { type: 'error-text', value: error };
+  const value: JsonObject = { reason: failure.reason, error };
+
+  if (failure.execution !== undefined) value.execution = failure.execution;
+
+  return { type: 'error-json', value };
+}
 
 /** Read only producer-owned error metadata; output and diagnostic wording are not status. */
 export function failedToolOutcome(input: Parameters<typeof renderThrownChain>[0]): Extract<ToolOutcome, { success: false }> {
