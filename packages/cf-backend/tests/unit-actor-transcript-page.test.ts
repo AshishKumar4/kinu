@@ -20,7 +20,7 @@ async function seed(actor: ActorHandle, history: SessionHistory, n: number, pref
 
   for (let i = 1; i <= n; i++) {
     const id = prefix + i;
-    const reference = await history.append({ id, turnId: id, message: { role: 'user', content: 'message ' + i }, origin: 'input', assertOwner: () => actor.current() });
+    const reference = await history.append({ id, turnId: id, message: { role: 'user', content: 'message ' + i }, origin: 'input', assertOwner: () => actor.assertCurrent() });
     const entry = await store.prepareUser({ id, turnId: id, message: reference });
     store.appendUser(entry);
     ids.push(id);

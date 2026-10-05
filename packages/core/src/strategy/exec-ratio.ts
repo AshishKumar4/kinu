@@ -390,7 +390,7 @@ export function runRatioMeasurement(
       `const verifierSign = await (${hmacSha256Signer.toString()})(RECEIPT);`,
       `const refSolve = ${yield* referenceAsExpression(problem.reference)};`,
       `await unlink(${JSON.stringify(measureFile)});`,
-      ctx.nodeIsolated ? 'lockRealm();' : '',
+      'lockRealm();',
       `const cand = await loadSolve('./${candidateFile}');`,
       problem.body,
       'await Promise.all(verifierPending);',

@@ -103,6 +103,9 @@ const PlanStageSchema = v.object({
 });
 
 const PlanSnapshotSchema: v.GenericSchema<PlanSnapshot> = v.object({
+  attachmentPolicyKey: v.optional(v.string()),
+  attachmentLinks: v.optional(v.record(v.string(), v.string())),
+  bypassSummaries: v.optional(v.boolean()),
   sessionId: v.string(),
   rangeHash: v.string(),
   contextLimit: v.number(),

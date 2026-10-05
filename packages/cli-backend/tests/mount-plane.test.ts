@@ -1,4 +1,4 @@
-import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Local environments and the mount table: a directory-bound session works on the real bytes through one `workspace`
 // executor, with no `/pc` or `/sandbox` mount.
 import { describe, expect, test } from 'bun:test';
@@ -11,14 +11,12 @@ import { type ExecutionRouter } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { present, scratchDir, scratchPath } from '@kinu.run/test-utils';
 
-function freshRuntime(cwd?: string) {
+function freshRuntime(cwd = scratchDir('mount-plane-folder')) {
   const db = new Database(scratchPath('mount-plane', 'agent.db'), { create: true });
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
-    llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
+    llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' }, cwd,
   };
-
-  if (cwd !== undefined) config.cwd = cwd;
 
   return createCLIRuntime(db, config);
 }
@@ -40,10 +38,10 @@ describe('the local backend file plane', () => {
     const rt = freshRuntime(dir);
     const mounted = rt.storage.vfs;
 
-    // The absolute path and the plane-relative name are one file; nothing is copied.
+    // The absolute path and the plane-relative name are one file; nothing is copied. `/` is the machine's own root.
     expect(await readText(mounted, join(dir, 'existing.txt'))).toBe('from the host');
     expect(await readText(mounted, 'existing.txt')).toBe('from the host');
-    expect((await mounted.readdir('/')).map(({ name }) => name)).toContain('existing.txt');
+    expect((await mounted.readdir(dir)).map(({ name }) => name)).toContain('existing.txt');
 
     await writeText(mounted, 'written.txt', 'from the agent');
     expect(readFileSync(join(dir, 'written.txt'), 'utf8')).toBe('from the agent');
@@ -82,15 +80,4 @@ describe('the local backend file plane', () => {
     expect([await writing('/sandbox/notes.md'), await writing('/elsewhere/notes.md')]).toEqual(['EACCES', 'EACCES']);
   });
 
-  test('the workspace tree stays canonical: host paths name nothing in it', async () => {
-    const rt = freshRuntime();
-    const dir = scratchDir('mount-plane-host');
-    writeFileSync(join(dir, 'host-only.txt'), 'on the machine');
-    const mounted = rt.storage.vfs;
-
-    expect(await exists(mounted, join(dir, 'host-only.txt'))).toBe(false);
-
-    await writeText(mounted, 'notes.md', 'in the workspace');
-    expect(await readText(mounted, 'notes.md')).toBe('in the workspace');
-  });
 });

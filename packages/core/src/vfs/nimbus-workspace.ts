@@ -18,8 +18,7 @@ import type { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { ShellCommandIdentity } from '@nimbus-sh/core/substrate/lifo/shell/Shell.js';
-import type { CommandRunAsHost } from '@nimbus-sh/core/substrate/lifo/commands/types.js';
+import type { CommandResult, RunOptions } from '@nimbus-sh/core/substrate/lifo/sandbox/types.js';
 import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates, resealWorkspaceSoul,
@@ -31,13 +30,11 @@ import { ShellExecOptionsSchema, type Shell, type ShellExecOptions } from '../ty
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { FORK_PIN_PREFIX } from '../identity/fork';
 import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
-import { Cause, Effect } from 'effect';
-import { diagnostics, flight, KinuError, settle, tolerate, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, tolerate, toKinuError } from '../obs/index';
 import { atVfsPath } from './errno';
 import type { MountedVfs } from './mounts';
 import { shellMounts, type ShellMounts, type ShellMountTable } from './shell-mounts';
 
-export { workspaceToolchainCapabilities } from './workspace-runtimes';
 
 export type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 
@@ -98,12 +95,13 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceBundle['vf
   }, WORKSPACE_ROOT);
 }
 
-/** No per-command `cwd`: the shell owns its working directory so `cd` persists. */
-/**
- * The workspace's one shell keeps a `cd` or `export` from call to call, so every call runs in a subshell, whose state
- * ends with it, started at its `cwd` or the home. This shell keeps no named shells (Nimbus has none in process).
- */
-function workspaceShell(open: () => Promise<NimbusWorkspace>, identity: (workspace: NimbusWorkspace) => ShellCommandIdentity): Shell {
+type ShellCall = (workspace: NimbusWorkspace, command: string, options: RunOptions & { readonly cwd: string }) => Promise<CommandResult>;
+
+/** Where a call starts: a directory, and a relative `cwd` taken from it. */
+type CallStart = Pick<NimbusWorkspace['fs'], 'cwd' | 'resolve'>;
+
+/** Each call is a shell of its own, started at its `cwd` or `start`'s directory; nothing it changes lasts. */
+function workspaceShell(open: () => Promise<NimbusWorkspace>, start: (workspace: NimbusWorkspace) => CallStart, run: ShellCall): Shell {
   return {
     async exec(command, stdinOrOptions) {
       const options = shellExecOptions({ value: stdinOrOptions });
@@ -115,13 +113,12 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>, identity: (workspa
       }
 
       const workspace = await open();
-      const home = workspace.shell.getEnv().HOME ?? WORKSPACE_ROOT;
-      const start = options?.cwd === undefined ? home : workspacePath(options.cwd, home);
+      const at = start(workspace);
+      const cwd = options?.cwd === undefined ? at.cwd : at.resolve(options.cwd);
       const output = options?.output;
 
-      // The newline closes a command that ends in a comment.
-      const result = await (await callCommands(workspace, identity(workspace))).run(`(${command}\n)`, {
-        cwd: start,
+      const result = await run(workspace, command, {
+        cwd,
         stdin: options?.stdin,
         signal: options?.signal,
         ...(output !== undefined && {
@@ -131,7 +128,7 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>, identity: (workspa
       });
 
       return workspaceCommandNotFound(
-        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, cwd: start },
+        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, cwd },
         // Read per call: installs re-register bins mid-session.
         (bin) => workspace.registry.has(bin),
       );
@@ -139,17 +136,18 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>, identity: (workspa
   };
 }
 
-/** Nimbus runs one shell's calls in turn, so each call gets a shell of its own, as the workspace's shell, over its files. */
-async function callCommands(workspace: NimbusWorkspace, identity: ShellCommandIdentity) {
-  const [{ Shell }, { HeadlessTerminal }, { SandboxCommandsImpl }] = await Promise.all([
-    import('@nimbus-sh/core/substrate/lifo/shell/Shell.js'),
-    import('@nimbus-sh/core/substrate/lifo/sandbox/HeadlessTerminal.js'),
-    import('@nimbus-sh/core/substrate/lifo/sandbox/SandboxCommands.js'),
-  ]);
+/** Nimbus's one-shot exec runs as the session user; an agent's call runs as the agent's own process, in a shell built for it. */
+function agentCall(pid: number, env: Readonly<Record<string, string>>): ShellCall {
+  return async (workspace, command, options) => {
+    const { runCommand } = await import('@nimbus-sh/core/substrate/lifo/sandbox/SandboxCommands.js');
+    const shell = workspace.shellFor(pid, { cwd: options.cwd, env });
 
-  const shell = new Shell(new HeadlessTerminal(), workspace.shell.filesystem, workspace.registry, workspace.shell.getEnv(), workspace.kernel.processRegistry, identity);
-
-  return new SandboxCommandsImpl(shell, workspace.registry);
+    try {
+      return await runCommand(shell, command, { ...options, cwd: undefined });
+    } finally {
+      await shell.closeDescriptors();
+    }
+  };
 }
 
 /** One agent's credentialed view of the same rows, on both the file and shell planes. */
@@ -251,6 +249,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const mountTables = new Map<number, MountedVfs>();
   const tableFor: ShellMountTable = (cred) => mountTables.get(cred.uid) ?? null;
   let shellMountPoints: ShellMounts | undefined;
+  let booting: Promise<NimbusWorkspace> | undefined;
 
   const shellOver = async (creation: NimbusCreation): Promise<NimbusWorkspace> => {
     const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
@@ -258,100 +257,90 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     return await NimbusWorkspace.create(creation);
   };
 
-  const boot = (): Effect.Effect<NimbusWorkspace, KinuError> => Effect.gen(function* () {
-      // Boot revokes append writers at or below `generation * PID_GEN_STRIDE`, so the pid base must be
-      // this generation.
-      const generationNow = yield* takeWorkspaceGeneration(opts);
+  const boot = async (): Promise<NimbusWorkspace> => {
+    // Boot revokes append writers at or below `generation * PID_GEN_STRIDE`, so the pid base must be
+    // this generation.
+    const generationNow = takeWorkspaceGeneration(opts);
 
-      processes.setPidBase(generationNow * PID_GEN_STRIDE);
+    processes.setPidBase(generationNow * PID_GEN_STRIDE);
 
-      let creation: NimbusCreation = {
-        sql: opts.sql,
-        transactions: opts.transactions,
-        generation: generationNow,
-        cwd: WORKSPACE_ROOT,
-        env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
-        processes,
-        fabric: opts.fabric,
-        // Each supplied runtime's bins are stubs that install it on first use; a reopened workspace rehydrates it.
-        runtimes: opts.runtimes ?? [],
-        runtimeInstall: 'on-demand',
-      };
+    let creation: NimbusCreation = {
+      sql: opts.sql,
+      transactions: opts.transactions,
+      generation: generationNow,
+      cwd: WORKSPACE_ROOT,
+      env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
+      processes,
+      fabric: opts.fabric,
+      // Each supplied runtime's bins are stubs that install it on first use; a reopened workspace rehydrates it.
+      runtimes: opts.runtimes ?? [],
+      runtimeInstall: 'on-demand',
+    };
 
-      if (opts.runtimeFacets !== undefined) creation = { ...creation, facets: opts.runtimeFacets };
+    if (opts.runtimeFacets !== undefined) creation = { ...creation, facets: opts.runtimeFacets };
 
-      if (opts.runtimeSource !== undefined) creation = { ...creation, runtimeSource: opts.runtimeSource };
+    if (opts.runtimeSource !== undefined) creation = { ...creation, runtimeSource: opts.runtimeSource };
 
-      const workspace = yield* Effect.promise(() => shellOver(creation));
+    const workspace = await shellOver(creation);
 
-      // A transfer pin lives for its activation: a restart ends the forks and exports it served.
-      for (const pin of workspace.vfs.snapshots()) {
-        if (pin.name.startsWith(FORK_PIN_PREFIX) || pin.name.startsWith(ARCHIVE_PIN_PREFIX)) yield* Effect.promise(() => workspace.vfs.dropSnapshotAsync(pin.name));
+    // A transfer pin lives for its activation: a restart ends the forks and exports it served.
+    for (const pin of workspace.vfs.snapshots()) {
+      if (pin.name.startsWith(FORK_PIN_PREFIX) || pin.name.startsWith(ARCHIVE_PIN_PREFIX)) await workspace.vfs.dropSnapshotAsync(pin.name);
+    }
+
+    shellMountPoints = shellMounts(workspace.filesystem, tableFor);
+
+    for (const plane of mountTables.values()) shellMountPoints.add(plane);
+    settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
+    // Trusted host init, once per engine boot: a registration is not stored with the tree.
+    settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
+    resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
+
+    await registerNpm(workspace);
+    const root = workspace.vfs.as(CRED_KERNEL);
+    const main = agentIdentity(opts.sql, MAIN_AGENT);
+    provisionAgentHome(root, MAIN_AGENT, main);
+    confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
+    restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
+    workspace.vfs.events.on((batch) => {
+      if (fileListeners.size === 0) return;
+      // A rename names where the file left as well as where it went.
+      const paths = batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]));
+
+      for (const listener of fileListeners) listener(paths);
+    });
+
+    return workspace;
+  };
+
+  const open = async (): Promise<NimbusWorkspace> => {
+    const attempt = (booting ??= boot());
+
+    try {
+      return await attempt;
+    } catch (cause) {
+      // The first waiter to see this attempt fail clears it, so the next call boots afresh instead of
+      // re-awaiting a cached rejection for the isolate's life; a newer attempt stays cached.
+      if (booting === attempt) {
+        booting = undefined;
+        diagnostics.failure(
+          'workspace.boot_failed',
+          toKinuError({ doing: 'boot the Nimbus workspace', cause, otherwise: 'unavailable' }),
+        );
       }
 
-      shellMountPoints = shellMounts(workspace.filesystem, tableFor);
-
-      for (const plane of mountTables.values()) shellMountPoints.add(plane);
-      settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
-      // Trusted host init, once per engine boot: a registration is not stored with the tree.
-      settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
-      resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
-
-      yield* Effect.promise(() => registerNpm(workspace));
-      const root = workspace.vfs.as(CRED_KERNEL);
-      const main = agentIdentity(opts.sql, MAIN_AGENT);
-      provisionAgentHome(root, MAIN_AGENT, main);
-      confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
-      restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
-      workspace.vfs.events.on((batch) => {
-        if (fileListeners.size === 0) return;
-        // A rename names where the file left as well as where it went.
-        const paths = batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]));
-
-        for (const listener of fileListeners) listener(paths);
-      });
-
-      return workspace;
-  }).pipe(Effect.tapCause((cause) => Effect.sync(() => {
-    diagnostics.failure('workspace.boot_failed', toKinuError({ doing: 'boot the Nimbus workspace', cause: Cause.squash(cause), otherwise: 'unavailable' }));
-  })));
-
-  const open = flight(boot, { keep: 'success' });
+      throw cause;
+    }
+  };
 
   // One supervisor for this filesystem so no two shells share a pid; `open` sets its pid base.
   const processes = new SessionProcessSupervisor();
 
-  const identityOf = (pid: number, runAs: CommandRunAsHost | undefined): ShellCommandIdentity => ({
-    pid, cred: processes.cred(pid), setUmask: (mask: number) => { processes.setUmask(pid, mask); }, runAs,
-  });
-
-  const agentPlanes = flight((agent: WorkspaceAgent) => Effect.gen(function* () {
-    const origin = yield* open();
-    const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
-
-    // Second shell over the same `SqliteVFS`, never a second filesystem (stale cache).
-    // `runAs` is the origin's so `sudo`/`su` keep working.
-    const asAgent = yield* Effect.promise(() => shellOver({
-      sql: opts.sql,
-      transactions: opts.transactions,
-      vfs: origin.vfs,
-      cwd: agent.home,
-      env: { HOME: agent.home, TMPDIR: agent.tmp },
-      identity: identityOf(process.pid, origin.shell.getRunAsHost()),
-      fabric: opts.fabric,
-      // The origin's namespace, so this shell serves the same mount points.
-      filesystem: origin.filesystem,
-    }));
-
-    return {
-      vfs: agentVfs(origin.vfs.as(agent.cred), agent.home),
-      shell: workspaceShell(() => Promise.resolve(asAgent), () => identityOf(process.pid, origin.shell.getRunAsHost())),
-    };
-  }), { key: (agent) => agent.cred.uid, keep: 'success' });
+  const planes = new Map<number, Promise<WorkspaceAgentPlane>>();
 
   return {
-    vfs: workspaceVfs(() => settle(open())),
-    shell: workspaceShell(() => settle(open()), (workspace) => identityOf(workspace.shellProcessPid, workspace.shell.getRunAsHost())),
+    vfs: workspaceVfs(open),
+    shell: workspaceShell(open, (workspace) => workspace.fs, (workspace, command, options) => workspace.exec(command, options)),
     onFilesChanged(listener) {
       fileListeners.add(listener);
 
@@ -364,11 +353,15 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
       return () => { if (mountTables.get(uid) === plane) mountTables.delete(uid); };
     },
-    privileged() {
-      return settle(Effect.map(open(), (workspace) => ({ root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs })));
+    async privileged() {
+      const workspace = await open();
+
+      return { root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs };
     },
-    session() {
-      return settle(Effect.map(open(), (workspace) => ({
+    async session() {
+      const workspace = await open();
+
+      return {
         workspace,
         shell: workspace.shell,
         vfs: workspace.vfs,
@@ -378,35 +371,59 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         sql: opts.sql,
         // Bound to the origin workspace, where the dispatch table was built.
         supervisorOp: (envelope: SupervisorOpEnvelope) => workspace.supervisorOp(envelope),
-      })));
+      };
     },
-    destroy() { return settle(Effect.map(open(), (workspace) => { workspace.destroy(); })); },
-    asAgent: (agent) => settle(agentPlanes(agent)),
+    async destroy() { (await open()).destroy(); },
+    async asAgent(agent) {
+      const held = planes.get(agent.cred.uid);
+
+      if (held) return await held;
+
+      const opening = (async (): Promise<WorkspaceAgentPlane> => {
+        try {
+          const origin = await open();
+          const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
+          // Over the origin's files, commands and mount table; a second workspace would seed its HOME as the session user.
+          const home: CallStart = { cwd: agent.home, resolve: (path) => workspacePath(path, agent.home) };
+
+          return {
+            vfs: agentVfs(origin.vfs.as(agent.cred), agent.home),
+            shell: workspaceShell(() => Promise.resolve(origin), () => home, agentCall(process.pid, { HOME: agent.home, TMPDIR: agent.tmp })),
+          };
+        } catch (cause) {
+          // Same rule as `booting`: never cache a rejection.
+          planes.delete(agent.cred.uid);
+          throw cause;
+        }
+      })();
+
+      planes.set(agent.cred.uid, opening);
+
+      return await opening;
+    },
   };
 }
 
 const GENERATION_TABLE = 'kinu_workspace_generation';
 
 /** One past the persisted generation, in one write transaction (ADR W1). */
-function takeWorkspaceGeneration(opts: Pick<WorkspaceOptions, 'sql' | 'transactions' | 'generation'>): Effect.Effect<number, KinuError> {
+function takeWorkspaceGeneration(opts: Pick<WorkspaceOptions, 'sql' | 'transactions' | 'generation'>): number {
   const adopted = generation(opts.generation);
 
-  if (adopted !== 0) return Effect.succeed(adopted);
+  if (adopted !== 0) return adopted;
   const transactions = opts.transactions.storage;
 
-  if (transactions === undefined) return Effect.fail(new KinuError('unsupported', 'a workspace takes its generation in a transaction, and this host has none'));
+  if (transactions === undefined) throw new KinuError('unsupported', 'a workspace takes its generation in a transaction, and this host has none');
 
-  return Effect.sync(() => {
-    const next = transactions.transactionSync(() => {
-      opts.sql.exec(`INSERT INTO ${GENERATION_TABLE} (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1`);
+  const next = transactions.transactionSync(() => {
+    opts.sql.exec(`INSERT INTO ${GENERATION_TABLE} (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1`);
 
-      return v.parse(v.pipe(v.number(), v.integer(), v.minValue(1)), Number([...opts.sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)][0]?.value));
-    });
-
-    assumeGeneration(opts.generation, next);
-
-    return next;
+    return v.parse(v.pipe(v.number(), v.integer(), v.minValue(1)), Number([...opts.sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)][0]?.value));
   });
+
+  assumeGeneration(opts.generation, next);
+
+  return next;
 }
 
 export interface WorkspaceGeneration {

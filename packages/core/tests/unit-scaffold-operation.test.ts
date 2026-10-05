@@ -13,6 +13,7 @@ import type { ComposedRequest, ResolvedTurnProfile } from '../src/index';
 function composed(profile: ResolvedTurnProfile, model: MockLanguageModelV3): () => Promise<ComposedRequest> {
   return async () => ({
     profile,
+    sessionKey: 'scaffold-operation',
     execution: {
       loopVersion: 1, extensions: [], instructions: null,
       chat: { model, system: 'the turn system prompt', tools: {} },

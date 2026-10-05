@@ -12,9 +12,9 @@ import {
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT,
+  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes
 } from '@kinu.run/core';
-import { attempt, diagnostics, KinuError, settle, settleSync, detach } from '@kinu.run/core/obs';
+import { attempt, detach, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -230,7 +230,7 @@ export class AgentDatabase {
         execRaw: (ddl) => { files.storage.sql.exec(ddl); },
         transactionSync: (write) => files.storage.transactionSync(write),
       },
-      workspaceIsMachine: false,
+      planes: cloudPlanes(this.workspace.home),
       memory: this.workspace.memory(),
       get executor() {
         const current = execution();
@@ -366,7 +366,7 @@ export class AgentDatabase {
     if (rows.has(opening.id)) return;
 
     const message = await history.admitInput({
-      id: opening.id, turnId: opening.id, message: opening.message, assertOwner: () => bound.handle.current(),
+      id: opening.id, turnId: opening.id, message: opening.message, assertOwner: () => bound.handle.assertCurrent(),
     });
 
     const prepared = await rows.prepareUser({ id: opening.id, turnId: opening.id, message, metadata: opening.metadata });
@@ -433,9 +433,11 @@ export class AgentDatabase {
   clear(): void {
     const reference = this.reference();
 
-    this.actorHost().bindStores(reference).stores.history.clearConversation(CHAT_SESSION_ID, () => this.actorHost().hosted(reference)?.session.inFlight === true
-      ? Effect.fail(new KinuError('denied', 'Stop the active turn before clearing its conversation'))
-      : Effect.void);
+    this.actorHost().bindStores(reference).stores.history.clearConversation(CHAT_SESSION_ID, () => {
+      if (this.actorHost().hosted(reference)?.session.inFlight === true) {
+        return settleSync(Effect.fail(new KinuError('denied', 'Stop the active turn before clearing its conversation')));
+      }
+    });
   }
 
 }

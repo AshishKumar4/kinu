@@ -1,7 +1,7 @@
 /** The durable assistant row reads as the answer `runChat` selects (chat.ts `answerFromSteps`), not narration + answer. */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { readTranscriptRows, scratchPath } from '@kinu.run/test-utils';
+import { readTranscriptRows, scratchPath, scratchDir } from '@kinu.run/test-utils';
 import { CHAT_SESSION_ID, initWorkspaceSchema, readSessionTranscript, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
@@ -88,7 +88,7 @@ interface OpenedSession { readonly db: Database; readonly rt: CLIRuntime }
 function openSession(name: string): OpenedSession {
   const db = new Database(scratchPath('turn-answer-row', `${name}.db`));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
   return { db, rt };
 }

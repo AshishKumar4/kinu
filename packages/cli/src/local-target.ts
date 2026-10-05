@@ -1,32 +1,25 @@
 /** Which backend, database, and project a command acts on. */
 
-import { Effect, Cause } from 'effect';
-import { settle } from '@kinu.run/core/obs';
 import { existsSync } from 'node:fs';
 import {
   MissingLocalWorkspaceError,
   agentDbPath,
   resolveAgentRef,
   resolveLocalAgent,
-  type ResolvedLocalAgent,
-  type ResolveLocalAgentOptions,
+  type LocalAgentRef,
 } from './config';
 import { resolveAgentTarget, type AgentTarget, type ResolveAgentTargetOptions } from './agent-target';
 import { printError } from './display';
 
-/** Adopts an unplaced workspace into the calling project unless `adopt: false`. */
-export function requireLocalAgent(name: string, opts: ResolveLocalAgentOptions = {}): Promise<ResolvedLocalAgent> {
-  return settle(Effect.gen(function* () {
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      return yield* Effect.promise(async () => resolveLocalAgent(name, opts));
-    }), (failed) => Effect.gen(function* () {
-      const error = Cause.squash(failed);
-
-      if (!(error instanceof MissingLocalWorkspaceError)) return yield* Effect.failCause(failed);
-      printError(error.message, error.hint);
-      process.exit(1);
-    }));
-  }));
+/** A missing workspace is a usage error with its hint; every other refusal propagates. */
+export function requireLocalAgent(name: string): LocalAgentRef {
+  try {
+    return resolveLocalAgent(name);
+  } catch (error) {
+    if (!(error instanceof MissingLocalWorkspaceError)) throw error;
+    printError(error.message, error.hint);
+    process.exit(1);
+  }
 }
 
 /** Cloud targets need a configured ref: the account list is server-side. */

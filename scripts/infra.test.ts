@@ -23,17 +23,17 @@ import {
   requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import {
-  type AccessApplicationView, type ContainerApplication, accessCovering, accessDestinations, accessOverreach, edgeResponds,
-  namespaceBinding, routeAnswer,
+  type AccessApplicationView, type ContainerApplication, type Deployment, accessCovering, accessDestinations, accessOverreach,
+  edgeResponds, namespaceBinding, routeAnswer, secretListing,
 } from './infra-cloudflare';
 import {
-  type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observedRow, phaseFrom, supplyDrift,
+  type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observe, observedRow, phaseFrom, supplyDrift,
   supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
 import { deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
 import { confirmationPhrase, partition } from './infra-teardown';
 import { POLL_SECONDS, settle, type SettleClock } from './edge-settled';
-import { plan, putSecret, type SecretIo } from './infra-provision';
+import { plan, provisionSecrets, putSecret, type SecretIo } from './infra-provision';
 import { isProductSource, readMatching } from './sources';
 
 const infrastructure = deriveInfrastructure();
@@ -1089,6 +1089,90 @@ describe('the first staging deploy is refused for nothing it creates', () => {
       expect((await edgeResponds(`127.0.0.1:${String(closing.port)}`)).state).toBe('unknown');
     } finally {
       closing.stop(true);
+    }
+  });
+});
+
+/**
+ * GitHub #42: the documented sequence on an empty account. Provisioning skipped every secret until a Worker existed,
+ * and the deploy that creates the Worker refused to upload without them. The account here is as the operator meets
+ * it: their prerequisites and provisioning's storage present, nothing the deploy creates, no Worker and no secrets.
+ */
+describe('an empty account reaches its first deploy', () => {
+  const staging = deriveInfrastructure('staging');
+
+  // wrangler 4.145's `secret list` on a Worker that does not exist, recorded 2026-10-04 against the live account.
+  const missingWorker = {
+    ok: false, stdout: '', code: 1,
+    stderr: '\u001b[31m✘ \u001b[41;31m[\u001b[41;97mERROR\u001b[41;31m]\u001b[0m \u001b[1mWorker "kinu-bootstrap-probe-1791089222" not found.\u001b[0m\n'
+    + '\n'
+    + '  \n'
+    + '  If this is a new Worker, run `wrangler deploy` first to create it.\n'
+    + '  Otherwise, check that the Worker name is correct and you\'re logged into the right account.\n'
+    + '\n'
+    + '\n'
+    + '🪵  Logs were written to "/home/operator/.config/.wrangler/logs/wrangler.log"\n',
+  };
+
+  const required = [...SUPPLY.keys()].filter((name) => SUPPLY.get(name)?.handling !== 'config-var' && requiredIn(name, staging.worker));
+
+  /** The Worker and what is bound to it are observed for real; nothing else here needs an account. */
+  const account = (live: Deployment): Promise<Row[]> => Promise.all(staging.resources.map(async (resource) => {
+    if (resource.kind === 'worker' || resource.kind === 'durable-object' || resource.kind === 'binding') return await observe(resource, staging.worker, live);
+
+    if (UNOBSERVABLE.has(resource.kind)) return row(resource.id, 'unobservable', resource.required, resource.origin);
+
+    return row(resource.id, resource.origin === 'wrangler-deploy' ? 'absent' : 'present', resource.required, resource.origin);
+  }));
+
+  const findings = async (phase: Phase, live: Deployment, held: readonly string[]) => audit({
+    infrastructure: staging, rows: await account(live), unreadFields: [], phase,
+    supplied: supplyRows(staging.worker, live.state === 'absent' ? secretListing(missingWorker) : { state: 'present', detail: 'listed', names: held }),
+  }).findings;
+
+  test("wrangler's word that the Worker is missing is an absence, and no other failure is", () => {
+    expect(secretListing(missingWorker)).toEqual({ state: 'absent' });
+
+    for (const stderr of ['✘ [ERROR] Authentication error [code: 10000]', 'sh: 1: wrangler: not found']) {
+      expect(secretListing({ ok: false, stdout: '', stderr, code: 1 }).state).toBe('unknown');
+    }
+  });
+
+  test('before provisioning, the gate refuses the deploy for the missing secrets alone', async () => {
+    const refused = await findings('full', { state: 'absent' }, []);
+
+    expect(refused).toHaveLength(required.length);
+
+    for (const name of required) expect(refused.join('\n')).toContain(name);
+  });
+
+  test('provisioning installs every required secret though no Worker exists yet', async () => {
+    const installed: string[] = [];
+
+    const steps = await provisionSecrets(staging, { state: 'absent' }, () => ({ state: 'absent' }), {
+      ask: async (question) => (question.includes('enter to skip') ? 'a value the operator pasted' : ''),
+      interactive: true,
+      install: (name) => {
+        installed.push(name);
+
+        return { ok: true, stdout: '', stderr: '', code: 0 };
+      },
+      show: () => undefined,
+    });
+
+    expect(installed).toEqual(required);
+    expect(steps.map((step) => step.outcome)).toEqual(required.map(() => 'created'));
+  });
+
+  test('with the secrets on the Worker wrangler made to hold them, the first deploy has nothing to refuse', async () => {
+    expect(await findings('bootstrap', { state: 'deployed', versionId: 'placeholder', bindings: [] }, required)).toEqual([]);
+  });
+
+  test('a deployment missing a required secret is still refused in every phase', async () => {
+    const [missing = '', ...rest] = required;
+
+    for (const phase of PHASES) {
+      expect((await findings(phase, { state: 'deployed', versionId: 'v', bindings: [] }, rest)).join('\n')).toContain(missing);
     }
   });
 });

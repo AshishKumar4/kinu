@@ -174,21 +174,37 @@ function fixedOwedTurnEffect(
   });
 }
 
-export function overflowRetryTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+function overflowRetryTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
   return fixedOwedTurnEffect(queue, { event: OVERFLOW_RETRY_EVENT, text: OVERFLOW_RETRY_TEXT, prefix: 'overflow-retry' });
 }
 
 /** Think's loop cannot extend past a `length` finish, so the continuation is the next turn, owed durably. */
-export function outputLimitContinuationTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+function outputLimitContinuationTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
   return fixedOwedTurnEffect(queue, { event: OUTPUT_CONTINUATION_EVENT, text: OUTPUT_CONTINUATION_TEXT, prefix: 'output-continuation' });
 }
 
 /** The text is a recorded input: a replay announces what the turn was owed. */
-export function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
   return owedTurnTerminalEffect(queue, {
     input: v.object({ text: v.string() }), event: TASK_REMINDER_EVENT, text: ({ text }) => text,
     key: taskReminderIdempotencyKey,
   });
+}
+
+/** The bodies every chat backend owes alike: the loop's follow-up turns, the recording, the lessons and the drain. */
+export function chatTerminalEffects(deps: {
+  readonly chat: () => OwedTurnQueue;
+  readonly orchestrator: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+  readonly engine: Pick<EvolutionEngine, 'learnFromTurn'>;
+}): TerminalEffectTable {
+  return {
+    overflow_retry: overflowRetryTerminalEffect(deps.chat),
+    output_continuation: outputLimitContinuationTerminalEffect(deps.chat),
+    task_reminder: taskReminderTerminalEffect(deps.chat),
+    turn_record: turnRecordTerminalEffect(deps.orchestrator),
+    turn_lessons: turnLessonsTerminalEffect(deps.engine),
+    event_drain: eventDrainTerminalEffect(deps.orchestrator),
+  };
 }
 
 /**
@@ -254,7 +270,7 @@ export function branchesTerminalEffect(deps: {
 }
 
 /** The window append is idempotent on the message's identity. Continuity, mode and the evolution gate come off the row. A plan turn records nothing. */
-export function turnRecordTerminalEffect(
+function turnRecordTerminalEffect(
   orch: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn'>,
 ): TerminalEffect {
   return terminalEffect({
@@ -286,7 +302,7 @@ export function turnRecordTerminalEffect(
 }
 
 /** Each part is tombstoned on the turn, so a retry neither rescores nor asks again; a refusal throws, for the ledger. */
-export function turnLessonsTerminalEffect(engine: Pick<EvolutionEngine, 'learnFromTurn'>): TerminalEffect {
+function turnLessonsTerminalEffect(engine: Pick<EvolutionEngine, 'learnFromTurn'>): TerminalEffect {
   return terminalEffect({
     input: v.object({ turn: JsonValueSchema }),
     run: async ({ turn }) => {
@@ -298,7 +314,7 @@ export function turnLessonsTerminalEffect(engine: Pick<EvolutionEngine, 'learnFr
 }
 
 /** Idempotent (PENDING, unbound rows only). Rethrows: `completed` over a half-bound batch strands the assignment. */
-export function eventDrainTerminalEffect(
+function eventDrainTerminalEffect(
   orch: Pick<AgentOrchestrator, 'drainPendingEvents'>,
 ): TerminalEffect {
   return terminalEffect({

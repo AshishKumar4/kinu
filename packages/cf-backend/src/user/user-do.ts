@@ -3,7 +3,7 @@
  * Every privileged method takes a `UserCaller` first and gates on `requireTier` before anything else.
  */
 import { Agent, type AgentContext } from "agents";
-import { Cause, Data, Effect, Result } from "effect";
+import { Effect } from "effect";
 import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from "../rpc-surface";
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "../activation-gate";
 import { parseCliTokenUserId } from "../cli/auth-store";
@@ -80,7 +80,17 @@ import {
   autoTitleMayReplace, nameOriginOf,
   type NameOrigin,
 } from '@kinu.run/core';
-import { attempt, authoredRefusal, diagnostics, flight, KinuError, logged, renderThrownChain, settle, tolerate, toKinuError, settleSync, settleLogged } from '@kinu.run/core/obs';
+import {
+  attempt,
+  authoredRefusal,
+  diagnostics,
+  KinuError,
+  renderThrownChain,
+  settle,
+  settleLogged,
+  tolerate,
+  toKinuError,
+} from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
@@ -274,21 +284,15 @@ function mcpNameTakenMessage(name: string): string {
 }
 
 /**
- * A failed name claim, renaming only the `lower(name)` UNIQUE violation to that sentence.
- * Any other failure stays as it was so storage errors are not reported as duplicates.
+ * Rethrow a failed name claim, renaming only the `lower(name)` UNIQUE violation to that sentence.
+ * Any other failure is rethrown untouched so storage errors are not reported as duplicates.
  */
-function mcpNameCollision(input: { cause: unknown; name: string }): Effect.Effect<never, KinuError> {
+function rethrowMcpNameCollision(input: { cause: unknown; name: string }): never {
   if (/UNIQUE constraint failed/i.test(renderThrownChain({ cause: input.cause }))) {
-    return Effect.fail(new KinuError('bad_input', mcpNameTakenMessage(input.name), { cause: input.cause }));
+    throw new KinuError('bad_input', mcpNameTakenMessage(input.name), { cause: input.cause });
   }
 
-  return input.cause instanceof KinuError ? Effect.fail(input.cause) : Effect.die(input.cause);
-}
-
-function reportedThenThrown<A>(run: () => Promise<A>, report: (failed: { readonly cause: unknown }) => void): Effect.Effect<A> {
-  return Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) }).pipe(
-    Effect.catch((failed) => Effect.andThen(Effect.sync(() => { report(failed); }), Effect.die(failed.cause))),
-  );
+  throw input.cause;
 }
 
 export interface McpServerUnavailable {
@@ -494,17 +498,19 @@ export type WorkspaceRegistration =
 
 /** Publish of something that is not an open reservation. A fork transfer treats it as a rollback
  * trigger, not a transport fault; crosses the DO RPC boundary as its message. */
-class WorkspaceReservationNotPendingError extends Data.TaggedError('WorkspaceReservationNotPendingError')<{ readonly message: string }> {
+class WorkspaceReservationNotPendingError extends Error {
   constructor(name: string, why: string) {
-    super({ message: `Workspace "${name}" cannot be published: ${why}.` });
+    super(`Workspace "${name}" cannot be published: ${why}.`);
+    this.name = 'WorkspaceReservationNotPendingError';
   }
 }
 
 /** A CLI device-code approval redeemed twice; the poll route answers it as already-delivered.
  * Crosses the DO RPC boundary as its message. */
-class CliAuthorizationSpentError extends Data.TaggedError('CliAuthorizationSpentError')<{ readonly message: string; readonly cause?: unknown }> {
+class CliAuthorizationSpentError extends Error {
   constructor(options: ErrorOptions) {
-    super({ message: 'That CLI authorization has already been redeemed.', ...(options?.cause !== undefined && { cause: options.cause }) });
+    super('That CLI authorization has already been redeemed.', options);
+    this.name = 'CliAuthorizationSpentError';
   }
 }
 
@@ -538,13 +544,6 @@ export interface CredentialSummary {
 interface HeldLogin {
   readonly cred: OAuthCredential;
   readonly revision: number;
-}
-
-interface RefreshingLogin {
-  readonly key: string;
-  readonly held: HeldLogin;
-  readonly rotate: () => Promise<OAuthCredential>;
-  readonly onRevoked: (revision: number) => Effect.Effect<void, KinuError>;
 }
 
 /** What a failed refresh names, per base key. */
@@ -710,11 +709,9 @@ export class UserDO extends Agent<Env> {
 
   private _userMcpHydrated = false;
 
-  /**
-   * The single hydration path for this user's MCP plane; `user_mcp_servers` is the truth. Calls interleave
-   * at every await, so callers join one run: reconciliation stays one credential-safe sequence.
-   */
-  private readonly hydrateUserMcp = flight(() => this.hydrateUserMcpOnce());
+  /** Calls interleave at every await; joining this keeps reconciliation one credential-safe sequence.
+   * Cleared after either settlement so a later caller can retry. */
+  private _hydratingUserMcp: Promise<void> | null = null;
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
@@ -744,68 +741,72 @@ export class UserDO extends Agent<Env> {
 
   /** Provisioning in flight, per workspace. A DO does not serialize across an RPC await, so
    *  coalescing here keeps concurrent first-touches from installing tokens from different mints. */
-  private readonly provisioning = flight((workspaceName: string) => Effect.gen({ self: this }, function* () {
-    const { token, tokenHash } = yield* Effect.promise(() => freshWorkspaceCapability());
-
-    if (!this.workspaceMintable(workspaceName)) {
-      return yield* new KinuError('unavailable', `Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
-    }
-
-    commitWorkspaceCapability(this.ctx.storage.sql, workspaceName, tokenHash);
-    clearCapabilityReconcile(this.ctx.storage.sql, workspaceName);
-    const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceName));
-    const result = yield* Effect.promise(() => workspace.installWorkspaceCapability(token));
-
-    if (result.missed > 0) {
-      armCapabilityReconcile(this.ctx.storage.sql, workspaceName, tokenHash);
-    }
-  }), { key: (workspaceName) => workspaceName });
+  private readonly _provisioning = new Map<string, Promise<void>>();
 
   /**
    * Reconcile a workspace's identity; any mismatch with `presentedHash` is repaired by minting anew.
    * The only ungated method (it bootstraps identity), so it opens the analytics window itself.
    */
-  ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      openAnalyticsWindow(this.env);
-      validateWorkspaceName(workspaceName);
+  async ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
+    openAnalyticsWindow(this.env);
+    validateWorkspaceName(workspaceName);
 
-      if (!this.workspaceRegistered(workspaceName)) {
-        return yield* new KinuError('missing', `Workspace ${workspaceName} is not in your registry.`);
-      }
+    if (!this.workspaceRegistered(workspaceName)) {
+      throw new KinuError('missing', `Workspace ${workspaceName} is not in your registry.`);
+    }
 
-      return yield* this.reconcileWorkspaceCapability(workspaceName, presentedHash);
-    }));
+    return this.reconcileWorkspaceCapability(workspaceName, presentedHash);
   }
 
   /**
    * Shared body for {@link ensureWorkspaceCapability} and {@link publishWorkspaceReservation}.
    * Admission is re-checked in the same synchronous turn as the write, so a delete during minting wins.
    */
-  private reconcileWorkspaceCapability(workspaceName: string, presentedHash: string | null): Effect.Effect<void, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      if (presentedHash && presentedHash === workspaceCapabilityHash(this.ctx.storage.sql, workspaceName)) {
-        // Matching hash is done only if no rotation is pending on a replica; the root holds the
-        // only plaintext, so it is asked to re-push.
-        const pending = pendingCapabilityReconcile(this.ctx.storage.sql, workspaceName);
+  private async reconcileWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
+    if (presentedHash && presentedHash === workspaceCapabilityHash(this.ctx.storage.sql, workspaceName)) {
+      // Matching hash is done only if no rotation is pending on a replica; the root holds the
+      // only plaintext, so it is asked to re-push.
+      const pending = pendingCapabilityReconcile(this.ctx.storage.sql, workspaceName);
 
-        if (pending === null || pending !== presentedHash) return;
-        const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceName));
-        const result = yield* Effect.promise(() => workspace.repushWorkspaceCapability());
+      if (pending === null || pending !== presentedHash) return;
+      const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceName));
+      const result = await workspace.repushWorkspaceCapability();
 
-        if (result.missed === 0) {
-          clearCapabilityReconcile(this.ctx.storage.sql, workspaceName);
-
-          return;
-        }
-
-        armCapabilityReconcile(this.ctx.storage.sql, workspaceName, presentedHash);
+      if (result.missed === 0) {
+        clearCapabilityReconcile(this.ctx.storage.sql, workspaceName);
 
         return;
       }
 
-      return yield* this.provisioning(workspaceName);
-    });
+      armCapabilityReconcile(this.ctx.storage.sql, workspaceName, presentedHash);
+
+      return;
+    }
+
+    const inFlight = this._provisioning.get(workspaceName);
+
+    if (inFlight) return inFlight;
+
+    const task = (async () => {
+      const { token, tokenHash } = await freshWorkspaceCapability();
+
+      if (!this.workspaceMintable(workspaceName)) {
+        throw new KinuError('unavailable', `Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
+      }
+
+      commitWorkspaceCapability(this.ctx.storage.sql, workspaceName, tokenHash);
+      clearCapabilityReconcile(this.ctx.storage.sql, workspaceName);
+      const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceName));
+      const result = await workspace.installWorkspaceCapability(token);
+
+      if (result.missed > 0) {
+        armCapabilityReconcile(this.ctx.storage.sql, workspaceName, tokenHash);
+      }
+    })();
+
+    this._provisioning.set(workspaceName, task);
+
+    try { await task; } finally { this._provisioning.delete(workspaceName); }
   }
 
   /** Like {@link workspaceRegistered} but also admits fork reservations (`create_pending = 1`);
@@ -888,55 +889,49 @@ export class UserDO extends Agent<Env> {
   // The 'account' capability is floored at owner_only, so no workspace token reaches these methods.
 
   /** Idempotent: the first completion wins; a retry returns the original timestamp. */
-  completeOnboarding(caller: UserCaller): Promise<{ onboardedAt: number }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'account'));
+  async completeOnboarding(caller: UserCaller): Promise<{ onboardedAt: number }> {
+    await this.requireTier(caller, 'account');
 
-      this.sqlx(
-        `INSERT INTO user_onboarding (id, completed_at) VALUES (1, ?) ON CONFLICT (id) DO NOTHING`,
-        Date.now(),
-      );
+    this.sqlx(
+      `INSERT INTO user_onboarding (id, completed_at) VALUES (1, ?) ON CONFLICT (id) DO NOTHING`,
+      Date.now(),
+    );
 
-      const stamped = this.onboardingCompletedAt();
+    const stamped = this.onboardingCompletedAt();
 
-      if (stamped === null) return yield* new KinuError('io', 'user_onboarding has no row after the insert');
+    if (stamped === null) throw new KinuError('io', 'user_onboarding has no row after the insert');
 
-      return { onboardedAt: stamped };
-    }));
+    return { onboardedAt: stamped };
   }
 
-  setDisplayName(caller: UserCaller, displayName: string): Promise<UserProfile> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'account'));
-      const name = displayName.trim();
-      const problem = displayNameProblem(name);
+  async setDisplayName(caller: UserCaller, displayName: string): Promise<UserProfile> {
+    await this.requireTier(caller, 'account');
+    const name = displayName.trim();
+    const problem = displayNameProblem(name);
 
-      if (problem !== null) return yield* new KinuError('bad_input', problem);
+    if (problem !== null) throw new KinuError('bad_input', problem);
 
-      this.sqlx(`UPDATE user_profile SET display_name = ? WHERE id = 1`, name);
+    this.sqlx(`UPDATE user_profile SET display_name = ? WHERE id = 1`, name);
 
-      const profile = yield* Effect.promise(async () => this.getProfile(caller));
+    const profile = await this.getProfile(caller);
 
-      if (!profile) return yield* new KinuError('missing', 'No profile row to rename');
+    if (!profile) throw new KinuError('missing', 'No profile row to rename');
 
-      return profile;
-    }));
+    return profile;
   }
 
-  listWorkspaces(caller: UserCaller, query?: RosterQuery): Promise<RosterPage> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.read'));
-      // This read is the retry for unfinished teardowns and for stale fork reservations nothing else frees.
-      yield* this.resumePendingDeletions();
-      yield* this.reclaimStaleForkReservations();
-      this.nudgeUnreported();
-      const page = rosterPage(this.ctx.storage.sql, query);
+  async listWorkspaces(caller: UserCaller, query?: RosterQuery): Promise<RosterPage> {
+    const resolved = await this.requireTier(caller, 'workspaces.read');
+    // This read is the retry for unfinished teardowns and for stale fork reservations nothing else frees.
+    await this.resumePendingDeletions();
+    await this.reclaimStaleForkReservations();
+    this.nudgeUnreported();
+    const page = rosterPage(this.ctx.storage.sql, query);
 
-      // Never whom siblings share with.
-      return resolved.kind === 'owner_session' ? page : {
-        ...page, entries: page.entries.map((entry) => ({ ...entry, overview: entry.overview === null ? null : { ...entry.overview, shares: [] } })),
-      };
-    }));
+    // Never whom siblings share with.
+    return resolved.kind === 'owner_session' ? page : {
+      ...page, entries: page.entries.map((entry) => ({ ...entry, overview: entry.overview === null ? null : { ...entry.overview, shares: [] } })),
+    };
   }
 
   /** So two reads never ask one twice. */
@@ -955,20 +950,23 @@ export class UserDO extends Agent<Env> {
 
     const lane = async (): Promise<void> => {
       for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
-        const asked = name;
-
-        await settleLogged('roster.overview_nudge_failed', { doing: 'asking a workspace with no tile for its first one', otherwise: 'unavailable' }, async () => {
+        try {
           // Deleted since the queue was read: never woken.
-          if (!this.workspaceRegistered(asked)) return;
-          const [marker] = this.sqlx<{ attempts: number }>(`SELECT attempts FROM workspace_overview_nudges WHERE name = ?`, asked);
+          if (!this.workspaceRegistered(name)) continue;
+          const [marker] = this.sqlx<{ attempts: number }>(`SELECT attempts FROM workspace_overview_nudges WHERE name = ?`, name);
           const attempts = (marker?.attempts ?? 0) + 1;
 
           this.sqlx(`INSERT INTO workspace_overview_nudges (name, attempts, next_at) VALUES (?, ?, ?)
             ON CONFLICT (name) DO UPDATE SET attempts = excluded.attempts, next_at = excluded.next_at`,
-          asked, attempts, Date.now() + recoveryBackoffMs(attempts));
-          await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(asked)).requestOverviewPush();
-        }, { workspace: asked });
-        this.nudging.delete(asked);
+          name, attempts, Date.now() + recoveryBackoffMs(attempts));
+          await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name)).requestOverviewPush();
+        } catch (cause) {
+          diagnostics.failure('roster.overview_nudge_failed', toKinuError({
+            doing: 'asking a workspace with no tile for its first one', cause, otherwise: 'unavailable',
+          }), { workspace: name });
+        } finally {
+          this.nudging.delete(name);
+        }
       }
     };
 
@@ -985,28 +983,26 @@ export class UserDO extends Agent<Env> {
   }
 
   /** A repeat writes and sends nothing. */
-  putWorkspaceOverview(caller: UserCaller, name: string, overview: WorkspaceOverview): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.overview_self'));
-      validateWorkspaceName(name);
+  async putWorkspaceOverview(caller: UserCaller, name: string, overview: WorkspaceOverview): Promise<void> {
+    const resolved = await this.requireTier(caller, 'workspaces.overview_self');
+    validateWorkspaceName(name);
 
-      if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-        return yield* new KinuError('denied', `Workspace "${resolved.workspace}" may only push its own overview.`);
-      }
+    if (resolved.kind === 'workspace' && resolved.workspace !== name) {
+      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only push its own overview.`);
+    }
 
-      const parsed = v.parse(WorkspaceOverviewSchema, overview);
+    const parsed = v.parse(WorkspaceOverviewSchema, overview);
 
-      const changed = this.sqlx(
-        `INSERT INTO workspace_overviews (name, overview, activity, decisions) VALUES (?, ?, ?, ?)
-         ON CONFLICT (name) DO UPDATE SET overview = excluded.overview, activity = excluded.activity,
-           decisions = excluded.decisions
-         WHERE workspace_overviews.overview <> excluded.overview
-         RETURNING name`,
-        name, JSON.stringify(parsed), parsed.activity, parsed.decisionsWaiting,
-      );
+    const changed = this.sqlx(
+      `INSERT INTO workspace_overviews (name, overview, activity, decisions) VALUES (?, ?, ?, ?)
+       ON CONFLICT (name) DO UPDATE SET overview = excluded.overview, activity = excluded.activity,
+         decisions = excluded.decisions
+       WHERE workspace_overviews.overview <> excluded.overview
+       RETURNING name`,
+      name, JSON.stringify(parsed), parsed.activity, parsed.decisionsWaiting,
+    );
 
-      if (changed.length > 0) this.rosterChanged(name);
-    }));
+    if (changed.length > 0) this.rosterChanged(name);
   }
 
   /** Uncapped enumeration of the active roster for server-side fans, where a page would drop targets. */
@@ -1024,67 +1020,65 @@ export class UserDO extends Agent<Env> {
    * Claim a roster name. `created` is exclusive (read+insert in one turn), and only it may initialize
    * or roll back; `active` must not be re-seeded; `reserved` is an uncommitted fork's hold.
    */
-  registerWorkspace(
+  async registerWorkspace(
     caller: UserCaller, name: string, displayName?: string, from?: WorkspaceRegistrationSource,
   ): Promise<WorkspaceRegistration> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const { purpose, nameOrigin } = from ?? {};
-      yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.write'));
-      validateWorkspaceName(name);
-      yield* this.requireNotDeleting(name);
-      const now = Date.now();
+    const { purpose, nameOrigin } = from ?? {};
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
+    await this.requireNotDeleting(name);
+    const now = Date.now();
 
-      const existing = this.sqlx<{
-        display_name: string;
-        created_at: number;
-        create_pending: number;
-      }>(
-        `SELECT display_name, created_at, create_pending
-         FROM user_workspaces WHERE name = ?`,
-        name,
-      )[0];
+    const existing = this.sqlx<{
+      display_name: string;
+      created_at: number;
+      create_pending: number;
+    }>(
+      `SELECT display_name, created_at, create_pending
+       FROM user_workspaces WHERE name = ?`,
+      name,
+    )[0];
 
-      if (existing && existing.create_pending !== 0) return { status: 'reserved' };
+    if (existing && existing.create_pending !== 0) return { status: 'reserved' };
 
-      if (existing) {
-        // Return the row's own timestamp: keeps the answer stable across retries and lets a
-        // rollback match the row it actually inserted.
-        this.sqlx(
-          `UPDATE user_workspaces SET last_visited = ? WHERE name = ?`,
-          now, name,
-        );
-        this.rosterChanged(name);
-
-        return {
-          status: 'active',
-          entry: {
-            name,
-            displayName: existing.display_name,
-            createdAt: existing.created_at,
-            lastVisited: now,
-          },
-        };
-      }
-
-      const explicit = displayName?.trim() ?? '';
-      const title = resolveWorkspaceTitle({ explicit, purpose, slug: name });
-      // Use the origin the caller decided; a derived title is non-empty and must not read as
-      // the owner's choice. A caller that states nothing falls back to the displayName test.
-      const origin: NameOrigin = nameOrigin ?? (explicit !== '' ? 'user' : 'auto');
-      // No ON CONFLICT: the read above and this write are one turn, so a conflict is unreachable;
-      // if an await ever separated them, a silent upsert would be wrong.
+    if (existing) {
+      // Return the row's own timestamp: keeps the answer stable across retries and lets a
+      // rollback match the row it actually inserted.
       this.sqlx(
-        `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited, create_pending)
-         VALUES (?, ?, ?, ?, ?, 0)`,
-        name, title, origin, now, now,
+        `UPDATE user_workspaces SET last_visited = ? WHERE name = ?`,
+        now, name,
       );
       this.rosterChanged(name);
 
       return {
-        status: 'created',
-        entry: { name, displayName: title, createdAt: now, lastVisited: now },
+        status: 'active',
+        entry: {
+          name,
+          displayName: existing.display_name,
+          createdAt: existing.created_at,
+          lastVisited: now,
+        },
       };
-    }));
+    }
+
+    const explicit = displayName?.trim() ?? '';
+    const title = resolveWorkspaceTitle({ explicit, purpose, slug: name });
+    // Use the origin the caller decided; a derived title is non-empty and must not read as
+    // the owner's choice. A caller that states nothing falls back to the displayName test.
+    const origin: NameOrigin = nameOrigin ?? (explicit !== '' ? 'user' : 'auto');
+    // No ON CONFLICT: the read above and this write are one turn, so a conflict is unreachable;
+    // if an await ever separated them, a silent upsert would be wrong.
+    this.sqlx(
+      `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited, create_pending)
+       VALUES (?, ?, ?, ?, ?, 0)`,
+      name, title, origin, now, now,
+    );
+    this.rosterChanged(name);
+
+    return {
+      status: 'created',
+      entry: { name, displayName: title, createdAt: now, lastVisited: now },
+    };
   }
 
   /**
@@ -1092,59 +1086,57 @@ export class UserDO extends Agent<Env> {
    * until {@link publishWorkspaceReservation} (KINU-027) but still blocking the name.
    * Carries a lease; a lapsed reservation is torn down and adopted by the new caller.
    */
-  reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{ entry: WorkspaceEntry; reserved: boolean }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.write'));
-      validateWorkspaceName(name);
-      yield* this.requireNotDeleting(name);
+  async reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{ entry: WorkspaceEntry; reserved: boolean }> {
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
+    await this.requireNotDeleting(name);
 
-      const existing = this.sqlx<{
-        name: string;
-        display_name: string;
-        created_at: number;
-        last_visited: number;
-        create_pending: number;
-        fork_lease_expires_at: number | null;
-      }>(
-        `SELECT name, display_name, created_at, last_visited,
-                create_pending, fork_lease_expires_at
-         FROM user_workspaces WHERE name = ?`,
-        name,
-      )[0];
+    const existing = this.sqlx<{
+      name: string;
+      display_name: string;
+      created_at: number;
+      last_visited: number;
+      create_pending: number;
+      fork_lease_expires_at: number | null;
+    }>(
+      `SELECT name, display_name, created_at, last_visited,
+              create_pending, fork_lease_expires_at
+       FROM user_workspaces WHERE name = ?`,
+      name,
+    )[0];
 
-      const abandoned = existing !== undefined
-        && existing.create_pending === 1
-        && (existing.fork_lease_expires_at ?? 0) <= Date.now();
+    const abandoned = existing !== undefined
+      && existing.create_pending === 1
+      && (existing.fork_lease_expires_at ?? 0) <= Date.now();
 
-      if (abandoned) yield* this.reclaimForkReservation(name);
+    if (abandoned) await this.reclaimForkReservation(name);
 
-      if (existing && !abandoned) {
-        return {
-          entry: {
-            name: existing.name,
-            displayName: existing.display_name,
-            createdAt: existing.created_at,
-            lastVisited: existing.last_visited,
-          },
-          reserved: false,
-        };
-      }
-
-      const now = Date.now();
-      const explicit = displayName?.trim() ?? '';
-      const title = resolveWorkspaceTitle({ explicit, slug: name });
-      this.sqlx(
-        `INSERT INTO user_workspaces
-           (name, display_name, name_origin, created_at, last_visited, create_pending, fork_lease_expires_at)
-         VALUES (?, ?, ?, ?, ?, 1, ?)`,
-        name, title, explicit !== '' ? 'user' : 'auto', now, now, now + FORK_RESERVATION_LEASE_MS,
-      );
-
+    if (existing && !abandoned) {
       return {
-        entry: { name, displayName: title, createdAt: now, lastVisited: now },
-        reserved: true,
+        entry: {
+          name: existing.name,
+          displayName: existing.display_name,
+          createdAt: existing.created_at,
+          lastVisited: existing.last_visited,
+        },
+        reserved: false,
       };
-    }));
+    }
+
+    const now = Date.now();
+    const explicit = displayName?.trim() ?? '';
+    const title = resolveWorkspaceTitle({ explicit, slug: name });
+    this.sqlx(
+      `INSERT INTO user_workspaces
+         (name, display_name, name_origin, created_at, last_visited, create_pending, fork_lease_expires_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`,
+      name, title, explicit !== '' ? 'user' : 'auto', now, now, now + FORK_RESERVATION_LEASE_MS,
+    );
+
+    return {
+      entry: { name, displayName: title, createdAt: now, lastVisited: now },
+      reserved: true,
+    };
   }
 
   /**
@@ -1166,84 +1158,85 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Tear down the target DO of a lapsed reservation, then drop the row; teardown is idempotent. */
-  private reclaimForkReservation(name: string): Effect.Effect<void, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const ownerUserId = this.ctx.id.name ?? '';
+  private async reclaimForkReservation(name: string): Promise<void> {
+    const ownerUserId = this.ctx.id.name ?? '';
 
-      if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
-        // Without the owner id the destroy cannot be authorized; the row keeps its lapsed lease
-        // and the next attempt retries.
-        diagnostics.failure('workspace.fork_reservation_unowned', toKinuError({
-          doing: 'reclaiming a fork reservation whose transfer stopped',
-          cause: new Error('this user object has no user id to authorize the destroy with'),
-          otherwise: 'denied',
-        }), { workspace: name });
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
+      // Without the owner id the destroy cannot be authorized; the row keeps its lapsed lease
+      // and the next attempt retries.
+      diagnostics.failure('workspace.fork_reservation_unowned', toKinuError({
+        doing: 'reclaiming a fork reservation whose transfer stopped',
+        cause: new Error('this user object has no user id to authorize the destroy with'),
+        otherwise: 'denied',
+      }), { workspace: name });
+      throw new KinuError('unavailable', `Workspace "${name}" holds an abandoned fork reservation that cannot be reclaimed.`);
+    }
 
-        return yield* new KinuError('unavailable', `Workspace "${name}" holds an abandoned fork reservation that cannot be reclaimed.`);
-      }
-
-      yield* this.tearDownWorkspace(name, ownerUserId);
-    });
+    await this.tearDownWorkspace(name, ownerUserId);
   }
 
   /**
    * Reclaim lapsed reservations. Driven by the owner's reads like {@link resumePendingDeletions}:
    * this object has no timer, and the roster hides `create_pending` rows.
    */
-  private reclaimStaleForkReservations(): Effect.Effect<void> {
-    return Effect.gen({ self: this }, function* () {
-      const stale = this.sqlx<{ name: string }>(
-        `SELECT name FROM user_workspaces
+  private async reclaimStaleForkReservations(): Promise<void> {
+    const stale = this.sqlx<{ name: string }>(
+      `SELECT name FROM user_workspaces
        WHERE create_pending = 1 AND delete_pending = 0
          AND COALESCE(fork_lease_expires_at, 0) <= ?`,
-        Date.now(),
-      );
+      Date.now(),
+    );
 
-      for (const row of stale) {
-        yield* logged('workspace.fork_reservation_reclaim_failed', { doing: 'reclaiming a fork reservation whose transfer stopped renewing it', otherwise: 'io' }, this.reclaimForkReservation(row.name), { workspace: row.name });
+    for (const row of stale) {
+      try {
+        await this.reclaimForkReservation(row.name);
+      } catch (err) {
+        diagnostics.failure('workspace.fork_reservation_reclaim_failed', toKinuError({
+          doing: 'reclaiming a fork reservation whose transfer stopped renewing it',
+          cause: err,
+          otherwise: 'io',
+        }), { workspace: row.name });
       }
-    });
+    }
   }
 
   /** Commit a reservation; the only place `create_pending` is cleared. */
-  publishWorkspaceReservation(
+  async publishWorkspaceReservation(
     caller: UserCaller,
     name: string,
     createdAt: number,
     capabilityHash: string | null,
   ): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.write'));
-      validateWorkspaceName(name);
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
 
-      // Match on timestamp too: by name alone a late reply could publish a later reservation.
-      // Rows with teardown started (`delete_pending`) may not be committed.
-      const reserved = v.safeParse(v.object({ create_pending: v.picklist([0, 1]) }), this.sqlx(
-        `SELECT create_pending FROM user_workspaces
-         WHERE name = ? AND created_at = ? AND delete_pending = 0`,
+    // Match on timestamp too: by name alone a late reply could publish a later reservation.
+    // Rows with teardown started (`delete_pending`) may not be committed.
+    const reserved = v.safeParse(v.object({ create_pending: v.picklist([0, 1]) }), this.sqlx(
+      `SELECT create_pending FROM user_workspaces
+       WHERE name = ? AND created_at = ? AND delete_pending = 0`,
+      name, createdAt,
+    )[0]);
+
+    if (!reserved.success) {
+      throw new WorkspaceReservationNotPendingError(name, 'no reservation of that name is open under that timestamp');
+    }
+
+    if (reserved.output.create_pending === 0) {
+      throw new WorkspaceReservationNotPendingError(name, 'it is already published');
+    }
+
+    // Install (cross-DO await) must precede the transaction: `transactionSync` commits when its
+    // synchronous body returns. A failed install leaves the row unpublished and releasable.
+    await this.reconcileWorkspaceCapability(name, capabilityHash);
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        `UPDATE user_workspaces SET create_pending = 0, fork_lease_expires_at = NULL
+         WHERE name = ? AND created_at = ? AND create_pending = 1`,
         name, createdAt,
-      )[0]);
-
-      if (!reserved.success) {
-        return yield* Effect.die(new WorkspaceReservationNotPendingError(name, 'no reservation of that name is open under that timestamp'));
-      }
-
-      if (reserved.output.create_pending === 0) {
-        return yield* Effect.die(new WorkspaceReservationNotPendingError(name, 'it is already published'));
-      }
-
-      // Install (cross-DO await) must precede the transaction: `transactionSync` commits when its
-      // synchronous body returns. A failed install leaves the row unpublished and releasable.
-      yield* this.reconcileWorkspaceCapability(name, capabilityHash);
-      this.ctx.storage.transactionSync(() => {
-        this.ctx.storage.sql.exec(
-          `UPDATE user_workspaces SET create_pending = 0, fork_lease_expires_at = NULL
-           WHERE name = ? AND created_at = ? AND create_pending = 1`,
-          name, createdAt,
-        );
-      });
-      this.rosterChanged(name);
-    }));
+      );
+    });
+    this.rosterChanged(name);
   }
 
   /** Drop only the exact row a failed fork reservation inserted; never contacts the target DO
@@ -1290,14 +1283,12 @@ export class UserDO extends Agent<Env> {
    * Row is marked before teardown and removed after, so a failed teardown is resumed by the next
    * read (`resumePendingDeletions`); `destroyAgent` is idempotent.
    */
-  removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.write'));
-      validateWorkspaceName(name);
+  async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
 
-      if (!/^[a-f0-9]{32}$/.test(ownerUserId)) return yield* new KinuError('bad_input', 'invalid owner user id');
-      yield* this.tearDownWorkspace(name, ownerUserId);
-    }));
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
+    await this.tearDownWorkspace(name, ownerUserId);
   }
 
   /**
@@ -1305,32 +1296,25 @@ export class UserDO extends Agent<Env> {
    * authority. Destroy the DO before dropping the row; on failure the marked row stays and the
    * revoke is not undone.
    */
-  private tearDownWorkspace(name: string, ownerUserId: string): Effect.Effect<void> {
-    return Effect.gen({ self: this }, function* () {
-      this.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
-      revokeWorkspaceCapability(this.ctx.storage.sql, name);
-      this.rosterChanged(name);
-      // Grants are read by name, so a surviving row would grant full_filesystem to a same-name recreate.
-      this.deleteWorkspaceRows(name, 'before-destroy');
+  private async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
+    this.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
+    revokeWorkspaceCapability(this.ctx.storage.sql, name);
+    this.rosterChanged(name);
+    // Grants are read by name, so a surviving row would grant full_filesystem to a same-name recreate.
+    this.deleteWorkspaceRows(name, 'before-destroy');
 
-      yield* Effect.tryPromise({
-        try: async () => {
-          const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
-          await stub.destroyAgent(ownerUserId);
-        },
-        catch: (err) => ({ err }),
-      }).pipe(Effect.catch((failed) => (
-        // agents-SDK destroy aborts its own isolate after the wipe; the 'destroyed' error means success.
-        failed.err instanceof Error && failed.err.message === 'destroyed' ? Effect.void : Effect.die(failed.err)
-      )));
+    try {
+      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
+      await stub.destroyAgent(ownerUserId);
+    } catch (err) {
+      // agents-SDK destroy aborts its own isolate after the wipe; the 'destroyed' error means success.
+      if (!(err instanceof Error) || err.message !== 'destroyed') throw err;
+    }
 
-      const pictures = this.env.SLATE_PICTURES;
-
-      if (pictures !== undefined) yield* Effect.promise(() => deletePictures(pictures, picturePrefix(name)));
-      this.deleteWorkspaceRows(name, 'after-destroy');
-      // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
-      revokeWorkspaceCapability(this.ctx.storage.sql, name);
-    });
+    if (this.env.SLATE_PICTURES !== undefined) await deletePictures(this.env.SLATE_PICTURES, picturePrefix(name));
+    this.deleteWorkspaceRows(name, 'after-destroy');
+    // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
+    revokeWorkspaceCapability(this.ctx.storage.sql, name);
   }
 
   private deleteWorkspaceRows(name: string, when: 'before-destroy' | 'after-destroy'): void {
@@ -1343,80 +1327,81 @@ export class UserDO extends Agent<Env> {
    * Finish teardowns left marked; driven by the owner's reads since this object has no timer.
    * Failures keep the marker (the row is the retry) and do not throw, so listings still succeed.
    */
-  private resumePendingDeletions(): Effect.Effect<void> {
-    return Effect.gen({ self: this }, function* () {
-      const pending = this.sqlx<{ name: string }>(
-        `SELECT name FROM user_workspaces WHERE delete_pending = 1`,
-      );
+  private async resumePendingDeletions(): Promise<void> {
+    const pending = this.sqlx<{ name: string }>(
+      `SELECT name FROM user_workspaces WHERE delete_pending = 1`,
+    );
 
-      if (pending.length === 0) return;
-      const ownerUserId = this.ctx.id.name ?? '';
+    if (pending.length === 0) return;
+    const ownerUserId = this.ctx.id.name ?? '';
 
-      if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
-        diagnostics.failure('workspace.cleanup_unowned', toKinuError({
-          doing: 'resuming a pending workspace teardown',
-          cause: new Error('this user object has no user id to authorize the destroy with'),
-          otherwise: 'denied',
-        }), { pending: pending.length });
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
+      diagnostics.failure('workspace.cleanup_unowned', toKinuError({
+        doing: 'resuming a pending workspace teardown',
+        cause: new Error('this user object has no user id to authorize the destroy with'),
+        otherwise: 'denied',
+      }), { pending: pending.length });
 
-        return;
+      return;
+    }
+
+    for (const row of pending) {
+      try {
+        await this.tearDownWorkspace(row.name, ownerUserId);
+      } catch (err) {
+        diagnostics.failure('workspace.cleanup_retry_failed', toKinuError({
+          doing: 'finishing a workspace teardown a previous attempt left unfinished',
+          cause: err,
+          otherwise: 'io',
+        }), { workspace: row.name });
       }
-
-      for (const row of pending) {
-        yield* logged('workspace.cleanup_retry_failed', { doing: 'finishing a workspace teardown a previous attempt left unfinished', otherwise: 'io' }, this.tearDownWorkspace(row.name, ownerUserId), { workspace: row.name });
-      }
-    });
+    }
   }
 
   /**
    * Refuse a name whose teardown is pending; the row still owns a DO a recreate would wire into.
    * Retries the teardown first so a transient failure does not dead-end the name.
    */
-  private requireNotDeleting(name: string): Effect.Effect<void, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
+  private async requireNotDeleting(name: string): Promise<void> {
+    const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
 
-      if (this.sqlx(marked, name).length === 0) return;
-      yield* this.resumePendingDeletions();
+    if (this.sqlx(marked, name).length === 0) return;
+    await this.resumePendingDeletions();
 
-      if (this.sqlx(marked, name).length === 0) return;
-
-      return yield* new KinuError('unavailable', `Workspace "${name}" is still being deleted; its teardown has not finished.`);
-    });
+    if (this.sqlx(marked, name).length === 0) return;
+    throw new KinuError('unavailable', `Workspace "${name}" is still being deleted; its teardown has not finished.`);
   }
 
   /**
    * Root title authority: an 'auto' write is refused when the owner has named the workspace.
    * Returns whether the write applied; the workspace actor mirrors only after this succeeds.
    */
-  setWorkspaceDisplayName(
+  async setWorkspaceDisplayName(
     caller: UserCaller, name: string, displayName: string, origin: NameOrigin,
   ): Promise<{ applied: boolean }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.rename_self'));
-      validateWorkspaceName(name);
+    const resolved = await this.requireTier(caller, 'workspaces.rename_self');
+    validateWorkspaceName(name);
 
-      // An agent renames only itself; this is what makes rename safe at the `shared` tier.
-      if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-        return yield* new KinuError('denied', `Workspace "${resolved.workspace}" may only rename itself.`);
-      }
+    // An agent renames only itself; this is what makes rename safe at the `shared` tier.
+    if (resolved.kind === 'workspace' && resolved.workspace !== name) {
+      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only rename itself.`);
+    }
 
-      const current = this.sqlx<{ name_origin: string }>(
-        `SELECT name_origin FROM user_workspaces
-         WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
-      )[0];
+    const current = this.sqlx<{ name_origin: string }>(
+      `SELECT name_origin FROM user_workspaces
+       WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
+    )[0];
 
-      if (!current) return { applied: false };
+    if (!current) return { applied: false };
 
-      if (origin !== 'user' && !autoTitleMayReplace(nameOriginOf(current.name_origin))) return { applied: false };
-      this.sqlx(
-        `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
-        displayName, origin, name,
-      );
-      this.rosterChanged(name);
+    if (origin !== 'user' && !autoTitleMayReplace(nameOriginOf(current.name_origin))) return { applied: false };
+    this.sqlx(
+      `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
+      displayName, origin, name,
+    );
+    this.rosterChanged(name);
 
-      return { applied: true };
-    }));
+    return { applied: true };
   }
 
   /** Null when no row exists; actors hydrate their activation cache from this. */
@@ -1686,31 +1671,30 @@ export class UserDO extends Agent<Env> {
    * reach this UserDO before verification. `authorizationHash` is the approval: the unique index
    * makes the mint single-use, since the KV device-code record has no compare-and-swap.
    */
-  mintCliToken(
+  async mintCliToken(
     caller: UserCaller, userId: string, authorizationHash: string, label?: string,
   ): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'auth_tokens'));
+    await this.requireTier(caller, 'auth_tokens');
 
-      if (!/^[a-f0-9]{32}$/.test(userId)) return yield* new KinuError('bad_input', 'invalid user id');
+    if (!/^[a-f0-9]{32}$/.test(userId)) throw new KinuError('bad_input', 'invalid user id');
 
-      if (!/^[a-f0-9]{64}$/.test(authorizationHash)) return yield* new KinuError('bad_input', 'invalid authorization hash');
-      const token = `ptc_${userId}_${nanoid(44)}`;
-      const tokenHash = yield* Effect.promise(async () => sha256Hex(token));
-      const now = Date.now();
-      const expiresAt = now + CLI_TOKEN_TTL_MS;
+    if (!/^[a-f0-9]{64}$/.test(authorizationHash)) throw new KinuError('bad_input', 'invalid authorization hash');
+    const token = `ptc_${userId}_${nanoid(44)}`;
+    const tokenHash = await sha256Hex(token);
+    const now = Date.now();
+    const expiresAt = now + CLI_TOKEN_TTL_MS;
 
-      yield* Effect.try({
-        try: () => this.sqlx(
-          `INSERT INTO user_cli_tokens (token_hash, label, created_at, expires_at, authorization_hash)
-           VALUES (?, ?, ?, ?, ?)`,
-          tokenHash, cleanCliTokenLabel(label), now, expiresAt, authorizationHash,
-        ),
-        catch: (cause) => ({ cause }),
-      }).pipe(Effect.catch((spent) => Effect.die(new CliAuthorizationSpentError(spent))));
+    try {
+      this.sqlx(
+        `INSERT INTO user_cli_tokens (token_hash, label, created_at, expires_at, authorization_hash)
+         VALUES (?, ?, ?, ?, ?)`,
+        tokenHash, cleanCliTokenLabel(label), now, expiresAt, authorizationHash,
+      );
+    } catch (cause) {
+      throw new CliAuthorizationSpentError({ cause });
+    }
 
-      return { token, tokenHash, expiresAt };
-    }));
+    return { token, tokenHash, expiresAt };
   }
 
   async verifyCliToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {
@@ -2041,17 +2025,15 @@ export class UserDO extends Agent<Env> {
   /** Durable record of commands running on devices (see ./device-inflight.ts); the ledger owns the table. */
   private readonly _inflight = new DeviceRequestLedger(this.ctx.storage.sql);
 
-  private _sockets: Hono | undefined;
-
   /** A WebSocket cannot cross RPC; the Worker forwards these upgrades. */
-  override async fetch(request: Request): Promise<Response> {
-    this._sockets ??= new Hono({ getPath: rawPath })
-      .all(DEVICE_CONNECT_PATH, (c) => settle(this.acceptDeviceSocket(c.req.raw, new URL(c.req.url))))
-      .all(DEVICE_TERMINAL_PATH, (c) => settle(this.acceptTerminalSocket(c.req.raw, new URL(c.req.url))))
-      .all(ROSTER_SOCKET_PATH, async (c) => acceptRosterSocket(this.ctx, c.req.raw))
-      .notFound(async (c) => super.fetch(c.req.raw))
-      .onError(rethrow);
+  private readonly _sockets = new Hono({ getPath: rawPath })
+    .all(DEVICE_CONNECT_PATH, async (c) => this.acceptDeviceSocket(c.req.raw, new URL(c.req.url)))
+    .all(DEVICE_TERMINAL_PATH, async (c) => this.acceptTerminalSocket(c.req.raw, new URL(c.req.url)))
+    .all(ROSTER_SOCKET_PATH, async (c) => acceptRosterSocket(this.ctx, c.req.raw))
+    .notFound(async (c) => super.fetch(c.req.raw))
+    .onError(rethrow);
 
+  override async fetch(request: Request): Promise<Response> {
     return await this._sockets.fetch(request);
   }
 
@@ -2059,90 +2041,85 @@ export class UserDO extends Agent<Env> {
    * Verify + consume the connect ticket here so the upgrade is safe however it arrived, then rotate
    * the device token over the authenticated socket. A newcomer socket wins the slot.
    */
-  private acceptDeviceSocket(request: Request, url: URL): Effect.Effect<Response> {
-    return Effect.gen({ self: this }, function* () {
-      if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
-        return new Response('Expected WebSocket', { status: 426 });
+  private async acceptDeviceSocket(request: Request, url: URL): Promise<Response> {
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      return new Response('Expected WebSocket', { status: 426 });
+    }
+
+    const ticket = url.searchParams.get('ticket');
+    const verified = ticket ? await this.verifyDeviceConnectTicket(await ownerCaller(this.env), ticket) : { ok: false as const };
+
+    if (!verified.ok || !verified.deviceId) return new Response('unauthorized', { status: 401 });
+
+    if (this._devices.isConnected(verified.deviceId)) {
+      this.sqlx(`UPDATE user_devices SET replaced_at = ? WHERE id = ?`, Date.now(), verified.deviceId);
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
+    this._devices.accept(verified.deviceId, server);
+    const now = Date.now();
+
+    // Clear offline notices only on tracked workspaces; an unreachable one keeps its row for next accept.
+    const label = this.deviceLabel(verified.deviceId);
+
+    for (const { agent_name } of this.sqlx<{ agent_name: string }>(
+      `SELECT agent_name FROM device_notice_pending`,
+    )) {
+      try {
+        const workspace = this.env.OrchestratorAgent.get(
+          this.env.OrchestratorAgent.idFromName(agent_name),
+        );
+
+        await workspace.announceDeviceAvailable({ id: verified.deviceId, label });
+        this.sqlx(`DELETE FROM device_notice_pending WHERE agent_name = ?`, agent_name);
+      } catch (cause) {
+        diagnostics.event('device.available_announce_unreachable', {
+          workspace: agent_name, error: renderThrownChain({ cause }),
+        });
       }
+    }
 
-      const ticket = url.searchParams.get('ticket');
-      const verified = ticket ? yield* Effect.promise(async () => this.verifyDeviceConnectTicket(await ownerCaller(this.env), ticket)) : { ok: false as const };
+    this.sqlx(
+      `UPDATE user_devices SET last_seen_at = ? WHERE id = ?`,
+      now, verified.deviceId,
+    );
+    await this.devicesMoved();
+    server.send(JSON.stringify({
+      type: DEVICE_TOKEN_ROTATION,
+      token: await this.rotateDeviceToken(verified.deviceId, verified.tokenWasCurrent === true),
+    }));
+    const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
 
-      if (!verified.ok || !verified.deviceId) return new Response('unauthorized', { status: 401 });
-      const deviceId = verified.deviceId;
-
-      if (this._devices.isConnected(verified.deviceId)) {
-        this.sqlx(`UPDATE user_devices SET replaced_at = ? WHERE id = ?`, Date.now(), verified.deviceId);
-      }
-
-      const pair = new WebSocketPair();
-      const [client, server] = [pair[0], pair[1]];
-      this._devices.accept(verified.deviceId, server);
-      const now = Date.now();
-
-      // Clear offline notices only on tracked workspaces; an unreachable one keeps its row for next accept.
-      const label = this.deviceLabel(verified.deviceId);
-
-      for (const { agent_name } of this.sqlx<{ agent_name: string }>(
-        `SELECT agent_name FROM device_notice_pending`,
-      )) {
-        yield* Effect.tryPromise({
-          try: async () => {
-            const workspace = this.env.OrchestratorAgent.get(
-              this.env.OrchestratorAgent.idFromName(agent_name),
-            );
-
-            await workspace.announceDeviceAvailable({ id: deviceId, label });
-            this.sqlx(`DELETE FROM device_notice_pending WHERE agent_name = ?`, agent_name);
-          },
-          catch: (cause) => ({ cause }),
-        }).pipe(Effect.catch((unreachable) => Effect.sync(() => {
-          diagnostics.event('device.available_announce_unreachable', {
-            workspace: agent_name, error: renderThrownChain(unreachable),
-          });
-        })));
-      }
-
-      this.sqlx(
-        `UPDATE user_devices SET last_seen_at = ? WHERE id = ?`,
-        now, verified.deviceId,
-      );
-      yield* this.devicesMoved();
-      const token = yield* Effect.promise(() => this.rotateDeviceToken(deviceId, verified.tokenWasCurrent === true));
-      server.send(JSON.stringify({ type: DEVICE_TOKEN_ROTATION, token }));
-      const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
-
-      return new Response(null, init);
-    });
+    return new Response(null, init);
   }
 
   /**
    * The session name is the authority: minted once after ownership and consent checks, spent by first
    * attach. An upgrade carries no `UserCaller`, so the check happens in {@link openDeviceTerminal}.
    */
-  private acceptTerminalSocket(request: Request, url: URL): Effect.Effect<Response> {
-    return Effect.gen({ self: this }, function* () {
-      if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
-        return new Response('Expected WebSocket', { status: 426 });
-      }
+  private acceptTerminalSocket(request: Request, url: URL): Response {
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      return new Response('Expected WebSocket', { status: 426 });
+    }
 
-      const session = url.searchParams.get('session') ?? '';
-      const pair = new WebSocketPair();
-      const [client, server] = [pair[0], pair[1]];
-      const attaching = yield* Effect.result(Effect.try({ try: () => this._terminals.attach(session, server), catch: (cause) => ({ cause }) }));
+    const session = url.searchParams.get('session') ?? '';
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
+    let attached: { device: string; workspace: string };
 
-      if (Result.isFailure(attaching)) {
-        // Unknown or taken session is expected (shell ended or object evicted); the pane opens a new one.
-        return new Response(renderThrownChain({ cause: authoredRefusal({ doing: 'attaching a terminal pane', cause: attaching.failure.cause }) }), { status: 409 });
-      }
+    try {
+      attached = this._terminals.attach(session, server);
+    } catch (cause) {
+      // Unknown or taken session is expected (shell ended or object evicted); the pane opens a new one.
+      return new Response(renderThrownChain({ cause: authoredRefusal({ doing: 'attaching a terminal pane', cause }) }), { status: 409 });
+    }
 
-      const attached = attaching.success;
-      server.send(JSON.stringify({ type: 'ready' }));
-      diagnostics.event('device.terminal_attached', { device: attached.device, workspace: attached.workspace });
-      const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
+    server.send(JSON.stringify({ type: 'ready' }));
+    diagnostics.event('device.terminal_attached', { device: attached.device, workspace: attached.workspace });
+    const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
 
-      return new Response(null, init);
-    });
+    return new Response(null, init);
   }
 
   /** A grace is kept only when the machine used the current secret, so two copies of `device.json`
@@ -2203,75 +2180,73 @@ export class UserDO extends Agent<Env> {
 
   /* These hibernation handlers are declared here, so `Lifecycle.installHandlers` skips them and there
    * is no `super`; foreign sockets are delegated to the lifecycle directly, as `Agent.fetch` does. */
-  override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (isRosterSocket(ws)) return;
-      // Pane bytes are raw keystrokes; decoding them as text would corrupt them.
-      const terminal = terminalFromSocket(ws);
+  override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
+    if (isRosterSocket(ws)) return;
+    // Pane bytes are raw keystrokes; decoding them as text would corrupt them.
+    const terminal = terminalFromSocket(ws);
 
-      if (terminal) {
-        this._terminals.fromPane(terminal.session, terminal.device, message);
+    if (terminal) {
+      this._terminals.fromPane(terminal.session, terminal.device, message);
 
-        return;
+      return;
+    }
+
+    const deviceId = deviceIdFromSocket(ws);
+
+    if (!deviceId) return this.lifecycle.webSocketMessage(ws, message);
+    let data: string;
+
+    if (isTextWebSocketMessage(message)) {
+      data = message;
+    } else if (message instanceof ArrayBuffer) {
+      data = new TextDecoder().decode(message);
+    } else {
+      const bytes = new Uint8Array(message.byteLength);
+      bytes.set(new Uint8Array(message.buffer, message.byteOffset, message.byteLength));
+      data = new TextDecoder().decode(bytes);
+    }
+
+    // Keepalive answered here, not by platform auto-response, which would eat a pasted "ping" to a shell.
+    if (data === DEVICE_KEEPALIVE_PING) {
+      ws.send(DEVICE_KEEPALIVE_PONG);
+
+      return;
+    }
+
+    // Anything not a HELLO (including non-JSON) is treated as an RPC response.
+    const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+
+    if (hello.success) {
+      this.recordDeviceHello(deviceId, hello.output);
+      await this.devicesMoved();
+      const frame = await this.deviceUpdateFrame(deviceId, hello.output);
+
+      if (frame !== null) {
+        diagnostics.event('device.update_pushed', { device: deviceId, from: hello.output.version ?? '', to: frame.version });
+        ws.send(JSON.stringify(frame));
       }
 
-      const deviceId = deviceIdFromSocket(ws);
+      return;
+    }
 
-      if (!deviceId) return yield* Effect.promise(async () => this.lifecycle.webSocketMessage(ws, message));
-      let data: string;
+    const acknowledged = v.safeParse(DeviceRotationAckSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
 
-      if (isTextWebSocketMessage(message)) {
-        data = message;
-      } else if (message instanceof ArrayBuffer) {
-        data = new TextDecoder().decode(message);
-      } else {
-        const bytes = new Uint8Array(message.byteLength);
-        bytes.set(new Uint8Array(message.buffer, message.byteOffset, message.byteLength));
-        data = new TextDecoder().decode(bytes);
-      }
+    if (acknowledged.success) {
+      const now = Date.now();
 
-      // Keepalive answered here, not by platform auto-response, which would eat a pasted "ping" to a shell.
-      if (data === DEVICE_KEEPALIVE_PING) {
-        ws.send(DEVICE_KEEPALIVE_PONG);
+      const [grace] = this.sqlx<{ prev_token_hash: string | null }>(
+        `SELECT prev_token_hash FROM user_devices WHERE id = ?`, deviceId,
+      );
 
-        return;
-      }
+      this.retireDeviceTokens(deviceId, [grace?.prev_token_hash ?? null], now);
+      this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL, last_seen_at = ? WHERE id = ?`, now, deviceId);
 
-      // Anything not a HELLO (including non-JSON) is treated as an RPC response.
-      const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+      return;
+    }
 
-      if (hello.success) {
-        this.recordDeviceHello(deviceId, hello.output);
-        yield* this.devicesMoved();
-        const frame = yield* Effect.promise(async () => this.deviceUpdateFrame(deviceId, hello.output));
-
-        if (frame !== null) {
-          diagnostics.event('device.update_pushed', { device: deviceId, from: hello.output.version ?? '', to: frame.version });
-          ws.send(JSON.stringify(frame));
-        }
-
-        return;
-      }
-
-      const acknowledged = v.safeParse(DeviceRotationAckSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
-
-      if (acknowledged.success) {
-        const now = Date.now();
-
-        const [grace] = this.sqlx<{ prev_token_hash: string | null }>(
-          `SELECT prev_token_hash FROM user_devices WHERE id = ?`, deviceId,
-        );
-
-        this.retireDeviceTokens(deviceId, [grace?.prev_token_hash ?? null], now);
-        this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL, last_seen_at = ? WHERE id = ?`, now, deviceId);
-
-        return;
-      }
-
-      // Terminal frames have no request id; the RPC correlator would silently drop them.
-      if (this.handleTerminalFrame(data)) return;
-      this._devices.handleMessage(deviceId, data);
-    }));
+    // Terminal frames have no request id; the RPC correlator would silently drop them.
+    if (this.handleTerminalFrame(data)) return;
+    this._devices.handleMessage(deviceId, data);
   }
 
   /** Returns true if the frame was a terminal frame (so skip the RPC correlator); exit closes the pane. */
@@ -2295,7 +2270,7 @@ export class UserDO extends Agent<Env> {
    * Open a terminal on the owner's machine for one workspace; returns the session its pane attaches to.
    * Goes through `deviceRpc` (tier, per-device grant, Sandbox switch); there is no other way to open one.
    */
-  openDeviceTerminal(
+  async openDeviceTerminal(
     caller: UserCaller,
     agentName: string,
     window: { cols: number; rows: number },
@@ -2305,40 +2280,43 @@ export class UserDO extends Agent<Env> {
       Number.isInteger(axis) && axis >= 1 && axis <= DEVICE_PTY_MAX_AXIS ? axis : fallback
     );
 
-    return settle(Effect.gen({ self: this }, function* () {
-      // Gate first: a refused caller must not learn whether a machine is connected.
-      yield* Effect.promise(() => this.requireTier(caller, 'device.rpc'));
-      const session = `pty-${nanoid(16)}`;
-      // Resolved before minting: several live devices and none named is an error.
-      const target = yield* this.resolveDeviceForCall(deviceId, undefined);
+    // Gate first: a refused caller must not learn whether a machine is connected.
+    await this.requireTier(caller, 'device.rpc');
+    const session = `pty-${nanoid(16)}`;
+    // Resolved before minting: several live devices and none named is an error.
+    const target = await this.resolveDeviceForCall(deviceId, undefined);
 
-      yield* Effect.tryPromise({
-        try: () => this.deviceRpc(
-          caller,
-          DEVICE_PTY_OPEN_METHOD,
-          [session, bounded(window.cols, TERMINAL_DEFAULT_AXIS.cols), bounded(window.rows, TERMINAL_DEFAULT_AXIS.rows)],
-          { agentName, deviceId: target, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
-        ),
-        // An install too old for terminals gets an actionable message; other failures pass through.
-        catch: (cause) => (isDeviceUnknownMethodError({ cause })
-          ? new KinuError('unsupported', `${this.deviceLabel(target)} runs an older Kinu. Run \`kinu update\` on that machine.`, { cause })
-          : new KinuError('unavailable', 'Could not open a terminal on this machine; try again.', { cause })),
-      });
+    try {
+      await this.deviceRpc(
+        caller,
+        DEVICE_PTY_OPEN_METHOD,
+        [session, bounded(window.cols, TERMINAL_DEFAULT_AXIS.cols), bounded(window.rows, TERMINAL_DEFAULT_AXIS.rows)],
+        { agentName, deviceId: target, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
+      );
+    } catch (cause) {
+      // An install too old for terminals gets an actionable message; other failures pass through.
+      if (isDeviceUnknownMethodError({ cause })) {
+        throw new KinuError('unsupported', `${this.deviceLabel(target)} runs an older Kinu. Run \`kinu update\` on that machine.`, { cause });
+      }
 
-      this._terminals.register(session, target, agentName);
+      throw new KinuError('unavailable', 'Could not open a terminal on this machine; try again.', { cause });
+    }
 
-      // Unattached sessions are swept on the next open: this object's one alarm belongs to other work.
-      for (const stale of this._terminals.expired()) yield* this.closeDeviceTerminal(stale.session, stale.device);
+    this._terminals.register(session, target, agentName);
 
-      return { session };
-    }));
+    // Unattached sessions are swept on the next open: this object's one alarm belongs to other work.
+    for (const stale of this._terminals.expired()) this.closeDeviceTerminal(stale.session, stale.device);
+
+    return { session };
   }
 
-  private closeDeviceTerminal(session: string, device: string): Effect.Effect<void> {
-    return Effect.try({ try: () => this._terminals.paneClosed(session, device), catch: (cause) => ({ cause }) }).pipe(
+  private closeDeviceTerminal(session: string, device: string): void {
+    try {
+      this._terminals.paneClosed(session, device);
+    } catch (cause) {
       // The machine's socket dropped, which already ended every terminal on it.
-      Effect.catch((unsent) => Effect.sync(() => { diagnostics.event('device.terminal_close_unsent', { device, error: renderThrownChain(unsent) }); })),
-    );
+      diagnostics.event('device.terminal_close_unsent', { device, error: renderThrownChain({ cause }) });
+    }
   }
 
   /**
@@ -2431,26 +2409,28 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  override webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (isRosterSocket(ws)) return;
-      // A pane's socket closing hangs up the shell rather than leaving it running with no window.
-      const terminal = terminalFromSocket(ws);
+  override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+    if (isRosterSocket(ws)) return;
+    // A pane's socket closing hangs up the shell rather than leaving it running with no window.
+    const terminal = terminalFromSocket(ws);
 
-      if (terminal) return yield* this.closeDeviceTerminal(terminal.session, terminal.device);
+    if (terminal) {
+      this.closeDeviceTerminal(terminal.session, terminal.device);
 
-      const deviceId = deviceIdFromSocket(ws);
+      return;
+    }
 
-      if (!deviceId) return yield* Effect.promise(async () => this.lifecycle.webSocketClose(ws, code, reason, wasClean));
-      this._devices.handleClose(deviceId, ws);
+    const deviceId = deviceIdFromSocket(ws);
 
-      // The daemon hangs up its shells when the socket drops, so tell the panes.
-      for (const session of this._terminals.panesForDevice(deviceId)) {
-        this._terminals.endPane(session, NO_DEVICE_CONNECTED);
-      }
+    if (!deviceId) return this.lifecycle.webSocketClose(ws, code, reason, wasClean);
+    this._devices.handleClose(deviceId, ws);
 
-      yield* this.devicesMoved();
-    }));
+    // The daemon hangs up its shells when the socket drops, so tell the panes.
+    for (const session of this._terminals.panesForDevice(deviceId)) {
+      this._terminals.endPane(session, NO_DEVICE_CONNECTED);
+    }
+
+    await this.devicesMoved();
   }
 
   override async webSocketError(...call: Parameters<NonNullable<Agent<Env>['webSocketError']>>): Promise<void> {
@@ -2462,25 +2442,23 @@ export class UserDO extends Agent<Env> {
 
   /** The raw token is returned once to the CLI; only its hash is stored. 'Your PC' is the default
    * label. `replaces` is the machine's previous token, whose registration this one replaces. */
-  registerDevice(caller: UserCaller, label?: string, replaces?: string): Promise<{ deviceId: string; token: string }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'device.manage'));
-      const replaced = replaces === undefined ? null : (yield* Effect.promise(async () => this.deviceHoldingToken(caller, replaces)));
-      const deviceId = `dev-${nanoid(10)}`;
-      const token = `pdt_${randomToken(32)}`;
-      const tokenHash = yield* Effect.promise(async () => sha256Hex(token));
-      const now = Date.now();
-      const trimmedLabel = label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
-      this.sqlx(
-        `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-        deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
-      );
+  async registerDevice(caller: UserCaller, label?: string, replaces?: string): Promise<{ deviceId: string; token: string }> {
+    await this.requireTier(caller, 'device.manage');
+    const replaced = replaces === undefined ? null : await this.deviceHoldingToken(caller, replaces);
+    const deviceId = `dev-${nanoid(10)}`;
+    const token = `pdt_${randomToken(32)}`;
+    const tokenHash = await sha256Hex(token);
+    const now = Date.now();
+    const trimmedLabel = label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
+    this.sqlx(
+      `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
+      deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
+    );
 
-      if (replaced !== null) yield* Effect.promise(async () => this.revokeDevice(caller, replaced));
-      else yield* this.devicesMoved();
+    if (replaced !== null) await this.revokeDevice(caller, replaced);
+    else await this.devicesMoved();
 
-      return { deviceId, token };
-    }));
+    return { deviceId, token };
   }
 
   /** Expired or not, holding the token proves the caller had that machine's `device.json`. */
@@ -2499,21 +2477,19 @@ export class UserDO extends Agent<Env> {
     return null;
   }
 
-  renameDevice(caller: UserCaller, deviceId: string, name: string): Promise<{ ok: boolean }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'device.manage'));
-      const trimmed = name.trim().slice(0, DEVICE_NAME_MAX_LENGTH);
+  async renameDevice(caller: UserCaller, deviceId: string, name: string): Promise<{ ok: boolean }> {
+    await this.requireTier(caller, 'device.manage');
+    const trimmed = name.trim().slice(0, DEVICE_NAME_MAX_LENGTH);
 
-      const row = trimmed ? this.sqlx<{ id: string }>(
-        `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
-      )[0] : undefined;
+    const row = trimmed ? this.sqlx<{ id: string }>(
+      `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
+    )[0] : undefined;
 
-      if (!row) return { ok: false };
-      this.sqlx(`UPDATE user_devices SET label = ? WHERE id = ?`, trimmed, deviceId);
-      yield* this.devicesMoved();
+    if (!row) return { ok: false };
+    this.sqlx(`UPDATE user_devices SET label = ? WHERE id = ?`, trimmed, deviceId);
+    await this.devicesMoved();
 
-      return { ok: true };
-    }));
+    return { ok: true };
   }
 
   /** The window is absolute from the last rotation; the superseded secret is a one-shot grace
@@ -2571,31 +2547,29 @@ export class UserDO extends Agent<Env> {
     return { ok: true, ticket, expiresAt };
   }
 
-  recordDeviceUpdateRefusal(
+  async recordDeviceUpdateRefusal(
     caller: UserCaller, token: string, refusal: { version: string; runtime: string; reason: string },
   ): Promise<boolean> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'device.manage'));
-      const verified = yield* Effect.promise(async () => this.verifyDeviceToken(await ownerCaller(this.env), token));
+    await this.requireTier(caller, 'device.manage');
+    const verified = await this.verifyDeviceToken(await ownerCaller(this.env), token);
 
-      if (!verified.ok || !verified.deviceId) return false;
-      this.sqlx(
-        `INSERT INTO user_device_update_refusals (device_id, version, runtime, reason, refused_at)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(device_id) DO UPDATE SET
-             version = excluded.version,
-             runtime = excluded.runtime,
-             reason = excluded.reason,
-             refused_at = excluded.refused_at`,
-        verified.deviceId, refusal.version, refusal.runtime, refusal.reason, Date.now(),
-      );
-      diagnostics.event('device.update_refused', {
-        device: verified.deviceId, version: refusal.version, runtime: refusal.runtime, reason: refusal.reason,
-      });
-      yield* this.devicesMoved();
+    if (!verified.ok || !verified.deviceId) return false;
+    this.sqlx(
+      `INSERT INTO user_device_update_refusals (device_id, version, runtime, reason, refused_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(device_id) DO UPDATE SET
+           version = excluded.version,
+           runtime = excluded.runtime,
+           reason = excluded.reason,
+           refused_at = excluded.refused_at`,
+      verified.deviceId, refusal.version, refusal.runtime, refusal.reason, Date.now(),
+    );
+    diagnostics.event('device.update_refused', {
+      device: verified.deviceId, version: refusal.version, runtime: refusal.runtime, reason: refusal.reason,
+    });
+    await this.devicesMoved();
 
-      return true;
-    }));
+    return true;
   }
 
   async verifyDeviceConnectTicket(caller: UserCaller, ticket: string): Promise<{ ok: boolean; deviceId?: string; tokenWasCurrent?: boolean }> {
@@ -2651,19 +2625,17 @@ export class UserDO extends Agent<Env> {
    * Unnamed call resolves to the only live machine; several live is an error naming them.
    * With none live, a workspace op is told the registered machines; `undefined` just reports none.
    */
-  private resolveDeviceForCall(
+  private async resolveDeviceForCall(
     requested: string | undefined,
     consentAgent: string | undefined,
-  ): Effect.Effect<string, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const deviceId = yield* this.liveDeviceForCall(requested);
+  ): Promise<string> {
+    const deviceId = this.liveDeviceForCall(requested);
 
-      if (deviceId) return deviceId;
+    if (deviceId) return deviceId;
 
-      if (consentAgent !== undefined) yield* this.announceDevicesUnavailable(consentAgent);
+    if (consentAgent !== undefined) await this.announceDevicesUnavailable(consentAgent);
 
-      return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
-    });
+    throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
   }
 
   /** Revoked rows are excluded: revoked means gone, not offline. */
@@ -2678,39 +2650,36 @@ export class UserDO extends Agent<Env> {
   }
 
   /** The call still fails; the workspace is recorded so the next connect clears this notice. */
-  private announceDevicesUnavailable(workspaceOrAgent: string): Effect.Effect<void> {
-    return Effect.tryPromise({
-      try: async () => {
-        const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceOrAgent));
+  private async announceDevicesUnavailable(workspaceOrAgent: string): Promise<void> {
+    try {
+      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceOrAgent));
 
-        await stub.announceDeviceUnavailable(this.registeredOfflineDevices());
-        this.sqlx(
-          `INSERT INTO device_notice_pending (agent_name) VALUES (?) ON CONFLICT (agent_name) DO NOTHING`,
-          workspaceOrAgent,
-        );
-      },
-      catch: (cause) => ({ cause }),
-    }).pipe(Effect.catch((unreachable) => Effect.sync(() => {
+      await stub.announceDeviceUnavailable(this.registeredOfflineDevices());
+      this.sqlx(
+        `INSERT INTO device_notice_pending (agent_name) VALUES (?) ON CONFLICT (agent_name) DO NOTHING`,
+        workspaceOrAgent,
+      );
+    } catch (error) {
       diagnostics.event('device.unavailable_announce_unreachable', {
-        workspace: workspaceOrAgent, error: renderThrownChain(unreachable),
+        workspace: workspaceOrAgent, error: renderThrownChain({ cause: error }),
       });
-    })));
+    }
   }
 
   /** Null when none qualifies; an unnamed call with several live is reported as ambiguous. */
-  private liveDeviceForCall(requested: string | undefined): Effect.Effect<string | null, KinuError> {
+  private liveDeviceForCall(requested: string | undefined): string | null {
     const deviceId = this._devices.connectedDeviceId(requested);
 
-    if (deviceId) return Effect.succeed(deviceId);
+    if (deviceId) return deviceId;
 
     if (requested === undefined && this._devices.connectedDeviceIds().length > 1) {
-      return Effect.fail(new KinuError('bad_input', `${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`));
+      throw new KinuError('bad_input', `${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`);
     }
 
-    return Effect.succeed(null);
+    return null;
   }
 
-  deviceRpc(
+  async deviceRpc(
     caller: UserCaller,
     method: string,
     params: JsonValue[],
@@ -2720,90 +2689,97 @@ export class UserDO extends Agent<Env> {
       onOutput?: (output: DeviceExecOutput) => void | Promise<void>;
     },
   ): Promise<string | undefined> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'device.rpc'));
-      const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
+    const resolved = await this.requireTier(caller, 'device.rpc');
+    const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
 
-      if (proven !== null && Object.hasOwn(CHECKPOINT_STORE_METHODS, method) && params[0] !== proven) {
-        return yield* new KinuError('denied', `workspace ${proven} reads and restores only its own device checkpoints`);
+    if (proven !== null && Object.hasOwn(CHECKPOINT_STORE_METHODS, method) && params[0] !== proven) {
+      throw new KinuError('denied', `workspace ${proven} reads and restores only its own device checkpoints`);
+    }
+
+    // Cancellation is never consent-gated: it only ends a command already allowed, and
+    // gating it could leave a live process waiting on an unanswered card.
+    const stopping = method === DEVICE_CANCEL_METHOD;
+    const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
+
+    const consentAgent = consentAgentFor(resolved, opts?.agentName, { stopping, ownerRead });
+
+    const deviceId = await this.resolveDeviceForCall(opts?.deviceId, consentAgent);
+
+    if (!stopping && !this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+
+    if (consentAgent !== undefined) {
+      // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot
+      // ride a sibling workspace's grant.
+      const consent = await this.checkDeviceConsent({
+        agentName: consentAgent, deviceId, method, params,
+        workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
+      });
+
+      if (!consent.allowed) throw new KinuError('denied', consent.reason);
+    }
+
+    const frameSandbox = Object.hasOwn(DEVICE_VIEW_METHODS, method) ? this.frameSandboxFor(method, deviceId, proven) : null;
+
+    if (!stopping && !this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+    const tunnel = this._devices.tunnel(deviceId);
+
+    if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+    const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = { extra: { deviceId }, ...watchedOutput(opts) };
+
+    if (opts?.checkpoint) {
+      rpcOptions.extra = {
+        ...rpcOptions.extra,
+        checkpoint: {
+          agent: proven ?? opts.checkpoint.agent,
+          turnId: opts.checkpoint.turnId,
+          sessionId: opts.checkpoint.sessionId,
+          dir: opts.checkpoint.dir,
+        },
+      };
+    }
+
+    if (frameSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: frameSandbox };
+
+    if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
+
+    if (opts?.requestId !== undefined) rpcOptions.requestId = opts.requestId;
+
+    // Persist before sending: an insert after send races with eviction. Only a proven
+    // workspace command carries a durable turn identity.
+    const requestId = opts?.requestId;
+    const durableExec = method === 'exec' && requestId !== undefined && resolved.kind === 'workspace';
+
+    if (durableExec) {
+      // Probe with a fresh id, never the command's own: ACKing a retry's id before replay
+      // would delete its retained terminal result.
+      await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [nextDeviceRequestId(), DEVICE_CANCEL_PROTOCOL]);
+
+      // A revocation sweep can land during the probe await; recheck so no command runs
+      // with nothing left to cancel or count it.
+      if (!this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+      // A command inside a detached scope belongs to the background job from insert.
+      // A blank owner is refused: neither turn nor job sweep could ever select that row.
+      const backgroundJobId = opts?.backgroundJobId ?? null;
+
+      if (backgroundJobId === '') {
+        throw new KinuError('bad_input', 'A background job id must name a job.');
       }
 
-      // Cancellation is never consent-gated: it only ends a command already allowed, and
-      // gating it could leave a live process waiting on an unanswered card.
-      const stopping = method === DEVICE_CANCEL_METHOD;
-      const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
+      this._inflight.insert({
+        requestId,
+        deviceId,
+        workspace: resolved.workspace,
+        turnId: opts?.checkpoint?.turnId ?? null,
+        backgroundJobId,
+      });
+    }
 
-      const consentAgent = consentAgentFor(resolved, opts?.agentName, { stopping, ownerRead });
+    const result = await tunnel.rpc(method, params, rpcOptions);
 
-      const deviceId = yield* this.resolveDeviceForCall(opts?.deviceId, consentAgent);
+    // A tool's own cancel is recorded where a sweep would put it; the first answer wins.
+    if (stopping) this.recordToolPathCancellation(params, result);
 
-      if (!stopping && !this.isActiveDevice(deviceId)) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
-
-      if (consentAgent !== undefined) yield* this.requireDeviceConsent(resolved, { agentName: consentAgent, deviceId, method, params });
-
-      const frameSandbox = Object.hasOwn(DEVICE_VIEW_METHODS, method) ? (yield* this.frameSandboxFor(method, deviceId, proven)) : null;
-
-      if (!stopping && !this.isActiveDevice(deviceId)) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
-      const tunnel = this._devices.tunnel(deviceId);
-
-      if (!tunnel) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
-      const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = { extra: { deviceId }, ...watchedOutput(opts) };
-
-      if (opts?.checkpoint) {
-        rpcOptions.extra = {
-          ...rpcOptions.extra,
-          checkpoint: {
-            agent: proven ?? opts.checkpoint.agent,
-            turnId: opts.checkpoint.turnId,
-            sessionId: opts.checkpoint.sessionId,
-            dir: opts.checkpoint.dir,
-          },
-        };
-      }
-
-      if (frameSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: frameSandbox };
-
-      if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
-
-      if (opts?.requestId !== undefined) rpcOptions.requestId = opts.requestId;
-
-      // Persist before sending: an insert after send races with eviction. Only a proven
-      // workspace command carries a durable turn identity.
-      const requestId = opts?.requestId;
-      const durableExec = method === 'exec' && requestId !== undefined && resolved.kind === 'workspace';
-
-      if (durableExec) {
-        // Probe with a fresh id, never the command's own: ACKing a retry's id before replay
-        // would delete its retained terminal result.
-        yield* Effect.promise(async () => tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [nextDeviceRequestId(), DEVICE_CANCEL_PROTOCOL]));
-
-        // A revocation sweep can land during the probe await; recheck so no command runs
-        // with nothing left to cancel or count it.
-        if (!this.isActiveDevice(deviceId)) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
-        // A command inside a detached scope belongs to the background job from insert.
-        // A blank owner is refused: neither turn nor job sweep could ever select that row.
-        const backgroundJobId = opts?.backgroundJobId ?? null;
-
-        if (backgroundJobId === '') {
-          return yield* new KinuError('bad_input', 'A background job id must name a job.');
-        }
-
-        this._inflight.insert({
-          requestId,
-          deviceId,
-          workspace: resolved.workspace,
-          turnId: opts?.checkpoint?.turnId ?? null,
-          backgroundJobId,
-        });
-      }
-
-      const result = yield* Effect.promise(async () => tunnel.rpc(method, params, rpcOptions));
-
-      // A tool's own cancel is recorded where a sweep would put it; the first answer wins.
-      if (stopping) this.recordToolPathCancellation(params, result);
-
-      return result === undefined ? undefined : JSON.stringify(result);
-    }));
+    return result === undefined ? undefined : JSON.stringify(result);
   }
 
   /** The machine carrying `provider` for a web session: for Codex the first daemon with the relay, for the
@@ -2906,23 +2882,21 @@ export class UserDO extends Agent<Env> {
   }
 
   /** `agentHome` is empty only under the raw tier. */
-  private frameSandboxFor(method: string, deviceId: string, workspace: string | null): Effect.Effect<JsonObject, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const sandbox = this.deviceSandboxFor(deviceId, workspace);
+  private frameSandboxFor(method: string, deviceId: string, workspace: string | null): JsonObject {
+    const sandbox = this.deviceSandboxFor(deviceId, workspace);
 
-      // Neither end ever downgrades a sandboxed command to raw; files need no kernel.
-      if ((method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) && effectiveDeviceMode(sandbox) === 'files_only') {
-        return yield* new KinuError('denied', this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
-      }
+    // Neither end ever downgrades a sandboxed command to raw; files need no kernel.
+    if ((method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) && effectiveDeviceMode(sandbox) === 'files_only') {
+      throw new KinuError('denied', this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
+    }
 
-      if (sandbox.tier === 'sandboxed' && sandbox.agentHome === null) {
-        return yield* new KinuError('denied', this.sandboxRefusal(deviceId, sandbox, workspace === null
-          ? 'an agent home belongs to a workspace, and this call has none'
-          : 'the daemon did not report where agent homes live'));
-      }
+    if (sandbox.tier === 'sandboxed' && sandbox.agentHome === null) {
+      throw new KinuError('denied', this.sandboxRefusal(deviceId, sandbox, workspace === null
+        ? 'an agent home belongs to a workspace, and this call has none'
+        : 'the daemon did not report where agent homes live'));
+    }
 
-      return { tier: sandbox.tier, agentHome: sandbox.agentHome ?? '', roots: [...sandbox.roots] };
-    });
+    return { tier: sandbox.tier, agentHome: sandbox.agentHome ?? '', roots: [...sandbox.roots] };
   }
 
   /** Store the answer from a forwarded cancellation so the durable authority holds one outcome per request.
@@ -2939,50 +2913,46 @@ export class UserDO extends Agent<Env> {
    * Cloud-side acceptance of one exec result: acks the daemon, then removes the durable row.
    * A claimed row belongs to an in-flight cancellation, which owns the terminal outcome and ack.
    */
-  acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'device.rpc'));
+  async acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void> {
+    const resolved = await this.requireTier(caller, 'device.rpc');
 
-      if (resolved.kind !== 'workspace' || requestId === '') return;
-      const held = this._inflight.acknowledgeable(requestId, resolved.workspace);
+    if (resolved.kind !== 'workspace' || requestId === '') return;
+    const held = this._inflight.acknowledgeable(requestId, resolved.workspace);
 
-      if (!held) return;
-      const tunnel = this._devices.tunnel(held.deviceId);
+    if (!held) return;
+    const tunnel = this._devices.tunnel(held.deviceId);
 
-      if (!tunnel) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
-      yield* Effect.promise(async () => tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]));
-      this._inflight.deleteAcknowledged({
-        requestId, workspace: resolved.workspace, deviceId: held.deviceId,
-      });
-    }));
+    if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]);
+    this._inflight.deleteAcknowledged({
+      requestId, workspace: resolved.workspace, deviceId: held.deviceId,
+    });
   }
 
   /**
    * Stop every live device command of one durable turn after a fresh actor activation.
    * Rows with no turn id are excluded so Stop never widens into a workspace sweep.
    */
-  cancelDeviceRequestsForTurn(
+  async cancelDeviceRequestsForTurn(
     caller: UserCaller,
     turnId: string,
   ): Promise<DeviceCancellationOutcome[]> {
     // Claim atomically before any device await, so a parallel detach to a background job
     // cannot race this sweep.
-    return settle(this.cancelClaimedDeviceRequests(caller, turnId,
-      (workspace) => this._inflight.claimTurnRequests(workspace, turnId)));
+    return this.cancelClaimedDeviceRequests(caller, turnId,
+      (workspace) => this._inflight.claimTurnRequests(workspace, turnId));
   }
 
-  private cancelClaimedDeviceRequests(
+  private async cancelClaimedDeviceRequests(
     caller: UserCaller,
     scopeId: string,
     claim: (workspace: string) => ClaimedDeviceRequest[],
-  ): Effect.Effect<DeviceCancellationOutcome[]> {
-    return Effect.gen({ self: this }, function* () {
-      const resolved = yield* Effect.promise(() => this.requireTier(caller, 'device.rpc'));
+  ): Promise<DeviceCancellationOutcome[]> {
+    const resolved = await this.requireTier(caller, 'device.rpc');
 
-      if (resolved.kind !== 'workspace' || scopeId === '') return [];
+    if (resolved.kind !== 'workspace' || scopeId === '') return [];
 
-      return yield* this.cancelDeviceRequests(claim(resolved.workspace));
-    });
+    return this.cancelDeviceRequests(claim(resolved.workspace));
   }
 
   /** Move one live device request to its background job; per request because a turn can hold
@@ -3001,85 +2971,84 @@ export class UserDO extends Agent<Env> {
     });
   }
 
-  cancelDeviceRequestsForBackgroundJob(
+  async cancelDeviceRequestsForBackgroundJob(
     caller: UserCaller,
     jobId: string,
   ): Promise<DeviceCancellationOutcome[]> {
-    return settle(this.cancelClaimedDeviceRequests(caller, jobId,
-      (workspace) => this._inflight.claimBackgroundJobRequests(workspace, jobId)));
+    return this.cancelClaimedDeviceRequests(caller, jobId,
+      (workspace) => this._inflight.claimBackgroundJobRequests(workspace, jobId));
   }
 
-  private cancelDeviceRequests(rows: ClaimedDeviceRequest[]): Effect.Effect<DeviceCancellationOutcome[]> {
-    return Effect.gen({ self: this }, function* () {
-      const outcomes: DeviceCancellationOutcome[] = [];
+  private async cancelDeviceRequests(rows: ClaimedDeviceRequest[]): Promise<DeviceCancellationOutcome[]> {
+    const outcomes: DeviceCancellationOutcome[] = [];
 
-      for (const row of rows) {
-        // Re-read before any frame: ownership or an answer (e.g. from a tool's own abort via
-        // `deviceRpc`) may have changed while an earlier row was awaiting.
-        const held = this._inflight.held(row.requestId, row.claim);
+    for (const row of rows) {
+      // Re-read before any frame: ownership or an answer (e.g. from a tool's own abort via
+      // `deviceRpc`) may have changed while an earlier row was awaiting.
+      const held = this._inflight.held(row.requestId, row.claim);
 
-        if (held === null) continue;
+      if (held === null) continue;
 
-        if (held.settled !== null) {
-          outcomes.push({ requestId: row.requestId, outcome: held.settled });
-          yield* this.cleanUpSettledDeviceRequest(row);
-          continue;
-        }
-
-        const tunnel = this._devices.tunnel(row.deviceId);
-
-        if (!tunnel) {
-          this._inflight.releaseClaim(row.requestId, row.claim);
-          outcomes.push({ requestId: row.requestId, outcome: 'failed', detail: NO_DEVICE_CONNECTED });
-          continue;
-        }
-
-        yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-          const cancelled = yield* Effect.promise(() => tunnel.rpc(DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]));
-          const answer = parseDeviceCancelAnswer(row.requestId, cancelled).cancelled;
-
-          // Persist before the ack, which can fail. No row updated means the terminal authority took
-          // the claim and reports the request; the returned answer is the one that stands.
-          const settled = this._inflight.settleHeld(row.requestId, row.claim, answer);
-
-          if (settled === null) return;
-          outcomes.push({ requestId: row.requestId, outcome: settled });
-          yield* this.cleanUpSettledDeviceRequest(row);
-        }), (failed) => Effect.sync(() => {
-          // Kill failed, so the request is still live. Releasing nothing means the terminal authority
-          // took or dropped the row and answers for it.
-          if (!this._inflight.releaseClaim(row.requestId, row.claim)) return;
-          outcomes.push({
-            requestId: row.requestId,
-            outcome: 'failed',
-            detail: renderThrownChain({ cause: Cause.squash(failed) }),
-          });
-        }));
+      if (held.settled !== null) {
+        outcomes.push({ requestId: row.requestId, outcome: held.settled });
+        await this.cleanUpSettledDeviceRequest(row);
+        continue;
       }
 
-      return outcomes;
-    });
+      const tunnel = this._devices.tunnel(row.deviceId);
+
+      if (!tunnel) {
+        this._inflight.releaseClaim(row.requestId, row.claim);
+        outcomes.push({ requestId: row.requestId, outcome: 'failed', detail: NO_DEVICE_CONNECTED });
+        continue;
+      }
+
+      try {
+        const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
+          DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL],
+        )).cancelled;
+
+        // Persist before the ack, which can fail. No row updated means the terminal authority took
+        // the claim and reports the request; the returned answer is the one that stands.
+        const settled = this._inflight.settleHeld(row.requestId, row.claim, answer);
+
+        if (settled === null) continue;
+        outcomes.push({ requestId: row.requestId, outcome: settled });
+        await this.cleanUpSettledDeviceRequest(row);
+      } catch (err) {
+        // Kill failed, so the request is still live. Releasing nothing means the terminal authority
+        // took or dropped the row and answers for it.
+        if (!this._inflight.releaseClaim(row.requestId, row.claim)) continue;
+        outcomes.push({
+          requestId: row.requestId,
+          outcome: 'failed',
+          detail: renderThrownChain({ cause: err }),
+        });
+      }
+    }
+
+    return outcomes;
   }
 
   /**
    * Release the daemon's supervisor, then drop the row. Cleanup failure is not cancellation
    * failure: the stored answer stands and the claim is returned so a later sweep can retry.
    */
-  private cleanUpSettledDeviceRequest(row: ClaimedDeviceRequest): Effect.Effect<void> {
+  private async cleanUpSettledDeviceRequest(row: ClaimedDeviceRequest): Promise<void> {
     const tunnel = this._devices.tunnel(row.deviceId);
 
-    return Effect.catchCause(Effect.gen({ self: this }, function* () {
-      if (!tunnel) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
-      yield* Effect.promise(() => tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]));
+    try {
+      if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+      await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
       this._inflight.deleteHeld(row.requestId, row.claim);
-    }), (failed) => Effect.sync(() => {
+    } catch (err) {
       this._inflight.releaseClaim(row.requestId, row.claim);
       diagnostics.failure('device.cancellation_ack_cleanup_failed', toKinuError({
         doing: 'releasing the cancelled device command supervisor',
-        cause: Cause.squash(failed),
+        cause: err,
         otherwise: 'unavailable',
       }), { device: row.deviceId, request: row.requestId });
-    }));
+    }
   }
 
 
@@ -3114,26 +3083,24 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Owner session only: a workspace holding `device.manage` must not turn off its own sandbox. */
-  setDeviceTier(caller: UserCaller, deviceId: string, tier: DeviceTier): Promise<{ ok: boolean }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'device.manage'));
+  async setDeviceTier(caller: UserCaller, deviceId: string, tier: DeviceTier): Promise<{ ok: boolean }> {
+    const resolved = await this.requireTier(caller, 'device.manage');
 
-      if (resolved.kind !== 'owner_session') {
-        return yield* Effect.die(new CapabilityDeniedError('Only the account owner can change a device\'s Sandbox setting.'));
-      }
+    if (resolved.kind !== 'owner_session') {
+      throw new CapabilityDeniedError('Only the account owner can change a device\'s Sandbox setting.');
+    }
 
-      if (!v.is(v.picklist(DEVICE_TIERS), tier)) return { ok: false };
+    if (!v.is(v.picklist(DEVICE_TIERS), tier)) return { ok: false };
 
-      const row = this.sqlx<{ id: string }>(
-        `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
-      )[0];
+    const row = this.sqlx<{ id: string }>(
+      `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
+    )[0];
 
-      if (!row) return { ok: false };
-      this.sqlx(`UPDATE user_devices SET tier = ? WHERE id = ?`, tier, deviceId);
-      yield* this.devicesMoved();
+    if (!row) return { ok: false };
+    this.sqlx(`UPDATE user_devices SET tier = ? WHERE id = ?`, tier, deviceId);
+    await this.devicesMoved();
 
-      return { ok: true };
-    }));
+    return { ok: true };
   }
 
   /** No tier here: what a bound workspace may touch is the device's Sandbox switch, owner-set. */
@@ -3167,71 +3134,54 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  /** Consent is keyed on the proven workspace, never the claimed name, so an agent cannot ride a
-   *  sibling workspace's grant. */
-  private requireDeviceConsent(resolved: ResolvedCaller, check: Omit<DeviceConsentCheck, 'workspaceName'>): Effect.Effect<void, KinuError> {
-    return Effect.flatMap(
-      this.checkDeviceConsent({ ...check, workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined }),
-      (consent) => (consent.allowed ? Effect.void : Effect.fail(new KinuError('denied', consent.reason))),
-    );
-  }
-
   /**
    * Is this workspace bound to this device? Fails closed, but `reason` distinguishes a refusal from
    * an unanswered prompt, so an unattended agent does not read an expiry as a revoked capability.
    */
-  private checkDeviceConsent(check: DeviceConsentCheck): Effect.Effect<{ allowed: true } | { allowed: false; reason: string }> {
-    return Effect.gen({ self: this }, function* () {
-      const { agentName, deviceId, method, params, workspaceName } = check;
+  private async checkDeviceConsent(check: DeviceConsentCheck): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+    const { agentName, deviceId, method, params, workspaceName } = check;
 
-      const bound = this.getDeviceBinding(agentName, deviceId);
+    const bound = this.getDeviceBinding(agentName, deviceId);
 
-      if (bound === 'allow') return { allowed: true };
+    if (bound === 'allow') return { allowed: true };
 
-      if (bound === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
-      const action = summarizeDeviceAction(method, params);
+    if (bound === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
+    const action = summarizeDeviceAction(method, params);
+    let decision: DeviceConsentDecision;
 
-      const asked = yield* Effect.result(Effect.tryPromise({
-        try: async (): Promise<DeviceConsentDecision> => {
-          const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agentName));
+    try {
+      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agentName));
 
-          const base: DeviceConsentRequest = {
-            deviceId,
-            deviceLabel: this.deviceLabel(deviceId),
-            method: action.method,
-            command: action.command,
-          };
+      const base: DeviceConsentRequest = {
+        deviceId,
+        deviceLabel: this.deviceLabel(deviceId),
+        method: action.method,
+        command: action.command,
+      };
 
-          const request: DeviceConsentRequest = workspaceName
-            ? { ...base, workspaceName }
-            : base;
+      const request: DeviceConsentRequest = workspaceName
+        ? { ...base, workspaceName }
+        : base;
 
-          return await stub.awaitDeviceConsent(request);
-        },
-        catch: (cause) => ({ cause }),
-      }));
+      decision = await stub.awaitDeviceConsent(request);
+    } catch (error) {
+      // Nobody was asked, so this is the unanswered case, not a refusal.
+      diagnostics.event('device.consent_unreachable', { error: renderThrownChain({ cause: error }) });
 
-      if (Result.isFailure(asked)) {
-        // Nobody was asked, so this is the unanswered case, not a refusal.
-        diagnostics.event('device.consent_unreachable', { error: renderThrownChain(asked.failure) });
+      return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
+    }
 
-        return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
-      }
+    // Only "always" is remembered; "once", "deny" and "timeout" are per-call.
+    if (decision === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
 
-      const decision = asked.success;
+    if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
 
-      // Only "always" is remembered; "once", "deny" and "timeout" are per-call.
-      if (decision === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
+    if (decision === 'always') {
+      this.setDeviceBinding(agentName, deviceId, 'allow', action);
+      await this.devicesMoved();
+    }
 
-      if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
-
-      if (decision === 'always') {
-        this.setDeviceBinding(agentName, deviceId, 'allow', action);
-        yield* this.devicesMoved();
-      }
-
-      return { allowed: true };
-    });
+    return { allowed: true };
   }
 
 
@@ -3261,16 +3211,14 @@ export class UserDO extends Agent<Env> {
 
   /** Deletes the row (not 'deny') so the next call asks again; takes effect on that next call.
    *  Not a stop: running commands continue. `revokeDevice` ends live commands. */
-  revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'device.consent'));
+  async revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
+    await this.requireTier(caller, 'device.consent');
 
-      if (!agentName || !deviceId) return { ok: false };
-      this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
-      yield* this.devicesMoved();
+    if (!agentName || !deviceId) return { ok: false };
+    this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
+    await this.devicesMoved();
 
-      return { ok: true };
-    }));
+    return { ok: true };
   }
 
   /** Unconfined only when the owner turned the device's Sandbox switch off; one switch governs
@@ -3360,28 +3308,21 @@ export class UserDO extends Agent<Env> {
   }
 
   /** A watcher with no page open, or unreachable, drops. */
-  private devicesMoved(): Effect.Effect<void> {
-    return Effect.suspend(() => {
-      const watchers = this.sqlx<{ agent_name: string }>(`SELECT agent_name FROM device_status_watchers`);
+  private async devicesMoved(): Promise<void> {
+    const watchers = this.sqlx<{ agent_name: string }>(`SELECT agent_name FROM device_status_watchers`);
 
-      return Effect.forEach(watchers, ({ agent_name }) => Effect.tryPromise({
-        try: async () => {
-          const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agent_name));
+    await Promise.all(watchers.map(async ({ agent_name }) => {
+      let watching = false;
 
-          return (await workspace.devicesMoved()).watching;
-        },
-        catch: (cause) => ({ cause }),
-      }).pipe(
-        Effect.catch((unreachable) => Effect.sync(() => {
-          diagnostics.event('device.watcher_unreachable', { workspace: agent_name, error: renderThrownChain(unreachable) });
+      try {
+        const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agent_name));
+        watching = (await workspace.devicesMoved()).watching;
+      } catch (cause) {
+        diagnostics.event('device.watcher_unreachable', { workspace: agent_name, error: renderThrownChain({ cause }) });
+      }
 
-          return false;
-        })),
-        Effect.map((watching) => {
-          if (!watching) this.sqlx(`DELETE FROM device_status_watchers WHERE agent_name = ?`, agent_name);
-        }),
-      ), { concurrency: 'unbounded', discard: true });
-    });
+      if (!watching) this.sqlx(`DELETE FROM device_status_watchers WHERE agent_name = ?`, agent_name);
+    }));
   }
 
   /**
@@ -3465,93 +3406,110 @@ export class UserDO extends Agent<Env> {
 
   /** Records every unconfirmed command on the owner-visible device row before removing its active row,
    *  since a revoked daemon cannot reconnect to act on it. A close is not proof a process stopped. */
-  revokeDevice(
+  async revokeDevice(
     caller: UserCaller,
     deviceId: string,
   ): Promise<{ ok: boolean; unstoppedCommands: number }> {
-    return settle(Effect.andThen(Effect.promise(() => this.requireTier(caller, 'device.manage')), this.revoking(deviceId)));
+    await this.requireTier(caller, 'device.manage');
+    // Coalesce concurrent revokes of one device: two sweeps sharing the row could let a confirmed
+    // sweep erase unconfirmed commands the other reported. A DO serializes nothing across an await.
+    const inFlight = this._revoking.get(deviceId);
+
+    if (inFlight) return inFlight;
+    const task = this.sweepAndRevokeDevice(deviceId);
+    this._revoking.set(deviceId, task);
+
+    try {
+      const revoked = await task;
+      await this.devicesMoved();
+
+      return revoked;
+    } finally { this._revoking.delete(deviceId); }
   }
 
-  /** Concurrent revokes of one device join one sweep: two sweeps sharing the row could let a confirmed
-   *  sweep erase unconfirmed commands the other reported. A DO serializes nothing across an await. */
-  private readonly revoking = flight((deviceId: string) => Effect.tap(this.sweepAndRevokeDevice(deviceId), () => this.devicesMoved()), {
-    key: (deviceId) => deviceId,
-  });
+  private readonly _revoking = new Map<string, Promise<{ ok: boolean; unstoppedCommands: number }>>();
 
-  private sweepAndRevokeDevice(
+  private async sweepAndRevokeDevice(
     deviceId: string,
-  ): Effect.Effect<{ ok: boolean; unstoppedCommands: number }> {
-    return Effect.gen({ self: this }, function* () {
-      const now = Date.now();
-      // Close admission before the first cancellation await; a device RPC resuming after its consent
-      // await rechecks this durable state before send.
-      this.sqlx(
-        `UPDATE user_devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
-        now, deviceId,
-      );
-      // Revocation takes the claim from any in-flight sweep; a displaced sweep keeps reporting what it
-      // observed and its guarded cleanup finds the row already gone.
-      const rows = this._inflight.claimEveryRequestOf(deviceId);
+  ): Promise<{ ok: boolean; unstoppedCommands: number }> {
+    const now = Date.now();
+    // Close admission before the first cancellation await; a device RPC resuming after its consent
+    // await rechecks this durable state before send.
+    this.sqlx(
+      `UPDATE user_devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
+      now, deviceId,
+    );
+    // Revocation takes the claim from any in-flight sweep; a displaced sweep keeps reporting what it
+    // observed and its guarded cleanup finds the row already gone.
+    const rows = this._inflight.claimEveryRequestOf(deviceId);
 
-      // Written before the first await so an activation dying mid-sweep leaves a visible unconfirmed
-      // marker. `now` is this sweep's provisional value; only it is cleared on success.
-      if (rows.length > 0) {
-        this.sqlx(`UPDATE user_devices SET unstopped_at = ? WHERE id = ?`, now, deviceId);
+    // Written before the first await so an activation dying mid-sweep leaves a visible unconfirmed
+    // marker. `now` is this sweep's provisional value; only it is cleared on success.
+    if (rows.length > 0) {
+      this.sqlx(`UPDATE user_devices SET unstopped_at = ? WHERE id = ?`, now, deviceId);
+    }
+
+    let unstoppedCommands = 0;
+    const tunnel = this._devices.tunnel(deviceId);
+
+    for (const row of rows) {
+      // A stored answer means nothing runs under this request, so it is not an unstopped command;
+      // its cleanup is still owed.
+      const settled = row.settled;
+
+      if (!tunnel) {
+        if (settled === null) unstoppedCommands += 1;
+        continue;
       }
 
-      let unstoppedCommands = 0;
-      const tunnel = this._devices.tunnel(deviceId);
+      try {
+        if (settled === null) {
+          const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
+            DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL],
+          )).cancelled;
 
-      for (const row of rows) {
-        // A stored answer means nothing runs under this request, so it is not an unstopped command;
-        // its cleanup is still owed.
-        const settled = row.settled;
-
-        if (!tunnel) {
-          if (settled === null) unstoppedCommands += 1;
-          continue;
+          // Durable before the acknowledgement, so a dying activation leaves an answer, not
+          // apparent live work.
+          this._inflight.settleRevoked(row.requestId, answer);
         }
 
-        yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-          if (settled === null) {
-            const cancelled = yield* Effect.promise(() => tunnel.rpc(DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]));
-            const answer = parseDeviceCancelAnswer(row.requestId, cancelled).cancelled;
-
-            // Durable before the acknowledgement, so a dying activation leaves an answer, not
-            // apparent live work.
-            this._inflight.settleRevoked(row.requestId, answer);
-          }
-
+        try {
+          await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
+        } catch (err) {
           // Kill confirmation is already truthful; this is local replay cleanup, recorded separately so a
           // failed ACK never reads as a possibly running process.
-          yield* logged('device.revocation_ack_cleanup_failed', { doing: 'releasing the cancelled device command supervisor on revocation', otherwise: 'unavailable' }, async () => { await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]); }, { device: deviceId, request: row.requestId });
-        }), (failed) => Effect.sync(() => {
-          unstoppedCommands += 1;
-          diagnostics.failure('device.revocation_cancel_unconfirmed', toKinuError({
-            doing: 'confirming device command termination before revocation',
-            cause: Cause.squash(failed),
+          diagnostics.failure('device.revocation_ack_cleanup_failed', toKinuError({
+            doing: 'releasing the cancelled device command supervisor on revocation',
+            cause: err,
             otherwise: 'unavailable',
           }), { device: deviceId, request: row.requestId });
-        }));
+        }
+      } catch (err) {
+        unstoppedCommands += 1;
+        diagnostics.failure('device.revocation_cancel_unconfirmed', toKinuError({
+          doing: 'confirming device command termination before revocation',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { device: deviceId, request: row.requestId });
       }
+    }
 
-      // Only a sweep that swept rows may set or clear the marker; a later revoke of an already-revoked
-      // device must not retract an earlier incident, which only the owner may clear.
-      if (unstoppedCommands > 0) {
-        this.sqlx(`UPDATE user_devices SET unstopped_at = ? WHERE id = ?`, now, deviceId);
-      } else if (rows.length > 0) {
-        this.sqlx(`UPDATE user_devices SET unstopped_at = NULL WHERE id = ?`, deviceId);
-      }
+    // Only a sweep that swept rows may set or clear the marker; a later revoke of an already-revoked
+    // device must not retract an earlier incident, which only the owner may clear.
+    if (unstoppedCommands > 0) {
+      this.sqlx(`UPDATE user_devices SET unstopped_at = ? WHERE id = ?`, now, deviceId);
+    } else if (rows.length > 0) {
+      this.sqlx(`UPDATE user_devices SET unstopped_at = NULL WHERE id = ?`, deviceId);
+    }
 
-      this._inflight.deleteEveryRequestOf(deviceId);
-      // A revoked device is unreachable; drop its grants so the owner's audited roster shows only live
-      // permissions.
-      this.sqlx(`DELETE FROM device_consent WHERE device_id = ?`, deviceId);
-      this._devices.close(deviceId, 'device revoked');
-      this.deleteRevokedDeviceWithoutIncident(deviceId);
+    this._inflight.deleteEveryRequestOf(deviceId);
+    // A revoked device is unreachable; drop its grants so the owner's audited roster shows only live
+    // permissions.
+    this.sqlx(`DELETE FROM device_consent WHERE device_id = ?`, deviceId);
+    this._devices.close(deviceId, 'device revoked');
+    this.deleteRevokedDeviceWithoutIncident(deviceId);
 
-      return { ok: true, unstoppedCommands };
-    });
+    return { ok: true, unstoppedCommands };
   }
 
   private deleteRevokedDeviceWithoutIncident(deviceId: string): boolean {
@@ -3595,16 +3553,14 @@ export class UserDO extends Agent<Env> {
   /**
    * Source workspace comes from the proven caller, never the argument; owner sessions cannot publish.
    */
-  publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'experience.write'));
+  async publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
+    const resolved = await this.requireTier(caller, 'experience.write');
 
-      if (resolved.kind !== 'workspace') {
-        return yield* new KinuError('denied', 'Only a workspace can publish experience; it publishes under its own name.');
-      }
+    if (resolved.kind !== 'workspace') {
+      throw new KinuError('denied', 'Only a workspace can publish experience; it publishes under its own name.');
+    }
 
-      return this.experienceLibrary().publish(candidate, resolved.workspace);
-    }));
+    return this.experienceLibrary().publish(candidate, resolved.workspace);
   }
 
   /** Excludes the calling workspace's own entries. */
@@ -3640,35 +3596,31 @@ export class UserDO extends Agent<Env> {
     return this.requireTier(caller, isModelInferenceCredentialKey(key) ? 'credentials.model' : 'credentials.other');
   }
 
-  setCredential(caller: UserCaller, key: string, credentialJson: Credential | JsonValue): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'credentials.other'));
-      validateCredentialKey(key);
+  async setCredential(caller: UserCaller, key: string, credentialJson: Credential | JsonValue): Promise<void> {
+    await this.requireTier(caller, 'credentials.other');
+    validateCredentialKey(key);
 
-      if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
-        return yield* new KinuError('bad_input', `${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
-      }
+    if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
+      throw new KinuError('bad_input', `${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
+    }
 
-      const cred = validateCredential({ key, value: credentialJson });
+    const cred = validateCredential({ key, value: credentialJson });
 
-      const refusal = unrenewable(key, cred);
+    const refusal = unrenewable(key, cred);
 
-      if (refusal !== null) return yield* new KinuError('bad_input', refusal);
+    if (refusal !== null) throw new KinuError('bad_input', refusal);
 
-      yield* this.writeCredential(key, cred);
+    await this.writeCredential(key, cred);
 
-      // Discover AI Gateways right after Cloudflare login so my-gateway works without a settings visit.
-      // listAIGateways never throws.
-      if (key === CLOUDFLARE_OAUTH_CRED_KEY) yield* Effect.promise(async () => this.listAIGateways(await ownerCaller(this.env)));
-    }));
+    // Discover AI Gateways right after Cloudflare login so my-gateway works without a settings visit.
+    // listAIGateways never throws.
+    if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(await ownerCaller(this.env));
   }
 
-  deleteCredential(caller: UserCaller, key: string): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'credentials.other'));
-      validateCredentialKey(key);
-      yield* this.disconnectCredential(key);
-    }));
+  async deleteCredential(caller: UserCaller, key: string): Promise<void> {
+    await this.requireTier(caller, 'credentials.other');
+    validateCredentialKey(key);
+    await this.disconnectCredential(key);
   }
 
   /** Disconnected grants the provider refused to revoke, newest first. */
@@ -3690,52 +3642,50 @@ export class UserDO extends Agent<Env> {
    * Removes the credential, then asks its provider to revoke the grant (RFC 7009). Removal comes first so a
    * slow or failing provider cannot keep it live here; a refused revoke is kept for the owner to see.
    */
-  private disconnectCredential(key: string): Effect.Effect<void> {
-    return Effect.gen({ self: this }, function* () {
-      const endpoint = revocationEndpointFor(key, this.env);
+  private async disconnectCredential(key: string): Promise<void> {
+    const endpoint = revocationEndpointFor(key, this.env);
 
-      if (endpoint === null) {
-        this.dropCredential(key);
+    if (endpoint === null) {
+      this.dropCredential(key);
 
-        return;
-      }
+      return;
+    }
 
-      const failures: readonly KinuError[] | null = yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-        const credential = yield* this.readCredential(key);
+    let failures: readonly KinuError[];
 
-        this.dropCredential(key);
+    try {
+      const credential = await this.readCredential(key);
 
-        if (credential?.kind !== 'oauth') return null;
+      this.dropCredential(key);
 
-        return yield* Effect.promise(() => revokeOAuthGrant({ endpoint, credential, fetch: globalThis.fetch }));
-      }), (failed) => Effect.sync(() => {
-        // An unopenable row still leaves Kinu; its grant cannot be revoked from here.
-        this.dropCredential(key);
+      if (credential?.kind !== 'oauth') return;
+      failures = await revokeOAuthGrant({ endpoint, credential, fetch: globalThis.fetch });
+    } catch (cause) {
+      // An unopenable row still leaves Kinu; its grant cannot be revoked from here.
+      this.dropCredential(key);
+      failures = [toKinuError({ doing: 'reading the credential to revoke it', cause, otherwise: 'io' })];
+    }
 
-        return [toKinuError({ doing: 'reading the credential to revoke it', cause: Cause.squash(failed), otherwise: 'io' })];
-      }));
+    if (failures.length === 0) {
+      this.sqlx(`DELETE FROM user_unrevoked_grants WHERE key = ?`, key);
 
-        if (failures === null) return;
+      return;
+    }
 
-      if (failures.length === 0) {
-        this.sqlx(`DELETE FROM user_unrevoked_grants WHERE key = ?`, key);
+    for (const failure of failures) diagnostics.failure('credential.revoke_failed', failure, { credentialKey: key });
 
-        return;
-      }
-
-      for (const failure of failures) diagnostics.failure('credential.revoke_failed', failure, { credentialKey: key });
-
-      this.sqlx(
-        `INSERT INTO user_unrevoked_grants (key, reasons_json, recorded_at) VALUES (?, ?, ?)
+    this.sqlx(
+      `INSERT INTO user_unrevoked_grants (key, reasons_json, recorded_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET reasons_json = excluded.reasons_json, recorded_at = excluded.recorded_at`,
-        key, JSON.stringify(failures.map((failure) => failure.message)), Date.now(),
-      );
-    });
+      key, JSON.stringify(failures.map((failure) => failure.message)), Date.now(),
+    );
   }
 
 
   // All reads/writes of `user_credentials.value` go through this pair; the only places plaintext
   // secrets exist in this class (sealed by credential-envelope.ts).
+
+  private _credentialsRewrapped: Promise<void> | null = null;
 
   private cipher(): Promise<CredentialCipher> {
     return createCredentialCipher(this.env);
@@ -3748,35 +3698,38 @@ export class UserDO extends Agent<Env> {
 
   /** Null when no credential is stored; a stored row that does not open or decode rejects,
    * so callers can tell "not connected" from "connected but unreadable". */
-  private readCredential(key: string): Effect.Effect<Credential | null, KinuError> {
-    return Effect.map(this.readCredentialAt(key), (at) => at?.cred ?? null);
+  private async readCredential(key: string): Promise<Credential | null> {
+    return (await this.readCredentialAt(key))?.cred ?? null;
   }
 
   /** The row and its revision, read in one step. */
-  private readCredentialAt(key: string): Effect.Effect<{ readonly cred: Credential; readonly revision: number } | null, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      yield* this.rewrapCredentials();
-      const row = this.sqlx<{ value: string }>(`SELECT value FROM user_credentials WHERE key = ?`, key)[0];
-      const revision = this.credentialRevision(key);
+  private async readCredentialAt(key: string): Promise<{ readonly cred: Credential; readonly revision: number } | null> {
+    await this.rewrapCredentials();
+    const row = this.sqlx<{ value: string }>(`SELECT value FROM user_credentials WHERE key = ?`, key)[0];
+    const revision = this.credentialRevision(key);
 
-      if (!row) return null;
+    if (!row) return null;
+    let plaintext: string;
 
-      const plaintext = yield* attempt({ doing: `opening the stored credential ${key}`, otherwise: 'bad_input' },
-        async () => (await this.cipher()).open(this.credentialAad(key), row.value));
+    try { plaintext = await (await this.cipher()).open(this.credentialAad(key), row.value); }
+    catch (err) {
+      throw toKinuError({ doing: `opening the stored credential ${key}`, cause: err, otherwise: 'bad_input' });
+    }
 
-      // Through `tolerate`, never a caught parse error: a JSON error message
-      // quotes the text it choked on, and that text is the decrypted secret.
-      const decoded = tolerate(() => parseJsonValue(plaintext), 'malformed-input');
+    // Through `tolerate`, never a caught parse error: a JSON error message
+    // quotes the text it choked on, and that text is the decrypted secret.
+    const decoded = tolerate(() => parseJsonValue(plaintext), 'malformed-input');
 
-      if (decoded === undefined) return yield* new KinuError('bad_input', `the stored credential ${key} did not decode as JSON`);
+    if (decoded === undefined) throw new KinuError('bad_input', `the stored credential ${key} did not decode as JSON`);
 
-      return { cred: validateCredential({ key, value: decoded }), revision };
-    });
+    return { cred: validateCredential({ key, value: decoded }), revision };
   }
 
   /** Writes nothing, so {@link commitCredential} can be paired with a fence read in one turn. */
-  private sealCredential(key: string, cred: Credential): Effect.Effect<string> {
-    return Effect.andThen(this.rewrapCredentials(), Effect.promise(async () => (await this.cipher()).seal(this.credentialAad(key), JSON.stringify(cred))));
+  private async sealCredential(key: string, cred: Credential): Promise<string> {
+    await this.rewrapCredentials();
+
+    return (await this.cipher()).seal(this.credentialAad(key), JSON.stringify(cred));
   }
 
   /**
@@ -3801,10 +3754,8 @@ export class UserDO extends Agent<Env> {
     return true;
   }
 
-  private writeCredential(key: string, cred: Credential): Effect.Effect<void, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      this.commitCredential({ key, kind: cred.kind, sealed: yield* this.sealCredential(key, cred) });
-    });
+  private async writeCredential(key: string, cred: Credential): Promise<void> {
+    this.commitCredential({ key, kind: cred.kind, sealed: await this.sealCredential(key, cred) });
   }
 
   /** Bumps the revision so an in-flight refresh cannot land a rotated token over this deletion. */
@@ -3859,19 +3810,17 @@ export class UserDO extends Agent<Env> {
    * Returns the rotated credential, or `'revoked'` if the owner moved it meanwhile, so a late
    * rotation reply cannot reconnect a disconnected account or overwrite a replacement.
    */
-  private commitRefreshedCredential(
+  private async commitRefreshedCredential(
     key: string, next: OAuthCredential, expectRevision: number,
-  ): Effect.Effect<OAuthCredential | 'revoked', KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const sealed = yield* this.sealCredential(key, next);
+  ): Promise<OAuthCredential | 'revoked'> {
+    const sealed = await this.sealCredential(key, next);
 
-      if (this.commitCredential({ key, kind: next.kind, sealed, expectRevision })) return next;
-      diagnostics.event('credential.refresh_superseded', { outcome: 'denied', credentialKey: key });
-      // The store is the authority, not the token this call was carrying.
-      const current = yield* this.readCredential(key);
+    if (this.commitCredential({ key, kind: next.kind, sealed, expectRevision })) return next;
+    diagnostics.event('credential.refresh_superseded', { outcome: 'denied', credentialKey: key });
+    // The store is the authority, not the token this call was carrying.
+    const current = await this.readCredential(key);
 
-      return current?.kind === 'oauth' ? current : 'revoked';
-    });
+    return current?.kind === 'oauth' ? current : 'revoked';
   }
 
   /** No-op if the owner already replaced the credential; the rejection belongs to the old one. */
@@ -3882,56 +3831,74 @@ export class UserDO extends Agent<Env> {
 
   /** Re-seals retired-key rows and a never-sealed store's plaintext once per instance, unless the
    *  marker matches. Unopenable rows are left so only that credential fails. */
-  private readonly rewrapCredentials = flight(() => Effect.gen({ self: this }, function* () {
-    const cipher = yield* Effect.promise(() => this.cipher());
+  private rewrapCredentials(): Promise<void> {
+    this._credentialsRewrapped ??= (async () => {
+      const cipher = await this.cipher();
 
-    const marker = this.sqlx<{ value: string }>(
-      `SELECT value FROM user_schema_meta WHERE key = ?`, UserDO.CREDENTIAL_ENVELOPE_MARKER,
-    )[0];
+      const marker = this.sqlx<{ value: string }>(
+        `SELECT value FROM user_schema_meta WHERE key = ?`, UserDO.CREDENTIAL_ENVELOPE_MARKER,
+      )[0];
 
-    if (marker?.value === cipher.keyId) return;
-    let clean = true;
+      if (marker?.value === cipher.keyId) return;
+      let clean = true;
 
-    // Only a never-sealed store holds pre-encryption rows.
-    const reopen = (aad: string, stored: string): Promise<string> => (
-      marker === undefined && !isSealedCredential(stored) ? Promise.resolve(stored) : cipher.open(aad, stored)
-    );
+      // Only a never-sealed store holds pre-encryption rows.
+      const reopen = (aad: string, stored: string): Promise<string> => (
+        marker === undefined && !isSealedCredential(stored) ? Promise.resolve(stored) : cipher.open(aad, stored)
+      );
 
-    for (const row of this.sqlx<{ key: string; value: string }>(`SELECT key, value FROM user_credentials`)) {
-      const aad = this.credentialAad(row.key);
+      for (const row of this.sqlx<{ key: string; value: string }>(`SELECT key, value FROM user_credentials`)) {
+        const aad = this.credentialAad(row.key);
 
-      yield* attempt({ doing: 'resealing a stored credential under the current key', otherwise: 'bad_input' }, async () => {
-        this.sqlx(`UPDATE user_credentials SET value = ? WHERE key = ?`, await cipher.seal(aad, await reopen(aad, row.value)), row.key);
-      }).pipe(Effect.catch((failure) => Effect.sync(() => {
-        clean = false;
-        diagnostics.failure('credential.reseal_failed', failure, { credentialKey: row.key });
-      })));
-    }
+        try {
+          this.sqlx(
+            `UPDATE user_credentials SET value = ? WHERE key = ?`,
+            await cipher.seal(aad, await reopen(aad, row.value)), row.key,
+          );
+        } catch (err) {
+          clean = false;
+          diagnostics.failure('credential.reseal_failed', toKinuError({
+            doing: 'resealing a stored credential under the current key',
+            cause: err,
+            otherwise: 'bad_input',
+          }), { credentialKey: row.key });
+        }
+      }
 
-    for (const row of this.sqlx<{ id: string; headers: string }>(
-      `SELECT id, headers FROM user_mcp_servers WHERE headers IS NOT NULL`,
-    )) {
-      const aad = this.mcpHeadersAad(row.id);
+      for (const row of this.sqlx<{ id: string; headers: string }>(
+        `SELECT id, headers FROM user_mcp_servers WHERE headers IS NOT NULL`,
+      )) {
+        const aad = this.mcpHeadersAad(row.id);
 
-      yield* attempt({ doing: "resealing an MCP server's stored headers under the current key", otherwise: 'bad_input' }, async () => {
-        this.sqlx(`UPDATE user_mcp_servers SET headers = ? WHERE id = ?`, await cipher.seal(aad, await reopen(aad, row.headers)), row.id);
-      }).pipe(Effect.catch((failure) => Effect.sync(() => {
-        clean = false;
-        diagnostics.failure('mcp.stored_headers_reseal_failed', failure, { serverId: row.id });
-      })));
-    }
+        try {
+          this.sqlx(
+            `UPDATE user_mcp_servers SET headers = ? WHERE id = ?`,
+            await cipher.seal(aad, await reopen(aad, row.headers)), row.id,
+          );
+        } catch (err) {
+          clean = false;
+          diagnostics.failure('mcp.stored_headers_reseal_failed', toKinuError({
+            doing: "resealing an MCP server's stored headers under the current key",
+            cause: err,
+            otherwise: 'bad_input',
+          }), { serverId: row.id });
+        }
+      }
 
-    // Egress secrets share the cipher and must rotate in the same pass as the marker.
-    if (!(yield* Effect.promise(() => rewrapEgressSecrets(this.egressVaultDeps(cipher))))) clean = false;
+      // Egress secrets share the cipher and must rotate in the same pass as the marker.
+      if (!await rewrapEgressSecrets(this.egressVaultDeps(cipher))) clean = false;
 
-    // Rotation drops the retired key based on this marker, so only write it if no row was left.
-    if (!clean) return;
-    this.sqlx(
-      `INSERT INTO user_schema_meta (key, value) VALUES (?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      UserDO.CREDENTIAL_ENVELOPE_MARKER, cipher.keyId,
-    );
-  }), { keep: 'exit' });
+      // Rotation drops the retired key based on this marker, so only write it if no row was left.
+      if (!clean) return;
+      this.sqlx(
+        `INSERT INTO user_schema_meta (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        UserDO.CREDENTIAL_ENVELOPE_MARKER, cipher.keyId,
+      );
+    })();
+
+    return this._credentialsRewrapped;
+  }
 
   private static readonly CREDENTIAL_ENVELOPE_MARKER = 'credential_envelope_key_id';
 
@@ -3941,17 +3908,23 @@ export class UserDO extends Agent<Env> {
     return `${this.ctx.id.toString()}:mcp:${serverId}`;
   }
 
-  private sealMcpHeaders(serverId: string, headers: string | null): Effect.Effect<string | null> {
-    return Effect.andThen(this.rewrapCredentials(), Effect.promise(async () => (headers === null ? null : (await this.cipher()).seal(this.mcpHeadersAad(serverId), headers))));
+  private async sealMcpHeaders(serverId: string, headers: string | null): Promise<string | null> {
+    await this.rewrapCredentials();
+
+    return headers === null ? null : (await this.cipher()).seal(this.mcpHeadersAad(serverId), headers);
   }
 
   /** Stored headers that do not open reject: sent without them, the request would reach
    * the server unauthenticated and read as a server wanting a login. */
-  private openMcpHeaders(serverId: string, stored: string | null): Effect.Effect<string | null, KinuError> {
-    return Effect.andThen(this.rewrapCredentials(), stored === null
-      ? Effect.succeed(null)
-      : attempt({ doing: `opening the stored headers of MCP server ${serverId}`, otherwise: 'bad_input' },
-        async () => (await this.cipher()).open(this.mcpHeadersAad(serverId), stored)));
+  private async openMcpHeaders(serverId: string, stored: string | null): Promise<string | null> {
+    await this.rewrapCredentials();
+
+    if (stored === null) return null;
+
+    try { return await (await this.cipher()).open(this.mcpHeadersAad(serverId), stored); }
+    catch (err) {
+      throw toKinuError({ doing: `opening the stored headers of MCP server ${serverId}`, cause: err, otherwise: 'bad_input' });
+    }
   }
 
   // Egress secret vault: see user/egress-vault.ts for why the row shape is its own table.
@@ -3974,15 +3947,11 @@ export class UserDO extends Agent<Env> {
 
   /** The returned `placeholder` is the only thing that may enter the container; rotating an id
    *  keeps its placeholder. */
-  putEgressSecret(caller: UserCaller, input: PutEgressSecretInput): Promise<EgressSecretBinding> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'egress_secrets.manage'));
-      yield* this.rewrapCredentials();
+  async putEgressSecret(caller: UserCaller, input: PutEgressSecretInput): Promise<EgressSecretBinding> {
+    await this.requireTier(caller, 'egress_secrets.manage');
+    await this.rewrapCredentials();
 
-      const cipher = yield* Effect.promise(async () => this.cipher());
-
-      return yield* Effect.promise(() => putEgressSecret(this.egressVaultDeps(cipher), input));
-    }));
+    return putEgressSecret(this.egressVaultDeps(await this.cipher()), input);
   }
 
   /** A later request carrying the placeholder is refused rather than forwarded with a dummy. */
@@ -3996,33 +3965,27 @@ export class UserDO extends Agent<Env> {
    * `active` is already grant-filtered (consent); this decides destination per request.
    * The outbound handler presents the owner capability.
    */
-  resolveEgressInjection(
+  async resolveEgressInjection(
     caller: UserCaller,
     facts: EgressRequestFacts,
     active: readonly EgressSecretBinding[],
   ): Promise<EgressInjectionResult> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'egress_secrets.inject'));
-      yield* this.rewrapCredentials();
+    await this.requireTier(caller, 'egress_secrets.inject');
+    await this.rewrapCredentials();
 
-      const cipher = yield* Effect.promise(async () => this.cipher());
-
-      return yield* Effect.promise(() => resolveEgressInjection(this.egressVaultDeps(cipher), facts, active));
-    }));
+    return resolveEgressInjection(this.egressVaultDeps(await this.cipher()), facts, active);
   }
 
   /** baseURL is not a secret and is absent from listCredentials(); the provider proxy reads it without the login. */
-  getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireCredentialAccess(caller, key));
-      validateCredentialKey(key);
-      // The my-gateway view uses the same account-scoped /ai/v1 endpoint as Workers AI;
-      // only the cf-aig-gateway-id header differs.
-      const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
-      const cred = yield* this.readCredential(storedKey);
+  async getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null> {
+    await this.requireCredentialAccess(caller, key);
+    validateCredentialKey(key);
+    // The my-gateway view uses the same account-scoped /ai/v1 endpoint as Workers AI;
+    // only the cf-aig-gateway-id header differs.
+    const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
+    const cred = await this.readCredential(storedKey);
 
-      return cred === null ? null : credentialBaseURL(storedKey, cred);
-    }));
+    return cred === null ? null : credentialBaseURL(storedKey, cred);
   }
 
   async getAuthHeaders(caller: UserCaller, key: string, opts?: AuthRequest): Promise<Record<string, string> | null> {
@@ -4030,68 +3993,60 @@ export class UserDO extends Agent<Env> {
   }
 
   /** What a model call needs of a credential, headers and endpoint, in one round trip. */
-  getAuth(caller: UserCaller, key: string, opts?: AuthRequest): Promise<AuthResolution | null> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireCredentialAccess(caller, key));
-      validateCredentialKey(key);
-      // `cloudflare.ai-gateway` is a derived view of the Cloudflare login: same bearer and refresh,
-      // but cf-aig-gateway-id names the user's selected gateway (null until selected).
-      const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
-      const stored = yield* this.readCredentialAt(storedKey);
+  async getAuth(caller: UserCaller, key: string, opts?: AuthRequest): Promise<AuthResolution | null> {
+    await this.requireCredentialAccess(caller, key);
+    validateCredentialKey(key);
+    // `cloudflare.ai-gateway` is a derived view of the Cloudflare login: same bearer and refresh,
+    // but cf-aig-gateway-id names the user's selected gateway (null until selected).
+    const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
+    const stored = await this.readCredentialAt(storedKey);
 
-      if (!stored) return null;
-      // Explicitly non-null so the refresh reassignment below doesn't re-widen to `Credential | null`.
-      let cred: Credential = stored.cred;
+    if (!stored) return null;
+    // Explicitly non-null so the refresh reassignment below doesn't re-widen to `Credential | null`.
+    let cred: Credential = stored.cred;
 
-      const issuer = subscriptionIssuer(storedKey);
-      // Refused on the login this store still holds; one another caller already rotated is served as it stands.
-      const refused = opts?.rejected !== undefined && refusedLogin(credentialToHeaders(storedKey, cred), opts.rejected);
+    const issuer = subscriptionIssuer(storedKey);
+    // Refused on the login this store still holds; one another caller already rotated is served as it stands.
+    const refused = opts?.rejected !== undefined && refusedLogin(credentialToHeaders(storedKey, cred), opts.rejected);
 
-      if (issuer !== null && cred.kind === 'oauth') {
-        const login = cred;
-        const held = { cred: login, revision: stored.revision };
+    if (issuer !== null && cred.kind === 'oauth') {
+      const held = { cred, revision: stored.revision };
+      const usable = await usableLogin({ issuer, credential: cred, refused, renew: () => this.refreshSubscriptionLogin(storedKey, held, issuer) });
 
-        const usable = yield* Effect.promise(() => usableLogin({
-          issuer, credential: login, refused,
-          renew: () => settle(this.refreshSubscriptionLogin(storedKey, held, issuer)),
-        }));
+      if (usable === null) return null;
+      cred = usable;
+    }
 
-        if (usable === null) return null;
-        cred = usable;
+    if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
+      const needRefresh = refused || isCloudflareCredentialExpiring(cred);
+
+      if (needRefresh) {
+        if (!cred.refreshToken) return null;
+        const refreshed = await this.refreshCloudflareInternal({ cred, revision: stored.revision });
+
+        if (refreshed === 'revoked') return null;
+
+        if (!('failed' in refreshed)) cred = refreshed;
       }
+    }
 
-      if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
-        const needRefresh = refused || isCloudflareCredentialExpiring(cred);
+    // A credential whose stored shape doesn't match its key is a defect and must not reach
+    // the caller as "not connected".
+    const headers = credentialToHeaders(storedKey, cred);
 
-        if (needRefresh) {
-          if (!cred.refreshToken) return null;
-          const login = cred;
-          const refreshed = yield* this.refreshCloudflareInternal({ cred: login, revision: stored.revision });
+    if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
+      const gatewayId = this.selectedAIGatewayId();
 
-          if (refreshed === 'revoked') return null;
+      if (!gatewayId) return null;
+      headers['cf-aig-gateway-id'] = gatewayId;
+    } else if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
+      // Use the user's selected gateway if any, otherwise the platform's configured default.
+      headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.env);
+    }
 
-          if (!('failed' in refreshed)) cred = refreshed;
-        }
-      }
+    const baseURL = credentialBaseURL(storedKey, cred);
 
-      // A credential whose stored shape doesn't match its key is a defect and must not reach
-      // the caller as "not connected".
-      const headers = credentialToHeaders(storedKey, cred);
-
-      if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
-        const gatewayId = this.selectedAIGatewayId();
-
-        if (!gatewayId) return null;
-        headers['cf-aig-gateway-id'] = gatewayId;
-      } else if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
-        // Use the user's selected gateway if any, otherwise the platform's configured default.
-        headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.env);
-      }
-
-      const baseURL = credentialBaseURL(storedKey, cred);
-
-      return baseURL === null ? { headers } : { headers, baseURL };
-    }));
+    return baseURL === null ? { headers } : { headers, baseURL };
   }
 
   private static readonly AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';
@@ -4108,167 +4063,163 @@ export class UserDO extends Agent<Env> {
 
   /** Null when no usable Cloudflare credential is stored; rejects when the login
    * is there and its refresh failed. */
-  private cloudflareAPICredential(): Effect.Effect<{ accessToken: string; accountId: string } | null, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const stored = yield* this.readCredentialAt(CLOUDFLARE_OAUTH_CRED_KEY);
+  private async cloudflareAPICredential(): Promise<{ accessToken: string; accountId: string } | null> {
+    const stored = await this.readCredentialAt(CLOUDFLARE_OAUTH_CRED_KEY);
 
-      if (stored?.cred.kind !== 'oauth' || !isCloudflareCredentialUsable(stored.cred)) return null;
-      let cred = stored.cred;
+    if (stored?.cred.kind !== 'oauth' || !isCloudflareCredentialUsable(stored.cred)) return null;
+    let cred = stored.cred;
 
-      if (isCloudflareCredentialExpiring(cred)) {
-        const refreshed = yield* this.refreshCloudflareInternal({ cred, revision: stored.revision });
+    if (isCloudflareCredentialExpiring(cred)) {
+      const refreshed = await this.refreshCloudflareInternal({ cred, revision: stored.revision });
 
-        if (refreshed === 'revoked') return null;
+      if (refreshed === 'revoked') return null;
 
-        if ('failed' in refreshed) return yield* Effect.die(refreshed.failed);
-        cred = refreshed;
-      }
+      if ('failed' in refreshed) throw refreshed.failed;
+      cred = refreshed;
+    }
 
-      const accountId = accountIdFromCloudflareCredential(cred);
+    const accountId = accountIdFromCloudflareCredential(cred);
 
-      return accountId ? { accessToken: cred.accessToken, accountId } : null;
-    });
+    return accountId ? { accessToken: cred.accessToken, accountId } : null;
   }
 
   /** With exactly one gateway and nothing selected, selects it (persisted). Never throws:
    * unusable login or failed discovery surface in `error`, so login can call this inline. */
-  listAIGateways(caller: UserCaller): Promise<{
+  async listAIGateways(caller: UserCaller): Promise<{
     connected: boolean;
     selectedId: string | null;
     gateways: CloudflareAIGatewaySummary[];
     error: string | null;
   }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'ai_gateway.admin'));
-      let selectedId = this.selectedAIGatewayId();
-      const none: CloudflareAIGatewaySummary[] = [];
+    await this.requireTier(caller, 'ai_gateway.admin');
+    let selectedId = this.selectedAIGatewayId();
 
-      return yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-        const api = yield* this.cloudflareAPICredential();
+    try {
+      const api = await this.cloudflareAPICredential();
 
-        if (!api) return { connected: false, selectedId, gateways: none, error: null };
-        const gateways = yield* Effect.promise(() => fetchCloudflareAIGateways(api.accountId, api.accessToken));
+      if (!api) return { connected: false, selectedId, gateways: [], error: null };
+      const gateways = await fetchCloudflareAIGateways(api.accountId, api.accessToken);
 
-        if (!selectedId && gateways.length === 1) {
-          const only = gateways[0].id;
-
-          yield* Effect.promise(async () => this.selectAIGateway(await ownerCaller(this.env), only));
-          selectedId = only;
-        }
-
-        return { connected: true, selectedId, gateways, error: null };
-      }), (failed) => Effect.sync(() => {
-        const error = authoredRefusal({ doing: 'listing your Cloudflare AI Gateways', cause: Cause.squash(failed) });
-        diagnostics.failure('user.ai_gateways_unread', error);
-
-        return { connected: true, selectedId, gateways: none, error: renderThrownChain({ cause: error }) };
-      }));
-    }));
-  }
-
-  selectAIGateway(caller: UserCaller, gatewayId: string | null): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'ai_gateway.admin'));
-
-      if (gatewayId === null) {
-        this.sqlx(`DELETE FROM user_config WHERE key = ?`, UserDO.AI_GATEWAY_CONFIG_KEY);
-
-        return;
+      if (!selectedId && gateways.length === 1) {
+        await this.selectAIGateway(await ownerCaller(this.env), gateways[0].id);
+        selectedId = gateways[0].id;
       }
 
-      if (!isCloudflareAIGatewayId(gatewayId)) return yield* new KinuError('bad_input', 'Invalid AI Gateway id.');
-      yield* Effect.promise(async () => this.setConfig(await ownerCaller(this.env), UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId));
-    }));
+      return { connected: true, selectedId, gateways, error: null };
+    } catch (cause) {
+      const error = authoredRefusal({ doing: 'listing your Cloudflare AI Gateways', cause });
+      diagnostics.failure('user.ai_gateways_unread', error);
+
+      return { connected: true, selectedId, gateways: [], error: renderThrownChain({ cause: error }) };
+    }
+  }
+
+  async selectAIGateway(caller: UserCaller, gatewayId: string | null): Promise<void> {
+    await this.requireTier(caller, 'ai_gateway.admin');
+
+    if (gatewayId === null) {
+      this.sqlx(`DELETE FROM user_config WHERE key = ?`, UserDO.AI_GATEWAY_CONFIG_KEY);
+
+      return;
+    }
+
+    if (!isCloudflareAIGatewayId(gatewayId)) throw new KinuError('bad_input', 'Invalid AI Gateway id.');
+    await this.setConfig(await ownerCaller(this.env), UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
   }
 
   /** Reads the stored credential only, no API call, so it cannot fail for a reason the user
    * did not cause. */
-  listCloudflareAccounts(caller: UserCaller): Promise<{
+  async listCloudflareAccounts(caller: UserCaller): Promise<{
     connected: boolean;
     selectedId: string | null;
     accounts: CloudflareAccount[];
   }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'ai_gateway.admin'));
-      const cred = yield* this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
+    await this.requireTier(caller, 'ai_gateway.admin');
+    const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
 
-      if (cred?.kind !== 'oauth') return { connected: false, selectedId: null, accounts: [] };
+    if (cred?.kind !== 'oauth') return { connected: false, selectedId: null, accounts: [] };
 
-      return {
-        connected: true,
-        selectedId: accountIdFromCloudflareCredential(cred),
-        accounts: cloudflareAccountsFromCredential(cred),
-      };
-    }));
+    return {
+      connected: true,
+      selectedId: accountIdFromCloudflareCredential(cred),
+      accounts: cloudflareAccountsFromCredential(cred),
+    };
   }
 
   /** Point Workers AI at another of this login's accounts. The AI Gateway selection belongs
    * to the old account, so it is dropped and rediscovered. */
-  selectCloudflareAccount(caller: UserCaller, accountId: string): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'ai_gateway.admin'));
-      const cred = yield* this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
+  async selectCloudflareAccount(caller: UserCaller, accountId: string): Promise<void> {
+    await this.requireTier(caller, 'ai_gateway.admin');
+    const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
 
-      if (cred?.kind !== 'oauth') return yield* new KinuError('bad_input', 'Cloudflare is not connected.');
-      yield* this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, withCloudflareAccount(cred, accountId));
-      const owner = yield* Effect.promise(async () => ownerCaller(this.env));
-      yield* Effect.promise(async () => this.selectAIGateway(owner, null));
-      yield* Effect.promise(async () => this.listAIGateways(owner));
-    }));
+    if (cred?.kind !== 'oauth') throw new KinuError('bad_input', 'Cloudflare is not connected.');
+    await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, withCloudflareAccount(cred, accountId));
+    const owner = await ownerCaller(this.env);
+    await this.selectAIGateway(owner, null);
+    await this.listAIGateways(owner);
   }
 
   /** `'revoked'` on `invalid_grant` or a disconnect mid-refresh; `{ failed }` when the issuer could not be asked. One
    *  refresh per login at a time, shared by later callers: two spending one rotating token would lose the login. */
-  private refreshOAuthCredential(
+  private async refreshOAuthCredential(
     key: string,
     held: HeldLogin,
     rotate: () => Promise<OAuthCredential>,
-    onRevoked: (revision: number) => Effect.Effect<void, KinuError>,
-  ): Effect.Effect<LoginRenewal, KinuError> {
-    return this.refreshing({ key, held, rotate, onRevoked });
+    onRevoked: (revision: number) => Promise<void>,
+  ): Promise<LoginRenewal> {
+    const inFlight = this._refreshing.get(key);
+
+    if (inFlight) return inFlight;
+    const task = this.rotateOAuthCredential(key, held, rotate, onRevoked);
+    this._refreshing.set(key, task);
+
+    try { return await task; } finally { this._refreshing.delete(key); }
   }
 
-  private readonly refreshing = flight((login: RefreshingLogin) => this.rotateOAuthCredential(login), { key: (login) => login.key });
+  private readonly _refreshing = new Map<string, Promise<LoginRenewal>>();
 
-  private rotateOAuthCredential({ key, held, rotate, onRevoked }: RefreshingLogin): Effect.Effect<LoginRenewal, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      if (this.credentialRevision(key) !== held.revision) {
-        const current = yield* this.readCredential(key);
+  private async rotateOAuthCredential(
+    key: string,
+    held: HeldLogin,
+    rotate: () => Promise<OAuthCredential>,
+    onRevoked: (revision: number) => Promise<void>,
+  ): Promise<LoginRenewal> {
+    // Replaced since this caller read it: the held refresh token may be spent. Writes fence on that revision.
+    if (this.credentialRevision(key) !== held.revision) {
+      const current = await this.readCredential(key);
 
-        return current?.kind === 'oauth' ? current : 'revoked' as const;
-      }
+      return current?.kind === 'oauth' ? current : 'revoked';
+    }
 
-      const rotated = yield* Effect.promise(() => rotateLogin(key, REFRESH_DOING.get(baseCredentialKey(key)) ?? `refreshing ${key}`, rotate));
+    const rotated = await rotateLogin(key, REFRESH_DOING.get(baseCredentialKey(key)) ?? `refreshing ${key}`, rotate);
 
-      if (rotated === 'revoked') yield* onRevoked(held.revision);
+    if (rotated === 'revoked') await onRevoked(held.revision);
 
-      if (rotated === 'revoked' || 'failed' in rotated) return rotated;
+    if (rotated === 'revoked' || 'failed' in rotated) return rotated;
 
-      return yield* this.commitRefreshedCredential(key, rotated, held.revision);
-    });
+    return await this.commitRefreshedCredential(key, rotated, held.revision);
   }
 
   /** The token still serves management APIs after a rejected refresh; only the refresh token is stripped. */
-  private refreshCloudflareInternal(held: HeldLogin): Effect.Effect<LoginRenewal, KinuError> {
+  private refreshCloudflareInternal(held: HeldLogin): Promise<LoginRenewal> {
     return this.refreshOAuthCredential(
       CLOUDFLARE_OAUTH_CRED_KEY,
       held,
       () => refreshCloudflareCredential(this.env, held.cred),
-      (revision) => {
+      async (revision) => {
         const { refreshToken: _dead, ...rest } = held.cred;
-
-        return Effect.asVoid(this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest, revision));
+        await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest, revision);
       },
     );
   }
 
   /** A rejected refresh deletes only that login's row, so its connect CTA resurfaces. */
-  private refreshSubscriptionLogin(key: string, held: HeldLogin, issuer: SubscriptionIssuer): Effect.Effect<LoginRenewal, KinuError> {
+  private refreshSubscriptionLogin(key: string, held: HeldLogin, issuer: SubscriptionIssuer): Promise<LoginRenewal> {
     return this.refreshOAuthCredential(
       key,
       held,
       () => issuer.refresh(held.cred),
-      (revision) => Effect.sync(() => { this.retireRejectedCredential(key, revision); }),
+      async (revision) => { this.retireRejectedCredential(key, revision); },
     );
   }
 
@@ -4297,49 +4248,47 @@ export class UserDO extends Agent<Env> {
     return result;
   }
 
-  pollCodexDeviceFlow(caller: UserCaller): Promise<{ connected: boolean; accountId?: string; error?: string }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'subscription_auth'));
+  async pollCodexDeviceFlow(caller: UserCaller): Promise<{ connected: boolean; accountId?: string; error?: string }> {
+    await this.requireTier(caller, 'subscription_auth');
 
-      const row = this.sqlx<{ device_auth_id: string; user_code: string; generation: number }>(
-        `SELECT device_auth_id, user_code, generation FROM codex_device_flow
+    const row = this.sqlx<{ device_auth_id: string; user_code: string; generation: number }>(
+      `SELECT device_auth_id, user_code, generation FROM codex_device_flow
        WHERE id = 1 AND settled_at IS NULL`,
-      )[0];
+    )[0];
 
-      if (!row) return { connected: false, error: 'No device flow in progress: call startCodexDeviceFlow first.' };
-      // Both fences must be read before the provider wait.
-      const generation = row.generation;
-      const revision = this.credentialRevision(CODEX_CRED_KEY);
+    if (!row) return { connected: false, error: 'No device flow in progress: call startCodexDeviceFlow first.' };
+    // Both fences must be read before the provider wait.
+    const generation = row.generation;
+    const revision = this.credentialRevision(CODEX_CRED_KEY);
 
-      const client = createCodexOAuthClient();
+    const client = createCodexOAuthClient();
 
-      return yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-        const poll = yield* Effect.promise(() => client.pollDeviceFlow(row.device_auth_id, row.user_code));
+    try {
+      const poll = await client.pollDeviceFlow(row.device_auth_id, row.user_code);
 
-        if (poll.status === 'pending') return { connected: false };
+      if (poll.status === 'pending') return { connected: false };
 
-        if (poll.status === 'expired' || poll.status === 'denied') return { connected: false, error: poll.message };
-        const accountId = decodeCodexAccountId(poll.tokens.accessToken);
-        const cred = tokensToCredential(poll.tokens, accountId ? { accountId } : undefined);
-        const sealed = yield* this.sealCredential(CODEX_CRED_KEY, cred);
+      if (poll.status === 'expired' || poll.status === 'denied') return { connected: false, error: poll.message };
+      const accountId = decodeCodexAccountId(poll.tokens.accessToken);
+      const cred = tokensToCredential(poll.tokens, accountId ? { accountId } : undefined);
+      const sealed = await this.sealCredential(CODEX_CRED_KEY, cred);
 
-        if (!this.commitCodexDeviceFlow({ generation, revision, kind: cred.kind, sealed })) {
-          diagnostics.event('credential.codex_device_flow_superseded', { outcome: 'denied' });
+      if (!this.commitCodexDeviceFlow({ generation, revision, kind: cred.kind, sealed })) {
+        diagnostics.event('credential.codex_device_flow_superseded', { outcome: 'denied' });
 
-          return {
-            connected: false,
-            error: 'That Codex sign-in was superseded before it completed: start the connection again.',
-          };
-        }
+        return {
+          connected: false,
+          error: 'That Codex sign-in was superseded before it completed: start the connection again.',
+        };
+      }
 
-        return { connected: true, accountId: accountId ?? undefined };
-      }), (failed) => Effect.sync(() => {
-        const error = authoredRefusal({ doing: 'checking the Codex sign-in', cause: Cause.squash(failed) });
-        diagnostics.failure('user.codex_poll_failed', error);
+      return { connected: true, accountId: accountId ?? undefined };
+    } catch (cause) {
+      const error = authoredRefusal({ doing: 'checking the Codex sign-in', cause });
+      diagnostics.failure('user.codex_poll_failed', error);
 
-        return { connected: false, error: renderThrownChain({ cause: error }) };
-      }));
-    }));
+      return { connected: false, error: renderThrownChain({ cause: error }) };
+    }
   }
 
   /** Commits credential and flow settlement together; synchronous, with both fences checked
@@ -4404,11 +4353,7 @@ export class UserDO extends Agent<Env> {
       const refusal = unrenewable(CLAUDE_CRED_KEY, credential);
 
       if (refusal !== null) return { connected: false, error: `Claude signed you in without a refresh token, so Kinu cannot keep the login: ${refusal}` };
-
-      const sealed = yield* Effect.catchCause(this.sealCredential(CLAUDE_CRED_KEY, credential), (failed) => Effect.fail(
-        toKinuError({ doing: 'sealing the Claude credential', cause: Cause.squash(failed), otherwise: 'io' }),
-      ));
-
+      const sealed = yield* attempt({ doing: 'sealing the Claude credential', otherwise: 'io' }, () => this.sealCredential(CLAUDE_CRED_KEY, credential));
       const current = v.safeParse(ClaudeSignInSchema, this.ctx.storage.kv.get(CLAUDE_SIGN_IN_KEY));
 
       if (!current.success || current.output.state !== signIn.state
@@ -4422,76 +4367,68 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  disconnectCodex(caller: UserCaller): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'subscription_auth'));
-      yield* this.disconnectCredential(CODEX_CRED_KEY);
-      // Settled, not deleted: the generation must keep rising, and a poll already waiting on OpenAI
-      // must find this attempt closed rather than find no row to fence against.
-      this.sqlx(`UPDATE codex_device_flow SET settled_at = ? WHERE id = 1 AND settled_at IS NULL`, Date.now());
-    }));
+  async disconnectCodex(caller: UserCaller): Promise<void> {
+    await this.requireTier(caller, 'subscription_auth');
+    await this.disconnectCredential(CODEX_CRED_KEY);
+    // Settled, not deleted: the generation must keep rising, and a poll already waiting on OpenAI
+    // must find this attempt closed rather than find no row to fence against.
+    this.sqlx(`UPDATE codex_device_flow SET settled_at = ? WHERE id = 1 AND settled_at IS NULL`, Date.now());
   }
 
-  getCodexStatus(caller: UserCaller): Promise<CodexStatus> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'subscription_auth'));
-      const cred = yield* this.readCredential(CODEX_CRED_KEY);
+  async getCodexStatus(caller: UserCaller): Promise<CodexStatus> {
+    await this.requireTier(caller, 'subscription_auth');
+    const cred = await this.readCredential(CODEX_CRED_KEY);
 
-      // Only an open attempt is an in-progress flow; a settled row just keeps the generation rising.
-      const flow = this.sqlx<{ user_code: string; portal_url: string; poll_interval: number }>(
-        `SELECT user_code, portal_url, poll_interval FROM codex_device_flow
-         WHERE id = 1 AND settled_at IS NULL`,
-      )[0];
+    // Only an open attempt is an in-progress flow; a settled row just keeps the generation rising.
+    const flow = this.sqlx<{ user_code: string; portal_url: string; poll_interval: number }>(
+      `SELECT user_code, portal_url, poll_interval FROM codex_device_flow
+       WHERE id = 1 AND settled_at IS NULL`,
+    )[0];
 
-      if (cred?.kind === 'oauth') {
-        return {
-          connected: true,
-          accountId: decodeCodexAccountId(cred.accessToken),
-          expiresAt: cred.expiresAt ?? null,
-          startedFlow: flow
-            ? { userCode: flow.user_code, portalURL: flow.portal_url, pollIntervalSec: flow.poll_interval }
-            : null,
-        };
-      }
-
+    if (cred?.kind === 'oauth') {
       return {
-        connected: false,
-        accountId: null,
-        expiresAt: null,
+        connected: true,
+        accountId: decodeCodexAccountId(cred.accessToken),
+        expiresAt: cred.expiresAt ?? null,
         startedFlow: flow
           ? { userCode: flow.user_code, portalURL: flow.portal_url, pollIntervalSec: flow.poll_interval }
           : null,
       };
-    }));
+    }
+
+    return {
+      connected: false,
+      accountId: null,
+      expiresAt: null,
+      startedFlow: flow
+        ? { userCode: flow.user_code, portalURL: flow.portal_url, pollIntervalSec: flow.poll_interval }
+        : null,
+    };
   }
 
-  getConfig(caller: UserCaller, key: string): Promise<string | null> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'config'));
+  async getConfig(caller: UserCaller, key: string): Promise<string | null> {
+    await this.requireTier(caller, 'config');
 
-      if (key === PROFILE_CATALOG_CONFIG_KEY) {
-        return yield* new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
-      }
+    if (key === PROFILE_CATALOG_CONFIG_KEY) {
+      throw new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
+    }
 
-      const row = this.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
+    const row = this.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
 
-      return row?.value ?? null;
-    }));
+    return row?.value ?? null;
   }
 
-  setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'config'));
+  async setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
+    await this.requireTier(caller, 'config');
 
-      if (key === PROFILE_CATALOG_CONFIG_KEY) {
-        return yield* new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
-      }
+    if (key === PROFILE_CATALOG_CONFIG_KEY) {
+      throw new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
+    }
 
-      this.sqlx(
-        `INSERT INTO user_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-        key, value,
-      );
-    }));
+    this.sqlx(
+      `INSERT INTO user_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      key, value,
+    );
   }
 
   async listConfig(caller: UserCaller): Promise<Record<string, string>> {
@@ -4512,23 +4449,37 @@ export class UserDO extends Agent<Env> {
    * Owner-session only: the role/tier catalog is authority, so even a `full`-tier workspace is
    * refused until the agent runtime adds its narrow read surface.
    */
-  private requireOwnerSession(caller: UserCaller): Effect.Effect<void> {
-    return Effect.flatMap(Effect.promise(() => this.requireTier(caller, 'config')), (resolved) => (resolved.kind === 'owner_session'
-      ? Effect.void
-      : Effect.die(new CapabilityDeniedError(
+  private async requireOwnerSession(caller: UserCaller): Promise<void> {
+    const resolved = await this.requireTier(caller, 'config');
+
+    if (resolved.kind !== 'owner_session') {
+      throw new CapabilityDeniedError(
         'The profile catalog is owner-only. Workspaces cannot read or write the account\'s roles and tiers.',
-      ))));
+      );
+    }
   }
 
   /** Corruption is an account configuration error, not permission to substitute other authority. */
-  private parseStoredProfileCatalog(value: string): Effect.Effect<ProfileCatalog, KinuError> {
-    return Effect.try({
-      try: () => decodeJsonValue({ value: JSON.parse(value) }),
-      catch: (error) => new KinuError('io', 'The stored account profile catalog cannot be decoded as JSON.', { cause: error }),
-    }).pipe(Effect.flatMap((json) => Effect.try({
-      try: () => validateProfileCatalog({ value: json }),
-      catch: (error) => new KinuError('io', 'The stored account profile catalog violates the profile catalog contract.', { cause: error }),
-    })));
+  private parseStoredProfileCatalog(value: string): ProfileCatalog {
+    let json: JsonValue;
+
+    try {
+      json = decodeJsonValue({ value: JSON.parse(value) });
+    } catch (error) {
+      throw new KinuError('io', 
+        'The stored account profile catalog cannot be decoded as JSON.',
+        { cause: error },
+      );
+    }
+
+    try {
+      return validateProfileCatalog({ value: json });
+    } catch (error) {
+      throw new KinuError('io', 
+        'The stored account profile catalog violates the profile catalog contract.',
+        { cause: error },
+      );
+    }
   }
 
   private profileCatalogEnvelope(version: number, catalog: ProfileCatalog): ProfileCatalogEnvelope {
@@ -4541,83 +4492,79 @@ export class UserDO extends Agent<Env> {
   }
 
   /** A missing row starts at version 0; malformed stored config fails rather than changing roles. */
-  private readProfileCatalogState(): Effect.Effect<ProfileCatalogState, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const rawRow = this.sqlx(
-        `SELECT value, version FROM user_config WHERE key = ?`, PROFILE_CATALOG_CONFIG_KEY,
-      )[0];
+  private readProfileCatalogState(): ProfileCatalogState {
+    const rawRow = this.sqlx(
+      `SELECT value, version FROM user_config WHERE key = ?`, PROFILE_CATALOG_CONFIG_KEY,
+    )[0];
 
-      if (!rawRow) return { version: 0, catalog: BUILTIN_PROFILE_CATALOG };
+    if (!rawRow) return { version: 0, catalog: BUILTIN_PROFILE_CATALOG };
 
-      const row: StoredProfileCatalogRow = yield* Effect.try({
-        try: () => v.parse(StoredProfileCatalogRowSchema, rawRow),
-        catch: (error) => new KinuError('io', 'The stored account profile catalog state is malformed.', { cause: error }),
-      });
+    let row: StoredProfileCatalogRow;
 
-      return { version: row.version, catalog: yield* this.parseStoredProfileCatalog(row.value) };
-    });
+    try {
+      row = v.parse(StoredProfileCatalogRowSchema, rawRow);
+    } catch (error) {
+      throw new KinuError('io', 'The stored account profile catalog state is malformed.', { cause: error });
+    }
+
+    return { version: row.version, catalog: this.parseStoredProfileCatalog(row.value) };
   }
 
-  getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* this.requireOwnerSession(caller);
-      const current = yield* this.readProfileCatalogState();
+  async getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
+    await this.requireOwnerSession(caller);
+    const current = this.readProfileCatalogState();
 
-      return this.profileCatalogEnvelope(current.version, current.catalog);
-    }));
+    return this.profileCatalogEnvelope(current.version, current.catalog);
   }
 
   /** Shared workspaces may read the catalog; only an owner session may mutate it. */
-  getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'profile.resolve'));
-      const current = yield* this.readProfileCatalogState();
+  async getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
+    await this.requireTier(caller, 'profile.resolve');
+    const current = this.readProfileCatalogState();
 
-      return this.profileCatalogEnvelope(current.version, current.catalog);
-    }));
+    return this.profileCatalogEnvelope(current.version, current.catalog);
   }
 
   /**
    * CAS write: a version mismatch refuses with current state. Validation precedes the write, and
    * the read-check-write has no await, so each accepted write increments the version by one.
    */
-  putProfileCatalog(caller: UserCaller, catalog: JsonValue, expectedVersion: number): Promise<ProfileCatalogWriteResult> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* this.requireOwnerSession(caller);
+  async putProfileCatalog(caller: UserCaller, catalog: JsonValue, expectedVersion: number): Promise<ProfileCatalogWriteResult> {
+    await this.requireOwnerSession(caller);
 
-      if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
-        return { ok: false, kind: 'malformed', reason: 'expectedVersion must be a non-negative integer.' };
-      }
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+      return { ok: false, kind: 'malformed', reason: 'expectedVersion must be a non-negative integer.' };
+    }
 
-      const validated = yield* Effect.result(Effect.try({ try: () => validateProfileCatalog({ value: catalog }), catch: (cause) => ({ cause }) }));
+    let parsed: ProfileCatalog;
 
-      if (Result.isFailure(validated)) {
-        // The refusal names the offending path; it is all the owner is shown.
-        return { ok: false, kind: 'malformed', reason: renderThrownChain({ cause: authoredRefusal({ doing: 'reading the profile catalog', cause: validated.failure.cause }) }) };
-      }
+    try {
+      parsed = validateProfileCatalog({ value: catalog });
+    } catch (cause) {
+      // The refusal names the offending path; it is all the owner is shown.
+      return { ok: false, kind: 'malformed', reason: renderThrownChain({ cause: authoredRefusal({ doing: 'reading the profile catalog', cause }) }) };
+    }
 
-      const parsed = validated.success;
-      // No await from here to the write: DO input gates make the CAS atomic.
-      const current = yield* this.readProfileCatalogState();
+    // No await from here to the write: DO input gates make the CAS atomic.
+    const current = this.readProfileCatalogState();
 
-      if (current.version !== expectedVersion) {
-        return {
-          ok: false,
-          kind: 'conflict',
-          currentVersion: current.version,
-          currentDigest: profileCatalogDigest(current.catalog),
-        };
-      }
+    if (current.version !== expectedVersion) {
+      return {
+        ok: false,
+        kind: 'conflict',
+        currentVersion: current.version,
+        currentDigest: profileCatalogDigest(current.catalog),
+      };
+    }
 
-      const nextVersion = current.version + 1;
-      this.sqlx(
-        `INSERT INTO user_config (key, value, version) VALUES (?, ?, ?)
+    const nextVersion = current.version + 1;
+    this.sqlx(
+      `INSERT INTO user_config (key, value, version) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, version = excluded.version`,
-        PROFILE_CATALOG_CONFIG_KEY, JSON.stringify(parsed), nextVersion,
-      );
+      PROFILE_CATALOG_CONFIG_KEY, JSON.stringify(parsed), nextVersion,
+    );
 
-      return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
-    }));
+    return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
   }
 
   /**
@@ -4669,60 +4616,57 @@ export class UserDO extends Agent<Env> {
     return tenantDrive(this.env, tenant);
   }
 
-  private drive(): Effect.Effect<MossaicVfs, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const row = this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0];
+  private async drive(): Promise<MossaicVfs> {
+    const row = this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0];
 
-      if (!row) return yield* new KinuError('missing', 'the Drive opens once the account has signed in');
-      const files = this.driveFor(yield* Effect.promise(() => deriveUserId(row.email)));
+    if (!row) throw new KinuError('missing', 'the Drive opens once the account has signed in');
+    const files = this.driveFor(await deriveUserId(row.email));
 
-      if (files === null) return yield* new KinuError('unavailable', SHARED_DRIVE_UNBOUND);
+    if (files === null) throw new KinuError('unavailable', SHARED_DRIVE_UNBOUND);
 
-      return files;
-    });
+    return files;
   }
 
-  private driveOp<Value>(caller: UserCaller, op: (drive: MossaicVfs) => Effect.Effect<Value, KinuError>): Effect.Effect<DriveAnswer<Value>> {
-    return Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'drive'));
+  private async driveOp<Value>(caller: UserCaller, op: (drive: MossaicVfs) => Promise<Value>): Promise<DriveAnswer<Value>> {
+    await this.requireTier(caller, 'drive');
 
-      return yield* Effect.flatMap(this.drive(), op).pipe(
-        Effect.map((value): DriveAnswer<Value> => ({ ok: true, value })),
-        Effect.catchCause((failed) => Effect.succeed<DriveAnswer<Value>>({ ok: false, ...driveFailure({ cause: Cause.squash(failed) }) })),
-      );
-    });
+    try {
+      return { ok: true, value: await op(await this.drive()) };
+    } catch (cause) {
+      return { ok: false, ...driveFailure({ cause }) };
+    }
   }
 
-  drive_list(caller: UserCaller, path: string): Promise<DriveAnswer<DriveListing>> {
-    return settle(this.driveOp(caller, (drive) => Effect.promise(() => listDrive(drive, path))));
+  async drive_list(caller: UserCaller, path: string): Promise<DriveAnswer<DriveListing>> {
+    return this.driveOp(caller, (drive) => listDrive(drive, path));
   }
 
-  drive_mkdir(caller: UserCaller, path: string): Promise<DriveAnswer<void>> {
-    return settle(this.driveOp(caller, (drive) => Effect.promise(() => makeDriveFolder(drive, path))));
+  async drive_mkdir(caller: UserCaller, path: string): Promise<DriveAnswer<void>> {
+    return this.driveOp(caller, (drive) => makeDriveFolder(drive, path));
   }
 
-  drive_rename(caller: UserCaller, from: string, to: string): Promise<DriveAnswer<void>> {
-    return settle(this.driveOp(caller, (drive) => Effect.promise(() => renameDriveEntry(drive, from, to))));
+  async drive_rename(caller: UserCaller, from: string, to: string): Promise<DriveAnswer<void>> {
+    return this.driveOp(caller, (drive) => renameDriveEntry(drive, from, to));
   }
 
-  drive_delete(caller: UserCaller, path: string): Promise<DriveAnswer<void>> {
-    return settle(this.driveOp(caller, (drive) => Effect.promise(() => deleteDriveEntry(drive, path))));
+  async drive_delete(caller: UserCaller, path: string): Promise<DriveAnswer<void>> {
+    return this.driveOp(caller, (drive) => deleteDriveEntry(drive, path));
   }
 
-  drive_markAsSkill(caller: UserCaller, path: string): Promise<DriveAnswer<MarkedSkill>> {
-    return settle(this.driveOp(caller, (drive) => Effect.promise(() => markAsSkill(drive, path))));
+  async drive_markAsSkill(caller: UserCaller, path: string): Promise<DriveAnswer<MarkedSkill>> {
+    return this.driveOp(caller, (drive) => markAsSkill(drive, path));
   }
 
-  drive_addSkill(caller: UserCaller, skillFile: string): Promise<DriveAnswer<MarkedSkill>> {
-    return settle(this.driveOp(caller, (drive) => Effect.gen(function* () {
+  async drive_addSkill(caller: UserCaller, skillFile: string): Promise<DriveAnswer<MarkedSkill>> {
+    return this.driveOp(caller, (drive) => {
       const bytes = new TextEncoder().encode(skillFile);
 
       if (bytes.byteLength > DRIVE_PASTED_SKILL_MAX_BYTES) {
-        return yield* new KinuError('budget', `a pasted SKILL.md is at most ${String(DRIVE_PASTED_SKILL_MAX_BYTES)} bytes`);
+        throw new KinuError('budget', `a pasted SKILL.md is at most ${String(DRIVE_PASTED_SKILL_MAX_BYTES)} bytes`);
       }
 
-      return yield* Effect.promise(() => addSkill(drive, [{ path: SKILL_FOLDER_FILE, bytes }], null));
-    })));
+      return addSkill(drive, [{ path: SKILL_FOLDER_FILE, bytes }], null);
+    });
   }
 
   // Chunked transfers as in files-routes.ts: one transfer id per request, an `offset === 0` chunk
@@ -4730,33 +4674,32 @@ export class UserDO extends Agent<Env> {
   private readonly driveUploads = new Map<string, { readonly target: DriveUploadTarget; readonly upload: ChunkedUpload }>();
   private readonly driveDownloads = new Map<string, { readonly path: string; readonly bytes: Uint8Array }>();
 
-  drive_writeChunk(caller: UserCaller, write: DriveChunkWrite): Promise<DriveAnswer<DriveUploadOutcome>> {
+  async drive_writeChunk(caller: UserCaller, write: DriveChunkWrite): Promise<DriveAnswer<DriveUploadOutcome>> {
     const { transferId, offset } = write;
 
-    return settle(this.driveOp(caller, (drive) => Effect.gen({ self: this }, function* () {
+    return this.driveOp(caller, async (drive) => {
       const target = v.parse(DriveUploadTargetSchema, write.target);
 
-      if (!transferId) return yield* new KinuError('bad_input', 'upload transfer id required');
+      if (!transferId) throw new KinuError('bad_input', 'upload transfer id required');
       let row = this.driveUploads.get(transferId);
 
       if (offset === 0) {
         row = { target, upload: new ChunkedUpload() };
         this.driveUploads.set(transferId, row);
       } else if (!row || JSON.stringify(row.target) !== JSON.stringify(target)) {
-        return yield* new KinuError('bad_input', 'file transfer out of sync: no matching open upload');
+        throw new KinuError('bad_input', 'file transfer out of sync: no matching open upload');
       }
 
       const step = row.upload.chunk(offset, write.chunk, write.final);
 
       if (row.upload.done) this.driveUploads.delete(transferId);
 
-      if (Result.isFailure(step)) return yield* new KinuError('bad_input', step.failure);
-      const assembled = step.success;
+      if ('error' in step) throw new KinuError('bad_input', step.error);
 
-      if (assembled === null) return { ok: true };
+      if (!('assembled' in step)) return { ok: true };
 
-      return yield* Effect.promise(() => receiveDriveUpload(drive, target, assembled));
-    })));
+      return receiveDriveUpload(drive, target, step.assembled);
+    });
   }
 
   async drive_abortUpload(caller: UserCaller, transferId: string): Promise<void> {
@@ -4766,49 +4709,49 @@ export class UserDO extends Agent<Env> {
   }
 
   /** The snapshot is taken here, so later ranges cannot observe a newer write. */
-  drive_startDownload(caller: UserCaller, path: string, transferId: string): Promise<DriveAnswer<{ size: number; name: string }>> {
-    return settle(this.driveOp(caller, (drive) => Effect.gen({ self: this }, function* () {
-      if (!transferId) return yield* new KinuError('bad_input', 'download transfer id required');
+  async drive_startDownload(caller: UserCaller, path: string, transferId: string): Promise<DriveAnswer<{ size: number; name: string }>> {
+    return this.driveOp(caller, async (drive) => {
+      if (!transferId) throw new KinuError('bad_input', 'download transfer id required');
       const clean = normalizeDrivePath(path);
-      const stat = yield* Effect.promise(async () => drive.stat(clean));
+      const stat = await drive.stat(clean);
 
-      if (stat === null) return yield* new KinuError('missing', `no such entry: ${clean}`);
+      if (stat === null) throw new KinuError('missing', `no such entry: ${clean}`);
       const leaf = clean === '/' ? 'drive' : clean.slice(clean.lastIndexOf('/') + 1);
 
       if ((stat.type === 'directory')) {
-        const bytes = yield* Effect.promise(() => packDriveFolder(drive, clean, FILE_TRANSFER_MAX_BYTES));
+        const bytes = await packDriveFolder(drive, clean, FILE_TRANSFER_MAX_BYTES);
         this.driveDownloads.set(transferId, { path: clean, bytes });
 
         return { size: bytes.byteLength, name: `${leaf}.zip` };
       }
 
       if (stat.size > FILE_TRANSFER_MAX_BYTES) {
-        return yield* new KinuError('budget', `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`);
+        throw new KinuError('budget', `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`);
       }
 
-      const raw = yield* Effect.promise(async () => drive.readFile(clean));
+      const raw = await drive.readFile(clean);
       const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw);
       this.driveDownloads.set(transferId, { path: clean, bytes });
 
       return { size: bytes.byteLength, name: leaf };
-    })));
+    });
   }
 
-  drive_readChunk(caller: UserCaller, transferId: string, offset: number, length: number): Promise<DriveAnswer<{ bytes: Uint8Array }>> {
-    return settle(this.driveOp(caller, () => Effect.gen({ self: this }, function* () {
+  async drive_readChunk(caller: UserCaller, transferId: string, offset: number, length: number): Promise<DriveAnswer<{ bytes: Uint8Array }>> {
+    return this.driveOp(caller, async () => {
       const open = this.driveDownloads.get(transferId);
 
-      if (!open) return yield* new KinuError('bad_input', 'file transfer out of sync: no matching open download');
+      if (!open) throw new KinuError('bad_input', 'file transfer out of sync: no matching open download');
 
-      if (offset < 0 || length <= 0 || length > FILE_CHUNK_BYTES) return yield* new KinuError('bad_input', 'chunk range out of bounds');
+      if (offset < 0 || length <= 0 || length > FILE_CHUNK_BYTES) throw new KinuError('bad_input', 'chunk range out of bounds');
 
-      if (offset >= open.bytes.byteLength) return yield* new KinuError('bad_input', 'chunk offset past end of file');
+      if (offset >= open.bytes.byteLength) throw new KinuError('bad_input', 'chunk offset past end of file');
       const bytes = open.bytes.subarray(offset, offset + length);
 
       if (offset + bytes.byteLength >= open.bytes.byteLength) this.driveDownloads.delete(transferId);
 
       return { bytes };
-    })));
+    });
   }
 
   async drive_abortDownload(caller: UserCaller, transferId: string): Promise<void> {
@@ -4842,310 +4785,141 @@ export class UserDO extends Agent<Env> {
    * Delete everything under this account, then the object itself; the step order is the contract.
    * Each step leaves no rows, so a failed sweep resumes on retry; errors propagate to the owner.
    */
-  deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(async () => this.requireTier(caller, 'account'));
+  async deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
+    await this.requireTier(caller, 'account');
 
-      if (!/^[a-f0-9]{32}$/.test(ownerUserId)) return yield* new KinuError('bad_input', 'invalid owner user id');
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
 
-      const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`);
+    const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`);
 
-      for (const { name } of workspaces) {
-        yield* this.tearDownWorkspace(name, ownerUserId);
-      }
+    for (const { name } of workspaces) {
+      await this.tearDownWorkspace(name, ownerUserId);
+    }
 
-      const devices = this.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE revoked_at IS NULL`);
+    const devices = this.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE revoked_at IS NULL`);
 
-      for (const { id } of devices) {
-        yield* Effect.promise(async () => this.revokeDevice(caller, id));
-      }
+    for (const { id } of devices) {
+      await this.revokeDevice(caller, id);
+    }
 
-      const servers = this.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers`);
+    const servers = this.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers`);
 
-      for (const { id } of servers) {
-        yield* Effect.promise(async () => this.userMcp_remove(caller, id));
-      }
+    for (const { id } of servers) {
+      await this.userMcp_remove(caller, id);
+    }
 
-      yield* Effect.promise(async () => this.destroy());
-      // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
-      // again, empty, and answers as the new account.
-      this.initTables();
+    await this.destroy();
+    // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
+    // again, empty, and answers as the new account.
+    this.initTables();
 
-      return { ok: true, workspaces: workspaces.length };
-    }));
+    return { ok: true, workspaces: workspaces.length };
   }
 
   /**
-   * Called only through {@link hydrateUserMcp}, which coalesces concurrent callers. Order matters: remove
-   * orphan SDK rows, re-register rows this plane owns, then let the SDK restore the rest and connect step-2
-   * connections (restore skips CONNECTING ones, `agents/dist/client-zqKcsyFa.js:1541-1549`). Idempotent.
+   * The single hydration path for this user's MCP plane; `user_mcp_servers` is the truth.
+   * Order matters: remove orphan SDK rows, re-register rows this plane owns, then let the SDK
+   * restore the rest and connect step-2 connections (restore skips CONNECTING ones,
+   * `agents/dist/client-zqKcsyFa.js:1541-1549`). Idempotent.
    */
-  private hydrateUserMcpOnce(): Effect.Effect<void> {
-    return Effect.gen({ self: this }, function* () {
-      const mgr = this.mcp;
+  private async hydrateUserMcp(): Promise<void> {
+    if (this._hydratingUserMcp) return this._hydratingUserMcp;
+    const hydration = this.hydrateUserMcpOnce();
+    this._hydratingUserMcp = hydration;
 
-      const rows = this.sqlx<McpHydrationRow>(
-        `SELECT s.id, s.name, s.server_url, s.transport, s.headers, p.preset_id
+    try {
+      await hydration;
+    } finally {
+      if (this._hydratingUserMcp === hydration) this._hydratingUserMcp = null;
+    }
+  }
+
+  /** Called only through {@link hydrateUserMcp}, which coalesces concurrent callers. */
+  private async hydrateUserMcpOnce(): Promise<void> {
+    const mgr = this.mcp;
+
+    const rows = this.sqlx<McpHydrationRow>(
+      `SELECT s.id, s.name, s.server_url, s.transport, s.headers, p.preset_id
          FROM user_mcp_servers s
          LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id`,
+    );
+
+    const configured = new Set(rows.map((row) => row.id));
+    const sdkRows = mgr.listServers();
+
+    for (const stored of sdkRows) {
+      if (configured.has(stored.id)) continue;
+
+      try { await mgr.removeServer(stored.id); }
+      catch (err) {
+        diagnostics.failure('mcp.orphan_server_removal_failed', toKinuError({
+          doing: 'removing an SDK MCP server row that no config row owns',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { serverId: stored.id });
+        throw err;
+      }
+    }
+
+    const registered: string[] = [];
+
+    for (const row of rows) {
+      const live = mgr.mcpConnections[row.id]?.options.transport;
+      const seamLive = live !== undefined && 'fetch' in live && live.fetch !== undefined;
+      // A sealed credential must run on the seam; a credential the SDK stored as data must go,
+      // whether or not our column still holds one.
+      const needsSeam = row.headers !== null && !seamLive;
+
+      const holdsPlaintext = storedMcpOptionsCarryCredential(
+        sdkRows.find((server) => server.id === row.id)?.server_options,
       );
 
-      const configured = new Set(rows.map((row) => row.id));
-      const sdkRows = mgr.listServers();
+      if (!needsSeam && !holdsPlaintext) continue;
+      await this.registerOwnedMcpTransport(row);
+      registered.push(row.id);
+    }
 
-      for (const stored of sdkRows) {
-        if (configured.has(stored.id)) continue;
+    await this.restoreUserMcp(USER_MCP_CLIENT_NAME);
 
-        yield* reportedThenThrown(() => mgr.removeServer(stored.id), (cause) => diagnostics.failure('mcp.orphan_server_removal_failed', toKinuError({
-          doing: 'removing an SDK MCP server row that no config row owns',
-          cause,
-          otherwise: 'unavailable',
-        }), { serverId: stored.id }));
-      }
-
-      const registered: string[] = [];
-
-      for (const row of rows) {
-        const live = mgr.mcpConnections[row.id]?.options.transport;
-        const seamLive = live !== undefined && 'fetch' in live && live.fetch !== undefined;
-        // A sealed credential must run on the seam; a credential the SDK stored as data must go,
-        // whether or not our column still holds one.
-        const needsSeam = row.headers !== null && !seamLive;
-
-        const holdsPlaintext = storedMcpOptionsCarryCredential(
-          sdkRows.find((server) => server.id === row.id)?.server_options,
-        );
-
-        if (!needsSeam && !holdsPlaintext) continue;
-        yield* this.registerOwnedMcpTransport(row);
-        registered.push(row.id);
-      }
-
-      yield* Effect.promise(() => this.restoreUserMcp(USER_MCP_CLIENT_NAME));
-
-      for (const id of registered) yield* Effect.promise(() => mgr.establishConnection(id));
-      this._userMcpHydrated = true;
-    });
+    for (const id of registered) await mgr.establishConnection(id);
+    this._userMcpHydrated = true;
   }
 
   /** Replace the SDK row with a transport this plane owns; tear down any live connection first,
    *  since `createConnection` returns an existing one untouched (`client-zqKcsyFa.js:1719-1720`). */
-  private registerOwnedMcpTransport(row: McpHydrationRow): Effect.Effect<void> {
-    return Effect.gen({ self: this }, function* () {
-      const mgr = this.mcp;
-      const stored = mgr.listServers().find((server) => server.id === row.id);
-      const callbackUrl = stored?.callback_url ?? '';
+  private async registerOwnedMcpTransport(row: McpHydrationRow): Promise<void> {
+    const mgr = this.mcp;
+    const stored = mgr.listServers().find((server) => server.id === row.id);
+    const callbackUrl = stored?.callback_url ?? '';
 
-      if (mgr.mcpConnections[row.id]) {
-        yield* reportedThenThrown(() => mgr.removeServer(row.id), (cause) => diagnostics.failure('mcp.transport_rewrite_teardown_failed', toKinuError({
+    if (mgr.mcpConnections[row.id]) {
+      try { await mgr.removeServer(row.id); }
+      catch (err) {
+        diagnostics.failure('mcp.transport_rewrite_teardown_failed', toKinuError({
           doing: 'closing an MCP connection before rewriting the transport it runs on',
-          cause,
+          cause: err,
           otherwise: 'unavailable',
-        }), { serverId: row.id }));
+        }), { serverId: row.id });
+        throw err;
       }
+    }
 
-      const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> =
-        row.headers === null
-          ? { type: row.transport }
-          : {
-              ...mcpCredentialTransport(row.server_url, () => this.openMcpHeaderMap(row.id)),
-              type: row.transport,
-            };
+    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> =
+      row.headers === null
+        ? { type: row.transport }
+        : {
+            ...mcpCredentialTransport(row.server_url, () => this.openMcpHeaderMap(row.id)),
+            type: row.transport,
+          };
 
-      // `oauth-app` rows use the registered-app provider; the vendor rejects dynamic registration.
-      const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
+    // `oauth-app` rows use the registered-app provider; the vendor rejects dynamic registration.
+    const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
 
-      const appCredentials = preset?.auth === 'oauth-app'
-        ? mcpAppCredentials(this.env, preset)
-        : null;
+    const appCredentials = preset?.auth === 'oauth-app'
+      ? mcpAppCredentials(this.env, preset)
+      : null;
 
-      if (callbackUrl) {
-        const authProvider = appCredentials
-          ? new RegisteredAppOAuthClientProvider({
-              storage: this.ctx.storage,
-              clientName: USER_MCP_CLIENT_NAME,
-              baseRedirectUrl: callbackUrl,
-              clientId: appCredentials.clientId,
-              clientSecret: appCredentials.clientSecret,
-              scope: preset?.scope,
-            })
-          : new DurableObjectOAuthClientProvider(
-              this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
-            );
-
-        authProvider.serverId = row.id;
-
-        if (!appCredentials && stored?.client_id) authProvider.clientId = stored.client_id;
-        transport.authProvider = authProvider;
-      }
-
-      const options: Parameters<MCPClientManager['registerServer']>[1] = {
-        url: row.server_url, name: row.name, callbackUrl, transport,
-      };
-
-      // The env's client id wins over a stale stored id, which would key tokens under an unused client.
-      options.clientId = appCredentials?.clientId ?? stored?.client_id ?? undefined;
-
-      if (stored?.auth_url) options.authUrl = stored.auth_url;
-      yield* Effect.promise(() => mgr.registerServer(row.id, options));
-    });
-  }
-  /** Read per request so rotated headers apply without reconnect and no decrypted copy is held. */
-  private openMcpHeaderMap(serverId: string): Effect.Effect<Record<string, string> | null, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const row = this.sqlx<{ headers: string | null }>(
-        `SELECT headers FROM user_mcp_servers WHERE id = ?`, serverId,
-      )[0];
-
-      if (!row) return null;
-
-      return parseMcpHeaders(yield* this.openMcpHeaders(serverId, row.headers));
-    });
-  }
-
-  /** Idempotent, fire-and-forget boot warmup called by routes on first hit per process.
-   *  Runs even with no configured servers so orphan SDK rows are still reconciled. */
-  userMcp_warmConnections(caller: UserCaller): Promise<{ servers: number }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'mcp.manage'));
-      const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
-      const servers = rows?.n ?? 0;
-
-      yield* logged('mcp.connection_warmup_failed', { doing: 'restoring the user MCP connections on warmup', otherwise: 'unavailable' }, Effect.gen({ self: this }, function* () {
-        yield* this.hydrateUserMcp();
-        yield* Effect.promise(() => this.mcp.waitForConnections());
-        yield* Effect.promise(() => this.readMcpToolLists());
-      }), { servers });
-
-      return { servers };
-    }));
-  }
-
-  userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'mcp.manage'));
-
-      const rows = this.sqlx<{
-        id: string; name: string; server_url: string; transport: McpTransport;
-        allowed_tools: string | null; preset_id: McpPresetId | null;
-      }>(
-        `SELECT s.id, s.name, s.server_url, s.transport, s.allowed_tools, p.preset_id
-         FROM user_mcp_servers s
-         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
-        ORDER BY s.name`,
-      );
-
-      // Hydrate unconditionally: an orphaned SDK row can outlive the last config row. Idempotent.
-      // A failure here is a storage failure, not per-server; it must not report every server disconnected.
-      yield* this.hydrateUserMcp();
-      yield* Effect.promise(() => this.readMcpToolLists());
-      const connections = this.mcp.mcpConnections;
-
-      return rows.map((r): McpServerSummary => {
-        const conn = connections[r.id];
-        const status = mapConnectionStatus(conn?.connectionState);
-        const allowed = parseAllowedTools(r.allowed_tools);
-        const listing = conn?.connectionState === 'connected' ? this._mcpToolLists.get(r.id) : undefined;
-        const lenient = listing !== undefined && 'listed' in listing ? listing.listed : null;
-
-        const tools = lenient === null
-          ? conn?.tools ?? []
-          : lenient.tools.filter((tool) => 'admitted' in describeMcpTool({ id: r.id, name: r.name }, tool));
-
-        let problems: string[] = [];
-
-        if (listing !== undefined) {
-          problems = 'failure' in listing
-            ? [listing.failure]
-            : mcpListingRefusals({ id: r.id, name: r.name }, listing.listed).map((refusal) => refusal.reason);
-        }
-
-        const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
-
-        // authUrl is exposed only while pending, so the UI knows whether to render the authorize link.
-        const authUrl = status === 'authenticating'
-          ? (conn?.options?.transport?.authProvider?.authUrl ?? null)
-          : null;
-
-        return {
-          id: r.id,
-          name: r.name,
-          serverUrl: r.server_url,
-          transport: r.transport,
-          status,
-          error: conn?.connectionError ?? (problems.length === 0 ? null : problems.join('; ')),
-          toolsCount,
-          presetId: r.preset_id,
-          authUrl,
-          allowedTools: allowed,
-        };
-      });
-    }));
-  }
-  /** Which presets can offer a sign-in button (OAuth app configured) vs token fallback or nothing. */
-  async userMcp_presets(caller: UserCaller): Promise<McpPresetAvailability[]> {
-    await this.requireTier(caller, 'mcp.manage');
-
-    return listMcpPresetAvailability(this.env);
-  }
-
-  /** `publicOrigin` is the user-facing origin that determines the OAuth callback URL; the routes
-   *  layer derives it from the request's `Origin`/`Host`, since UserDO doesn't see the request. */
-  userMcp_add(
-    caller: UserCaller,
-    input: JsonValue,
-    publicOrigin: string,
-  ): Promise<{ id: string; authUrl: string | null }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'mcp.manage'));
-      const cfg = validateMcpServerInput(input);
-
-      if (!/^https?:\/\//.test(publicOrigin)) {
-        return yield* new KinuError('bad_input', 'publicOrigin must be a full https?:// origin.');
-      }
-
-      const preset = cfg.presetId === undefined ? undefined : mcpPresetById(cfg.presetId);
-
-      // A preset with no configured OAuth app and no token would dead-end in SDK registration, so the
-      // add is refused before the name claim; a refused add must leave no row behind.
-      if (preset?.auth === 'oauth-app' && !mcpAppCredentials(this.env, preset) && !cfg.headers) {
-        const names = mcpAppEnvNames(preset);
-
-        return yield* new KinuError('bad_input',
-          `'${preset.title}' needs either the deployment's ${names?.clientIdEnv ?? 'app'}/`
-          + `${names?.clientSecretEnv ?? 'secret'} OAuth app or a token in \`headers\`.`,
-        );
-      }
-
-      const appCredentials = preset?.auth === 'oauth-app'
-        ? mcpAppCredentials(this.env, preset)
-        : null;
-
-      const id = nanoid(8);
-      const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
-      const allowedJson = cfg.allowedTools ? JSON.stringify(cfg.allowedTools) : null;
-      // Seal before the transaction: sealing awaits, and every written value must be in hand first.
-      const sealedHeaders = yield* this.sealMcpHeaders(id, headersJson);
-      yield* this.claimMcpServerName(cfg.name, id, () => {
-        this.ctx.storage.sql.exec(
-          `INSERT INTO user_mcp_servers
-           (id, name, server_url, transport, headers, allowed_tools)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-          id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
-          sealedHeaders, allowedJson,
-        );
-
-        // The preset tag lives in its own table; `user_mcp_servers` keeps its shipped shape.
-        if (cfg.presetId !== undefined) {
-          this.ctx.storage.sql.exec(
-            `INSERT INTO user_mcp_server_presets (server_id, preset_id) VALUES (?, ?)`,
-            id, cfg.presetId,
-          );
-        }
-      });
-
-      const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
-
+    if (callbackUrl) {
       const authProvider = appCredentials
         ? new RegisteredAppOAuthClientProvider({
             storage: this.ctx.storage,
@@ -5159,145 +4933,336 @@ export class UserDO extends Agent<Env> {
             this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
           );
 
-      authProvider.serverId = id;
+      authProvider.serverId = row.id;
 
-      // The credential is a closure, never data the SDK can persist; see `mcpCredentialTransport`.
-      const credential = cfg.headers
-        ? mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id))
-        : {};
+      if (!appCredentials && stored?.client_id) authProvider.clientId = stored.client_id;
+      transport.authProvider = authProvider;
+    }
 
-      let authUrl: string | null = null;
+    const options: Parameters<MCPClientManager['registerServer']>[1] = {
+      url: row.server_url, name: row.name, callbackUrl, transport,
+    };
 
-      yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-        const mgr = this.mcp;
-        yield* Effect.promise(() => mgr.registerServer(id, {
-          url: cfg.serverUrl,
-          name: cfg.name,
-          callbackUrl,
-          // Persisted on the SDK row so a restore after eviction keys token storage under the same client.
-          clientId: appCredentials?.clientId,
-          transport: {
-            ...credential,
-            authProvider,
-            type: cfg.transport ?? 'auto',
-          },
-        }));
-        const result = yield* Effect.promise(() => mgr.connectToServer(id));
+    // The env's client id wins over a stale stored id, which would key tokens under an unused client.
+    options.clientId = appCredentials?.clientId ?? stored?.client_id ?? undefined;
 
-        if (result.state === 'failed') {
-          return yield* new KinuError('unavailable', result.error ?? 'connection failed');
-        }
+    if (stored?.auth_url) options.authUrl = stored.auth_url;
+    await mgr.registerServer(row.id, options);
+  }
+  /** Read per request so rotated headers apply without reconnect and no decrypted copy is held. */
+  private async openMcpHeaderMap(serverId: string): Promise<Record<string, string> | null> {
+    const row = this.sqlx<{ headers: string | null }>(
+      `SELECT headers FROM user_mcp_servers WHERE id = ?`, serverId,
+    )[0];
 
-        if (result.state === 'authenticating') {
-          authUrl = result.authUrl ?? null;
-        } else {
-          // Awaited, not detached: waitUntil is a no-op in a DO (`do.wait_until.no_op`) and in-flight
-          // promises are cancelled on reset (`do.background_task.cancelled_on_reset`).
-          yield* Effect.promise(() => mgr.discoverIfConnected(id));
-          yield* Effect.promise(() => this.readMcpToolList(id));
-        }
-      }), (failed) => Effect.gen({ self: this }, function* () {
-        // Roll back both our row and the SDK's storage entry so the user can retry cleanly.
-        this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
-        yield* Effect.promise(() => this.mcp.removeServer(id));
+    if (!row) return null;
 
-        return yield* new KinuError('unavailable', 'Could not connect to the MCP server. Check its URL and credentials, then add it again.', { cause: Cause.squash(failed) });
-      }));
-
-      return { id, authUrl };
-    }));
+    return parseMcpHeaders(await this.openMcpHeaders(serverId, row.headers));
   }
 
-  userMcp_remove(caller: UserCaller, id: string): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'mcp.manage'));
+  /** Idempotent, fire-and-forget boot warmup called by routes on first hit per process.
+   *  Runs even with no configured servers so orphan SDK rows are still reconciled. */
+  async userMcp_warmConnections(caller: UserCaller): Promise<{ servers: number }> {
+    await this.requireTier(caller, 'mcp.manage');
+    const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
+    const servers = rows?.n ?? 0;
 
-      if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) return yield* new KinuError('bad_input', 'Invalid server id.');
+    try {
+      await this.hydrateUserMcp();
+      await this.mcp.waitForConnections();
+      await this.readMcpToolLists();
+    } catch (err) {
+      diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
+        doing: 'restoring the user MCP connections on warmup',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { servers });
+    }
 
-      yield* logged('mcp.live_server_removal_failed', { doing: 'removing a server from the live MCP manager', otherwise: 'unavailable' }, () => this.mcp.removeServer(id), { serverId: id });
+    return { servers };
+  }
 
+  async userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {
+    await this.requireTier(caller, 'mcp.manage');
+
+    const rows = this.sqlx<{
+      id: string; name: string; server_url: string; transport: McpTransport;
+      allowed_tools: string | null; preset_id: McpPresetId | null;
+    }>(
+      `SELECT s.id, s.name, s.server_url, s.transport, s.allowed_tools, p.preset_id
+         FROM user_mcp_servers s
+         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
+        ORDER BY s.name`,
+    );
+
+    // Hydrate unconditionally: an orphaned SDK row can outlive the last config row. Idempotent.
+    // A failure here is a storage failure, not per-server; it must not report every server disconnected.
+    await this.hydrateUserMcp();
+    await this.readMcpToolLists();
+    const connections = this.mcp.mcpConnections;
+
+    return rows.map((r): McpServerSummary => {
+      const conn = connections[r.id];
+      const status = mapConnectionStatus(conn?.connectionState);
+      const allowed = parseAllowedTools(r.allowed_tools);
+      const listing = conn?.connectionState === 'connected' ? this._mcpToolLists.get(r.id) : undefined;
+      const lenient = listing !== undefined && 'listed' in listing ? listing.listed : null;
+
+      const tools = lenient === null
+        ? conn?.tools ?? []
+        : lenient.tools.filter((tool) => 'admitted' in describeMcpTool({ id: r.id, name: r.name }, tool));
+
+      let problems: string[] = [];
+
+      if (listing !== undefined) {
+        problems = 'failure' in listing
+          ? [listing.failure]
+          : mcpListingRefusals({ id: r.id, name: r.name }, listing.listed).map((refusal) => refusal.reason);
+      }
+
+      const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
+
+      // authUrl is exposed only while pending, so the UI knows whether to render the authorize link.
+      const authUrl = status === 'authenticating'
+        ? (conn?.options?.transport?.authProvider?.authUrl ?? null)
+        : null;
+
+      return {
+        id: r.id,
+        name: r.name,
+        serverUrl: r.server_url,
+        transport: r.transport,
+        status,
+        error: conn?.connectionError ?? (problems.length === 0 ? null : problems.join('; ')),
+        toolsCount,
+        presetId: r.preset_id,
+        authUrl,
+        allowedTools: allowed,
+      };
+    });
+  }
+  /** Which presets can offer a sign-in button (OAuth app configured) vs token fallback or nothing. */
+  async userMcp_presets(caller: UserCaller): Promise<McpPresetAvailability[]> {
+    await this.requireTier(caller, 'mcp.manage');
+
+    return listMcpPresetAvailability(this.env);
+  }
+
+  /** `publicOrigin` is the user-facing origin that determines the OAuth callback URL; the routes
+   *  layer derives it from the request's `Origin`/`Host`, since UserDO doesn't see the request. */
+  async userMcp_add(
+    caller: UserCaller,
+    input: JsonValue,
+    publicOrigin: string,
+  ): Promise<{ id: string; authUrl: string | null }> {
+    await this.requireTier(caller, 'mcp.manage');
+    const cfg = validateMcpServerInput(input);
+
+    if (!/^https?:\/\//.test(publicOrigin)) {
+      throw new KinuError('bad_input', 'publicOrigin must be a full https?:// origin.');
+    }
+
+    const preset = cfg.presetId === undefined ? undefined : mcpPresetById(cfg.presetId);
+
+    // A preset with no configured OAuth app and no token would dead-end in SDK registration, so the
+    // add is refused before the name claim; a refused add must leave no row behind.
+    if (preset?.auth === 'oauth-app' && !mcpAppCredentials(this.env, preset) && !cfg.headers) {
+      const names = mcpAppEnvNames(preset);
+
+      throw new KinuError('bad_input', 
+        `'${preset.title}' needs either the deployment's ${names?.clientIdEnv ?? 'app'}/`
+        + `${names?.clientSecretEnv ?? 'secret'} OAuth app or a token in \`headers\`.`,
+      );
+    }
+
+    const appCredentials = preset?.auth === 'oauth-app'
+      ? mcpAppCredentials(this.env, preset)
+      : null;
+
+    const id = nanoid(8);
+    const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
+    const allowedJson = cfg.allowedTools ? JSON.stringify(cfg.allowedTools) : null;
+    // Seal before the transaction: sealing awaits, and every written value must be in hand first.
+    const sealedHeaders = await this.sealMcpHeaders(id, headersJson);
+    this.claimMcpServerName(cfg.name, id, () => {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO user_mcp_servers
+           (id, name, server_url, transport, headers, allowed_tools)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
+        sealedHeaders, allowedJson,
+      );
+
+      // The preset tag lives in its own table; `user_mcp_servers` keeps its shipped shape.
+      if (cfg.presetId !== undefined) {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO user_mcp_server_presets (server_id, preset_id) VALUES (?, ?)`,
+          id, cfg.presetId,
+        );
+      }
+    });
+
+    const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
+
+    const authProvider = appCredentials
+      ? new RegisteredAppOAuthClientProvider({
+          storage: this.ctx.storage,
+          clientName: USER_MCP_CLIENT_NAME,
+          baseRedirectUrl: callbackUrl,
+          clientId: appCredentials.clientId,
+          clientSecret: appCredentials.clientSecret,
+          scope: preset?.scope,
+        })
+      : new DurableObjectOAuthClientProvider(
+          this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
+        );
+
+    authProvider.serverId = id;
+
+    // The credential is a closure, never data the SDK can persist; see `mcpCredentialTransport`.
+    const credential = cfg.headers
+      ? mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id))
+      : {};
+
+    let authUrl: string | null = null;
+
+    try {
+      const mgr = this.mcp;
+      await mgr.registerServer(id, {
+        url: cfg.serverUrl,
+        name: cfg.name,
+        callbackUrl,
+        // Persisted on the SDK row so a restore after eviction keys token storage under the same client.
+        clientId: appCredentials?.clientId,
+        transport: {
+          ...credential,
+          authProvider,
+          type: cfg.transport ?? 'auto',
+        },
+      });
+      const result = await mgr.connectToServer(id);
+
+      if (result.state === 'failed') {
+        throw new KinuError('unavailable', result.error ?? 'connection failed');
+      }
+
+      if (result.state === 'authenticating') {
+        authUrl = result.authUrl ?? null;
+      } else {
+        // Awaited, not detached: waitUntil is a no-op in a DO (`do.wait_until.no_op`) and in-flight
+        // promises are cancelled on reset (`do.background_task.cancelled_on_reset`).
+        await mgr.discoverIfConnected(id);
+        await this.readMcpToolList(id);
+      }
+    } catch (err) {
+      // Roll back both our row and the SDK's storage entry so the user can retry cleanly.
       this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
-      this._mcpToolLists.delete(id);
-    }));
+      await this.mcp.removeServer(id);
+      throw new KinuError('unavailable', 'Could not connect to the MCP server. Check its URL and credentials, then add it again.', { cause: err });
+    }
+
+    return { id, authUrl };
+  }
+
+  async userMcp_remove(caller: UserCaller, id: string): Promise<void> {
+    await this.requireTier(caller, 'mcp.manage');
+
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
+
+    try { await this.mcp.removeServer(id); }
+    catch (err) {
+      diagnostics.failure('mcp.live_server_removal_failed', toKinuError({
+        doing: 'removing a server from the live MCP manager',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { serverId: id });
+    }
+
+    this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
+    this._mcpToolLists.delete(id);
   }
 
   /** Patch-update editable fields; nothing reconnects. Rotated `headers` apply on the next request
    *  via `mcpCredentialTransport`; `serverUrl`/`transport` changes require remove + re-add. */
-  userMcp_update(caller: UserCaller, id: string, patch: JsonValue): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'mcp.manage'));
+  async userMcp_update(caller: UserCaller, id: string, patch: JsonValue): Promise<void> {
+    await this.requireTier(caller, 'mcp.manage');
 
-      if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) return yield* new KinuError('bad_input', 'Invalid server id.');
-      const parsedPatch = v.safeParse(JsonObjectSchema, patch);
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
+    const parsedPatch = v.safeParse(JsonObjectSchema, patch);
 
-      if (!parsedPatch.success) return yield* new KinuError('bad_input', 'patch must be a JSON object.');
-      const p = parsedPatch.output;
-      const sets: string[] = [];
-      const args: SqlStorageValue[] = [];
-      // Same name rule as add: both claim from the same canonical namespace.
-      const renamed = p.name === undefined ? null : validateMcpServerName(p.name);
+    if (!parsedPatch.success) throw new KinuError('bad_input', 'patch must be a JSON object.');
+    const p = parsedPatch.output;
+    const sets: string[] = [];
+    const args: SqlStorageValue[] = [];
+    // Same name rule as add: both claim from the same canonical namespace.
+    const renamed = p.name === undefined ? null : validateMcpServerName(p.name);
 
-      if (renamed !== null) { sets.push('name = ?'); args.push(renamed); }
+    if (renamed !== null) { sets.push('name = ?'); args.push(renamed); }
 
-      if (p.allowedTools !== undefined) {
-        const allowedTools = v.safeParse(NullableStringArraySchema, p.allowedTools);
+    if (p.allowedTools !== undefined) {
+      const allowedTools = v.safeParse(NullableStringArraySchema, p.allowedTools);
 
-        if (!allowedTools.success) return yield* new KinuError('bad_input', 'allowedTools must be string[] or null.');
+      if (!allowedTools.success) throw new KinuError('bad_input', 'allowedTools must be string[] or null.');
 
-        if (allowedTools.output === null) {
-          sets.push('allowed_tools = ?'); args.push(null);
-        } else {
-          sets.push('allowed_tools = ?'); args.push(JSON.stringify(allowedTools.output));
-        }
+      if (allowedTools.output === null) {
+        sets.push('allowed_tools = ?'); args.push(null);
+      } else {
+        sets.push('allowed_tools = ?'); args.push(JSON.stringify(allowedTools.output));
       }
+    }
 
-      if (p.headers !== undefined) {
-        const headers = v.safeParse(NullableStringRecordSchema, p.headers);
+    if (p.headers !== undefined) {
+      const headers = v.safeParse(NullableStringRecordSchema, p.headers);
 
-        if (!headers.success) return yield* new KinuError('bad_input', 'headers must be Record<string,string> or null.');
+      if (!headers.success) throw new KinuError('bad_input', 'headers must be Record<string,string> or null.');
 
-        if (headers.output === null) {
-          sets.push('headers = ?'); args.push(null);
-        } else {
-          const sealed = yield* this.sealMcpHeaders(id, JSON.stringify(headers.output));
-          sets.push('headers = ?'); args.push(sealed);
-        }
+      if (headers.output === null) {
+        sets.push('headers = ?'); args.push(null);
+      } else {
+        sets.push('headers = ?'); args.push(await this.sealMcpHeaders(id, JSON.stringify(headers.output)));
       }
+    }
 
-      // Everything above is validated and sealed; nothing below may await.
-      if (sets.length === 0) return;
-      args.push(id);
+    // Everything above is validated and sealed; nothing below may await.
+    if (sets.length === 0) return;
+    args.push(id);
 
-      const write = (): void => {
-        this.ctx.storage.sql.exec(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
-      };
+    const write = (): void => {
+      this.ctx.storage.sql.exec(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
+    };
 
-      if (renamed === null) write();
-      else yield* this.claimMcpServerName(renamed, id, write);
+    if (renamed === null) write();
+    else this.claimMcpServerName(renamed, id, write);
 
-      if (p.headers !== undefined) {
-        yield* logged('mcp.header_rotation_hydration_failed', { doing: 'hydrating an MCP server after a header change', otherwise: 'unavailable' }, this.hydrateUserMcp(), { serverId: id });
+    if (p.headers !== undefined) {
+      try { await this.hydrateUserMcp(); }
+      catch (err) {
+        diagnostics.failure('mcp.header_rotation_hydration_failed', toKinuError({
+          doing: 'hydrating an MCP server after a header change',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { serverId: id });
       }
-    }));
+    }
   }
 
   /** Claim `name` for `serverId` and run `write` atomically; the transaction is the check and holds
    *  without the UNIQUE index (see `schema.ts`). `write` must not await. */
-  private claimMcpServerName(name: string, serverId: string, write: () => void): Effect.Effect<void, KinuError> {
-    return Effect.try({
-      try: () => this.ctx.storage.transactionSync(() => {
-        return settleSync(Effect.gen({ self: this }, function* () {
-          const taken = this.ctx.storage.sql.exec(
-            `SELECT 1 AS held FROM user_mcp_servers WHERE lower(name) = lower(?) AND id <> ? LIMIT 1`,
-            name, serverId,
-          ).toArray().length > 0;
+  private claimMcpServerName(name: string, serverId: string, write: () => void): void {
 
-          if (taken) return yield* new KinuError('bad_input', mcpNameTakenMessage(name));
-          write();
-        }));
-      }),
-      catch: (cause) => ({ cause }),
-    }).pipe(Effect.catch((failed) => mcpNameCollision({ cause: failed.cause, name })));
+    try {
+      this.ctx.storage.transactionSync(() => {
+        const taken = this.ctx.storage.sql.exec(
+          `SELECT 1 AS held FROM user_mcp_servers WHERE lower(name) = lower(?) AND id <> ? LIMIT 1`,
+          name, serverId,
+        ).toArray().length > 0;
+
+        if (taken) throw new KinuError('bad_input', mcpNameTakenMessage(name));
+        write();
+      });
+    } catch (err) {
+      rethrowMcpNameCollision({ cause: err, name });
+    }
   }
 
 
@@ -5412,103 +5377,104 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Called over RPC by the orchestrator's per-tool closure; the result must be JSON-serializable. */
-  userMcp_callTool(
+  async userMcp_callTool(
     caller: UserCaller,
     serverId: string,
     name: string,
     args: JsonObject,
   ): Promise<string> {
-    return settle(Effect.gen({ self: this }, function* () {
     // Caller identity comes from the capability token, not an argument, so no agent name can be spoofed.
-      yield* Effect.promise(() => this.requireTier(caller, 'mcp.tools'));
-      const manager = this.mcp;
+    await this.requireTier(caller, 'mcp.tools');
+    const manager = this.mcp;
 
-      if (!this._userMcpHydrated) {
-        yield* Effect.catchCause(this.hydrateUserMcp(), (failed) => Effect.fail(
-          new KinuError('unavailable', 'The MCP server is not connected yet; try again.', { cause: Cause.squash(failed) }),
-        ));
-      }
+    if (!this._userMcpHydrated) {
+      try { await this.hydrateUserMcp(); }
+      catch (err) { throw new KinuError('unavailable', 'The MCP server is not connected yet; try again.', { cause: err }); }
+    }
 
-      // Check server membership in SQL so a stale orchestrator closure can't dispatch to a deleted server.
-      const row = this.sqlx<{ allowed_tools: string | null }>(
-        `SELECT allowed_tools FROM user_mcp_servers WHERE id = ?`, serverId,
-      )[0];
+    // Check server membership in SQL so a stale orchestrator closure can't dispatch to a deleted server.
+    const row = this.sqlx<{ allowed_tools: string | null }>(
+      `SELECT allowed_tools FROM user_mcp_servers WHERE id = ?`, serverId,
+    )[0];
 
-      if (!row) return yield* new KinuError('missing', `Unknown MCP server: ${serverId}`);
-      const allowed = parseAllowedTools(row.allowed_tools);
+    if (!row) throw new KinuError('missing', `Unknown MCP server: ${serverId}`);
+    const allowed = parseAllowedTools(row.allowed_tools);
 
-      if (allowed && !allowed.includes(name)) {
-        return yield* new KinuError('denied', `Tool '${name}' is not in the allowed_tools list for this server.`);
-      }
+    if (allowed && !allowed.includes(name)) {
+      throw new KinuError('denied', `Tool '${name}' is not in the allowed_tools list for this server.`);
+    }
 
-      const parsedParams = v.safeParse(JsonObjectSchema, args);
-      const params = parsedParams.success ? parsedParams.output : {};
-      // Clients send untouched optional fields as ""; drop only keys the tool's inputSchema marks optional,
-      // never required or undeclared keys (KINU-052).
-      const listing = this._mcpToolLists.get(serverId);
-      const listed = listing !== undefined && 'listed' in listing ? listing.listed.tools : [];
-      const tool = [...(this.mcp.mcpConnections[serverId]?.tools ?? []), ...listed].find((t) => t.name === name);
-      const parsedSchema = v.safeParse(JsonObjectSchema, tool?.inputSchema);
+    const parsedParams = v.safeParse(JsonObjectSchema, args);
+    const params = parsedParams.success ? parsedParams.output : {};
+    // Clients send untouched optional fields as ""; drop only keys the tool's inputSchema marks optional,
+    // never required or undeclared keys (KINU-052).
+    const listing = this._mcpToolLists.get(serverId);
+    const listed = listing !== undefined && 'listed' in listing ? listing.listed.tools : [];
+    const tool = [...(this.mcp.mcpConnections[serverId]?.tools ?? []), ...listed].find((t) => t.name === name);
+    const parsedSchema = v.safeParse(JsonObjectSchema, tool?.inputSchema);
 
-      const callArgs = omitEmptyOptionalArgs(
-        params,
-        parsedSchema.success ? parsedSchema.output : undefined,
-      );
+    const callArgs = omitEmptyOptionalArgs(
+      params,
+      parsedSchema.success ? parsedSchema.output : undefined,
+    );
 
-      return yield* Effect.tryPromise({
-        try: async () => JSON.stringify(decodeJsonValue({
-          value: await callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs })),
-        })),
-        catch: (cause) => ({ cause }),
-      }).pipe(Effect.catch((failed) => Effect.andThen(this.convergeMcpAuthState({ serverId, cause: failed.cause }), Effect.die(failed.cause))));
-    }));
+    try {
+      const result = await callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }));
+
+      return JSON.stringify(decodeJsonValue({ value: result }));
+    } catch (err) {
+      await this.convergeMcpAuthState({ serverId, cause: err });
+      throw err;
+    }
   }
 
   /**
    * A mid-session auth failure leaves the connection `ready`; `discoverIfConnected` re-probes it so it
    * moves to authenticating with a reconnect URL. Which failures qualify is `isMcpTransportUnauthorized`'s.
    */
-  private convergeMcpAuthState(input: { serverId: string; cause: unknown }): Effect.Effect<void> {
-    if (!isMcpTransportUnauthorized(input)) return Effect.void;
+  private async convergeMcpAuthState(input: { serverId: string; cause: unknown }): Promise<void> {
+    if (!isMcpTransportUnauthorized(input)) return;
     const { serverId } = input;
 
-    return logged('mcp.auth_state_convergence_failed', { doing: 'reprobing an MCP connection that failed to authorize', otherwise: 'unavailable' }, async () => { await this.mcp.discoverIfConnected(serverId); }, { serverId });
+    try { await this.mcp.discoverIfConnected(serverId); }
+    catch (err) {
+      diagnostics.failure('mcp.auth_state_convergence_failed', toKinuError({
+        doing: 'reprobing an MCP connection that failed to authorize',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { serverId });
+    }
   }
 
-  userMcp_handleOAuthCallback(caller: UserCaller, url: string): Promise<{ ok: boolean; serverId: string | null; error: string | null }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* Effect.promise(() => this.requireTier(caller, 'mcp.manage'));
+  async userMcp_handleOAuthCallback(caller: UserCaller, url: string): Promise<{ ok: boolean; serverId: string | null; error: string | null }> {
+    await this.requireTier(caller, 'mcp.manage');
 
-      return yield* Effect.gen({ self: this }, function* () {
-        const req = new Request(url);
-        const result = yield* Effect.promise(() => this.mcp.handleCallbackRequest(req));
+    try {
+      const req = new Request(url);
+      const result = await this.mcp.handleCallbackRequest(req);
 
-        if (result.authSuccess) {
-          // Awaited apart: tokens are already saved, so a connect failure is not an auth failure.
-          // A DO cannot retain an unawaited promise (`do.wait_until.no_op`).
-          const connected = yield* attempt({ doing: 'establishing an authorized MCP connection', otherwise: 'unavailable' }, () => this.mcp.establishConnection(result.serverId)).pipe(
-            Effect.as(true),
-            Effect.catch((failure) => Effect.sync(() => {
-              diagnostics.failure('mcp.connect_failed', failure);
+      if (result.authSuccess) {
+        // Awaited in its own try: tokens are already saved, so a connect failure is not an auth failure.
+        // A DO cannot retain an unawaited promise (`do.wait_until.no_op`).
+        try { await this.mcp.establishConnection(result.serverId); }
+        catch (cause) {
+          diagnostics.failure('mcp.connect_failed', toKinuError({ doing: 'establishing an authorized MCP connection', cause, otherwise: 'unavailable' }));
 
-              return false;
-            })),
-          );
-
-          if (!connected) return { ok: true, serverId: result.serverId, error: 'Signed in, but the MCP server did not accept the connection yet.' };
-          yield* Effect.promise(() => this.readMcpToolList(result.serverId));
-
-          return { ok: true, serverId: result.serverId, error: null };
+          return { ok: true, serverId: result.serverId, error: 'Signed in, but the MCP server did not accept the connection yet.' };
         }
 
-        return { ok: false, serverId: result.serverId ?? null, error: result.authError };
-      }).pipe(Effect.catchCause((failed) => Effect.sync(() => {
-        const error = toKinuError({ doing: 'completing an MCP sign-in', cause: Cause.squash(failed), otherwise: 'unavailable' });
-        diagnostics.failure('mcp.oauth_callback_failed', error);
+        await this.readMcpToolList(result.serverId);
 
-        return { ok: false, serverId: null, error: renderThrownChain({ cause: error }) };
-      })));
-    }));
+        return { ok: true, serverId: result.serverId, error: null };
+      }
+
+      return { ok: false, serverId: result.serverId ?? null, error: result.authError };
+    } catch (cause) {
+      const error = toKinuError({ doing: 'completing an MCP sign-in', cause, otherwise: 'unavailable' });
+      diagnostics.failure('mcp.oauth_callback_failed', error);
+
+      return { ok: false, serverId: null, error: renderThrownChain({ cause: error }) };
+    }
   }
 
   async listConnectedProviders(caller: UserCaller): Promise<ConnectedProvider[]> {

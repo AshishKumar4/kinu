@@ -16,7 +16,7 @@ import { ownerSoulDb, SOUL_PATH, UNVERIFIED_SOUL_PATH } from '../identity/soul';
 import { parseActorKey } from '../identity/actor-key';
 import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
 import { diagnostics, toKinuError } from '../obs/index';
-import { NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
+import { SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
 export const MAIN_AGENT = 'main';
@@ -203,27 +203,22 @@ export function provisionAgentHome(root: HomeRootVfs, agentName: string, identit
 }
 
 export type RootMoveVfs = Pick<CredentialedVfs,
-  'exists' | 'isDirectory' | 'isSymlink' | 'readlink' | 'readdir' | 'rename' | 'removeRecursive' | 'symlink' | 'unlink'
+  'exists' | 'isDirectory' | 'isSymlink' | 'readlink' | 'readdir' | 'rename' | 'removeRecursive' | 'unlink'
   | 'stat' | 'chown' | 'chmod'>;
 
-const NIMBUS_HOME_TARGET = vfsBasename(WORKSPACE_ROOT);
+/** Nimbus before 0.15 seeded it, and Kinu linked it to {@link WORKSPACE_ROOT}; its HOME is now the only home. */
+const LEGACY_HOME = '/home/user';
 
 export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
-  const home = NIMBUS_WORKSPACE_ROOT;
-
-  if (!kernel.isSymlink(home) || kernel.readlink(home) !== NIMBUS_HOME_TARGET) {
-    if (kernel.isDirectory(home)) {
-      if (kernel.exists(WORKSPACE_ROOT)) {
-        moveMissing(kernel, home, WORKSPACE_ROOT);
-        kernel.removeRecursive(home);
-      } else {
-        kernel.rename(normalizeVfsPath(home), normalizeVfsPath(WORKSPACE_ROOT));
-      }
-    } else if (kernel.exists(home)) {
-      kernel.unlink(home);
+  if (kernel.isSymlink(LEGACY_HOME)) {
+    if ([vfsBasename(WORKSPACE_ROOT), WORKSPACE_ROOT].includes(kernel.readlink(LEGACY_HOME))) kernel.unlink(LEGACY_HOME);
+  } else if (kernel.isDirectory(LEGACY_HOME)) {
+    if (kernel.exists(WORKSPACE_ROOT)) {
+      moveMissing(kernel, LEGACY_HOME, WORKSPACE_ROOT);
+      kernel.removeRecursive(LEGACY_HOME);
+    } else {
+      kernel.rename(normalizeVfsPath(LEGACY_HOME), normalizeVfsPath(WORKSPACE_ROOT));
     }
-
-    kernel.symlink(NIMBUS_HOME_TARGET, home);
   }
 
   const homes = kernel.stat('/home');

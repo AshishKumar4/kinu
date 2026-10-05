@@ -1,7 +1,7 @@
-import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * A shipped `agents.swarm` call reaches `facetHomeProvisioner`: each node gets a private home keyed on its actor's
- * storage key, never the node id. Five settled nodes and a no-provisioner control arm are the denominator.
+ * A shipped `agents.swarm` call on the CLI: every node works in its workspace's folder and own space, beside the
+ * origin, so each reports the shared plane. Five settled nodes are the denominator. Private node homes were the
+ * in-SQLite plane's, removed with it on 2026-10-04.
  *
  * Specified by docs/EXPLORATION.md — "Isolation".
  */
@@ -9,19 +9,14 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  AGENT_UID_FLOOR,
-  facetHomeProvisioner,
-  agentIdentity,
   createAgentsTool,
   initWorkspaceSchema,
-  explorationActorKey,
   type AgentsSwarmDeps,
   type AgentsToolInput,
   type JsonValue,
-  type LLMProviderConfig, actorHomeName } from '@kinu.run/core';
-import { scriptedTurnModel, scratchPath, toolExecute, unobservedSearchSeams } from '@kinu.run/test-utils';
+  type LLMProviderConfig } from '@kinu.run/core';
+import { scriptedTurnModel, scratchDir, scratchPath, toolExecute, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
-import { openLocalActor, registerLocalNode } from '@kinu.run/core';
 import { nodeSeatFactory } from './actor-fixture';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -53,38 +48,14 @@ function answeringModel() {
   });
 }
 
-/** The production runtime with no host plane, after `initWorkspaceSchema` (as `openWorkspaceCLI` runs it):
- *  nodes are actors whose first turn needs the workspace tables. */
+/** The production runtime after `initWorkspaceSchema` (as `openWorkspaceCLI` runs it): nodes are actors whose
+ *  first turn needs the workspace tables. */
 function cliRuntime(label: string): CLIRuntime {
   const database = new Database(scratchPath(label, 'agent.db'));
   databases.push(database);
   initWorkspaceSchema(makeWorkspaceSchemaSql(database));
 
-  return createCLIRuntime(database, {
-    llm: DUMMY_LLM,
-  });
-}
-
-/** This backend's node-home wiring as `local-session.ts` builds it. A missing host throws: passing nothing
- *  would report the shared plane and assert it. */
-function nodeHomeWiring(rt: CLIRuntime) {
-  const nodeHome = rt.nodeHome;
-
-  if (!nodeHome) throw new Error('createCLIRuntime must supply a node home host');
-
-  return {
-    nodeHome,
-    provisionNodeHome: () => async (node: { readonly nodeId: string; readonly rootId: string; readonly depth: number }) => {
-      const actor = registerLocalNode(rt.actor, node);
-
-      return facetHomeProvisioner(nodeHome())(actorHomeName({ origin: 'swarm', storageKey: actor.storageKey }));
-    },
-  };
-}
-
-/** The home directory name a settled node's actor owns, read back via the directory's `resolve`, never derived. */
-function nodeHomeName(rt: CLIRuntime, nodeId: string): string {
-  return actorHomeName({ origin: 'swarm', storageKey: openLocalActor(rt.actor, explorationActorKey(nodeId)).storageKey });
+  return createCLIRuntime(database, { llm: DUMMY_LLM, cwd: scratchDir(`${label}-folder`) });
 }
 
 /** `diagnostics` writes JSON lines to console.error with no injection seam, so the line is read where it lands. */
@@ -145,70 +116,9 @@ async function runShippedSwarm(swarm: AgentsSwarmDeps): Promise<SettledNode[]> {
   return settledNodes(lines);
 }
 
-describe('a node in a shipped agents.swarm run reports private-home', () => {
-  test('a local node keeps its home and private scratch through runtime reset', async () => {
-    const database = new Database(scratchPath('node-reset', 'agent.db'));
-    databases.push(database);
-    const config = { dbPath: database.filename, llm: DUMMY_LLM };
-    const first = createCLIRuntime(database, config);
-    const provision = nodeHomeWiring(first).provisionNodeHome();
-    const home = await provision({ nodeId: 'reset', rootId: 'reset', depth: 1 });
-
-    if (home.isolation !== 'private-home' || !first.nodeRuntime) throw new Error('node plane missing');
-    const before = await first.nodeRuntime(home, registerLocalNode(first.actor, { nodeId: 'reset', rootId: 'reset', depth: 1 }), first);
-
-    if (!before.shell) throw new Error('node shell missing');
-    expect(await before.shell.exec('echo private > /tmp/note; echo answer > "$HOME/answer"')).toMatchObject({ exitCode: 0 });
-    await writeText(first.storage.vfs, '/home/main/shared', 'shared');
-    const second = createCLIRuntime(database, config);
-
-    if (!second.nodeRuntime) throw new Error('reset node plane missing');
-    const after = await second.nodeRuntime(home, registerLocalNode(second.actor, { nodeId: 'reset', rootId: 'reset', depth: 1 }), second);
-
-    if (!after.shell) throw new Error('reset node shell missing');
-    expect(await after.shell.exec('echo $HOME $TMPDIR; cat /tmp/note; cat "$HOME/answer"; cat /home/main/shared'))
-      .toMatchObject({ exitCode: 0, stdout: `${home.home} ${home.tmp}\nprivate\nanswer\nshared` });
-    expect(await exists(second.storage.vfs, '/tmp/note')).toBe(false);
-    await expect(writeText(second.storage.vfs, `${home.home}/answer`, 'stolen')).rejects.toThrow();
-  });
-  test('every node of the run, and the count the preset fans', async () => {
-    const rt = cliRuntime('swarm-node-home-private');
-    const { provisionNodeHome } = nodeHomeWiring(rt);
-
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams(), provisionNodeHome });
-
-    expect(settled).toHaveLength(IDEATE_BRANCHES);
-    expect(settled.map((node) => node.isolation))
-      .toEqual(Array.from({ length: IDEATE_BRANCHES }, () => 'private-home'));
-  });
-
-  test('the homes are real directories in the ORIGIN\u2019s own filesystem', async () => {
-    const rt = cliRuntime('swarm-node-home-inodes');
-    const { nodeHome, provisionNodeHome } = nodeHomeWiring(rt);
-
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams(), provisionNodeHome });
-
-    expect(settled).toHaveLength(IDEATE_BRANCHES);
-    // Through `rt.storage.vfs`, the origin's own view: a home the origin could not see would be a second tree.
-    const homes = (await rt.storage.vfs.readdir('/home')).map(({ name }) => name);
-    const owned = settled.map(({ node }) => nodeHomeName(rt, node));
-
-    for (const home of owned) {
-      expect(homes).toContain(home);
-      expect(await rt.storage.vfs.stat(`/home/${home}`)).toMatchObject({ type: 'directory' });
-    }
-
-    for (const { node } of settled) expect(homes).not.toContain(actorHomeName({ origin: 'swarm', storageKey: node }));
-
-    const { sql } = await nodeHome();
-    const uids = new Set(owned.map((home) => agentIdentity(sql, home).uid));
-
-    for (const uid of uids) expect(uid).toBeGreaterThanOrEqual(AGENT_UID_FLOOR);
-    expect(uids.size).toBe(IDEATE_BRANCHES);
-  });
-
-  test('the same call with no home host reports the shared plane instead', async () => {
-    const rt = cliRuntime('swarm-node-home-absent');
+describe('a node in a shipped agents.swarm run shares the origin plane', () => {
+  test('every node of the run reports the shared plane', async () => {
+    const rt = cliRuntime('swarm-node-home-shared');
 
     const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() });
 
@@ -219,14 +129,12 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
 });
 
 describe('a node seat shares the origin plane on its own head row', () => {
-  test('the seat runs the origin shell until its home is provisioned, keyed by its own actor', async () => {
+  test('the seat runs the origin shell, keyed by its own actor', async () => {
     const rt = cliRuntime('swarm-node-home-seat');
     expect(rt.shell).toBeDefined();
     const seat = await nodeSeatFactory(rt)({ nodeId: 'seat-probe', rootId: 'seat-probe', depth: 1 });
-    // A former-node actor's seat runs on the origin plane; the home comes later through provisionNodeHome.
     expect(seat.actor.record.origin).toBe('swarm');
     expect(seat.actor.handle.actorId).not.toBe(rt.actor.actorId);
     expect(seat.actor.runtime.shell).toBe(rt.shell);
-    expect(nodeHomeName(rt, 'seat-probe')).toBe(actorHomeName({ origin: 'swarm', storageKey: seat.actor.handle.storageKey }));
   });
 });

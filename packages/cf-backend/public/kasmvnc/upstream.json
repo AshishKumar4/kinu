@@ -1,0 +1,25 @@
+{
+  "$comment": "KasmVNC's web client (D70), MPL-2.0, source github.com/kasmtech/noVNC at 475ecfa5 (the release's kasmweb submodule). Vendored from the .deb the devbox image installs: only the files the client loaded in a session (connect, click, scroll), measured 2026-10-04; no locales, no lazy decoders. Refresh: bun scripts/kasmvnc-client.ts <the .deb>.",
+  "deb": {
+    "url": "https://github.com/kasmtech/KasmVNC/releases/download/v1.5.0/kasmvncserver_trixie_1.5.0_amd64.deb",
+    "sha256": "80b241de7dfe53bba2b7e1cc5ac8c5246d72271efa16be2d4f76607f30fab1c4"
+  },
+  "root": "usr/share/kasmvnc/www",
+  "files": {
+    "assets/368_kasm_logo_only_32x32-ig-uDAV_.png": "b4a38cafb6cd8a7b4c1d134ee4693961c3e2ea6a62d01483e0bc040cf0437950",
+    "assets/Orbitron700-DI3tXiXq.woff": "014dbca522dec17453fde78412d4f2295bb7293b24e1130b9a2f668c237aa943",
+    "assets/bell-BmA9-LrF.oga": "7bb1ae73f3db55d99ea1826f114ce161002ac71879ad4649d9e001bc4efb1bdc",
+    "assets/ctrl-DWDnpgzu.svg": "025fd57dfac68c3a7319547b3fefc2ecddf95372f0ff1ae7513e1daf54ea8f39",
+    "assets/disconnect-BEcDH18f.svg": "c45ea31510f9d4fafe659e111a98cbef357f5734bfd206ff93020a2ee84073cd",
+    "assets/drag-BAMk-8Cy.svg": "d2d93f1708af4101f265202901dda2a97d0b0b6b1da953b613ddf333a5e6444f",
+    "assets/esc-DBerPpvV.svg": "dec7fae5b8c8b896477fc883665afea8b90a127d5bb4726ad4c63f379585bf48",
+    "assets/handle_bg-YkRQCoNH.svg": "3182137766268f9f3bc09dfc54641b082c2d729d1b53b18890fdcbcb3dd3d852",
+    "assets/keyboard-XAYSNaxM.svg": "972aee889a350a32ba52e4fb6a02365bf0a621f7d5928aadae400ad20b755a72",
+    "assets/splash-D03O8R4K.jpg": "ab4728e7fafc8db7333e5a331ded31109ac304f4ed6f39263f3c8977432e721f",
+    "assets/toggleextrakeys-CmGlT_ei.svg": "ad3e3791d9211fe908fffdce34978c2e63543db93a68ae6407941be2fe6a17fd",
+    "assets/ui-BOjwDkC7.js": "351b7a0b3b05261b8bff17419e28a8216f691e2eee1e6800842f4773a143c727",
+    "assets/ui-PaSsnzBa.css": "9345fc59f08ac4da50f5b8136db4d7f7b08cda872f93b70c1ad53548af705090",
+    "package.json": "a266f059b0e0fcf0c703f890055ab9321a91f743f91068b2a7a5662df9e28653",
+    "vnc.html": "e83beef3521001888e20a47a261165f9507acc1e5588f3ba2b384ac3d7a68844"
+  }
+}

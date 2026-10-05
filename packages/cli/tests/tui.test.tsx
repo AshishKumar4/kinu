@@ -1196,7 +1196,7 @@ const INHERITED_CREDENTIALS = [
 ];
 
 /** Installed before mount: the cloud roster sync runs on mount, so a later swap would race it. */
-const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
+const homeScreenPrelude = (project: string, width = 100, height = 40, fetchStub?: string) => `
   import { mock } from 'bun:test';
   import * as core from '@opentui/core';
   import { createTestRenderer } from '@opentui/core/testing.js';
@@ -1242,6 +1242,8 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
   };
 
   let action = null;
+  // The screen runs in the folder its workspaces are placed in, as \`kinu\` run there does.
+  process.chdir(${JSON.stringify(project)});
   const opened = runHomeTui({}).then((resolved) => { action = resolved; return resolved; });
   // A key pressed before the screen's own handler is attached is dropped, and a
   // painted frame does not mean it is attached: the handler subscribes on the
@@ -1333,10 +1335,18 @@ async function runHomeScreen(options: {
   fetchStub?: string;
 }) {
   const home = scratchDir('home-tui');
+  const project = realpathSync(scratchDir('home-tui-project'));
+  const stamp = new Date(0).toISOString();
+
+  const placed = Object.fromEntries((options.workspaces ?? []).map((name) => [name, {
+    name, mode: 'local', localName: name, cwd: project, workspaceId: 'proj', createdAt: stamp, updatedAt: stamp,
+  }]));
+
   writeFileSync(resolve(home, 'config.json'), JSON.stringify({
     model: 'openai/gpt-5.5',
     providers: { openai: { apiKey: 'sk-test' } },
     ...options.config,
+    agents: { ...placed, ...options.config?.agents },
   }));
 
   for (const name of options.workspaces ?? []) {
@@ -1345,7 +1355,7 @@ async function runHomeScreen(options: {
     const db = new Database(resolve(home, name, 'agent.db'), { create: true });
 
     try {
-      createCLIRuntime(db, { llm: null, agentName: name }).actor.config.setDisplayName(workspaceTitle(name));
+      createCLIRuntime(db, { llm: null, agentName: name, cwd: project }).actor.config.setDisplayName(workspaceTitle(name));
     } finally {
       db.close();
     }
@@ -1358,7 +1368,7 @@ async function runHomeScreen(options: {
   const proc = await runToExit([
     process.execPath,
     '-e',
-    `${homeScreenPrelude(options.width, options.height, options.fetchStub)}${options.driver}`,
+    `${homeScreenPrelude(project, options.width, options.height, options.fetchStub)}${options.driver}`,
   ], { cwd: repoRoot, env });
 
   // Bun exits 0 for a rejected top-level await, so stderr is what fails the test.

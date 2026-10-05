@@ -33,7 +33,7 @@ import {
 import {
   buildEvalAgentSurface, createStepToolCallLog,
 } from './harness';
-import { provisionLocalTarget } from './target-local';
+import { localTargetFolder, provisionLocalTarget } from './target-local';
 import { seedTranscriptEntry, finalIntegerAnswer,
 liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
 UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
@@ -107,7 +107,7 @@ async function chatTurn(
   userMessage: string,
 ): Promise<CompletedTurn> {
   const start = Date.now();
-  const soul = await readSoul(rt.storage.vfs) ?? '';
+  const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
   const log = createStepToolCallLog();
@@ -206,7 +206,7 @@ describe('E2E Full Lifecycle', () => {
     expect(tables).toContain('crafted_tools');
     expect(tables).toContain('fibers');
 
-    const soul = await readSoul(rt.storage.vfs) ?? '';
+    const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
     expect(soul).toContain('JavaScript');
 
     const identity = db.query<{ id: string; name: string }, []>(
@@ -318,7 +318,7 @@ describe('E2E Full Lifecycle', () => {
     db.close();
 
     const db2 = new Database(DB_PATH);
-    const { rt: rt2, info } = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG });
+    const { rt: rt2, info } = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG, cwd: localTargetFolder(TEST_DIR) });
     // Hand over the reopened database and runtime before any assertion can
     // throw. Otherwise, an assertion failure leaves later steps holding the
     // closed database: step 7 reports unrelated `bun:sqlite` prepare errors,
@@ -378,7 +378,7 @@ describe('E2E Full Lifecycle', () => {
 
     console.log(`\n  Identity: ${JSON.stringify(identity)}`);
 
-    const soul = await readSoul(rt.storage.vfs) ?? '';
+    const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
     console.log(`  SOUL.md: ${JSON.stringify(soul.slice(0, 120))}`);
 
     const vfsFiles = db.query<{ path: string; size: number }, []>(

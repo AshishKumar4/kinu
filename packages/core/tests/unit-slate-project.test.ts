@@ -96,7 +96,7 @@ test('malformed workspace prefixes fail project parsing rather than changing a d
 });
 
 test('a declared prefix is carried as the path it names', () => {
-  for (const prefix of ['/home/main/shared', '/home/main/shared/', '/home/main/x/../shared']) {
+  for (const prefix of ['/home/main/shared', '/home/main/shared/', '/home/main/x/../shared', 'vfs://home/main/shared']) {
     const project = parseSlateProject({ main: 'server.js', slate: { bindings: {
       FILES: { kind: 'namespace', namespace: 'workspace', paths: [prefix] },
     } } });

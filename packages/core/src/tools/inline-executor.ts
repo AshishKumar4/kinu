@@ -11,12 +11,11 @@ import type { CraftStore } from '../types/agent-runtime';
 import { appendMemoryNote } from '../memory/note';
 import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
 import { withVfsErrorHint } from '../vfs/errno';
-import { isVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { commandResult, existsTool } from '../execution/exec-result';
-import { Effect, Result } from 'effect';
 import { shellExecOptions } from '../execution/shell-session';
-import { diagnostics, KinuError, refusalOf, settle, settleSync, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
@@ -29,7 +28,8 @@ import { refusedInput } from '../obs/index';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
-import type { JsonObject, JsonValue } from '../utils/json';
+import type { JsonValue } from '../utils/json';
+import { cloudPlanes, type PathPlanes } from '../vfs/resolve';
 
 const StringSchema = v.string();
 
@@ -63,6 +63,8 @@ export interface InlineExecutorDeps {
   vfs: VFS;
   /** Absent: {@link WORKSPACE_ROOT}, the root's. */
   home?: string;
+  /** Absent: the cloud's planes over `home`. */
+  planes?: PathPlanes;
   /** The owner's files surface; absent: `vfs`, the plane the tools reach. */
   files?: VFS;
   memory: Memory;
@@ -81,7 +83,7 @@ export interface InlineExecutorDeps {
   ledger?: () => TurnFileLedger | undefined;
   /** Shared like `ledger`; required by the shared dispatcher's deps shape. */
   budget?: () => TurnContextBudget | undefined;
-  /** Toolchain capabilities the shell can reach beyond coreutils, declared by the host (see `workspaceToolchainCapabilities`). */
+  /** Toolchain capabilities the shell can reach beyond coreutils, declared by the host. */
   toolchain?: readonly ExecutorCapability[];
   /** Capabilities the host can neither claim nor rule out; declared, since an omission reads as a measured absence. */
   unmeasured?: readonly ExecutorCapability[];
@@ -89,19 +91,25 @@ export interface InlineExecutorDeps {
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
 }
 
-function slateRefusal(refusal: { readonly reason: JsonValue; readonly error: JsonValue }): JsonObject {
-  return { success: false, ...refusal };
-}
-
 /** Every VFS error out of `workspace.*` gets vfsAddressingHint; code, errno and path are kept. */
-function vfsGuided<A>(vfs: VFS, run: () => Promise<A>): Effect.Effect<A, VfsError> {
-  return Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) }).pipe(Effect.catch((failed) => {
-    const { cause } = failed;
+function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorProvider['tools'] {
+  const guided: ExecutorProvider['tools'] = {};
 
-    return isVfsError(cause)
-      ? Effect.flatMap(Effect.promise(() => vfsAddressingHint(vfs, 'workspace.*')), (hint) => Effect.fail(withVfsErrorHint(cause, hint)))
-      : Effect.die(cause);
-  }));
+  for (const [name, entry] of Object.entries(tools)) {
+    guided[name] = {
+      ...entry,
+      execute: async (...args: unknown[]) => {
+        try {
+          return await entry.execute(...args);
+        } catch (err) {
+          if (!isVfsError(err)) throw err;
+          throw withVfsErrorHint(err, await vfsAddressingHint(vfs, 'workspace.*'));
+        }
+      },
+    };
+  }
+
+  return guided;
 }
 
 /** The one statement of what `createTool` takes, rendered into the declaration the model reads. */
@@ -120,6 +128,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const currentFileDispatch = () => createFileDispatcher({
     vfs,
     home: deps.home ?? WORKSPACE_ROOT,
+    planes: deps.planes ?? cloudPlanes(deps.home ?? WORKSPACE_ROOT),
     ledger: currentLedger(),
     budget: currentBudget(),
     memory,
@@ -305,73 +314,75 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             `createTool("${toolName}"): ${admitted.error}`)) };
         }
 
-        const upserted = (): JsonValue => {
-        // Exact-name update is an upsert; a case-insensitive match on another name is a collision.
-        const existing = craftStore.get(toolName);
-        const desc = description;
-        const codeStr = admitted.code;
-        // Misevolution gate on the `craft_tool` surface, without `network-egress` (see SURFACE_CRITERIA).
-        const misevolution = checkMisevolutionForSurface({ code: codeStr }, 'craft_tool');
+        try {
+          // Exact-name update is an upsert; a case-insensitive match on another name is a collision.
+          const existing = craftStore.get(toolName);
+          const desc = description;
+          const codeStr = admitted.code;
+          // Misevolution gate on the `craft_tool` surface, without `network-egress` (see SURFACE_CRITERIA).
+          const misevolution = checkMisevolutionForSurface({ code: codeStr }, 'craft_tool');
 
-        if (Result.isFailure(misevolution)) {
-          if (sql && actor) {
-            recordMisevolutionVeto(sql, actor, {
-              surface: 'craft_tool', violation: misevolution.failure,
-              detail: `workspace.createTool("${toolName}") rejected`,
-            });
+          if (!misevolution.ok) {
+            if (sql && actor) {
+              recordMisevolutionVeto(sql, actor, {
+                surface: 'craft_tool', violation: misevolution,
+                detail: `workspace.createTool("${toolName}") rejected`,
+              });
+            }
+            else {
+              // Reported, never dropped: recording a veto needs both the store and the actor.
+              diagnostics.failure('misevolution.veto_unrecorded', new KinuError(
+                'unavailable',
+                'a misevolution veto fired with no actor-scoped store to record it against',
+              ), { surface: 'craft_tool', criterion: misevolution.criterionId, tool: toolName });
+            }
+
+            // `denied`: a gate refused and the work correctly never ran.
+            return {
+              ok: false,
+              ...refusalOf(new KinuError('denied',
+                `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}. Rewrite the tool body without it: `
+                + `${WORKSPACE_FILE_BINDINGS}, and call other tools as \`tools.<name>(args)\`.`)),
+            };
           }
-          else {
-            // Reported, never dropped: recording a veto needs both the store and the actor.
-            diagnostics.failure('misevolution.veto_unrecorded', new KinuError(
-              'unavailable',
-              'a misevolution veto fired with no actor-scoped store to record it against',
-            ), { surface: 'craft_tool', criterion: misevolution.failure.criterionId, tool: toolName });
+
+          if (existing) {
+            craftStore.update(toolName, { description: desc, code: codeStr });
+
+            return { ok: true, name: toolName, action: 'updated' };
           }
 
-          // `denied`: a gate refused and the work correctly never ran.
-          return {
-            ok: false,
-            ...refusalOf(new KinuError('denied',
-              `Misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason}. Rewrite the tool body without it: `
-              + `${WORKSPACE_FILE_BINDINGS}, and call other tools as \`tools.<name>(args)\`.`)),
-          };
+          const caseHit = craftStore.list().find(t =>
+            t.name !== toolName && t.name.toLowerCase() === toolName.toLowerCase(),
+          );
+
+          if (caseHit) {
+            return {
+              ok: false,
+              ...refusalOf(new KinuError('bad_input',
+                `A tool named "${caseHit.name}" already exists `
+                + `(case-insensitive match with "${toolName}"). `
+                + `Either call that tool as tools.${caseHit.name}(...) or `
+                + `pick a genuinely different name.`)),
+            };
+          }
+
+          craftStore.create({
+            name: toolName,
+            description: desc,
+            code: codeStr,
+          });
+
+          // Column defaults seed the neutral prior in the same INSERT, so decay and injection floor see the tool.
+          return { ok: true, name: toolName, action: 'created' };
+        } catch (err) {
+          // The craft store is local SQLite, so an unrecognised failure is `io`.
+          const failure = toKinuError({
+            doing: `workspace.createTool ${toolName}`, cause: err, otherwise: 'io',
+          });
+
+          return { ok: false, ...refusalOf(failure) };
         }
-
-        if (existing) {
-          craftStore.update(toolName, { description: desc, code: codeStr });
-
-          return { ok: true, name: toolName, action: 'updated' };
-        }
-
-        const caseHit = craftStore.list().find(t =>
-          t.name !== toolName && t.name.toLowerCase() === toolName.toLowerCase(),
-        );
-
-        if (caseHit) {
-          return {
-            ok: false,
-            ...refusalOf(new KinuError('bad_input',
-              `A tool named "${caseHit.name}" already exists `
-              + `(case-insensitive match with "${toolName}"). `
-              + `Either call that tool as tools.${caseHit.name}(...) or `
-              + `pick a genuinely different name.`)),
-          };
-        }
-
-        craftStore.create({
-          name: toolName,
-          description: desc,
-          code: codeStr,
-        });
-
-        // Column defaults seed the neutral prior in the same INSERT, so decay and injection floor see the tool.
-        return { ok: true, name: toolName, action: 'created' };
-        };
-
-        // The craft store is local SQLite, so an unrecognised failure is `io`.
-        return settleSync(Effect.try({ try: upserted, catch: (cause) => toKinuError({ doing: `workspace.createTool ${toolName}`, cause, otherwise: 'io' }) }).pipe(
-          Effect.catch((failure) => Effect.succeed<JsonValue>({ ok: false, ...refusalOf(failure) })),
-        ));
       },
     },
   };
@@ -386,12 +397,12 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]): Promise<JsonValue> => {
         const parsed = v.safeParse(SlateOperationSchema, args[0]);
 
-        if (!parsed.success) return slateRefusal(refusalOf(new KinuError('bad_input',
-          'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) })));
+        if (!parsed.success) return { success: false, ...refusalOf(new KinuError('bad_input',
+          'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) })) };
         requireSlateWorkMode(parsed.output, currentWorkMode());
         const result = await slate(parsed.output);
 
-        return result.ok ? result.value : slateRefusal({ reason: result.reason, error: result.error });
+        return result.ok ? result.value : { success: false, reason: result.reason, error: result.error };
       },
     };
   }
@@ -416,7 +427,7 @@ declare namespace workspace {
   function createTool(
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;
-  ${slate === undefined ? '' : `/** Slates in this workspace; read /skills/slates/SKILL.md first, which names the \`$\` members.
+  ${slate === undefined ? '' : `/** Slates in this workspace; read vfs://skills/slates/SKILL.md first, which names the \`$\` members.
    * \`await workspace.slates.board.addStroke(stroke)\` runs the board slate's \`addStroke\`. */
   const slates: { readonly [id: string]: { readonly [member: string]: (...args: unknown[]) => Promise<unknown> } };
 `}
@@ -434,10 +445,7 @@ declare namespace workspace {
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},
-    tools: Object.fromEntries(Object.entries(tools).map(([name, entry]) => [name, {
-      ...entry,
-      execute: (...args: unknown[]) => settle(vfsGuided(vfs, async () => entry.execute(...args))),
-    }])),
+    tools: withVfsGuidance(vfs, tools),
     types,
     positionalArgs: true,
     // No inbound TCP surface here; Worker slates use their separate host.

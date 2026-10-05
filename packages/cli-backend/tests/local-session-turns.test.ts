@@ -11,7 +11,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import type { TemporaryAgentPort } from '@kinu.run/core';
 import {
-  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER, initWorkspaceSchema,
+  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER, initWorkspaceSchema, OUTPUT_CONTINUATION_EVENT, sha256Hex,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type SessionEvent } from '../src/local-session';
@@ -79,6 +79,47 @@ test('parallel native calls retain their SDK identities after reverse completion
   }
 });
 
+test('a provider failing after a real tool result retains that completed call exactly once', async () => {
+  const { db, rt } = workspaceRuntime();
+  rt.actor.config.setDisplayNameOrigin('Failed provider', 'user');
+  let provider: ReadableStreamDefaultController<LanguageModelV2StreamPart> | undefined;
+
+  const model = new TestLanguageModelV2({ doStream: async () => ({
+    stream: new ReadableStream<LanguageModelV2StreamPart>({ start(controller) {
+      provider = controller;
+      controller.enqueue({ type: 'stream-start', warnings: [] });
+      controller.enqueue({ type: 'tool-call', toolCallId: 'completed-save', toolName: 'memory',
+        input: JSON.stringify({ action: 'save', topic: 'completed', content: 'saved before the provider failed' }) });
+    } }),
+    warnings: [],
+  }) });
+
+  const observed: SessionEvent[] = [];
+
+  rt.actor.config.setLearning(false);
+
+  const session = new LocalAgentSession({ rt, db, model, onEvent: (event) => {
+    observed.push(event);
+
+    if (event.type !== 'tool-result' || event.toolCallId !== 'completed-save') return;
+
+    if (provider === undefined) throw new Error('the model stream is not open');
+    provider.error(new Error('the provider disconnected after the completed tool'));
+  } });
+
+  try {
+    await session.send('Save a durable note.', { id: crypto.randomUUID() });
+    expect(observed.filter((event) => event.type === 'tool-result')).toMatchObject([{ toolCallId: 'completed-save', success: true }]);
+    const run = present(session.listRuns().items[0], 'the failed provider left an active run');
+    const calls = session.getRunEvents(run.runId).filter((event) => event.type === 'tool_call_end');
+
+    expect(calls).toMatchObject([{ toolCallId: 'completed-save', name: 'memory', outcome: { success: true } }]);
+    const ended = observed.find((event) => event.type === 'turn-end');
+
+    expect(ended?.turn.hadError).toBe(true);
+  } finally { await session.end(); db.close(); }
+});
+
 test('a native ledger failure cannot finish an uncommitted step or add its usage to the turn', async () => {
   const { db, rt } = workspaceRuntime();
   const events: SessionEvent[] = [];
@@ -137,6 +178,33 @@ test('an output-limit continuation records each sealed step once across SDK call
     }))).toEqual([{ step: 1, text: 'first half' }, { step: 2, text: 'second half' }]);
     expect(events.flatMap((event) => event.type === 'turn-end' ? [event.turn.steps] : [])).toEqual([2]);
   } finally { await session.end(); db.close(); }
+});
+
+// DUPLICATE-PATHS rank 16: the CLI built its roster without the continuation, so an answer cut at the output limit was
+// left cut where the cloud continues it.
+test('an answer cut at the output limit on both calls is continued by one more turn, as the cloud continues it', async () => {
+  let call = 0;
+
+  const model = scriptedTurnModel({ doGenerate: () => {
+    call += 1;
+    const cut = call <= 2;
+
+    return {
+      content: [{ type: 'text', text: cut ? `part ${String(call)} ` : 'the end' }],
+      finishReason: { unified: cut ? 'length' : 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    };
+  } });
+
+  const { session, events } = setup('unused', model);
+
+  try {
+    await session.send('Write the whole report.', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+
+    expect(turnStarts(events).map((turn) => turn.event ?? 'user')).toEqual(['user', OUTPUT_CONTINUATION_EVENT]);
+  } finally { await session.end(); }
 });
 
 describe('LocalAgentSession.send — a user turn', () => {
@@ -328,28 +396,23 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     expect(fileParts).toHaveLength(0);
 
-    const referenced = present(
-      observed.find((m) => m.role === 'user' && JSON.stringify(m.content).includes('attachments/')),
-      'the user message carrying the attachment reference',
-    );
+    // The whole reference, so nothing else in the prompt (a worktree path, an instruction) can stand in for it.
+    const path = `attachments/${sha256Hex(pdfBytes)}.pdf`;
+    const reference = `[Attachment resume.pdf (application/pdf, ${pdfBytes.length} bytes) saved to ${path} (read it with your file tools)]`;
 
-    const referencedJson = JSON.stringify(referenced.content);
-    const path = present(/saved to (\S+)/.exec(referencedJson)?.[1], 'the saved attachment path');
+    const carriesReference = (message: PromptMessage): boolean => message.role === 'user'
+      && message.content.some((part) => part.type === 'text' && part.text === reference);
 
-    expect(referencedJson).toContain('resume.pdf');
-    expect(path).toStartWith('attachments/');
-
+    const referenced = present(observed.find(carriesReference), 'the user message carrying the attachment reference');
     const stored = await rt.storage.vfs.readFile(path);
+
     expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(pdfBytes));
 
     await session.send('continue', { id: crypto.randomUUID() });
 
-    const again = present(
-      captures[1].find((m) => m.role === 'user' && JSON.stringify(m.content).includes('attachments/')),
-      'the re-sanitized message carrying the attachment reference',
-    );
+    const again = present(captures[1].find(carriesReference), 'the re-sanitized message carrying the attachment reference');
 
-    expect(JSON.stringify(again.content)).toBe(referencedJson);
+    expect(again.content).toEqual(referenced.content);
   });
 
   test('facts ride the dynamic-context block, never the system prompt', async () => {
@@ -422,21 +485,10 @@ describe('LocalAgentSession.send — a user turn', () => {
     const text = String(system.content);
     expect(text).not.toContain('device.***');
     expect(text).toContain('the machine the CLI runs on');
-    expect(text).toContain('rooted in the directory the session was started in');
+    expect(text).toContain("starting in this workspace's folder");
     expect(text).not.toContain('device tunnel');
     expect(text).not.toContain('asks the user for consent');
     expect(text).not.toContain('OFFLINE');
-  });
-
-  test('a workspace opened without a directory is told it lives in its database, not in a directory', async () => {
-    let observed: PromptMessage[] = [];
-    const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
-    await session.send('hi', { id: crypto.randomUUID() });
-
-    const text = String(present(observed.find((m) => m.role === 'system'), 'the system prompt message').content);
-    expect(text).toContain('kept in this workspace\'s database');
-    expect(text).not.toContain('rooted in the directory');
-    expect(text).not.toContain('with the Worker');
   });
 
   // Issue #36: a local workspace has neither mount, so nothing the model reads may offer one.
@@ -527,7 +579,7 @@ describe('LocalAgentSession.send — a user turn', () => {
 
       await rt.stores.history.replaceHistory(history, {
         author: rt.actor.actorId, via: 'runtime', turnId: null, stage: false,
-        assertOwner: () => rt.actor.current(),
+        assertOwner: () => { rt.actor.assertCurrent(); },
       });
     }
 

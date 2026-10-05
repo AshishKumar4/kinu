@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { AwaitedList, scratchPath } from '@kinu.run/test-utils';
+import { AwaitedList, scratchPath, scratchDir } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
 import { EventLog } from '../../core/src/events/hub/index';
@@ -94,7 +94,7 @@ function runs(db: Database): ReadonlyArray<{ run_id: string; type: string }> {
 describe('the loop admits a send queued while the slot is held, with every one-shot kick dead', () => {
   test('at turn close: the pump\'s own recheck runs the queued wake, which reaches a model call', async () => {
     const db = openDb('turn-close');
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const gate = Promise.withResolvers<void>();
     const asked: string[] = [];
     const events = new AwaitedList<SessionEvent>();
@@ -127,7 +127,7 @@ describe('the loop admits a send queued while the slot is held, with every one-s
 
   test('at wake: the retry a dead process left in the ledger, its drain timer never fired, is admitted by the next activation and reaches a model call', async () => {
     const db = openDb('wake');
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
     // The runner's durable retry row, left by a process gone before its debounced drain fired.
     new EventLog(makeSqlExec(db), rt.actor).publish({

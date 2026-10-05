@@ -558,6 +558,31 @@ describe('ChatWireTransport', () => {
     await h.land(answered);
   });
 
+  // A redialled socket keeps its id: the replay its last socket read is not its own, so it is held like any joiner.
+  test('a socket that reconnects under the same id is held until its own replay, not sent the turn live first', async () => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'reasoning-start', id: 'r' }, { type: 'reasoning-delta', id: 'r', delta: 'think' }]), { index: 0 });
+
+    await h.transport.onConnect(h.connection('c2'));
+    await h.transport.onMessage(h.connection('c2'), JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+    h.transport.onClose({ id: 'c2' });
+
+    const redialled = h.connection('c2');
+    await h.transport.onConnect(redialled);
+    await h.transport.observe(chunks([{ type: 'reasoning-delta', id: 'r', delta: 'ing' }]), { index: 0 });
+
+    const live = () => h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.replay !== true && frame.body !== undefined && frame.body !== '');
+
+    expect(live()).toEqual([]);
+    await h.transport.onMessage(redialled, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+    expect(replayOf(h.received('c2'))).toEqual(['start', 'reasoning-start', 'reasoning-delta think', 'reasoning-delta ing', 'complete']);
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+  });
+
   // A joining tab's replay restates from the ledger each step it records whose last chunk went out, then the relay's
   // chunks after them: the loop records a step beside the stream, so either can be ahead.
   test('a joining tab hears a step the ledger records and the relay sent whole restated, then the relay\'s chunks after it', async () => {

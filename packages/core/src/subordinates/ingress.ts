@@ -38,6 +38,32 @@ export interface SubordinateEventResult {
   readonly disposition: 'admitted' | 'already_held' | 'not_awaited';
 }
 
+/**
+ * What a child's turn has told its hirer so far. `spoke` (durable relay policy) and `settled` (temporary rung answered)
+ * are distinct: a `progress` note speaks without settling, and conflating them suppressed the terminal report of an ask.
+ */
+export interface SubordinateReportLedger {
+  spoke: boolean;
+  settled: boolean;
+}
+
+/** The one report publisher: both report sources, its report tool and its turn's end, carry the admitted turn's mode
+ *  and update the same ledger. */
+export async function publishSubordinateReport(
+  turn: { readonly mode: WorkMode; readonly reports: SubordinateReportLedger | null },
+  report: Omit<SubordinateEventInput, 'fromSubordinate' | 'mode'>,
+  send: (report: Omit<SubordinateEventInput, 'fromSubordinate'>) => Promise<SubordinateEventResult>,
+): Promise<SubordinateEventResult> {
+  const result = await send({ ...report, mode: turn.mode });
+
+  if (turn.reports !== null) {
+    turn.reports.spoke = true;
+    turn.reports.settled ||= temporaryRunSettles({ status: report.status, origin: report.origin });
+  }
+
+  return result;
+}
+
 export interface AdmittedSubordinateReport {
   id: string;
   subordinate: string;

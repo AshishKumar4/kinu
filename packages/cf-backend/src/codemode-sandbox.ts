@@ -10,9 +10,8 @@ import {
   NO_TIMER_DEADLINE_MS, bindTaskPlan, codemodeFunction, decodeJsonValue, relayedAnswer,
   type CraftedToolSource, type ExecuteResult, type Executor, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
-import { Cause, Effect } from 'effect';
-import { renderThrownChain, settle } from '@kinu.run/core/obs';
-import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, WORKSPACE_ROOT } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
+import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from '@kinu.run/core';
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { EGRESS_FAILURE_HEADER, codemodeEgress, type CodemodeEgressProps } from './codemode-egress';
 import { BROWSER_CLIENT_MODULE, BROWSER_CLIENT_SOURCE } from './browser-prelude';
@@ -23,6 +22,8 @@ type ResolvedProvider = Extract<DynamicProviderInput, object[]>[number];
 
 export interface SandboxIdentity {
   readonly workspace: string;
+  /** Where the program's `process` starts: the actor's own (`PathPlanes.cwd`). */
+  readonly cwd: string;
 }
 
 /**
@@ -36,7 +37,7 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
     '    __kinu.bindSlates(__kinuWorkspace);',
     '    const __kinuState = typeof state === "undefined" ? null : state;',
     '    const __kinuBuiltins = await __kinu.loadBuiltins();',
-    `    const process = __kinu.createProcess(${JSON.stringify(WORKSPACE_ROOT)});`,
+    `    const process = __kinu.createProcess(${JSON.stringify(identity.cwd)});`,
     '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
     `    const env = Object.freeze({ workspace: ${JSON.stringify(identity.workspace)}, state: __kinuState, missingBuiltins: __kinuBuiltins.missing });`,
@@ -106,26 +107,27 @@ export class KinuSandboxExecutor {
     this.#inner = launch;
   }
 
-  execute(code: string, providers: DynamicProviderInput): Promise<ProgramResult> {
+  async execute(code: string, providers: DynamicProviderInput) {
     const providerArr: ResolvedProvider[] = Array.isArray(providers)
       ? providers
       : [{ name: 'codemode', fns: providers }];
 
-    const inner = this.#inner;
-
-    return settle(Effect.catchCause(Effect.gen(function* () {
+    try {
       // The vendor reads only err.message. Carry an explicitly thrown refusal
       // as a result so the shared completion mapper retains its classification.
       const callable = normalizeCode(code);
       const source = `async () => { try { return await (${callable})(); } catch (cause) { if (cause && cause.success === false && typeof cause.error === 'string') return cause; throw cause; } }`;
-      const result = yield* Effect.promise(() => inner.run(source, attributeProviders(providerArr)));
+      const result = await this.#inner.run(source, attributeProviders(providerArr));
 
       // DWE returns sandbox-internal failures as strings; only the native-tool ReferenceError is
       // rewritten into the correction.
       return result.error
         ? { ...result, error: explainSandboxError(result.error) }
         : result;
-    }), programFailed));
+    } catch (err) {
+      // createCodeTool turns a non-empty `error` into a tool-output-error the model sees.
+      return { result: undefined, error: renderThrownChain({ cause: err }) };
+    }
   }
 }
 
@@ -133,8 +135,8 @@ export class KinuSandboxExecutor {
 export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
   return {
     languages: ['javascript'],
-    execute(code: string, providers: HostProvider[]): Promise<ExecuteResult> {
-      return settle(Effect.catchCause(Effect.gen(function* () {
+    async execute(code: string, providers: HostProvider[]): Promise<ExecuteResult> {
+      try {
         const normalized = Array.isArray(providers)
           ? providers
           : [{ name: 'codemode', fns: providers }];
@@ -147,7 +149,7 @@ export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
           ])),
         }));
 
-        const res = yield* Effect.promise(() => launch.run(code, bridged));
+        const res = await launch.run(code, bridged);
         const result = res.result === undefined ? undefined : decodeJsonValue({ value: res.result });
         const output: ExecuteResult = { result };
 
@@ -156,12 +158,9 @@ export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
         if (res.logs !== undefined) output.logs = res.logs;
 
         return output;
-      }), programFailed));
+      } catch (e) {
+        return { result: undefined, error: renderThrownChain({ cause: e }) };
+      }
     },
   };
-}
-
-/** A program that could not run, as the `error` createCodeTool turns into the tool-output-error the model sees. */
-function programFailed(failed: Cause.Cause<unknown>): Effect.Effect<{ result: undefined; error: string }> {
-  return Effect.succeed({ result: undefined, error: renderThrownChain({ cause: Cause.squash(failed) }) });
 }

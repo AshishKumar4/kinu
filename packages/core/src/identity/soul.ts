@@ -8,15 +8,12 @@ import type { SqlRow } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { AgentSignal } from '../types/signals';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlExecutor, SqlValue } from '../types/primitives';
-import { NIMBUS_WORKSPACE_ROOT, workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 export const SOUL_PATH = 'SOUL.md';
 
 export function isWorkspaceSoul(path: string): boolean {
-  const named = workspacePath(path, WORKSPACE_ROOT);
-
-  // Nimbus's home links to Kinu's.
-  return named === `${WORKSPACE_ROOT}/${SOUL_PATH}` || named === `${NIMBUS_WORKSPACE_ROOT}/${SOUL_PATH}`;
+  return workspacePath(path, WORKSPACE_ROOT) === `${WORKSPACE_ROOT}/${SOUL_PATH}`;
 }
 
 /** Generic missions seeded when none was given. */

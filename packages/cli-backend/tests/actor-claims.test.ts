@@ -9,7 +9,7 @@ import { scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
-  contextMount, localContextTree, withMountTable, createFileDispatcher, TurnContextBudget, WORKSPACE_ROOT,
+  contextMount, localContextTree, withMountTable, createFileDispatcher, TurnContextBudget, WORKSPACE_ROOT, cloudPlanes,
 } from '@kinu.run/core';
 import type {
   ActorHandle, AgentRuntime, AgentStores, ChatEvent, FileToolInput, ProfileAuthorityInputs,
@@ -134,7 +134,7 @@ async function runTurn(bound: Bound, opts: {
 async function selectedInput(bound: Bound, messages: readonly ModelMessage[]) {
   return (await bound.stores.history.replaceHistory(messages, {
     author: bound.handle.actorId, via: 'session', turnId: null, stage: false,
-    assertOwner: () => bound.handle.current(),
+    assertOwner: () => bound.handle.assertCurrent(),
   })).selection;
 }
 
@@ -354,7 +354,7 @@ test('a context edit written through the native file tool reaches the NEXT model
   })]);
 
   const file = createFileDispatcher({
-    home: WORKSPACE_ROOT,
+    home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT),
     vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
   });
 
@@ -452,7 +452,7 @@ test('a versioned context edit refuses a replaced target and preserves its histo
     actorId: left.handle.actorId, own: ownTree(left),
   })]);
 
-  const file = createFileDispatcher({ home: WORKSPACE_ROOT, vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const file = createFileDispatcher({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
   const path = '/context/working.jsonl';
   await file({ action: 'read', path });
   const revision = (await files.stat(path))?.revision;
@@ -477,8 +477,8 @@ test('pending context edits can be read and revised but cannot overwrite another
     actorId: left.handle.actorId, own: ownTree(left),
   })]);
 
-  const first = createFileDispatcher({ home: WORKSPACE_ROOT, vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
-  const second = createFileDispatcher({ home: WORKSPACE_ROOT, vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const first = createFileDispatcher({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const second = createFileDispatcher({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
   const path = '/context/working.jsonl';
   await first({ action: 'read', path });
   await second({ action: 'read', path });
@@ -487,7 +487,7 @@ test('pending context edits can be read and revised but cannot overwrite another
     .rejects.toMatchObject({ verdict: 'stale' });
   await first({ action: 'read', path });
   await first({ action: 'edit', path, edits: [{ old_text: 'first proposal', new_text: 'revised proposal' }] });
-  const next = await left.stores.history.stepBase(() => left.handle.current());
+  const next = await left.stores.history.stepBase(() => left.handle.assertCurrent());
   expect(next.messages).toEqual([{ role: 'user', content: 'revised proposal' }]);
 });
 

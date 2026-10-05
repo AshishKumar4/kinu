@@ -3,6 +3,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,8 +21,8 @@ const md5Hex = (bytes: Uint8Array): string => createHash('md5').update(bytes).di
 
 /** A multipart store. It answers the first part only once a second has arrived, so a publisher with one part in
  *  flight never finishes; it samples the disk the archive takes at each part's arrival. `corruptPart` stores that
- *  part with one byte changed. */
-function r2LikeStore(archive: string, corruptPart?: number) {
+ *  part with one byte changed; `arrived` hears of each part as it lands. */
+function r2LikeStore(archive: string, corruptPart?: number, arrived?: () => void) {
   const parts = new Map<number, Uint8Array>();
   let firstWaiting: (() => void) | undefined;
   let partsAtOnce = false;
@@ -46,6 +47,7 @@ function r2LikeStore(archive: string, corruptPart?: number) {
 
         if (Number(part) === corruptPart) bytes[0] = (bytes[0] ?? 0) ^ 1;
         parts.set(Number(part), bytes);
+        arrived?.();
 
         if (firstWaiting !== undefined) {
           partsAtOnce = true;
@@ -140,7 +142,7 @@ function listing(squashfs: Uint8Array | undefined, label: string): string {
   return listed.exitCode === 0 ? listed.stdout.toString().split('\n').filter((line) => line.includes('squashfs-root')).map((line) => line.replace(/^\S+ \S+ +/, '')).sort().join('\n') : listed.stderr.toString();
 }
 
-test('an archive many times the window streams in parts: the store holds exactly it, and the disk never held it whole', async () => {
+test('an archive many times the window streams in parts: the store holds exactly it, and the disk held three windows at most', async () => {
   const store = r2LikeStore(archive);
   const source = tree('large', 20, 32 * 1024 * 1024);
   const { stdout, stderr } = await stream(source, store.url);
@@ -150,7 +152,8 @@ test('an archive many times the window streams in parts: the store holds exactly
   Bun.spawnSync(['mksquashfs', source, direct, '-noappend', '-comp', 'zstd', '-no-progress']);
   const [code, size] = stdout.split(' ');
 
-  expect({ code, stderr, partsAtOnce: store.partsAtOnce(), held: store.mostOnDisk() < Number(size) / 2, tree: listing(landed, 'landed') })
+  // mksquashfs writes up to 7 GB/s here: between two paces it passes the window by tens of MiB, never by two windows.
+  expect({ code, stderr, partsAtOnce: store.partsAtOnce(), held: store.mostOnDisk() <= 3 * SMALL.windowBytes, tree: listing(landed, 'landed') })
     .toEqual({ code: '0', stderr: '', partsAtOnce: true, held: true, tree: listing(Bun.file(direct).size > 0 ? new Uint8Array(await Bun.file(direct).arrayBuffer()) : undefined, 'direct') });
   expect(Number(size)).toBe(landed?.byteLength ?? -1);
 });
@@ -189,6 +192,32 @@ os.pwrite(f,b"again",6*1048576)' '${join(root, 'stage', 'layer.sqsh')}'`;
 
   expect({ code: stdout.split(' ')[0], stored: store.object() !== undefined }).toEqual({ code: '1', stored: false });
   expect(stderr).toContain('written again where its uploaded parts were freed');
+});
+
+// 2026-10-04, under load: the archiver ended while one part was in flight, and the rest waited for it, so the store
+// never had two parts at once and the publisher's fetch timed out after 300 s.
+test('the parts left when the archiver ends go up beside the one still in flight', async () => {
+  const go = join(root, 'stage', 'go');
+  mkdirSync(join(root, 'stage'), { recursive: true });
+  rmSync(go, { force: true });
+  expect(spawnSync('mkfifo', [go]).status).toBe(0);
+  let told = false;
+
+  const store = r2LikeStore(archive, undefined, () => {
+    if (!told) writeFileSync(go, 'x');
+    told = true;
+  });
+
+  // Two parts and some: the publisher starts the second, and the archiver ends once that one has reached the store.
+  const archiver = `python3 -c 'import os,sys
+f=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT,0o644)
+os.write(f,os.urandom(12*1048576))
+open(sys.argv[2]).read(1)' '${archive}' '${go}'`;
+
+  const { stdout, stderr } = await stream(tree('tail', 0, 0), store.url, archiver);
+  await store.stop();
+
+  expect({ stdout, stderr, landed: store.object()?.byteLength }).toEqual({ stdout: expect.stringMatching(/^0 12582912 [0-9a-f]{32}-3$/), stderr: '', landed: 12582912 });
 });
 
 test('mksquashfs failing is exit 4 with its own words', async () => {

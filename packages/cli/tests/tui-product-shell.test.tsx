@@ -35,7 +35,6 @@ const GROUPED_ITEMS: readonly TuiAgentSummary[] = [
   },
   { name: 'fixer', label: 'fixer', mode: 'local', cwd: ROOT, workspaceId: 'shop' },
   { name: 'writer', label: 'writer', mode: 'local', cwd: ROOT, workspaceId: 'docs' },
-  { name: 'oldbot', label: 'oldbot', mode: 'local' },
   { name: 'jarvis', label: 'Jarvis', mode: 'cloud', cloudName: 'jarvis' },
   { name: 'audit', label: 'audit', mode: 'cloud', cloudName: 'audit' },
 ];
@@ -169,7 +168,6 @@ describe('grouped workspace navigator', () => {
         saveFrame(`chat-${label}`, frame);
         expect(frame).toContain('shop · 2');
         expect(frame).toContain('docs · 1');
-        expect(frame).toContain('Unplaced · 1');
         expect(frame).toContain('Cloud · 2');
         expect(frame).toContain('└ reviewer · auditor');
         expect(frame).not.toContain('Jarvis');
@@ -182,7 +180,7 @@ describe('grouped workspace navigator', () => {
     }
   });
 
-  test('groups order current project first, then foreign projects, then unplaced, then cloud, with one paging row', async () => {
+  test('groups order current project first, then foreign projects, then cloud, with one paging row', async () => {
     const probe = await mountProbe({
       width: 160,
       page: pageOf(
@@ -212,28 +210,10 @@ describe('grouped workspace navigator', () => {
 
       expect(at('docs · 1')).toBeLessThan(at('other · 1'));
       expect(at('other · 1')).toBeLessThan(at('faraway'));
-
-      expect(at('faraway')).toBeLessThan(at('Unplaced · 1'));
-      expect(at('Unplaced · 1')).toBeLessThan(at('▸ Cloud · 2'));
+      expect(at('faraway')).toBeLessThan(at('▸ Cloud · 2'));
       expect(frame).not.toContain('Jarvis');
-      expect(at('▸ Cloud · 2')).toBeLessThan(at('Load more · 7 of 7'));
+      expect(at('▸ Cloud · 2')).toBeLessThan(at('Load more · 6 of 6'));
       expect(lines.filter((line) => line.includes('Load more'))).toHaveLength(1);
-    } finally {
-      await probe.destroy();
-    }
-  });
-
-  test('an agent no ref places groups under Unplaced, never under the current project', async () => {
-    const probe = await mountProbe({
-      width: 160,
-      page: pageOf([{ name: 'oldbot', label: 'oldbot', mode: 'local' }]),
-    });
-
-    try {
-      const frame = probe.frame();
-      expect(frame).toContain('Unplaced · 1');
-      expect(frame).toContain('oldbot');
-      expect(frame.split('▾ ')).toHaveLength(2);
     } finally {
       await probe.destroy();
     }
@@ -262,7 +242,7 @@ describe('grouped workspace navigator', () => {
       expect(probe.frame()).toContain('▾ shop · 2');
       expect(probe.frame()).toContain('audit');
 
-      for (let step = 0; step < 7; step += 1) probe.mockInput.pressArrow('down');
+      for (let step = 0; step < 5; step += 1) probe.mockInput.pressArrow('down');
       probe.mockInput.pressEnter();
       await probe.settle();
       expect(probe.frame()).toContain('▾ Cloud · 2');
@@ -285,7 +265,7 @@ describe('grouped workspace navigator', () => {
       probeSetNavigationOpen?.(true);
       await probe.settle();
 
-      for (let step = 0; step < 8; step += 1) probe.mockInput.pressArrow('up');
+      for (let step = 0; step < 6; step += 1) probe.mockInput.pressArrow('up');
       probe.mockInput.pressEnter();
       await probe.settle();
       expect(probe.activations.at(-1)).toEqual({ name: 'audit', mode: 'local' });

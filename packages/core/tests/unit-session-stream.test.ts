@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { SessionHistory } from '../src/session/history';
@@ -69,6 +69,22 @@ test('a streamed answer joins the working context only when it seals', async () 
   } finally { s.testSql.close(); }
 });
 
+test('the provider\'s compaction summary is kept with its mark, so the next request replays it as one', async () => {
+  const s = setup();
+  const mark = { anthropic: { type: 'compaction' } };
+
+  try {
+    const { stream } = await s.turn('t1');
+    await stream.nativePart({ type: 'text-start', id: '0', providerMetadata: mark });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'Summary so far.' });
+    await stream.nativePart({ type: 'text-end', id: '0' });
+    const final: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'Summary so far.', providerOptions: mark }] };
+    await stream.nativeStep({ messages: [final], toolResults: [] });
+
+    expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
+  } finally { s.testSql.close(); }
+});
+
 test('a failed ledger write rolls back its step, and a committed step is published only after commit', async () => {
   const s = setup();
 
@@ -96,6 +112,24 @@ test('a failed ledger write rolls back its step, and a committed step is publish
     expect(heard).toEqual([{ inTransaction: false, open: [] }]);
     expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
     expect(events.read('run-t1')).toEqual([expect.objectContaining({ type: 'step_finish', stepIndex: 1, usage: { input: 7, output: 2 }, usd: 0.000003 })]);
+  } finally { s.testSql.close(); }
+});
+
+test('settling an already sealed stream runs no SQL', async () => {
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    await stream.nativePart({ type: 'text-start', id: '0' });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'done' });
+    await stream.nativePart({ type: 'text-end', id: '0' });
+    await stream.nativeStep({ messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }], toolResults: [] });
+    const statements = spyOn(s.testSql.db, 'prepare');
+
+    try {
+      await stream.settle();
+      expect(statements).toHaveBeenCalledTimes(0);
+    } finally { statements.mockRestore(); }
   } finally { s.testSql.close(); }
 });
 
@@ -142,6 +176,29 @@ test('a late native finish after a terminal seal cannot duplicate the tool row',
     });
 
     expect(events.read('run-t1').filter((event) => event.type === 'tool_call_end').map((event) => event.toolCallId)).toEqual(['call-a']);
+  } finally { s.testSql.close(); }
+});
+
+test('a program following an unfinished native delegation retains both outputs and settles every part', async () => {
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    const native = 'the native delegation stopped here '.repeat(12);
+    const authored = 'the program continued';
+    await stream.nativePart({ type: 'text-start', id: 'partial' });
+    await stream.nativePart({ type: 'text-delta', id: 'partial', text: native });
+    await stream.observe({ type: 'text-delta', delta: authored, source: 'scaffold' });
+    // A program's own step finishes with no response messages, as the scaffold transform yields it.
+    await stream.observe({ type: 'step-finish', stepIndex: 1, responseMessages: [], source: 'scaffold' });
+    await stream.settle();
+    const messages = (await s.history.materialize()).messages.filter((message) => message.role === 'assistant');
+
+    expect(messages).toEqual([
+      { role: 'assistant', content: [{ type: 'text', text: native }] },
+      { role: 'assistant', content: [{ type: 'text', text: authored }] },
+    ]);
+    expect(s.open()).toEqual([]);
   } finally { s.testSql.close(); }
 });
 

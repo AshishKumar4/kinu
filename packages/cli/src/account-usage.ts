@@ -4,7 +4,7 @@ import {
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { getCloudAccountUsage } from './cloud-api';
-import { createOAuthStore, listLocalRefsAllProjects, listUnplacedAgentNames, resolveCloudSession, resolveProviderCredentials } from './config';
+import { createOAuthStore, listLocalRefsAllProjects, resolveCloudSession, resolveProviderCredentials } from './config';
 import { getLocalAccountSpend } from './local-inspection';
 
 async function cloudAccountUsage(session: { origin: string; token: string }, refresh: boolean): Promise<AccountUsage> {
@@ -40,7 +40,7 @@ const LIMITS = new LimitCache();
 
 export async function readAllAccountUsage(opts: { readonly refresh?: boolean } = {}): Promise<AccountUsage> {
   const session = resolveCloudSession();
-  const names = [...listLocalRefsAllProjects().map((ref) => ref.name), ...listUnplacedAgentNames()];
+  const names = listLocalRefsAllProjects().map((ref) => ref.name);
 
   const [local, live, cloud] = await Promise.all([
     readAccountUsage(names.map((name) => ({ name, read: async () => getLocalAccountSpend(name) }))),

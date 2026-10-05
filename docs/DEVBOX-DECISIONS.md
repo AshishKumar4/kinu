@@ -1143,6 +1143,13 @@ five message-row reads (two open-parts reads, two seals, one source binding), tw
 stream-parts reads, and four open-container/part pre-reads. All 51 stream appends
 remain; the working-context origin check and abandoned-stream recovery reads
 remain. The unchanged workerd chat-session parity fixture passes.
+
+2026-10-03 (`lane/providers-one-owner`): one output-slot rule for both producers, `step * 3 + slot` under the
+request, and a native step a program cut off seals before the program's own output opens. Before, a native container
+took bare slot 0 to 2 and a program's first step the same `step * 3 + slot` under the same request, so a program
+continuing after an unfinished native delegation failed its turn on "message identity is already recorded". Pin:
+`packages/core/tests/unit-session-stream.test.ts` "a program following an unfinished native delegation retains both
+outputs and settles every part".
 A lone surrogate from a malformed provider stream now seals as streamed, not as bun's replacement characters; valid pairs remain byte-identical.
 
 2026-10-01: the owner-approved single writer commits a native step's seals,
@@ -1181,10 +1188,19 @@ messages. The request-time reclassification is gone. The failed/success/image
 regression compares the live and re-driven tool-message bytes, not just the
 last answer or the error's words.
 
-Provenance is stamped where each event is produced. An extra async-generator
-wrapper had delayed consumption enough for the model's fourth request to miss
-the nudge after three failed tools; removing that hop restores the nudge at
-that request without delaying live output or adding a consumer mode switch.
+Provenance is stamped where each event is produced, without an extra
+async-generator hop. The undelayed steering regression receives its nudge on
+the fourth request. Logical tool hooks still run from event consumption, so
+that timing is not guaranteed for a delayed consumer.
+
+2026-10-03: a native record is finalized on provider failure and an early
+consumer return or exception. A completed tool can precede `finish-step`;
+tying its record to the consumer lost it on those exits. The consumer-throw
+regression failed before this change and passes after it. A real HTTP model
+stream and early-return caller retained the completed call once; the local
+session also retained a real memory save after its provider disconnected.
+Closing a consumer aborts that model call before awaiting its live tee;
+provider failures retain their classification, including overflow recovery.
 
 D25. A wake proves a recycle only after the stop confirms (`b6a6ace00`,
 2026-09-04). The 2026-09-04 rerun (`kinu-devbox-bench-20260904142724`) saw
@@ -3807,6 +3823,21 @@ detection is not built: it saves about 0.6 s a save at 10 GB, but loses its
 base snapshot at every wake (so the first save after one walks anyway) and its
 held snapshot pins rewritten blocks, which deepens C's ENOSPC at 10 to 18 GB.
 
+After D68 (2026-10-04). The fault soak is clean: 104 cycles plus a 32-cycle
+kill-mid-save rerun, 0 silent losses, 0 dead boxes (be2407fc8, 47b0a7a4b).
+A delta streams its tar to mksquashfs with no staged copy, chunks sharded by
+digest (eeab19c94): at 18 GB, 12 GB rewrites save in 375 to 401 s with at
+least 1.96 GB free (n=5; ENOSPC before). A lost wake mounts its layers at
+once (a417a4e2f): median/worst ms, all exact, n=5: 0.25 GB 3,242/3,940,
+2 GB 3,428/4,437, 10 GB 4,342/4,687; 18 GB 4,338/4,933 (n=2). s3fs keeps
+every layer byte it reads on the disk, so a lost wake copies to disk only
+when copy and layers fit (9cb262140); at 18 GB the workspace stays lazy
+instead of failing reads with EIO. Rejected for the remaining 2.5 to 3.5 s
+gate: s3fs read-ahead cut to 10 MiB (0.7 s faster, sequential reads 43-67
+down to 17-27 MiB/s); priming each layer's superblock and tables (no gain);
+the DO+R2 store. The gate's time is several 100 to 500 ms s3fs round trips
+per layer, not bytes, and a DO behind the gateway does not remove them.
+
 D69. An untimed command's kill and a supervised process's stop end it by
 one operation, and answer only once nothing it started is alive
 (2026-10-03). `END_TREE` (`src/processes.ts`) sends TERM to the command's
@@ -3821,6 +3852,88 @@ image (`tests/kill-image.test.ts`, under docker), a shell answers TERM by
 starting a process that ignores TERM, and exits. On bfb0f35a9 the untimed
 kill answered with that process still running; now both callers answer once
 it is gone, and a command that ignores TERM ends on KILL under both.
+
+D70. The desktop is KasmVNC with its own web client, started by the first
+open and reached through `/_devbox/desktop` (2026-10-04). The probe ran on
+throwaway Medium boxes from integration 85285006f's image, each server driven
+by a real client in headless Chrome through the box's Durable Object, n=3
+boxes a server:
+
+| | KasmVNC 1.5, its client | TigerVNC, websockify, noVNC 1.6 |
+|---|---|---|
+| server listens, ms | 187 (169-196) | 703 (702-774) |
+| idle server PSS | 27 MB | 18 MB Xvnc and 34 MB websockify |
+| socket opens, ms (n=9) | 123 (119-1,189) | 156 (137-251) |
+| first frame after open, ms (n=9) | 218 (163-237) | 115 (108-188) |
+| click to screen, ms (n=60) | 66 (64-83) | 49 (32-83) |
+| full-screen scroll, MB/s (n=9) | 2.7 (2.6-3.1) | 9.3 (7.7-10.2) |
+| packages installed | 330 MB | 324 MB |
+
+Chromium with one tab is 402 MB PSS under both, and an idle screen sends 0
+bytes. The stack is 236 more packages in the tools tarball (336 MB, was 101
+MB): its offline install on trixie took 82 s locally, against 33 s before. KasmVNC's PointerEvent is 11 bytes (a 16-bit button mask, then x, y
+and two scroll deltas; kasmweb `core/rfb.js`), where RFB's is 6: with
+upstream noVNC 1.6 or 1.7 the server ends the session at the first click
+("unknown message type 144"), live 3 of 3 and locally. Kasm's client is not
+on npm and is not a library (its `display.js` imports its app UI), so the
+client is its prebuilt web app, vendored from the image's pinned `.deb`: the
+15 files it loads, 864 KB (`packages/cf-backend/public/kasmvnc/upstream.json`,
+`scripts/kasmvnc-client.ts`, `unit-kasmvnc-vendor.test.ts`). The app frames
+it from its own origin; its document policy allows framing by the app alone
+and sockets to the app's origin alone, so no client setting can point the
+socket elsewhere.
+
+The server listens on every interface, because the box reaches the container
+at the container's own address, and asks for the `binary` subprotocol and an
+`Origin`, which the Worker's allowlist strips and the box sets. Without
+`-publicIP`, KasmVNC queries STUN servers and exits when none answers: with
+no network it never listened (`tools-image.test.ts`). An open desktop is a
+bridged socket like a preview's, so it holds the box awake; port 6080 is
+refused as a preview. `desktop-image.test.ts` drives the vendored client in
+Chrome, through the Worker's route and the box's, to Chromium in the real
+image, and sees a click turn the screen; it fails without the box's
+`Origin`. `tools-image.test.ts` runs the start script with no network, so it
+fails without `-publicIP`, and opens the menu's browser as root.
+
+D71. The desktop stays on KasmVNC; Media over QUIC through Cloudflare's relay
+is rejected (2026-10-05). Probe only (`/mnt/local/kinu/tmp/moq-probe-save`):
+throwaway Medium boxes on integration 0b367f089's image, n=3 boxes, each
+publishing its X display (ffmpeg x11grab, libx264 ultrafast zerolatency,
+1280x800 at 30 fps, fMP4 into moq-rs's `moq-pub`, draft-14 branch) to the
+public draft-14 relay, played by moq-js main (WebTransport and WebCodecs).
+Every client ran with TLS verification off: the relay's certificate expired
+2026-10-04 20:33:59 UTC. All boxes, Workers and buckets were deleted.
+
+| | MoQ | KasmVNC (D70) |
+|---|---|---|
+| reaches the relay from a box | yes, QUIC/UDP | |
+| a viewer on another box or this host sees it | 0 of 12 | |
+| encode, % of one core: a strip changes / full-screen motion | 22 / 30 | |
+| bitrate, Mb/s | 0.11 a strip changes, 11.3-11.9 motion | 0 idle, 21-24 scrolling |
+| click to screen, ms (p50) | 124, in the box | 66, from this host |
+| glass to glass, ms (p50) | 109, in the box | |
+
+The relay delivers only within one relay server. A box read its own
+publication back 6 of 6; a second box in the same colo (DFW, the same egress
+IP) read 0 of 3; this host (DFW) read nothing in either direction, 0 of 9,
+while host to host worked 6 of 6, and the same ffmpeg stream from a local
+container played on this host. So the latency was measured with the player in
+the box: both clocks are the box's, and the figures exclude the viewer's
+network and the input path (`xdotool` in the box), where KasmVNC's 66 ms is
+the whole path through the Worker and the Durable Object. The box p50s were
+92, 109 and 137 ms glass to glass (p90 up to 360, n=1,366 frames) and 123, 124
+and 161 ms click to frame (97 to 213, n=60), on a box also running the encoder
+and the decoder. moq-pub takes 0.5 to 2.3% of a core; the motion's software
+rendering in Chromium takes 108 to 116%, so a two-core box is full. The
+motion and KasmVNC's scrolling are different content, so the bitrates
+compare only roughly.
+
+Authorization is from the documentation, unmeasured (no token with the MoQ
+permission): a token is relay-wide, publishes or subscribes or both, expires
+within a year, and travels in the URL path, so it reaches access logs; there
+is no namespace scope. A workspace of its own means a relay of its own. Chrome's
+WebTransport over this host's WARP tunnel (MTU 1280) failed with a packet
+write error until its QUIC packets were capped at 1200 bytes.
 
 ## Measurement contract for a strategy comparison
 

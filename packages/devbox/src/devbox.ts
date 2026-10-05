@@ -15,6 +15,8 @@ import {
 import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
+import { bridgeSockets } from './socket-bridge';
+import { DESKTOP_PORT, DESKTOP_START } from './desktop';
 import { Deferred, Effect, Result } from 'effect';
 
 import {
@@ -228,6 +230,8 @@ const GOLDEN_REFRESH_CALLBACK = 'golden-refresh';
 
 const GOLDEN_KEY = 'devbox:golden';
 
+const AWAITING_GOLDEN_KEY = 'devbox:awaiting-golden';
+
 type StartSource = { readonly kind: 'image' } | { readonly kind: 'own' | 'golden'; readonly id: string };
 
 /** A classified recovery obligation; executed outside the restore block. */
@@ -313,7 +317,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #storage: DevboxStorage | undefined;
 
   #started: StartSource = { kind: 'image' };
-  #awaitingGolden: string | undefined;
   #sweeping: Promise<void> | undefined;
   #gateRestore: Flight | undefined;
   /** Fences every write below: an abandoned startup continuation keeps running, and must
@@ -508,6 +511,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #destroyGoldenContainer(): Promise<void> {
     if (this.#container().running) await this.#container().destroy();
     await this.#awaitContainerStopped();
+  }
+
+  get #awaitingGolden(): string | undefined {
+    const held = v.safeParse(v.string(), this.ctx.storage.kv.get(AWAITING_GOLDEN_KEY));
+
+    return held.success ? held.output : undefined;
+  }
+
+  set #awaitingGolden(reason: string | undefined) {
+    if (reason === undefined) this.ctx.storage.kv.delete(AWAITING_GOLDEN_KEY);
+    else this.ctx.storage.kv.put(AWAITING_GOLDEN_KEY, reason);
   }
 
   async goldenReady(answer: GoldenAnswer): Promise<void> {
@@ -2165,6 +2179,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       for (const admission of admissions) admission.abort();
       await Promise.allSettled(admissions.map((admission) => admission.settled));
+      this.#awaitingGolden = undefined;
 
       for (const callback of CONTAINER_CALLBACKS) this.#deleteSchedule(callback);
       await this.#destroyContainer();
@@ -2466,7 +2481,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     port: number,
     options: { name?: string; hostname: string; token?: string },
   ) {
-    return await settle(this.#claimed(portScope(port), attempt("file", () => this.#expose(port, options))).pipe(Effect.mapError(fileFault)));
+    const exposed = port === DESKTOP_PORT
+      ? Effect.fail(new DevboxError('invalid-input', `port ${String(DESKTOP_PORT)} is the desktop's, and is never a preview`))
+      : this.#claimed(portScope(port), attempt("file", () => this.#expose(port, options)));
+
+    return await settle(exposed.pipe(Effect.mapError(fileFault)));
   }
 
   /** Revocation touches only this object's preview rows, never the container, so it skips
@@ -2861,7 +2880,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         await this.#routes().mount(STORE_MOUNT);
       },
       excludes: () => this.archiveExcludes,
-      checkpointIntervalMs: () => this.policy.checkpointIntervalMs,
       now: () => Date.now(),
       log: (message) => {
         console.log(`[devbox] ${message}`);
@@ -2969,32 +2987,34 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     });
   }
 
+  #desktop(request: Request): Effect.Effect<Response, DevboxError> {
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return Effect.succeed(new Response('WebSocket required', { status: 426 }));
+
+    return this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
+      const started = yield* attempt('io', async () => await (await container.exec(['/bin/bash', '-c', DESKTOP_START, 'devbox-desktop'], { env: CONTAINER_TRUST_ENV })).output());
+
+      if (started.exitCode !== 0) {
+        return yield* Effect.fail(new DevboxError('io', `the desktop did not start: ${new TextDecoder().decode(started.stderr).trim()}`));
+      }
+
+      const server = `http://127.0.0.1:${String(DESKTOP_PORT)}`;
+      const headers = new Headers(request.headers);
+      headers.set('origin', server);
+      const answer = yield* attempt('io', () => container.getTcpPort(DESKTOP_PORT).fetch(new Request(`${server}/websockify`, { headers })));
+
+      return answer.webSocket ? this.#bridge(answer.webSocket, answer.headers) : answer;
+    }));
+  }
+
   /** The SDK's `bridge()`: an open preview socket is the box's use. */
   #bridge(upstream: WebSocket, headers: Headers): Response {
-    const [visitor, held] = Object.values(new WebSocketPair());
-    let open = true;
+    this.#openSockets += 1;
 
-    const end = (code: number, reason: string): void => {
-      if (!open) return;
-      open = false;
+    return bridgeSockets(upstream, headers, () => {
       this.#openSockets -= 1;
       this.stampInteraction();
-
-      for (const socket of [held, upstream]) socket.close(code === 1005 || code === 1006 ? 1000 : code, reason);
-    };
-
-    held.accept();
-    upstream.accept();
-    this.#openSockets += 1;
-    held.addEventListener('message', (event) => { if (open) upstream.send(event.data); });
-    upstream.addEventListener('message', (event) => { if (open) held.send(event.data); });
-
-    for (const socket of [held, upstream]) {
-      socket.addEventListener('close', (event) => end(event.code, event.reason));
-      socket.addEventListener('error', () => end(1011, 'preview socket failed'));
-    }
-
-    return new Response(null, { status: 101, headers, webSocket: visitor });
+    });
   }
 
   #fileClient: Files | undefined;
@@ -3049,6 +3069,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         return yield* this.#preview(forwarded, Number(preview[1]), token);
       }
+
+      if (url.pathname === '/_devbox/desktop') return yield* this.#desktop(request);
 
       if (url.pathname !== '/_devbox/terminal') return new Response('Not found', { status: 404 });
 

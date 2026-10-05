@@ -1,4 +1,3 @@
-import { Effect } from 'effect';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
@@ -35,12 +34,12 @@ test('message publication rolls back with its membership and can be retried', as
   try {
     const selected = s.context.initialize();
     const prepared = await s.messages.prepare({ role: 'user', content: 'hello' }, 'input');
-    expect(() => s.context.commit(selected, { cause: 'input', turnId: 'turn', assertEpoch: () => s.rt.actor.current(), mutate: () => {
+    expect(() => s.context.commit(selected, { cause: 'input', turnId: 'turn', assertEpoch: () => s.rt.actor.assertCurrent(), mutate: () => {
       s.messages.insert(prepared, 'input');
       throw new Error('crash before membership');
     } })).toThrow('crash before membership');
     expect(s.context.entries(selected)).toEqual([]);
-    const committed = s.context.commit(selected, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => s.rt.actor.current() });
+    const committed = s.context.commit(selected, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
     expect(await s.messages.materialize(present(s.context.entries(committed)[0], 'the committed context entry'))).toEqual({ role: 'user', content: 'hello' });
   } finally { s.testSql.close(); }
 });
@@ -106,12 +105,12 @@ test('pruning and branching preserve historical selection without resurrecting r
   try {
     const prepared = await s.messages.prepare({ role: 'assistant', content: 'recorded' }, 'answer');
     const initial = s.context.initialize();
-    const original = s.context.commit(initial, { cause: 'output', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], assertEpoch: () => s.rt.actor.current() });
+    const original = s.context.commit(initial, { cause: 'output', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
     const fork = s.context.fork(original);
-    const pruned = s.context.commit(original, { cause: 'context_transform', turnId: 'turn', mutate: () => [], assertEpoch: () => s.rt.actor.current() });
+    const pruned = s.context.commit(original, { cause: 'context_transform', turnId: 'turn', mutate: () => [], assertEpoch: () => s.rt.actor.assertCurrent() });
     expect(s.context.entries(pruned)).toEqual([]);
     expect(s.context.entries(original)).toEqual(s.context.entries(fork));
-    s.context.select(pruned, fork, () => Effect.void);
+    s.context.select(pruned, fork, () => {});
     expect(s.context.selected()).toEqual(fork);
     expect(() => s.context.entries({ contextId: 'missing', revision: 0 })).toThrow('revision does not exist');
   } finally { s.testSql.close(); }
@@ -121,7 +120,7 @@ test('reverting a context selects an isolated branch that survives reader recons
   const s = setup();
 
   try {
-    const assertOwner = () => s.rt.actor.current();
+    const assertOwner = () => s.rt.actor.assertCurrent();
     const input = await s.messages.prepare({ role: 'user', content: 'initial instruction' }, 'input');
     const initial = s.context.initialize();
     const original = s.context.commit(initial, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(input, 'input'), entryId: 'input', position: 0 }], assertEpoch: assertOwner });
@@ -156,7 +155,7 @@ test('a context reads what is stored: another reader\'s revision, and one writte
   setSystemTime(Date.parse('2026-09-25T00:00:00.000Z'));
 
   try {
-    const assertOwner = () => s.rt.actor.current();
+    const assertOwner = () => s.rt.actor.assertCurrent();
     const other = new SessionContext(s.rt.storage.sql, s.rt.actor, write => s.rt.storage.transactionSync(write), s.messages);
 
     const said = async (text: string) => {
@@ -212,16 +211,16 @@ test('a past revision reads back as it was after a transform and a clear, by a r
     const writer = history();
 
     for (const text of ['one', 'two', 'three']) {
-      await writer.append({ id: text, origin: 'input', turnId: null, assertOwner: () => Effect.void, message: { role: 'user', content: text } });
+      await writer.append({ id: text, origin: 'input', turnId: null, assertOwner: () => undefined, message: { role: 'user', content: text } });
     }
 
     const origin = (await writer.materialize()).selection;
 
     writer.context.commit(origin, {
-      cause: 'context_transform', turnId: null, assertEpoch: () => Effect.void,
+      cause: 'context_transform', turnId: null, assertEpoch: () => undefined,
       mutate: current => current.slice(-1).map(entry => ({ ...entry, position: 0 })),
     });
-    writer.clearConversation(CHAT_SESSION_ID, () => Effect.void);
+    writer.clearConversation(CHAT_SESSION_ID, () => undefined);
 
     const reader = history();
 
@@ -238,7 +237,7 @@ test('a held turn context follows sealed output, an authored edit and a selected
 
   const history = new SessionHistory(dependencies);
   const other = new SessionHistory(dependencies);
-  const assertOwner = () => s.rt.actor.current();
+  const assertOwner = () => s.rt.actor.assertCurrent();
 
   try {
     await history.append({ id: 'input', message: { role: 'user', content: 'instruction' }, origin: 'input', turnId: 'turn', assertOwner });
@@ -268,7 +267,7 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
 
   try {
     const image = await s.messages.prepare({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] }, 'image');
-    const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(image, 'input'), entryId: 'image', position: 0 }], assertEpoch: () => s.rt.actor.current() });
+    const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(image, 'input'), entryId: 'image', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
     const reference = present(s.context.entries(selected)[0], 'the image entry');
     expect(await s.messages.materialize(reference)).toEqual({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] });
     const stored = await s.messages.materializeParts(reference);
@@ -293,7 +292,7 @@ test('a sealed row that is JSON but not a message is refused on read', async () 
 
     try {
       const prepared = await s.messages.prepare({ role: 'user', content: [{ type: 'text', text: 'hello' }] }, 'input');
-      const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => s.rt.actor.current() });
+      const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
       const reference = present(s.context.entries(selected)[0], 'the input entry');
       s.testSql.db.run("UPDATE session_messages SET content_json = ? WHERE message_id = 'input'", [content]);
       await expect(s.messages.materialize(reference), layer).rejects.toThrow(KinuError);
@@ -349,7 +348,7 @@ test('staged removal preserves an appended tail and rejects a changed target', a
   const s = setup();
 
   try {
-    const assertOwner = () => s.rt.actor.current();
+    const assertOwner = () => s.rt.actor.assertCurrent();
     const proposals = new SessionProposals(s.rt.storage.sql, s.rt.actor, s.context, write => s.rt.storage.transactionSync(write));
     const prepared = await s.messages.prepare({ role: 'user', content: 'old' }, 'old');
     const base = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'old', position: 0 }], assertEpoch: assertOwner });
@@ -430,7 +429,7 @@ test('reverting to an entry deletes it and continues on the context recorded bef
     initSessionContextTables(rt.storage.execRaw);
     initSessionTranscriptTables(rt.storage.execRaw);
     const history = new SessionHistory({ sql: rt.storage.sql, actor: rt.actor, transactionSync: write => rt.storage.transactionSync(write), files: async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor' }) });
-    const assertOwner = () => rt.actor.current();
+    const assertOwner = () => rt.actor.assertCurrent();
     const chat = history.transcript('default');
     const turns: Array<[string, string, string]> = [['ask-1', 'answer-1', 'one'], ['ask-2', 'answer-2', 'two'], ['ask-3', 'answer-3', 'three']];
 
@@ -444,7 +443,7 @@ test('reverting to an entry deletes it and continues on the context recorded bef
     const before = history.context.selected();
 
     if (before === null) throw new Error('a context is selected after three turns');
-    const reverted = history.revertTo('default', 'ask-3', () => Effect.void);
+    const reverted = history.revertTo('default', 'ask-3', () => {});
     expect(reverted).not.toEqual(before);
     expect(history.context.selected()).toEqual(reverted);
     expect((await history.materialize()).messages.map(message => message.content)).toEqual(['one', 'one answered', 'two', 'two answered']);
@@ -454,7 +453,7 @@ test('reverting to an entry deletes it and continues on the context recorded bef
     const fourth = await history.append({ id: 'ask-4', message: { role: 'user', content: 'four' }, origin: 'input', turnId: 'ask-4', assertOwner });
     chat.record({ ...await chat.prepareUser({ id: 'ask-4', turnId: 'ask-4', message: fourth }) });
     expect(chat.entries().map(entry => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2', 'ask-4']);
-    expect(history.revertTo('default', 'ask-1', () => Effect.void)).toMatchObject({ revision: 0 });
+    expect(history.revertTo('default', 'ask-1', () => {})).toMatchObject({ revision: 0 });
     expect((await history.materialize()).messages).toEqual([]);
     expect(chat.entries()).toEqual([]);
     expect(() => history.revertTo('default', 'ask-2', () => { throw new Error('turn is active'); })).toThrow('turn is active');

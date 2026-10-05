@@ -36,6 +36,9 @@ export function initToolEffectClaimTable(execRaw: RawSqlExec): void {
     result_json        TEXT,
     PRIMARY KEY (actor_id, turn_id, normalized_call_id, call_digest)
   )`);
+  // Recovery reads only what never settled; the primary key leads with the turn, so it scanned every settled claim.
+  execRaw(`CREATE INDEX IF NOT EXISTS tool_effect_claims_pending
+    ON tool_effect_claims (actor_id, turn_id, normalized_call_id) WHERE result_json IS NULL`);
 }
 
 /** Read first, then insert, with no await between: only the prior read separates "just claimed" from

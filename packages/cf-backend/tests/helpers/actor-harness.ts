@@ -233,7 +233,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Actors whose turn waits inside a task hire: a task helper of theirs is still working. */
   harnessTurnsWaitingOnDelegates(): number {
     return this.boundSql<{ n: number }>`
-      SELECT COUNT(DISTINCT actor_id) AS n FROM actor_subordinates WHERE lifetime = 'task' AND status != 'dismissed'`[0]?.n ?? 0;
+      SELECT COUNT(DISTINCT s.actor_id) AS n FROM actor_subordinates s
+      JOIN workspace_actors a ON a.actor_id = json_extract(s.actor_reference, '$.actorId')
+      WHERE a.lifetime = 'task' AND s.status != 'dismissed'`[0]?.n ?? 0;
   }
 
   /** The scripted gateway's calls still waiting on the script, when this object runs on one. */
@@ -883,6 +885,13 @@ export async function wakeForDelegatedTask(
 /** Core's background-job journal over the object's stored rows. */
 export function jobsOver(db: Database): BackgroundJobStore {
   return new BackgroundJobStore(sqlOver(db), workspaceMainActor(db));
+}
+
+/** The owner's words through the public send, resolved once the turn they open has run, as the CLI's send resolves:
+ *  a lap count cannot bound a cf turn, which asks the owner's device over a real tunnel. */
+export async function sentTurn(agent: HarnessOrchestratorAgent, text: string, id: string): Promise<void> {
+  await agent.send(text, id);
+  await agent.harnessChatLoop.pumpPromise;
 }
 
 /** One owner message to the main actor, its turn run to the end on the models the workspace catalog routes to. */

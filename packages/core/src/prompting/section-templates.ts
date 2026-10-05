@@ -17,6 +17,7 @@ import sandboxExecutorLine from "../prompts/sandbox-executor-line.md" with { typ
 import deviceExecutorLine from "../prompts/device-executor-line.md" with { type: 'text' };
 import genericExecutorLine from "../prompts/generic-executor-line.md" with { type: 'text' };
 import executorsSection from "../prompts/executors-section.md" with { type: 'text' };
+import planesSection from "../prompts/planes-section.md" with { type: 'text' };
 import persistenceSection from "../prompts/persistence-section.md" with { type: 'text' };
 import codeExecutionSection from "../prompts/code-execution-section.md" with { type: 'text' };
 import delegationSection from "../prompts/delegation-section.md" with { type: 'text' };
@@ -92,7 +93,7 @@ export const TOOLS_SECTION = definePromptSection(
  * from the `worker.isolate.memory` catalog fact, not a measured `resourceLimits`. */
 export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
   "executors/workspace",
-  "{{memoryMb}}{{#if cliLocal}}{{/if}}{{#if cliVfs}}{{/if}}",
+  "{{memoryMb}}{{#if cliLocal}}{{/if}}",
   workspaceExecutorLine.trimEnd(),
 );
 
@@ -125,8 +126,15 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  */
 export const EXECUTORS_SECTION = definePromptSection(
   "executors/section",
-  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceReference}}{{workspaceRoot}}{{#if hasSandbox}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}",
+  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasSandbox}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}",
   executorsSection.trimEnd(),
+);
+
+/** Each prefix as the `vfs://` subtree it names, and where each subtree is on this machine: a fact per workspace, after the shared prefix. */
+export const PLANES_SECTION = definePromptSection(
+  "executors/planes",
+  "{{aliases}}{{mounts}}",
+  planesSection.trimEnd(),
 );
 
 export const PERSISTENCE_SECTION = definePromptSection(

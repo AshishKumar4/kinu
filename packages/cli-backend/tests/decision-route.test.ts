@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema } from '@kinu.run/core';
-import { scratchPath } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 import { fakeModel } from './helpers/local-session';
@@ -42,6 +42,7 @@ describe('the CLI decision route', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
     const rt = createCLIRuntime(db, {
+      cwd: scratchDir('workspace-folder'),
       llm: { name: 'workers-ai', baseURL, headers: { Authorization: 'Bearer bench-token' }, model: '@cf/moonshotai/kimi-k2.6' },
     });
 
@@ -66,6 +67,7 @@ describe('the CLI decision route', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
     const rt = createCLIRuntime(db, {
+      cwd: scratchDir('workspace-folder'),
       llm: { name: 'workers-ai', baseURL, headers: { Authorization: 'Bearer bench-token' }, model: '@cf/moonshotai/kimi-k2.6' },
     });
 

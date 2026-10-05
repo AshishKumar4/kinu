@@ -1,6 +1,3 @@
-import { type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { Effect } from 'effect';
-import { settleSync, settle } from '../obs/effect';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -44,7 +41,7 @@ interface LandedInput {
   readonly prepared: PreparedMessage | null;
   readonly reference: MessageReference;
   readonly turnId: string;
-  readonly assertOwner: () => Effect.Effect<void, KinuError>;
+  readonly assertOwner: () => void;
   readonly publish?: (selection: ContextSelection) => void;
 }
 
@@ -74,11 +71,11 @@ export class SessionHistory {
   readonly proposals: SessionProposals;
   readonly requests: SessionRequests;
   /** One SQL transaction; the caller fences it. */
-  readonly transactionSync: <T>(write: () => T) => T;
+  readonly atomic: <T>(write: () => T) => T;
 
   constructor(private readonly dependencies: SessionHistoryDependencies) {
     const { sql, actor, transactionSync, files } = dependencies;
-    this.transactionSync = transactionSync;
+    this.atomic = transactionSync;
     const payloads = new SessionPayloads(files);
     this.messages = new SessionMessages(sql, actor, payloads);
     this.context = new SessionContext(sql, actor, transactionSync, this.messages);
@@ -104,7 +101,7 @@ export class SessionHistory {
       const selected = this.context.selected() ?? this.context.initialize();
       this.dependencies.transactionSync(() => {
         if (!abandoned().some(candidate => candidate.message_id === row.message_id)) return;
-        this.context.commit(selected, { cause: 'output', turnId: null, assertEpoch: () => this.dependencies.actor.current(), mutate: entries => {
+        this.context.commit(selected, { cause: 'output', turnId: null, assertEpoch: () => this.dependencies.actor.assertCurrent(), mutate: entries => {
           this.messages.seal(row.message_id, content);
 
           if (row.origin !== 'output' || entries.some(entry => entry.messageId === row.message_id)) return entries;
@@ -116,7 +113,7 @@ export class SessionHistory {
   }
 
   /** A text-only cut step is sealed empty and leaves the context, so the model writes it again whole (Chat loop C1). */
-  async retract(outputs: readonly string[], assertOwner: () => Effect.Effect<void, KinuError>): Promise<void> {
+  async retract(outputs: readonly string[], assertOwner: () => void): Promise<void> {
     const cut = new Set(outputs);
     const empty = await this.messages.prepareContent([]);
     const selected = this.context.selected() ?? this.context.initialize();
@@ -154,10 +151,10 @@ export class SessionHistory {
       atomic: this.dependencies.transactionSync, selection: () => this.context.selected() });
   }
 
-  clearConversation(sessionId: string, assertIdle: () => Effect.Effect<void, KinuError>): ContextSelection {
-    return this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
+  clearConversation(sessionId: string, assertIdle: () => void): ContextSelection {
+    return this.dependencies.transactionSync(() => {
       this.dependencies.actor.assertCurrent();
-      yield* assertIdle();
+      assertIdle();
       const selected = this.context.selected() ?? this.context.initialize();
 
       for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
@@ -165,141 +162,129 @@ export class SessionHistory {
       this.transcript(sessionId).clear();
 
       return cleared;
-    })));
+    });
   }
 
   /** Continue from before `entryId`: the context of the nearest earlier entry that recorded one branches, and
    *  `entryId` and everything after it is deleted. */
-  revertTo(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>): ContextSelection {
+  revertTo(sessionId: string, entryId: string, assertIdle: () => void): ContextSelection {
     return this.dependencies.transactionSync(() => {
-      return settleSync(Effect.gen({ self: this }, function* () {
-        this.dependencies.actor.assertCurrent();
-        yield* assertIdle();
-        const transcript = this.transcript(sessionId);
-        const entry = transcript.read(entryId);
+      this.dependencies.actor.assertCurrent();
+      assertIdle();
+      const transcript = this.transcript(sessionId);
+      const entry = transcript.read(entryId);
 
-        if (entry === null) return yield* new KinuError('missing', 'conversation entry does not exist');
-        const base = transcript.contextAt(entry.position - 1);
-        const selected = this.context.selected() ?? this.context.initialize();
+      if (entry === null) throw new KinuError('missing', 'conversation entry does not exist');
+      const base = transcript.contextAt(entry.position - 1);
+      const selected = this.context.selected() ?? this.context.initialize();
 
-        for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
-        const target = this.context.fork(base);
-        this.context.select(selected, target, assertIdle);
-        transcript.truncate(entry.position);
-        // The only deletion short of a clear; recorded so it is distinguishable from lost rows.
-        diagnostics.event('session.transcript_rewound', { session: sessionId, from: entryId, position: entry.position });
+      for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
+      const target = this.context.fork(base);
+      this.context.select(selected, target, assertIdle);
+      transcript.truncate(entry.position);
+      // The only deletion short of a clear; recorded so it is distinguishable from lost rows.
+      diagnostics.event('session.transcript_rewound', { session: sessionId, from: entryId, position: entry.position });
 
-        return target;
-      }));
+      return target;
     });
   }
 
-  materialize(kept: MaterializedHistory | null = null): Promise<MaterializedHistory> {
-    return settle(this.materialized(kept));
-  }
+  async materialize(kept: MaterializedHistory | null = null): Promise<MaterializedHistory> {
+    const { selection, entries: members } = this.context.snapshot();
 
-  private materialized(kept: MaterializedHistory | null): Effect.Effect<MaterializedHistory, KinuError> {
-    return Effect.suspend(() => {
-      const { selection, entries: members } = this.context.snapshot();
+    if (kept?.members === members && kept.selection.contextId === selection.contextId && kept.selection.revision === selection.revision) return kept;
 
-      if (kept?.members === members && kept.selection.contextId === selection.contextId && kept.selection.revision === selection.revision) return Effect.succeed(kept);
-
-      return Effect.map(this.partition(members), (partition) => ({ selection, members, ...partition }));
-    });
+    return { selection, members, ...await this.partition(members) };
   }
 
   /** Revisions are durable: a past one reads back as it was. */
-  materializeAt(selection: ContextSelection): Promise<MaterializedContext> {
-    return settle(Effect.suspend(() => this.partition(this.context.entries(selection))));
+  async materializeAt(selection: ContextSelection): Promise<MaterializedContext> {
+    return this.partition(this.context.entries(selection));
   }
 
-  private partition(members: readonly ContextEntry[]): Effect.Effect<MaterializedContext, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const all = yield* Effect.promise(() => this.messages.materializeAll(members));
-      const entries: ContextEntry[] = [];
-      const messages: ModelMessage[] = [];
-      const renders: { readonly message: ModelMessage; readonly at: number }[] = [];
+  private async partition(members: readonly ContextEntry[]): Promise<MaterializedContext> {
+    const all = await this.messages.materializeAll(members);
+    const entries: ContextEntry[] = [];
+    const messages: ModelMessage[] = [];
+    const renders: { readonly message: ModelMessage; readonly at: number }[] = [];
 
-      for (const [index, member] of members.entries()) {
-        const message = all[index];
+    for (const [index, member] of members.entries()) {
+      const message = all[index];
 
-        if (message === undefined) return yield* new KinuError('io', 'a context member did not materialize');
+      if (message === undefined) throw new KinuError('io', 'a context member did not materialize');
 
-        if (this.messages.originOf(member) === 'render') renders.push({ message, at: messages.length });
-        else { entries.push(member); messages.push(message); }
-      }
+      if (this.messages.originOf(member) === 'render') renders.push({ message, at: messages.length });
+      else { entries.push(member); messages.push(message); }
+    }
 
-      return { entries, messages, rendered: renders.map(({ message, at }) => ({ message, before: messages[at] ?? null, after: messages[at - 1] ?? null })) };
-    });
+    return { entries, messages, rendered: renders.map(({ message, at }) => ({ message, before: messages[at] ?? null, after: messages[at - 1] ?? null })) };
   }
 
   /** The render row its request names too. */
-  async recordRender(message: ModelMessage, at: { readonly before: string | null; readonly replaces: boolean }, turnId: string, assertOwner: () => Effect.Effect<void, KinuError>): Promise<void> {
+  async recordRender(message: ModelMessage, at: { readonly before: string | null; readonly replaces: boolean }, turnId: string, assertOwner: () => void): Promise<void> {
     const prepared = await this.messages.prepareRender(message);
 
-    this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
-      yield* assertOwner();
+    this.dependencies.transactionSync(() => {
+      assertOwner();
       this.messages.insertRender(prepared);
       this.context.addRender({ messageId: prepared.id }, at, { turnId, assertEpoch: assertOwner });
-    })));
+    });
   }
 
-  stagePrepared(proposal: Omit<ContextProposal, 'base'> & { readonly base: ContextSelection | null }, messages: readonly PreparedMessage[], assertOwner: () => Effect.Effect<void, KinuError | VfsError>, events: ContextEventRecorder | null = null): void {
-    const publication = this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
+  stagePrepared(proposal: Omit<ContextProposal, 'base'> & { readonly base: ContextSelection | null }, messages: readonly PreparedMessage[], assertOwner: () => void, events: ContextEventRecorder | null = null): void {
+    const publication = this.dependencies.transactionSync(() => {
       this.dependencies.actor.assertCurrent();
-      yield* assertOwner();
+      assertOwner();
       const base = proposal.base ?? this.context.initialize();
 
       for (const message of messages) this.messages.insert(message, proposal.cause === 'context_transform' ? 'context_transform' : 'edit');
       this.proposals.stage({ ...proposal, base });
 
-      return yield* this.editEvent({ proposalId: proposal.id, selection: base, status: 'staged', turnId: proposal.turnId, events });
-    })));
+      return this.editEvent({ proposalId: proposal.id, selection: base, status: 'staged', turnId: proposal.turnId, events });
+    });
 
     publication?.publish();
   }
 
-  replaceHistory(messages: readonly ModelMessage[], options: { readonly author: string; readonly via: string; readonly turnId: string | null; readonly stage: boolean; readonly assertOwner: () => Effect.Effect<void, KinuError>; readonly events?: ContextEventRecorder | null }): Promise<{ readonly selection: ContextSelection; readonly proposalId: string | null }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* options.assertOwner();
-      const selected = this.context.selected() ?? this.context.initialize();
-      const pending = this.proposals.pending(selected.contextId).at(-1)?.proposal_id ?? null;
-      const prepared: PreparedMessage[] = [];
-      const calls = new Map<string, { messageId: string; part: number }>();
+  async replaceHistory(messages: readonly ModelMessage[], options: { readonly author: string; readonly via: string; readonly turnId: string | null; readonly stage: boolean; readonly assertOwner: () => void; readonly events?: ContextEventRecorder | null }): Promise<{ readonly selection: ContextSelection; readonly proposalId: string | null }> {
+    options.assertOwner();
+    const selected = this.context.selected() ?? this.context.initialize();
+    const pending = this.proposals.pending(selected.contextId).at(-1)?.proposal_id ?? null;
+    const prepared: PreparedMessage[] = [];
+    const calls = new Map<string, { messageId: string; part: number }>();
 
-      for (const message of messages) {
-        const id = crypto.randomUUID();
+    for (const message of messages) {
+      const id = crypto.randomUUID();
 
-        if (message.role === 'assistant' && !v.is(v.string(), message.content)) for (const [part, value] of message.content.entries()) if (value.type === 'tool-call') calls.set(value.toolCallId, { messageId: id, part });
-        prepared.push(yield* Effect.promise(() => this.messages.prepare(message, id, calls)));
+      if (message.role === 'assistant' && !v.is(v.string(), message.content)) for (const [part, value] of message.content.entries()) if (value.type === 'tool-call') calls.set(value.toolCallId, { messageId: id, part });
+      prepared.push(await this.messages.prepare(message, id, calls));
+    }
+
+    const committed = this.dependencies.transactionSync(() => {
+      options.assertOwner();
+      const base = this.context.entries(selected);
+      const entries = prepared.map((message, position) => ({ ...this.messages.insert(message, 'edit'), entryId: message.id, position }));
+
+      if (options.stage) {
+        // A replacement staged inside a turn replaces the history before that
+        // turn; the turn's own exchange stays as the tail the edit lands under.
+        const turnEntries = options.turnId === null ? new Set<string>() : this.entriesOfTurn(selected.contextId, options.turnId);
+        const proposalId = crypto.randomUUID();
+        this.proposals.stage({ id: proposalId, base: selected, author: options.author, via: options.via, cause: 'edit', turnId: options.turnId, expectedPending: pending,
+          changes: [...base.filter(entry => !turnEntries.has(entry.entryId)).map(entry => ({ entryId: entry.entryId, expected: entry, replacement: null })), ...entries.map(entry => ({ entryId: entry.entryId, expected: null, replacement: entry }))] });
+
+        return { result: { selection: selected, proposalId },
+          publication: this.editEvent({ proposalId, selection: selected, status: 'staged', turnId: options.turnId, events: options.events ?? null }) };
       }
 
-      const committed = this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
-        yield* options.assertOwner();
-        const base = this.context.entries(selected);
-        const entries = prepared.map((message, position) => ({ ...this.messages.insert(message, 'edit'), entryId: message.id, position }));
+      for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
 
-        if (options.stage) {
-          // A replacement staged inside a turn replaces the history before that
-          // turn; the turn's own exchange stays as the tail the edit lands under.
-          const turnEntries = options.turnId === null ? new Set<string>() : this.entriesOfTurn(selected.contextId, options.turnId);
-          const proposalId = crypto.randomUUID();
-          this.proposals.stage({ id: proposalId, base: selected, author: options.author, via: options.via, cause: 'edit', turnId: options.turnId, expectedPending: pending,
-            changes: [...base.filter(entry => !turnEntries.has(entry.entryId)).map(entry => ({ entryId: entry.entryId, expected: entry, replacement: null })), ...entries.map(entry => ({ entryId: entry.entryId, expected: null, replacement: entry }))] });
+      return { result: { selection: this.context.commit(selected, { cause: 'edit', turnId: options.turnId, mutate: () => entries, assertEpoch: options.assertOwner }), proposalId: null }, publication: null };
+    });
 
-          return { result: { selection: selected, proposalId },
-            publication: yield* this.editEvent({ proposalId, selection: selected, status: 'staged', turnId: options.turnId, events: options.events ?? null }) };
-        }
+    committed.publication?.publish();
 
-        for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
-
-        return { result: { selection: this.context.commit(selected, { cause: 'edit', turnId: options.turnId, mutate: () => entries, assertEpoch: options.assertOwner }), proposalId: null }, publication: null };
-      })));
-
-      committed.publication?.publish();
-
-      return committed.result;
-    }));
+    return committed.result;
   }
 
   private entriesOfTurn(contextId: string, turnId: string): Set<string> {
@@ -310,69 +295,65 @@ export class SessionHistory {
       WHERE m.actor_id=${actorId} AND m.context_id=${contextId} AND m.to_revision IS NULL AND r.turn_id=${turnId}`.map(row => row.entry_id));
   }
 
-stepBase(assertOwner: () => Effect.Effect<void, KinuError>, turnId: string | null = null, events: ContextEventRecorder | null = null, kept: MaterializedHistory | null = null): Promise<MaterializedHistory & { readonly changed: boolean }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* assertOwner();
-      // Tools, steers and authored edits can advance the head between requests. Keep the partition, not a stale selection.
-      const current = yield* this.materialized(kept);
-      const pending = this.proposals.pending(current.selection.contextId).at(-1);
+  async stepBase(assertOwner: () => void, turnId: string | null = null, events: ContextEventRecorder | null = null, kept: MaterializedHistory | null = null): Promise<MaterializedHistory & { readonly changed: boolean }> {
+    assertOwner();
+    // Tools, steers and authored edits can advance the head between requests. Keep the partition, not a stale selection.
+    const current = await this.materialize(kept);
+    const pending = this.proposals.pending(current.selection.contextId).at(-1);
 
-      if (pending === undefined) return { ...current, changed: false };
+    if (pending === undefined) return { ...current, changed: false };
+    let candidate: readonly ContextEntry[];
 
-      const candidate = yield* this.proposals.previewed(pending.proposal_id).pipe(
-        Effect.catchIf((refusal) => refusal.code === 'denied', () => Effect.succeed(null)),
-      );
+    try { candidate = this.proposals.preview(pending.proposal_id); } catch (cause) {
+      if (!(cause instanceof KinuError) || cause.code !== 'denied') throw cause;
+      assertOwner();
+      this.proposals.close(pending.proposal_id, 'history_rewritten');
 
-      if (candidate === null) {
-        yield* assertOwner();
-        this.proposals.close(pending.proposal_id, 'history_rewritten');
+      return { ...current, changed: false };
+    }
 
-        return { ...current, changed: false };
-      }
+    const staged = await this.partition(candidate);
+    const before = toolPairingGaps(current.messages);
+    const after = toolPairingGaps(staged.messages);
+    const refusal = before.calls.size > 0 || after.calls.size > 0 || after.results.size > 0 ? 'unpaired_tool_call' : null;
 
-      const staged = yield* this.partition(candidate);
-      const before = toolPairingGaps(current.messages);
-      const after = toolPairingGaps(staged.messages);
-      const refusal = before.calls.size > 0 || after.calls.size > 0 || after.results.size > 0 ? 'unpaired_tool_call' : null;
+    const committed = this.dependencies.transactionSync(() => {
+      const applied = this.proposals.apply(pending.proposal_id, assertOwner, entries => {
+        if (entries.length !== candidate.length || entries.some((entry, index) => entry.entryId !== candidate[index]?.entryId || entry.messageId !== candidate[index]?.messageId)) return 'history_rewritten';
 
-      const committed = this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
-        const applied = this.proposals.apply(pending.proposal_id, assertOwner, entries => {
-          if (entries.length !== candidate.length || entries.some((entry, index) => entry.entryId !== candidate[index]?.entryId || entry.messageId !== candidate[index]?.messageId)) return 'history_rewritten';
+        return refusal;
+      }, turnId);
 
-          return refusal;
-        }, turnId);
+      return { applied,
+        publication: applied === null ? null : this.editEvent({ proposalId: pending.proposal_id, selection: applied, status: 'activated', turnId, events }) };
+    });
 
-        return { applied,
-          publication: applied === null ? null : yield* this.editEvent({ proposalId: pending.proposal_id, selection: applied, status: 'activated', turnId, events }) };
-      })));
+    committed.publication?.publish();
 
-      committed.publication?.publish();
+    if (committed.applied !== null) return { ...staged, selection: committed.applied, members: candidate, changed: true };
+    const settled = await this.materialize(current);
 
-      if (committed.applied !== null) return { ...staged, selection: committed.applied, members: candidate, changed: true };
-      const settled = yield* this.materialized(current);
-
-      return { ...settled, changed: false };
-    }));
+    return { ...settled, changed: false };
   }
 
-  private editEvent(edit: ContextEditAudit): Effect.Effect<{ publish(): void } | null, KinuError> {
+  private editEvent(edit: ContextEditAudit): { publish(): void } | null {
     const { proposalId, selection, status, turnId, events } = edit;
 
-    if (events === null || turnId === null) return Effect.succeed(null);
+    if (events === null || turnId === null) return null;
     const claim = this.dependencies.sql<{ run_id: string; outcome: string | null }>`SELECT run_id,outcome FROM actor_turn_claims WHERE actor_id=${this.dependencies.actor.actorId} AND turn_id=${turnId}`[0];
 
-    if (claim === undefined || claim.outcome !== null) return Effect.succeed(null);
+    if (claim === undefined || claim.outcome !== null) return null;
     const proposal = this.proposals.inspect(proposalId);
 
-    if (proposal === null) return Effect.fail(new KinuError('missing', 'context proposal disappeared before its audit event'));
+    if (proposal === null) throw new KinuError('missing', 'context proposal disappeared before its audit event');
     const via = proposal.metadata.via;
 
-    if (via !== 'file' && via !== 'session' && via !== 'owner') return Effect.succeed(null);
+    if (via !== 'file' && via !== 'session' && via !== 'owner') return null;
 
-    return Effect.sync(() => events.emitDeferred(claim.run_id, { type: 'context_edit', contextId: selection.contextId, proposalId,
+    return events.emitDeferred(claim.run_id, { type: 'context_edit', contextId: selection.contextId, proposalId,
       revision: selection.revision, baseRevision: proposal.metadata.base_revision, author: proposal.metadata.author, via, status,
       messageCount: status === 'staged' ? proposal.entries.length : this.context.entries(selection).length,
-      effectiveAt: 'step', turnId, stepIndex: null }));
+      effectiveAt: 'step', turnId, stepIndex: null });
   }
 
   /** `messages` is the model-facing output; `parts` also carries render-only parts for the public transcript. */
@@ -403,43 +384,39 @@ stepBase(assertOwner: () => Effect.Effect<void, KinuError>, turnId: string | nul
     return row === undefined ? null : { messageId: row.message_id };
   }
 
-  admitInput(input: { readonly id: string; readonly message: ModelMessage; readonly turnId: string; readonly assertOwner: () => Effect.Effect<void, KinuError> }): Promise<MessageReference> {
-    return settle(Effect.gen({ self: this }, function* () {
-      yield* input.assertOwner();
-      const existing = this.admittedInput(input.id);
+  async admitInput(input: { readonly id: string; readonly message: ModelMessage; readonly turnId: string; readonly assertOwner: () => void }): Promise<MessageReference> {
+    input.assertOwner();
+    const existing = this.admittedInput(input.id);
 
-      if (existing !== null) return existing;
-      const prepared = yield* Effect.promise(() => this.messages.prepare(input.message, input.id));
+    if (existing !== null) return existing;
+    const prepared = await this.messages.prepare(input.message, input.id);
 
-      return this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
-        yield* input.assertOwner();
-        const admitted = this.admittedInput(input.id);
+    return this.dependencies.transactionSync(() => {
+      input.assertOwner();
+      const admitted = this.admittedInput(input.id);
 
-        if (admitted !== null) return admitted;
+      if (admitted !== null) return admitted;
 
-        return this.messages.insert(prepared, 'input', { ingressId: input.id });
-      })));
-    }));
+      return this.messages.insert(prepared, 'input', { ingressId: input.id });
+    });
   }
 
   landInput(input: LandedInput): void {
     const { prepared, reference, assertOwner } = input;
     this.dependencies.transactionSync(() => {
-      return settleSync(Effect.gen({ self: this }, function* () {
-        yield* assertOwner();
-        const existing = this.admittedInput(reference.messageId);
+      assertOwner();
+      const existing = this.admittedInput(reference.messageId);
 
-        if (existing === null) {
-          if (prepared === null) return yield* new KinuError('missing', 'landed input was not prepared');
-          this.messages.insert(prepared, 'input', { ingressId: reference.messageId });
-        }
+      if (existing === null) {
+        if (prepared === null) throw new KinuError('missing', 'landed input was not prepared');
+        this.messages.insert(prepared, 'input', { ingressId: reference.messageId });
+      }
 
-        const selected = this.activateInput(reference, input.turnId, assertOwner);
-        input.publish?.(selected);
-      }));
+      const selected = this.activateInput(reference, input.turnId, assertOwner);
+      input.publish?.(selected);
     });
   }
-  activateInput(reference: MessageReference, turnId: string, assertOwner: () => Effect.Effect<void, KinuError>): ContextSelection {
+  activateInput(reference: MessageReference, turnId: string, assertOwner: () => void): ContextSelection {
     return this.context.commit(null, { cause: 'input', turnId, assertEpoch: assertOwner, mutate: entries => {
       const owned = this.dependencies.sql<{ entry_id: string }>`SELECT entry_id FROM context_memberships WHERE actor_id=${this.dependencies.actor.actorId} AND message_id=${reference.messageId} LIMIT 1`[0];
 
@@ -447,34 +424,30 @@ stepBase(assertOwner: () => Effect.Effect<void, KinuError>, turnId: string | nul
     } });
   }
 
-  append(input: {
+  async append(input: {
     readonly id: string; readonly message: ModelMessage; readonly origin: MessageOrigin;
     readonly turnId: string | null; readonly ingressId?: string;
-    readonly assertOwner: () => Effect.Effect<void, KinuError>;
+    readonly assertOwner: () => void;
   }): Promise<MessageReference> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const selected = this.context.selected() ?? this.context.initialize();
-      const prepared = yield* Effect.promise(() => this.messages.prepare(input.message, input.id));
-      let reference: MessageReference | null = null;
-      this.context.commit(selected, { cause: input.origin, turnId: input.turnId, assertEpoch: input.assertOwner, mutate: entries => {
-        reference = this.messages.insert(prepared, input.origin, input.ingressId === undefined ? {} : { ingressId: input.ingressId });
+    const selected = this.context.selected() ?? this.context.initialize();
+    const prepared = await this.messages.prepare(input.message, input.id);
+    let reference: MessageReference | null = null;
+    this.context.commit(selected, { cause: input.origin, turnId: input.turnId, assertEpoch: input.assertOwner, mutate: entries => {
+      reference = this.messages.insert(prepared, input.origin, input.ingressId === undefined ? {} : { ingressId: input.ingressId });
 
-        return [...entries, { ...reference, entryId: input.id, position: entries.length }];
-      } });
+      return [...entries, { ...reference, entryId: input.id, position: entries.length }];
+    } });
 
-      if (reference === null) return yield* new KinuError('io', 'message publication did not return its identity');
+    if (reference === null) throw new KinuError('io', 'message publication did not return its identity');
 
-      return reference;
-    }));
+    return reference;
   }
 
   assertClaimEpoch(turnId: string, epoch: number): void {
-    return settleSync(Effect.gen({ self: this }, function* () {
-      this.dependencies.actor.assertCurrent();
-      const claim = this.dependencies.sql<{ epoch: number }>`SELECT epoch FROM actor_turn_claims WHERE actor_id=${this.dependencies.actor.actorId} AND turn_id=${turnId}`[0];
+    this.dependencies.actor.assertCurrent();
+    const claim = this.dependencies.sql<{ epoch: number }>`SELECT epoch FROM actor_turn_claims WHERE actor_id=${this.dependencies.actor.actorId} AND turn_id=${turnId}`[0];
 
-      if (claim?.epoch !== epoch) return yield* new KinuError('denied', 'actor claim epoch is no longer current');
-    }));
+    if (claim?.epoch !== epoch) throw new KinuError('denied', 'actor claim epoch is no longer current');
   }
 
   epochCurrent(turnId: string, epoch: number): boolean {
@@ -486,11 +459,6 @@ stepBase(assertOwner: () => Effect.Effect<void, KinuError>, turnId: string | nul
   }
 
   assertEpoch(turnId: string, epoch: number): void {
-    return settleSync(this.epochFence(turnId, epoch));
-  }
-
-  /** {@link assertEpoch} as the fence a transaction yields. */
-  epochFence(turnId: string, epoch: number): Effect.Effect<void, KinuError> {
-    return Effect.suspend(() => this.epochCurrent(turnId, epoch) ? Effect.void : Effect.fail(new KinuError('denied', 'actor execution epoch is no longer current')));
+    if (!this.epochCurrent(turnId, epoch)) throw new KinuError('denied', 'actor execution epoch is no longer current');
   }
 }

@@ -5,11 +5,11 @@ import { Database } from 'bun:sqlite';
 
 import {
   TERMINAL_EFFECT_RETRY_BASE_MS, TerminalEffectLedger, initTerminalEffectTable,
-  terminalEffect, turnRecordTerminalEffect, TerminalEffectInterrupt,
+  terminalEffect, chatTerminalEffects, TerminalEffectInterrupt,
 } from '../src/orchestrator/terminal-effects';
 import { projectJsonValue, type CompletedTurn } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { present, testActorHandle } from '@kinu.run/test-utils';
 
 const TURN: CompletedTurn = {
   userMessage: 'name the parser', assistantResponse: 'the parser is sound',
@@ -52,10 +52,15 @@ describe('turnRecordTerminalEffect', () => {
   const recorderOver = () => {
     const recorded: unknown[] = [];
 
-    const effect = turnRecordTerminalEffect({
-      recordedTurn: (status, turn) => ({ ...turn, status }),
-      recordTurn: (turn, continuity, options) => { recorded.push({ turn, continuity, options }); },
-    });
+    const effect = present(chatTerminalEffects({
+      chat: () => { throw new Error('the recording owes no turn'); },
+      orchestrator: {
+        recordedTurn: (status, turn) => ({ ...turn, status }),
+        recordTurn: (turn, continuity, options) => { recorded.push({ turn, continuity, options }); },
+        drainPendingEvents: () => Promise.reject(new Error('the recording drains nothing')),
+      },
+      engine: { learnFromTurn: () => Promise.reject(new Error('the recording learns nothing')) },
+    }).turn_record, 'the recording body');
 
     return { effect, recorded };
   };

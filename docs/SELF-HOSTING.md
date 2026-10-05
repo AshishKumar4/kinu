@@ -45,15 +45,14 @@ I commit both public pins with the deployment configuration and push that revisi
 
 For a build runner with no key file, `KINU_RELEASE_SIGNING_KEY` can supply the same PKCS#8 base64 private key through its secret store. It takes precedence over the file. `scripts/build-cli-dist.sh` runs the signing check before bundling or creating the output directory, and the signer checks the final artifact manifest again. A missing key, missing pin, or mismatched key refuses the build with setup instructions.
 
-## Step two: provision, deploy, provision
+## Step two: provision, deploy
 
 ```bash
-bun run infra:provision staging   # staging's R2 buckets and Vectorize indexes
-bun run deploy                    # staging's Worker, DO namespaces, container, routes, cron
-bun run infra:provision staging   # staging's secrets; its Worker must exist
+bun run infra:provision staging   # staging's R2 buckets, Vectorize indexes and secrets
+bun run deploy --bootstrap        # staging's Worker, DO namespaces, container, routes, cron
 ```
 
-Provisioning runs twice because `wrangler secret put` refuses on a Worker that does not exist yet. The first run says so, and the second creates nothing the first created. `bun run deploy` runs its required gates before it builds anything. Preflight runs first, the source gates run concurrently, and the two that need the machine or the account to themselves (`gate:hammer`, `gate:infra`) run alone at the end, in that order. A failed gate exits before Wrangler runs.
+With no Worker yet, `wrangler secret put` makes a placeholder Worker to hold the secrets, and the first deploy replaces it. That deploy passes `--bootstrap` because it creates everything only a deploy can; later deploys drop the flag. `bun run deploy` runs its required gates before it builds anything. Preflight runs first, the source gates run concurrently, and the two that need the machine or the account to themselves (`gate:hammer`, `gate:infra`) run alone at the end, in that order. A failed gate exits before Wrangler runs.
 
 A fresh deployment has no hosted Python, Bash, Ruby, or Clang until someone supplies a Nimbus runtime catalog. The base workspace and the Cloudflare container still work. I don't promise runtime parity for a fresh self-host until a seed command and a content check exist.
 
@@ -69,8 +68,7 @@ Production takes the build staging verified:
 
 ```bash
 bun run infra:provision production
-bun run deploy --promote           # production, from staging's verified build
-bun run infra:provision production
+bun run deploy --promote --bootstrap   # production, from staging's verified build
 bun run gate:infra production
 ```
 
@@ -82,7 +80,7 @@ A provider appears on `/login` only when both its client id and its client secre
 https://<your-host>/auth/<provider>/callback
 ```
 
-Client ids are plain vars in `wrangler.jsonc`. Client secrets are Wrangler secrets, and the second provisioning run prompts for them. The Cloudflare provider is the one worth having: signing in with it also connects the user's own Workers AI, so their chat bills their account rather than yours. The exact scopes and grant types are in [DEPLOYMENT.md](DEPLOYMENT.md#oauth-setup).
+Client ids are plain vars in `wrangler.jsonc`. Client secrets are Wrangler secrets, and provisioning prompts for them. The Cloudflare provider is the one worth having: signing in with it also connects the user's own Workers AI, so their chat bills their account rather than yours. The exact scopes and grant types are in [DEPLOYMENT.md](DEPLOYMENT.md#oauth-setup).
 
 ## What works when
 

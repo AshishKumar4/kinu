@@ -2,7 +2,6 @@
  * Every actor's work in the workspace, retired actors included (`list({ retired: true })`). Each actor is
  * read through a read-only handle fenced on row presence, not lifecycle, so retained history stays readable.
  */
-import { Effect } from 'effect';
 import * as v from 'valibot';
 import { bindActorHandle, type ActorHandle, type ActorIdentity } from '../identity/actor-handle';
 import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
@@ -72,7 +71,7 @@ export function actorReadHandle(sql: SqlExecutor, row: WorkspaceActor): ActorHan
     storageKey: row.storageKey,
   };
 
-  return bindActorHandle(sql, identity, () => Effect.void);
+  return bindActorHandle(sql, identity, () => {});
 }
 
 /** `root` binds nothing; every row is read through its own actor's handle. */

@@ -5,13 +5,10 @@
  */
 
 import { textSink } from '@nimbus-sh/core/_shared/bytes.js';
-import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { ShellExecuteFn } from '@nimbus-sh/core/substrate/lifo/commands/system/npm.js';
 import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import * as v from 'valibot';
-import type { ExecutorCapability } from '../execution/types';
-import { Effect } from 'effect';
-import { KinuError, refusalOf, renderCauseChain, settle, toKinuError, type Refusal } from '../obs/index';
+import { KinuError, refusalOf, renderCauseChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 
 /**
@@ -60,47 +57,26 @@ const NimbusRuntimeCatalogSchema = v.union([
 ]);
 
 /** Bins a hosted session box can put on PATH: installed bins plus available runtime names. */
-export function sessionRuntimeBins(list: () => Promise<JsonValue | undefined>): Promise<ReadonlySet<string> | { readonly unreadable: KinuError }> {
-  return settle(Effect.tryPromise({
-    try: list,
-    catch: (cause) => toKinuError({ doing: 'reading the session box runtime catalog', cause, otherwise: 'io' }),
-  }).pipe(
-    Effect.map((listed) => {
-      const parsed = v.safeParse(NimbusRuntimeCatalogSchema, listed);
+export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefined>): Promise<ReadonlySet<string> | { readonly unreadable: KinuError }> {
+  try {
+    const parsed = v.safeParse(NimbusRuntimeCatalogSchema, await list());
 
-      if (!parsed.success) return new Set<string>();
+    if (!parsed.success) return new Set();
 
-      const rows = Array.isArray(parsed.output) ? parsed.output : parsed.output.installed;
-      const names = new Set<string>();
+    const rows = Array.isArray(parsed.output) ? parsed.output : parsed.output.installed;
+    const names = new Set<string>();
 
-      for (const runtime of rows) for (const bin of runtime.bins) names.add(bin);
+    for (const runtime of rows) for (const bin of runtime.bins) names.add(bin);
 
-      if (!Array.isArray(parsed.output)) {
-        for (const available of parsed.output.available) names.add(available.name);
-      }
+    if (!Array.isArray(parsed.output)) {
+      for (const available of parsed.output.available) names.add(available.name);
+    }
 
-      return names;
-    }),
+    return names;
+  } catch (cause) {
     // Distinct from a catalog that parsed and named no bins.
-    Effect.catch((unreadable) => Effect.succeed({ unreadable })),
-  ));
-}
-
-/**
- * Capabilities a workspace holding `runtimes` may declare; reads the same list that decides registration,
- * so the declaration cannot drift. `npm` is always registered.
- */
-export function workspaceToolchainCapabilities(
-  runtimes: readonly RuntimePackage[],
-): readonly ExecutorCapability[] {
-  const capabilities: ExecutorCapability[] = ['npm'];
-
-  // `cpython` is the manifest name; `python` is the catalog name users type.
-  if (runtimes.some((pkg) => pkg.manifest.name === 'cpython' || pkg.manifest.name === 'python')) {
-    capabilities.push('python');
+    return { unreadable: toKinuError({ doing: 'reading the session box runtime catalog', cause, otherwise: 'io' }) };
   }
-
-  return capabilities;
 }
 
 /** Registers npm and npx on the workspace's shell; nothing is fetched until a subcommand runs. */

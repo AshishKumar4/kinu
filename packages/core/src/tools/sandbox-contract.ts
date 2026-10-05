@@ -119,7 +119,8 @@ export function codemodeText(argument: { readonly value: unknown; readonly param
   return text.output;
 }
 
-export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
+/** `signal` is the calling program's: a tool it reaches here is stopped with the eval that called it. */
+export function nativeToolFunctions(tools: ToolSet, signal: AbortSignal | undefined): CodemodeProvider['tools'] {
   const out: Record<string, CodemodeProvider['tools'][string]> = {};
 
   for (const [name, tool] of Object.entries(tools)) {
@@ -138,7 +139,8 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
           }
 
           const output = input.output;
-          const result = yield* Effect.promise(() => Promise.resolve(execute(output, { toolCallId: 'codemode-' + nanoid(), messages: [] })));
+          const options = { toolCallId: 'codemode-' + nanoid(), messages: [], ...(signal !== undefined && { abortSignal: signal }) };
+          const result = yield* Effect.promise(() => Promise.resolve(execute(output, options)));
 
           return result === undefined ? undefined : decodeJsonValue({ value: result });
         })));

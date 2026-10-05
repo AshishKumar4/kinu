@@ -27,6 +27,7 @@ import {
   CODE_EXECUTION_SECTION,
   DELEGATION_SECTION,
   EXECUTORS_SECTION,
+  PLANES_SECTION,
   GENERIC_EXECUTOR_LINE,
   DEVICE_EXECUTOR_LINE,
   OPERATING_GUIDANCE,
@@ -51,6 +52,7 @@ import {
   type RenderSection,
 } from './prompting/section-templates';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
+import { DEVICE_PREFIX, VFS_PREFIX, type PathPlanes } from './vfs/resolve';
 import { PLATFORM_CATALOG } from './platform-catalog';
 import { sandboxSizeLabel } from './execution/sandbox';
 import type { SandboxSizes } from './execution/types';
@@ -163,7 +165,7 @@ function renderExecutorLine(
   switch (exec.name) {
       case 'workspace':
         return render(WORKSPACE_EXECUTOR_LINE, {
-          cliLocal: backend === 'cli-local', cliVfs: backend === 'cli-vfs', memoryMb: String(WORKSPACE_MEMORY_MB),
+          cliLocal: backend === 'cli-local', memoryMb: String(WORKSPACE_MEMORY_MB),
         });
       case 'sandbox':
         return render(SANDBOX_EXECUTOR_LINE, sandboxSizeSlots(exec.sizes));
@@ -174,7 +176,7 @@ function renderExecutorLine(
   }
 }
 
-function renderExecutorSection(surface: PromptSurface, render: RenderSection, workspaceIsMachine: boolean): string {
+function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
   const tools = surface.builtinTools;
 
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
@@ -197,7 +199,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, wo
   return render(EXECUTORS_SECTION, {
     executorLines: lines.join('\n'),
     workspaceRoot: WORKSPACE_ROOT,
-    workspaceReference: workspaceIsMachine ? 'local' : 'vfs',
+    hasFolder: surface.backend === 'cli-local',
     hasDevices: devices.length > 0,
     hasSandbox: devices.some((exec) => exec.name === 'sandbox'),
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
@@ -210,6 +212,23 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, wo
 
 function hasTool(tools: readonly BuiltinToolName[], name: BuiltinToolName): boolean {
   return tools.includes(name);
+}
+
+/** Each prefix as the `vfs://` subtree it names (`local://` is `vfs://local`), then where each subtree is here. */
+function renderPlanesSection(planes: PathPlanes, render: RenderSection): string {
+  const long = (path: string): string => `\`${VFS_PREFIX}://${path.replace(/^\/+/u, '')}\``;
+
+  const aliases = planes.prefixes.filter((row) => row.prefix !== VFS_PREFIX).map((row) => (row.prefix === DEVICE_PREFIX
+    ? `a machine's \`${row.prefix}://\` is ${long(`${row.subtree}/${row.prefix}`)}`
+    : `\`${row.prefix}://\` is ${long(row.subtree)}`));
+
+  const mounts = planes.mounts.map((mount) => `${long(mount.subtree)} is \`${mount.at}\``);
+
+  return render(PLANES_SECTION, { aliases: listed(aliases), mounts: listed(mounts) });
+}
+
+function listed(items: readonly string[]): string {
+  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
 }
 
 function renderAgentStateSection(surface: PromptSurface, render: RenderSection): string {
@@ -308,7 +327,7 @@ export function buildSystemPromptSync(
   return [
     renderOperatingGuidance(surface, render),
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
-    renderExecutorSection(surface, render, rt.workspaceIsMachine),
+    renderExecutorSection(surface, render),
     renderToolsSection(surface, render),
     renderAgentStateSection(surface, render),
     ...(lead ? [
@@ -320,6 +339,7 @@ export function buildSystemPromptSync(
       render(LEAD_DELIVERY, {}),
       render(LEAD_DIRECT_EDIT, {}),
     ] : []),
+    renderPlanesSection(rt.planes, render),
     readSoulForPrompt(opts.soulOverride),
     // System placement carries only owner-approved (by digest) and built-in instructions; the rest ride the
     // unapproved-instructions block (prompting/volatile-context.ts).

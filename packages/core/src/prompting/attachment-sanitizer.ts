@@ -6,14 +6,11 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
-import { Cause, Effect } from 'effect';
 
 import type { ModelInputModality } from '../providers/types';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
-import { classify, diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
-import { settle } from '../obs/effect';
+import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
-import { base64ToBytes } from '../utils/base64';
 
 /** Every model accepts text. */
 export type MediaModality = Exclude<ModelInputModality, 'text'>;
@@ -59,106 +56,98 @@ const OVERSIZE_ACCEPTED_DOC_MAX_BYTES = 1024 * 1024;
 const ATTACHMENTS_DIR = SPILL_DIRS.attachments;
 
 /** Copy-on-write per message; untouched messages keep referential identity. */
-export function sanitizeAttachmentsForModel(
+export async function sanitizeAttachmentsForModel(
   messages: readonly ModelMessage[],
   policy: AttachmentPolicy,
 ): Promise<ModelMessage[]> {
-  return settle(Effect.gen(function* () {
-    const out: ModelMessage[] = [];
+  const out: ModelMessage[] = [];
 
-    for (const message of messages) {
-      if (message.role === 'user') {
-        if (Array.isArray(message.content)) {
-          out.push(yield* sanitizeUserMessage(message, message.content, policy));
-        } else {
-          const replacement = yield* sanitizeUserText(message.content, policy);
-          out.push(replacement === null ? message : { ...message, content: replacement });
-        }
-      } else if (message.role === 'assistant' && Array.isArray(message.content)) {
-        out.push(yield* sanitizeAssistantMessage(message, message.content, policy));
+  for (const message of messages) {
+    if (message.role === 'user') {
+      if (Array.isArray(message.content)) {
+        out.push(await sanitizeUserMessage(message, message.content, policy));
       } else {
-        out.push(message);
+        const replacement = await sanitizeUserText(message.content, policy);
+        out.push(replacement === null ? message : { ...message, content: replacement });
       }
+    } else if (message.role === 'assistant' && Array.isArray(message.content)) {
+      out.push(await sanitizeAssistantMessage(message, message.content, policy));
+    } else {
+      out.push(message);
     }
+  }
 
-    return out;
-  }));
+  return out;
 }
-
-type Sanitized<A> = Effect.Effect<A, KinuError>;
 
 type UserPart = Exclude<UserModelMessage['content'], string>[number];
 
 type AssistantPart = Exclude<AssistantModelMessage['content'], string>[number];
 
-function sanitizeUserMessage(
+async function sanitizeUserMessage(
   message: UserModelMessage,
   content: readonly UserPart[],
   policy: AttachmentPolicy,
-): Sanitized<UserModelMessage> {
-  return Effect.gen(function* () {
-    let changed = false;
-    const parts: UserPart[] = [];
+): Promise<UserModelMessage> {
+  let changed = false;
+  const parts: UserPart[] = [];
 
-    for (const part of content) {
-      const replacement = yield* sanitizePart(part, policy);
+  for (const part of content) {
+    const replacement = await sanitizePart(part, policy);
 
-      if (replacement) changed = true;
-      parts.push(replacement ?? part);
-    }
+    if (replacement) changed = true;
+    parts.push(replacement ?? part);
+  }
 
-    return changed ? { ...message, content: parts } : message;
-  });
+  return changed ? { ...message, content: parts } : message;
 }
 
-function sanitizeAssistantMessage(
+async function sanitizeAssistantMessage(
   message: AssistantModelMessage,
   content: readonly AssistantPart[],
   policy: AttachmentPolicy,
-): Sanitized<AssistantModelMessage> {
-  return Effect.gen(function* () {
-    let changed = false;
-    const parts: AssistantPart[] = [];
+): Promise<AssistantModelMessage> {
+  let changed = false;
+  const parts: AssistantPart[] = [];
 
-    for (const part of content) {
-      const replacement = part.type === 'file' ? yield* sanitizeFilePart(part, policy) : null;
+  for (const part of content) {
+    const replacement = part.type === 'file' ? await sanitizeFilePart(part, policy) : null;
 
-      if (replacement) changed = true;
-      parts.push(replacement ?? part);
-    }
+    if (replacement) changed = true;
+    parts.push(replacement ?? part);
+  }
 
-    return changed ? { ...message, content: parts } : message;
-  });
+  return changed ? { ...message, content: parts } : message;
 }
 
 /** Only the three carrier kinds can hold an attachment. */
-function sanitizePart(part: UserPart, policy: AttachmentPolicy): Sanitized<TextPart | null> {
-  if (part.type === 'image') return sanitizeImagePart(part, policy);
+async function sanitizePart(part: UserPart, policy: AttachmentPolicy): Promise<TextPart | null> {
+  if (part.type === 'image') return await sanitizeImagePart(part, policy);
 
-  if (part.type === 'file') return sanitizeFilePart(part, policy);
+  if (part.type === 'file') return await sanitizeFilePart(part, policy);
 
-  if (part.type === 'text') return sanitizeTextPart(part, policy);
+  if (part.type === 'text') return await sanitizeTextPart(part, policy);
 
-  return Effect.succeed(null);
+  return null;
 }
 
-function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Sanitized<TextPart | null> {
+async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Promise<TextPart | null> {
   if (part.mediaType !== undefined && !RASTER_IMAGES.has(part.mediaType)) {
     return sanitizeFilePart({ type: 'file', data: part.image, mediaType: part.mediaType }, policy);
   }
 
-  if (policy.accepts.has('image')) return Effect.succeed(null);
+  if (policy.accepts.has('image')) return null;
 
   return replaceMedia(part.image, part.mediaType ?? 'image', undefined, policy);
 }
 
-function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Sanitized<TextPart | null> {
+async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promise<TextPart | null> {
   const modality = mediaModalityFor(part.mediaType);
 
   if (modality !== null && policy.accepts.has(modality)) {
     return modality !== 'image' && oversizeForInlineDocument(part.data)
       ? replaceMedia(part.data, part.mediaType, part.filename, policy)
-      : Effect.succeed(null);
+      : null;
   }
 
   if (isTextMediaType(part.mediaType)) return inlineOrStoreText(part, policy);
@@ -166,17 +155,18 @@ function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Sanitized<T
   return replaceMedia(part.data, part.mediaType, part.filename, policy);
 }
 
-function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Sanitized<TextPart | null> {
-  return Effect.map(sanitizeUserText(part.text, policy), (replacement) => (replacement === null ? null : { ...part, text: replacement }));
+async function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Promise<TextPart | null> {
+  const replacement = await sanitizeUserText(part.text, policy);
+
+  return replacement === null ? null : { ...part, text: replacement };
 }
 
 /** Byte-stable, so a pasted document does not move the prompt-cache prefix. Null within budget. */
-function sanitizeUserText(text: string, policy: AttachmentPolicy): Sanitized<string | null> {
+async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise<string | null> {
   const bytes = new TextEncoder().encode(text);
 
-  if (bytes.length <= INLINE_TEXT_MAX_BYTES) return Effect.succeed(null);
-
-  return Effect.map(storeContentAddressed(bytes, 'text/plain', policy), (path) => {
+  if (bytes.length <= INLINE_TEXT_MAX_BYTES) return null;
+  const path = await storeAttachment(policy.vfs, ATTACHMENTS_DIR, bytes, 'text/plain');
   const head = text.slice(0, PASTED_TEXT_PREVIEW_CHARS);
   policy.budget?.recordSpill({
     producer: 'pasted_text', omitted: text.length - head.length, referenced: true,
@@ -184,7 +174,6 @@ function sanitizeUserText(text: string, policy: AttachmentPolicy): Sanitized<str
 
   return `[Pasted text (${bytes.length} bytes) saved to ${path} (read or slice it with your file tools; ` +
     `oversize: name ${path} in the mission of a lifetime:"task" agents hire so that agent reads it instead of you). The first ${head.length} chars follow.]\n\n${head}`;
-  });
 }
 
 /** Sized without decoding: base64 is ~4/3 of the bytes; remote URLs have no local payload. */
@@ -227,44 +216,44 @@ function isTextMediaType(mediaType: string): boolean {
   return mediaType.startsWith('text/') || mediaType === 'image/svg+xml';
 }
 
-function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Sanitized<TextPart> {
-  return Effect.gen(function* () {
-    const payload = yield* decodePayload(file.data);
+async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
+  const payload = decodePayload(file.data);
 
-    if (payload.kind === 'remote') return remoteReference(payload.url, file.mediaType, file.filename);
+  if (payload.kind === 'remote') return remoteReference(payload.url, file.mediaType, file.filename);
 
-    if (payload.bytes.length < INLINE_TEXT_MAX_BYTES) {
-      const name = file.filename ?? 'attachment.txt';
-      const text = new TextDecoder().decode(payload.bytes);
+  if (payload.bytes.length < INLINE_TEXT_MAX_BYTES) {
+    const name = file.filename ?? 'attachment.txt';
+    const text = new TextDecoder().decode(payload.bytes);
 
-      return {
-        type: 'text',
-        text: `[Attachment ${name} (${file.mediaType}, ${payload.bytes.length} bytes) inlined below]\n\n${text}`,
-      } satisfies TextPart;
-    }
+    return {
+      type: 'text',
+      text: `[Attachment ${name} (${file.mediaType}, ${payload.bytes.length} bytes) inlined below]\n\n${text}`,
+    };
+  }
 
-    return yield* storeAndReference(payload.bytes, file.mediaType, file.filename, policy);
-  });
+  return storeAndReference(payload.bytes, file.mediaType, file.filename, policy);
 }
 
-function replaceMedia(
+async function replaceMedia(
   data: FilePart['data'],
   mediaType: string,
   filename: string | undefined,
   policy: AttachmentPolicy,
-): Sanitized<TextPart> {
-  return Effect.flatMap(decodePayload(data), (payload) => (payload.kind === 'remote'
-    ? Effect.succeed(remoteReference(payload.url, mediaType, filename))
-    : storeAndReference(payload.bytes, mediaType, filename, policy)));
+): Promise<TextPart> {
+  const payload = decodePayload(data);
+
+  if (payload.kind === 'remote') return remoteReference(payload.url, mediaType, filename);
+
+  return storeAndReference(payload.bytes, mediaType, filename, policy);
 }
 
-function storeAndReference(
+async function storeAndReference(
   bytes: Uint8Array,
   mediaType: string,
   filename: string | undefined,
   policy: AttachmentPolicy,
-): Sanitized<TextPart> {
-  return Effect.map(storeContentAddressed(bytes, mediaType, policy), (path) => {
+): Promise<TextPart> {
+  const path = await storeAttachment(policy.vfs, ATTACHMENTS_DIR, bytes, mediaType);
   const basename = path.slice(ATTACHMENTS_DIR.length + 1);
   policy.budget?.recordSpill({ producer: 'attachment', omitted: bytes.length, referenced: true });
   const name = filename ?? basename;
@@ -273,49 +262,45 @@ function storeAndReference(
     type: 'text',
     text: `[Attachment ${name} (${mediaType}, ${bytes.length} bytes) saved to ${path} (read it with your file tools)]`,
   };
-  });
 }
 
-/** Reuse verifies the bytes: an existing path (truncated write, agent-written file) is not proof of content. */
-function storeContentAddressed(
-  bytes: Uint8Array,
-  mediaType: string,
-  policy: AttachmentPolicy,
-): Sanitized<string> {
-  return Effect.gen(function* () {
-    const path = `${ATTACHMENTS_DIR}/${sha256Hex(bytes)}.${extensionFor(mediaType)}`;
+/**
+ * `bytes` under `directory` by content (`<sha256>.<ext>`), the path returned once durable: the one attachment store,
+ * for a part the model cannot take and for one compaction moves out. Reuse verifies the bytes: an existing path
+ * (truncated write, agent-written file) is not proof of content.
+ */
+export async function storeAttachment(vfs: VFS, directory: string, bytes: Uint8Array, mediaType: string): Promise<string> {
+  const path = `${directory}/${sha256Hex(bytes)}.${extensionFor(mediaType)}`;
 
-    if (yield* holdsBytes(policy.vfs, path, bytes)) return path;
+  if (await holdsBytes(vfs, path, bytes)) return path;
 
-    yield* Effect.catchCause(Effect.promise(async () => policy.vfs.mkdir(ATTACHMENTS_DIR, { recursive: true })), (failed) => {
-      const err = Cause.squash(failed);
+  try {
+    await vfs.mkdir(directory, { recursive: true });
+  } catch (err) {
+    if (classify({ cause: err }) !== 'eexist') {
+      throw toKinuError({ doing: 'creating the attachments spill directory', cause: err, otherwise: 'io' });
+    }
+  }
 
-      return classify({ cause: err }) === 'eexist'
-        ? Effect.void
-        : Effect.fail(toKinuError({ doing: 'creating the attachments spill directory', cause: err, otherwise: 'io' }));
-    });
-    yield* Effect.promise(async () => policy.vfs.writeFile(path, bytes));
+  await vfs.writeFile(path, bytes);
 
-    return path;
-  });
+  return path;
 }
 
 /** Absent is the ordinary first spill; mismatched bytes are rewritten. */
-function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Effect.Effect<boolean> {
-  return Effect.gen(function* () {
-    if (!(yield* Effect.promise(() => exists(vfs, path)))) return false;
-    const stored = yield* Effect.promise(async () => vfs.readFile(path));
-    // Narrowed by class, as prompting/agents-md.ts does for the same VFS return.
-    const existing = stored instanceof Uint8Array ? stored : new TextEncoder().encode(stored);
+async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<boolean> {
+  if (!(await exists(vfs, path))) return false;
+  const stored = await vfs.readFile(path);
+  // Narrowed by class, as prompting/agents-md.ts does for the same VFS return.
+  const existing = stored instanceof Uint8Array ? stored : new TextEncoder().encode(stored);
 
-    if (existing.length !== bytes.length) return false;
+  if (existing.length !== bytes.length) return false;
 
-    for (let i = 0; i < bytes.length; i++) {
-      if (existing[i] !== bytes[i]) return false;
-    }
+  for (let i = 0; i < bytes.length; i++) {
+    if (existing[i] !== bytes[i]) return false;
+  }
 
-    return true;
-  });
+  return true;
 }
 
 /** Remote URLs are referenced directly (equally byte-stable). */
@@ -332,36 +317,51 @@ type DecodedPayload =
   | { kind: 'bytes'; bytes: Uint8Array }
   | { kind: 'remote'; url: string };
 
-function decodePayload(data: FilePart['data']): Effect.Effect<DecodedPayload> {
-  if (data instanceof URL) return Effect.succeed({ kind: 'remote', url: data.toString() });
+/** A part's payload as bytes; null for a remote URL, which has none here. */
+export function attachmentBytes(data: FilePart['data']): Uint8Array | null {
+  const payload = decodePayload(data);
 
-  if (data instanceof Uint8Array) return Effect.succeed({ kind: 'bytes', bytes: data });
-
-  if (data instanceof ArrayBuffer) return Effect.succeed({ kind: 'bytes', bytes: new Uint8Array(data) });
-
-  if (/^https?:\/\//.test(data)) return Effect.succeed({ kind: 'remote', url: data });
-  const bytes = data.startsWith('data:') ? decodeDataUrl(data) : decodeBase64OrText(data);
-
-  return Effect.map(bytes, (decoded): DecodedPayload => ({ kind: 'bytes', bytes: decoded }));
+  return payload.kind === 'bytes' ? payload.bytes : null;
 }
 
-function decodeDataUrl(dataUrl: string): Effect.Effect<Uint8Array> {
+function decodePayload(data: FilePart['data']): DecodedPayload {
+  if (data instanceof URL) return { kind: 'remote', url: data.toString() };
+
+  if (data instanceof Uint8Array) return { kind: 'bytes', bytes: data };
+
+  if (data instanceof ArrayBuffer) return { kind: 'bytes', bytes: new Uint8Array(data) };
+
+  if (data.startsWith('data:')) return { kind: 'bytes', bytes: decodeDataUrl(data) };
+
+  if (/^https?:\/\//.test(data)) return { kind: 'remote', url: data };
+
+  return { kind: 'bytes', bytes: decodeBase64OrText(data) };
+}
+
+function decodeDataUrl(dataUrl: string): Uint8Array {
   const comma = dataUrl.indexOf(',');
   const header = comma === -1 ? dataUrl : dataUrl.slice(0, comma);
   const payload = comma === -1 ? '' : dataUrl.slice(comma + 1);
 
   if (header.includes(';base64')) return decodeBase64OrText(payload);
 
-  return Effect.sync(() => new TextEncoder().encode(decodeURIComponent(payload)));
+  return new TextEncoder().encode(decodeURIComponent(payload));
 }
 
 /** Invalid base64 is treated as UTF-8 so a malformed part cannot break the turn. */
-function decodeBase64OrText(value: string): Effect.Effect<Uint8Array> {
-  return Effect.catchCause(Effect.sync(() => base64ToBytes(value)), (failed) => Effect.sync(() => {
-    diagnostics.event('attachment.base64_decode_fallback', { error: renderThrownChain({ cause: Cause.squash(failed) }) });
+function decodeBase64OrText(value: string): Uint8Array {
+  try {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+    return bytes;
+  } catch (error) {
+    diagnostics.event('attachment.base64_decode_fallback', { error: renderThrownChain({ cause: error }) });
 
     return new TextEncoder().encode(value);
-  }));
+  }
 }
 
 interface AttachmentExtensions {

@@ -455,7 +455,7 @@ test('a tool binding keeps native Plan checks and the same approval ladder as co
   const binding = () => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'tool-gate', 'RUN', { member: 'call', args: [{ command }], invocation: null });
   // The shell a turn's model calls.
   const turns = chatSessionTurns(actor.agent);
-  const native = nativeToolFunctions((await turns.prepare({ messages: [{ role: 'user', content: 'publish it' }] })).tools);
+  const native = nativeToolFunctions((await turns.prepare({ messages: [{ role: 'user', content: 'publish it' }] })).tools, undefined);
   const codemode = () => native.shell?.execute({ command });
 
   for (const [mode, reason] of [['deny_all', 'denied'], ['strict', 'unavailable']]) {

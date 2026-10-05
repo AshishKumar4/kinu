@@ -1,4 +1,5 @@
 import { exists as nimbusExists, readText, type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { direntType } from '../vfs/dirent';
 /**
  * DeviceTunnelExecutor (`device.*`): the user's machines via a daemon connected through the UserDO hub.
  * A fleet: with several live machines a call must name one (`{ device }`); files mount per machine under `/pc/<name>`.
@@ -32,7 +33,7 @@ import { readDeviceOwnershipContext } from './signal';
 import { callJob, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
 import { approveFileAccess, createShellSession, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { asBytes } from '../safety/bound-write';
-import { RESERVED_REFERENCE_ROOTS } from '../vfs/mounts';
+import { RESERVED_ROOTS } from '../vfs/resolve';
 import {
   isJsonObject,
   JsonValueSchema,
@@ -225,9 +226,12 @@ export function createDeviceTunnelExecutor(
     const s = transport.status();
     const live = (s.devices ?? []).filter((d) => d.connected);
     const named = live[0] ?? s.devices?.[0];
-    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox'>> = {};
+    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox' | 'mounts'>> = {};
 
     if (named) identity.label = named.name;
+
+    // Only a fleet the hub listed has segments to name.
+    if (s.devices !== undefined) identity.mounts = live.map((device) => deviceMountSegment(device, s.devices));
     // Per-device answers count only when exactly one machine is live.
     const perDeviceReach = live.length === 1 ? live[0].granted : undefined;
     const granted = perDeviceReach ?? s.workspaceGranted;
@@ -841,14 +845,12 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
         if (isJsonObject(entry)) {
           const name = v.safeParse(v.string(), entry.name);
 
-          if (name.success) {
-            if (entry.type === 'symlink') return { name: name.output, type: 'symlink' as const };
+          const kind = v.safeParse(v.string(), entry.type);
 
-            return { name: name.output, type: entry.type === 'directory' || entry.type === 'dir' ? 'directory' as const : 'file' as const };
-          }
+          if (name.success) return { name: name.output, type: direntType(kind.success ? kind.output : undefined) };
         }
 
-        return { name: JSON.stringify(entry), type: 'file' as const };
+        return { name: JSON.stringify(entry), type: 'unknown' as const };
       });
     })),
 
@@ -877,8 +879,8 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 /** Mount segment: the machine name when it is a clean, unshared segment, else its id. */
 export function deviceMountSegment(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[] | undefined): string {
   const name = device.name.trim();
-  // Reserved reference roots (`vfs`, `sandbox`, `local`) are never a machine's segment.
-  const usable = name.length > 0 && !name.includes('/') && name !== '.' && name !== '..' && !RESERVED_REFERENCE_ROOTS.includes(name);
+  // A reserved root (`vfs`, `local`, `pc`, a URL scheme...) is never a machine's segment.
+  const usable = name.length > 0 && !name.includes('/') && name !== '.' && name !== '..' && !RESERVED_ROOTS.includes(name);
 
   if (!usable) return device.id;
   const others = connectedDevices(fleet).filter((d) => d.id !== device.id && d.name.trim() === name);

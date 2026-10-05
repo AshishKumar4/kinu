@@ -6,7 +6,7 @@
  * whether it `harms` a good turn. Nothing runs the agent, so nothing touches the workspace. A passing edit waits as a
  * candidate; a search is recorded and never repeated for the same turns.
  */
-import { Effect, Result } from 'effect';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { DecisionPort, DecisionQuestion } from '../providers/decision-model';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -226,7 +226,7 @@ function scaffoldEditRefusal(before: string, after: string): string | null {
   if (unsafe !== null) return unsafe;
   const misevolution = checkMisevolution(after);
 
-  return Result.isSuccess(misevolution) ? null : `misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason}`;
+  return misevolution.ok ? null : `misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`;
 }
 
 const SECTION_CHOICE = {

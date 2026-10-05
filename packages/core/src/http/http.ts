@@ -1,8 +1,7 @@
 // Shared HTTP helpers for backend route modules, plus the policy for rebuilding a request for an upstream.
 import { inlineFileType } from '../read-models/file-types';
 import { projectJsonValue } from '../utils/json';
-import { Cause, Effect } from 'effect';
-import { KinuError, publicMessage, settle, toKinuError, tolerateAsync, type ErrorCode } from '../obs/index';
+import { KinuError, publicMessage, toKinuError, tolerateAsync, type ErrorCode } from '../obs/index';
 import { PRIVATE_NO_STORE } from './security-headers';
 import { copyHeaders } from '../providers/fetch-shim';
 import * as v from 'valibot';
@@ -70,69 +69,67 @@ export async function safeJson<Schema extends v.GenericSchema>(
  * a missing `content-length` reads as 0, so the declared length is only a pre-filter. On overflow the
  * stream is cancelled, not drained. A stalled body returns classified; `sink` failures propagate.
  */
-export function readBoundedStream<E>(
+export async function readBoundedStream(
   request: Request,
   limit: number,
-  sink: (chunk: Uint8Array) => Effect.Effect<void, E>,
-): Effect.Effect<'ok' | 'too_large' | KinuError, E> {
-  return Effect.gen(function* () {
-    const declared = Number(request.headers.get('content-length'));
+  sink: (chunk: Uint8Array) => Promise<void> | void,
+): Promise<'ok' | 'too_large' | KinuError> {
+  const declared = Number(request.headers.get('content-length'));
 
-    if (Number.isFinite(declared) && declared > limit) return 'too_large';
-    const body = request.body;
+  if (Number.isFinite(declared) && declared > limit) return 'too_large';
+  const body = request.body;
 
-    if (body === null) return 'ok';
-    const reader = body.getReader();
-    let total = 0;
+  if (body === null) return 'ok';
+  const reader = body.getReader();
+  let total = 0;
 
-    for (;;) {
-      const arrived = yield* Effect.matchCause(Effect.promise(() => reader.read()), {
-        onSuccess: (read) => ({ read }),
-        onFailure: (failed) => ({ unread: toKinuError({ doing: 'reading a request body', cause: Cause.squash(failed), otherwise: 'unavailable' }) }),
-      });
+  for (;;) {
+    let arrived: Awaited<ReturnType<typeof reader.read>>;
 
-      if ('unread' in arrived) return arrived.unread;
-      const value = arrived.read.value;
-
-      if (arrived.read.done || value === undefined) return 'ok';
-      total += value.byteLength;
-
-      if (total > limit) {
-        yield* Effect.promise(() => reader.cancel('the request body is over its limit'));
-
-        return 'too_large';
-      }
-
-      yield* sink(value);
+    try {
+      arrived = await reader.read();
+    } catch (cause) {
+      return toKinuError({ doing: 'reading a request body', cause, otherwise: 'unavailable' });
     }
-  });
+
+    const value = arrived.value;
+
+    if (arrived.done || value === undefined) return 'ok';
+    total += value.byteLength;
+
+    if (total > limit) {
+      await reader.cancel('the request body is over its limit');
+
+      return 'too_large';
+    }
+
+    await sink(value);
+  }
 }
 
 /** The whole body, bounded, or the classified reason there is not one. */
-export function readBounded(
+export async function readBounded(
   request: Request,
   limit: number,
 ): Promise<Uint8Array | 'too_large' | KinuError> {
-  return settle(Effect.gen(function* () {
-    const chunks: Uint8Array[] = [];
-    let total = 0;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
 
-    const outcome = yield* readBoundedStream(request, limit, (chunk) => Effect.sync(() => {
-      chunks.push(chunk);
-      total += chunk.byteLength;
-    }));
+  const outcome = await readBoundedStream(request, limit, (chunk) => {
+    chunks.push(chunk);
+    total += chunk.byteLength;
+  });
 
-    if (outcome !== 'ok') return outcome;
-    const bounded = new Uint8Array(total);
-    let at = 0;
+  if (outcome !== 'ok') return outcome;
+  const bounded = new Uint8Array(total);
+  let at = 0;
 
-    for (const chunk of chunks) {
-      bounded.set(chunk, at);
-      at += chunk.byteLength;
-    }
+  for (const chunk of chunks) {
+    bounded.set(chunk, at);
+    at += chunk.byteLength;
+  }
 
-    return bounded;
-  }));
+  return bounded;
 }
 
 export function escapeHtml(value: string): string {

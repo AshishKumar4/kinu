@@ -4,7 +4,7 @@
  */
 import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { markStoreChanged } from '@kinu.run/agent-utils';
-import { Effect, Result } from 'effect';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
@@ -96,15 +96,14 @@ export function applyPromotionDecision(
 
       const misevolution = checkMisevolution(pendingCode);
 
-      if (Result.isFailure(misevolution)) {
-        const violation = misevolution.failure;
+      if (!misevolution.ok) {
         recordMisevolutionVeto(sql, rt.actor, {
-          surface: 'scaffold', violation,
+          surface: 'scaffold', violation: misevolution,
           detail: `promotion of v${pending.version} vetoed; rolled back instead`,
         });
         const result = yield* Effect.promise(() => applyPromotionDecision(rt, pending, 'rollback', events));
 
-        return { ...result, vetoReason: `Misevolution veto (${violation.criterionId}): ${violation.reason}` };
+        return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
       }
 
       // One actor-scoped statement retires the old current and promotes the pending, so no crash leaves zero or two current rows.

@@ -302,7 +302,8 @@ describe('a confined principal may move its own bits and no others', () => {
     const refused = await rpcExec(f.host, 'chmod 777 /home/agent-a/s.sh', { cred: AGENT_A });
 
     expect(refused.exitCode).not.toBe(0);
-    expect(`${refused.stdout}${refused.stderr}`).toContain('EPERM');
+    // GNU's wording since Nimbus 0.15: the command, the path, and why.
+    expect(`${refused.stdout}${refused.stderr}`).toContain("chmod: changing permissions of '/home/agent-a/s.sh'");
     // A clamp would apply 0o700 and report success; untouched mode is a refusal, not a lie.
     expect(f.workspace.vfs.as(ROOT).stat('/home/agent-a/s.sh').mode & 0o777).toBe(0o600);
   });

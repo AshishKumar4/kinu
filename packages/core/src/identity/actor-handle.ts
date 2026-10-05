@@ -1,7 +1,4 @@
-import { Effect } from 'effect';
 import * as v from 'valibot';
-import { settleSync } from '../obs/effect';
-import type { KinuError } from '../obs/error';
 import { createAgentConfigStore, type AgentConfigStore } from '../config/store';
 import { createProgramStateStore, type ProgramStateStore } from './program-state';
 import type { SqlExecutor } from '../types/primitives';
@@ -31,34 +28,28 @@ export function sameActorReference(left: ActorReference, right: ActorReference):
 export interface ActorHandle extends ActorIdentity {
   /** The getters' own validation, run before acting without `config` or `programState`. */
   readonly assertCurrent: () => void;
-  /** The same validation as an effect, for a fence a transaction yields. */
-  readonly current: () => Effect.Effect<void, KinuError>;
   readonly config: AgentConfigStore;
   readonly programState: ProgramStateStore;
 }
 
 /** Bind an identity to physical storage without exposing its SQL. */
-export function bindActorHandle(sql: SqlExecutor, identity: ActorIdentity, validate: () => Effect.Effect<void, KinuError>): ActorHandle {
+export function bindActorHandle(sql: SqlExecutor, identity: ActorIdentity, validate: () => void): ActorHandle {
+  validate();
   let config: AgentConfigStore | undefined;
   let programState: ProgramStateStore | undefined;
 
-  const handle: ActorHandle = Object.freeze({
+  return Object.freeze({
     ...identity,
-    assertCurrent: () => settleSync(validate()),
-    current: validate,
+    assertCurrent: validate,
     get config() {
-      handle.assertCurrent();
+      validate();
 
-      return config ??= createAgentConfigStore(sql, identity.actorId, handle.assertCurrent);
+      return config ??= createAgentConfigStore(sql, identity.actorId, validate);
     },
     get programState() {
-      handle.assertCurrent();
+      validate();
 
-      return programState ??= createProgramStateStore(sql, identity.actorId, handle.assertCurrent);
+      return programState ??= createProgramStateStore(sql, identity.actorId, validate);
     },
   });
-
-  handle.assertCurrent();
-
-  return handle;
 }

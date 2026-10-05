@@ -49,7 +49,6 @@ async function measure(source: string, nativeNode = false, problem?: RatioProble
 
   const ctx: MeasurementContext = {
     vfs: rt.storage.vfs,
-    nodeIsolated: nativeNode,
     exec: nativeNode ? async (command) => {
       const directory = scratchDir('verifier-node');
 
@@ -105,8 +104,8 @@ export function solve() { return -1; }`, nativeNode);
     });
   }
 
-  // Nimbus's inline node shares the host realm; lockdown awaits upstream per-run isolation.
-  test.each([
+  // Nimbus 0.15 runs inline node in a realm of its own (ask 17), so the verifier locks its intrinsics on both.
+  const tampering = [
     ['Array.isArray', `Array.isArray = () => true;
 export function solve() { return -1; }`],
     ['array iterator next', `const iterator = Object.getPrototypeOf([][Symbol.iterator]());
@@ -121,13 +120,17 @@ iterator.next = function () {
 export function solve() { return -1; }`],
     ['global Array binding', `globalThis.Array = class extends Array { static isArray() { return true; } };
 export function solve() { return -1; }`],
-  ])('Node: candidate cannot tamper with verifier %s', async (_name, source) => {
-    const measured = await measure(source, true);
+  ] as const;
 
-    expect(measured.correct).toBe(false);
-    expect(measured.candOps).toBe(0);
-    expect(measured.failure).toContain('import failed:');
-  });
+  for (const nativeNode of [false, true]) {
+    test.each(tampering)(`${nativeNode ? 'Node' : 'Nimbus'}: candidate cannot tamper with verifier %s`, async (_name, source) => {
+      const measured = await measure(source, nativeNode);
+
+      expect(measured.correct).toBe(false);
+      expect(measured.candOps).toBe(0);
+      expect(measured.failure).toContain('import failed:');
+    });
+  }
 
   test('Node: the opaque-token reference still verifies under lockdown', async () => {
     const measured = await measure(MAJORITY_VOTE.reference, true, MAJORITY_VOTE);

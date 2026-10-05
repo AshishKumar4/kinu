@@ -208,7 +208,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
         message: { role: turn.role, content: turn.text },
         origin: turn.role === 'user' ? 'input' : 'output',
         turnId: null,
-        assertOwner: () => actor.current(),
+        assertOwner: () => actor.assertCurrent(),
       });
 
       transcript.record({

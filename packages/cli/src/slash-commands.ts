@@ -1,7 +1,6 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
-import { Result } from 'effect';
-import { fmtUsd, limitLines, MAIN_ACCOUNT, specWithoutAccount, usageTotal } from '@kinu.run/core';
+import { fmtUsd, limitLines, MAIN_ACCOUNT, SERVER_COMPACTION_MIN_TOKENS, specWithoutAccount, usageTotal, type CompactOutcome } from '@kinu.run/core';
 import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
@@ -399,12 +398,12 @@ async function refineCommand({ client, rest }: SlashContext): Promise<SlashOutco
   if (sub === 'show') {
     const located = resolveRefinementEdit(await client.refinements(), args[0], args[1]);
 
-    if (Result.isFailure(located)) return { kind: 'text', text: located.failure };
-    const shown = await client.showRefinement(located.success.id, located.success.index);
+    if (!located.ok) return { kind: 'text', text: located.error };
+    const shown = await client.showRefinement(located.id, located.index);
 
     return {
       kind: 'text',
-      text: shown.ok ? renderStagedSkill(shown.view, located.success.requestRef, located.success.editRef) : shown.error,
+      text: shown.ok ? renderStagedSkill(shown.view, located.requestRef, located.editRef) : shown.error,
     };
   }
 
@@ -416,19 +415,19 @@ async function refineCommand({ client, rest }: SlashContext): Promise<SlashOutco
     const [requestRef, editRef, token] = args;
     const located = resolveRefinementEdit(await client.refinements(), requestRef, editRef);
 
-    if (Result.isFailure(located)) return { kind: 'text', text: located.failure };
+    if (!located.ok) return { kind: 'text', text: located.error };
 
     if (token === undefined) {
       return {
         kind: 'text',
-        text: `Read it first: /refine show ${located.success.requestRef} ${located.success.editRef}\n`
-          + `Then repeat the digest it prints: /refine ${decision} ${located.success.requestRef} ${located.success.editRef} <digest>\n`,
+        text: `Read it first: /refine show ${located.requestRef} ${located.editRef}\n`
+          + `Then repeat the digest it prints: /refine ${decision} ${located.requestRef} ${located.editRef} <digest>\n`,
       };
     }
 
     const result = await client.decideRefinement({
-      requestId: located.success.id,
-      routeIndex: located.success.index,
+      requestId: located.id,
+      routeIndex: located.index,
       expectedDigest: token,
       decision,
     });
@@ -525,11 +524,16 @@ function resumeCommand(): SlashOutcome {
   };
 }
 
+const COMPACTED: Readonly<Record<CompactOutcome, string>> = {
+  folded: 'Folded this conversation into a summary; its last exchanges stay as they were.',
+  armed: 'Your next message asks the model\'s provider to fold this conversation into a summary; its last exchanges stay as they were.',
+  nothing: `This conversation is under the ${SERVER_COMPACTION_MIN_TOKENS.toLocaleString('en-US')} tokens its model's provider folds; nothing to fold yet.`,
+};
+
 async function compactCommand({ client, command }: SlashContext): Promise<SlashOutcome> {
   if (!client.localControls) return { kind: 'unknown', command };
-  await client.localControls.compact();
 
-  return { kind: 'text', text: 'Folded this conversation into a summary; its last exchanges stay as they were.' };
+  return { kind: 'text', text: COMPACTED[await client.localControls.compact()] };
 }
 
 function stopCommand({ client }: SlashContext): SlashOutcome {
@@ -1019,8 +1023,10 @@ function renderStagedSkill(view: StagedSkillView, requestRef: string, editRef: s
   ].filter((line, index) => line !== '' || index > 2).join('\n');
 }
 
-type LocatedRefinementEdit = Result.Result<{ readonly id: string; readonly index: number;
-  readonly requestRef: string; readonly editRef: string; }, string>;
+type LocatedRefinementEdit =
+  | { readonly ok: true; readonly id: string; readonly index: number;
+      readonly requestRef: string; readonly editRef: string }
+  | { readonly ok: false; readonly error: string };
 
 /** By listing index, against a re-fetched listing. */
 function resolveRefinementEdit(
@@ -1032,20 +1038,26 @@ function resolveRefinementEdit(
   const edit = Number.parseInt(editRef ?? '', 10);
 
   if (!Number.isInteger(n) || n < 1 || !Number.isInteger(edit) || edit < 1) {
-    return Result.fail(REFINE_USAGE);
+    return { ok: false, error: REFINE_USAGE };
   }
 
   const request = view.requests[n - 1];
 
   if (!request) {
-    return Result.fail(`No refinement ${n}. /refine lists ${view.requests.length}.`);
+    return { ok: false, error: `No refinement ${n}. /refine lists ${view.requests.length}.` };
   }
 
   if (!request.routes[edit - 1]) {
-    return Result.fail(`Refinement ${n} has no edit ${edit}. It lists ${request.routes.length}.`);
+    return {
+      ok: false,
+      error: `Refinement ${n} has no edit ${edit}. It lists ${request.routes.length}.`,
+    };
   }
 
-  return Result.succeed({ id: request.id, index: edit - 1, requestRef: String(n), editRef: String(edit) });
+  return {
+    ok: true, id: request.id, index: edit - 1,
+    requestRef: String(n), editRef: String(edit),
+  };
 }
 
 function renderRefinementRoute(route: RefinementRoute, index: number): string {

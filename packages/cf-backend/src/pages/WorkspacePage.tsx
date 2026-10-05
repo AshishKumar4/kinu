@@ -33,7 +33,7 @@ import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
 import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
-import { hasComparableTakes } from "@kinu.run/core";
+import { cloudPlanes, filesFocusOf, hasComparableTakes, referencePrefixes, WORKSPACE_ROOT, type FilesFocus } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
@@ -42,7 +42,7 @@ import { ChatSlates } from "@/components/slates/InlineSlate";
 import { SLATE_PREFIX, agentActive, type ForkNode, type PanelAgent, type SurfaceKind } from "@kinu.run/core";
 import { ViewOnlyBar } from "@/components/ViewOnlyBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
-import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
+import { ConversationStartBoundary, FileLinkContext, HistoryBoundary } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
@@ -743,6 +743,28 @@ export default function WorkspacePage() {
     workbench.current?.reveal();
   }, []);
 
+  // A chat file link, or a `?file=<reference>` landing, opens Files on the file it names.
+  const [filesFocus, setFilesFocus] = useState<FilesFocus | null>(null);
+
+  const openFile = useCallback((reference: string): void => {
+    const focus = filesFocusOf(reference);
+
+    if (focus === null) return;
+    setFilesFocus((prior) => ({ ...focus, nonce: (prior?.nonce ?? 0) + 1 }));
+    show("Files");
+  }, [show]);
+
+  // Every prefix, and each live machine's own name: `<name>://x` opens that machine's file in Files.
+  const machines = useMemo(() => state.executors.flatMap((executor) => executor.mounts ?? []), [state.executors]);
+  const fileLinks = useMemo(() => ({ roots: referencePrefixes(cloudPlanes(WORKSPACE_ROOT), machines), open: openFile }), [machines, openFile]);
+  const [landingFile, setLandingFile] = useState<string | null>(() => new URLSearchParams(location.search).get("file"));
+
+  useEffect(() => {
+    if (landingFile === null) return;
+    openFile(landingFile);
+    setLandingFile(null);
+  }, [landingFile, openFile]);
+
   const openChangeNote = useCallback((source: string, anchor: DiffAnchor | undefined): void => {
     show("Changes");
     setChangesFocus((prior) => ({ source, path: anchor?.path ?? null, nonce: (prior?.nonce ?? 0) + 1 }));
@@ -949,7 +971,7 @@ export default function WorkspacePage() {
 
 
   return (
-    <SlateInlineContext.Provider value={slateInline}>
+    <SlateInlineContext.Provider value={slateInline}><FileLinkContext.Provider value={fileLinks}>
     <div className="h-full flex flex-col" data-workbench>
       {/* The chat stays mounted through reconnect so the in-flight turn survives. */}
       {state.connectionStatus === "disconnected" && !state.terminalClose && (
@@ -1187,6 +1209,7 @@ export default function WorkspacePage() {
             previewFocus={state.previewFocus}
             planFocus={state.planFocus}
             changesFocus={changesFocus}
+            filesFocus={filesFocus}
             planOwner={planOwnerName(subName, agentId)}
             workspacePlanArrival={state.workspacePlanArrival}
             onReviewActor={async (name, actorId) => {
@@ -1285,7 +1308,7 @@ export default function WorkspacePage() {
         </Modal>
       )}
     </div>
-    </SlateInlineContext.Provider>
+    </FileLinkContext.Provider></SlateInlineContext.Provider>
   );
 }
 

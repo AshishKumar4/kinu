@@ -3,8 +3,7 @@
  * length (absent `content-length` reads as 0), plus a declared-length pre-filter.
  */
 import { describe, expect, test } from 'bun:test';
-import { Effect } from 'effect';
-import { KinuError, settle } from '@kinu.run/core/obs';
+import { KinuError } from '@kinu.run/core/obs';
 import { readBounded, readBoundedStream } from '@kinu.run/core';
 
 /** `duplex: 'half'` is required for a streamed Request body and missing from the DOM `RequestInit`. */
@@ -34,15 +33,11 @@ function streamed(chunks: readonly Uint8Array[], headers: Record<string, string>
 
 const chunk = (byte: number, size: number) => new Uint8Array(size).fill(byte);
 
-/** Runs the read with a plain sink, as its callers' effects do. */
-const read = (request: Request, limit: number, sink: (part: Uint8Array) => void) =>
-  settle(readBoundedStream(request, limit, (part) => Effect.sync(() => sink(part))));
-
 describe('readBoundedStream', () => {
   test('every chunk reaches the sink, in arrival order, when the body fits', async () => {
     const seen: number[] = [];
 
-    const outcome = await read(streamed([chunk(1, 3), chunk(2, 4)]), 100, (part) => {
+    const outcome = await readBoundedStream(streamed([chunk(1, 3), chunk(2, 4)]), 100, (part) => {
       seen.push(part.byteLength);
     });
 
@@ -54,7 +49,7 @@ describe('readBoundedStream', () => {
     // An honest oversized sender costs a header parse; `pulled` proves nothing was read.
     const parts: number[] = [];
     const request = streamed([chunk(1, 8)], { 'content-length': '4096' });
-    const outcome = await read(request, 1024, (part) => { parts.push(part.byteLength); });
+    const outcome = await readBoundedStream(request, 1024, (part) => { parts.push(part.byteLength); });
     expect(outcome).toBe('too_large');
     expect(parts).toEqual([]);
   });
@@ -62,7 +57,7 @@ describe('readBoundedStream', () => {
   test('an absent declared length is no defence — the arriving count is the gate', async () => {
     const parts: number[] = [];
 
-    const outcome = await read(streamed([chunk(1, 4), chunk(2, 4)]), 5, (part) => {
+    const outcome = await readBoundedStream(streamed([chunk(1, 4), chunk(2, 4)]), 5, (part) => {
       parts.push(part.byteLength);
     });
 
@@ -77,13 +72,13 @@ describe('readBoundedStream', () => {
 
     const init: StreamingRequestInit = { method: 'PUT', body, duplex: 'half' };
     const request = new Request('https://kinu.example.com/x', init);
-    const outcome = await read(request, 1024, () => undefined);
+    const outcome = await readBoundedStream(request, 1024, () => undefined);
     expect(outcome).toBeInstanceOf(KinuError);
   });
 
   test("the sink's own failure is the caller's, and is not swallowed as a read failure", async () => {
     // Only an actor refusal aborts a half-written transfer, so the two must be distinguishable.
-    const attempt = read(streamed([chunk(1, 4)]), 1024, () => {
+    const attempt = readBoundedStream(streamed([chunk(1, 4)]), 1024, () => {
       throw new Error('the actor refused this chunk');
     });
 
@@ -91,7 +86,7 @@ describe('readBoundedStream', () => {
   });
 
   test('a request with no body at all is an empty read, not a failure', async () => {
-    const outcome = await read(new Request('https://kinu.example.com/x'), 16, () => undefined);
+    const outcome = await readBoundedStream(new Request('https://kinu.example.com/x'), 16, () => undefined);
     expect(outcome).toBe('ok');
   });
 });

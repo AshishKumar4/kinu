@@ -196,11 +196,12 @@ describe("renameExecutorPathOp", () => {
     expect(files.has("/home/main/a.txt")).toBe(false);
   });
 
-  test("refuses a directory where only bytes could carry it", async () => {
+  test("carries a directory whole where the plane has no native rename, as mv does", async () => {
     const { deps, files } = makeTree({ "/home/main/src/app.ts": "export {};" });
     const out = await renameExecutorPathOp(deps, "workspace", "/home/main/src", "/home/main/moved");
-    expect("error" in out && out.error).toContain("directory");
-    expect(files.has("/home/main/src/app.ts")).toBe(true);
+    expect(out).toEqual({ ok: true });
+    expect(files.get("/home/main/moved/app.ts")).toEqual(new TextEncoder().encode('export {};'));
+    expect([...files.keys()].filter((path) => path.startsWith("/home/main/src") || path.includes(".nimbus-move-"))).toEqual([]);
   });
 
   test("never overwrites: an existing target is a stated refusal", async () => {

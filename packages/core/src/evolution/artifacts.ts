@@ -4,7 +4,6 @@
  * the bundled text; an override changes only the agent that promoted it. The scaffold keeps `scaffold_versions`.
  */
 import * as v from 'valibot';
-import { Result } from 'effect';
 import type { ActorHandle } from '../identity/actor-handle';
 import { ARTIFACT_STATUSES } from './artifact-schema';
 import type { SqlExecutor } from '../types/primitives';
@@ -251,12 +250,11 @@ export function artifactEditRefusal(sql: SqlExecutor, actor: ActorHandle, input:
   if (own !== null) return own;
   const misevolution = checkMisevolutionForSurface({ prose: input.after }, 'scaffold');
 
-  if (Result.isSuccess(misevolution)) return null;
-  const violation = misevolution.failure;
+  if (misevolution.ok) return null;
 
-  if (input.record) recordMisevolutionVeto(sql, actor, { surface: 'scaffold', violation, detail: input.artifactId });
+  if (input.record) recordMisevolutionVeto(sql, actor, { surface: 'scaffold', violation: misevolution, detail: input.artifactId });
 
-  return `misevolution veto (${violation.criterionId}): ${violation.reason}`;
+  return `misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`;
 }
 
 /** A candidate that passed the pre-live tests, waiting for a trial. */

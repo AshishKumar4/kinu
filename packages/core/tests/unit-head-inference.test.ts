@@ -1,8 +1,11 @@
 // runHeadInference: the backend-agnostic head loop, driven through the real generateText loop.
-import { Effect } from 'effect';
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
-import { seedTranscriptEntry, createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { ResolvedProvider } from '../src/types/primitives';
+import type { JsonValue } from '../src/utils/json';
 import { actorJobsFor, createTestWorkspace, conversationsFor } from './helpers';
 import { buildHeadToolSet } from '../src/heads/head-tools';
 import { jsonSchema, tool, type LanguageModel, type ModelMessage } from 'ai';
@@ -160,6 +163,24 @@ describe('runHeadInference — report assembly', () => {
   });
 });
 
+/** Promotes an evolved loop on `runtime` whose program is `body`, run with the scaffold host's functions. */
+async function evolvedLoop(runtime: AgentRuntime, body: (host: ResolvedProvider['fns']) => Promise<JsonValue | undefined>): Promise<void> {
+  void runtime.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${runtime.actor.actorId}, 1, ${Date.now()}, 'two model calls', 'current')`;
+  await writeText(runtime.agentStateVfs ?? runtime.storage.vfs, `${runtime.identity.scaffold.path}.v1`, 'async function run() {}');
+
+  runtime.executor = {
+    languages: ['javascript'],
+    execute: async (_code, providers) => {
+      const host = Array.isArray(providers) ? providers.find((provider) => provider.name === 'host') : undefined;
+
+      if (host === undefined) throw new Error('the loop ran without its host');
+
+      return { result: await body(host.fns) };
+    },
+  };
+}
+
 describe('a head step as the node view reads it', () => {
   // 2026-10-03 (DUPLICATE-PATHS rank 19): a re-projected step dropped a call's failure and renamed the call, so the node
   // view drew a failed tool spinning under an invented id while the head's own record held both.
@@ -189,6 +210,51 @@ describe('a head step as the node view reads it', () => {
       [expect.objectContaining({ type: 'tool-probe', toolCallId: 'probe-1', state: 'output-error', errorText: expect.stringContaining('the probe broke') })],
       [{ type: 'text', text: 'done', state: 'done' }],
     ]);
+  });
+
+  // 2026-10-04 (release review): an evolved loop's second model call restarts its messages, so a cursor kept across
+  // calls cut the second call's tool call off its result and the turn failed.
+  test('an evolved loop that calls the model twice records each of its steps whole', async () => {
+    // The first call answers; the second calls the probe, then answers.
+    const answers: ScriptedTurnResult['content'][] = [
+      [{ type: 'text', text: 'first look' }],
+      [{ type: 'tool-call', toolCallId: 'probe-1', toolName: 'probe', input: '{}' }],
+      [{ type: 'text', text: 'done' }],
+    ];
+
+    let calls = 0;
+
+    const model = scriptedTurnModel({ doGenerate: () => {
+      const content = answers[calls] ?? [];
+      calls += 1;
+
+      return {
+        content, finishReason: { unified: calls === 2 ? 'tool-calls' : 'stop', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
+        warnings: [],
+      };
+    } });
+
+    const steps: HeadStep[] = [];
+
+    const inference = await deps(model, {
+      tools: { probe: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }), execute: async () => 'probed' }) },
+      reportStep: (_seq, step) => { steps.push(step); },
+    });
+
+    await evolvedLoop(inference.actor.runtime, async (host) => {
+      await host.llmStream({ system: 's', messages: [{ role: 'user', content: 'look' }] });
+
+      return await host.llmStream({ system: 's', messages: [{ role: 'user', content: 'probe' }] });
+    });
+
+    const report = await runHeadInference(headInput({ inheritedContext: [] }), inference);
+
+    expect({ status: report.status, steps: steps.map((step) => step.parts) }).toEqual({ status: 'completed', steps: [
+      [{ type: 'text', text: 'first look', state: 'done' }],
+      [expect.objectContaining({ type: 'tool-probe', toolCallId: 'probe-1', state: 'output-available', output: 'probed' })],
+      [{ type: 'text', text: 'done', state: 'done' }],
+    ] });
   });
 });
 
@@ -297,7 +363,7 @@ describe('durable delegated turn opening', () => {
     const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back', 'agent');
     const { session, stores } = seat.actor;
     const chat = stores.history.transcript(CHAT_SESSION_ID);
-    const assertOwner = () => rt.actor.current();
+    const assertOwner = () => rt.actor.assertCurrent();
 
     try {
       for (const [ask, answer, text] of [['ask-1', 'answer-1', 'one'], ['ask-2', 'answer-2', 'two']] as const) {
@@ -319,7 +385,7 @@ describe('durable delegated turn opening', () => {
       expect(chat.entries().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
       expect(session.dynamic.size).toBe(1);
 
-      await session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => Effect.void);
+      await session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => {});
       expect(chat.entries().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1']);
       expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered']);
       expect((await stores.history.materialize()).messages.map((message) => message.content)).toEqual(['one', 'one answered']);

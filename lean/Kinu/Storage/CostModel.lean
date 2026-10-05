@@ -37,8 +37,8 @@ namespace Kinu.Storage.CostModel
 
     The size parameters are NOT a record here. The strategy's cost is a
     function of the parameters it actually reads, and taking a parameter it
-    must then be proved to IGNORE is what makes the ignoring checkable —
-    see `SnapshotChain.attachCostAt`. A single record passed everywhere
+    must then be proved to IGNORE is what makes the ignoring checkable.
+    A single record passed everywhere
     would make every cost mention every parameter and the independence
     claims unstateable. -/
 structure Cost where

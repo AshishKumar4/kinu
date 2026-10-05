@@ -18,7 +18,7 @@ import {
   type StagedSkillResult,
   type ModelTestResult,
 } from '@kinu.run/core';
-import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
+import { attempt, detach, diagnostics, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
   AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
@@ -42,7 +42,7 @@ import {
 } from './session';
 import { CloudTurnStream, jsonErrorMessage, TurnStreams } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
-import { JobOutputFrameSchema, LIVE_READS, READS_CHANGED_EVENT, type AgentModelMenu, type AgentRpcMethod } from '@kinu.run/core';
+import { cloudFileLinks, JobOutputFrameSchema, LIVE_READS, READS_CHANGED_EVENT, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
 import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
@@ -71,6 +71,7 @@ import {
   type PlanReviewSurface,
 } from './agent-client';
 import * as v from 'valibot';
+
 
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
 
@@ -273,6 +274,9 @@ const BranchStatusEventSchema = v.variant('status', [
   }),
 ]);
 
+/** The executors read as chat links need it: a device fleet's live machines, by the segment each mounts under. */
+const ExecutorMountsSchema = v.array(v.object({ mounts: v.optional(v.array(v.string())) }));
+
 const BroadcastFrameSchema = v.union([
   BranchStatusEventSchema,
   v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) }),
@@ -305,6 +309,7 @@ export class CloudAgentClient implements AgentClient {
   readonly checkpoints: FileCheckpointSurface | null;
   readonly plans: PlanReviewSurface | null;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
+  readonly planes = null;
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
 
   private readonly origin: string;
@@ -328,9 +333,12 @@ export class CloudAgentClient implements AgentClient {
   private stopPromise: Promise<void> | null = null;
   /** Held until the submission or RPC ack reaches the event stream; ids keep cleanup identity-safe. */
   private readonly launchedTasks = new Map<string, Promise<void>>();
+  /** Every prefix, and each live machine's own name once {@link readMachines} has listed them. */
+  private links: FileLinks;
 
   constructor(opts: CloudAgentClientOptions) {
     this.origin = opts.origin;
+    this.links = cloudFileLinks(opts.origin, opts.cloudName);
     this.token = opts.token;
     this.agentName = opts.agentName;
     this.cloudName = opts.cloudName;
@@ -379,7 +387,31 @@ export class CloudAgentClient implements AgentClient {
     return this.activeCliSession;
   }
 
+  get fileLinks(): FileLinks {
+    return this.links;
+  }
+
+  /** The socket opens on first use; connecting reads which machines a chat links by their own name. */
   async connect(): Promise<void> {
+    await this.readMachines();
+  }
+
+  /**
+   * Re-reads the live machines, so `<name>://` references link; on connect, and before reporting that the executors
+   * moved. A window that may not read them links none, and a read that fails keeps the names already read.
+   */
+  readMachines(): Promise<void> {
+    if (!this.mayCall('getExecutors')) return Promise.resolve();
+
+    const read = attempt(
+      { doing: 'reading the workspace\'s machines for chat links', otherwise: 'unavailable' },
+      () => this.callHttp('getExecutors', ExecutorMountsSchema),
+    );
+
+    return settle(Effect.match(read, {
+      onSuccess: (executors) => { this.links = cloudFileLinks(this.origin, this.cloudName, executors.flatMap((executor) => executor.mounts ?? [])); },
+      onFailure: (unread) => { diagnostics.failure('chat.machines_unread', unread); },
+    }));
   }
 
   subscribe(listener: (event: AgentClientEvent) => void): () => void {
@@ -920,25 +952,26 @@ export class CloudAgentClient implements AgentClient {
       }
     };
 
-    ws.addEventListener('close', () => detach(Effect.promise(onDrop)));
-    ws.addEventListener('error', () => detach(Effect.promise(onDrop)));
+    const droppedConnection = () => detach(Effect.promise(onDrop));
+    ws.addEventListener('close', droppedConnection);
+    ws.addEventListener('error', droppedConnection);
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), 15_000);
 
-      const settle = (outcome: () => void): void => {
+      const finish = (outcome: () => void): void => {
         clearTimeout(timeout);
         outcome();
       };
 
       ws.addEventListener('open', () => {
-        settle(resolve);
+        finish(resolve);
       }, { once: true });
       ws.addEventListener('error', () => {
-        settle(() => reject(new Error('Could not connect to cloud agent.')));
+        finish(() => reject(new Error('Could not connect to cloud agent.')));
       }, { once: true });
       ws.addEventListener('close', () => {
-        settle(() => reject(new Error('Cloud workspace connection closed before it opened.')));
+        finish(() => reject(new Error('Cloud workspace connection closed before it opened.')));
       }, { once: true });
     });
 
@@ -946,6 +979,25 @@ export class CloudAgentClient implements AgentClient {
       ws.close();
       throw new Error('Cloud workspace client closed while connecting.');
     }
+  }
+
+  /** A broadcast that moved the executors is reported once the machines are re-read, so its hearer renders their links. */
+  private reportBroadcast(frame: v.InferOutput<typeof BroadcastFrameSchema>): void {
+    if (frame.type !== READS_CHANGED_EVENT || !frame.reads.includes('getExecutors')) {
+      this.emit({ type: 'broadcast', event: frame });
+
+      return;
+    }
+
+    const taskId = randomRequestId();
+
+    const task: Promise<void> = this.readMachines().then(() => {
+      this.emit({ type: 'broadcast', event: frame });
+    }).finally(() => {
+      if (this.launchedTasks.get(taskId) === task) this.launchedTasks.delete(taskId);
+    });
+
+    this.launchedTasks.set(taskId, task);
   }
 
   private handleMessage(event: MessageEvent): void {
@@ -968,7 +1020,7 @@ export class CloudAgentClient implements AgentClient {
     const broadcast = v.safeParse(BroadcastFrameSchema, payload);
 
     if (broadcast.success) {
-      this.emit({ type: 'broadcast', event: broadcast.output });
+      this.reportBroadcast(broadcast.output);
 
       return;
     }

@@ -3,15 +3,13 @@
  * `MCPClientManager`. Descriptors are serialized because `execute` closures can't cross DO RPC.
  */
 
-import { Cause, Effect } from 'effect';
-
 import {
   JsonArraySchema, JsonObjectSchema,
   describeMcpTool, listMcpToolsLeniently,
   mcpPresetById, MCP_PRESETS,
   type JsonObject, type JsonValue, type ListedMcpTools, type McpPreset, type McpPresetId, type McpToolRefusal,
 } from '@kinu.run/core';
-import { diagnostics, flight, KinuError, renderCauseChain, settle, tolerate, toKinuError, settleSync } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderCauseChain, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as v from 'valibot';
@@ -96,136 +94,130 @@ function canonicalMcpUrl(serverUrl: string): string {
  * A preset add takes name, URL and transport from the catalog; `serverUrl` is optional there.
  */
 export function validateMcpServerInput(input: JsonValue): McpServerInput {
-  return settleSync(Effect.gen(function* () {
-    const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
+  const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
 
-    if (!parsedInput.success) {
-      return yield* new KinuError('bad_input', 'Body must be a JSON object.');
+  if (!parsedInput.success) {
+    throw new KinuError('bad_input', 'Body must be a JSON object.');
+  }
+
+  const obj = parsedInput.output;
+
+  const preset = validateMcpPresetId(obj.presetId);
+
+  const name = preset ? preset.title : validateMcpServerName(obj.name);
+
+  const parsedServerUrl = v.safeParse(v.string(), obj.serverUrl);
+
+  if (!preset && (!parsedServerUrl.success || !parsedServerUrl.output.trim())) {
+    throw new KinuError('bad_input', '`serverUrl` is required.');
+  }
+
+  const serverUrl = preset ? preset.serverUrl : v.parse(v.string(), obj.serverUrl);
+
+  if (!URL.canParse(serverUrl)) throw new KinuError('bad_input', '`serverUrl` is not a valid URL.');
+  const parsed = new URL(serverUrl);
+  const isHttps = parsed.protocol === 'https:';
+
+  const isLocalDev = parsed.protocol === 'http:' && (
+    parsed.hostname === 'localhost'
+    || parsed.hostname === '127.0.0.1'
+    || parsed.hostname === '[::1]'
+    || parsed.hostname === '::1'
+  );
+
+  if (!isHttps && !isLocalDev) {
+    throw new KinuError('bad_input', '`serverUrl` must use https:// (http:// allowed only for localhost).');
+  }
+
+  // Credentials belong in sealed `headers`; `serverUrl` is plaintext and Workers `fetch`
+  // rejects URLs with userinfo.
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw new KinuError('bad_input', '`serverUrl` must not carry a username or password: put credentials in `headers`.');
+  }
+
+  const parsedTransport = v.safeParse(v.nullish(McpTransportSchema), obj.transport);
+
+  if (!parsedTransport.success) {
+    throw new KinuError('bad_input', "`transport` must be one of 'auto', 'sse', 'streamable-http'.");
+  }
+
+  const transport = preset ? preset.transport : (parsedTransport.output ?? 'auto');
+
+  let headers: Record<string, string> | undefined;
+
+  if (obj.headers !== undefined && obj.headers !== null) {
+    const parsedHeaderObject = v.safeParse(RawMcpServerInputSchema, obj.headers);
+
+    if (!parsedHeaderObject.success) {
+      throw new KinuError('bad_input', '`headers` must be a flat object of string->string.');
     }
 
-    const obj = parsedInput.output;
+    const collected: Record<string, string> = {};
 
-    const preset = yield* validateMcpPresetId(obj.presetId);
+    for (const [k, value] of Object.entries(parsedHeaderObject.output)) {
+      if (k.length === 0 || k.length > 128) throw new KinuError('bad_input', `headers.${k}: key length out of range.`);
+      const parsedValue = v.safeParse(v.string(), value);
 
-    const name = preset ? preset.title : validateMcpServerName(obj.name);
-
-    const parsedServerUrl = v.safeParse(v.string(), obj.serverUrl);
-
-    if (!preset && (!parsedServerUrl.success || !parsedServerUrl.output.trim())) {
-      return yield* new KinuError('bad_input', '`serverUrl` is required.');
+      if (!parsedValue.success) throw new KinuError('bad_input', `headers.${k} must be a string.`);
+      collected[k] = parsedValue.output;
     }
 
-    const serverUrl = preset ? preset.serverUrl : v.parse(v.string(), obj.serverUrl);
+    if (Object.keys(collected).length > 0) headers = collected;
+  }
 
-    if (!URL.canParse(serverUrl)) return yield* new KinuError('bad_input', '`serverUrl` is not a valid URL.');
-    const parsed = new URL(serverUrl);
-    const isHttps = parsed.protocol === 'https:';
+  let allowedTools: string[] | undefined;
 
-    const isLocalDev = parsed.protocol === 'http:' && (
-      parsed.hostname === 'localhost'
-      || parsed.hostname === '127.0.0.1'
-      || parsed.hostname === '[::1]'
-      || parsed.hostname === '::1'
-    );
+  if (obj.allowedTools !== undefined && obj.allowedTools !== null) {
+    const parsedAllowedTools = v.safeParse(JsonArraySchema, obj.allowedTools);
 
-    if (!isHttps && !isLocalDev) {
-      return yield* new KinuError('bad_input', '`serverUrl` must use https:// (http:// allowed only for localhost).');
+    if (!parsedAllowedTools.success) {
+      throw new KinuError('bad_input', '`allowedTools` must be a string[] (or omitted to allow all).');
     }
 
-    // Credentials belong in sealed `headers`; `serverUrl` is plaintext and Workers `fetch`
-    // rejects URLs with userinfo.
-    if (parsed.username !== '' || parsed.password !== '') {
-      return yield* new KinuError('bad_input', '`serverUrl` must not carry a username or password: put credentials in `headers`.');
-    }
+    allowedTools = [];
 
-    const parsedTransport = v.safeParse(v.nullish(McpTransportSchema), obj.transport);
+    for (const toolName of parsedAllowedTools.output) {
+      const parsedToolName = v.safeParse(v.pipe(v.string(), v.nonEmpty()), toolName);
 
-    if (!parsedTransport.success) {
-      return yield* new KinuError('bad_input', "`transport` must be one of 'auto', 'sse', 'streamable-http'.");
-    }
-
-    const transport = preset ? preset.transport : (parsedTransport.output ?? 'auto');
-
-    let headers: Record<string, string> | undefined;
-
-    if (obj.headers !== undefined && obj.headers !== null) {
-      const parsedHeaderObject = v.safeParse(RawMcpServerInputSchema, obj.headers);
-
-      if (!parsedHeaderObject.success) {
-        return yield* new KinuError('bad_input', '`headers` must be a flat object of string->string.');
+      if (!parsedToolName.success) {
+        throw new KinuError('bad_input', '`allowedTools` entries must be non-empty strings.');
       }
 
-      const collected: Record<string, string> = {};
-
-      for (const [k, value] of Object.entries(parsedHeaderObject.output)) {
-        if (k.length === 0 || k.length > 128) return yield* new KinuError('bad_input', `headers.${k}: key length out of range.`);
-        const parsedValue = v.safeParse(v.string(), value);
-
-        if (!parsedValue.success) return yield* new KinuError('bad_input', `headers.${k} must be a string.`);
-        collected[k] = parsedValue.output;
-      }
-
-      if (Object.keys(collected).length > 0) headers = collected;
+      allowedTools.push(parsedToolName.output);
     }
+  }
 
-    let allowedTools: string[] | undefined;
-
-    if (obj.allowedTools !== undefined && obj.allowedTools !== null) {
-      const parsedAllowedTools = v.safeParse(JsonArraySchema, obj.allowedTools);
-
-      if (!parsedAllowedTools.success) {
-        return yield* new KinuError('bad_input', '`allowedTools` must be a string[] (or omitted to allow all).');
-      }
-
-      allowedTools = [];
-
-      for (const toolName of parsedAllowedTools.output) {
-        const parsedToolName = v.safeParse(v.pipe(v.string(), v.nonEmpty()), toolName);
-
-        if (!parsedToolName.success) {
-          return yield* new KinuError('bad_input', '`allowedTools` entries must be non-empty strings.');
-        }
-
-        allowedTools.push(parsedToolName.output);
-      }
-    }
-
-    return {
-      name, serverUrl: canonicalMcpUrl(serverUrl), transport, headers, allowedTools,
-      presetId: preset?.id,
-    };
-  }));
+  return {
+    name, serverUrl: canonicalMcpUrl(serverUrl), transport, headers, allowedTools,
+    presetId: preset?.id,
+  };
 }
 
 /** Absent → custom server; a non-catalog id is an error. The preset's fields can't be overridden. */
-function validateMcpPresetId(presetId: JsonValue | undefined): Effect.Effect<McpPreset | undefined, KinuError> {
-  return Effect.gen(function* () {
-    if (presetId === undefined || presetId === null) return undefined;
+function validateMcpPresetId(presetId: JsonValue | undefined): McpPreset | undefined {
+  if (presetId === undefined || presetId === null) return undefined;
 
-    const parsedPresetId = v.safeParse(v.string(), presetId);
+  const parsedPresetId = v.safeParse(v.string(), presetId);
 
-    if (!parsedPresetId.success) return yield* new KinuError('bad_input', '`presetId` must be a string.');
+  if (!parsedPresetId.success) throw new KinuError('bad_input', '`presetId` must be a string.');
 
-    const preset = mcpPresetById(parsedPresetId.output);
+  const preset = mcpPresetById(parsedPresetId.output);
 
-    if (!preset) return yield* new KinuError('bad_input', `Unknown MCP preset '${parsedPresetId.output}'.`);
+  if (!preset) throw new KinuError('bad_input', `Unknown MCP preset '${parsedPresetId.output}'.`);
 
-    return preset;
-  });
+  return preset;
 }
 
 /** Shared by add and update: non-blank, at most 64 chars after trim (the stored, indexed value). */
 export function validateMcpServerName(name: JsonValue): string {
-  return settleSync(Effect.gen(function* () {
-    const parsed = v.safeParse(v.string(), name);
+  const parsed = v.safeParse(v.string(), name);
 
-    if (!parsed.success || !parsed.output.trim()) return yield* new KinuError('bad_input', '`name` is required.');
-    const trimmed = parsed.output.trim();
+  if (!parsed.success || !parsed.output.trim()) throw new KinuError('bad_input', '`name` is required.');
+  const trimmed = parsed.output.trim();
 
-    if (trimmed.length > 64) return yield* new KinuError('bad_input', '`name` must be <= 64 characters.');
+  if (trimmed.length > 64) throw new KinuError('bad_input', '`name` must be <= 64 characters.');
 
-    return trimmed;
-  }));
+  return trimmed;
 }
 
 /** Null when the column is unset or fails the schema. */
@@ -253,22 +245,22 @@ export function parseMcpHeaders(raw: string | null | undefined): Record<string, 
  */
 export function mcpCredentialTransport(
   serverUrl: string,
-  openHeaders: () => Effect.Effect<Record<string, string> | null, KinuError>,
+  openHeaders: () => Promise<Record<string, string> | null>,
 ): McpCredentialTransport {
   const origin = new URL(serverUrl).origin;
 
   return {
-    fetch: (url: string | URL, init?: RequestInit): Promise<Response> => settle(Effect.gen(function* () {
-      if (new URL(url.toString()).origin !== origin) return yield* Effect.promise(() => fetch(url, init));
-      const credential = yield* openHeaders();
+    fetch: async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      if (new URL(url.toString()).origin !== origin) return fetch(url, init);
+      const credential = await openHeaders();
 
-      if (credential === null || Object.keys(credential).length === 0) return yield* Effect.promise(() => fetch(url, init));
+      if (credential === null || Object.keys(credential).length === 0) return fetch(url, init);
       const headers = new Headers(init?.headers);
 
       for (const [name, value] of Object.entries(credential)) headers.set(name, value);
 
-      return yield* Effect.promise(() => fetch(url, { ...init, headers, redirect: 'manual' }));
-    })),
+      return fetch(url, { ...init, headers, redirect: 'manual' });
+    },
   };
 }
 
@@ -324,18 +316,20 @@ function causeChain(input: { cause: unknown }): Error[] {
 
 export type McpToolListing = { readonly listed: ListedMcpTools } | { readonly failure: string };
 
-export function readUndiscoveredToolList(server: { readonly name: string }, client: Pick<Client, 'request'>): Promise<McpToolListing> {
-  const listed = Effect.promise(() => listMcpToolsLeniently(server, (cursor) => client.request(
-    { method: 'tools/list', params: cursor === undefined ? {} : { cursor } },
-    ResultSchema,
-  )));
-
-  return settle(Effect.catchCause(Effect.map(listed, (tools): McpToolListing => ({ listed: tools })), (failed) => Effect.sync((): McpToolListing => {
-    const error = toKinuError({ doing: `reading the tool list of MCP server ${server.name}`, cause: Cause.squash(failed), otherwise: 'unavailable' });
+export async function readUndiscoveredToolList(server: { readonly name: string }, client: Pick<Client, 'request'>): Promise<McpToolListing> {
+  try {
+    return {
+      listed: await listMcpToolsLeniently(server, (cursor) => client.request(
+        { method: 'tools/list', params: cursor === undefined ? {} : { cursor } },
+        ResultSchema,
+      )),
+    };
+  } catch (cause) {
+    const error = toKinuError({ doing: `reading the tool list of MCP server ${server.name}`, cause, otherwise: 'unavailable' });
     diagnostics.failure('mcp.tool_list_unreadable', error, { server: server.name });
 
     return { failure: renderCauseChain(error) };
-  })));
+  }
 }
 
 export function mcpListingRefusals(server: { readonly id: string; readonly name: string }, listed: ListedMcpTools): McpToolRefusal[] {
@@ -357,17 +351,9 @@ interface McpSessionConnection {
   clearResumedSession(): void;
 }
 
-interface SessionRenewal {
-  readonly host: McpSessionHost;
-  readonly serverId: string;
-  readonly expired: string;
-  readonly traffic: SessionTraffic;
-}
-
 interface SessionTraffic {
   readonly calls: Set<Promise<unknown>>;
-  /** One renewal per expired session, joined by every call that found it expired. */
-  readonly renew: (renewal: SessionRenewal) => Effect.Effect<void, KinuError>;
+  readonly renewals: Map<string, Promise<void>>;
 }
 
 const sessionTraffic = new WeakMap<McpSessionHost, Map<string, SessionTraffic>>();
@@ -379,17 +365,23 @@ export async function callRenewingExpiredSession<Result>(
 ): Promise<Result> {
   const servers = sessionTraffic.get(host) ?? new Map<string, SessionTraffic>();
   sessionTraffic.set(host, servers);
-  const traffic = servers.get(serverId) ?? { calls: new Set(), renew: flight(renewSession, { key: (renewal) => renewal.expired }) };
+  const traffic = servers.get(serverId) ?? { calls: new Set(), renewals: new Map() };
   servers.set(serverId, traffic);
   const expired = host.mcpConnections[serverId]?.sessionId;
 
-  return settle(Effect.catchCause(Effect.promise(() => sent(traffic, call)), (failed) => {
-    if (expired === undefined || !causeChain({ cause: Cause.squash(failed) }).some((error) => error instanceof SdkHttpError && error.status === 404)) {
-      return Effect.failCause(failed);
-    }
+  try {
+    return await sent(traffic, call);
+  } catch (cause) {
+    if (expired === undefined || !causeChain({ cause }).some((error) => error instanceof SdkHttpError && error.status === 404)) throw cause;
+  }
 
-    return Effect.andThen(traffic.renew({ host, serverId, expired, traffic }), Effect.promise(() => sent(traffic, call)));
-  }));
+  const renewal = traffic.renewals.get(expired)
+    ?? renewSession({ host, serverId, expired, traffic }).finally(() => traffic.renewals.delete(expired));
+
+  traffic.renewals.set(expired, renewal);
+  await renewal;
+
+  return sent(traffic, call);
 }
 
 async function sent<Result>(traffic: SessionTraffic, call: () => Promise<Result>): Promise<Result> {
@@ -403,23 +395,21 @@ async function sent<Result>(traffic: SessionTraffic, call: () => Promise<Result>
   }
 }
 
-function renewSession(input: SessionRenewal): Effect.Effect<void, KinuError> {
-  return Effect.gen(function* () {
-    const { host, serverId, expired } = input;
-    // Starting a session closes the old client and every call still on it.
-    yield* Effect.promise(() => Promise.allSettled(input.traffic.calls));
-    const connection = host.mcpConnections[serverId];
+async function renewSession(input: { host: McpSessionHost; serverId: string; expired: string; traffic: SessionTraffic }): Promise<void> {
+  const { host, serverId, expired } = input;
+  // Starting a session closes the old client and every call still on it.
+  await Promise.allSettled(input.traffic.calls);
+  const connection = host.mcpConnections[serverId];
 
-    if (connection === undefined || connection.sessionId !== expired) return;
-    connection.clearResumedSession();
-    const started = yield* Effect.promise(() => host.connectToServer(serverId));
+  if (connection === undefined || connection.sessionId !== expired) return;
+  connection.clearResumedSession();
+  const started = await host.connectToServer(serverId);
 
-    if (started.state !== 'connected') {
-      return yield* new KinuError('unavailable', `MCP server ${serverId} ended its session and a new one did not start (${started.error ?? started.state})`);
-    }
+  if (started.state !== 'connected') {
+    throw new KinuError('unavailable', `MCP server ${serverId} ended its session and a new one did not start (${started.error ?? started.state})`);
+  }
 
-    yield* Effect.promise(() => host.discoverIfConnected(serverId));
-  });
+  await host.discoverIfConnected(serverId);
 }
 
 /** Avoids importing the SDK enum so this module doesn't pull the agents SDK transitively. */

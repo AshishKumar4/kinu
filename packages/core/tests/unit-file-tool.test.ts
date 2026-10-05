@@ -1,4 +1,3 @@
-import { Result } from 'effect';
 import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /** The `file` tool: exact-match editor, honest read, read-before-write gate. Asserts the model-facing contract. */
 
@@ -24,16 +23,17 @@ import type { RunEvent, RunEventBase } from '../src/events/types';
 import { KinuError } from '../src/obs/index';
 import { failedToolOutcome } from '../src/tools/outcome';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { cloudPlanes } from '../src/vfs/resolve';
 
 
 describe('applyFileEdits', () => {
   test('replaces the one occurrence and leaves the rest byte-identical', () => {
     const out = applyFileEdits('a\nTARGET\nb\n', [{ oldText: 'TARGET', newText: 'REPLACED' }], '/f');
-    expect(Result.isSuccess(out)).toBe(true);
+    expect(out.ok).toBe(true);
 
-    if (Result.isFailure(out)) return;
-    expect(out.success.content).toBe('a\nREPLACED\nb\n');
-    expect(out.success.applied).toEqual([{ line: 2, removedLines: 1, addedLines: 1 }]);
+    if (!out.ok) return;
+    expect(out.content).toBe('a\nREPLACED\nb\n');
+    expect(out.applied).toEqual([{ line: 2, removedLines: 1, addedLines: 1 }]);
   });
 
   /** Each refusal: the anchor as typed, the file, and what the message must say to recover without another read. */
@@ -88,12 +88,12 @@ describe('applyFileEdits', () => {
     test(refusal.name, () => {
       const out = applyFileEdits(refusal.file, refusal.edits, '/f');
 
-      expect(Result.isSuccess(out)).toBe(false);
+      expect(out.ok).toBe(false);
 
-      if (Result.isSuccess(out)) return;
-      expect(out.failure.reason).toBe(refusal.reason);
+      if (out.ok) return;
+      expect(out.reason).toBe(refusal.reason);
 
-      for (const phrase of refusal.says) expect(out.failure.message).toContain(phrase);
+      for (const phrase of refusal.says) expect(out.message).toContain(phrase);
     });
   }
 
@@ -105,10 +105,10 @@ describe('applyFileEdits', () => {
       '/f',
     );
 
-    expect(Result.isSuccess(out)).toBe(true);
+    expect(out.ok).toBe(true);
 
-    if (Result.isFailure(out)) return;
-    expect(out.success.content).toBe('two\nthree\n');
+    if (!out.ok) return;
+    expect(out.content).toBe('two\nthree\n');
   });
 
   /** A successful edit keeps line endings, an untyped BOM, and every line outside the anchor. */
@@ -139,30 +139,30 @@ describe('applyFileEdits', () => {
     test(rewrite.name, () => {
       const out = applyFileEdits(rewrite.file, rewrite.edits, '/f');
 
-      expect(Result.isSuccess(out)).toBe(true);
+      expect(out.ok).toBe(true);
 
-      if (Result.isFailure(out)) return;
-      expect(out.success.content).toBe(rewrite.content);
+      if (!out.ok) return;
+      expect(out.content).toBe(rewrite.content);
     });
   }
 
   test('an empty file and a file with no trailing newline both edit cleanly', () => {
-    expect(applyFileEdits('', [{ oldText: 'x', newText: 'y' }], '/f')).toMatchObject({ failure: { reason: 'not_found' } });
+    expect(applyFileEdits('', [{ oldText: 'x', newText: 'y' }], '/f')).toMatchObject({ reason: 'not_found' });
     const out = applyFileEdits('last line', [{ oldText: 'last', newText: 'final' }], '/f');
-    expect(Result.isSuccess(out)).toBe(true);
+    expect(out.ok).toBe(true);
 
-    if (Result.isFailure(out)) return;
-    expect(out.success.content).toBe('final line');
+    if (!out.ok) return;
+    expect(out.content).toBe('final line');
   });
 
   test('does not normalize away characters it merely failed to match', () => {
     // A fuzzy fallback would rewrite the whole file out of normalized space; refuse instead.
     const original = 'const a = “quoted”;\nconst b = "plain";\n';
     const out = applyFileEdits(original, [{ oldText: 'const a = "quoted";', newText: 'x' }], '/f');
-    expect(Result.isSuccess(out)).toBe(false);
+    expect(out.ok).toBe(false);
 
-    if (Result.isSuccess(out)) return;
-    expect(out.failure.reason).toBe('not_found');
+    if (out.ok) return;
+    expect(out.reason).toBe('not_found');
   });
 });
 
@@ -470,7 +470,7 @@ type FileToolTestInput = FileToolInput | { action: string; path: string | number
 
 /** The entry as the tool surface serves it: behind the input check a program meets. */
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
-  const entry = withCheckedInput('file', createFileTool({ home: WORKSPACE_ROOT, vfs, ledger, budget: new TurnContextBudget() }));
+  const entry = withCheckedInput('file', createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget: new TurnContextBudget() }));
 
   return { call: toolExecute<FileToolTestInput, JsonValue>(entry), ledger };
 }
@@ -489,7 +489,7 @@ describe('file tool', () => {
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
 
-    expect(edited).toEqual({ ok: true, path: 'a.ts', reference: 'vfs://a.ts', applied: [{ line: 1, removed_lines: 1, added_lines: 1 }] });
+    expect(edited).toEqual({ ok: true, path: 'a.ts', reference: 'vfs://home/main/a.ts', applied: [{ line: 1, removed_lines: 1, added_lines: 1 }] });
     expect(vfs.files.get('a.ts')).toBe('const x = 2;\n');
   });
 
@@ -616,7 +616,7 @@ describe('file tool', () => {
     };
 
     for (const path of ['memory/a.md', '/memory/a.md', 'memory/a.md']) {
-      const entry = createFileTool({ home: WORKSPACE_ROOT, vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
+      const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
       await toolExecute(entry)({ action: 'write', path, content: 'x' });
     }
 
@@ -635,7 +635,7 @@ describe('file tool', () => {
     const vfs = memoryVfs();
     const { call } = toolFor(vfs);
     expect(await call({ action: 'write', path: 'new.txt', content: 'hi' }))
-      .toEqual({ ok: true, path: 'new.txt', reference: 'vfs://new.txt', bytes: 2, action: 'created' });
+      .toEqual({ ok: true, path: 'new.txt', reference: 'vfs://home/main/new.txt', bytes: 2, action: 'created' });
     expect(vfs.files.get('new.txt')).toBe('hi');
   });
 
@@ -671,7 +671,7 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'big.txt': 'x'.repeat(500) });
     const ledger = new TurnFileLedger();
     const budget = new TurnContextBudget();
-    const entry = createFileTool({ home: WORKSPACE_ROOT, vfs, ledger, budget });
+    const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget });
     await toolExecute(entry)({ action: 'read', path: 'big.txt' });
     expect(budget.snapshot().admittedChars).toBe(500);
   });

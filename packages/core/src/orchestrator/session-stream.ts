@@ -141,7 +141,7 @@ export class SessionStream {
 
   constructor(private readonly history: SessionHistory, private readonly turnId: string, private readonly epoch: number) {
     this.requestId = `${turnId}:${epoch}:admission`;
-    this.claim = { turnId, epoch, assert: () => this.history.epochFence(turnId, epoch) };
+    this.claim = { turnId, epoch, assert: () => this.history.assertEpoch(turnId, epoch) };
     this.assistant = this.container('assistant');
     this.tool = this.container('tool');
     this.ui = this.container('assistant', 2);
@@ -177,7 +177,7 @@ export class SessionStream {
     for (const part of this.assistant.parts.values()) {
       const text = part.kind !== 'text' || part.buffered === '' ? null : this.window(part, null, false, false);
 
-      if (text !== null && text !== '') this.history.transactionSync(() => this.history.messages.streamAppend(this.assistant.id, part.number, text, this.claim));
+      if (text !== null && text !== '') this.history.atomic(() => this.history.messages.streamAppend(this.assistant.id, part.number, text, this.claim));
     }
   }
 
@@ -332,12 +332,10 @@ export class SessionStream {
 
   private async observeScaffold(event: ChatEvent): Promise<void> {
     if (this.nativeProducer) {
+      // A native step the program cut off seals first: its messages and the program's never share an output slot.
+      if ([this.assistant, this.tool, this.ui].some(container => container.reference !== null)) await this.sealStep(null);
       this.nativeProducer = false;
-      this.cadence.reset();
-      this.sourceOrder = 0;
-      this.assistant = this.container('assistant');
-      this.tool = this.container('tool');
-      this.ui = this.container('assistant', 2);
+      this.nextStep();
     }
 
     if (event.type === 'text-delta' || event.type === 'reasoning-delta') {
@@ -361,7 +359,9 @@ export class SessionStream {
 
 
   private container(role: 'assistant' | 'tool', slot = role === 'assistant' ? 0 : 1): StreamContainer {
-    return { id: `${this.requestId}:${this.nativeProducer ? slot : this.step * 3 + slot}`, role, slot, reference: null, working: slot !== 2, sealed: false, parts: new Map() };
+    const outputSlot = this.step * 3 + slot;
+
+    return { id: `${this.requestId}:${outputSlot}`, role, slot: outputSlot, reference: null, working: slot !== 2, sealed: false, parts: new Map() };
   }
 
   private nextStep(): void {
@@ -468,7 +468,7 @@ export class SessionStream {
   }
 
   private fenced<T>(write: () => T): T {
-    return this.history.transactionSync(() => {
+    return this.history.atomic(() => {
       this.history.assertEpoch(this.turnId, this.epoch);
 
       return write();
@@ -478,7 +478,7 @@ export class SessionStream {
   /** Joins the working context only when sealed: a revision names immutable content. */
   private openContainer(container: StreamContainer, write?: () => void): void {
     this.fenced(() => {
-      container.reference = this.history.messages.open(container.role, container.id, container.working ? 'output' : 'render', { requestId: this.requestId, slot: this.nativeProducer ? container.slot : this.step * 3 + container.slot });
+      container.reference = this.history.messages.open(container.role, container.id, container.working ? 'output' : 'render', { requestId: this.requestId, slot: container.slot });
       write?.();
     });
   }
@@ -494,7 +494,7 @@ export class SessionStream {
     const selected = this.history.context.selected();
 
     if (selected === null) throw new KinuError('missing', 'stream has no selected context');
-    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => this.history.epochFence(this.turnId, this.epoch), mutate: entries => {
+    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => this.history.assertEpoch(this.turnId, this.epoch), mutate: entries => {
       this.history.messages.seal(container.id, content, envelope);
 
       if (entries.some(entry => entry.messageId === container.id)) return entries;
@@ -647,7 +647,7 @@ export class SessionStream {
         part.buffered = '';
         part.bufferedDeltas = 0;
         part.bufferedBytes = 0;
-        this.history.transactionSync(() => this.history.messages.streamAppend(container.id, part.number, window, this.claim));
+        this.history.atomic(() => this.history.messages.streamAppend(container.id, part.number, window, this.claim));
       }
 
       const value = { ...part.descriptor };
@@ -666,7 +666,7 @@ export class SessionStream {
 
       this.terminal = true;
 
-      if (this.failedRecord) return;
+      if (this.failedRecord || [this.assistant, this.tool, this.ui].every(container => container.reference === null || container.sealed)) return;
 
       if (!this.history.epochCurrent(this.turnId, this.epoch)) return;
 

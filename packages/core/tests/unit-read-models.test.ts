@@ -358,7 +358,7 @@ describe('agent status', () => {
 
     const message = await history.admitInput({
       id, turnId: id, message: { role: 'user', content: '9 head(s) across 1 fork run(s)…' },
-      assertOwner: () => w.actor.current(),
+      assertOwner: () => { w.actor.assertCurrent(); },
     });
 
     transcript.appendUser(await transcript.prepareUser({
@@ -573,10 +573,10 @@ describe('executor file plane', () => {
     const { rt, db } = createTestRuntime();
     await writeText(rt.storage.vfs, '/home/main/notes.md', 'me');
 
-    // `..` from the agent's home is /home, not the filesystem root: the old root's link sits beside it.
+    // `..` from the agent's home is /home, not the filesystem root: the home sits in it.
     const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/..');
     expect(up.path).toBe('/home');
-    expect(up.entries?.map((e) => e.name)).toContain('user');
+    expect(up.entries?.map((e) => e.name)).toContain('main');
     db.close();
   });
 

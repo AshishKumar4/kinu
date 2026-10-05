@@ -145,7 +145,7 @@ async function runOneShot(
   );
 
   // Resolved after the client exists: it reports the backend's inline cap.
-  const prompt = await resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes });
+  const prompt = await resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
 
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 

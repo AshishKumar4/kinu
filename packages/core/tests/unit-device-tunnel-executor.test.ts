@@ -181,10 +181,10 @@ describe('createDeviceTunnelExecutor', () => {
       workspaceGranted: true,
     }, async () => undefined);
 
-    // The connected machine names the row, not whichever registered first.
+    // The connected machine names the row, not whichever registered first; only a live machine's segment is linkable.
     expect(createDeviceTunnelExecutor(named).getStatus?.()).toEqual({
       configured: true, available: true, active: true, status: 'active',
-      label: 'ashish@studio', granted: true,
+      label: 'ashish@studio', granted: true, mounts: ['ashish@studio'],
     });
 
     // Offline but registered: still named, still ungranted.

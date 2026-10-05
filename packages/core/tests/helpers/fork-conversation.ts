@@ -42,12 +42,15 @@ export class ForkConversation {
     this.actor = openWorkspaceMainActor(workspace.sql);
     this.payloads = new SessionPayloads(async () => ({ vfs: workspace.vfs, artifactDirectory }));
     this.messages = new SessionMessages(workspace.sql, this.actor, this.payloads);
-    this.context = new SessionContext(workspace.sql, this.actor, (write) => this.transactionSync(write), this.messages);
+    this.context = new SessionContext(workspace.sql, this.actor, (write) => this.atomic(write), this.messages);
 
-    this.transcript = new SessionTranscript({ sql: workspace.sql, actor: this.actor, sessionId: CHAT_SESSION_ID, messages: this.messages, payloads: this.payloads, atomic: (write) => this.transactionSync(write), selection: () => this.context.selected(), });
+    this.transcript = new SessionTranscript({
+      sql: workspace.sql, actor: this.actor, sessionId: CHAT_SESSION_ID, messages: this.messages, payloads: this.payloads,
+      atomic: (write) => this.atomic(write), selection: () => this.context.selected(),
+    });
   }
 
-  transactionSync<T>(write: () => T): T {
+  atomic<T>(write: () => T): T {
     return this.workspace.db.transaction(write)();
   }
 
@@ -71,13 +74,13 @@ export class ForkConversation {
     let reference: MessageReference | null = null;
 
     if (input.working ?? true) {
-      this.context.commit(this.selection(), { cause: origin, turnId: null, assertEpoch: () => this.actor.current(), mutate: (entries) => {
+      this.context.commit(this.selection(), { cause: origin, turnId: null, assertEpoch: () => this.actor.assertCurrent(), mutate: (entries) => {
         reference = this.messages.insert(prepared, origin);
 
         return [...entries, { ...reference, entryId: input.id, position: entries.length }];
       } });
     } else {
-      reference = this.transactionSync(() => this.messages.insert(prepared, origin));
+      reference = this.atomic(() => this.messages.insert(prepared, origin));
     }
 
     if (reference === null) throw new Error('seeded message did not return its identity');
@@ -139,7 +142,7 @@ export class ForkConversation {
       cause: 'context_transform', turnId: null,
       mutate: (entries) => entries.filter((entry) => entry.entryId !== entryId)
         .map((entry, position) => ({ ...entry, position })),
-      assertEpoch: () => this.actor.current(),
+      assertEpoch: () => this.actor.assertCurrent(),
     });
   }
 }

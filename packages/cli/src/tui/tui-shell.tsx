@@ -328,8 +328,6 @@ function buildSidebarRows(
     pushGroup(`ws:${group.cwd}\u0000${group.workspaceId}`, group.workspaceId, group.agents);
   }
 
-  if (grouped.unplaced.length > 0) pushGroup('ws:unplaced', 'Unplaced', grouped.unplaced);
-
   if (grouped.remote.length > 0) {
     rows.push({ kind: 'remote', key: 'remote', expanded: expansion.remoteExpanded, loaded: grouped.remote.length });
 

@@ -15,7 +15,7 @@ export interface AgentTarget {
   mode: AgentMode;
   cloudName: string;
   localName: string;
-  /** Only a configured local ref has one; an unplaced workspace gets one when `resolveLocalAgent` adopts it. */
+  /** Only a configured local ref has one. */
   cwd?: string;
   workspaceId?: string;
 }

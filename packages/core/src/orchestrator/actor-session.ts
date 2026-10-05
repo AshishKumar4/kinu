@@ -1,4 +1,3 @@
-import { settleSync } from '../obs/effect';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -246,7 +245,7 @@ export class ActorSession {
     const publish = await prepareDrain?.(rows, atStep, reference);
     this.canonical.landInput({
       prepared, reference, turnId: claim.turnId,
-      assertOwner: () => this.canonical.epochFence(claim.turnId, claim.epoch), publish,
+      assertOwner: () => { this.canonical.assertEpoch(claim.turnId, claim.epoch); }, publish,
     });
     const message = await this.canonical.messages.materialize(reference);
     this.landed.push(...rows);
@@ -434,7 +433,7 @@ export class ActorSession {
     const active = this.active;
 
     return this.restoreAfterPending(async () => {
-      const receipt = await this.canonical.replaceHistory(messages, { author: this.actorId, via: 'session', turnId: active?.lease.turnId ?? null, stage: active !== null, assertOwner: () => this.runtime.actor.current(), events: this.options.events });
+      const receipt = await this.canonical.replaceHistory(messages, { author: this.actorId, via: 'session', turnId: active?.lease.turnId ?? null, stage: active !== null, assertOwner: () => this.runtime.actor.assertCurrent(), events: this.options.events });
 
       if (receipt.proposalId === null) {
         const current = await this.canonical.materialize();
@@ -446,14 +445,20 @@ export class ActorSession {
   }
 
   /** Refused while a turn is in flight; `assertIdle` is the host's further condition, raised in the same transaction. */
-  async revertConversation(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>): Promise<void> {
-    this.canonical.revertTo(sessionId, entryId, () => this.inFlight ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : assertIdle());
+  async revertConversation(sessionId: string, entryId: string, assertIdle: () => void): Promise<void> {
+    this.canonical.revertTo(sessionId, entryId, () => {
+      if (this.inFlight) throw new KinuError('denied', REVERT_NEEDS_IDLE);
+      assertIdle();
+    });
     this.dynamic.unload();
     await this.restoreWorkingHistory();
   }
 
-  async clearConversation(sessionId: string, assertIdle: () => Effect.Effect<void, KinuError>): Promise<void> {
-    this.canonical.clearConversation(sessionId, () => this.inFlight ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE)) : assertIdle());
+  async clearConversation(sessionId: string, assertIdle: () => void): Promise<void> {
+    this.canonical.clearConversation(sessionId, () => {
+      if (this.inFlight) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
+      assertIdle();
+    });
     this.dynamic.unload();
     await this.restoreWorkingHistory();
   }
@@ -475,12 +480,12 @@ export class ActorSession {
     return pending;
   }
 
-  private preparingTurnFence(lease: ActorTurnLease, refusal: string): () => Effect.Effect<void, KinuError> {
-    return () => Effect.gen({ self: this }, function* () {
-      yield* this.runtime.actor.current();
+  private preparingTurnFence(lease: ActorTurnLease, refusal: string): () => void {
+    return () => {
+      this.runtime.actor.assertCurrent();
 
-      if (this.requireTurn(lease).phase !== 'preparing') return yield* new KinuError('denied', refusal);
-    });
+      if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', refusal);
+    };
   }
 
   /** Open a durable assignment. The lease's turn id is the delivery identity, so a re-drive admits a task once,
@@ -552,39 +557,35 @@ export class ActorSession {
     startedAt: number,
     metadata?: JsonObject,
   ): ActorTurnLease {
-    return settleSync(Effect.gen({ self: this }, function* () {
-      if (this.active !== null) return yield* new KinuError('denied', 'this actor already has an admitted turn');
-      const abort = new AbortController();
+    if (this.active !== null) throw new KinuError('denied', 'this actor already has an admitted turn');
+    const abort = new AbortController();
 
-      const lease: ActorTurnLease = Object.freeze({
-        actorId: this.actorId, runId: ids.runId, turnId: ids.turnId, signal: abort.signal,
-      });
+    const lease: ActorTurnLease = Object.freeze({
+      actorId: this.actorId, runId: ids.runId, turnId: ids.turnId, signal: abort.signal,
+    });
 
-      this.active = {
-        lease, abort, phase: 'preparing', context: null, profile: null, profileInputs: null,
-        claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
-      };
-      this.mode = mode;
-      this.landed.length = 0;
-      this.orchestrator.beginTurn(startedAt, metadata);
-      this.orchestrator.restrictTurnWorkMode(mode);
+    this.active = {
+      lease, abort, phase: 'preparing', context: null, profile: null, profileInputs: null,
+      claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
+    };
+    this.mode = mode;
+    this.landed.length = 0;
+    this.orchestrator.beginTurn(startedAt, metadata);
+    this.orchestrator.restrictTurnWorkMode(mode);
 
-      return lease;
-    }));
+    return lease;
   }
 
   bindProfile(lease: ActorTurnLease, profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void {
-    return settleSync(Effect.gen({ self: this }, function* () {
-      const turn = this.requireTurn(lease);
+    const turn = this.requireTurn(lease);
 
-      if (turn.phase !== 'preparing' || turn.profile !== null) return yield* new KinuError('denied', 'an actor turn profile is bound exactly once before execution');
+    if (turn.phase !== 'preparing' || turn.profile !== null) throw new KinuError('denied', 'an actor turn profile is bound exactly once before execution');
 
-      if (this.mode === 'plan' && profile.workMode !== 'plan') return yield* new KinuError('denied', 'an actor profile cannot widen an admitted Plan turn');
-      turn.profile = profile;
-      turn.profileInputs = inputs;
-      this.mode = profile.workMode;
-      this.orchestrator.restrictTurnWorkMode(this.mode);
-    }));
+    if (this.mode === 'plan' && profile.workMode !== 'plan') throw new KinuError('denied', 'an actor profile cannot widen an admitted Plan turn');
+    turn.profile = profile;
+    turn.profileInputs = inputs;
+    this.mode = profile.workMode;
+    this.orchestrator.restrictTurnWorkMode(this.mode);
   }
 
   send(steer: UserSteer & { readonly id: string; readonly mode?: WorkMode }): Promise<SendOutcome> {
@@ -614,24 +615,20 @@ export class ActorSession {
 
   /** An unnamed outcome settles `indeterminate`, never `completed`. */
   finishTurn(lease: ActorTurnLease): void {
-    return settleSync(Effect.gen({ self: this }, function* () {
-      const active = this.requireTurn(lease);
+    const active = this.requireTurn(lease);
 
-      if (active.phase === 'running') return yield* new KinuError('denied', 'cannot release an actor while its program is running');
+    if (active.phase === 'running') throw new KinuError('denied', 'cannot release an actor while its program is running');
 
-      if (active.claim !== null && !active.claimSettled) this.settleClaim(active, 'indeterminate');
-      this.active = null;
-    }));
+    if (active.claim !== null && !active.claimSettled) this.settleClaim(active, 'indeterminate');
+    this.active = null;
   }
 
   /** Called once the turn's answer is durable. */
   settleTurnClaim(lease: ActorTurnLease, outcome: ClaimOutcome): void {
-    return settleSync(Effect.gen({ self: this }, function* () {
-      const active = this.requireTurn(lease);
+    const active = this.requireTurn(lease);
 
-      if (active.claim === null) return yield* new KinuError('denied', 'this actor turn holds no durable claim to settle');
-      this.settleClaim(active, outcome);
-    }));
+    if (active.claim === null) throw new KinuError('denied', 'this actor turn holds no durable claim to settle');
+    this.settleClaim(active, outcome);
   }
 
   private settleClaim(active: ActiveTurn, outcome: ClaimOutcome): void {
@@ -816,7 +813,7 @@ export class ActorSession {
     const { tools, extensions } = this.turnToolset(input, profile);
     // Activation names the input's entry after its message; an edit keeps the entry.
     const turnInput = this.canonical.admittedInput(claim.turnId);
-    const assertClaim = () => this.canonical.epochFence(claim.turnId, claim.epoch);
+    const assertClaim = () => this.canonical.assertEpoch(claim.turnId, claim.epoch);
     let stepEntries: readonly ContextEntry[] = [];
     let turnOpened = false;
 

@@ -17,6 +17,7 @@ import {
   createMemoryCraftStore, createMockExecutor, createMemorySchedule,
 } from '../helpers';
 import { WORKSPACE_ROOT } from '../../src/vfs/workspace-path';
+import { cloudPlanes } from '../../src/vfs/resolve';
 
 function createScaffoldTestRuntime(llm: LLM) {
   const db = new Database(':memory:');
@@ -27,7 +28,7 @@ function createScaffoldTestRuntime(llm: LLM) {
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'scaffold-test');
 
   const rt: AgentRuntime = {
-    workspaceIsMachine: false,
+    planes: cloudPlanes(WORKSPACE_ROOT),
     actor,
     toolFiles: vfs,
     storage: { vfs, home: WORKSPACE_ROOT, sql, execRaw, transactionSync: write => db.transaction(write)() },

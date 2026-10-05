@@ -193,7 +193,7 @@ export function buildProgram(): Command {
   program
     .command('import <file>')
     .helpGroup(WORKSPACES)
-    .description('Restore a workspace archive as a local workspace')
+    .description('Restore a workspace archive as a local workspace that works in the current folder')
     .option('-n, --name <name>', 'Workspace name (default: the name recorded in the archive)')
     .action(importCommand);
 

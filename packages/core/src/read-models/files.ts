@@ -6,14 +6,15 @@ import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
  */
 
 import {
-  MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, carryFileWithVfsOps, listWithVfsOps,
+  MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, listWithVfsOps,
   readBoundedWithVfsOps, partialTreeRemovalMessage, removeTreeWithVfsOps,
 } from '../vfs/mounts';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { move } from '@nimbus-sh/core/vfs/move.js';
 import { inlineFileType } from './file-types';
 import { isSystemManaged } from '../vfs/workspace-path';
 
-import { Effect, Result } from 'effect';
+import { Effect } from 'effect';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
@@ -118,20 +119,18 @@ export class ExecutorFileUpload {
   async chunk(offset: number, chunk: Uint8Array, final: boolean): Promise<ExecutorWriteResult> {
     const assembly = this.chunks.chunk(offset, chunk, final);
 
-    if (Result.isFailure(assembly)) return { error: assembly.failure };
+    if (!('assembled' in assembly)) return assembly;
 
-    if (assembly.success === null) return { ok: true };
-    const assembled = assembly.success;
     const { writeSoul, expectedRevision } = this.write;
 
     return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
       if (writeSoul !== undefined && this.executorId === 'workspace' && isWorkspaceSoul(this.path)) {
-        await writeSoul(assembled);
+        await writeSoul(assembly.assembled);
 
         return { ok: true };
       }
 
-      return writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembled, expectedRevision });
+      return writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembly.assembled, expectedRevision });
     })));
   }
 
@@ -151,29 +150,29 @@ export class ChunkedUpload {
     return this.settled;
   }
 
-  chunk(offset: number, chunk: Uint8Array, final: boolean): Result.Result<Uint8Array | null, string> {
-    if (this.settled) return Result.fail('file transfer already settled');
+  chunk(offset: number, chunk: Uint8Array, final: boolean): { ok: true } | { error: string } | { assembled: Uint8Array } {
+    if (this.settled) return { error: 'file transfer already settled' };
 
-    if (offset < 0) return Result.fail('chunk offset must not be negative');
+    if (offset < 0) return { error: 'chunk offset must not be negative' };
 
     if (offset !== this.received) {
-      return Result.fail(`file transfer out of sync: expected offset ${String(this.received)}, got ${String(offset)}`);
+      return { error: `file transfer out of sync: expected offset ${String(this.received)}, got ${String(offset)}` };
     }
 
     if (chunk.byteLength > FILE_CHUNK_BYTES) {
-      return Result.fail(`chunk exceeds ${String(FILE_CHUNK_BYTES)} bytes`);
+      return { error: `chunk exceeds ${String(FILE_CHUNK_BYTES)} bytes` };
     }
 
     if (this.received + chunk.byteLength > FILE_TRANSFER_MAX_BYTES) {
       this.settled = true;
 
-      return Result.fail(`file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`);
+      return { error: `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit` };
     }
 
     this.parts.push(chunk);
     this.received += chunk.byteLength;
 
-    if (!final) return Result.succeed(null);
+    if (!final) return { ok: true };
     const assembled = new Uint8Array(this.received);
     let at = 0;
 
@@ -184,7 +183,7 @@ export class ChunkedUpload {
 
     this.settled = true;
 
-    return Result.succeed(assembled);
+    return { assembled };
   }
 
   abort(): void {
@@ -196,48 +195,46 @@ export class ChunkedUpload {
 
 /** Streams the body as whole FILE_CHUNK_BYTES chunks then one final (possibly empty) tail. A
  *  throwing `send` propagates; only the caller can abort the transfer it opened. */
-export function pumpUploadChunks<Result, E>(
+export async function pumpUploadChunks<Result>(
   request: Request,
-  send: (offset: number, chunk: Uint8Array, final: boolean) => Effect.Effect<Result, E>,
-): Effect.Effect<'too_large' | KinuError | { result: Result }, E> {
-  return Effect.gen(function* () {
-    const pending: Uint8Array[] = [];
-    let pendingBytes = 0;
-    let offset = 0;
+  send: (offset: number, chunk: Uint8Array, final: boolean) => Promise<Result>,
+): Promise<'too_large' | KinuError | { result: Result }> {
+  const pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  let offset = 0;
 
-    const take = (want: number): Uint8Array => {
-      const out = new Uint8Array(want);
-      let at = 0;
+  const take = (want: number): Uint8Array => {
+    const out = new Uint8Array(want);
+    let at = 0;
 
-      while (at < want) {
-        const part = pending[0];
-        const count = Math.min(part.byteLength, want - at);
-        out.set(part.subarray(0, count), at);
+    while (at < want) {
+      const part = pending[0];
+      const count = Math.min(part.byteLength, want - at);
+      out.set(part.subarray(0, count), at);
 
-        if (count === part.byteLength) pending.shift();
-        else pending[0] = part.subarray(count);
-        at += count;
-      }
+      if (count === part.byteLength) pending.shift();
+      else pending[0] = part.subarray(count);
+      at += count;
+    }
 
-      pendingBytes -= want;
+    pendingBytes -= want;
 
-      return out;
-    };
+    return out;
+  };
 
-    const outcome = yield* readBoundedStream(request, FILE_TRANSFER_MAX_BYTES, (value) => Effect.gen(function* () {
-      pending.push(value);
-      pendingBytes += value.byteLength;
+  const outcome = await readBoundedStream(request, FILE_TRANSFER_MAX_BYTES, async (value) => {
+    pending.push(value);
+    pendingBytes += value.byteLength;
 
-      while (pendingBytes >= FILE_CHUNK_BYTES) {
-        yield* send(offset, take(FILE_CHUNK_BYTES), false);
-        offset += FILE_CHUNK_BYTES;
-      }
-    }));
-
-    if (outcome !== 'ok') return outcome;
-
-    return { result: yield* send(offset, pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0), true) };
+    while (pendingBytes >= FILE_CHUNK_BYTES) {
+      await send(offset, take(FILE_CHUNK_BYTES), false);
+      offset += FILE_CHUNK_BYTES;
+    }
   });
+
+  if (outcome !== 'ok') return outcome;
+
+  return { result: await send(offset, pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0), true) };
 }
 
 /** One snapshot behind a chunked download, so ranges never observe a different file version. */
@@ -567,20 +564,7 @@ export function renameExecutorPathOp(
     if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
 
     if (await exists(vfs, to)) return { error: `${to} already exists` };
-    const native = vfs.rename?.bind(vfs);
-
-    if (native) {
-      await native.call(vfs, from, to);
-
-      return { ok: true };
-    }
-
-    const stat = await vfs.stat(from);
-
-    if (!stat) return { error: `no such file or directory: ${from}` };
-
-    if ((stat.type === 'directory')) return { error: 'this environment cannot rename a directory in place' };
-    await carryFileWithVfsOps({ files: vfs, path: from }, { files: vfs, path: to });
+    await move(vfs, from, to);
 
     return { ok: true };
   })));
@@ -622,15 +606,14 @@ export function deleteExecutorPathOp(
 
     const removal = await removeTreeWithVfsOps(vfs, path);
 
-    if (Result.isFailure(removal)) {
-      const partial = removal.failure;
+    if (!removal.ok) {
       // No cause attached: the message already inlines it.
-      const reason = classifyErrorCode({ cause: partial.failed.cause }) ?? 'io';
+      const reason = classifyErrorCode({ cause: removal.failed.cause }) ?? 'io';
 
       return {
-        ...refusalOf(new KinuError(reason, partialTreeRemovalMessage(path, partial))),
-        removed: partial.removed,
-        remaining: partial.remaining,
+        ...refusalOf(new KinuError(reason, partialTreeRemovalMessage(path, removal))),
+        removed: removal.removed,
+        remaining: removal.remaining,
       };
     }
 

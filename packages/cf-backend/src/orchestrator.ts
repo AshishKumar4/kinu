@@ -62,11 +62,11 @@ import {
 } from "./actor-hosting";
 import {
   admitHostedTask, hostedDelegationBudget, hostedRetryTools, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
-  reportSettlesRun, hostedTaskEnding, reclaimSettledExplorationActors,
+  hostedTaskEnding, reclaimSettledExplorationActors,
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
-import type { ReportToolDeps } from "@kinu.run/core";
+import { publishSubordinateReport, temporaryRunSettles, type ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
@@ -255,7 +255,7 @@ import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
 import {
-  terminalEffect, declareTerminalRoster, isDefinitiveTerminalFailure,
+  terminalEffect, chatTurnParts, declareTerminalRoster, isDefinitiveTerminalFailure,
   branchesTerminalEffect,
   type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnFacts,
   type TerminalTurnParts,
@@ -1064,18 +1064,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const report: ReportToolDeps = {
       report: async (input) => {
-        // A run-settling report is the answer.
-        const settles = reportSettlesRun(input.status, 'report_tool');
-
-        const relayed = await relayHostedReport(this.hostedSeams(), turn.actor, {
+        const relayed = await publishSubordinateReport({ mode: turn.input.mode, reports: turn.reports }, {
           status: input.status, content: input.content, origin: 'report_tool',
-          mode: 'build', sequenceId: `live:${turn.actor.record.name}:${nanoid()}`,
-          handoff: input.handoff,
-          ...(settles && { answers: turn.turnId }),
-        });
-
-        turn.reports.spoke = true;
-        turn.reports.settled ||= settles;
+          sequenceId: `live:${turn.actor.record.name}:${nanoid()}`, handoff: input.handoff,
+        }, (published) => relayHostedReport(this.hostedSeams(), turn.actor, {
+          // A run-settling report is the answer.
+          ...published, ...(temporaryRunSettles({ status: published.status, origin: published.origin }) && { answers: turn.turnId }),
+        }));
 
         return { id: relayed.id, disposition: relayed.disposition };
       },
@@ -2349,13 +2344,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const parts: TerminalTurnParts = {
       // Over the row the transcript is about to persist, so a cut turn's announcement replays from it.
       turnEndExtensions: true,
-      credited: input.credited,
+      ...chatTurnParts(input),
       craftedToolsUsed: this.acc.craftedToolsUsed(),
       eventReplies: { answered: input.answeredDeliveries, requestId: input.messageId },
       branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
-      overflowRetry: input.overflowRetry,
-      outputContinuation: input.outputContinuation,
-      taskReminder: input.taskReminder ?? undefined,
       // Owed only when the actor reviews turns, as the lane it replaced was started only then.
       advisor: this.actorSession.reviewsTurns
         ? projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) })

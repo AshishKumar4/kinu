@@ -10,7 +10,7 @@ export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, 
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
-  declareTerminalRoster,
+  chatTurnParts, declareTerminalRoster,
   type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
@@ -20,10 +20,7 @@ export {
 } from './orchestrator/terminal-transition';
 
 export {
-  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
-  outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  branchesTerminalEffect, turnRecordTerminalEffect, turnLessonsTerminalEffect,
-  eventDrainTerminalEffect,
+  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, branchesTerminalEffect,
   terminalEffectKey, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
@@ -215,7 +212,14 @@ export { OutputSinkSchema, ShellExecOptionsSchema, VfsRevisionSchema } from './t
 
 export { REAL_CLOCK, waitOn, every, type Clock } from './types/clock';
 
-export { referenceRoots, formatReference, type ReferenceRoot } from './vfs/references';
+export {
+  cloudFileLinks, filesFocusOf, linkFileReferences, localFileLinks, type FileLinks, type FilesFocus,
+} from './read-models/file-links';
+
+export {
+  cloudPlanes, findPlaneReferences, formatPath, localPlanes, machinePath, referencedPath, referencePrefixes, resolvePath, RESERVED_ROOTS,
+  type PathPlanes, type ResolvedPath,
+} from './vfs/resolve';
 
 export type * from './types/agent-runtime';
 
@@ -524,7 +528,7 @@ export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendant
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
 export {
-  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, registerLocalNode, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
+  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
 } from './state/local-actors';
 
 // open-38: one physical workspace SQLite for every logical actor.
@@ -766,10 +770,16 @@ export {
 
 export {
   acceptedMediaForModel,
+  attachmentBytes,
   sanitizeAttachmentsForModel,
+  storeAttachment,
   type AttachmentPolicy,
   type MediaModality,
 } from './prompting/attachment-sanitizer';
+
+export { rasterImage, type RasterImage } from './utils/raster-image';
+
+export { compactsServerSide, isServerCompaction, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {
   DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type RuntimeFacts, type DynamicTask, type MissingCapability,
@@ -1005,7 +1015,7 @@ export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, 
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  workspacePath, NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT,
+  workspacePath, SLATES_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {
@@ -1059,7 +1069,7 @@ export {
 } from './skills/drive';
 
 export {
-  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
+  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
   type VfsMount, type MountableProvider, type MountedVfs,
   type VfsListedEntry,
@@ -1571,7 +1581,7 @@ export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type Actor
 
 
 export {
-  ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
+  ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
@@ -2106,6 +2116,8 @@ export { KINU_USER_AGENT, kinuUserAgent } from './utils/user-agent';
 
 export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';
 
+export { desktopClientUrl } from './http/desktop-client';
+
 export { serveApp } from './http/app-shell';
 
 export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressAdmission } from './http/ingress-budget';
@@ -2454,4 +2466,3 @@ export type {
   AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';
-

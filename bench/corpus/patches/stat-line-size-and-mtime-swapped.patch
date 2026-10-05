@@ -1,12 +1,12 @@
 diff --git a/packages/core/src/execution/nimbus.ts b/packages/core/src/execution/nimbus.ts
 --- a/packages/core/src/execution/nimbus.ts
 +++ b/packages/core/src/execution/nimbus.ts
-@@ -756,7 +756,7 @@ export function nimbusSessionFiles(
+@@ -774,7 +774,7 @@ export function nimbusSessionFiles(
  
-         const entryType = type === 'symbolic link' ? 'symlink' as const : 'file' as const;
+       const entryType = type === 'symbolic link' ? 'symlink' as const : 'file' as const;
  
--        return { size: Number(size), mtimeMs: Number(seconds) * 1_000, type: type === 'directory' ? 'directory' : entryType };
-+        return { size: Number(seconds), mtimeMs: Number(size) * 1_000, type: type === 'directory' ? 'directory' : entryType };
-       },
-       async unlink(path) { await files.delete(at(path)); },
-       async removeRecursive(path) { await files.delete(at(path), { recursive: true }); },
+-      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, type: type === 'directory' ? 'directory' : entryType };
++      return { size: Number(seconds), mtimeMs: Number(size) * 1_000, type: type === 'directory' ? 'directory' : entryType };
+     },
+     async unlink(path) { await files.delete(at(path)); },
+     async removeRecursive(path) { await files.delete(at(path), { recursive: true }); },

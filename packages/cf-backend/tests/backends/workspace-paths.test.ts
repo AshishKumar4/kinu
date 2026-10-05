@@ -4,10 +4,18 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { scratchDir } from '@kinu.run/test-utils';
+import { buildBuiltinTools, type AgentRuntime, type JsonValue } from '@kinu.run/core';
+import { present, scratchDir, toolExecute } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 import { createCLIRuntime } from '../../../cli-backend/src/runtime';
-import { orchestratorHarness, workspaceFiles } from '../helpers/actor-harness';
+import { conversationsFor } from '../../../core/tests/helpers';
+import { hostedMainActor, orchestratorHarness, workspaceFiles } from '../helpers/actor-harness';
 import { testBackends } from './backend';
+
+/** The model's `file` tool over a backend's own runtime. */
+function fileTool(rt: AgentRuntime): (input: { action: string; path: string; content?: string }) => Promise<JsonValue> {
+  return toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: conversationsFor(rt) }).file, 'the file tool'));
+}
 
 async function publicPlane(name: 'cf' | 'cli') {
   if (name === 'cf') {
@@ -18,18 +26,26 @@ async function publicPlane(name: 'cf' | 'cli') {
 
     return {
       read: (path: string) => cloud.agent.readExecutorFile('workspace', path),
+      file: fileTool((await hostedMainActor(cloud)).actor.runtime),
+      shell: present((await hostedMainActor(cloud)).actor.runtime.shell, 'the cloud workspace shell'),
       list: (path: string) => files.readdir(path),
       write: async (path: string, text: string) => {
         await files.writeFile(path, new TextEncoder().encode(text));
       },
+      // The own home is the Nimbus tree's, and a relative path starts there.
+      home: '/home/main', workdir: '/home/main',
       hostFile: null,
     };
   }
 
-  const cwd = scratchDir('workspace-paths');
-  mkdirSync(join(cwd, 'slates'));
+  // The own space is real files beside the database; a relative path starts in the folder.
+  const root = scratchDir('workspace-paths');
+  const cwd = join(root, 'project');
+  const space = join(root, 'space');
+  mkdirSync(cwd);
+  mkdirSync(space);
 
-  const db = new Database(':memory:');
+  const db = new Database(join(space, 'agent.db'));
   const rt = createCLIRuntime(db, { llm: null, cwd });
 
   return {
@@ -42,34 +58,36 @@ async function publicPlane(name: 'cf' | 'cli') {
       }
     },
     list: (path: string) => rt.storage.vfs.readdir(path),
+    file: fileTool(rt),
+    shell: present(rt.shell, 'the local shell'),
     write: async (path: string, text: string) => { await rt.storage.vfs.writeFile(path, new TextEncoder().encode(text)); },
     end: () => db.close(),
-    hostFile: (path: string) => readFileSync(join(cwd, path), 'utf8'),
+    home: join(space, 'home', 'main'), workdir: cwd,
+    hostFile: (path: string) => readFileSync(path, 'utf8'),
   };
 }
 
 for (const name of testBackends()) {
   describe(`${name} public workspace paths`, () => {
-    test('every home spelling reads and updates the same file, without copying it', async () => {
+    test('every spelling of the own home reads and updates the same file, without copying it', async () => {
       const plane = await publicPlane(name);
 
       try {
-        await plane.write('notes/item.txt', 'one');
+        await plane.write('/home/main/notes/item.txt', 'one');
 
         for (const path of [
-          'notes/item.txt', './notes/item.txt', './/notes/./item.txt', 'notes/deep/../item.txt',
-          '/home/main/notes/item.txt', '/home//main/notes/item.txt', '/home/user/notes/item.txt',
-          '/home/main/notes/item.txt/',
+          '/home/main/notes/item.txt', '/home//main/notes/item.txt', '/home/main/notes/./item.txt', '/home/main/notes/item.txt/',
+          `${plane.home}/notes/item.txt`,
         ]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
 
-        await plane.write('/home/user/notes/./item.txt', 'two');
-        expect(await plane.read('notes/item.txt')).toMatchObject({ content: 'two' });
+        await plane.write(`${plane.home}/notes/./item.txt`, 'two');
+        expect(await plane.read('/home/main/notes/item.txt')).toMatchObject({ content: 'two' });
 
-        if (plane.hostFile !== null) expect(plane.hostFile('notes/item.txt')).toBe('two');
+        if (plane.hostFile !== null) expect(plane.hostFile(`${plane.home}/notes/item.txt`)).toBe('two');
 
-        for (const path of ['', '.', './', '/home/main/', '/home/user/']) {
+        for (const path of ['/home/main/', `${plane.home}/`]) {
           expect((await plane.list(path)).map((entry) => entry.name)).toContain('notes');
         }
 
@@ -79,20 +97,72 @@ for (const name of testBackends()) {
       }
     });
 
-    test('a path resolves as POSIX resolves it, from the home, on both backends', async () => {
+    test('a path resolves as POSIX resolves it, a relative one from where the agent works', async () => {
       const plane = await publicPlane(name);
 
       try {
         await plane.write('item.txt', 'one');
         await plane.write('/slates/project/item.txt', 'slate');
 
-        for (const path of ['../main/item.txt', './dir/../item.txt', '/slates/../home/main/item.txt', '/home/x/../main/item.txt']) {
+        for (const path of ['./item.txt', './dir/../item.txt', `${plane.workdir}/x/../item.txt`, `${plane.workdir}//./item.txt`]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
 
         expect(await plane.read('/home/main/../../slates/project/./item.txt')).toMatchObject({ content: 'slate' });
 
-        if (plane.hostFile !== null) expect(plane.hostFile('slates/project/item.txt')).toBe('slate');
+        if (plane.hostFile !== null) {
+          expect(plane.hostFile(`${plane.workdir}/item.txt`)).toBe('one');
+          expect(plane.hostFile(join(plane.home, '..', '..', 'slates', 'project', 'item.txt'))).toBe('slate');
+        }
+      } finally {
+        plane.end?.();
+      }
+    });
+
+    // 2026-10-04: the file tool printed `root://path` references it could not read back, and took `~` as a name.
+    test('the file tool reads a file by the reference it printed, and `~` as the shell names it', async () => {
+      const plane = await publicPlane(name);
+
+      try {
+        const written = v.parse(v.object({ reference: v.string() }), await plane.file({ action: 'write', path: 'notes/ref.txt', content: 'one' }));
+        expect(written.reference).toBe(name === 'cf' ? 'vfs://home/main/notes/ref.txt' : 'local://notes/ref.txt');
+        expect(await plane.file({ action: 'read', path: written.reference })).toContain('one');
+
+        if (name === 'cf') expect(await plane.file({ action: 'read', path: '~/notes/ref.txt' })).toContain('one');
+      } finally {
+        plane.end?.();
+      }
+    });
+
+    // 2026-10-04: vfs:// is the one tree an agent sees, and every other prefix is an alias for a subtree of it.
+    test('a prefix and its vfs:// long form read the same file, and the file tool prints the shorter', async () => {
+      const plane = await publicPlane(name);
+
+      try {
+        const written = v.parse(v.object({ reference: v.string() }), await plane.file({ action: 'write', path: 'notes/alias.txt', content: 'one' }));
+
+        // The cloud's `local://` is its own files, `vfs://` itself; a local workspace's is its folder, `vfs://local`.
+        const forms = name === 'cf'
+          ? ['vfs://home/main/notes/alias.txt', 'local://home/main/notes/alias.txt']
+          : ['local://notes/alias.txt', 'vfs://local/notes/alias.txt'];
+
+        expect(written.reference).toBe(forms[0]);
+
+        for (const form of forms) expect(await plane.file({ action: 'read', path: form })).toContain('one');
+      } finally {
+        plane.end?.();
+      }
+    });
+
+    // 2026-10-04: a shell given `vfs://x` ran it as a relative path. The shell takes its machine's paths; a refusal names the real one.
+    test('the shell refuses a plane reference and names the path it has for it', async () => {
+      const plane = await publicPlane(name);
+
+      try {
+        const refused = await plane.shell.exec('cat vfs://home/main/notes/ref.txt');
+        expect(refused.stderr).toContain(`NOT RUN: the shell takes this machine's paths: vfs://home/main/notes/ref.txt is ${plane.home}/notes/ref.txt here`);
+        expect(refused.exitCode).not.toBe(0);
+        expect((await plane.shell.exec('echo "see vfs://home/main/x and https://example.com"')).stdout).toContain('see vfs://home/main/x');
       } finally {
         plane.end?.();
       }
@@ -107,7 +177,8 @@ for (const name of testBackends()) {
         expect(await plane.read('pc/studio/item.txt')).toMatchObject({ content: 'local device spelling' });
         expect(await plane.read('shared/item.txt')).toMatchObject({ content: 'local shared spelling' });
         expect((await plane.read('/shared/item.txt')).error).toContain('ENXIO');
-        expect((await plane.read('/shared/../item.txt')).error).toContain('EPERM');
+        // A mount on the cloud refuses a climb out of it; a real path climbs as POSIX does.
+        expect((await plane.read('/shared/../item.txt')).error).toContain(name === 'cf' ? 'EPERM' : 'ENOENT');
 
         if (name === 'cf') {
           expect((await plane.read('/pc/studio/item.txt')).error).toContain('ENXIO');

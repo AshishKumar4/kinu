@@ -4,8 +4,9 @@ import { describe, test, expect } from 'bun:test';
 import { AwaitedList, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
 import { agentAffinityKey, initWorkspaceSchema } from '@kinu.run/core';
-import { narrowToolSurface } from '@kinu.run/core';
+import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
+import { resolve as resolvePath } from 'node:path';
 import { APICallError } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -1797,7 +1798,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     const tool = createNodeCodemodeToolFactory({
       reach: narrowToolSurface(undefined),
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
-    })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
+    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 
     return (code: string, options?: ToolExecutionOptions) =>
       toolExecute<{ code: string }, JsonValue>(tool)({ code }, options);
@@ -1831,11 +1832,11 @@ describe('agents.* codemode namespace — node sandbox', () => {
       },
     });
 
-    const db = new Database(':memory:');
+    const db = new Database(scratchPath('workspace', 'agent.db'));
     // Production initializer: a swarm node claims a working revision in the workspace's tables
     // (without it, `no such table: actor_working_revisions`).
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
     return { deps: { mode: 'build', swarms: true, swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
   }
@@ -2313,6 +2314,8 @@ describe('LocalAgentSession — a workspace bound to a directory', () => {
 
     expect(systems.length).toBeGreaterThanOrEqual(2);
     expect(new Set(systems).size).toBe(1);
-    expect(systems[0]).toContain('`local://` for this workspace');
+    expect(systems[0]).toContain('`local://` is `vfs://local`');
+    // The real roots are the workspace's own, so they ride the byte-identical prompt too.
+    expect(systems[0]).toContain(`\`vfs://local\` is \`${resolvePath(root)}\``);
   });
 });

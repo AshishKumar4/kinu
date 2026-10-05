@@ -105,7 +105,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
   test("defines require, env and every crafted tool on the tools namespace", () => {
     const prelude = renderToolsPrelude(
       [{ name: "double", code: "async (n) => n * 2", description: "" }],
-      { workspace: "hardy-stone-a905df14" },
+      { cwd: WORKSPACE_ROOT, workspace: "hardy-stone-a905df14" },
     );
 
     expect(prelude).toContain(`await import("./${KINU_NODE_MODULE_NAME}")`);
@@ -122,7 +122,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
         { name: "broken", code: "const broken = async () => 1", description: "" },
         { name: "fine", code: "async () => 2", description: "" },
       ],
-      { workspace: "w" },
+      { cwd: WORKSPACE_ROOT, workspace: "w" },
     );
 
     expect(prelude).toContain('"broken": __kinu.defineCrafted("broken", () => { throw new Error("stored source does not parse:');
@@ -136,7 +136,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
     // compiled prelude, denying every tool; the async wrapper keeps failure at call time.
     const prelude = renderToolsPrelude(
       [{ name: "waiter", code: "await foo()", description: "" }],
-      { workspace: "w" },
+      { cwd: WORKSPACE_ROOT, workspace: "w" },
     );
 
     expect(prelude).toContain('"waiter": __kinu.defineCrafted("waiter", async () => (\nawait foo()\n), tools["waiter"])');
@@ -215,6 +215,24 @@ describe("createRequire — Node's fs and child_process over the workspace", () 
   test("text that reads like a failure is output: only a refusal fails a call", async () => {
     expect(await require("child_process").exec("printf x")).toEqual({ stdout: "Error (exit 3)", stderr: "printed, not failed" });
     expect(await require("fs/promises").readFile("saved.json", "utf8")).toBe('{"reason":"io","error":"a saved API error"}');
+  });
+
+  // 2026-10-04: `fs` joined `vfs://notes/a.md` onto the working directory, so a prefixed path named no file.
+  test("a prefixed path reaches the workspace as written, for the host's resolver; a relative one joins the working directory", async () => {
+    const read: string[] = [];
+
+    const readFile = async (path: string) => {
+      read.push(path);
+
+      return "x";
+    };
+
+    const fs = shim.createRequire({ workspace: { readFile }, builtins: {}, cwd: WORKSPACE_ROOT })("fs/promises");
+
+    await fs.readFile("vfs://notes/a.md", "utf8");
+    await fs.readFile("local://src/b.ts", "utf8");
+    await fs.readFile("notes/c.md", "utf8");
+    expect(read).toEqual(["vfs://notes/a.md", "local://src/b.ts", `${WORKSPACE_ROOT}/notes/c.md`]);
   });
 
   test("Node builtins resolve with or without the node: prefix; anything else names what exists", () => {

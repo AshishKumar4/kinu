@@ -1,9 +1,8 @@
-import { Cause, Data, Effect } from 'effect';
 import {
-  chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync, statSync,
+  chmodSync, existsSync, readFileSync, mkdirSync, realpathSync, statSync,
   writeFileSync, unlinkSync,
 } from 'node:fs';
-import { basename, isAbsolute, join, relative as relativePath, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
   ANTHROPIC_BASE_URL,
@@ -23,7 +22,8 @@ import {
   type ProfileCatalogEnvelope,
   shellQuote,
 } from '@kinu.run/core';
-import { tolerate, settle, settleSync } from '@kinu.run/core/obs';
+import { KinuError, settleSync, tolerate } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import {
   makeSql, CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
@@ -211,40 +211,25 @@ export function defaultVirtualWorkspaceId(cwd = process.cwd()): string {
 }
 
 export function agentDir(name: string): string {
-  return settleSync(Effect.as(validateAgentName(name), join(AGENT_HOME, name)));
+  validateAgentName(name);
+
+  return join(AGENT_HOME, name);
 }
 
 export function agentDbPath(name: string): string {
   return join(agentDir(name), 'agent.db');
 }
 
-interface LocalAgentRef {
+export interface LocalAgentRef {
   name: string;
   cwd: string;
   workspaceId: string;
   dbPath: string;
 }
 
-/** `adopted`: this resolve bound an unplaced `~/.kinu/<name>` workspace to the caller's project. */
-type LocalPlacement = 'recorded' | 'adopted' | 'unplaced';
-
-export interface ResolvedLocalAgent extends LocalAgentRef {
-  placement: LocalPlacement;
-}
-
-/** An install-tree placement (the old launcher's) names no project. */
-function insideInstallTree(cwd: string): boolean {
-  const relative = relativePath(canonicalProjectRoot(join(AGENT_HOME, 'cli')), canonicalProjectRoot(cwd));
-
-  return relative === '' || (!relative.startsWith('..') && !isAbsolute(relative));
-}
-
-/** Null without a recorded placement, so an unplaced workspace belongs to no project rather than to the current directory. */
+/** Null without a recorded folder that still exists: such a workspace is listed nowhere and refused at open. */
 function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
-  if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId) return null;
-
-  // A missing recorded directory places nothing; otherwise a renamed project's agents would vanish from every roster.
-  if (!existsSync(agent.cwd) || insideInstallTree(agent.cwd)) return null;
+  if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId || !existsSync(agent.cwd)) return null;
   const name = agent.localName ?? agent.name;
 
   if (!KINU_IDENTIFIER_RE.test(name)) return null;
@@ -264,7 +249,6 @@ export function listLocalRefsAllProjects(): LocalAgentRef[] {
     .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.name.localeCompare(b.name));
 }
 
-/** Unplaced workspaces are not attributed here: attribution is adoption, and adoption is per-agent. */
 function listLocalRefs(cwd = process.cwd()): LocalAgentRef[] {
   const root = canonicalProjectRoot(cwd);
 
@@ -294,19 +278,7 @@ export function listAgentDirs(cwd = process.cwd()): string[] {
   return listLocalRefs(cwd).map((ref) => ref.name);
 }
 
-/** `~/.kinu/<name>` directories with an `agent.db` that no ref places; adopted one at a time. */
-export function listUnplacedAgentNames(): string[] {
-  if (!existsSync(AGENT_HOME)) return [];
-  const placed = new Set(listLocalRefsAllProjects().map((ref) => ref.name));
-
-  return readdirSync(AGENT_HOME)
-    .filter((name) => KINU_IDENTIFIER_RE.test(name)
-      && !placed.has(name)
-      && existsSync(join(AGENT_HOME, name, 'agent.db')))
-    .sort();
-}
-
-export function readWorkspaceIdentityId(dbPath: string): string | null {
+function readWorkspaceIdentityId(dbPath: string): string | null {
   if (!existsSync(dbPath)) return null;
   // Read-write although nothing writes: a WAL database needs its `-shm`, and a readonly connection may not build one.
   const db = new Database(dbPath);
@@ -346,122 +318,73 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
   }
 }
 
-interface AdoptUnplacedAgentOptions {
-  cwd?: string;
-  workspaceId?: string;
+/** A new local workspace's ref: the folder it works in, and its database's identity (`assertIdentityUnchanged`). */
+export async function placeLocalWorkspace(input: { name: string; cwd: string; workspaceId: string; alias?: string }): Promise<void> {
+  await upsertAgentConfig({
+    name: input.name,
+    mode: 'local',
+    localName: input.name,
+    alias: input.alias,
+    cwd: input.cwd,
+    workspaceId: input.workspaceId,
+    identityId: readWorkspaceIdentityId(agentDbPath(input.name)) ?? undefined,
+  });
 }
 
-/** Binds one named workspace, keyed on its own identity, so nothing sweeps every unplaced directory. Placed refs return unchanged. */
-export function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOptions = {}): Promise<LocalAgentRef> {
-  return settle(Effect.gen(function* () {
-    const dbPath = agentDbPath(name);
-
-    if (!existsSync(dbPath)) {
-      return yield* Effect.die(new Error(`Workspace "${name}" not found at ${dbPath}.`));
-    }
-
-    const existing = loadConfigFile().agents?.[name];
-
-    if (existing && existing.mode !== 'local') {
-      return yield* Effect.die(new Error(`"${name}" is already configured as a cloud workspace.`));
-    }
-
-    const already = existing ? placedRef(existing) : null;
-
-    if (already) return already;
-    const cwd = canonicalProjectRoot(opts.cwd);
-    const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
-    yield* Effect.promise(async () => upsertAgentConfig({
-      ...existing,
-      name,
-      mode: 'local',
-      localName: name,
-      cwd,
-      workspaceId,
-      identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
-    }));
-
-    return { name, cwd, workspaceId, dbPath };
-  }));
-}
-
-export class MissingLocalWorkspaceError extends Data.TaggedError('MissingLocalWorkspaceError')<{ readonly message: string }> {
+export class MissingLocalWorkspaceError extends Error {
   readonly hint: string;
 
   constructor(workspaceName: string) {
-    super({ message: `Workspace "${workspaceName}" not found.` });
+    super(`Workspace "${workspaceName}" not found.`);
+    this.name = 'MissingLocalWorkspaceError';
     this.hint = `Create it with: kinu create ${workspaceName}`;
   }
 }
 
-export interface ResolveLocalAgentOptions {
-  cwd?: string;
-  workspaceId?: string;
-  /** Pass false for a read that must not change configuration. */
-  adopt?: boolean;
-}
+/** The one local resolution: a workspace works in the folder its ref records, and one without a folder is refused. */
+export function resolveLocalAgent(input: string): LocalAgentRef {
+  const ref = resolveAgentRef(input);
 
-/** The one local resolution, so the placement a peer group depends on cannot drift between call sites. */
-export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions = {}): Promise<ResolvedLocalAgent> {
-  return settle(Effect.gen(function* () {
-    const ref = resolveAgentRef(input);
+  if (ref && ref.mode !== 'local') {
+    throw new Error(`"${input}" is a cloud workspace; this needs a local one.`);
+  }
 
-    if (ref && ref.mode !== 'local') {
-      return yield* Effect.die(new Error(`"${input}" is a cloud workspace; this needs a local one.`));
-    }
+  const name = ref?.localName ?? ref?.name ?? input;
 
-    const name = ref?.localName ?? ref?.name ?? input;
-    const dbPath = agentDbPath(name);
+  if (!existsSync(agentDbPath(name))) throw new MissingLocalWorkspaceError(name);
+  const placed = ref ? placedRef(ref) : null;
 
-    if (!existsSync(dbPath)) return yield* Effect.die(new MissingLocalWorkspaceError(name));
-    const placed = ref ? placedRef(ref) : null;
+  if (!ref || !placed) {
+    return settleSync(Effect.fail(new KinuError('missing', `Workspace "${name}" has no folder; create a new one from the folder it should work in.`)));
+  }
 
-    if (ref && placed) {
-      yield* assertIdentityUnchanged(ref, placed);
+  assertIdentityUnchanged(ref, placed);
 
-      return { ...placed, placement: 'recorded' };
-    }
-
-    const cwd = canonicalProjectRoot(opts.cwd);
-    const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
-
-    if (opts.adopt === false) {
-      return { name, cwd, workspaceId, dbPath, placement: 'unplaced' };
-    }
-
-    return { ...(yield* Effect.promise(async () => adoptUnplacedLocalAgent(name, { cwd, workspaceId }))), placement: 'adopted' };
-  }));
+  return placed;
 }
 
 /** A changed identity means the name was reused; continuing would attach history to a different workspace. */
-function assertIdentityUnchanged(agent: KinuAgentConfig, ref: LocalAgentRef): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    if (!agent.identityId) return;
-    const actual = readWorkspaceIdentityId(ref.dbPath);
+function assertIdentityUnchanged(agent: KinuAgentConfig, ref: LocalAgentRef): void {
+  if (!agent.identityId) return;
+  const actual = readWorkspaceIdentityId(ref.dbPath);
 
-    if (actual === null || actual === agent.identityId) return;
-
-    return yield* Effect.die(new Error(
-      `Workspace "${ref.name}" at ${ref.dbPath} is not the one recorded for ${ref.cwd}: `
-      + `expected identity ${agent.identityId}, found ${actual}. `
-      + 'Rename one of them, or remove the stale entry from ~/.kinu/config.json.',
-    ));
-  });
+  if (actual === null || actual === agent.identityId) return;
+  throw new Error(
+    `Workspace "${ref.name}" at ${ref.dbPath} is not the one recorded for ${ref.cwd}: `
+    + `expected identity ${agent.identityId}, found ${actual}. `
+    + 'Rename one of them, or remove the stale entry from ~/.kinu/config.json.',
+  );
 }
 
 export function loadConfigFile(): KinuConfig {
-  return settleSync(Effect.gen(function* () {
-    if (!existsSync(CONFIG_PATH)) return {};
+  if (!existsSync(CONFIG_PATH)) return {};
 
-    return yield* Effect.catchCause(Effect.sync(() => {
-      return v.parse(KinuConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
-    }), (failed) => Effect.gen(function* () {
-      const error = Cause.squash(failed);
-      // Defaulting would discard the whole file over one bad field and look like a first run.
-
-      return yield* Effect.die(new Error(`${CONFIG_PATH} is not a valid Kinu config; fix or remove it.`, { cause: error }));
-    }));
-  }));
+  try {
+    return v.parse(KinuConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
+  } catch (error) {
+    // Defaulting would discard the whole file over one bad field and look like a first run.
+    throw new Error(`${CONFIG_PATH} is not a valid Kinu config; fix or remove it.`, { cause: error });
+  }
 }
 
 function writeConfigFileUnlocked(config: KinuConfig): void {
@@ -501,32 +424,26 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
 }
 
 export function requireAuthConfig(): LocalCloudSession {
-  const session = resolveCloudSession();
-
-  if (session) return session;
-
-  return settleSync(storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)'));
+  return resolveCloudSession() ?? storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)');
 }
 
 export function requireStoredAuthConfig(): LocalCloudSession {
-  return settleSync(storedAuthConfig('No interactive CLI session found. Run: kinu auth'));
+  return storedAuthConfig('No interactive CLI session found. Run: kinu auth');
 }
 
-function storedAuthConfig(missingTokenMessage: string): Effect.Effect<LocalCloudSession> {
-  return Effect.gen(function* () {
-    const config = loadConfigFile();
-    const token = config.accessToken;
+function storedAuthConfig(missingTokenMessage: string): LocalCloudSession {
+  const config = loadConfigFile();
+  const token = config.accessToken;
 
-    if (!token) {
-      return yield* Effect.die(new Error(missingTokenMessage));
-    }
+  if (!token) {
+    throw new Error(missingTokenMessage);
+  }
 
-    if (sessionExpired(config)) {
-      return yield* Effect.die(new Error('Your Kinu CLI session has expired. Run: kinu auth'));
-    }
+  if (sessionExpired(config)) {
+    throw new Error('Your Kinu CLI session has expired. Run: kinu auth');
+  }
 
-    return { origin: resolveCloudOrigin(), token };
-  });
+  return { origin: resolveCloudOrigin(), token };
 }
 
 export function sessionExpired(config: KinuConfig): boolean {
@@ -560,36 +477,30 @@ export function listConfiguredAgentRefs(): KinuAgentConfig[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>): Promise<KinuAgentConfig> {
-  return settle(Effect.gen(function* () {
-    yield* validateAgentName(agent.name);
+export async function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>): Promise<KinuAgentConfig> {
+  validateAgentName(agent.name);
 
-    if (agent.alias) yield* validateAliasName(agent.alias);
+  if (agent.alias) validateAliasName(agent.alias);
 
-    if (agent.localName) yield* validateAgentName(agent.localName);
+  if (agent.localName) validateAgentName(agent.localName);
 
-    if (agent.cloudName) yield* validateAgentName(agent.cloudName);
+  if (agent.cloudName) validateAgentName(agent.cloudName);
 
-    if (agent.workspaceId) yield* validateIdentifier(agent.workspaceId, 'Workspace id');
-    const now = new Date().toISOString();
-    const saved: KinuAgentConfig[] = [];
+  if (agent.workspaceId) validateWorkspaceId(agent.workspaceId);
+  const now = new Date().toISOString();
+  let saved!: KinuAgentConfig;
+  await updateConfigFile((config) => {
+    const existing = config.agents?.[agent.name];
+    saved = {
+      ...existing,
+      ...agent,
+      createdAt: agent.createdAt ?? existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    config.agents = { ...config.agents, [agent.name]: saved };
+  });
 
-    yield* Effect.promise(() => updateConfigFile((config) => {
-      const existing = config.agents?.[agent.name];
-
-      const next: KinuAgentConfig = {
-        ...existing,
-        ...agent,
-        createdAt: agent.createdAt ?? existing?.createdAt ?? now,
-        updatedAt: now,
-      };
-
-      saved.push(next);
-      config.agents = { ...config.agents, [agent.name]: next };
-    }));
-
-    return saved[saved.length - 1];
-  }));
+  return saved;
 }
 
 export async function removeCloudAgentConfig(cloudName: string): Promise<boolean> {
@@ -617,21 +528,19 @@ export async function removeCloudAgentConfig(cloudName: string): Promise<boolean
   return removed;
 }
 
-function setAliasConfig(agentName: string, alias: string): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    yield* validateAgentName(agentName);
-    yield* validateAliasName(alias);
-    yield* Effect.promise(() => updateConfigFile((config) => {
-      config.aliases = { ...config.aliases, [alias]: agentName };
-      const existing = config.agents?.[agentName];
+async function setAliasConfig(agentName: string, alias: string): Promise<void> {
+  validateAgentName(agentName);
+  validateAliasName(alias);
+  await updateConfigFile((config) => {
+    config.aliases = { ...config.aliases, [alias]: agentName };
+    const existing = config.agents?.[agentName];
 
-      if (existing) {
-        config.agents = {
-          ...config.agents,
-          [agentName]: { ...existing, alias, updatedAt: new Date().toISOString() },
-        };
-      }
-    }));
+    if (existing) {
+      config.agents = {
+        ...config.agents,
+        [agentName]: { ...existing, alias, updatedAt: new Date().toISOString() },
+      };
+    }
   });
 }
 
@@ -647,68 +556,61 @@ async function removeAliasConfig(alias: string): Promise<void> {
   });
 }
 
-function aliasPath(alias: string): Effect.Effect<string> {
-  return Effect.as(validateAliasName(alias), join(BIN_DIR, alias));
+function aliasPath(alias: string): string {
+  validateAliasName(alias);
+
+  return join(BIN_DIR, alias);
 }
 
-export function writeAliasShim(agentName: string, alias: string): Promise<string> {
-  return settle(Effect.gen(function* () {
-    yield* validateAgentName(agentName);
-    yield* validateAliasName(alias);
-    ensureBinDir();
-    const path = yield* aliasPath(alias);
+export async function writeAliasShim(agentName: string, alias: string): Promise<string> {
+  validateAgentName(agentName);
+  validateAliasName(alias);
+  ensureBinDir();
+  const path = aliasPath(alias);
 
-    const script = `#!/usr/bin/env sh
+  const script = `#!/usr/bin/env sh
 set -eu
 bin_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 exec "$bin_dir/kinu" run ${shellQuote(agentName)} "$@"
 `;
 
-    writeFileSync(path, script, { mode: 0o755 });
-    chmodSync(path, 0o755);
-    yield* setAliasConfig(agentName, alias);
+  writeFileSync(path, script, { mode: 0o755 });
+  chmodSync(path, 0o755);
+  await setAliasConfig(agentName, alias);
 
-    return path;
-  }));
+  return path;
 }
 
-export function deleteAliasShim(alias: string): Promise<void> {
-  return settle(Effect.gen(function* () {
-    const path = yield* aliasPath(alias);
-
-    tolerate(() => unlinkSync(path), 'enoent');
-    yield* Effect.promise(() => removeAliasConfig(alias));
-  }));
+export async function deleteAliasShim(alias: string): Promise<void> {
+  validateAliasName(alias);
+  tolerate(() => unlinkSync(aliasPath(alias)), 'enoent');
+  await removeAliasConfig(alias);
 }
 
 export function pathHint(): string | null {
   return (process.env.PATH ?? '').split(':').includes(BIN_DIR) ? null : `Add ${BIN_DIR} to PATH for kinu aliases.`;
 }
 
-function validateIdentifier(value: string, noun: string): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    if (!KINU_IDENTIFIER_RE.test(value)) {
-      return yield* Effect.die(new Error(`${noun} must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.`));
-    }
-  });
+function validateIdentifier(value: string, noun: string): void {
+  if (!KINU_IDENTIFIER_RE.test(value)) {
+    throw new Error(`${noun} must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.`);
+  }
 }
 
-function validateAgentName(name: string): Effect.Effect<void> {
-  return validateIdentifier(name, 'Agent name');
+function validateAgentName(name: string): void {
+  validateIdentifier(name, 'Agent name');
 }
 
 export function validateWorkspaceId(workspaceId: string): void {
-  return settleSync(validateIdentifier(workspaceId, 'Workspace id'));
+  validateIdentifier(workspaceId, 'Workspace id');
 }
 
-function validateAliasName(alias: string): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    yield* validateIdentifier(alias, 'Alias');
+function validateAliasName(alias: string): void {
+  validateIdentifier(alias, 'Alias');
 
-    if (RESERVED_ALIASES.has(alias)) {
-      return yield* Effect.die(new Error(`Alias "${alias}" is reserved. Choose another alias.`));
-    }
-  });
+  if (RESERVED_ALIASES.has(alias)) {
+    throw new Error(`Alias "${alias}" is reserved. Choose another alias.`);
+  }
 }
 
 /** Default endpoint for bare model ids, null when nothing derives one; see {@link requireLLMConfig}. */
@@ -718,85 +620,80 @@ export function resolveLLMConfig(opts?: {
   auth?: string;
   defaultModel?: string;
 }): LLMProviderConfig | null {
-  return settleSync(Effect.gen(function* () {
-    const file = loadConfigFile();
+  const file = loadConfigFile();
 
-    const baseURL = opts?.baseUrl
-      ?? process.env.KINU_BASE_URL
-      ?? process.env.AI_GATEWAY_BASE_URL;
+  const baseURL = opts?.baseUrl
+    ?? process.env.KINU_BASE_URL
+    ?? process.env.AI_GATEWAY_BASE_URL;
 
-    const auth = opts?.auth
-      ?? process.env.KINU_AUTH
-      ?? process.env.AI_GATEWAY_AUTH;
+  const auth = opts?.auth
+    ?? process.env.KINU_AUTH
+    ?? process.env.AI_GATEWAY_AUTH;
 
-    const named = opts?.model
-      ?? process.env.KINU_MODEL
-      ?? process.env.AI_GATEWAY_MODEL
-      ?? opts?.defaultModel;
+  const named = opts?.model
+    ?? process.env.KINU_MODEL
+    ?? process.env.AI_GATEWAY_MODEL
+    ?? opts?.defaultModel;
 
-    const model = named === undefined ? undefined : specWithoutAccount(named);
+  const model = named === undefined ? undefined : specWithoutAccount(named);
 
-    if (baseURL && auth) {
-      return {
-        name: model?.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
-        baseURL,
-        headers: { 'Authorization': auth },
-        model: directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID),
-      };
-    }
+  if (baseURL && auth) {
+    return {
+      name: model?.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
+      baseURL,
+      headers: { 'Authorization': auth },
+      model: directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID),
+    };
+  }
 
-    const cloud = resolveCloudSession();
+  const cloud = resolveCloudSession();
 
-    // The signed-in account is the default path and owns native model families (`workers-ai`, `my-gateway`, `@cf/`);
-    // a local endpoint would accept those ids and serve something else. Explicitly picked BYO models still win.
-    const cloudConfig: LLMProviderConfig | null = cloud
-      ? {
-          name: 'workers-ai',
-          baseURL: cloudProxyBaseURL(cloud.origin),
-          headers: { Authorization: `Bearer ${cloud.token}` },
-          model: workersAIModelId(model),
-        }
-      : null;
+  // The signed-in account is the default path and owns native model families (`workers-ai`, `my-gateway`, `@cf/`);
+  // a local endpoint would accept those ids and serve something else. Explicitly picked BYO models still win.
+  const cloudConfig: LLMProviderConfig | null = cloud
+    ? {
+        name: 'workers-ai',
+        baseURL: cloudProxyBaseURL(cloud.origin),
+        headers: { Authorization: `Bearer ${cloud.token}` },
+        model: workersAIModelId(model),
+      }
+    : null;
 
-    if (cloudConfig && (!model || isNativeCloudSpec(model))) return cloudConfig;
+  if (cloudConfig && (!model || isNativeCloudSpec(model))) return cloudConfig;
 
-    // An explicit registry-only spec resolves to that family ahead of any credential default.
-    const family = registryFamilyMarker(model ?? preferredModelFromCredentials(file));
+  // An explicit registry-only spec resolves to that family ahead of any credential default.
+  const family = registryFamilyMarker(model ?? preferredModelFromCredentials(file));
 
-    if (family) return family;
+  if (family) return family;
 
-    const derived = deriveLLMConfigFromProviderCredentials(file, model);
+  const derived = deriveLLMConfigFromProviderCredentials(file, model);
 
-    if (derived) return derived;
+  if (derived) return derived;
 
-    if (cloudConfig) return cloudConfig;
+  if (cloudConfig) return cloudConfig;
 
-    if (baseURL && !auth) {
-      return yield* Effect.die(new Error(
-        'A base URL is set (--base-url or KINU_BASE_URL) but no auth header (--auth or KINU_AUTH).\n' +
-        '  Set both, or unset the base URL and run kinu setup to pick a model provider.'
-      ));
-    }
+  if (baseURL && !auth) {
+    throw new Error(
+      'A base URL is set (--base-url or KINU_BASE_URL) but no auth header (--auth or KINU_AUTH).\n' +
+      '  Set both, or unset the base URL and run kinu setup to pick a model provider.'
+    );
+  }
 
-    return null;
-  }));
+  return null;
 }
 
 /** For seams that must hand core an endpoint object (workspace creation, evolution); the failure names every fix. */
 export function requireLLMConfig(opts?: Parameters<typeof resolveLLMConfig>[0]): LLMProviderConfig {
-  return settleSync(Effect.gen(function* () {
-    const config = resolveLLMConfig(opts);
+  const config = resolveLLMConfig(opts);
 
-    if (config) return config;
-
-    return yield* Effect.die(new Error(
-      'No model is set up.\n' +
-      '  Run kinu auth to use Workers AI in your Cloudflare account,\n' +
-      '  run kinu setup to pick a model provider,\n' +
-      '  run kinu provider connect claude to use your Claude subscription,\n' +
-      '  or pass --base-url and --auth to use your own endpoint.'
-    ));
-  }));
+  if (config) return config;
+  throw new Error(
+    'No model is set up.\n' +
+    '  Run kinu auth to use Workers AI in your Cloudflare account,\n' +
+    '  run kinu setup to pick a model provider,\n' +
+    '  run kinu provider connect claude to use your Claude subscription,\n' +
+    '  or pass --base-url and --auth to use your own endpoint.'
+  );
 }
 
 export function resolveProviderCredentials(): LocalProviderCredentials {
@@ -910,28 +807,24 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
   return null;
 }
 
-export function firstOpenAiCompatModel(): Promise<string | null> {
-  return settle(Effect.gen(function* () {
-    const compat = loadConfigFile().providers?.openaiCompat?.default;
+export async function firstOpenAiCompatModel(): Promise<string | null> {
+  const compat = loadConfigFile().providers?.openaiCompat?.default;
 
-    if (compat === undefined) return null;
+  if (compat === undefined) return null;
 
-    let first: ModelInfo | undefined;
+  let first: ModelInfo | undefined;
 
-    yield* Effect.catchCause(Effect.gen(function* () {
-      [first] = yield* Effect.promise(() => discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: compatHeaders(compat) }));
-    }), (failed) => Effect.gen(function* () {
-      const cause = Cause.squash(failed);
+  try {
+    [first] = await discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: compatHeaders(compat) });
+  } catch (cause) {
+    throw new Error(`Could not list the models of the OpenAI-compatible endpoint at ${compat.baseURL}.`, { cause });
+  }
 
-      return yield* Effect.die(new Error(`Could not list the models of the OpenAI-compatible endpoint at ${compat.baseURL}.`, { cause }));
-    }));
+  if (first === undefined) {
+    throw new Error(`The OpenAI-compatible endpoint at ${compat.baseURL} lists no models and none is named: run kinu provider connect openai-compatible.`);
+  }
 
-    if (first === undefined) {
-      return yield* Effect.die(new Error(`The OpenAI-compatible endpoint at ${compat.baseURL} lists no models and none is named: run kinu provider connect openai-compatible.`));
-    }
-
-    return `openai-compat/${first.id}`;
-  }));
+  return `openai-compat/${first.id}`;
 }
 
 /** Families the registry serves from their own logins (Claude's, opencode's auth.json); the endpoint is only a marker. */

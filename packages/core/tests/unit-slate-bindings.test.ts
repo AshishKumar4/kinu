@@ -123,6 +123,12 @@ test('a path-scoped workspace binding offers only file members, on an absolute p
   }
 });
 
+// 2026-10-04: a slate named its own space's file by its reference and was refused as a relative path.
+test('a path-scoped workspace binding takes a reference to the own space, forwarded as the path it names', () => {
+  expect(route('FILES', 'readFile', ['vfs://home/main/notes/a.md'])).toMatchObject({ args: ['/home/main/notes/a.md'] });
+  expect(() => route('FILES', 'readFile', ['local://notes/a.md'])).toThrow(expect.objectContaining({ code: 'denied' }));
+});
+
 describe('a granted path is judged where it lands in the workspace namespace', () => {
   async function landsWithin(prefixes: readonly string[]) {
     const granted = parseSlateProject({ main: 'server.js', slate: { bindings: {
@@ -143,20 +149,13 @@ describe('a granted path is judged where it lands in the workspace namespace', (
   test('inside a prefix lands; a sibling, a parent segment or another tree does not', async () => {
     const lands = await landsWithin(['/home/main/notes', '/home/main/shared/']);
 
-    for (const inside of ['/home/main/notes/a.md', '/home/main/shared', '/home/main/shared/x', '/home/user/notes/a.md']) {
+    for (const inside of ['/home/main/notes/a.md', '/home/main/shared', '/home/main/shared/x']) {
       expect(await lands(inside)).toBeUndefined();
     }
 
     for (const outside of ['/etc/passwd', '/home/main/notes2/x', '/home/main/notes/../other', '/home/main/shared2/x']) {
       await expect(lands(outside)).rejects.toMatchObject({ code: 'denied' });
     }
-  });
-
-  test('a grant on the Nimbus home spelling grants the home it links to', async () => {
-    const lands = await landsWithin(['/home/user/']);
-
-    expect(await lands('/home/main/item.txt')).toBeUndefined();
-    await expect(lands('/home/other/item.txt')).rejects.toMatchObject({ code: 'denied' });
   });
 });
 

@@ -517,10 +517,10 @@ hosted actor rebuilds the same runtime from `HostedNodeHome`.
 
 Measured 2026-09-06, `packages/cf-backend/tests/unit-node-home-wiring.test.ts`
 passes 26 tests with 0 failures. It covers home ownership, sibling write
-refusal, shared reads, binary transfer, and reset recovery.
-`packages/cli-backend/tests/swarm-node-home.test.ts` passes 4 tests with
-0 failures. It covers local dispatch, absent-host behavior, and a runtime
-reset that retains the node home and private temporary files.
+refusal, shared reads, binary transfer, and reset recovery. The CLI provisions
+no private node home since 2026-10-04, when local workspaces became real files:
+`packages/cli-backend/tests/swarm-node-home.test.ts` proves every local node
+reports `shared-origin-plane`.
 
 The main agent keeps `HOME=/home/main` and uses `TMPDIR=/tmp/main`.
 Workspace boot provisions its temporary directory before commands run.
@@ -528,17 +528,13 @@ A bare `/tmp` resolves to each agent's own temporary directory on both
 backends. Hosted actors ask the workspace owner to register their mappings.
 Boot restores these mappings after a reset.
 
-Measured 2026-09-10, `bun scripts/workspace-planes-probe.ts` reads four
-distinct temporary-file values from the main, swarm node, head and subordinate
-planes. The swarm node's home is `head-<its own key>` on both backends. All four
-read the same shared workspace file. The second runtime generation returns the
-same values without copying files.
+The swarm node's home is `head-<its own key>` on the cloud.
 
 `shared-origin-plane` is the state of a runtime with no provisioner: a test
-runtime, or a plane bound to a physical directory, which has no principal
-registry. A directory-bound actor still runs its commands with `HOME` and
-`TMPDIR` in its own scratch under the workspace state, and the tree stays
-shared. The grader and merge-back read the home, hence `0o755` and not `0o700`.
+runtime, or every local runtime, whose files are the machine's and which has no
+principal registry. A local actor still runs its commands with `HOME` and
+`TMPDIR` in its own home in the workspace's own space (`~/.kinu/<workspace>/home/<key>`),
+and the tree stays shared. The grader and merge-back read the home, hence `0o755` and not `0o700`.
 One view preserves the user's repository. There are exactly two isolation
 states, because "partially isolated" tells no caller what to do. A shared-plane
 run grades the candidates swarm nodes report and never a diff, since no diff

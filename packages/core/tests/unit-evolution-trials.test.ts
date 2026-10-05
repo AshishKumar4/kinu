@@ -203,6 +203,21 @@ describe('a live trial\'s arm is drawn per cache segment', () => {
     for (let i = 0; i < 40; i++) seen.add(opened(`c${String(i)}`, true).trial?.arm ?? 'none');
     expect([...seen].sort()).toEqual(['candidate', 'incumbent']);
   });
+
+  // 2026-10-04 (release review): a turn reopened after a process loss keeps its answer id and finds the cache cold; a
+  // fresh draw there ran the other arm's text while its recorded row still credited the first arm.
+  test('a turn reopened under its answer id runs the arm it was recorded under, however cold the cache', () => {
+    const rt = workspace();
+    const { sql } = rt.storage;
+    writeCandidate(sql, rt.actor, { artifactId: SECTION, body: EDITED, rationale: 'r', evidence: { turns: ['t'], reason: 'incorrect' } });
+
+    if (startTrial(sql, rt.actor, NOW) === null) throw new Error('the waiting candidate did not start a trial');
+    const first = turnArtifactBodies(sql, rt.actor, { answerId: 'a1', cacheCold: true, main: true, now: NOW });
+    const reopened = Array.from({ length: 20 }, () => turnArtifactBodies(sql, rt.actor, { answerId: 'a1', cacheCold: true, main: true, now: NOW + 1 }));
+
+    expect(reopened.filter((again) => again.trial?.arm !== first.trial?.arm || again.trial?.segmentId !== first.trial?.segmentId)).toEqual([]);
+    expect(reopened.every((again) => JSON.stringify(again.bodies) === JSON.stringify(first.bodies))).toBe(true);
+  });
 });
 
 describe('the keep and revert rules', () => {

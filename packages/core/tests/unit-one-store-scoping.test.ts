@@ -1,4 +1,3 @@
-import { Result } from 'effect';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Every per-actor table not covered by `unit-actor-private-stores.test.ts`, with two
@@ -71,6 +70,7 @@ import { TriggerRegistry } from '../src/events/hub/triggers';
 import { resetWorkspaceBaseline, getWorkspaceDiff } from '../src/read-models/workspace-diff';
 import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { cloudPlanes } from '../src/vfs/resolve';
 
 interface World {
   readonly db: Database;
@@ -108,7 +108,7 @@ function world(): World {
 /** For stores whose entry point is an `AgentRuntime`. */
 function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().vfs): AgentRuntime {
   return {
-    workspaceIsMachine: false,
+    planes: cloudPlanes(WORKSPACE_ROOT),
     actor,
     toolFiles: vfs,
     storage: {
@@ -670,12 +670,12 @@ describe('two actors, one database: imported_experience', () => {
 
     const rtA = runtimeFor(w, w.a);
     const rtB = runtimeFor(w, w.b);
-    expect(Result.isSuccess(stageImport(rtA, entry, 1))).toBe(true);
+    expect(stageImport(rtA, entry, 1).ok).toBe(true);
     // Admitted for B too: "already imported" is per actor.
-    expect(Result.isSuccess(stageImport(rtB, entry, 1))).toBe(true);
+    expect(stageImport(rtB, entry, 1).ok).toBe(true);
     expect(w.count('imported_experience')).toBe(2);
     // The same actor is still refused.
-    expect(Result.isSuccess(stageImport(rtA, entry, 1))).toBe(false);
+    expect(stageImport(rtA, entry, 1).ok).toBe(false);
 
     bindPendingImports(w.sql, w.a, 'turn-1');
     expect(listImportedExperience(w.sql, w.a)[0]?.turnIds).toEqual(['turn-1']);

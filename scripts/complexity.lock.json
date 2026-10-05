@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-04",
-  "files": 2977,
-  "functions": 78135,
+  "measuredAt": "2026-10-05",
+  "files": 2994,
+  "functions": 77639,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -46,6 +46,10 @@
       "complexity": 40
     },
     {
+      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
+      "complexity": 39
+    },
+    {
       "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
       "complexity": 38
     },
@@ -55,10 +59,6 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
-      "complexity": 37
-    },
-    {
-      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc>gen",
       "complexity": 37
     },
     {
@@ -106,7 +106,7 @@
       "complexity": 34
     },
     {
-      "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput>gen",
+      "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput",
       "complexity": 33
     },
     {
@@ -178,10 +178,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 30
-    },
-    {
       "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
       "complexity": 30
     },
@@ -214,6 +210,10 @@
       "complexity": 29
     },
     {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
+      "complexity": 29
+    },
+    {
       "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
       "complexity": 29
     },
@@ -231,6 +231,10 @@
     },
     {
       "key": "packages/core/src/slates/capability-graph.ts#riskOf",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
       "complexity": 29
     },
     {
@@ -274,11 +278,7 @@
       "complexity": 28
     },
     {
-      "key": "packages/cli/src/config.ts#resolveLLMConfig>gen",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/chat.ts#ProviderCall.consume",
+      "key": "packages/cli/src/config.ts#resolveLLMConfig",
       "complexity": 28
     },
     {
@@ -286,7 +286,7 @@
       "complexity": 28
     },
     {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply>gen",
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 28
     },
     {

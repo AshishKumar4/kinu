@@ -110,10 +110,12 @@ export function fakeClient(options: FakeClientOptions) {
       approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
       revokeInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
       clearConversation: async () => null,
-      compact: async () => {},
+      compact: async () => 'folded' as const,
     }) : null,
     checkpoints: null,
     inlineAttachmentLimitBytes: 1024,
+    planes: null,
+    fileLinks: { roots: [], href: () => null },
     connect: options.connect ?? (async () => {}),
     subscribe: (listener) => {
       listeners.add(listener);

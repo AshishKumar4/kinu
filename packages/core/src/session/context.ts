@@ -1,5 +1,3 @@
-import { Effect } from 'effect';
-import { settleSync } from '../obs/effect';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
@@ -40,7 +38,7 @@ export interface ContextCommitRequest {
   /** Returns the membership the revision publishes; runs inside the transaction. */
   readonly mutate: (current: readonly ContextEntry[]) => readonly ContextEntry[];
   /** Throws when the turn that prepared this change no longer holds the actor. */
-  readonly assertEpoch: () => Effect.Effect<void, KinuError>;
+  readonly assertEpoch: () => void;
   /** The staged proposal this change applies: it authors the revision and is recorded on it. */
   readonly proposal?: { readonly id: string; readonly author: string };
 }
@@ -50,7 +48,7 @@ export class SessionContext {
   /** Each context's head as last read or written here: a committed revision's membership never changes. */
   private readonly heads = new Map<string, KeptHead>();
 
-  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly transactionSync: <T>(operation: () => T) => T,
+  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly atomic: <T>(operation: () => T) => T,
     private readonly messages: Pick<SessionMessageReader, 'originOf'>) {}
 
   selected(): ContextSelection | null {
@@ -72,7 +70,7 @@ export class SessionContext {
   initialize(contextId = crypto.randomUUID()): ContextSelection {
     this.actor.assertCurrent();
 
-    return this.transactionSync(() => {
+    return this.atomic(() => {
       const selected = this.selected();
 
       if (selected !== null) return selected;
@@ -87,23 +85,21 @@ export class SessionContext {
   }
 
   entries(selection: ContextSelection): readonly ContextEntry[] {
-    return settleSync(Effect.gen({ self: this }, function* () {
-      this.actor.assertCurrent();
-      const actorId = this.actor.actorId;
-      const { contextId, revision } = selection;
-      const head = this.head(contextId) === revision;
+    this.actor.assertCurrent();
+    const actorId = this.actor.actorId;
+    const { contextId, revision } = selection;
+    const head = this.head(contextId) === revision;
 
-      if (!head && this.sql`SELECT 1 AS found FROM context_revisions WHERE actor_id=${actorId} AND context_id=${contextId} AND revision=${revision}`.length === 0) {
-        return yield* new KinuError('missing', 'context revision does not exist');
-      }
+    if (!head && this.sql`SELECT 1 AS found FROM context_revisions WHERE actor_id=${actorId} AND context_id=${contextId} AND revision=${revision}`.length === 0) {
+      throw new KinuError('missing', 'context revision does not exist');
+    }
 
-      if (!head) {
-        return Object.freeze(this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${actorId} AND context_id=${contextId}
-          AND from_revision<=${revision} AND (to_revision IS NULL OR to_revision>${revision}) ORDER BY position`.map(entryOf));
-      }
+    if (!head) {
+      return Object.freeze(this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${actorId} AND context_id=${contextId}
+        AND from_revision<=${revision} AND (to_revision IS NULL OR to_revision>${revision}) ORDER BY position`.map(entryOf));
+    }
 
-      return this.headEntries(selection);
-    }));
+    return this.headEntries(selection);
   }
 
   /** Selection and membership from one synchronous read boundary; the selection already names the head. */
@@ -159,45 +155,43 @@ export class SessionContext {
   commit(expected: ContextSelection | null, request: ContextCommitRequest): ContextSelection {
     const { cause, turnId, mutate, assertEpoch, proposal } = request;
 
-    return this.transactionSync(() => {
-      return settleSync(Effect.gen({ self: this }, function* () {
-        this.actor.assertCurrent();
-        yield* assertEpoch();
-        const selected = this.selected() ?? (expected === null ? this.initialize() : null);
+    return this.atomic(() => {
+      this.actor.assertCurrent();
+      assertEpoch();
+      const selected = this.selected() ?? (expected === null ? this.initialize() : null);
 
-        if (selected === null || (expected !== null && (selected.contextId !== expected.contextId || selected.revision !== expected.revision))) return yield* new KinuError('denied', 'context changed during preparation');
-        const current = this.headEntries(selected);
-        const next = mutate(current);
-        const ids = new Set<string>();
-        const prior = new Map(current.map(entry => [entry.entryId, entry]));
+      if (selected === null || (expected !== null && (selected.contextId !== expected.contextId || selected.revision !== expected.revision))) throw new KinuError('denied', 'context changed during preparation');
+      const current = this.headEntries(selected);
+      const next = mutate(current);
+      const ids = new Set<string>();
+      const prior = new Map(current.map(entry => [entry.entryId, entry]));
 
-        for (const [position, entry] of next.entries()) {
-          if (entry.position !== position || ids.has(entry.entryId)) return yield* new KinuError('bad_input', 'context entries must have unique identities and dense positions');
+      for (const [position, entry] of next.entries()) {
+        if (entry.position !== position || ids.has(entry.entryId)) throw new KinuError('bad_input', 'context entries must have unique identities and dense positions');
 
-          if (prior.get(entry.entryId)?.messageId !== entry.messageId) {
-            const message = this.sql<{ origin: string }>`SELECT origin FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${entry.messageId}`[0];
+        if (prior.get(entry.entryId)?.messageId !== entry.messageId) {
+          const message = this.sql<{ origin: string }>`SELECT origin FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${entry.messageId}`[0];
 
-            if (message === undefined || message.origin === 'render') return yield* new KinuError('denied', 'working context requires an actor-owned semantic message');
-          }
-
-          ids.add(entry.entryId);
+          if (message === undefined || message.origin === 'render') throw new KinuError('denied', 'working context requires an actor-owned semantic message');
         }
 
-        // An empty authored edit is still recorded: an explicitly empty history is a statement.
-        return this.revise(selected, current, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
-          recordUnchanged: proposal !== undefined || cause === 'edit' });
-      }));
+        ids.add(entry.entryId);
+      }
+
+      // An empty authored edit is still recorded: an explicitly empty history is a statement.
+      return this.revise(selected, current, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
+        recordUnchanged: proposal !== undefined || cause === 'edit' });
     });
   }
 
   /** Before entry `before`, else at the end; one revision, less the renders it `replaces`. */
   addRender(
     reference: MessageReference, at: { readonly before: string | null; readonly replaces: boolean },
-    request: { readonly turnId: string | null; readonly assertEpoch: () => Effect.Effect<void, KinuError> },
+    request: { readonly turnId: string | null; readonly assertEpoch: () => void },
   ): ContextSelection {
-    return this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
+    return this.atomic(() => {
       this.actor.assertCurrent();
-      yield* request.assertEpoch();
+      request.assertEpoch();
       const selected = this.selected() ?? this.initialize();
       const current = this.headEntries(selected);
       const kept = at.replaces ? this.conversationOf(current) : current;
@@ -207,12 +201,12 @@ export class SessionContext {
       const next = [...kept.slice(0, index), added, ...kept.slice(index)].map((entry, position) => ({ ...entry, position }));
 
       return this.revise(selected, current, next, { author: this.actor.actorId, cause: 'render', turnId: request.turnId, proposalId: null, recordUnchanged: false });
-    })));
+    });
   }
 
   /** The next revision of an unselected context, opened on first use: an entry is its position, so a kept message writes nothing. */
   record(contextId: string, messages: readonly MessageReference[]): ContextSelection {
-    return this.transactionSync(() => {
+    return this.atomic(() => {
       this.actor.assertCurrent();
       const head = this.head(contextId);
       const expected = head === null ? this.fork(null, contextId) : { contextId, revision: head };
@@ -262,40 +256,36 @@ export class SessionContext {
   fork(source: ContextSelection | null, contextId: string = crypto.randomUUID()): ContextSelection {
     this.actor.assertCurrent();
 
-    return this.transactionSync(() => {
-      return settleSync(Effect.gen({ self: this }, function* () {
-        const actorId = this.actor.actorId;
+    return this.atomic(() => {
+      const actorId = this.actor.actorId;
 
-        if (source !== null) {
-          const exists = this.sql<{ revision: number }>`SELECT revision FROM context_revisions
-            WHERE actor_id=${actorId} AND context_id=${source.contextId} AND revision=${source.revision}`[0];
+      if (source !== null) {
+        const exists = this.sql<{ revision: number }>`SELECT revision FROM context_revisions
+          WHERE actor_id=${actorId} AND context_id=${source.contextId} AND revision=${source.revision}`[0];
 
-          if (exists === undefined) return yield* new KinuError('missing', 'fork source revision does not exist');
-        }
+        if (exists === undefined) throw new KinuError('missing', 'fork source revision does not exist');
+      }
 
-        void this.sql`INSERT INTO actor_contexts(actor_id,context_id) VALUES(${actorId},${contextId})`;
-        void this.sql`INSERT INTO context_revisions(actor_id,context_id,revision,author,cause,recorded_at) VALUES(${actorId},${contextId},0,${actorId},'fork',${Date.now()})`;
+      void this.sql`INSERT INTO actor_contexts(actor_id,context_id) VALUES(${actorId},${contextId})`;
+      void this.sql`INSERT INTO context_revisions(actor_id,context_id,revision,author,cause,recorded_at) VALUES(${actorId},${contextId},0,${actorId},'fork',${Date.now()})`;
 
-        for (const entry of source === null ? [] : this.entries(source)) void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
-          VALUES(${actorId},${contextId},${entry.entryId},0,${entry.position},${entry.messageId})`;
+      for (const entry of source === null ? [] : this.entries(source)) void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
+        VALUES(${actorId},${contextId},${entry.entryId},0,${entry.position},${entry.messageId})`;
 
-        return { contextId, revision: 0 };
-      }));
+      return { contextId, revision: 0 };
     });
   }
 
-  select(expected: ContextSelection, target: ContextSelection, assertIdle: () => Effect.Effect<void, KinuError>): void {
-    this.transactionSync(() => {
-      return settleSync(Effect.gen({ self: this }, function* () {
-        this.actor.assertCurrent();
-        yield* assertIdle();
-        const selected = this.selected();
+  select(expected: ContextSelection, target: ContextSelection, assertIdle: () => void): void {
+    this.atomic(() => {
+      this.actor.assertCurrent();
+      assertIdle();
+      const selected = this.selected();
 
-        if (selected?.contextId !== expected.contextId || selected.revision !== expected.revision) return yield* new KinuError('denied', 'context selection changed');
+      if (selected?.contextId !== expected.contextId || selected.revision !== expected.revision) throw new KinuError('denied', 'context selection changed');
 
-        if (this.head(target.contextId) !== target.revision) return yield* new KinuError('denied', 'branch selection must name its current revision');
-        void this.sql`UPDATE actor_context_selection SET context_id=${target.contextId} WHERE actor_id=${this.actor.actorId}`;
-      }));
+      if (this.head(target.contextId) !== target.revision) throw new KinuError('denied', 'branch selection must name its current revision');
+      void this.sql`UPDATE actor_context_selection SET context_id=${target.contextId} WHERE actor_id=${this.actor.actorId}`;
     });
   }
 }

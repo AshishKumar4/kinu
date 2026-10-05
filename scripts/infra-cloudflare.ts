@@ -515,14 +515,19 @@ export function deployment(environment: InfraEnvironment): Deployment {
  * generated root secret exactly once.
  */
 export function secretNames(environment: InfraEnvironment): Observation & { readonly names?: readonly string[] } {
-  const run = wrangler(['secret', 'list', '--format', 'json', ...environmentArgs(environment)]);
+  return secretListing(wrangler(['secret', 'list', '--format', 'json', ...environmentArgs(environment)]));
+}
 
+/** wrangler's own words for a Worker that is not there: the API's 10007, or `secret list`'s refusal wrapping it. */
+const WORKER_MISSING = /\[code: 10007\]|Worker "[^"]+"(?: \(env: [^)]+\))? not found\./u;
+
+/** What a `wrangler secret list --format json` run says. Pure, so the test reads wrangler's own recorded words. */
+export function secretListing(run: Run): Observation & { readonly names?: readonly string[] } {
   if (!run.ok) {
-    const complaint = why(run);
-
-    return /not found|does not exist/iu.test(complaint)
+    // Read whole: `why` keeps the last lines, and wrangler names the missing Worker in its first.
+    return WORKER_MISSING.test(`${run.stderr}\n${run.stdout}`.replace(ANSI, ''))
       ? absent
-      : unknown(`\`wrangler secret list\` failed: ${complaint}`);
+      : unknown(`\`wrangler secret list\` failed: ${why(run)}`);
   }
 
   const body = jsonBody(run.stdout, '[');
