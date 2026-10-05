@@ -9,10 +9,25 @@ import { settle } from '../obs/effect';
 import { toKinuError, type KinuError } from '../obs/error';
 import { MEMORY_PATH } from '../memory/note';
 import { SOUL_PATH } from '../identity/soul';
+import { actorStateRoot } from '../identity/workspace-actors';
+import { WORKSPACE_ROOT } from './workspace-path';
 
 const AGENT_VIEW = '/agent';
 
 const MEMORY_DIR = MEMORY_PATH.slice(0, MEMORY_PATH.indexOf('/'));
+
+/**
+ * The workspace tree's agent state: what an agent view shows, for the root and every hire (whose scaffolds sit under
+ * their state roots). A local workspace keeps it in its database; the rest of its tree is files on disk.
+ */
+export const AGENT_STATE_PATHS: readonly string[] = [MEMORY_DIR, SOUL_PATH, 'scaffold', actorStateRoot('').replace(/\/$/u, '')]
+  .map((name) => `${WORKSPACE_ROOT}/${name}`);
+
+export function isAgentStatePath(path: string): boolean {
+  const absolute = `/${path.replace(/^\/+/u, '')}`;
+
+  return AGENT_STATE_PATHS.some((root) => absolute === root || absolute.startsWith(`${root}/`));
+}
 
 export function agentViewMount(state: VFS, scaffoldDir: string): VfsMount {
   const roots = new Map([[MEMORY_DIR, MEMORY_DIR], [SOUL_PATH, SOUL_PATH], ['scaffold', scaffoldDir]]);

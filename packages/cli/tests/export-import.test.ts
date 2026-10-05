@@ -7,7 +7,7 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, symlinkSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import {
@@ -56,27 +56,31 @@ function entryText(db: Database, id: string): string {
 
 function seedWorkspace(path: string): void {
   const db = new Database(path, { create: true });
-  db.exec(`CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL)`);
-  initActorClaimTables((ddl) => { db.exec(ddl); });
-  db.exec(`CREATE TABLE vfs_files (path TEXT PRIMARY KEY, data BLOB)`);
-  db.query(`INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)`).run('w1', 'scout', 100);
-  stampSchemaGenesis(db);
 
-  for (let i = 0; i < 300; i++) seedEntry(db, `m${i}`, `note ${i} with "quotes"`, i);
+  // One transaction: a commit per row is a disk sync per row, which took this suite past eight minutes on a busy disk.
+  db.transaction(() => {
+    db.exec(`CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL)`);
+    initActorClaimTables((ddl) => { db.exec(ddl); });
+    db.exec(`CREATE TABLE vfs_files (path TEXT PRIMARY KEY, data BLOB)`);
+    db.query(`INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)`).run('w1', 'scout', 100);
+    stampSchemaGenesis(db);
 
-  const bytes = new Uint8Array(256);
+    for (let i = 0; i < 300; i++) seedEntry(db, `m${i}`, `note ${i} with "quotes"`, i);
 
-  for (let i = 0; i < bytes.length; i++) bytes[i] = i;
-  db.query(`INSERT INTO vfs_files (path, data) VALUES (?, ?)`).run('logo.bin', bytes);
-  // Multi-byte text long enough that the reader's 64 KiB chunks land mid-character.
-  seedEntry(db, 'unicode', '→ café 🌍 '.repeat(9000), 300);
+    const bytes = new Uint8Array(256);
+
+    for (let i = 0; i < bytes.length; i++) bytes[i] = i;
+    db.query(`INSERT INTO vfs_files (path, data) VALUES (?, ?)`).run('logo.bin', bytes);
+    // Multi-byte text long enough that the reader's 64 KiB chunks land mid-character.
+    seedEntry(db, 'unicode', '→ café 🌍 '.repeat(9000), 300);
+  })();
   db.close();
 }
 
-function runCli(home: string, args: string[], env: Record<string, string> = {}) {
+function runCli(home: string, args: string[], env: Record<string, string> = {}, cwd = scratch('kinu-test-project-')) {
   return Bun.spawn([process.execPath, cliBin, ...args], {
     // The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo.
-    cwd: scratch('kinu-test-project-'),
+    cwd,
     env: { ...process.env, KINU_HOME: home, NO_COLOR: '1', ...env },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -112,32 +116,54 @@ function placedWorkspace() {
 }
 
 describe('kinu export / import', () => {
-  test('a placed local archive includes its real file plane and excludes its own output', async () => {
+  // Release review, 2026-10-05: export walked only the folder and import wrote it into the database's Nimbus files,
+  // which a local workspace no longer reads, so its own space (slates) was lost and its folder was unreadable.
+  test('a local archive carries the folder and the own space, and import lands each where the workspace reads it', async () => {
     const { home, project } = placedWorkspace();
     mkdirSync(join(project, 'docs'));
     mkdirSync(join(project, 'empty'));
     writeFileSync(join(project, 'docs', 'note.txt'), 'project bytes outside SQLite');
     const bytes = new Uint8Array([0, 255, 128, 10]);
     writeFileSync(join(project, 'bytes.bin'), bytes);
+    mkdirSync(join(home, 'scout', 'slates', 'board'), { recursive: true });
+    writeFileSync(join(home, 'scout', 'slates', 'board', 'index.ts'), 'export const board = 1;\n');
     const archive = join(project, 'backup.kinu.jsonl');
     const exported = await result(runCli(home, ['export', 'scout', '-o', archive]));
     expect(exported.exitCode).toBe(0);
     const records = readFileSync(archive, 'utf8').trim().split('\n').map(parseJsonObject);
-    expect(records.filter((row) => row.t === 'file').map((row) => row.path))
-      .toEqual(['bytes.bin', 'docs/note.txt']);
-    expect(records.filter((row) => row.t === 'directory').map((row) => row.path)).toContain('empty');
-    const imported = await result(runCli(home, ['import', archive, '--name', 'restored-files']));
-    expect(imported.exitCode).toBe(0);
-    const db = new Database(join(home, 'restored-files', 'agent.db'));
 
-    try {
-      const { vfs } = createInlineWorkspace(db);
-      expect(await readText(vfs, 'docs/note.txt')).toBe('project bytes outside SQLite');
-      expect(await vfs.readFile('bytes.bin')).toEqual(bytes);
-      expect(await exists(vfs, 'empty')).toBe(true);
-    } finally {
-      db.close();
-    }
+    // As vfs:// names them: the own space at the root, the folder under local/; never the database or the archive.
+    expect(records.filter((row) => row.t === 'file').map((row) => row.path))
+      .toEqual(['local/bytes.bin', 'local/docs/note.txt', 'slates/board/index.ts']);
+    expect(records.filter((row) => row.t === 'directory').map((row) => row.path)).toEqual(['local', 'local/docs', 'local/empty', 'slates', 'slates/board']);
+
+    const folder = scratch('kinu-import-folder-');
+    const imported = await result(runCli(home, ['import', archive, '--name', 'restored-files'], {}, folder));
+    expect(imported.stderr).toBe('');
+    expect(imported.exitCode).toBe(0);
+    expect(readFileSync(join(folder, 'docs', 'note.txt'), 'utf8')).toBe('project bytes outside SQLite');
+    expect(new Uint8Array(readFileSync(join(folder, 'bytes.bin')))).toEqual(bytes);
+    expect(existsSync(join(folder, 'empty'))).toBe(true);
+    expect(readFileSync(join(home, 'restored-files', 'slates', 'board', 'index.ts'), 'utf8')).toBe('export const board = 1;\n');
+    expect(readdirSync(home).filter((name) => name.startsWith('.importing'))).toEqual([]);
+  });
+
+  test('an import refuses a folder that holds one of its files with other contents, and writes nothing', async () => {
+    const { home, project } = placedWorkspace();
+    writeFileSync(join(project, 'same.txt'), 'same');
+    writeFileSync(join(project, 'changed.txt'), 'archived');
+    const archive = join(scratch('kinu-import-clash-out-'), 'scout.kinu.jsonl');
+    expect((await result(runCli(home, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
+
+    const folder = scratch('kinu-import-clash-');
+    writeFileSync(join(folder, 'same.txt'), 'same');
+    writeFileSync(join(folder, 'changed.txt'), 'newer work');
+    const imported = await result(runCli(home, ['import', archive, '--name', 'clash'], {}, folder));
+
+    expect(imported.exitCode).toBe(1);
+    expect(imported.stderr).toContain('already holds changed.txt with other contents');
+    expect(readFileSync(join(folder, 'changed.txt'), 'utf8')).toBe('newer work');
+    expect([existsSync(join(home, 'clash')), readdirSync(home).filter((name) => name.startsWith('.importing'))]).toEqual([false, []]);
   });
 
   test('a local archive refuses unsupported symlinks instead of exporting their targets', async () => {
@@ -262,6 +288,7 @@ describe('kinu export / import', () => {
     });
 
     await writeText(runtime.storage.vfs, 'version.txt', 'before restart');
+    await writeText(runtime.storage.vfs, 'memory/MEMORY.md', '- kept as agent state');
     let bundle = createInlineWorkspace(db);
     let restarted = false;
     let starts = 0;
@@ -307,9 +334,14 @@ describe('kinu export / import', () => {
       const imported = await result(runCli(home, ['import', archive, '--name', 'after-restart']));
 
       expect(imported.exitCode).toBe(0);
-      const restored = new Database(join(home, 'after-restart', 'agent.db'));
 
-      expect(await readText(createInlineWorkspace(restored).vfs, 'version.txt')).toBe('after restart');
+      // Its own-space files land in the local own space, as a local archive's do; agent state stays in the database.
+      expect(readFileSync(join(home, 'after-restart', 'home', 'main', 'version.txt'), 'utf8')).toBe('after restart');
+      expect(existsSync(join(home, 'after-restart', 'home', 'main', 'memory'))).toBe(false);
+      const restored = new Database(join(home, 'after-restart', 'agent.db'));
+      const { vfs } = createInlineWorkspace(restored);
+
+      expect([await readText(vfs, 'memory/MEMORY.md'), await exists(vfs, 'version.txt')]).toEqual(['- kept as agent state', false]);
       restored.close();
     } finally {
       await server.stop(true);

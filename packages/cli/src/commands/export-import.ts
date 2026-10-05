@@ -3,21 +3,21 @@
 import {
   appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync,
   readSync, renameSync, rmSync, statSync, writeFileSync,
-  promises as fs,
 } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
   WORKSPACE_ARCHIVE_EXTENSION,
   archiveSqlFromDatabase,
-  archiveFileTree,
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
   type ArchiveCursor,
   type ArchivePage,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
-import { requireSchemaGenesis, stampSchemaGenesis } from '@kinu.run/cli-backend';
+import {
+  localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFiles, requireSchemaGenesis, stampSchemaGenesis,
+} from '@kinu.run/cli-backend';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { workspaceArchiveTarget } from '@kinu.run/core';
 import {
@@ -73,14 +73,6 @@ export async function exportCommand(name: string, opts: { output?: string }): Pr
   );
 }
 
-function entryType(entry: { isDirectory: () => boolean; isFile: () => boolean; isSymbolicLink: () => boolean }): string {
-  if (entry.isDirectory()) return 'directory';
-
-  if (entry.isFile()) return 'file';
-
-  return entry.isSymbolicLink() ? 'symlink' : 'special';
-}
-
 export async function importCommand(file: string, opts: { name?: string }): Promise<void> {
   if (!existsSync(file)) {
     printError(`File not found: ${file}`);
@@ -92,7 +84,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   ensureAgentHome();
   const dbPath = agentDbPath(name);
 
-  if (existsSync(dbPath)) {
+  if (existsSync(agentDir(name))) {
     printError(`Workspace "${name}" already exists.`, 'Use --name to choose a different name');
     process.exit(1);
   }
@@ -103,46 +95,60 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     process.exit(1);
   }
 
-  mkdirSync(agentDir(name), { recursive: true });
+  // Like `kinu create`, the copy works in the folder it was restored from.
+  const cwd = canonicalProjectRoot();
 
-  // Restore to a partial file and rename on success, so a damaged archive leaves no half-populated workspace.
-  const partial = `${dbPath}.partial`;
-  rmSync(partial, { force: true });
+  // Restored beside the workspace and moved into place whole, so a damaged archive or a refused folder leaves nothing.
+  const staging = { space: join(dirname(agentDir(name)), `.importing-${name}`), folder: join(dirname(agentDir(name)), `.importing-${name}-folder`) };
+  const stagedDb = join(staging.space, basename(dbPath));
+
+  const discard = (): void => {
+    for (const path of [staging.space, staging.folder]) rmSync(path, { recursive: true, force: true });
+  };
+
+  discard();
+  mkdirSync(staging.space, { recursive: true });
   let restored: RestoredArchiveCounts;
 
   try {
-    if (bareDatabase) {
-      // A bare SQLite database, not an archive: copying the file is the restore.
-      copyFileSync(file, partial);
-      restored = countRestored(partial, file);
-    } else {
-      const db = new Database(partial, { create: true });
+    // A bare SQLite database, not an archive: copying the file is the restore.
+    if (bareDatabase) copyFileSync(file, stagedDb);
+    const db = new Database(stagedDb, { create: true });
 
-      try {
-        let workspace: ReturnType<typeof workspaceArchiveTarget> | null = null;
-        const target = () => (workspace ??= workspaceArchiveTarget(createInlineWorkspace(db)));
+    try {
+      const files = localArchiveTarget(staging);
+      let store: ReturnType<typeof createInlineWorkspace> | null = null;
+      const opened = () => (store ??= createInlineWorkspace(db));
 
-        const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), { files: target, store: target });
+      if (bareDatabase) {
+        restored = countRestored(db, file);
+      } else {
+        const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), {
+          files: () => files, store: () => workspaceArchiveTarget(opened()),
+        });
 
         restored = { rows: result.rows, tables: result.tables };
         stampSchemaGenesis(db);
-      } finally {
-        db.close();
       }
+
+      // The store keeps only agent state: a cloud archive's own-space files land with a local archive's.
+      await publishStoreFiles(opened().vfs, files);
+    } finally {
+      db.close();
     }
+
+    moveIntoFolder(staging.folder, cwd);
+    renameSync(staging.space, agentDir(name));
   } catch (err) {
-    rmSync(partial, { force: true });
+    discard();
     throw err;
   }
 
-  renameSync(partial, dbPath);
   console.log(
     `\n${OK('✓')} Imported workspace ${ACCENT(name)} from ${DIM(file)}`
     + ` ${DIM(`(${restored.tables} tables, ${restored.rows} records)`)}`,
   );
 
-  // Like `kinu create`, the copy works in the folder it was restored from.
-  const cwd = canonicalProjectRoot();
   const workspaceId = defaultVirtualWorkspaceId(cwd);
   await placeLocalWorkspace({ name, cwd, workspaceId });
   console.log(`  ${DIM('workspace:')} ${workspaceId} ${DIM('in')} ${cwd}\n`);
@@ -165,17 +171,7 @@ async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage | 's
 
 async function* localArchivePages(name: string, output: string): AsyncGenerator<ArchivePage> {
   const local = resolveLocalAgent(name);
-  const outputPath = resolve(output);
-
-  const files = archiveFileTree({
-    readdir: async (path) => (await fs.readdir(resolve(local.cwd, path), { withFileTypes: true }))
-      .filter((entry) => resolve(local.cwd, path, entry.name) !== outputPath)
-      .map((entry) => ({
-        name: entry.name,
-        type: entryType(entry),
-      })),
-    readFile: (path) => fs.readFile(resolve(local.cwd, path)),
-  });
+  const files = localArchiveSource({ space: dirname(local.dbPath), folder: local.cwd }, resolve(output));
 
   const db = new Database(local.dbPath, { readonly: true });
 
@@ -267,27 +263,21 @@ function nameFromFilename(file: string): string {
     .replace(/\.db$/, '');
 }
 
-function countRestored(dbPath: string, source: string): RestoredArchiveCounts {
-  const db = new Database(dbPath, { readonly: true });
+function countRestored(db: Database, source: string): RestoredArchiveCounts {
+  requireSchemaGenesis(db, source);
 
-  try {
-    requireSchemaGenesis(db, source);
+  const tables = db.query<{ name: string }, []>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+  ).all();
 
-    const tables = db.query<{ name: string }, []>(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
-    ).all();
+  let rows = 0;
 
-    let rows = 0;
+  for (const table of tables) {
+    const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM "${table.name.replace(/"/g, '""')}"`).get();
 
-    for (const table of tables) {
-      const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM "${table.name.replace(/"/g, '""')}"`).get();
-
-      if (!row) throw new Error(`Could not count restored table ${table.name}`);
-      rows += row.n;
-    }
-
-    return { rows, tables: tables.length };
-  } finally {
-    db.close();
+    if (!row) throw new Error(`Could not count restored table ${table.name}`);
+    rows += row.n;
   }
+
+  return { rows, tables: tables.length };
 }
