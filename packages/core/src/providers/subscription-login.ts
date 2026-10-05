@@ -1,10 +1,12 @@
-// Codex and Claude logins, any account: the CLI's config and a hosted account's credentials renew through this.
+// Codex, Claude and ChatGPT logins, any account: the CLI's config and a hosted account's credentials renew through this.
 import { baseCredentialKey } from '../credentials/accounts';
 import type { OAuthCredential } from '../credentials/store';
 import { CLAUDE_CRED_KEY } from './claude';
 import { CLAUDE_REFRESH_LEAD_MS, createClaudeOAuthClient } from './claude-oauth';
 import { CODEX_CRED_KEY } from './codex';
 import { CODEX_REFRESH_LEAD_SEC, codexAccessTokenExpiring, createCodexOAuthClient } from './codex-oauth';
+import { CHATGPT_CRED_KEY } from './chatgpt';
+import { chatgptLoginIssuer } from './chatgpt-sign-in';
 import { OAuthTokenError } from './oauth-token-error';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 
@@ -29,7 +31,9 @@ export const CLAUDE_LOGIN_ISSUER: SubscriptionIssuer = {
   refresh: (credential, fetchFn) => createClaudeOAuthClient(fetchFn).refresh(credential),
 };
 
-const ISSUERS: ReadonlyMap<string, SubscriptionIssuer> = new Map([[CODEX_CRED_KEY, CODEX_LOGIN_ISSUER], [CLAUDE_CRED_KEY, CLAUDE_LOGIN_ISSUER]]);
+const ISSUERS: ReadonlyMap<string, SubscriptionIssuer> = new Map([
+  [CODEX_CRED_KEY, CODEX_LOGIN_ISSUER], [CLAUDE_CRED_KEY, CLAUDE_LOGIN_ISSUER], [CHATGPT_CRED_KEY, chatgptLoginIssuer()],
+]);
 
 /** The issuer renewing a stored login, any account; null for other credentials. */
 export function subscriptionIssuer(key: string): SubscriptionIssuer | null {

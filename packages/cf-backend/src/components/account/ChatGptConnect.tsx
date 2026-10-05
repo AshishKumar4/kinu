@@ -60,9 +60,10 @@ export function ChatGptConnect({ plan, legacy, onChanged }: { plan: ChatGptPlan;
     const tab = window.open("", "_blank");
 
     return attempt({ doing: "starting the ChatGPT sign-in", otherwise: "io" }, startChatGptSignIn).pipe(
-      Effect.map(({ authorizeUrl }) => {
-        if (tab === null) window.location.assign(authorizeUrl);
-        else tab.location.href = authorizeUrl;
+      Effect.map((started) => {
+        if (started.state !== "open") tab?.close();
+        else if (tab === null) window.location.assign(started.authorizeUrl);
+        else tab.location.href = started.authorizeUrl;
         setWaiting(true);
       }),
       Effect.catch((failure) => Effect.andThen(Effect.sync(() => tab?.close()), shown(failure))),

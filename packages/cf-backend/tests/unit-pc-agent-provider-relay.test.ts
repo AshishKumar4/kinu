@@ -343,6 +343,8 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     expect(await harness.userDO.chatgptPlan(owner)).toEqual({
       device: { id: deviceId, label: 'studio' },
       status: { signedIn: true, email: 'owner@example.com', planEnabled: true, planDeclined: false, pending: false, lastFailure: null, firstSignIn: false },
+      account: null,
+      machineSignIn: null,
       changed: true,
     });
     expect(await harness.userDO.getCredentialsRevision(owner)).toBe(before + 1);

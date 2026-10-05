@@ -1,9 +1,9 @@
 // Sign in with ChatGPT for open-source clients (https://developers.openai.com/siwc/token-sharing-open-source,
 // read 2026-09-30): the sign-in, the rotating refresh and the revocation, on the user's own machine.
 //
-// One implementation for the two processes that may hold the token: the daemon requires this file as a
-// sibling, and the CLI imports it. Nothing on Kinu's servers loads it; the OSS terms cover locally hosted
-// apps only, so the token never leaves this machine.
+// One implementation for the two processes on a machine that may hold the token: the daemon requires this file
+// as a sibling, and the CLI imports it. An account's own sign-in, held by Kinu's servers, is core's
+// providers/chatgpt-sign-in.ts.
 'use strict';
 
 const fs = require('node:fs');

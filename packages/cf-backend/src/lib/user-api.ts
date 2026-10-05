@@ -319,12 +319,20 @@ export const pollCodexFlow    = () => settle(api(PollResultSchema, 'POST', '/cod
 /** Where the owner reviews and limits what Kinu spends of their ChatGPT plan. */
 export const CHATGPT_USAGE_URL = 'https://chatgpt.com/settings/usage';
 
+/** A sign-in through a machine: waiting for one to connect, or open at the URL for a browser on that machine. */
+const ChatGptMachineSignInSchema = v.variant('state', [
+  v.object({ state: v.literal('waiting_for_machine') }),
+  v.object({ state: v.literal('open'), authorizeUrl: v.string(), device: v.object({ id: v.string(), label: v.string() }) }),
+]);
+
 const ChatGptPlanSchema = v.object({
   device: v.nullable(v.object({ id: v.string(), label: v.string() })),
   status: v.nullable(v.object({
     signedIn: v.boolean(), email: v.nullable(v.string()), planEnabled: v.boolean(), planDeclined: v.optional(v.boolean(), false), pending: v.boolean(),
     lastFailure: v.nullable(v.string()), firstSignIn: v.boolean(),
   })),
+  account: v.nullable(v.object({ email: v.nullable(v.string()) })),
+  machineSignIn: v.nullable(ChatGptMachineSignInSchema),
 });
 
 export type ChatGptPlan = v.InferOutput<typeof ChatGptPlanSchema>;
@@ -332,7 +340,7 @@ export type ChatGptPlan = v.InferOutput<typeof ChatGptPlanSchema>;
 export const chatgptPlan = () => settle(api(ChatGptPlanSchema, 'GET', '/chatgpt'));
 
 /** The URL is for a browser on that device: the sign-in comes back to a port there. */
-export const startChatGptSignIn = () => settle(api(v.object({ authorizeUrl: v.string(), device: v.object({ id: v.string(), label: v.string() }) }), 'POST', '/chatgpt/sign-in'));
+export const startChatGptSignIn = () => settle(api(ChatGptMachineSignInSchema, 'POST', '/chatgpt/sign-in'));
 
 export const signOutChatGpt = () => settle(api(v.object({ unconfirmed: v.nullable(v.string()) }), 'DELETE', '/chatgpt'));
 

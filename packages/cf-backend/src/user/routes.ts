@@ -36,7 +36,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'setDeviceTier' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listUnrevokedGrants' | 'dismissUnrevokedGrant' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow' | 'startClaudeSignIn' | 'finishClaudeSignIn'
-  | 'chatgptPlan' | 'startChatGptSignIn' | 'signOutChatGpt'
+  | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
   | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_update'
@@ -402,6 +402,25 @@ userRoutes.post('/api/user/codex/poll', (c) => settle(Effect.tryPromise({
 userRoutes.get('/api/user/chatgpt', async (c) => answerSettingsRead(c, c.get('stub').chatgptPlan(c.get('owner')), (plan) => plan.changed));
 
 userRoutes.post('/api/user/chatgpt/sign-in', async (c) => json({ body: await c.get('stub').startChatGptSignIn(c.get('owner')) }));
+
+userRoutes.delete('/api/user/chatgpt/sign-in', async (c) => {
+  await c.get('stub').cancelChatGptSignIn(c.get('owner'));
+
+  return json({ body: { cancelled: true } });
+});
+
+userRoutes.post('/api/user/chatgpt/paste/start', async (c) => json({ body: await c.get('stub').startChatGptPasteSignIn(c.get('owner')) }));
+
+userRoutes.post('/api/user/chatgpt/paste/finish', async (c) => {
+  const body = await safeJson(c.req.raw, v.object({ url: v.string() }));
+
+  if (body === null) return err(400, 'Body must be { url }');
+  const finished = await c.get('stub').finishChatGptPasteSignIn(c.get('owner'), body.url);
+
+  if (finished.outcome === 'signed_in') modelSettingsChanged(c);
+
+  return json({ body: finished });
+});
 
 userRoutes.delete('/api/user/chatgpt', async (c) => {
   const signedOut = await c.get('stub').signOutChatGpt(c.get('owner'));

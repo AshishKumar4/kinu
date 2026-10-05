@@ -404,4 +404,17 @@ describe('on the web, through the machine that signed in', () => {
     expect(failed === null ? null : kinuCause(failed)).toMatchObject({ code: 'missing' });
     expect(failed?.error).toMatchObject({ message: expect.stringContaining('studio holds no ChatGPT sign-in') });
   });
+
+  test('an account holding its own sign-in calls api.openai.com itself, past a machine that could carry it', async () => {
+    const api = openai(answered());
+    const machine = openai();
+    const { deps } = signedIn(api.fetch);
+    const provider = createChatGptProvider({ device: { fetch: machine.fetch, unavailableReason: async () => undefined } });
+
+    expect((await generateText({ model: provider.createModel('gpt-6.1-sol', deps), prompt: 'hello', maxRetries: 0 })).text).toBe('ok');
+    expect(machine.sent).toEqual([]);
+    expect(api.sent.map(({ url, authorization, body }) => ({ url, authorization, store: body?.store, stream: body?.stream }))).toEqual([
+      { url: 'https://api.openai.com/v1/responses', authorization: 'Bearer at-1', store: false, stream: true },
+    ]);
+  });
 });

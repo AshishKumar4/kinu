@@ -334,7 +334,8 @@ function resolvedAuth(deps: ProviderDeps): Effect.Effect<AuthResolution | null, 
 export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelProvider {
   const { device } = opts;
 
-  const unsigned = (deps: ProviderDeps): Effect.Effect<AuthResolution | null, KinuError> => (device === undefined ? resolvedAuth(deps) : Effect.succeed({ headers: {} }));
+  /** The machine carries a call only for an account that holds no sign-in of its own. */
+  const relayed = async (deps: ProviderDeps): Promise<ChatGptDeviceRoute | null> => (device === undefined || await deps.hasCredential(CHATGPT_CRED_KEY) ? null : device);
 
   return {
     id: 'chatgpt',
@@ -343,24 +344,28 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
     defaultModel: CHATGPT_DEFAULT_MODEL,
 
     async isAvailable(deps) {
-      return device === undefined ? deps.hasCredential(CHATGPT_CRED_KEY) : (await device.unavailableReason()) === undefined;
+      const route = await relayed(deps);
+
+      return route === null ? deps.hasCredential(CHATGPT_CRED_KEY) : (await route.unavailableReason()) === undefined;
     },
-    async unavailableReason() {
-      return device === undefined
-        ? "ChatGPT isn't signed in on this machine."
-        : device.unavailableReason();
+    async unavailableReason(deps) {
+      const route = await relayed(deps);
+
+      return route === null ? "ChatGPT isn't signed in." : route.unavailableReason();
     },
 
     async listModels(deps) {
       const stale = (reason: string, failure?: KinuError) => new StaleModelList([], { reason: `ChatGPT models could not be read: ${reason}`, cause: failure });
 
       return settle(Effect.gen(function* () {
-        const auth = yield* unsigned(deps).pipe(Effect.catch((failure) => Effect.fail(stale(failure.message, failure))));
+        const route = yield* Effect.promise(() => relayed(deps));
+        const signed: Effect.Effect<AuthResolution | null, KinuError> = route === null ? resolvedAuth(deps) : Effect.succeed({ headers: {} });
+        const auth = yield* signed.pipe(Effect.catch((failure) => Effect.fail(stale(failure.message, failure))));
 
         if (auth === null) return [];
         const url = `${CHATGPT_BASE_URL}/models`;
 
-        const res = yield* attempt({ doing: 'listing the ChatGPT models', otherwise: 'unavailable' }, () => (device?.fetch ?? deps.fetch ?? fetch)(url, { headers: auth.headers }))
+        const res = yield* attempt({ doing: 'listing the ChatGPT models', otherwise: 'unavailable' }, () => (route?.fetch ?? deps.fetch ?? fetch)(url, { headers: auth.headers }))
           .pipe(Effect.catch((failure) => Effect.fail(stale(failure.message, failure))));
 
         if (!res.ok) return yield* Effect.fail(stale((yield* refusalOf(res, url))?.message ?? `api.openai.com answered HTTP ${String(res.status)}`));
@@ -371,26 +376,23 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
     },
 
     createModel(modelId, deps): LanguageModel {
-      const transport = device?.fetch ?? deps.fetch ?? fetch;
-
-      const refusing = asFetchFunction(async (input, init) => {
-        const res = await transport(input, init);
-
-        if (res.status === 401 || res.status === 503) return res;
-
-        return settle(Effect.flatMap(refusalOf(res, requestUrl(input)), (refusal) => (refusal === null ? Effect.succeed(res) : Effect.die(refusal))));
-      });
-
-      const send = withRateLimitRetry(refusing, {
-        provider: 'chatgpt',
-        modelId,
-        lane: CHATGPT_CRED_KEY,
-        ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
-      });
-
       const customFetch = asFetchFunction(async (input, requested) => {
         const { init, streamed } = planRequest(requested);
         const url = requestUrl(input);
+        const route = await relayed(deps);
+
+        const send = withRateLimitRetry(asFetchFunction(async (target, sent) => {
+          const res = await (route?.fetch ?? deps.fetch ?? fetch)(target, sent);
+
+          if (res.status === 401 || res.status === 503) return res;
+
+          return settle(Effect.flatMap(refusalOf(res, requestUrl(target)), (refusal) => (refusal === null ? Effect.succeed(res) : Effect.die(refusal))));
+        }), {
+          provider: 'chatgpt',
+          modelId,
+          lane: CHATGPT_CRED_KEY,
+          ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
+        });
 
         // A device's own sign-in renews nowhere from here: its 401 is the answer.
         const deviceLogin = async (_key: string, request?: AuthRequest): Promise<AuthResolution | null> => (request === undefined ? { headers: {} } : null);
@@ -406,7 +408,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         return settle(Effect.gen(function* () {
           // A refusal the transport raised is the owner's answer and passes through unchanged.
           const answer = yield* Effect.promise(() => authenticatedSend({
-            key: CHATGPT_CRED_KEY, getAuth: device === undefined ? deps.getAuth : deviceLogin, send: sendWith,
+            key: CHATGPT_CRED_KEY, getAuth: route === null ? deps.getAuth : deviceLogin, send: sendWith,
           }));
 
           if (answer.kind === 'absent') return yield* Effect.fail(new KinuError('missing', 'No ChatGPT sign-in with plan usage on this machine'));

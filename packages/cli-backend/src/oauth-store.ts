@@ -1,8 +1,8 @@
 // Subscription logins on this machine, one `config.json` provider section per issuer with named accounts.
-// Claude renews through core's issuer table, as a hosted account's login does; the ChatGPT plan's login
-// exists only on a machine, so its issuer lives beside the daemon's (`chatgpt-login.ts`).
+// Claude and the ChatGPT plan renew through core's issuers, as a hosted account's logins do.
 import {
   CHATGPT_CRED_KEY,
+  chatgptLoginIssuer,
   CLAUDE_CRED_KEY,
   CLAUDE_LOGIN_ISSUER,
   JsonObjectSchema,
@@ -26,7 +26,6 @@ import * as v from 'valibot';
 import { readFileSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
 import { registrationOf, revokeSession } from '../../pc-agent/src/chatgpt.js';
-import { chatgptLoginIssuer } from './chatgpt-login';
 import { withConfigLock } from './config-lock';
 import { writeSecretFile } from './secret-file';
 
