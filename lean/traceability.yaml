@@ -141,7 +141,6 @@ requirements:
       - packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES
       - packages/core/src/execution/types.ts#ExecutorKind
       - packages/core/src/execution/toolchain.ts#TOOLCHAIN_PROBE
-      - packages/core/src/vfs/workspace-runtimes.ts#workspaceToolchainCapabilities
       - packages/core/src/tools/inline-executor.ts#createInlineExecutor
       - packages/core/src/tools/inline-executor.ts#createNimbusWorkspaceExecutor
       - packages/core/src/execution/sandbox.ts#createSandboxExecutor
