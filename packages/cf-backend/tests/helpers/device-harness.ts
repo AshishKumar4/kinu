@@ -2,7 +2,7 @@
 // like the daemon; without one every call hangs and consent outcomes are indistinguishable.
 import * as v from 'valibot';
 import {
-  DEVICE_CANCEL_METHOD, type JsonValue,
+  DEVICE_CANCEL_METHOD, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, type JsonValue,
 } from '@kinu.run/core';
 import {
   createTestUserDO, provisionTestWorkspace, testOwner,
@@ -40,6 +40,8 @@ export type DeviceResponder = (frame: DeviceFrame, say: (frame: JsonValue) => Pr
  *  without it the hub refuses to run commands. */
 export const CAPABLE_HELLO = {
   type: 'HELLO',
+  protocolVersion: DEVICE_PROTOCOL_VERSION,
+  features: [...DEVICE_FEATURES],
   os: 'linux',
   hostname: 'studio',
   agentRoot: '/home/ashish/.kinu/agents',

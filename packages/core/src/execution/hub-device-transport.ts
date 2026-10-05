@@ -13,6 +13,7 @@ import { type DeviceCheckpointHint } from '../checkpoints/types';
 import { sameDeviceStatus, type DeviceStatus } from './device-status';
 import { type DeviceTransport } from './device-tunnel-executor';
 import { Effect } from 'effect';
+import { DEVICE_ERRORS, DEVICE_METHOD, deviceFailure } from './device-protocol';
 import { KinuError, diagnostics, flight, renderThrownChain, settle, toKinuError, type LogEventName } from "../obs/index";
 import * as v from 'valibot';
 import { type UserCaller } from '../safety/workspace-capability';
@@ -119,7 +120,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         // A null hub means an unattached workspace, not an unlinked machine.
         adopt(DISCONNECTED);
 
-        return Effect.die(new Error(WORKSPACE_HAS_NO_OWNER));
+        return Effect.fail(deviceFailure(DEVICE_ERRORS.noOwner, WORKSPACE_HAS_NO_OWNER));
       }
 
       return Effect.tryPromise({
@@ -128,20 +129,20 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           const first = params.at(0);
 
           // Only a string first param is a command to prefix with `cd`.
-          const effectiveParams: JsonValue[] = method === 'exec' && cwd && v.is(v.string(), first)
+          const effectiveParams: JsonValue[] = method === DEVICE_METHOD.exec && cwd && v.is(v.string(), first)
             ? [`cd ${shellQuote(cwd)} && ${first}`]
             : params;
 
-          const meta = (method === 'exec' || method === 'writeFile') ? opts.checkpointMeta?.() ?? null : null;
+          const meta = (method === DEVICE_METHOD.exec || method === DEVICE_METHOD.writeFile) ? opts.checkpointMeta?.() ?? null : null;
 
           const checkpoint: DeviceCheckpointHint | undefined = meta ? {
             agent: opts.agentName,
             turnId: meta.turnId,
             sessionId: meta.sessionId,
-            dir: method === 'exec' ? cwd : null,
+            dir: method === DEVICE_METHOD.exec ? cwd : null,
           } : undefined;
 
-          const requestId = method === 'exec' ? rpcOpts?.requestId ?? nextDeviceRequestId() : undefined;
+          const requestId = method === DEVICE_METHOD.exec ? rpcOpts?.requestId ?? nextDeviceRequestId() : undefined;
           const deviceOptions: DeviceRpcOptions = { agentName: opts.agentName, checkpoint };
 
           if (rpcOpts?.deviceId !== undefined) deviceOptions.deviceId = rpcOpts.deviceId;

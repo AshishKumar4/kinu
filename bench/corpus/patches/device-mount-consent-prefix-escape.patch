@@ -1,7 +1,7 @@
 diff --git a/packages/core/src/execution/device-tunnel-executor.ts b/packages/core/src/execution/device-tunnel-executor.ts
 --- a/packages/core/src/execution/device-tunnel-executor.ts
 +++ b/packages/core/src/execution/device-tunnel-executor.ts
-@@ -702,7 +702,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
+@@ -717,7 +717,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
      const root = yield* effectiveRoot();
  
      // A device that named no directory failed above rather than widening to `/`.

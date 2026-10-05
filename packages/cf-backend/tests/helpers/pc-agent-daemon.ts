@@ -15,7 +15,7 @@ const pcAgent = v.parse(
   require_(join(import.meta.dir, '../../../pc-agent/src/index.js')),
 );
 
-const ReplySchema = v.object({ id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()) });
+const ReplySchema = v.object({ id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.object({ code: v.string(), message: v.string() })) });
 
 export interface DaemonFrame {
   readonly id: string;
@@ -53,7 +53,7 @@ export function pcAgentDaemon(opts: { gitBin?: string } = {}): PcAgentDaemon {
         send(data: string) {
           const reply = v.parse(ReplySchema, JSON.parse(data));
 
-          if (reply.error !== undefined) reject(new Error(reply.error));
+          if (reply.error !== undefined) reject(new Error(reply.error.message));
           else resolve(reply.result);
         },
       }, ctx);

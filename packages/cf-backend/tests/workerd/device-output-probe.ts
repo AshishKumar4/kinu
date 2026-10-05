@@ -5,7 +5,7 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { DeviceSocketHub, deviceIdFromSocket, type DeviceExecOutput, type JsonValue } from '@kinu.run/core';
+import { DeviceSocketHub, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, deviceIdFromSocket, type DeviceExecOutput, type JsonValue } from '@kinu.run/core';
 import { detach, logged } from '@kinu.run/core/obs';
 
 const DEVICE = 'dev-probe';
@@ -17,6 +17,7 @@ export class DeviceOutputHubProbeDO extends DurableObject<Cloudflare.Env> {
   override async fetch(): Promise<Response> {
     const pair = new WebSocketPair();
     this.devices.accept(DEVICE, pair[1]);
+    this.devices.hello(DEVICE, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
     return new Response(null, { status: 101, webSocket: pair[0] });
   }

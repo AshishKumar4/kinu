@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import {
   nextDeviceRequestId, isDeviceNotConnectedError, isWorkspaceUnattachedError,
   NO_DEVICE_CONNECTED, WORKSPACE_HAS_NO_OWNER, type DeviceStatus, type JsonValue,
+  DEVICE_ERRORS, deviceFailure,
 } from '@kinu.run/core';
 import {
   createHubDeviceTransport,
@@ -156,8 +157,8 @@ describe('createHubDeviceTransport', () => {
 
     const failingHub: DeviceHubClient = {
       deviceRuntimeStatus: async () => NO_DEVICE,
-      deviceRpc: async () => { throw new Error('no device connected'); },
-      acknowledgeDeviceRequest: async () => { throw new Error('no device connected'); },
+      deviceRpc: async () => { throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected'); },
+      acknowledgeDeviceRequest: async () => { throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected'); },
     };
 
 

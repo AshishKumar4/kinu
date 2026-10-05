@@ -2,7 +2,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import {
-  DeviceTunnel, TUNNEL_DISCONNECTED, DEVICE_UNRESPONSIVE, DEVICE_DUPLICATE_REQUEST,
+  DeviceTunnel, TUNNEL_DISCONNECTED, DEVICE_DUPLICATE_REQUEST,
   DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
   nextDeviceRequestId, type DeviceExecOutput, type TunnelSocket,
 } from '../src/execution/device-tunnel';
@@ -58,10 +58,10 @@ describe('DeviceTunnel', () => {
 
   test('an {id,error} response rejects', async () => {
     const sock = fakeSocket();
-    const t = new DeviceTunnel(sock);
+    const t = new DeviceTunnel(sock, 20);
     const p = t.rpc('exec', ['boom']);
-    t.handleMessage(JSON.stringify({ id: sock.sent[0].id, error: 'command failed' }));
-    await expect(p).rejects.toThrow('command failed');
+    t.handleMessage(JSON.stringify({ id: sock.sent[0].id, error: { code: 'denied', message: 'command failed' } }));
+    await expect(p).rejects.toMatchObject({ code: 'denied', message: 'command failed' });
   });
 
   test('settles the response even when terminal cleanup throws', async () => {
@@ -73,7 +73,7 @@ describe('DeviceTunnel', () => {
     });
 
     expect(() => t.handleMessage(JSON.stringify({ id: sock.sent[0].id, result: 'ok' })))
-      .toThrow('durable cleanup failed');
+      .toThrow('record device completion');
     expect(await p).toBe('ok');
   });
 
@@ -87,6 +87,16 @@ describe('DeviceTunnel', () => {
     t.handleMessage(JSON.stringify({ id: idA, result: 'A' }));
     expect(await a).toBe('A');
     expect(await b).toBe('B');
+  });
+
+  test('an id without an answer is dropped, not accepted as a completion', async () => {
+    const socket = fakeSocket();
+    const tunnel = new DeviceTunnel(socket);
+    const answer = tunnel.rpc('exec', ['true']);
+    const id = socket.sent[0].id;
+    tunnel.handleMessage(JSON.stringify({ id }));
+    tunnel.handleMessage(JSON.stringify({ id, result: 'answered' }));
+    expect(await answer).toBe('answered');
   });
 
   // The daemon's name for the frame; unit-pc-agent-exec pins the daemon's frames reaching this tunnel.
@@ -183,9 +193,9 @@ describe('DeviceTunnel', () => {
       // Work is silent but probes answer, which is all liveness asks.
       for (let i = 0; i < 6; i++) {
         timers.advance(15);
-        const probe = sock.sent.find((f) => f.method === 'ping');
+        const probe = [...sock.sent].reverse().find((f) => f.method === 'ping');
 
-        if (probe) t.handleMessage(JSON.stringify({ id: probe.id, error: 'unknown method: ping' }));
+        if (probe) t.handleMessage(JSON.stringify({ id: probe.id, result: 'pong' }));
       }
 
       expect(settled).toBe(false);
@@ -195,12 +205,32 @@ describe('DeviceTunnel', () => {
       expect(await p).toEqual({ stdout: '42 passed', exitCode: 0 });
     });
 
+    test('an error to its own ping does not prove liveness and silence sends a correlated cancel', async () => {
+      const sock = fakeSocket();
+      const timers = handClock();
+      const t = new DeviceTunnel(sock, 1_000, 15, timers);
+      const p = t.rpc('exec', ['sleep 600'], { timeoutMs: 0 });
+      const ended = p.then(() => null, (...rejection: [unknown]) => rejection[0]);
+      timers.advance(15);
+      const probe = [...sock.sent].reverse().find((f) => f.method === 'ping');
+
+      if (!probe) throw new Error('no liveness probe');
+      t.handleMessage(JSON.stringify({ id: probe.id, error: { code: 'unknown_method', message: 'unknown method: ping' } }));
+      timers.advance(15);
+      const cancellation = sock.sent.find((f) => f.method === 'cancel');
+      expect(cancellation?.params).toEqual([sock.sent[0].id]);
+
+      if (cancellation) t.handleMessage(JSON.stringify({ id: cancellation.id, result: { requestId: sock.sent[0].id, cancelled: 'terminated' } }));
+      expect(await ended).toMatchObject({ message: expect.stringContaining("device stopped responding") });
+      t.dispose();
+    });
+
     test('a device that stops answering fails the call as unresponsive, not as a timeout', async () => {
       // Half-open: the socket reads OPEN, so only the heartbeat tells slow work from a dead machine.
       const sock = fakeSocket();
       const t = new DeviceTunnel(sock, 1_000, 10);
       const p = t.rpc('exec', ['make'], { timeoutMs: 0 });
-      await expect(p).rejects.toThrow(DEVICE_UNRESPONSIVE);
+      await expect(p).rejects.toThrow("device stopped responding");
       // The message must not imply the work was cancelled on the device.
       await expect(p).rejects.toThrow(/may still be running on the device/);
     });
@@ -222,18 +252,12 @@ describe('DeviceTunnel', () => {
       const timers = handClock();
       const t = new DeviceTunnel(sock, 1_000, 10, timers);
       const p = t.rpc('exec', ['make'], { timeoutMs: 0 });
-      let settled = false;
-      void p.then(() => { settled = true; }, () => { settled = true; });
-
       const refused = new Error('socket refused the frame');
       sock.send = () => { throw refused; };
 
       // One tick sends only the probe.
       timers.advance(10);
-      await Promise.resolve();
-
-      expect(settled).toBe(true);
-      await expect(p).rejects.toMatchObject({ message: expect.stringContaining(TUNNEL_DISCONNECTED), cause: refused });
+      await expect(p).rejects.toMatchObject({ message: expect.stringContaining(TUNNEL_DISCONNECTED), cause: { cause: refused } });
     });
   });
 
@@ -251,8 +275,8 @@ describe('DeviceTunnel', () => {
       expect(after.sent[0].id).not.toBe(before.sent[0].id);
 
       first.dispose();
-      second.dispose();
       await expect(firstCall).rejects.toThrow(TUNNEL_DISCONNECTED);
+      second.dispose();
       await expect(secondCall).rejects.toThrow(TUNNEL_DISCONNECTED);
     });
 
@@ -311,9 +335,9 @@ describe('DeviceTunnel', () => {
       expect(() => parseDeviceCancelAnswer(nextDeviceRequestId(), answer))
         .toThrow(DEVICE_CANCEL_MISPAIRED);
       expect(() => parseDeviceCancelAnswer(requestId, { requestId, cancelled: 'probably' }))
-        .toThrow('Invalid type: Expected ("terminated" | "unknown") but received "probably"');
+        .toThrow('unreadable cancellation answer');
       expect(() => parseDeviceCancelAnswer(requestId, undefined))
-        .toThrow('Invalid type: Expected Object but received undefined');
+        .toThrow('unreadable cancellation answer');
     });
   });
 });

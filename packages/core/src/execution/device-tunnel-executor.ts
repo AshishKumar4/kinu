@@ -9,13 +9,13 @@ import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 
 import type { CheckpointFiles, OutputSink } from '../types/primitives';
-import { vfsErrorFromText } from '../vfs/errno';
-import { syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsErrorCode, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { commandResult, commandResultAt, uncheckpointedSentence, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { settle } from '../obs/effect';
+import { DEVICE_METHOD, deviceFailureCodes } from './device-protocol';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
   connectedDevices, deviceFleetAsk, deviceByName, freshDeviceToolchain,
@@ -25,8 +25,8 @@ import {
   TOOLCHAIN_PROBED_CAPABILITIES, TOOLCHAIN_UNPROBEABLE,
 } from './toolchain';
 import {
-  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, parseDeviceCancelAnswer,
-  isDeviceNotConnectedError, isDeviceUnknownMethodError, isSandboxUnavailableError,
+  DEVICE_CANCEL_METHOD, parseDeviceCancelAnswer,
+  isDeviceNotConnectedError, isSandboxUnavailableError,
   nextDeviceRequestId,
 } from './device-tunnel';
 import { readDeviceOwnershipContext } from './signal';
@@ -82,11 +82,6 @@ const EXEC_TERMINATED =
 const EXEC_NOTHING_RUNNING =
   'device exec stopped: no active command control entry remained on the device; backgrounded or separately sessioned processes may still run';
 
-/** The daemon has no cancellation method; the user must update it. */
-const EXEC_CANCEL_UNSUPPORTED =
-  'device exec aborted: this machine runs an older Kinu daemon that cannot stop a command, '
-  + 'so the command may still be running. Ask the user to update the daemon on that machine.';
-
 /** The device left mid-cancellation, so nothing confirmed the kill. */
 const EXEC_CANCEL_UNCONFIRMED =
   'device exec aborted: the device disconnected before it confirmed the command stopped';
@@ -104,14 +99,12 @@ function terminateDeviceExec(
 ): Effect.Effect<string> {
   return Effect.match(Effect.tryPromise({
     try: async () => parseDeviceCancelAnswer(requestId, await rpc(
-      DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL], deviceId === undefined ? undefined : { deviceId },
+      DEVICE_CANCEL_METHOD, [requestId], deviceId === undefined ? undefined : { deviceId },
     )),
     catch: (cause) => ({ cause }),
   }), {
     onSuccess: (answer) => (answer.cancelled === 'terminated' ? EXEC_TERMINATED : EXEC_NOTHING_RUNNING),
     onFailure: (failed) => {
-      if (isDeviceUnknownMethodError(failed)) return EXEC_CANCEL_UNSUPPORTED;
-
       if (isDeviceNotConnectedError(failed)) return EXEC_CANCEL_UNCONFIRMED;
 
       return execCancelFailed(renderThrownChain(failed));
@@ -155,11 +148,7 @@ const WriteReportSchema = v.object({ uncheckpointed: v.object({ dir: v.string(),
 
 const DeviceListResultSchema = v.array(JsonValueSchema);
 
-/** A daemon from before paging answers one array. */
-const DeviceListPageSchema = v.union([
-  DeviceListResultSchema,
-  v.object({ entries: DeviceListResultSchema, next: v.nullable(v.number()) }),
-]);
+const DeviceListPageSchema = v.object({ entries: DeviceListResultSchema, next: v.nullable(v.number()) });
 
 /** Under the 32 MiB a Worker receives per WebSocket message or RPC, even as base64 in JSON. */
 const DEVICE_READ_CHUNK_BYTES = 8 * 1024 * 1024;
@@ -411,7 +400,7 @@ export function createDeviceTunnelExecutor(
             if (backgroundJobId !== null) execOpts.backgroundJobId = backgroundJobId;
 
             const result = await raceAbort(
-              () => rpc('exec', [call.command], execOpts), signal, EXEC_NOT_STARTED,
+              () => rpc(DEVICE_METHOD.exec, [call.command], execOpts), signal, EXEC_NOT_STARTED,
               () => settle(terminateDeviceExec(rpc, requestId, deviceId)),
             );
 
@@ -560,7 +549,7 @@ export function createDeviceTunnelExecutor(
     },
     isAvailable: () => transport.status().connected,
     getStatus,
-    connect: () => settle(Effect.tryPromise({ try: () => rpc('exec', ['echo connected']), catch: (cause) => ({ cause }) }).pipe(
+    connect: () => settle(Effect.tryPromise({ try: () => rpc(DEVICE_METHOD.exec, ['echo connected']), catch: (cause) => ({ cause }) }).pipe(
       Effect.asVoid,
       // Classified so callers read the same `unavailable` the tools return.
       Effect.catch((failed) => (isDeviceNotConnectedError(failed)
@@ -691,8 +680,11 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   const call = (method: string, params: JsonValue[], path: string): Effect.Effect<JsonValue | undefined, KinuError | VfsError> =>
     Effect.tryPromise({
       try: () => transport.rpc(method, params, target),
-      catch: (cause) => (cause instanceof Error ? vfsErrorFromText({ message: cause.message, path, cause }) : null)
-        ?? deviceFailure({ doing: `${method} on the device`, cause }),
+      catch: (cause) => {
+        const code = [...deviceFailureCodes({ cause })].find(isVfsErrorCode);
+
+        return code === undefined ? deviceFailure({ doing: `${method} on the device`, cause }) : new VfsError(code, renderThrownChain({ cause }), path, { cause });
+      },
     });
 
   const effectiveRoot = (): Effect.Effect<string, VfsError> => Effect.flatMap(Effect.promise(() => consent.consentedRoot(deviceId)), (explicit) => (explicit
@@ -755,13 +747,17 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
     for (;;) {
       const asked = length === null ? DEVICE_READ_CHUNK_BYTES : Math.min(DEVICE_READ_CHUNK_BYTES, length - total);
-      const raw = yield* call('readRange', [path, offset + total, asked, { root }], path);
+      const raw = yield* call(DEVICE_METHOD.readRange, [path, offset + total, asked, { root }], path);
 
       if (raw === undefined || !isJsonObject(raw) || raw.encoding !== 'base64') {
         return yield* Effect.fail(new VfsError('EIO', 'device returned an unreadable file range', path));
       }
 
-      const chunk = base64ToBytes(v.parse(v.string(), raw.content));
+      const chunk = yield* Effect.try({
+        try: () => base64ToBytes(v.parse(v.string(), raw.content)),
+        catch: (cause) => new VfsError('EIO', 'device returned an unreadable file range', path, { cause }),
+      });
+
       chunks.push(chunk);
       total += chunk.length;
 
@@ -794,11 +790,10 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     const text = asLosslessText(data);
 
     const result = yield* text !== null
-      ? call('writeFile', [path, text, { root }], path)
-      : call('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }], path);
+      ? call(DEVICE_METHOD.writeFile, [path, text, { root }], path)
+      : call(DEVICE_METHOD.writeFile, [path, bytesToBase64(data), { encoding: 'base64', root }], path);
 
-    const ok = result === 'ok'
-      || (result !== undefined && isJsonObject(result) && result.success === true);
+    const ok = result !== undefined && isJsonObject(result) && result.success === true;
 
     if (!ok) return yield* Effect.fail(new VfsError('EIO', `writeFile failed on the device: ${JSON.stringify(result)}`, path));
     const report = v.safeParse(WriteReportSchema, result);
@@ -828,17 +823,15 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       const entries: JsonValue[] = [];
 
       for (let offset: number | null = 0; offset !== null;) {
-        const page: v.InferOutput<typeof DeviceListPageSchema> = v.parse(DeviceListPageSchema, yield* call(
-          'listFiles', [path, { root, offset, limit: DEVICE_LIST_PAGE_ENTRIES }], path,
-        ));
+        const raw: JsonValue | undefined = yield* call(DEVICE_METHOD.listFiles, [path, { root, offset, limit: DEVICE_LIST_PAGE_ENTRIES }], path);
 
-        if (Array.isArray(page)) {
-          entries.push(...page);
-          offset = null;
-        } else {
-          entries.push(...page.entries);
-          offset = page.next;
-        }
+        const page: v.InferOutput<typeof DeviceListPageSchema> = yield* Effect.try({
+          try: () => v.parse(DeviceListPageSchema, raw),
+          catch: (cause) => new VfsError('EIO', 'device returned an unreadable directory page', path, { cause }),
+        });
+
+        entries.push(...page.entries);
+        offset = page.next;
       }
 
       return entries.map((entry) => {
@@ -858,19 +851,24 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       if ((yield* towardRoot(path)) !== null) return { size: 0, mtimeMs: 0, type: 'directory' as const };
       const root = yield* guarded(path, 'stat');
 
-      const stat = v.parse(DeviceStatSchema, yield* call('statPath', [path, { root }], path));
+      const raw = yield* call(DEVICE_METHOD.statPath, [path, { root }], path);
+
+      const stat = yield* Effect.try({
+        try: () => v.parse(DeviceStatSchema, raw),
+        catch: (cause) => new VfsError('EIO', 'device returned an unreadable file status', path, { cause }),
+      });
 
       return stat === null ? null : { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDir ? 'directory' as const : 'file' as const };
     })),
 
     unlink: (path) => settle(Effect.gen(function* () {
       const root = yield* guarded(path, 'unlink');
-      yield* call('unlinkPath', [path, { root }], path);
+      yield* call(DEVICE_METHOD.unlinkPath, [path, { root }], path);
     })),
 
     mkdir: (path, opts) => settle(Effect.gen(function* () {
       const root = yield* guarded(path, 'mkdir');
-      yield* call('mkdirPath', [path, { root, recursive: opts?.recursive ?? false }], path);
+      yield* call(DEVICE_METHOD.mkdirPath, [path, { root, recursive: opts?.recursive ?? false }], path);
     })),
 
   };

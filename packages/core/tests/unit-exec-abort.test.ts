@@ -6,10 +6,11 @@ import { buildBuiltinTools } from '../src/tools/builtins';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import {
-  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_MISPAIRED, DEVICE_CANCEL_PROTOCOL, DEVICE_UNKNOWN_METHOD,
+  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_MISPAIRED,
   DeviceTunnel, TUNNEL_DISCONNECTED, type TunnelSocket,
 } from '../src/execution/device-tunnel';
 import type { JsonValue } from '../src/utils/json';
+import { DEVICE_ERRORS, deviceFailure } from '../src/execution/device-protocol';
 import { createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
 import {
   nimbusSessionFiles,
@@ -217,7 +218,6 @@ describe('remote executor exec abort', () => {
 
     if (execRequestId === undefined) throw new Error('the exec call carried no request identity');
     expect(calls[1].params[0]).toBe(execRequestId);
-    expect(calls[1].params[1]).toBe(DEVICE_CANCEL_PROTOCOL);
   });
 
   test('a command that finished first is reported as gone, not as killed', async () => {
@@ -237,21 +237,7 @@ describe('remote executor exec abort', () => {
     });
   });
 
-  test('a device too old to stop a command says so instead of claiming it stopped', async () => {
-    // Mixed versions: the refusal must name the gap, not read as "terminated".
-    const { transport } = cancellableTransport(() => {
-      throw new Error(`${DEVICE_UNKNOWN_METHOD}: ${DEVICE_CANCEL_METHOD}`);
-    });
 
-    const provider = createDeviceTunnelExecutor(transport);
-    const controller = new AbortController();
-
-    const pending = provider.tools.exec.execute('make', { signal: controller.signal });
-    controller.abort();
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    await expect(pending).rejects.toThrow(/older Kinu daemon that cannot stop a command/);
-    await expect(pending).rejects.toThrow(/may still be running/);
-  });
 
   test('a kill the device refused is reported as a kill failure', async () => {
     const { transport } = cancellableTransport(() => {
@@ -269,7 +255,7 @@ describe('remote executor exec abort', () => {
 
   test('a device that vanished mid-cancellation does not claim a confirmed stop', async () => {
     const { transport } = cancellableTransport(() => {
-      throw new Error(TUNNEL_DISCONNECTED);
+      throw deviceFailure(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED);
     });
 
     const provider = createDeviceTunnelExecutor(transport);

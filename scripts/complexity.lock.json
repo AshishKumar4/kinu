@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-05",
-  "files": 2994,
-  "functions": 77639,
+  "files": 2998,
+  "functions": 77814,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -44,10 +44,6 @@
     {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
       "complexity": 40
-    },
-    {
-      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
-      "complexity": 39
     },
     {
       "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",

@@ -126,7 +126,6 @@
   "packages/core/src/execution/device-status.ts#DEVICE_TOOLCHAIN_TTL_MS (unreached-export)",
   "packages/core/src/execution/device-tunnel-executor.ts#deviceFiles (unreached-export)",
   "packages/core/src/execution/device-tunnel.ts#DEVICE_CANCEL_MISPAIRED (unreached-export)",
-  "packages/core/src/execution/device-tunnel.ts#DEVICE_CANCEL_VERSION_REFUSAL (unreached-export)",
   "packages/core/src/execution/device-tunnel.ts#DEVICE_DUPLICATE_REQUEST (unreached-export)",
   "packages/core/src/execution/device-tunnel.ts#DEVICE_UNKNOWN_METHOD (unreached-export)",
   "packages/core/src/execution/device-tunnel.ts#DeviceCancelResultSchema (unreached-export)",
