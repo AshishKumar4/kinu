@@ -7,7 +7,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { Database } from 'bun:sqlite';
 import type {
-  AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution, PathPlanes,
+  AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome, VfsMount,
 } from '@kinu.run/core';
 import type { Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
@@ -50,7 +50,7 @@ import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { localFilePlane, localFileReach } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
-import { agentViewMount, createSqlFiber, detectOrphanedFibers, readSoul, settledWorkspaceSoul } from '@kinu.run/core';
+import { agentViewMount, createSqlFiber, detectOrphanedFibers, localPlanes, readSoul, settledWorkspaceSoul } from '@kinu.run/core';
 import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
@@ -561,11 +561,8 @@ export function cleanupFacetScratch(space: string, facet: string): void {
 function runtimePlanes(cwd: string, space: string, facet: string | undefined, views: readonly VfsMount[]) {
   const home = join(space, agentHome(facet ?? MAIN_AGENT));
 
-  // The folder is `local://`; a hire's `~` is its own home, the workspace's agent's the user's.
-  const planes: PathPlanes = {
-    cwd, home: facet === undefined ? homedir() : home, devices: null,
-    roots: [{ root: 'vfs', at: space }, { root: 'local', at: cwd }], views: views.map((view) => view.name),
-  };
+  // A hire's `~` is its own home, the workspace's agent's the user's.
+  const planes = localPlanes({ space, folder: cwd, home: facet === undefined ? homedir() : home, views: views.map((view) => view.name) });
 
   return { home, planes };
 }

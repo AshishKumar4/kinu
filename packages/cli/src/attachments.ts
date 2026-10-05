@@ -4,7 +4,7 @@
 import { stat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
-import { resolvePath, type PathPlanes, type PromptFile } from '@kinu.run/core';
+import { referencePrefixes, resolvePath, type PathPlanes, type PromptFile } from '@kinu.run/core';
 import { renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 import { formatBytes } from './display';
 
@@ -74,11 +74,11 @@ const NAME_MAX_BYTES = 255;
 
 const PATH_MAX_BYTES = 4095;
 
-/** A `root://` reference this workspace's planes name, as its path on this machine; null for any other token. */
+/** A `prefix://` reference this workspace names, as its path on this machine; null for any other token. */
 function planePath(candidate: string, planes: PathPlanes | undefined): string | null {
   const root = /^([^\s/:]+):\/\//u.exec(candidate)?.[1];
 
-  if (planes === undefined || !planes.roots.some((plane) => plane.root === root)) return null;
+  if (planes === undefined || root === undefined || !referencePrefixes(planes).includes(root)) return null;
 
   // A reference that climbs above its plane is refused to the user, as the file tool refuses it.
   return resolvePath(candidate, planes).absolute;
@@ -112,7 +112,7 @@ interface PromptAttachmentOptions {
   /** The cap belongs to the backend that stores the message and the two differ by 8x, so no default. */
   limitBytes: number;
   cwd?: string;
-  /** A local workspace's planes, where its `vfs://` and `local://` references are on this machine. */
+  /** A local workspace's planes, where its references are on this machine. */
   planes?: PathPlanes;
 }
 

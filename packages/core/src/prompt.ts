@@ -52,7 +52,7 @@ import {
   type RenderSection,
 } from './prompting/section-templates';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
-import type { PathPlanes } from './vfs/resolve';
+import { DEVICE_PREFIX, VFS_PREFIX, type PathPlanes } from './vfs/resolve';
 import { PLATFORM_CATALOG } from './platform-catalog';
 import { sandboxSizeLabel } from './execution/sandbox';
 import type { SandboxSizes } from './execution/types';
@@ -176,7 +176,7 @@ function renderExecutorLine(
   }
 }
 
-function renderExecutorSection(surface: PromptSurface, render: RenderSection, planes: PathPlanes): string {
+function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
   const tools = surface.builtinTools;
 
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
@@ -199,7 +199,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, pl
   return render(EXECUTORS_SECTION, {
     executorLines: lines.join('\n'),
     workspaceRoot: WORKSPACE_ROOT,
-    hasFolder: planes.roots.some((root) => root.root === 'local'),
+    hasFolder: surface.backend === 'cli-local',
     hasDevices: devices.length > 0,
     hasSandbox: devices.some((exec) => exec.name === 'sandbox'),
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
@@ -214,13 +214,21 @@ function hasTool(tools: readonly BuiltinToolName[], name: BuiltinToolName): bool
   return tools.includes(name);
 }
 
-/** `vfs://` is `/x` and `local://` is `/y`: each fixed root, then where a device's root lands. */
+/** Each prefix as the `vfs://` subtree it names (`local://` is `vfs://local`), then where each subtree is here. */
 function renderPlanesSection(planes: PathPlanes, render: RenderSection): string {
-  const roots = planes.roots.map((root) => `\`${root.root}://\` is \`${root.at}\``);
-  const fixed = roots.length < 2 ? roots.join('') : `${roots.slice(0, -1).join(', ')} and ${roots.at(-1) ?? ''}`;
-  const devices = planes.devices === null ? '' : `; a machine's \`<name>://\` is \`${planes.devices}/<name>\``;
+  const long = (path: string): string => `\`${VFS_PREFIX}://${path.replace(/^\/+/u, '')}\``;
 
-  return render(PLANES_SECTION, { planes: `${fixed}${devices}` });
+  const aliases = planes.prefixes.filter((row) => row.prefix !== VFS_PREFIX).map((row) => (row.prefix === DEVICE_PREFIX
+    ? `a machine's \`${row.prefix}://\` is ${long(`${row.subtree}/${row.prefix}`)}`
+    : `\`${row.prefix}://\` is ${long(row.subtree)}`));
+
+  const mounts = planes.mounts.map((mount) => `${long(mount.subtree)} is \`${mount.at}\``);
+
+  return render(PLANES_SECTION, { aliases: listed(aliases), mounts: listed(mounts) });
+}
+
+function listed(items: readonly string[]): string {
+  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
 }
 
 function renderAgentStateSection(surface: PromptSurface, render: RenderSection): string {
@@ -319,7 +327,7 @@ export function buildSystemPromptSync(
   return [
     renderOperatingGuidance(surface, render),
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
-    renderExecutorSection(surface, render, rt.planes),
+    renderExecutorSection(surface, render),
     renderToolsSection(surface, render),
     renderAgentStateSection(surface, render),
     ...(lead ? [

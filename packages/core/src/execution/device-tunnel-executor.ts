@@ -218,9 +218,12 @@ export function createDeviceTunnelExecutor(
     const s = transport.status();
     const live = (s.devices ?? []).filter((d) => d.connected);
     const named = live[0] ?? s.devices?.[0];
-    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox'>> = {};
+    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox' | 'mounts'>> = {};
 
     if (named) identity.label = named.name;
+
+    // Only a fleet the hub listed has segments to name.
+    if (s.devices !== undefined) identity.mounts = live.map((device) => deviceMountSegment(device, s.devices));
     // Per-device answers count only when exactly one machine is live.
     const perDeviceReach = live.length === 1 ? live[0].granted : undefined;
     const granted = perDeviceReach ?? s.workspaceGranted;

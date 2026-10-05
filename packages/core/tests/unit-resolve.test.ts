@@ -1,15 +1,15 @@
 // One reading of a written path: `root://path`, `~`, relative and absolute, and the reference a person reads back.
 import { describe, expect, test } from 'bun:test';
-import { cloudPlanes, findPlaneReferences, formatPath, resolvePath, shellReference, type PathPlanes } from '../src/vfs/resolve';
+import {
+  cloudPlanes, findPlaneReferences, formatPath, localPlanes, referencePrefixes, RESERVED_ROOTS, resolvePath, shellReference,
+  type PathPlanes,
+} from '../src/vfs/resolve';
 import { deviceMountSegment } from '../src/execution/device-tunnel-executor';
 import type { DeviceFleetEntry } from '../src/execution/device-status';
 
 const CF = cloudPlanes('/home/main');
 
-const CLI: PathPlanes = {
-  cwd: '/home/ana/acme', home: '/home/ana', devices: null, views: ['skills'],
-  roots: [{ root: 'vfs', at: '/home/ana/.kinu/acme' }, { root: 'local', at: '/home/ana/acme' }],
-};
+const CLI = localPlanes({ space: '/home/ana/.kinu/acme', folder: '/home/ana/acme', home: '/home/ana', views: ['skills'] });
 
 describe('a written path resolves to the machine path its plane serves', () => {
   test('every root: the own space, the container and a device on the cloud; the own space and the folder locally', () => {
@@ -39,14 +39,14 @@ describe('a written path resolves to the machine path its plane serves', () => {
   test('a reference never climbs above its root, and a plane this workspace lacks is refused by name', () => {
     expect(() => resolvePath('vfs://../etc/passwd', CLI)).toThrow(expect.objectContaining({ code: 'EPERM' }));
     expect(() => resolvePath('local://src/../../x', CLI)).toThrow(expect.objectContaining({ code: 'EPERM' }));
-    expect(() => resolvePath('sandbox://x', CLI)).toThrow('sandbox:// is no plane here; this workspace\'s are vfs://, local://');
-    expect(() => resolvePath('pc://studio/x', CF)).toThrow('pc:// is no plane here; this workspace\'s are vfs://, sandbox://, <device>://');
+    expect(() => resolvePath('sandbox://x', CLI)).toThrow('sandbox:// is no prefix here; this workspace\'s are vfs://, local://');
+    expect(() => resolvePath('pc://studio/x', CF)).toThrow('pc:// is no prefix here; this workspace\'s are vfs://, local://, sandbox://, <device>://');
     expect(() => resolvePath('https://example.com/a', CF)).toThrow(expect.objectContaining({ code: 'ENOENT' }));
   });
 });
 
 describe('a machine path formats to the reference of the plane that holds it', () => {
-  test('the deepest root wins; a device is named by its segment; outside every root stays a machine path', () => {
+  test('the shortest prefix wins; a device is named by its segment; outside every subtree stays a machine path', () => {
     const cases: Array<[PathPlanes, string, string]> = [
       [CF, '/home/main/report.txt', 'vfs://home/main/report.txt'],
       [CF, '/sandbox', 'sandbox://'],
@@ -107,5 +107,47 @@ describe('a reference in prose', () => {
     ]);
     expect(findPlaneReferences('ashish@studio://home/x.', ['ashish@studio'])).toEqual([{ index: 0, reference: 'ashish@studio://home/x' }]);
     expect(findPlaneReferences('local://a', [])).toEqual([]);
+  });
+});
+
+// 2026-10-04: `vfs://` is the one tree an agent sees, and every other prefix is an alias for a subtree of it. The cloud's
+// `local://` was refused, and a local `vfs://local/x` named the own space rather than the folder.
+describe('every prefix is an alias for a vfs:// subtree', () => {
+  test('on both backends, each prefix and its vfs:// long form name the same file, and the shorter is printed', () => {
+    const cases: Array<[PathPlanes, string, string, string]> = [
+      [CF, 'local://home/main/a.md', 'vfs://home/main/a.md', '/home/main/a.md'],
+      [CF, 'sandbox://w/build.log', 'vfs://sandbox/w/build.log', '/sandbox/w/build.log'],
+      [CF, 'studio://home/dev/a.txt', 'vfs://pc/studio/home/dev/a.txt', '/pc/studio/home/dev/a.txt'],
+      [CLI, 'local://src/app.ts', 'vfs://local/src/app.ts', '/home/ana/acme/src/app.ts'],
+    ];
+
+    for (const [planes, short, long, absolute] of cases) {
+      expect(resolvePath(short, planes).absolute).toBe(absolute);
+      expect(resolvePath(long, planes).absolute).toBe(absolute);
+      expect(formatPath(absolute, planes)).toBe(planes === CF && short.startsWith('local://') ? long : short);
+      expect(findPlaneReferences(`${short} and ${long}`, referencePrefixes(planes, ['studio'])).map(({ reference }) => reference)).toEqual([short, long]);
+    }
+
+    expect(formatPath('/home/ana/acme', CLI)).toBe('local://');
+    expect(resolvePath('vfs://home/main/n.md', CLI).absolute).toBe('/home/ana/.kinu/acme/home/main/n.md');
+  });
+
+  test('a prefix the table gains resolves, prints, links, is refused by the shell and is no machine name, with no other edit', () => {
+    const drive = { prefix: 'drive', subtree: '/shared' };
+    const planes = { ...CF, prefixes: [...CF.prefixes, drive] };
+
+    expect(resolvePath('drive://a/b.md', planes).absolute).toBe('/shared/a/b.md');
+    expect(resolvePath('vfs://shared/a/b.md', planes).absolute).toBe('/shared/a/b.md');
+    expect(formatPath('/shared/a/b.md', planes)).toBe('drive://a/b.md');
+    expect(referencePrefixes(planes)).toContain('drive');
+    expect(shellReference('drive://a/b.md', planes)).toBe('the shell takes this machine\'s paths: drive://a/b.md is /shared/a/b.md here');
+    // Every row of the table, and the subtree machines mount under, is a name no machine takes.
+    expect(RESERVED_ROOTS).toEqual(expect.arrayContaining(['vfs', 'local', 'sandbox', 'pc']));
+  });
+
+  test('a machine is linked by its own name only when it is one, never any scheme', () => {
+    expect(referencePrefixes(CF, ['studio', 'https', 'local'])).toEqual(['vfs', 'local', 'sandbox', 'studio']);
+    expect(referencePrefixes(CLI, ['studio'])).toEqual(['vfs', 'local']);
+    expect(shellReference('postgres://db/app', CF)).toBeNull();
   });
 });

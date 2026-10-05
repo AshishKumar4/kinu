@@ -2322,8 +2322,8 @@ describe('LocalAgentSession — a workspace bound to a directory', () => {
 
     expect(systems.length).toBeGreaterThanOrEqual(2);
     expect(new Set(systems).size).toBe(1);
-    expect(systems[0]).toContain('`local://` the folder');
+    expect(systems[0]).toContain('`local://` is `vfs://local`');
     // The real roots are the workspace's own, so they ride the byte-identical prompt too.
-    expect(systems[0]).toContain(`\`local://\` is \`${resolvePath(root)}\``);
+    expect(systems[0]).toContain(`\`vfs://local\` is \`${resolvePath(root)}\``);
   });
 });

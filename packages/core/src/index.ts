@@ -217,7 +217,8 @@ export {
 } from './read-models/file-links';
 
 export {
-  cloudPlanes, findPlaneReferences, formatPath, machinePath, referencedPath, resolvePath, RESERVED_ROOTS, type PathPlanes, type PlaneRoot, type ResolvedPath,
+  cloudPlanes, findPlaneReferences, formatPath, localPlanes, machinePath, referencedPath, referencePrefixes, resolvePath, RESERVED_ROOTS,
+  type PathPlanes, type ResolvedPath,
 } from './vfs/resolve';
 
 export type * from './types/agent-runtime';
