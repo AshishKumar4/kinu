@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 706" width="900" height="706" role="img" aria-labelledby="t d">
+  <!-- A README figure. Its sibling in this directory (same name, -dark suffix)
+       is the same geometry under a different :root palette, and the README picks
+       between the two with <picture>. Everything below the palette block must
+       stay byte-identical in both, so edit them together. -->
+  <title id="t">How local devices and the TUI connect to the web</title>
+  <desc id="d">Cloud workspace agents call their account's UserDO, which checks grants and forwards JSON-RPC to the device daemon through one outbound reverse WebSocket. That socket carries commands, files and ChatGPT or Codex model relays, including streamed output. The machine mounts at /pc/&lt;name&gt;, with &lt;name&gt;:// as an alias of that subtree in the global VFS. Separately, browser and TUI cloud clients use the same chat WebSocket and RPC protocol through the Worker to a cloud workspace.</desc>
+  <style>
+    :root {
+      --fg: #1f2328;
+      --muted: #59636e;
+      --faint: #818b98;
+      --rule: #d1d9e0;
+      --ruleStrong: #8c959f;
+      --surface: #f6f8fa;
+      --surfaceAlt: #ffffff;
+      --bandFill: #f6f8fa;
+      --bandStroke: #d1d9e0;
+      --blue: #0550ae;
+      --blueFill: #ddf4ff;
+      --blueLine: #0969da;
+      --orange: #953800;
+      --orangeFill: #fff1e5;
+      --orangeLine: #bc4c00;
+      --green: #1a7f37;
+      --greenFill: #dafbe1;
+      --greenLine: #1f883d;
+      --purple: #6639ba;
+      --purpleFill: #fbefff;
+      --purpleLine: #8250df;
+      --pink: #99286e;
+      --pinkFill: #ffeff7;
+      --pinkLine: #bf3989;
+      --slateFill: #eef1f4;
+    }
+    text { font-family: ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; fill: var(--fg); }
+    text.mono { font-family: ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace; }
+    .h  { font-size: 15px; font-weight: 650; letter-spacing: .1px; }
+    .b  { font-size: 13px; font-weight: 600; }
+    .s  { font-size: 11.5px; fill: var(--muted); }
+    .xs { font-size: 10.5px; fill: var(--faint); }
+    .band { font-size: 11px; font-weight: 700; letter-spacing: .9px; fill: var(--faint); }
+    .edge { fill: none; stroke: var(--ruleStrong); stroke-width: 1.4; }
+    .edge-lite { fill: none; stroke: var(--rule); stroke-width: 1.2; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--ruleStrong)"/>
+    </marker>
+    <marker id="a-blue" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--blueLine)"/>
+    </marker>
+    <marker id="a-purple" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--purpleLine)"/>
+    </marker>
+    <marker id="a-pink" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--pinkLine)"/>
+    </marker>
+    <marker id="a-green" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--greenLine)"/>
+    </marker>
+    <marker id="a-orange" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--orangeLine)"/>
+    </marker>
+  </defs>
+  <text class="h" x="24" y="30">Your machine, reached through your account</text>
+  <text class="s" x="24" y="49">one daemon connection per device, shared by the workspaces you grant</text>
+  <text class="band" x="24" y="76">DEVICE ACCESS FROM A CLOUD WORKSPACE</text>
+  <rect x="24" y="88" width="252" height="112" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="36" y="109" fill="var(--blue)">Workspace agents</text>
+  <text class="s mono" x="36" y="129">ExecutionRouter</text>
+  <text class="s" x="36" y="148">device executor + files</text>
+  <text class="s mono" x="36" y="169">/pc/&lt;name&gt;</text>
+  <text class="xs" x="36" y="188">workspace grant required</text>
+  <rect x="312" y="88" width="276" height="112" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="b mono" x="324" y="109" fill="var(--purple)">UserDO · your account</text>
+  <text class="s" x="324" y="129">owns the device socket</text>
+  <text class="s" x="324" y="148">checks workspace + device grants</text>
+  <text class="xs" x="324" y="169">deviceRpc · relayModelCall</text>
+  <text class="xs" x="324" y="188">every granted workspace uses this hub</text>
+  <rect x="626" y="88" width="250" height="112" rx="7" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="b" x="638" y="109" fill="var(--green)">Device daemon</text>
+  <text class="s mono" x="638" y="129">kinu connect</text>
+  <text class="s" x="638" y="148">dials one outbound WebSocket</text>
+  <text class="xs" x="638" y="169">real commands + files</text>
+  <text class="xs" x="638" y="188">no inbound port</text>
+  <path d="M276 144 L312 144" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" marker-start="url(#a-purple)" marker-end="url(#a-purple)"/>
+  <text class="xs" x="294" y="134" text-anchor="middle">RPC</text>
+  <path d="M626 144 L588 144" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-start="url(#a-green)" marker-end="url(#a-green)"/>
+  <text class="xs" x="607" y="134" text-anchor="middle">WS</text>
+  <path d="M150 200 L150 238" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
+  <text class="xs" x="162" y="226">files</text>
+  <rect x="24" y="238" width="252" height="216" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="36" y="260" fill="var(--blue)">A mount, not a copy</text>
+  <text class="s mono" x="36" y="284">vfs://pc/&lt;name&gt;/...</text>
+  <text class="xs" x="36" y="305">&lt;name&gt;:// aliases that subtree</text>
+  <text class="s" x="36" y="330">One grant per workspace + device.</text>
+  <text class="xs" x="36" y="350">Revocation is checked at the hub.</text>
+  <text class="s" x="36" y="381">The daemon exposes its agent home</text>
+  <text class="s" x="36" y="398">and the folders you granted.</text>
+  <path d="M450 200 L450 238" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-purple)"/>
+  <path d="M751 200 L751 238" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-green)"/>
+  <rect x="312" y="238" width="564" height="216" rx="10" fill="var(--bandFill)" stroke="var(--bandStroke)"/>
+  <text class="band" x="326" y="260">ONE REVERSE WEBSOCKET</text>
+  <text class="s" x="326" y="281">JSON-RPC requests and replies; output streams share the connection</text>
+  <rect x="326" y="298" width="168" height="104" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b" x="338" y="320" fill="var(--orange)">Commands</text>
+  <text class="s mono" x="338" y="340">exec · execCancel</text>
+  <text class="xs" x="338" y="360">streamed output</text>
+  <text class="xs" x="338" y="380">device sandbox</text>
+  <rect x="510" y="298" width="168" height="104" rx="7" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="b" x="522" y="320" fill="var(--green)">Files</text>
+  <text class="s mono" x="522" y="340">readFile · writeFile</text>
+  <text class="s mono" x="522" y="360">listFiles · statPath</text>
+  <text class="xs" x="522" y="380">consented file view</text>
+  <rect x="694" y="298" width="168" height="104" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="706" y="320" fill="var(--blue)">Model relays</text>
+  <text class="s" x="706" y="340">ChatGPT / Codex</text>
+  <text class="xs" x="706" y="360">HTTPS from the device</text>
+  <text class="xs" x="706" y="380">streamed responses</text>
+  <text class="xs" x="326" y="428">Model calls start as RPC; response headers and bytes use relay stream frames.</text>
+  <line x1="24" y1="480" x2="876" y2="480" stroke="var(--rule)" stroke-width="1.2"/>
+  <text class="band" x="24" y="505">CLOUD CHAT FROM THE TERMINAL · A SEPARATE CONNECTION</text>
+  <rect x="24" y="524" width="250" height="56" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="36" y="545" fill="var(--blue)">Browser</text>
+  <text class="s" x="36" y="564">web chat client</text>
+  <rect x="24" y="594" width="250" height="56" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="36" y="615" fill="var(--blue)">kinu · cloud TUI</text>
+  <text class="s" x="36" y="634">CloudAgentClient</text>
+  <rect x="312" y="552" width="252" height="78" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b" x="324" y="576" fill="var(--orange)">Cloudflare Worker</text>
+  <text class="s" x="324" y="595">same chat WebSocket + RPC</text>
+  <text class="xs" x="324" y="613">authentication · workspace route</text>
+  <rect x="602" y="552" width="274" height="78" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="614" y="576" fill="var(--blue)">Cloud workspace</text>
+  <text class="s" x="614" y="595">canonical conversation</text>
+  <text class="xs" x="614" y="613">TUI and browser open the same chat</text>
+  <path d="M274 552 L294 552 L294 576 L312 576" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
+  <path d="M274 622 L294 622 L294 606 L312 606" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
+  <path d="M564 591 L602 591" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
+  <text class="xs" x="24" y="681">Cloud chat is separate from the device tunnel; the TUI can open it without lending the machine.</text>
+</svg>
+

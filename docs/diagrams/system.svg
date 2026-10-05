@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 840" width="900" height="840" role="img" aria-labelledby="t d">
+  <!-- A README figure. Its sibling in this directory (same name, -dark suffix)
+       is the same geometry under a different :root palette, and the README picks
+       between the two with <picture>. Everything below the palette block must
+       stay byte-identical in both, so edit them together. -->
+  <title id="t">Kinu's cloud system</title>
+  <desc id="d">Browser and cloud TUI clients reach a Worker that routes one Durable Object per workspace and one UserDO per account. The workspace owns the main agent, chat, roster, memory, jobs and canonical Nimbus files. Non-main agents run in per-agent AgentFacet isolates and call tools through workspace RPC. KinuDevbox runs the Linux container, saves platform snapshots and backs up a disk chain to R2. Main and facet agents call Workers AI and model providers. Device daemons connect to UserDO for commands, files and model relays.</desc>
+  <style>
+    :root {
+      --fg: #1f2328;
+      --muted: #59636e;
+      --faint: #818b98;
+      --rule: #d1d9e0;
+      --ruleStrong: #8c959f;
+      --surface: #f6f8fa;
+      --surfaceAlt: #ffffff;
+      --bandFill: #f6f8fa;
+      --bandStroke: #d1d9e0;
+      --blue: #0550ae;
+      --blueFill: #ddf4ff;
+      --blueLine: #0969da;
+      --orange: #953800;
+      --orangeFill: #fff1e5;
+      --orangeLine: #bc4c00;
+      --green: #1a7f37;
+      --greenFill: #dafbe1;
+      --greenLine: #1f883d;
+      --purple: #6639ba;
+      --purpleFill: #fbefff;
+      --purpleLine: #8250df;
+      --pink: #99286e;
+      --pinkFill: #ffeff7;
+      --pinkLine: #bf3989;
+      --slateFill: #eef1f4;
+    }
+    text { font-family: ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; fill: var(--fg); }
+    text.mono { font-family: ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace; }
+    .h  { font-size: 15px; font-weight: 650; letter-spacing: .1px; }
+    .b  { font-size: 13px; font-weight: 600; }
+    .s  { font-size: 11.5px; fill: var(--muted); }
+    .xs { font-size: 10.5px; fill: var(--faint); }
+    .band { font-size: 11px; font-weight: 700; letter-spacing: .9px; fill: var(--faint); }
+    .edge { fill: none; stroke: var(--ruleStrong); stroke-width: 1.4; }
+    .edge-lite { fill: none; stroke: var(--rule); stroke-width: 1.2; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--ruleStrong)"/>
+    </marker>
+    <marker id="a-blue" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--blueLine)"/>
+    </marker>
+    <marker id="a-purple" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--purpleLine)"/>
+    </marker>
+    <marker id="a-pink" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--pinkLine)"/>
+    </marker>
+    <marker id="a-green" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--greenLine)"/>
+    </marker>
+    <marker id="a-orange" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--orangeLine)"/>
+    </marker>
+  </defs>
+  <text class="h" x="24" y="30">The cloud system</text>
+  <text class="s" x="24" y="49">the Worker routes clients; workspace state, account state and agent turns have separate owners</text>
+  <text class="band" x="24" y="76">CLIENTS AND DEVICES</text>
+  <rect x="24" y="88" width="258" height="56" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="36" y="109" fill="var(--blue)">Browser</text>
+  <text class="s" x="36" y="126">web app · chat · workspace views</text>
+  <rect x="298" y="88" width="272" height="56" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="310" y="109" fill="var(--blue)">kinu · cloud CLI / TUI</text>
+  <text class="s" x="310" y="126">a client of the same cloud workspace</text>
+  <rect x="602" y="88" width="274" height="56" rx="7" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="b" x="614" y="109" fill="var(--green)">Your machine · device daemon</text>
+  <text class="s" x="614" y="126">commands · files · model relays</text>
+  <path d="M153 144 L153 184" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
+  <text class="xs" x="165" y="170">chat</text>
+  <path d="M434 144 L434 184" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
+  <text class="xs" x="446" y="170">chat + RPC</text>
+  <path d="M739 144 L739 184" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-green)"/>
+  <text class="xs" x="751" y="170">reverse WebSocket</text>
+  <rect x="24" y="184" width="852" height="58" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b" x="36" y="205" fill="var(--orange)">Cloudflare Worker</text>
+  <text class="s" x="36" y="223">authentication · workspace routes · device WebSocket forwarding</text>
+  <path d="M297 242 L297 288" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
+  <text class="xs" x="309" y="269">one Durable Object per workspace</text>
+  <path d="M739 242 L739 288" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-green)"/>
+  <text class="xs" x="751" y="269">one per account</text>
+  <rect x="24" y="288" width="546" height="218" rx="10" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="38" y="310" fill="var(--blue)">Workspace Durable Object</text>
+  <text class="s mono" x="38" y="329">OrchestratorAgent · the workspace's shared state</text>
+  <rect x="38" y="348" width="246" height="74" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="50" y="369">Main agent + chat</text>
+  <text class="s" x="50" y="388">conversation · roster · memory</text>
+  <text class="xs" x="50" y="405">jobs · schedules · workspace RPC</text>
+  <rect x="298" y="348" width="258" height="74" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="310" y="369">Nimbus · own files + shell</text>
+  <text class="s" x="310" y="384">/home/&lt;agent&gt; · /slates</text>
+  <text class="xs" x="310" y="399">canonical files on the DO's SQLite</text>
+  <text class="xs" x="310" y="414">/skills: a read-only skill view</text>
+  <rect x="38" y="434" width="518" height="56" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b mono" x="50" y="455">ExecutionRouter</text>
+  <text class="s" x="50" y="475">vfs:// is global; local:// is the Nimbus root</text>
+  <rect x="602" y="288" width="274" height="218" rx="10" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="b mono" x="614" y="310" fill="var(--purple)">UserDO</text>
+  <text class="s" x="614" y="329">account · sign-in · workspace list</text>
+  <text class="b" x="614" y="371" fill="var(--purple)">Credentials</text>
+  <text class="s" x="614" y="390">keys · OAuth · model access</text>
+  <text class="b" x="614" y="429" fill="var(--purple)">Devices</text>
+  <text class="s" x="614" y="448">registrations · workspace grants</text>
+  <text class="xs" x="614" y="468">device calls + model relays</text>
+  <path d="M570 400 L602 400" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" marker-start="url(#a-purple)" marker-end="url(#a-purple)"/>
+  <text class="xs" x="586" y="389" text-anchor="middle">RPC</text>
+  <path d="M153 506 L153 578" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" marker-start="url(#a-purple)" marker-end="url(#a-purple)"/>
+  <text class="xs" x="165" y="544">turns / tool RPC</text>
+  <path d="M434 506 L434 578" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-start="url(#a-orange)" marker-end="url(#a-orange)"/>
+  <text class="xs" x="446" y="544">sandbox calls</text>
+  <path d="M548 506 L548 554 L739 554 L739 578" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
+  <text class="xs" x="614" y="544">model calls</text>
+  <rect x="24" y="578" width="258" height="114" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="b mono" x="36" y="599" fill="var(--purple)">AgentFacet</text>
+  <text class="s" x="36" y="617">one per non-main agent</text>
+  <text class="s" x="36" y="635">Worker Loader isolate + SQLite</text>
+  <text class="xs" x="36" y="653">own conversation + context</text>
+  <text class="xs" x="36" y="671">tools call back through workspace RPC</text>
+  <rect x="298" y="578" width="272" height="114" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b mono" x="310" y="599" fill="var(--orange)">KinuDevbox</text>
+  <text class="s" x="310" y="617">Linux container · processes · ports</text>
+  <text class="s" x="310" y="635">platform snapshots on rest</text>
+  <text class="xs mono" x="310" y="653">sandbox:// = vfs://sandbox</text>
+  <text class="xs" x="310" y="671">disk-chain backup to R2</text>
+  <rect x="602" y="578" width="274" height="114" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="614" y="599" fill="var(--blue)">Workers AI + model providers</text>
+  <text class="s" x="614" y="617">direct APIs · subscriptions</text>
+  <text class="s" x="614" y="635">OpenAI · Anthropic · OpenRouter</text>
+  <text class="xs" x="614" y="653">device relays pass through UserDO</text>
+  <text class="xs" x="614" y="671">main and facets make model calls</text>
+  <path d="M434 692 L434 752" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-start="url(#a-orange)" marker-end="url(#a-orange)"/>
+  <text class="xs" x="446" y="730">save / recover</text>
+  <rect x="298" y="752" width="272" height="68" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b mono" x="310" y="773" fill="var(--orange)">R2 · BACKUP_BUCKET</text>
+  <text class="s" x="310" y="791">disk chain: base + delta layers</text>
+  <text class="xs" x="310" y="808">changed files + changed blocks</text>
+  <text class="xs" x="602" y="775">Cloud mounts extend the global file tree:</text>
+  <text class="xs mono" x="602" y="796">&lt;name&gt;:// = vfs://pc/&lt;name&gt;</text>
+  <text class="xs" x="602" y="817">the machine's files stay on the machine</text>
+</svg>
+

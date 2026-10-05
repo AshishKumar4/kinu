@@ -4,7 +4,7 @@
        between the two with <picture>. Everything below the palette block must
        stay byte-identical in both, so edit them together. -->
   <title id="t">Kinu: one core, two backends</title>
-  <desc id="d">Web, CLI and autonomous ingress reach a platform-agnostic core with shared turn logic, tools, delegation, evolution, Markdown prompt sections, files, execution routing and events. AgentRuntime and BackendHost connect this core to Cloudflare or local services. Hosted hires and swarm nodes are logical actors in one workspace Durable Object; local hires and branch processes also use their workspace's canonical database.</desc>
+  <desc id="d">Web, CLI and autonomous ingress reach a platform-agnostic core with shared turn logic, tools, delegation, evolution, Markdown prompt sections, files, execution routing and events. AgentRuntime and BackendHost connect this core to Cloudflare or local services. Hosted hires and swarm nodes run in per-agent Worker Loader facets and call tools through workspace RPC; local agents use real files and share their workspace's canonical database.</desc>
   <style>
     :root {
       --fg: #e6edf3;
@@ -152,13 +152,13 @@
   <rect x="681" y="478" width="86" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="xs mono" x="724" y="492.1" text-anchor="middle" fill="var(--fg)">headRuntime</text>
   <text class="xs" x="24" y="519">Selected interface members; dashed = optional. Actor identity also belongs to the runtime.</text>
-  <text class="xs" x="24" y="535">Container files: Devbox — immutable base + cumulative delta; read-only block layer on restore.</text>
+  <text class="xs" x="24" y="535">Container: Devbox — platform snapshots; an R2 disk chain for recovery.</text>
   <line x1="24" y1="545" x2="876" y2="545" stroke="var(--orangeLine)" stroke-width="2"/>
   <path d="M231 547 L231 569" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
   <path d="M669 547 L669 569" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-green)"/>
   <rect x="24" y="569" width="414" height="175" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="b" x="36" y="590" text-anchor="start" fill="var(--orange)">cf-backend  ·  Cloudflare</text>
-  <text class="s" x="36" y="605" text-anchor="start">OrchestratorAgent → ActorAgent → Think</text>
+  <text class="s" x="36" y="605" text-anchor="start">OrchestratorAgent → ActorAgent → Agent</text>
   <text class="xs" x="36" y="629" fill="var(--fg)">storage</text>
   <text class="xs" x="154" y="629">the DO’s own SQLite; Nimbus VFS for files</text>
   <text class="xs" x="36" y="646" fill="var(--fg)">shell</text>
@@ -168,16 +168,16 @@
   <text class="xs" x="36" y="680" fill="var(--fg)">executor</text>
   <text class="xs" x="154" y="680">a Worker Loader isolate</text>
   <text class="xs" x="36" y="697" fill="var(--fg)">swarm nodes</text>
-  <text class="xs" x="154" y="697">Logical workspace actors</text>
+  <text class="xs" x="154" y="697">per-agent Worker Loader facets</text>
   <text class="xs" x="36" y="714" fill="var(--fg)">subordinates</text>
-  <text class="xs" x="154" y="714">Logical workspace actors</text>
+  <text class="xs" x="154" y="714">per-agent Worker Loader facets</text>
   <text class="xs" x="36" y="731" fill="var(--fg)">also</text>
   <text class="xs" x="154" y="731">UserDO — MCP once-auth, devices, registry</text>
   <rect x="462" y="569" width="414" height="175" rx="7" fill="var(--greenFill)" stroke="var(--greenLine)"/>
   <text class="b" x="474" y="590" text-anchor="start" fill="var(--green)">cli-backend  ·  your machine</text>
   <text class="s" x="474" y="605" text-anchor="start">LocalAgentSession implements BackendHost</text>
   <text class="xs" x="474" y="629" fill="var(--fg)">storage</text>
-  <text class="xs" x="592" y="629">one bun:sqlite file; Nimbus VFS for files</text>
+  <text class="xs" x="592" y="629">one bun:sqlite file; real files in own space</text>
   <text class="xs" x="474" y="646" fill="var(--fg)">shell</text>
   <text class="xs" x="592" y="646">the real host process, checkpointed</text>
   <text class="xs" x="474" y="663" fill="var(--fg)">schedule</text>
