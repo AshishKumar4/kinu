@@ -1,7 +1,8 @@
 // 2026-10-04: a file the agent named was plain text. Each reference is a link: a local workspace's to the file on this
 // machine, a cloud workspace's to its Files surface; code blocks and other schemes stay as written.
 import { describe, expect, test } from 'bun:test';
-import { localPlanes } from '../src/vfs/resolve';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { formatPath, localPlanes } from '../src/vfs/resolve';
 import { cloudFileLinks, filesFocusOf, linkFileReferences, localFileLinks } from '../src/read-models/file-links';
 
 const PLANES = localPlanes({ space: '/home/ana/.kinu/acme', folder: '/home/ana/acme', home: '/home/ana', views: [] });
@@ -38,6 +39,23 @@ describe('a message\'s references become links', () => {
     const fenced = '```sh\ncat vfs://x\n```\n~~~\nvfs://y\n~~~';
     expect(linkFileReferences(fenced, links)).toBe(fenced);
     expect(linkFileReferences('run `cat vfs://x` or open https://x.io and vfs://../z', links)).toBe('run `cat vfs://x` or open https://x.io and vfs://../z');
+  });
+});
+
+// Release review, 2026-10-05: encodeURI left `#` and `?` in a file URL, so report#1.md opened report.
+describe('a local link is the file URL pathToFileURL makes', () => {
+  test('for every name a reference escapes, and from a whole inline code span with spaces in it', () => {
+    const links = localFileLinks(PLANES);
+
+    for (const name of ['report#1.md', 'what?.md', 'My Report.md', '100%.md']) {
+      const href = links.href(formatPath(`/home/ana/acme/${name}`, PLANES));
+
+      expect(href).toBe(pathToFileURL(`/home/ana/acme/${name}`).href);
+      expect(fileURLToPath(href ?? '')).toBe(`/home/ana/acme/${name}`);
+    }
+
+    expect(linkFileReferences('Open `local://My Report.md` now.', links))
+      .toBe(`Open [\`local://My Report.md\`](${pathToFileURL('/home/ana/acme/My Report.md').href}) now.`);
   });
 });
 

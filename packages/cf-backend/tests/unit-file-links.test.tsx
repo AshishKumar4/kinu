@@ -6,6 +6,7 @@ import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { filesFocusOf } from '@kinu.run/core';
 import { FileLinkContext, MarkdownContent } from '../src/components/surfaces/shared';
 
 const CHAT = { roots: ['vfs', 'sandbox'], open: () => {} };
@@ -25,6 +26,14 @@ describe('a file the agent names in chat', () => {
     expect(html).toContain('report.md</button>, see');
     expect(html).not.toContain('data-file-link="postgres');
     expect(html).toContain('href="https://example.com"');
+  });
+
+  // Release review, 2026-10-05: a link target the parser escaped opened "My%20Report.md", and a code span with a space linked nothing.
+  test('with a space in its name, opens that file from a link target and from a whole inline code span', () => {
+    const opened = [...chat('See [the report](<vfs://home/main/My Report.md>) and `vfs://home/main/My Report.md`.')
+      .matchAll(/data-file-link="([^"]*)"/gu)].map((hit) => filesFocusOf(hit[1] ?? '')?.file);
+
+    expect(opened).toEqual(['/home/main/My Report.md', '/home/main/My Report.md']);
   });
 
   test('stays text where nothing can open it, and in a fenced block', () => {

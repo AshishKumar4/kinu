@@ -1,5 +1,5 @@
 /** Where a file the agent names in chat opens: a local file on this machine, a cloud one on the web Files surface. */
-import { cloudPlanes, findPlaneReferences, referencedPath, referencePrefixes, type PathPlanes } from '../vfs/resolve';
+import { cloudPlanes, findPlaneReferences, isWholeReference, referencedPath, referencePrefixes, type PathPlanes } from '../vfs/resolve';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { APP_ROUTES } from './app-routes';
 
@@ -17,9 +17,18 @@ export function localFileLinks(planes: PathPlanes): FileLinks {
     href: (reference) => {
       const at = referencedPath(reference, planes);
 
-      return at === null ? null : `file://${encodeURI(at)}`;
+      return at === null ? null : fileUrl(at);
     },
   };
+}
+
+/** A path's `file://` URL, escaped as `pathToFileURL` escapes it: `%`, `\` and line breaks, then the pathname's own set (space, `#`, `?`...). */
+function fileUrl(path: string): string {
+  const url = new URL('file:///');
+
+  url.pathname = path.replace(/[%\\\t\n\r]/gu, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+
+  return url.href;
 }
 
 /** A cloud workspace's files open on its Files surface, which lands on `?file=<reference>`; `machines` are its live ones. */
@@ -68,8 +77,7 @@ export function linkFileReferences(markdown: string, links: FileLinks): string {
 
 function codeLink(code: string, links: FileLinks): string {
   const inner = code.slice(1, -1);
-  const [only] = findPlaneReferences(inner, links.roots);
-  const href = only !== undefined && only.index === 0 && only.reference === inner ? links.href(inner) : null;
+  const href = isWholeReference(inner, links.roots) ? links.href(inner) : null;
 
   return href === null ? code : `[${code}](${href})`;
 }
@@ -82,7 +90,7 @@ function proseLinks(prose: string, links: FileLinks): string {
   for (const link of prose.matchAll(LINK)) {
     out += bareLinks(prose.slice(from, link.index), links);
     const target = link[1] ?? '';
-    const href = findPlaneReferences(target, links.roots)[0]?.reference === target ? links.href(target) : null;
+    const href = isWholeReference(target, links.roots) ? links.href(target) : null;
     out += href === null ? link[0] : `${link[0].slice(0, link[0].length - target.length - 1)}${href})`;
     from = link.index + link[0].length;
   }

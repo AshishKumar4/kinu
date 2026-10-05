@@ -5,7 +5,7 @@ import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
-import { findPlaneReferences, MAX_LINES_PER_FILE, SLATE_LINK, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
+import { findPlaneReferences, isWholeReference, MAX_LINES_PER_FILE, SLATE_LINK, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -180,17 +180,10 @@ function remarkSlateLinks() {
   return (tree: MdNode) => { linkProse(tree, find, () => false); };
 }
 
-/** True when `href` is exactly one reference to `roots`. */
-function isFileReference(href: string, roots: readonly string[]): boolean {
-  const [only] = findPlaneReferences(href, roots);
-
-  return only !== undefined && only.index === 0 && only.reference === href;
-}
-
 function remarkFileLinks({ roots }: { readonly roots: readonly string[] }) {
   const find = (value: string) => findPlaneReferences(value, roots).map(({ index, reference }) => ({ index, text: reference }));
 
-  return (tree: MdNode) => { linkProse(tree, find, (value) => isFileReference(value, roots)); };
+  return (tree: MdNode) => { linkProse(tree, find, (value) => isWholeReference(value, roots)); };
 }
 
 // Memoized on content: the react-markdown re-parse dominates render cost.
@@ -201,7 +194,7 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
   return (
     <Markdown
       remarkPlugins={files === null ? [remarkGfm, remarkSlateLinks] : [remarkGfm, remarkSlateLinks, [remarkFileLinks, { roots }]]}
-      urlTransform={(url) => (url.startsWith('slate://') || isFileReference(url, roots) ? url : defaultUrlTransform(url))}
+      urlTransform={(url) => (url.startsWith('slate://') || isWholeReference(url, roots) ? url : defaultUrlTransform(url))}
       components={{
       // An unlabelled fence has no className, same as inline code, so a fence is detected by spanning lines.
       code({ node, className, children, ...props }) {
@@ -218,7 +211,7 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
 
         if (id !== null) return <SlateLink id={id} />;
 
-        if (files !== null && href !== undefined && isFileReference(href, roots)) {
+        if (files !== null && href !== undefined && isWholeReference(href, roots)) {
           return <button type="button" data-file-link={href} className="p-accent hover:underline" onClick={() => files.open(href)}>{children}</button>;
         }
 
