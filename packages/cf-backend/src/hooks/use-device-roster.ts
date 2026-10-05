@@ -5,6 +5,7 @@ import type { DeviceUpdateState } from "@kinu.run/core";
 
 /** `behind` is the hub's own reading and triggers its push; `unstamped` is a source install. */
 export const DEVICE_UPDATE_COPY = {
+  required: "Update Kinu on this machine: kinu update",
   behind: "update available",
   off: "update off",
   unstamped: "dev build",
