@@ -121,8 +121,8 @@ export async function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: st
     output.live();
     const retried: CallJob = { id: newId, detached: AbortSignal.abort(), output };
 
-    const options: ToolExecutionOptions & { [CALL_JOB_OPTION]: CallJob } = {
-      abortSignal: controller.signal, toolCallId: newId, messages: [], [CALL_JOB_OPTION]: retried,
+    const options: ToolExecutionOptions<unknown> & { [CALL_JOB_OPTION]: CallJob } = {
+      abortSignal: controller.signal, toolCallId: newId, messages: [], context: undefined, [CALL_JOB_OPTION]: retried,
     };
 
     const promise = Promise.resolve(tool.execute(input, options))

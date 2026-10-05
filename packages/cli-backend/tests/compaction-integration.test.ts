@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { stepCountIs, type LanguageModel, type ModelMessage } from 'ai';
+import { isStepCount, type LanguageModel, type ModelMessage } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
@@ -171,7 +171,7 @@ describe('default compaction over the real storage plane', () => {
         history: messages,
         dynamicContext: { ledger, snapshot: () => ({ factsBlock: '- the user prefers TypeScript' }) },
         tools: {},
-        stopWhen: stepCountIs(1),
+        stopWhen: isStepCount(1),
         extensions: new ExtensionHost().register(extension),
         cache: { sessionKey: SESSION },
       };
@@ -305,7 +305,7 @@ describe('default compaction over the real storage plane', () => {
         system: 'system prompt',
         history: history(12, 2_000),
         tools: {},
-        stopWhen: stepCountIs(1),
+        stopWhen: isStepCount(1),
         extensions: new ExtensionHost().register(extension),
         cache: { sessionKey: SESSION },
       };
@@ -369,7 +369,7 @@ describe('default compaction over the real storage plane', () => {
         history: messages,
         dynamicContext: { ledger, snapshot: () => ({ factsBlock: facts }) },
         tools: {},
-        stopWhen: stepCountIs(1),
+        stopWhen: isStepCount(1),
         extensions: new ExtensionHost().register(extension),
         cache: { sessionKey: SESSION },
       };

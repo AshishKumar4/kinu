@@ -700,7 +700,7 @@ describe('web through Browser Run', () => {
     expect(await rt.storage.vfs.readFile(path)).toEqual(PNG);
     expect(await web.toModelOutput?.({ toolCallId: 'c1', input: { action: 'screenshot', url: 'https://example.com/' }, output })).toEqual({
       type: 'content',
-      value: [{ type: 'text', text }, { type: 'image-data', data: 'iVBORw0KGgo=', mediaType: 'image/png' }],
+      value: [{ type: 'text', text }, { type: 'file', data: { type: 'data', data: 'iVBORw0KGgo=' }, mediaType: 'image/png' }],
     });
   });
 
@@ -755,7 +755,7 @@ describe('web through Browser Run', () => {
       type: 'content',
       value: [
         { type: 'text', text: expect.stringContaining('"shot":"[image 1]"') },
-        { type: 'image-data', data: 'iVBORw0KGgo=', mediaType: 'image/png' },
+        { type: 'file', data: { type: 'data', data: 'iVBORw0KGgo=' }, mediaType: 'image/png' },
       ],
     });
   });
@@ -770,7 +770,7 @@ describe('an eval that returns an image', () => {
 
     expect(successfulToolOutcome('eval', { output })).toEqual({ success: true, failures: [failure] });
     expect(await evalTool.toModelOutput?.({ toolCallId: 'c1', input: { code: '' }, output })).toMatchObject({
-      type: 'content', value: [{ type: 'text' }, { type: 'image-data', data: 'iVBORw0KGgo=' }],
+      type: 'content', value: [{ type: 'text' }, { type: 'file', data: { type: 'data', data: 'iVBORw0KGgo=' } }],
     });
   });
 });

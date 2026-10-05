@@ -1,7 +1,7 @@
 // Every field the ChatEvent seam drops is unrecoverable downstream; a reported zero must stay distinct from unreported.
 import { unobservedSearchSeams } from '@kinu.run/test-utils';
 import { describe, test, expect } from 'bun:test';
-import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { isStepCount, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
@@ -70,7 +70,7 @@ async function collect(model: LanguageModel, tools: ToolSet, extensions?: Extens
     system: 'sys',
     history: [{ role: 'user', content: 'go' }] satisfies ModelMessage[],
     tools,
-    stopWhen: stepCountIs(3),
+    stopWhen: isStepCount(3),
   };
 
   const stream = extensions === undefined

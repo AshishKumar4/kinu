@@ -436,7 +436,7 @@ describe('turn-pipeline correctness wiring', () => {
 
       if (!turn) throw new Error('the root turn must prepare a configuration');
       const messages = await stepMessages(agent, 0, turn.messages ?? handed);
-      await streamText({ model, system: turn.system, messages, tools: turn.tools, activeTools: turn.activeTools === undefined ? undefined : [...turn.activeTools] }).text;
+      await streamText({ model, instructions: turn.system, messages, tools: turn.tools, activeTools: turn.activeTools === undefined ? undefined : [...turn.activeTools] }).text;
 
       expect(model.doStreamCalls).toHaveLength(1);
       const request = model.doStreamCalls[0];
@@ -522,11 +522,11 @@ describe('turn-pipeline correctness wiring', () => {
       const turn = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: effort }] });
 
       const options = v.parse(
-        v.object({ 'workers-ai': v.object({ reasoningEffort: v.picklist(['low', 'medium', 'high']) }) }),
+        v.object({ workersAi: v.object({ reasoningEffort: v.picklist(['low', 'medium', 'high']) }) }),
         turn?.providerOptions,
       );
 
-      efforts.push(options['workers-ai'].reasoningEffort);
+      efforts.push(options.workersAi.reasoningEffort);
     }
 
     expect(efforts).toEqual(['low', 'high']);

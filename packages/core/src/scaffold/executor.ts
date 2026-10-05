@@ -42,10 +42,11 @@ export const SCAFFOLD_HOST_TYPES = `declare namespace host {
   /** Invoke a tool from the parent's ToolSet by name with JSON args. */
   function callTool(name: string, args: object): Promise<unknown>;
   /** Stream an LLM completion. Returns the concatenated text; chunks are emitted as text_delta events.
-   *  Pass tool NAMES (from the agent's tool surface) in \`tools\`; the host wires the executables. */
+   *  Pass tool NAMES (from the agent's tool surface) in \`tools\`; the host wires the executables.
+   *  \`system\` is the one system prompt: a message is a user or assistant turn. */
   function llmStream(opts: {
     system: string;
-    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>;
     tools?: string[];
   }): Promise<string>;
   /** Run the agent's standard inference (full tools + multi-step) and stream its
@@ -184,7 +185,7 @@ export interface ScaffoldRunOptions extends ScaffoldRunControl {
   /** Host-side model execution via the shared chat loop, with its own step/spend owner. Returns concatenated text to the scaffold. */
   llmStream: (opts: {
     system: string;
-    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>;
     tools?: string[];
   }) => AsyncIterable<ScaffoldModelEvent>;
   /** Executes `host.callTool` against the parent's ToolSet; the host emits tool_call and tool_result. */
@@ -225,7 +226,8 @@ const ScaffoldEventSchema: v.GenericSchema<Exclude<ScaffoldEvent, { type: 'chat_
 const LlmStreamOptionsSchema = v.object({
   system: v.string(),
   messages: v.array(v.object({
-    role: v.picklist(['system', 'user', 'assistant']),
+    // ai 7 refuses a system message among the messages; `system` carries the prompt.
+    role: v.picklist(['user', 'assistant']),
     content: v.string(),
   })),
   tools: v.optional(v.array(v.string())),

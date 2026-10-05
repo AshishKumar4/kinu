@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { tool, jsonSchema, type ToolSet } from 'ai';
-import type { LanguageModelV3Content } from '@ai-sdk/provider';
+import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -55,7 +55,7 @@ function slowExecuteTool(printed = '') {
  * Launches long work, ends its turn while it runs, and reports once woken. The stage is read off the
  * conversation rather than a call counter, so the fixture cannot get out of step with the loop.
  */
-function detachStageContent(stage: { reported: boolean; woken: boolean; launched: boolean }): LanguageModelV3Content[] {
+function detachStageContent(stage: { reported: boolean; woken: boolean; launched: boolean }): LanguageModelV4Content[] {
   if (stage.reported) return [{ type: 'text', text: 'Done.' }];
 
   if (stage.woken) {
@@ -78,7 +78,7 @@ function detachStageContent(stage: { reported: boolean; woken: boolean; launched
   }];
 }
 
-function factoryStageContent(stage: { reported: boolean; launched: boolean; sawFactory: boolean }): LanguageModelV3Content[] {
+function factoryStageContent(stage: { reported: boolean; launched: boolean; sawFactory: boolean }): LanguageModelV4Content[] {
   if (stage.reported) return [{ type: 'text', text: 'Done.' }];
 
   if (stage.launched) {

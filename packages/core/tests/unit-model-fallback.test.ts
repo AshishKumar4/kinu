@@ -134,7 +134,7 @@ const SCREENSHOT = 'iVBORw0KGgoAAAANSUhEUg==';
 const WITH_SCREENSHOT: ModelMessage[] = [
   { role: 'user', content: 'what does the page show?' },
   { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'web', input: { action: 'screenshot', url: 'https://example.com/' } }] },
-  { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'web', output: { type: 'content', value: [{ type: 'text', text: 'Screenshot of https://example.com/' }, { type: 'image-data', data: SCREENSHOT, mediaType: 'image/png' }] } }] },
+  { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'web', output: { type: 'content', value: [{ type: 'text', text: 'Screenshot of https://example.com/' }, { type: 'file', data: { type: 'data', data: SCREENSHOT }, mediaType: 'image/png' }] } }] },
 ];
 
 /** The roles each model was sent, and whether its request carried the image or the note in its place. */
@@ -147,7 +147,7 @@ function whatModelSaw(served: readonly Served[], model: string) {
 
 /** A picture the owner attached to the turn's question. */
 const WITH_ATTACHED_PICTURE: ModelMessage[] = [
-  { role: 'user', content: [{ type: 'text', text: 'what does this show?' }, { type: 'image', image: SCREENSHOT, mediaType: 'image/png' }] },
+  { role: 'user', content: [{ type: 'text', text: 'what does this show?' }, { type: 'file', data: SCREENSHOT, mediaType: 'image/png' }] },
 ];
 
 describe('an image follows the model each attempt calls', () => {

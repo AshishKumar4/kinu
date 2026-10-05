@@ -223,7 +223,7 @@ describe('Codex provider contract', () => {
 
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
-    await generateText({ model, system: 'You are concise.', prompt: 'hello', maxOutputTokens: 16 });
+    await generateText({ model, instructions: 'You are concise.', prompt: 'hello', maxOutputTokens: 16 });
 
     expect(mock.requests.length).toBeGreaterThan(0);
     const body = v.parse(CodexRequestBodySchema, JSON.parse(String(mock.requests[0].body)));
@@ -282,7 +282,7 @@ describe('Codex provider contract', () => {
     expect(JSON.stringify(body.input)).not.toContain('item_reference');
     expect(body.input).toEqual(expect.arrayContaining([
       { type: 'reasoning', encrypted_content: 'ENCRYPTED-1', summary: [] },
-      { role: 'assistant', content: [{ type: 'output_text', text: 'Reading notes.md now.' }] },
+      { role: 'assistant', content: 'Reading notes.md now.' },
     ]));
   });
 

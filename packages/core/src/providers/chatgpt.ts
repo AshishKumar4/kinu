@@ -2,7 +2,7 @@
 import { authenticatedSend } from './authenticated-send';
 import { createOpenAI } from '@ai-sdk/openai';
 import { EventSourceParserStream, type EventSourceMessage } from '@ai-sdk/provider-utils';
-import type { JSONObject, LanguageModelV3CallOptions, LanguageModelV3Message } from '@ai-sdk/provider';
+import type { JSONObject, LanguageModelV4CallOptions, LanguageModelV4Message } from '@ai-sdk/provider';
 import { APICallError, wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -49,7 +49,7 @@ const REFUSED_FIELDS = [
   'prompt_cache_retention', 'previous_response_id', 'safety_identifier', 'temperature', 'top_logprobs', 'top_p', 'truncation', 'user',
 ] as const;
 
-function namespacedCall(message: LanguageModelV3Message, functions: ReadonlySet<string>): LanguageModelV3Message {
+function namespacedCall(message: LanguageModelV4Message, functions: ReadonlySet<string>): LanguageModelV4Message {
   if (message.role !== 'assistant') return message;
 
   return {
@@ -61,8 +61,8 @@ function namespacedCall(message: LanguageModelV3Message, functions: ReadonlySet<
 }
 
 const PLAN_REQUEST: LanguageModelMiddleware = {
-  specificationVersion: 'v3',
-  transformParams: async ({ params }): Promise<LanguageModelV3CallOptions> => {
+  specificationVersion: 'v4',
+  transformParams: async ({ params }): Promise<LanguageModelV4CallOptions> => {
     const openai: JSONObject = { ...params.providerOptions?.openai, systemMessageMode: 'developer' };
     const functions = new Set(params.tools?.flatMap((tool) => (tool.type === 'function' ? [tool.name] : [])));
 

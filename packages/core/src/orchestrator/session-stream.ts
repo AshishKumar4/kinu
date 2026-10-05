@@ -78,11 +78,15 @@ type LifecyclePart = Extract<TextStreamPart<ToolSet>, { type:
   | 'tool-input-delta'
   | 'tool-input-end'
   | 'tool-output-denied'
+  | 'tool-approval-response'
+  | 'reasoning-file'
+  | 'custom'
 }>;
 
 const LIFECYCLE_PARTS: ReadonlySet<string> = new Set<LifecyclePart['type']>([
   'start', 'finish-step', 'finish', 'abort', 'error', 'raw',
   'tool-input-start', 'tool-input-delta', 'tool-input-end', 'tool-output-denied',
+  'tool-approval-response', 'reasoning-file', 'custom',
 ]);
 
 function isLifecyclePart(part: TextStreamPart<ToolSet>): part is LifecyclePart {

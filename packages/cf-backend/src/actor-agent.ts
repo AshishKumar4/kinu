@@ -3142,7 +3142,7 @@ export abstract class ActorAgent extends Agent<Env> {
       spec,
     });
 
-    const usage = normalizeUsage(answer.totalUsage);
+    const usage = normalizeUsage(answer.usage);
 
     return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
   }

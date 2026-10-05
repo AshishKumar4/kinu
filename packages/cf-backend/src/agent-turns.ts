@@ -3,7 +3,7 @@ import { asSchema, type ToolSet } from 'ai';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
-  AgentOpenTurns, hasPlanPermission, scaffoldProviders, runWorkModeInvocation,
+  AgentOpenTurns, encodeModelMessageValues, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
   type ActorReference, type DynamicContext, type HostedActor, type ModelPricing, type ResolvedTurnProfile, type WorkMode,
   type HeadInput, type HeadInferenceDeps, type HeadReport, type SqlExecutor, type MissionBudgetPort, type Executor,
 } from '@kinu.run/core';
@@ -48,7 +48,7 @@ interface PendingTurn {
 async function describe(tools: ToolSet): Promise<AgentToolDescriptor[]> {
   return await Promise.all(Object.entries(tools).map(async ([name, tool]) => ({
     name,
-    description: tool.description ?? '',
+    description: toolDescription(tool) ?? '',
     inputSchema: await asSchema(tool.inputSchema).jsonSchema,
     planAllowed: hasPlanPermission(tool),
   })));
@@ -264,14 +264,14 @@ export class AgentTurns {
     return {
       input: prepared.turn.input,
       runId: run?.runId ?? crypto.randomUUID(),
-      ...(run === undefined && { birthContext: prepared.birthContext }),
+      ...(run === undefined && { birthContext: encodeModelMessageValues(prepared.birthContext) }),
       model: prepared.model,
       window: await this.deps.window(prepared.model),
       pricing: this.deps.pricing(prepared.model),
       accounts: this.deps.accounts(),
       scaffold,
       languages: actor.runtime.executor.languages,
-      framing: prepared.framing,
+      ...(prepared.framing !== undefined && { framing: { system: prepared.framing.system, messages: encodeModelMessageValues(prepared.framing.messages) } }),
       workspaceLayout: run?.workspaceLayout ?? 'shared-workspace',
       tools: await describe(prepared.tools),
       dynamic: this.dynamic(pending),
@@ -319,7 +319,9 @@ export class AgentTurns {
   }
 
   async resume(actorId: string, turnId: string) {
-    return await this.turn(actorId, turnId).request.run?.inference.resume?.() ?? null;
+    const resumed = await this.turn(actorId, turnId).request.run?.inference.resume?.() ?? null;
+
+    return resumed === null ? null : encodeModelMessageValues(resumed);
   }
 
   async guard(actorId: string, turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) {
@@ -353,7 +355,7 @@ export class AgentTurns {
       toolCalls: capture.toolCalls.length, childHeadIds: capture.childHeadIds.length,
     };
 
-    const output = await runWorkModeInvocation(this.mode(pending), () => execute(input, { toolCallId: callId, messages: [] }));
+    const output = await runWorkModeInvocation(this.mode(pending), () => execute(input, { toolCallId: callId, messages: [], context: undefined }));
 
     return {
       output,

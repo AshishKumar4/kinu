@@ -21,7 +21,7 @@ import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  generateText, stepCountIs,
+  generateText, isStepCount,
   type LanguageModel, type ModelMessage, type ToolSet, type StepResult,
 } from 'ai';
 import {
@@ -135,17 +135,17 @@ async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
 
   const result = await generateText({
     model,
-    system: `${soul}\n\nKnowledge:\n${knowledge}`,
+    instructions: `${soul}\n\nKnowledge:\n${knowledge}`,
     messages: history,
     tools,
-    stopWhen: stepCountIs(500),
-    onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
+    stopWhen: isStepCount(500),
+    onStepEnd: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
   });
 
   recordLiveModelSpend(result.usage);
   // The turn's own output — assistant text AND tool call/result messages —
   // exactly as the SDK shaped them, so the next turn's model sees this one.
-  history.push(...result.response.messages);
+  history.push(...result.responseMessages);
   const responseText = collectStepText(result);
   const id = crypto.randomUUID();
   await seedTranscriptEntry(rt.stores.history, 'e2e', { id, message: { role: 'user', content: userMessage }, origin: 'input' });

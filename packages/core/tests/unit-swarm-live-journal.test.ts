@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
-import type { LanguageModelV3Content } from '@ai-sdk/provider';
+import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
@@ -53,7 +53,7 @@ function reportingNode() {
       }
 
       const own = prompt.slice(lastUser + 1).filter((message) => message.role === 'assistant').length;
-      const content: LanguageModelV3Content[] = [];
+      const content: LanguageModelV4Content[] = [];
       let finish: 'stop' | 'tool-calls' = 'tool-calls';
 
       if (own === 0) {

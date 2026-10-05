@@ -5,8 +5,8 @@ import { describe, expect, test } from 'bun:test';
 import type { ModelMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
-  runChat, createAnthropicProvider, decodeModelMessageValues, drawnStep, encodeModelMessageValues, TurnAccumulator,
-  ANTHROPIC_CRED_KEY, parseJsonObject,
+  runChat, createAnthropicProvider, createOpenAIProvider, decodeModelMessageValues, drawnStep, encodeModelMessageValues, TurnAccumulator,
+  ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, parseJsonObject,
   type ChatEvent, type ChatOptions, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { createMockFetch, type MockFetchHandle } from '@kinu.run/test-utils';
@@ -123,5 +123,73 @@ describe('Anthropic server-side compaction', () => {
     const replayed = JSON.stringify(body(next.mock).messages);
 
     expect(replayed).toContain(JSON.stringify({ type: 'compaction', content: SUMMARY }).slice(0, -1));
+  });
+});
+
+/** OpenAI's compaction item, encrypted: opaque to everyone but the API that wrote it. */
+const ENCRYPTED = 'ENCRYPTED-COMPACTION-STATE';
+
+const RESPONSE = { id: 'resp_1', object: 'response', created_at: 1_790_000_000, model: 'gpt-5.5', status: 'in_progress', output: [] };
+
+const MESSAGE = { id: 'msg_1', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: 'Continuing the rename.', annotations: [] }] };
+
+/** A Responses stream that compacted first: the compaction item, then the reply. */
+const OPENAI_COMPACTED = [
+  { type: 'response.created', response: RESPONSE },
+  { type: 'response.output_item.done', output_index: 0, item: { type: 'compaction', id: 'cmp_1', encrypted_content: ENCRYPTED } },
+  { type: 'response.output_item.added', output_index: 1, item: { ...MESSAGE, status: 'in_progress', content: [] } },
+  { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 1, content_index: 0, delta: 'Continuing the rename.' },
+  { type: 'response.output_item.done', output_index: 1, item: MESSAGE },
+  { type: 'response.completed', response: { ...RESPONSE, status: 'completed', usage: { input_tokens: 23_000, output_tokens: 6, total_tokens: 23_006 } } },
+].map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
+
+async function openaiTurn(modelId: string, history: ModelMessage[]): Promise<Turn> {
+  const mock = createMockFetch([{ match: 'api.openai.com', respond: () => ({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: OPENAI_COMPACTED }) }]);
+  const events: ChatEvent[] = [];
+  const shown: UIMessageChunk[] = [];
+
+  const routed: ModelCallDeps = {
+    env: {}, sessionAffinity: 'kinu-test', fetch: mock.fetch,
+    getAuth: async () => ({ headers: { Authorization: 'Bearer sk-test' } }),
+    hasCredential: async (key) => key === OPENAI_CRED_KEY,
+  };
+
+  for await (const event of runChat({
+    model: createOpenAIProvider().createModel(modelId, routed),
+    modelSpec: `openai/${modelId}`,
+    modelContext: { id: `openai/${modelId}`, contextWindow: 200_000 },
+    system: 'You are Kinu.',
+    history,
+    tools: {},
+    observeStream: async (stream) => {
+      for await (const chunk of stream) shown.push(chunk);
+    },
+  })) events.push(event);
+
+  return { mock, events, shown };
+}
+
+describe('OpenAI server-side compaction', () => {
+  test('a GPT-5 model on the Responses API is asked to compact at Kinu\'s trigger; an older model is not', async () => {
+    const gpt5 = await openaiTurn('gpt-5.5', [{ role: 'user', content: 'rename the parser' }]);
+    const gpt41 = await openaiTurn('gpt-4.1', [{ role: 'user', content: 'rename the parser' }]);
+
+    expect(body(gpt5.mock).context_management).toEqual([{ type: 'compaction', compact_threshold: 170_000 }]);
+    expect(body(gpt41.mock).context_management).toBeUndefined();
+  });
+
+  test('the compaction item stays out of the answer and the stream, and the next request carries it', async () => {
+    const first = await openaiTurn('gpt-5.5', [{ role: 'user', content: 'rename the parser' }]);
+    const done = v.parse(ResponseMessagesSchema, first.events.find((event) => event.type === 'done'));
+    const drawn = JSON.stringify(drawnStep(encodeModelMessageValues(done.responseMessages)));
+
+    expect({ answer: done.text, shown: JSON.stringify(first.shown).includes(ENCRYPTED), drawn: drawn.includes(ENCRYPTED) })
+      .toEqual({ answer: 'Continuing the rename.', shown: false, drawn: false });
+
+    const stored = decodeModelMessageValues(encodeModelMessageValues(done.responseMessages));
+    const next = await openaiTurn('gpt-5.5', [{ role: 'user', content: 'rename the parser' }, ...stored, { role: 'user', content: 'and the tests' }]);
+
+    // The direct route leaves `store` on, so the API holds the item and the next request names it.
+    expect(JSON.stringify(body(next.mock).input)).toContain(JSON.stringify({ type: 'item_reference', id: 'cmp_1' }));
   });
 });

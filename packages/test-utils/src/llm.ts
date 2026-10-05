@@ -54,17 +54,18 @@ export function createJSONLLM(payload: JsonValue): LLM {
 
 /** The `execute` of a built tool, typed for a direct call; throws if not callable. */
 interface ExecutableTool<Args, Result> {
-  execute?: (args: Args, options: ToolExecutionOptions) => PromiseLike<Result> | Result;
+  execute?: (args: Args, options: ToolExecutionOptions<unknown>) => PromiseLike<Result> | Result;
 }
 
-const DEFAULT_TOOL_OPTIONS: ToolExecutionOptions = {
+const DEFAULT_TOOL_OPTIONS: ToolExecutionOptions<unknown> = {
   toolCallId: 'test-tool-call',
   messages: [],
+  context: undefined,
 };
 
 export function toolExecute<Args, Result>(
   entry: ExecutableTool<Args, Result>,
-): (args: Args, options?: ToolExecutionOptions) => Promise<Result> {
+): (args: Args, options?: ToolExecutionOptions<unknown>) => Promise<Result> {
   return settleSync(Effect.gen(function* () {
     const execute = entry.execute;
 

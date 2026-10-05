@@ -55,7 +55,7 @@ export const unobservedSpend: ModelCallSink = () => undefined;
 export function unobservedSearchSeams(): Pick<AgentsSwarmDeps, 'reportModelCall' | 'nodeCodemode' | 'webSearch'> {
   return {
     reportModelCall: unobservedSpend,
-    nodeCodemode: () => () => tool<{ code: string }, string>({
+    nodeCodemode: () => () => tool<{ code: string }, string, Record<string, never>>({
       description: 'Runs no code in this suite.',
       inputSchema: codemodeInputSchema(),
       execute: async () => refuse("a node's code", 'nodeCodemode'),

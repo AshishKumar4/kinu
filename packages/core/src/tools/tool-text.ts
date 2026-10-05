@@ -49,7 +49,8 @@ export function withToolText(tools: ToolSet, text: ToolTextOverrides): ToolSet {
   return Object.fromEntries(Object.entries(tools).map(([name, entry]) => {
     const description = text.descriptions[name];
     const fields = text.fields[name];
-    const described = description === undefined ? entry : { ...entry, description };
+    // A provider's own tool carries its provider's description, never one of ours.
+    const described = description === undefined || 'id' in entry ? entry : { ...entry, description };
 
     return [name, fields === undefined ? described : reworded(described, fields)];
   }));

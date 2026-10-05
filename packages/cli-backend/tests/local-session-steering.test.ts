@@ -1800,7 +1800,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
     })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 
-    return (code: string, options?: ToolExecutionOptions) =>
+    return (code: string, options?: ToolExecutionOptions<unknown>) =>
       toolExecute<{ code: string }, JsonValue>(tool)({ code }, options);
   }
 
@@ -1922,7 +1922,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
       v.object({ result: v.object({ report: v.object({ stop: v.string(), expansions: v.number() }) }) }),
       await sandboxWith(deps)(
         `return await agents.swarm({ task: 't', preset: 'ideate', branches: 2, depth: 1 });`,
-        { abortSignal: controller.signal, toolCallId: 'swarm-abort-test', messages: [] },
+        { abortSignal: controller.signal, toolCallId: 'swarm-abort-test', messages: [], context: undefined },
       ),
     );
 

@@ -2,7 +2,7 @@
  *  models each provider's cache: a request reads only when its addressed prefix continues a stored one byte for byte. */
 
 import { describe, test, expect } from 'bun:test';
-import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { isStepCount, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import * as v from 'valibot';
 import {
@@ -510,7 +510,7 @@ async function driveTurn(
     system: SYSTEM,
     history: [...HISTORY],
     tools: chatTools(),
-    stopWhen: stepCountIs(5),
+    stopWhen: isStepCount(5),
     extensions,
     dynamicContext: opts.dynamic ? { ledger: new DynamicContextLedger(), snapshot: opts.dynamic, instructions: opts.instructions } : undefined,
     cache: { providerId: entry.providerId, modelId: entry.modelId, sessionKey: SESSION_KEY },

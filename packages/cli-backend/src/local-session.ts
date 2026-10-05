@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { ConversationSearchStore, sameActorReference, testModel, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { ConversationSearchStore, sameActorReference, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -745,7 +745,7 @@ export class LocalAgentSession {
     this.ensureModelState();
 
     return Object.entries({ ...this.tools, ...this.extraTools }).map(([name, t]) => ({
-      name, description: t.description ?? '',
+      name, description: toolDescription(t) ?? '',
     }));
   }
 

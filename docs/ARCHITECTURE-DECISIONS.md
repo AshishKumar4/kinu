@@ -1433,9 +1433,18 @@ fold). The next turn's pressure is the prompt the last sampling answered from,
 not the billed sum of both. Proven against
 fixtures built from the documented shapes and the SDK's mapping
 (`core/tests/contract-server-compaction.test.ts`); live acceptance on either
-route is unmeasured. OpenAI's (`context_management` with `compact_threshold`)
-needs @ai-sdk/openai 4, which needs ai 7, so OpenAI models keep better-compact's
-summaries until that migration.
+route is unmeasured.
+
+P3. On ai 7 a GPT-5 model on the direct `openai` route (Responses API) compacts
+the same way: `context_management` with `compact_threshold` at the same trigger
+and floor (developers.openai.com/api/docs/guides/compaction lists no models, so
+the GPT-5 family it documents). @ai-sdk/openai 4 returns the encrypted item as a
+`custom` part with its mark; it is persisted, replayed (by reference, since the
+route stores), kept out of the answer, the stream and the transcript, and the
+request opens at the ask before it. Codex, ChatGPT and OpenCode routes are not
+asked: their acceptance is unknown. Proven against a fixture of the documented
+item and the SDK's mapping (`contract-server-compaction.test.ts`,
+`unit-extension.test.ts`); live acceptance is unmeasured.
 
 ## Open
 

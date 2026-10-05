@@ -170,7 +170,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
 
       const streamed: StreamRequest = {
         model: model(resolved),
-        system: input.system,
+        instructions: input.system,
         messages: input.messages.map(m => ({
           role: m.role,
           content: m.content,

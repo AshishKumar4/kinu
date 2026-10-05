@@ -6,7 +6,7 @@
  * Specified by docs/EXPLORATION.md — "The report contract".
  */
 import { describe, expect, test } from 'bun:test';
-import type { LanguageModelV3Content } from '@ai-sdk/provider';
+import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -39,7 +39,7 @@ function reportTwice(seen: string[]): NodeAgentDeps['model'] {
       const accepted = text.includes('"received":true');
       seen.push(promptStage(refused, accepted));
 
-      const content: LanguageModelV3Content[] = accepted
+      const content: LanguageModelV4Content[] = accepted
         ? [{ type: 'text', text: 'Reported.' }]
         : [{
           type: 'tool-call',
@@ -71,7 +71,7 @@ function reportOnceBroken(): NodeAgentDeps['model'] {
     doGenerate: ({ prompt }) => {
       const attempts = JSON.stringify(prompt).split(UNRUNNABLE).length - 1;
 
-      const content: LanguageModelV3Content[] = attempts >= 2
+      const content: LanguageModelV4Content[] = attempts >= 2
         ? [{ type: 'text', text: 'I cannot fix it.' }]
         : [{
           type: 'tool-call',

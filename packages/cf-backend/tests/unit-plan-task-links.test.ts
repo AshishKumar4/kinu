@@ -42,7 +42,7 @@ test('native and asynchronous codemode tasks retain their approved revision with
       return 'done';
     } }) }, { sql: [f.rt.storage.sql], plan: f.plan });
 
-    await entry.tasks.execute?.({}, { toolCallId: 'tasks', messages: [] });
+    await entry.tasks.execute?.({}, { toolCallId: 'tasks', messages: [], context: undefined });
     await resumed?.();
     const linked = readPlanTasks(f.rt.storage.sql, f.rt.actor, f.plan);
     expect(linked.map(item => item.title)).toEqual(['native task', 'codemode task']);
@@ -66,7 +66,7 @@ test('a subtask added outside a turn scope inherits its parent plan revision', a
 
   try {
     const entry = withTaskPlan({ add: tool({ inputSchema: jsonSchema<object>({ type: 'object' }), execute: () => f.taskList.add(['parent'], null, 3) }) }, { sql: [f.rt.storage.sql], plan: f.plan });
-    await entry.add.execute?.({}, { toolCallId: 'parent', messages: [] });
+    await entry.add.execute?.({}, { toolCallId: 'parent', messages: [], context: undefined });
     const parent = readPlanTasks(f.rt.storage.sql, f.rt.actor, f.plan)[0];
 
     if (!parent) throw new Error('parent missing');

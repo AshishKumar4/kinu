@@ -1,6 +1,6 @@
 // The shared turn has no elapsed deadline; a stream that closes without a finish reason must not fake-complete.
 import { describe, test, expect } from 'bun:test';
-import { stepCountIs, tool, type StopCondition, type ToolSet } from 'ai';
+import { isStepCount, tool, type StopCondition, type ToolSet } from 'ai';
 import { z } from 'zod';
 import {
   INTERRUPTED_TURN, runChat, createChatModel, isRateLimitedTurnError,
@@ -140,7 +140,7 @@ describe('an unmapped finish reason alone is not a dead stream', () => {
 
     const { threw, events } = await driveTurn(
       () => { throw new Error('the turn must stop after one step'); },
-      { step1: toolStepEndingOnOther, stopWhen: stepCountIs(1) },
+      { step1: toolStepEndingOnOther, stopWhen: isStepCount(1) },
     );
 
     expect(threw).toBeNull();

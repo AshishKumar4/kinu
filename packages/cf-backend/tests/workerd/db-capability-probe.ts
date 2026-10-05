@@ -95,7 +95,7 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     const execute = tool.execute;
 
     if (execute === undefined) throw new Error('the codemode tool is not callable');
-    const answer = await execute({ code }, { toolCallId: 'db-probe', messages: [] });
+    const answer = await execute({ code }, { toolCallId: 'db-probe', messages: [], context: undefined });
 
     return {
       answer: JSON.stringify(answer ?? null),

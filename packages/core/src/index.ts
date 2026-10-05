@@ -779,6 +779,8 @@ export {
 
 export { rasterImage, type RasterImage } from './utils/raster-image';
 
+export { toolDescription } from './utils/tool-description';
+
 export { compactsServerSide, isServerCompaction, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {

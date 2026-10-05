@@ -65,8 +65,8 @@ export function resumeBackgroundJob(drive: BackgroundResumeRequest): Promise<Jso
     if (!exec) return yield* Effect.die(new JobNotResumable(kind));
 
     // Typed as a variable: the SDK options type is closed, so an extra key in a literal fails overload resolution.
-    const execOptions: ToolExecutionOptions & { [RESUME_REDRIVE_OPTION]: true } = {
-      abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
+    const execOptions: ToolExecutionOptions<unknown> & { [RESUME_REDRIVE_OPTION]: true } = {
+      abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [], context: undefined,
       [RESUME_REDRIVE_OPTION]: true,
     };
 

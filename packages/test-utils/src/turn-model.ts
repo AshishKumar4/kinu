@@ -1,16 +1,16 @@
 // Imports nothing beyond `ai/test`, so a workerd test project can host it.
-import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
+import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 
-/** Model-contract types derived from `MockLanguageModelV3`, since `ai` does not re-export them. */
+/** Model-contract types derived from `MockLanguageModelV4`, since `ai` does not re-export them. */
 export type ModelStreamPart =
-  Awaited<ReturnType<MockLanguageModelV3['doStream']>>['stream'] extends ReadableStream<infer Part>
+  Awaited<ReturnType<MockLanguageModelV4['doStream']>>['stream'] extends ReadableStream<infer Part>
     ? Part
     : never;
 
 /** One scripted step's answer and input; annotate each branch so `finishReason` does not widen to `string`. */
-export type ScriptedTurnResult = Awaited<ReturnType<MockLanguageModelV3['doGenerate']>>;
+export type ScriptedTurnResult = Awaited<ReturnType<MockLanguageModelV4['doGenerate']>>;
 
-export type ScriptedTurnOptions = Parameters<MockLanguageModelV3['doGenerate']>[0];
+export type ScriptedTurnOptions = Parameters<MockLanguageModelV4['doGenerate']>[0];
 
 /**
  * A fake model answering `doGenerate` and `doStream` from one script; agent turns stream via `runChat`,
@@ -20,10 +20,10 @@ export function scriptedTurnModel(config: {
   provider?: string;
   modelId?: string;
   doGenerate: (options: ScriptedTurnOptions) => PromiseLike<ScriptedTurnResult> | ScriptedTurnResult;
-}): MockLanguageModelV3 {
+}): MockLanguageModelV4 {
   const { doGenerate } = config;
 
-  return new MockLanguageModelV3({
+  return new MockLanguageModelV4({
     provider: config.provider ?? 'fake',
     modelId: config.modelId ?? 'fake-model',
     // Adapted: the mock requires a PromiseLike; scripts may answer synchronously.

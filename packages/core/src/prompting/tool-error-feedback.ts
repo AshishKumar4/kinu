@@ -28,24 +28,15 @@ function stepErrors(step: ToolErrorStep): Map<string, ToolResultPart['output'] |
   return errors;
 }
 
-/** The seal keeps the feedback the next request uses; only this step's suffix is classified. */
-export function modelStepMessages(step: ToolErrorStep, previous: readonly ModelMessage[]): ModelMessage[] {
+/** The step's own messages with the feedback the next request uses; the seal keeps them. */
+export function modelStepMessages(step: ToolErrorStep): ModelMessage[] {
   const messages = step.response.messages;
   let projected: ModelMessage[] | undefined;
-
-  for (let index = 0; index < previous.length; index++) {
-    const recorded = previous[index];
-
-    if (recorded === undefined || recorded === messages[index]) continue;
-    projected ??= [...messages];
-    projected[index] = recorded;
-  }
-
   const errors = stepErrors(step);
 
-  if (errors === undefined) return projected ?? messages;
+  if (errors === undefined) return messages;
 
-  for (let index = previous.length; index < messages.length; index++) {
+  for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
 
     if (message?.role !== 'tool') continue;

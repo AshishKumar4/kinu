@@ -33,8 +33,8 @@ function evalIn(directory: string) {
 
   if (!execute) throw new Error('eval has no execute');
 
-  return (code: string, options: Partial<ToolExecutionOptions> & { [DEVICE_REQUEST_OPTION]?: DeviceRequestOwnership } = {}) =>
-    execute({ code }, { toolCallId: 'call_eval', messages: [], ...options });
+  return (code: string, options: Partial<ToolExecutionOptions<unknown>> & { [DEVICE_REQUEST_OPTION]?: DeviceRequestOwnership } = {}) =>
+    execute({ code }, { toolCallId: 'call_eval', messages: [], context: undefined, ...options });
 }
 
 test("a directory's host shell starts each call fresh there, and a name keeps its directory and exports", async () => {

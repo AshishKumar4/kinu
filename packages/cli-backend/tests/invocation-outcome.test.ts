@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { stepCountIs } from 'ai';
+import { isStepCount } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   ExtensionHost, runChat, TurnAccumulator,
@@ -47,7 +47,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
 
   for await (const event of runChat({
     model, system: 'Run the requested program.', history: [{ role: 'user', content: 'go' }],
-    tools: { eval: tool }, extensions, stopWhen: stepCountIs(2),
+    tools: { eval: tool }, extensions, stopWhen: isStepCount(2),
   })) events.push(event);
   const result = events.find((event) => event.type === 'tool-result');
 

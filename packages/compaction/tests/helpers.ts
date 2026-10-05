@@ -148,7 +148,7 @@ export function screenshot(n: number): string {
 function screenshotResult(n: number): ToolResultPart {
   return {
     type: 'tool-result', toolCallId: `shot_${n}`, toolName: 'browser',
-    output: { type: 'content', value: [{ type: 'text', text: `Screen ${n}.` }, { type: 'image-data', data: screenshot(n), mediaType: 'image/png' }] },
+    output: { type: 'content', value: [{ type: 'text', text: `Screen ${n}.` }, { type: 'file', data: { type: 'data', data: screenshot(n) }, mediaType: 'image/png' }] },
   };
 }
 
@@ -179,7 +179,7 @@ export function sentScreens(messages: readonly ModelMessage[]): string[][] {
 
     if (!result.success) return [];
 
-    return [result.output.content[0].output.value.map((entry) => (entry.type === 'image-data' ? 'image' : v.parse(v.object({ text: v.string() }), entry).text))];
+    return [result.output.content[0].output.value.map((entry) => (entry.type === 'file' ? 'image' : v.parse(v.object({ text: v.string() }), entry).text))];
   });
 }
 

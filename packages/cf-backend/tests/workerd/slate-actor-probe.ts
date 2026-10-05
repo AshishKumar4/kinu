@@ -142,7 +142,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     const execute = tool?.execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');
-    const answer = await execute({ code }, { toolCallId: 'mode-probe', messages: [] });
+    const answer = await execute({ code }, { toolCallId: 'mode-probe', messages: [], context: undefined });
 
     return { answer: JSON.stringify(answer ?? null), file: files.readFileString('/home/main/plan-data.txt') };
   }

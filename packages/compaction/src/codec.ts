@@ -65,8 +65,6 @@ export interface CarriedMedia {
 
 type ResultSide = 'result' | 'inline';
 
-const PAYLOAD_ENTRIES: ReadonlySet<string> = new Set(['image-data', 'file-data', 'media']);
-
 const RASTER_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 const TOOL_PAIR_HANDLE = Symbol('kinu-tool-pair');
@@ -185,10 +183,10 @@ export function carriedMedia(item: Item): readonly CarriedMedia[] {
     return output.value.flatMap((entry, index): CarriedMedia[] => {
       const id = `${side}:${index}`;
 
-      if (!PAYLOAD_ENTRIES.has(entry.type) || !('data' in entry) || pair.offloaded?.has(id)) return [];
-      const image = entry.type === 'image-data' || RASTER_TYPES.has(entry.mediaType);
+      if (entry.type !== 'file' || entry.data.type !== 'data' || pair.offloaded?.has(id)) return [];
+      const image = entry.mediaType === 'image' || RASTER_TYPES.has(entry.mediaType);
 
-      return [{ id, kind: image ? 'image' : 'file', mediaType: entry.mediaType, data: entry.data, source: entry }];
+      return [{ id, kind: image ? 'image' : 'file', mediaType: entry.mediaType, data: entry.data.data, source: entry }];
     });
   });
 }
@@ -673,7 +671,7 @@ function charsOfResultOutput(part: ToolResultPart): number {
   if (output.type === 'json') return jsonLength({ value: output.value });
 
   if (output.type === 'content') {
-    return output.value.reduce((sum, entry) => sum + (PAYLOAD_ENTRIES.has(entry.type) ? ESTIMATED_MEDIA_CHARS : jsonLength({ value: entry })), 0);
+    return output.value.reduce((sum, entry) => sum + (entry.type === 'file' && entry.data.type === 'data' ? ESTIMATED_MEDIA_CHARS : jsonLength({ value: entry })), 0);
   }
 
   return jsonLength({ value: output });

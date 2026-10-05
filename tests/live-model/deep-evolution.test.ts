@@ -8,7 +8,7 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
+import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 
 import {
   EvolutionEngine,
@@ -71,11 +71,11 @@ async function solveProblem(
 
   const result = await generateText({
     model,
-    system: `${soul}\n\nKnowledge:\n${knowledge}\n\nAlways use eval to compute and verify answers. Never guess.`,
+    instructions: `${soul}\n\nKnowledge:\n${knowledge}\n\nAlways use eval to compute and verify answers. Never guess.`,
     messages: [{ role: 'user' as const, content: problem.question }],
     tools,
-    stopWhen: stepCountIs(500),
-    onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
+    stopWhen: isStepCount(500),
+    onStepEnd: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
   });
 
   recordLiveModelSpend(result.usage);

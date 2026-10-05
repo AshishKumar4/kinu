@@ -119,7 +119,7 @@ function failureOf(pending: PromiseLike<unknown>): PromiseLike<{ readonly error:
 
 /** How a stream ended: the error part it carried, or the error its reader threw. */
 async function streamFailure(model: LanguageModel): Promise<{ readonly error: unknown }> {
-  const reader = streamText({ model, prompt: 'hello', maxRetries: 0 }).fullStream.getReader();
+  const reader = streamText({ model, prompt: 'hello', maxRetries: 0 }).stream.getReader();
 
   for (;;) {
     const next = await reader.read().then((read) => ({ read }), (...rejection: [unknown]) => ({ thrown: rejection[0] }));
@@ -141,7 +141,7 @@ describe('the request the preview accepts', () => {
     const result = streamText({
       model,
       maxRetries: 0,
-      system: 'You are Kinu.',
+      instructions: 'You are Kinu.',
       temperature: 0.2,
       topP: 0.9,
       maxOutputTokens: 512,
@@ -178,7 +178,7 @@ describe('the request the preview accepts', () => {
     expect(input.find((item) => item.type === 'function_call')).toMatchObject({ call_id: 'call_1', name: 'read_file', namespace: 'functions' });
     expect(body.tools).toEqual([{
       type: 'namespace', name: 'functions', description: '',
-      tools: [{ type: 'function', name: 'read_file', description: 'Read a file.', parameters: { type: 'object', properties: { path: { type: 'string' } } } }],
+      tools: [{ type: 'function', name: 'read_file', description: 'Read a file.', parameters: { type: 'object', properties: { path: { type: 'string' } } }, strict: false }],
     }]);
   });
 
