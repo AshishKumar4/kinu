@@ -197,6 +197,7 @@ const USER_DO_METHODS = [
   'transferDeviceRequestToBackgroundJob',
   'userMcp_add',
   'userMcp_callTool',
+  'userMcp_cancelCall',
   'userMcp_handleOAuthCallback',
   'userMcp_list',
   'userMcp_presets',

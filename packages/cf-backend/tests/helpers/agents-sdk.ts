@@ -804,6 +804,10 @@ let mcpCallToolFailure: Error | null = null;
 
 let mcpCallToolAnswer: CallToolResult | undefined;
 
+let mcpCallToolHeld = false;
+
+const mcpToolAborts: unknown[] = [];
+
 const mcpToolCalls: { serverId: string; name: string; arguments?: JsonObject }[] = [];
 
 /** Every `callTool` the manager received, in order, as the SDK was handed it. */
@@ -813,6 +817,16 @@ export function recordedMcpToolCalls(): readonly { serverId: string; name: strin
 
 export function seedMcpAnswer(answer: CallToolResult): void {
   mcpCallToolAnswer = answer;
+}
+
+/** The next `callTool` is held, as a server holding the request holds it: only its signal settles it, as the SDK's request settles. */
+export function holdNextMcpToolCall(): void {
+  mcpCallToolHeld = true;
+}
+
+/** Each held call's abort reason: on it the SDK tells the server the request is cancelled. */
+export function recordedMcpToolAborts(): readonly unknown[] {
+  return mcpToolAborts;
 }
 
 /** Queued apart from the dispatch failure: in production the probe (`client-zqKcsyFa.js:762-764`)
@@ -975,8 +989,23 @@ export function seedUndiscoveredMcpTools(id: string, answer: () => Promise<objec
   connection.client = { request: answer };
 }
 
+/** As the SDK's request: an aborted signal rejects it at once, a later abort when it comes, with the signal's reason. */
+function heldCall(signal: AbortSignal | undefined): Promise<CallToolResult> {
+  return new Promise<CallToolResult>((_resolve, reject) => {
+    const stop = (): void => {
+      mcpToolAborts.push(signal?.reason);
+      reject(signal?.reason);
+    };
+
+    if (signal?.aborted === true) stop();
+    else signal?.addEventListener('abort', stop, { once: true });
+  });
+}
+
 export function resetRecordedMcp(): void {
   mcpCallToolAnswer = undefined;
+  mcpCallToolHeld = false;
+  mcpToolAborts.length = 0;
   mcpToolCalls.length = 0;
   mcpServers.clear();
   mcpEstablished.length = 0;
@@ -1169,8 +1198,15 @@ class FakeMCPClientManager {
     connection.connectionState = isMcpDiscoveryUnauthorized(probe) ? 'authenticating' : 'connected';
   }
 
-  async callTool(params: { serverId: string; name: string; arguments?: JsonObject }): Promise<CallToolResult> {
+  async callTool(params: { serverId: string; name: string; arguments?: JsonObject }, options?: { signal?: AbortSignal }): Promise<CallToolResult> {
     mcpToolCalls.push(params);
+
+    if (mcpCallToolHeld) {
+      mcpCallToolHeld = false;
+
+      return await heldCall(options?.signal);
+    }
+
     const failure = mcpCallToolFailure;
 
     if (failure !== null) {

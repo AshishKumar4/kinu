@@ -6,8 +6,8 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  dropLiveMcpFetch, failNextMcpRemove, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, inheritedMcpManager,
-  liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers,
+  dropLiveMcpFetch, failNextMcpRemove, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
+  liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
   recordedMcpToolCalls, resetRecordedMcp, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer, seedUndiscoveredMcpTools,
   type RecordedMcpTransport,
 } from './helpers/agents-sdk';
@@ -251,7 +251,7 @@ describe('the management surface completes a round trip', () => {
       .toEqual([['broken', 0, false], ['github', 1, true]]);
 
     // The offered tool runs, shaped by the schema the lenient read found: the untouched optional '' is dropped.
-    await h.userDO.userMcp_callTool(owner, 'srv1', 'do_thing', { q: '', note: '' });
+    await h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'do_thing', args: { q: '', note: '' }, id: crypto.randomUUID() });
     expect(recordedMcpToolCalls()).toEqual([{ serverId: 'srv1', name: 'do_thing', arguments: { q: '' } }]);
     h.close();
   });
@@ -652,6 +652,35 @@ describe('what counts as a credential in the SDK’s stored options', () => {
   });
 });
 
+// 2026-10-05: a stopped eval's MCP call ran on: the call is an RPC to this hub, and no signal crosses an RPC.
+describe('a caller stops the MCP call it made', () => {
+  test('a cancel naming the call aborts its request, and the call settles with the cancel', async () => {
+    const h = harness();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    holdNextMcpToolCall();
+    const owner = await testOwner();
+    const call = h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'do_thing', args: {}, id: 'call-7' });
+
+    await h.userDO.userMcp_cancelCall(owner, 'call-7');
+    await expect(call).rejects.toThrow('Its caller stopped the MCP tool call.');
+    expect(recordedMcpToolAborts()).toEqual([expect.objectContaining({ code: 'cancelled' })]);
+    h.close();
+  });
+
+  test('a cancel for a call this hub is not making changes nothing', async () => {
+    const h = harness();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    const owner = await testOwner();
+
+    await h.userDO.userMcp_cancelCall(owner, 'call-gone');
+    await expect(h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'do_thing', args: {}, id: 'call-8' })).resolves.toBe(JSON.stringify({ content: [] }));
+    expect(recordedMcpToolAborts()).toEqual([]);
+    h.close();
+  });
+});
+
 describe('an authorization failure converges to the reconnect state', () => {
   test('a transport 401 on dispatch re-probes the connection, and the failure still travels', async () => {
     const h = harness();
@@ -664,7 +693,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     // In production the dispatch and the `discoverIfConnected` probe are two failing requests.
     failNextMcpDiscovery(await refusedToolCall({ status: 401, body: 'nope' }));
 
-    await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+    await expect(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }))
       .rejects.toThrow('Error POSTing to endpoint: nope');
 
     // Observe the persisted `authenticating` status and `authUrl`, not merely that a re-probe was attempted.
@@ -684,7 +713,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     failNextMcpToolCall(await refusedToolCall({ status: 401, body: 'nope', authProvider: { token: () => Promise.resolve('stale') } }));
     failNextMcpDiscovery(await refusedToolCall({ status: 401, body: 'nope' }));
 
-    await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+    await expect(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }))
       .rejects.toThrow();
 
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
@@ -706,7 +735,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     }));
     failNextMcpDiscovery(await refusedToolCall({ status: 401, body: 'nope', authProvider: reauthenticated }));
 
-    await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+    await expect(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }))
       .rejects.toThrow();
 
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
@@ -725,7 +754,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     failNextMcpToolCall(await refusedToolCall({ status: 401, body: 'nope' }));
     failNextMcpDiscovery(await refusedToolCall({ status: 401, body: 'nope' }));
 
-    await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+    await expect(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }))
       .rejects.toThrow('Error POSTing to endpoint: nope');
 
     const surface = await readSurface(h, await testOwner());
@@ -743,7 +772,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     failNextMcpToolCall(await refusedSseConnect({ status: 401 }));
     failNextMcpDiscovery(await refusedSseConnect({ status: 401 }));
 
-    await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+    await expect(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }))
       .rejects.toThrow();
 
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
@@ -759,7 +788,7 @@ describe('an authorization failure converges to the reconnect state', () => {
       seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
       failNextMcpToolCall(await refusedToolCall({ status, body: 'nope' }));
 
-      await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+      await expect(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }))
         .rejects.toThrow('Error POSTing to endpoint: nope');
 
       expect({ status, discovered: recordedMcpLifecycle().discovered.includes('srv1') }).toEqual({ status, discovered: false });
@@ -773,7 +802,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
     failNextMcpToolCall(new Error('the repository does not exist'));
 
-    await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+    await expect(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }))
       .rejects.toThrow(/repository/);
 
     expect(recordedMcpLifecycle().discovered).not.toContain('srv1');
@@ -789,7 +818,7 @@ describe('an authorization failure converges to the reconnect state', () => {
       'MCP error -32603: GitHub API replied 401 Unauthorized: bad credentials for the PAT you configured',
     ));
 
-    await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+    await expect(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }))
       .rejects.toThrow(/401/);
 
     expect(recordedMcpLifecycle().discovered).not.toContain('srv1');
@@ -802,7 +831,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
     failNextMcpToolCall(Object.assign(new Error('upstream said no'), { code: 401 }));
 
-    await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+    await expect(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }))
       .rejects.toThrow(/upstream/);
 
     expect(recordedMcpLifecycle().discovered).not.toContain('srv1');

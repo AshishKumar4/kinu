@@ -720,6 +720,14 @@ function watchedOutput(opts: { readonly onOutput?: (output: DeviceExecOutput) =>
   };
 }
 
+/** One MCP tool call. `id` is the caller's name for it, which `userMcp_cancelCall` stops: no signal crosses the RPC. */
+export interface McpToolCall {
+  readonly serverId: string;
+  readonly name: string;
+  readonly args: JsonObject;
+  readonly id: string;
+}
+
 export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -747,6 +755,8 @@ export class UserDO extends Agent<Env> {
   private _hydratingUserMcp: Promise<void> | null = null;
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
+  /** MCP tool calls in flight, by the id each caller sent: `userMcp_cancelCall` stops one. */
+  private readonly _mcpCalls = new Map<string, AbortController>();
 
 
   /** Once per activation, from the constructor. Claims live in isolate memory, so any claim in storage
@@ -5511,12 +5521,27 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
   }
 
   /** Called over RPC by the orchestrator's per-tool closure; the result must be JSON-serializable. */
-  async userMcp_callTool(
-    caller: UserCaller,
-    serverId: string,
-    name: string,
-    args: JsonObject,
-  ): Promise<string> {
+  async userMcp_callTool(caller: UserCaller, call: McpToolCall): Promise<string> {
+    // Before any wait, so a cancel that arrives while this call is still being checked finds it.
+    const stopped = new AbortController();
+    this._mcpCalls.set(call.id, stopped);
+
+    try {
+      return await this.callUserMcpTool(caller, call, stopped.signal);
+    } finally {
+      this._mcpCalls.delete(call.id);
+    }
+  }
+
+  /** Stops a call `userMcp_callTool` is making: the server is told the request is cancelled, and the call settles. */
+  async userMcp_cancelCall(caller: UserCaller, callId: string): Promise<void> {
+    await this.requireTier(caller, 'mcp.tools');
+    this._mcpCalls.get(callId)?.abort(new KinuError('cancelled', 'Its caller stopped the MCP tool call.'));
+  }
+
+  private async callUserMcpTool(caller: UserCaller, call: { serverId: string; name: string; args: JsonObject }, signal: AbortSignal): Promise<string> {
+    const { serverId, name, args } = call;
+
     // Caller identity comes from the capability token, not an argument, so no agent name can be spoofed.
     await this.requireTier(caller, 'mcp.tools');
     const manager = this.mcp;
@@ -5553,7 +5578,7 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     );
 
     try {
-      const result = await callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }));
+      const result = await callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }, { signal }));
 
       return JSON.stringify(decodeJsonValue({ value: result }));
     } catch (err) {

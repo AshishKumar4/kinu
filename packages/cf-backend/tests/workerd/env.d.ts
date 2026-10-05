@@ -45,6 +45,7 @@ import type { JsonValue, SlateCallResult } from '@kinu.run/core';
 
 interface SlateActorRootRpc extends Rpc.DurableObjectBranded {
   craftedSlate(): Promise<string>;
+  stopDuringHeldCalls(): Promise<{ answer: string; called: string[]; cancelled: string[] }>;
   code(mode: 'plan' | 'build', code: string): Promise<{ answer: string; file: string }>;
 }
 
