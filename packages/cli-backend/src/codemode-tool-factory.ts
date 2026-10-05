@@ -3,16 +3,14 @@
  * hosted sandbox's `kinu-node.js`, so a program's files and cwd are its workspace, never the machine.
  */
 
-import { KINU_NODE_MODULE_SOURCE, requireBuild, WORKSPACE_ROOT } from '@kinu.run/core';
+import { KINU_NODE_MODULE_SOURCE, requireBuild, WORKSPACE_ROOT, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type {
   CodemodeProvider,
   CodemodeBuilder,
   ExecutorProvider,
   JsonValue,
 } from '@kinu.run/core';
-import { stringifyOr } from '@kinu.run/core';
-import { Cause, Effect } from 'effect';
-import { renderThrownChain, settle } from '@kinu.run/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
   decodeJsonValue, explainSandboxError, nativeToolFunctions,
@@ -21,11 +19,13 @@ import {
   codemodeFunction, withCodemodeProgram, currentWorkMode, toolsInWorkMode, execCallArgs, readDeviceRequestChannel,
 } from '@kinu.run/core';
 import { tool } from 'ai';
-import { normalizeCode } from '@cloudflare/codemode/normalize';
+import { programBody } from './executor';
 import * as v from 'valibot';
 
 interface NodeExecuteToolFactoryDeps {
   extraProviders?: CodemodeProvider[];
+  /** The role's reach, over every namespace bound, as cf's factory takes it. */
+  reach: ToolSurfaceNarrowing;
 }
 
 /** Always-bound sandbox parameters; a provider may not take them. `__kinu` defines the crafted tools. */
@@ -62,12 +62,14 @@ interface ExecuteSuccess {
 }
 
 /** Pass as `codemode` to `buildActorTools`, or call with a finished confined surface (heads). */
-export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps = {}): CodemodeBuilder {
+export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): CodemodeBuilder {
   return (surface) => {
-    const providers: CodemodeProvider[] = [
+    const bound: CodemodeProvider[] = [
       ...surface.providers.map(adaptExecutorProvider),
       ...(deps.extraProviders ?? []),
     ];
+
+    const providers = deps.reach.narrowProviders(bound);
 
     // A crafted name shadows a native one, as in the CF prelude.
     const nativeBindings = nativeToolFunctions(surface.native);
@@ -89,7 +91,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
 
         const sandboxConsole = { log: capture, info: capture, warn: capture, error: capture, debug: capture, trace: capture, dir: capture };
 
-        return settle(Effect.catchCause(Effect.gen(function* () {
+        try {
           const signal = options.abortSignal;
           const context = signal ? { signal } : undefined;
           const channel = readDeviceRequestChannel({ toolOptions: options });
@@ -117,7 +119,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
           }
 
           const workspace = providerBindings['workspace'] ?? {};
-          const node = yield* Effect.promise(() => loadKinuNode());
+          const node = await loadKinuNode();
           node.bindSlates(workspace);
 
           // Fixed names excluded: a duplicate `new Function` parameter crashes.
@@ -131,12 +133,9 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 
-          const fn = new Function(
-            ...argNames,
-            `${renderCraftedDefinitions(crafted)}\nreturn (\n${normalizeCode(args.code)}\n)()`,
-          );
+          const fn = new Function(...argNames, programBody(args.code, renderCraftedDefinitions(crafted)));
 
-          const rawResult: unknown = yield* Effect.promise(async () => fn(...argValues));
+          const rawResult = await fn(...argValues);
 
           const payload: ExecuteSuccess = {
             result: rawResult === undefined
@@ -147,13 +146,11 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
           if (logs.length > 0) payload.logs = logs;
 
           return payload;
-        }), (failed) => {
-          const error = Cause.squash(failed);
+        } catch (error) {
           // A bare native-tool call throws a plain ReferenceError; rewrite it into a correction.
           const message = explainSandboxError(renderThrownChain({ cause: error }));
-
-          return Effect.die(new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error }));
-        }));
+          throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
+        }
       }),
     }), () => surface.craftedTools().map(({ name, description }) => ({ name, description })));
   };
@@ -189,5 +186,8 @@ function formatLogArg(input: { value: unknown }): string {
 
   if (text.success) return text.output;
 
-  return stringifyOr(input, (reason) => `unserializable tool input: ${reason}`) ?? String(input.value);
+  try { return JSON.stringify(input.value) ?? String(input.value); }
+  catch (error) {
+    return `unserializable tool input: ${renderThrownChain({ cause: error })}`;
+  }
 }

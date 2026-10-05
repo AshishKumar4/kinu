@@ -1,4 +1,3 @@
-import { Cause, Effect, type Exit } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   ADVISOR_SEVERITIES,
@@ -19,7 +18,8 @@ import {
   type StagedSkillResult,
   type ModelTestResult,
 } from '@kinu.run/core';
-import { renderThrownChain, tolerate, settle, detach, hold, type KinuError } from '@kinu.run/core/obs';
+import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import {
   AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
   FileRestoreResultSchema, type FileCheckpointListing, type PlanReviewResult, type WorkspaceSpend,
@@ -28,6 +28,7 @@ import {
   ActivitySpendSchema,
   callAgentRpc,
   CloudAgentStatusSchema,
+  CancelJobSchema,
   CloudBackgroundJobSchema,
   CloudToolDescriptionsSchema,
   createCloudAgentConnectTicket,
@@ -74,6 +75,7 @@ import * as v from 'valibot';
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
 
 const EvolutionConfigSchema: v.GenericSchema<EvolutionConfigView> = v.object({
+  learning: v.boolean(),
   liveTrials: v.boolean(),
   advisorEnabled: v.boolean(),
   advisorMinSeverity: v.picklist(ADVISOR_SEVERITIES),
@@ -249,6 +251,8 @@ const SocketFrameSchema = v.objectWithRest({
   body: v.optional(v.string()),
   done: v.optional(v.boolean()),
   replay: v.optional(v.boolean()),
+  restated: v.optional(v.boolean()),
+  replayComplete: v.optional(v.boolean()),
   landed: v.optional(v.picklist(['mid-turn', 'turn'])),
   turnId: v.optional(v.string()),
 }, JsonValueSchema);
@@ -313,7 +317,7 @@ export class CloudAgentClient implements AgentClient {
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
   private readonly recorder = new SessionRecorder('cloud');
   private ws: WebSocket | null = null;
-  private connectPromise: Promise<Exit.Exit<void, KinuError>> | null = null;
+  private connectPromise: Promise<void> | null = null;
   /** A socket that dies after close() must not reconnect. */
   private closed = false;
   private readonly activeTurns = new Map<string, CloudTurnStream>();
@@ -321,9 +325,9 @@ export class CloudAgentClient implements AgentClient {
   private readonly pendingRpcs = new Map<string, { resolve: (value: JsonValue) => void; reject: (err: Error) => void }>();
   /** Kept visible until the actor confirms its durable cancellation sweep. */
   private readonly stoppingTurnIds = new Set<string>();
-  private stopPromise: Promise<Exit.Exit<void>> | null = null;
+  private stopPromise: Promise<void> | null = null;
   /** Held until the submission or RPC ack reaches the event stream; ids keep cleanup identity-safe. */
-  private readonly launchedTasks = new Map<string, Promise<Exit.Exit<void>>>();
+  private readonly launchedTasks = new Map<string, Promise<void>>();
 
   constructor(opts: CloudAgentClientOptions) {
     this.origin = opts.origin;
@@ -347,20 +351,27 @@ export class CloudAgentClient implements AgentClient {
       ),
     };
     this.checkpoints = subordinateName ? null : {
-      list: (limit, turnId) => this.parsedRpc(FileCheckpointListingSchema, 'listFileCheckpoints', [limit ?? 50, turnId ?? null]),
-      plan: (dir, id) => this.parsedRpc(FileRestorePlanSchema, 'planFileRestore', [dir, id]),
-      restore: (dir, id) => this.parsedRpc(FileRestoreResultSchema, 'restoreFileCheckpoint', [dir, id]),
+      list: async (limit, turnId) => v.parse(
+        FileCheckpointListingSchema,
+        await this.callRpc('listFileCheckpoints', [limit ?? 50, turnId ?? null]),
+      ),
+      plan: async (dir, id) => v.parse(FileRestorePlanSchema, await this.callRpc('planFileRestore', [dir, id])),
+      restore: async (dir, id) => v.parse(
+        FileRestoreResultSchema, await this.callRpc('restoreFileCheckpoint', [dir, id]),
+      ),
     };
     // The sealed plan RPCs (`agent-rpc-access.ts`).
     this.plans = subordinateName ? null : {
-      active: () => this.parsedRpc(CloudPlanReviewSchema, 'getActivePlanReview', []),
-      saveAnnotations: (id, revision, annotations) => this.parsedRpc(
-        CloudPlanReviewResultSchema, 'savePlanReviewAnnotations', [id, revision, v.parse(JsonValueSchema, annotations)],
+      active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
+      saveAnnotations: async (id, revision, annotations) => v.parse(
+        CloudPlanReviewResultSchema,
+        await this.callRpc('savePlanReviewAnnotations', [id, revision, v.parse(JsonValueSchema, annotations)]),
       ),
-      decide: (id, revision, decision, feedback) => this.parsedRpc(
-        CloudPlanReviewResultSchema, 'decidePlanReview', [id, revision, decision, feedback ?? null],
+      decide: async (id, revision, decision, feedback) => v.parse(
+        CloudPlanReviewResultSchema,
+        await this.callRpc('decidePlanReview', [id, revision, decision, feedback ?? null]),
       ),
-      dismiss: (id, revision) => this.parsedRpc(CloudPlanReviewResultSchema, 'dismissPlanReview', [id, revision]),
+      dismiss: async (id, revision) => v.parse(CloudPlanReviewResultSchema, await this.callRpc('dismissPlanReview', [id, revision])),
     };
   }
 
@@ -378,8 +389,8 @@ export class CloudAgentClient implements AgentClient {
   }
 
   /** A submit arriving mid-turn is routed through the server inbox and answered with where it landed. */
-  send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentSendResult> {
-    return settle(this.submit(prompt, opts, this.activeTurns.size > 0));
+  async send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentSendResult> {
+    return this.submit(prompt, opts, this.activeTurns.size > 0);
   }
 
   branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
@@ -395,105 +406,101 @@ export class CloudAgentClient implements AgentClient {
     };
 
     const taskId = randomRequestId();
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      try {
+        const result = await this.callRpc('branchTurn', [text]);
+        const r = v.parse(BranchTurnResultSchema, result);
 
-    const task: Promise<Exit.Exit<void>> = hold(Effect.ensuring(Effect.catchCause(Effect.gen({ self: this }, function* () {
-      const result = yield* this.callRpc('branchTurn', [text]);
-      const r = v.parse(BranchTurnResultSchema, result);
-
-      if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
-    }), (failed) => Effect.sync(() => fail(renderThrownChain({ cause: Cause.squash(failed) })))), Effect.sync(() => {
-      if (this.launchedTasks.get(taskId) === task) this.launchedTasks.delete(taskId);
-    })));
-
+        if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
+      } catch (cause) {
+        fail(renderThrownChain({ cause }));
+      } finally {
+        if (this.launchedTasks.get(taskId) === task) this.launchedTasks.delete(taskId);
+      }
+    })();
     this.launchedTasks.set(taskId, task);
 
     return true;
   }
 
-  private submit(prompt: AgentPrompt, opts: AgentClientSendOptions, steered: boolean): Effect.Effect<AgentSendResult, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const text = promptText(prompt).trim();
-      const files = promptFiles(prompt);
+  private async submit(prompt: AgentPrompt, opts: AgentClientSendOptions, steered: boolean): Promise<AgentSendResult> {
+    const text = promptText(prompt).trim();
+    const files = promptFiles(prompt);
 
-      if (!text && files.length === 0) return yield* Effect.die(new Error('prompt required'));
-      yield* this.ensureOpen();
-      const ws = this.ws;
+    if (!text && files.length === 0) throw new Error('prompt required');
+    await this.ensureOpen();
+    const ws = this.ws;
 
-      if (!ws || ws.readyState !== WebSocket.OPEN) return yield* Effect.die(new Error('Cloud workspace connection is not open.'));
+    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
 
-      // The JSONL log records attachment names, never the data-URL payloads.
-      const sessionEntry: JsonObject = {
-        text,
-        cwd: opts.cwd ?? process.cwd(),
-        backend: 'cloud',
-      };
+    // The JSONL log records attachment names, never the data-URL payloads.
+    const sessionEntry: JsonObject = {
+      text,
+      cwd: opts.cwd ?? process.cwd(),
+      backend: 'cloud',
+    };
 
-      if (steered) sessionEntry.steered = true;
+    if (steered) sessionEntry.steered = true;
 
-      if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
-      this.activeCliSession.append('user', sessionEntry);
+    if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
+    this.activeCliSession.append('user', sessionEntry);
 
-      // A message to a running turn starts no turn; turn-start is announced only if a stream comes back.
-      if (!steered) this.emit({ type: 'turn-start', kind: 'user', text });
+    // A message to a running turn starts no turn; turn-start is announced only if a stream comes back.
+    if (!steered) this.emit({ type: 'turn-start', kind: 'user', text });
 
-      const requestId = randomRequestId();
+    const requestId = randomRequestId();
 
-      return yield* Effect.promise(async () => new Promise<AgentSendResult>((resolve) => {
-        const turn = new CloudTurnStream((event) => this.emit(event), resolve, { deferStart: steered ? text : null });
-        this.activeTurns.set(requestId, turn);
+    return await new Promise<AgentSendResult>((resolve) => {
+      const turn = new CloudTurnStream((event) => this.emit(event), resolve, { deferStart: steered ? text : null });
+      this.activeTurns.set(requestId, turn);
 
-        try {
-          const body: JsonObject = {
-            messages: [decodeJsonValue({ value: createUserUiMessage(requestId, text, files, opts.mode) })],
-            trigger: 'submit-message',
-          };
+      try {
+        const body: JsonObject = {
+          messages: [decodeJsonValue({ value: createUserUiMessage(requestId, text, files, opts.mode) })],
+          trigger: 'submit-message',
+        };
 
-          if (opts.cwd) body.cwd = opts.cwd;
+        if (opts.cwd) body.cwd = opts.cwd;
 
-          if (opts.tier) body.tier = opts.tier;
+        if (opts.tier) body.tier = opts.tier;
 
-          if (this.oneShot) body.oneShot = true;
+        if (this.oneShot) body.oneShot = true;
 
-          const request: JsonObject = {
-            id: requestId,
-            init: {
-              method: 'POST',
-              body: JSON.stringify(body),
-            },
-            type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST,
-          };
+        const request: JsonObject = {
+          id: requestId,
+          init: {
+            method: 'POST',
+            body: JSON.stringify(body),
+          },
+          type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST,
+        };
 
-          ws.send(JSON.stringify(request));
-        } catch (err) {
-          this.activeTurns.delete(requestId);
-          this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
-          turn.settle(true);
-        }
-      }));
+        ws.send(JSON.stringify(request));
+      } catch (err) {
+        this.activeTurns.delete(requestId);
+        this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
+        turn.settle(true);
+      }
     });
   }
 
-  fork(point: ForkPoint): Promise<AgentForkResult> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (this.activeTurns.size > 0) return yield* Effect.die(new Error('Cannot fork while a turn is running.'));
-      const rows = yield* Effect.promise(async () => this.history());
-      const pivotRow = rows[findForkPivot(rows, point)];
+  async fork(point: ForkPoint): Promise<AgentForkResult> {
+    if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
+    const rows = await this.history();
+    const pivotRow = rows[findForkPivot(rows, point)];
 
-      if (pivotRow === undefined) return yield* Effect.die(new Error("Could not locate that message in the agent's chat history."));
-      yield* this.callRpc('revertConversation', [pivotRow.id]);
+    if (pivotRow === undefined) throw new Error("Could not locate that message in the agent's chat history.");
+    await this.callRpc('revertConversation', [pivotRow.id]);
 
-      return { client: this, label: `before ${pivotRow.id}` };
-    }));
-  }
-
-  /** A live-session RPC whose answer is parsed by `schema`; the checkpoint and plan surfaces run through it. */
-  parsedRpc<Input, T = Input>(schema: v.GenericSchema<Input, T>, method: AgentRpcMethod, args: JsonValue[]): Promise<T> {
-    return settle(Effect.map(this.callRpc(method, args), (result) => v.parse(schema, result)));
+    return { client: this, label: `before ${pivotRow.id}` };
   }
 
   /** For surfaces that must not force a websocket open; live-session ops use callRpc. */
   private callHttp<T>(method: AgentRpcMethod, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
-    if (this.subordinateName) return this.parsedRpc(schema, method, args);
+    if (this.subordinateName) {
+      return this.callRpc(method, args).then((result) => v.parse(schema, result));
+    }
 
     return this.callParentHttp(method, schema, args);
   }
@@ -506,25 +513,23 @@ export class CloudAgentClient implements AgentClient {
     return callAgentRpc({ origin: this.origin, token: this.token, name: this.cloudName, method, schema, args });
   }
 
-  private callRpc(method: AgentRpcMethod, args: JsonValue[]): Effect.Effect<JsonValue, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      if (!this.mayCall(method)) return yield* Effect.die(new Error(`${method} is not available in an additional agent's session.`));
-      yield* this.ensureOpen();
-      const ws = this.ws;
+  private async callRpc(method: AgentRpcMethod, args: JsonValue[]): Promise<JsonValue> {
+    if (!this.mayCall(method)) throw new Error(`${method} is not available in an additional agent's session.`);
+    await this.ensureOpen();
+    const ws = this.ws;
 
-      if (!ws || ws.readyState !== WebSocket.OPEN) return yield* Effect.die(new Error('Cloud workspace connection is not open.'));
-      const id = randomRequestId();
+    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
+    const id = randomRequestId();
 
-      return yield* Effect.promise(async () => new Promise<JsonValue>((resolve, reject) => {
-        this.pendingRpcs.set(id, { resolve, reject });
+    return await new Promise<JsonValue>((resolve, reject) => {
+      this.pendingRpcs.set(id, { resolve, reject });
 
-        try {
-          ws.send(JSON.stringify({ type: 'rpc', id, method, args }));
-        } catch (err) {
-          this.pendingRpcs.delete(id);
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      }));
+      try {
+        ws.send(JSON.stringify({ type: 'rpc', id, method, args }));
+      } catch (err) {
+        this.pendingRpcs.delete(id);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   }
 
@@ -548,16 +553,18 @@ export class CloudAgentClient implements AgentClient {
     }
 
     if (this.stoppingTurnIds.size > 0 && !this.stopPromise) {
-      this.stopPromise = hold(this.settleStoppedTurns());
+      this.stopPromise = this.settleStoppedTurns();
     }
 
     return [];
   }
 
-  private settleStoppedTurns(): Effect.Effect<void> {
-    return Effect.ensuring(Effect.catchCause(Effect.asVoid(this.callRpc('cancelCurrentWork', [])), (failed) => Effect.sync(() => {
-      this.emit({ type: 'error', message: renderThrownChain({ cause: Cause.squash(failed) }) });
-    })), Effect.sync(() => {
+  private async settleStoppedTurns(): Promise<void> {
+    try {
+      await this.callRpc('cancelCurrentWork', []);
+    } catch (cause) {
+      this.emit({ type: 'error', message: renderThrownChain({ cause }) });
+    } finally {
       this.stopPromise = null;
 
       for (const id of this.stoppingTurnIds) {
@@ -568,7 +575,7 @@ export class CloudAgentClient implements AgentClient {
         this.activeTurns.delete(id);
         turn.settle();
       }
-    }));
+    }
   }
 
   async close(): Promise<void> {
@@ -602,35 +609,31 @@ export class CloudAgentClient implements AgentClient {
     ));
   }
 
-  private ownSnapshot(name: string): Effect.Effect<v.InferOutput<typeof ActorSnapshotSchema>, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      return v.parse(ActorSnapshotSchema, yield* this.callRpc('getActorSnapshot', [name]));
-    });
+  private async ownSnapshot(name: string): Promise<v.InferOutput<typeof ActorSnapshotSchema>> {
+    return v.parse(ActorSnapshotSchema, await this.callRpc('getActorSnapshot', [name]));
   }
 
-  status(): Promise<AgentClientStatus> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (this.subordinateName !== null) {
-        const own = yield* this.ownSnapshot(this.subordinateName);
+  async status(): Promise<AgentClientStatus> {
+    if (this.subordinateName !== null) {
+      const own = await this.ownSnapshot(this.subordinateName);
 
-        return { name: own.displayName, purpose: own.mission, model: own.model.model, reasoningEffort: own.reasoningEffort, roleId: own.role };
-      }
+      return { name: own.displayName, purpose: own.mission, model: own.model.model, reasoningEffort: own.reasoningEffort, roleId: own.role };
+    }
 
-      const status = yield* Effect.promise(async () => this.callHttp('getAgentStatus', CloudAgentStatusSchema));
+    const status = await this.callHttp('getAgentStatus', CloudAgentStatusSchema);
 
-      return {
-        name: status.displayName ?? status.name,
-        purpose: status.purpose,
-        model: status.model ?? null,
-        reasoningEffort: status.reasoningEffort ?? null,
-        roleId: status.roleId,
-        tierId: status.tierId,
-        scaffoldVersion: status.scaffoldVersion,
-        messageCount: status.messageCount,
-        searchNodeCount: status.searchNodeCount,
-        context: status.context ?? null,
-      };
-    }));
+    return {
+      name: status.displayName ?? status.name,
+      purpose: status.purpose,
+      model: status.model ?? null,
+      reasoningEffort: status.reasoningEffort ?? null,
+      roleId: status.roleId,
+      tierId: status.tierId,
+      scaffoldVersion: status.scaffoldVersion,
+      messageCount: status.messageCount,
+      searchNodeCount: status.searchNodeCount,
+      context: status.context ?? null,
+    };
   }
 
   async describeTools(): Promise<AgentToolSurface> {
@@ -646,60 +649,62 @@ export class CloudAgentClient implements AgentClient {
     return await this.callHttp('getMemoryContent', v.string());
   }
 
-  changelog(): Promise<AgentChangelogView> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const result = v.parse(
-        ChangelogViewSchema, yield* this.callRpc('getEvolutionChangelog', [{ limit: 50 }]),
-      );
+  async changelog(): Promise<AgentChangelogView> {
+    const result = v.parse(
+      ChangelogViewSchema, await this.callRpc('getEvolutionChangelog', [{ limit: 50 }]),
+    );
 
-      const view: AgentChangelogView = {
-        entries: result?.entries ?? [],
-        unseenCount: result?.unseenCount ?? 0,
-      };
+    const view: AgentChangelogView = {
+      entries: result?.entries ?? [],
+      unseenCount: result?.unseenCount ?? 0,
+    };
 
-      // A silently dropped ack leaves the digest unseen forever; report it through the error channel.
-      yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-        yield* this.callRpc('markChangelogSeen', []);
-      }), (failed) => Effect.sync(() => {
-        const error = Cause.squash(failed);
-        this.emit({
-          type: 'error',
-          message: `Could not mark the changelog as seen: ${renderThrownChain({ cause: error })}`,
-        });
-      }));
+    // A silently dropped ack leaves the digest unseen forever; report it through the error channel.
+    try {
+      await this.callRpc('markChangelogSeen', []);
+    } catch (error) {
+      this.emit({
+        type: 'error',
+        message: `Could not mark the changelog as seen: ${renderThrownChain({ cause: error })}`,
+      });
+    }
 
-      return view;
-    }));
+    return view;
   }
 
-  revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    return this.parsedRpc(ChangelogRevertResultSchema, 'revertChangelogEntry', [id]);
+  async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
+    return v.parse(ChangelogRevertResultSchema, await this.callRpc('revertChangelogEntry', [id]));
   }
 
-  refinements(): Promise<AgentRefinementView> {
-    return this.parsedRpc(RefinementViewSchema, 'listRefinements', [20]);
+  async refinements(): Promise<AgentRefinementView> {
+    return v.parse(RefinementViewSchema, await this.callRpc('listRefinements', [20]));
   }
 
-  requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {
-    return this.parsedRpc(RefinementRequestViewSchema, 'requestRefinement', [
+  async requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {
+    return v.parse(RefinementRequestViewSchema, await this.callRpc('requestRefinement', [
       opts?.turnIds === undefined ? {} : { turnIds: [...opts.turnIds] },
-    ]);
+    ]));
   }
 
-  decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
-    // Spelled out: the RPC argument channel is JSON and a readonly interface is not.
-    return this.parsedRpc(RefinementDecisionResultSchema, 'decideRefinement', [{
-      requestId: input.requestId,
-      routeIndex: input.routeIndex,
-      expectedDigest: input.expectedDigest,
-      decision: input.decision,
-    }]);
+  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
+    return v.parse(
+      RefinementDecisionResultSchema,
+      // Spelled out: the RPC argument channel is JSON and a readonly interface is not.
+      await this.callRpc('decideRefinement', [{
+        requestId: input.requestId,
+        routeIndex: input.routeIndex,
+        expectedDigest: input.expectedDigest,
+        decision: input.decision,
+      }]),
+    );
   }
 
-  showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
-    return this.parsedRpc(StagedSkillResultSchema, 'showRefinement', [requestId, routeIndex]);
+  async showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
+    return v.parse(
+      StagedSkillResultSchema,
+      await this.callRpc('showRefinement', [requestId, routeIndex]),
+    );
   }
-
   async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
     const input = v.parse(SubordinateInspectionRequestSchema, request);
 
@@ -710,31 +715,27 @@ export class CloudAgentClient implements AgentClient {
     return this.callParentHttp('listWorkspaceWork', WorkspaceWorkSchema);
   }
 
-  latestTakes(): Promise<AlternateTakeSet | null> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (!this.mayCall('latestAlternateTakes')) return null;
+  async latestTakes(): Promise<AlternateTakeSet | null> {
+    if (!this.mayCall('latestAlternateTakes')) return null;
 
-      return v.parse(v.nullable(AlternateTakeSetSchema), yield* this.callRpc('latestAlternateTakes', []));
-    }));
+    return v.parse(v.nullable(AlternateTakeSetSchema), await this.callRpc('latestAlternateTakes', []));
   }
 
-  pickTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
-    return this.parsedRpc(TakePickOutcomeSchema, 'pickAlternateTake', [takeId, nodeId]);
+  async pickTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
+    return v.parse(TakePickOutcomeSchema, await this.callRpc('pickAlternateTake', [takeId, nodeId]));
   }
 
-  setRole(roleId: string): Promise<{ role: string }> {
-    return this.parsedRpc(v.object({ role: v.string() }), 'setRole', [roleId]);
+  async setRole(roleId: string): Promise<{ role: string }> {
+    return v.parse(v.object({ role: v.string() }), await this.callRpc('setRole', [roleId]));
   }
 
   /** Inherits the workspace mission with a blank `displayName`; `name` is the slug to open it by. */
-  createAdditionalAgent(): Promise<{ name: string; displayName: string }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const result = this.subordinateName
-        ? (yield* Effect.promise(async () => this.callParentHttp('createSubordinateAgent', AdditionalAgentSchema)))
-        : v.parse(AdditionalAgentSchema, yield* this.callRpc('createSubordinateAgent', []));
+  async createAdditionalAgent(): Promise<{ name: string; displayName: string }> {
+    const result = this.subordinateName
+      ? await this.callParentHttp('createSubordinateAgent', AdditionalAgentSchema)
+      : v.parse(AdditionalAgentSchema, await this.callRpc('createSubordinateAgent', []));
 
-      return result;
-    }));
+    return result;
   }
 
   /** Keeps the parent workspace name for ticket scope and parent-owned actions. */
@@ -771,37 +772,36 @@ export class CloudAgentClient implements AgentClient {
     }));
   }
 
-  async listJobs(limit = 20): Promise<AgentJobSummary[]> {
-    const args: JsonValue[] = this.subordinateName === null ? [limit] : [limit, this.subordinateName];
+  async listJobs(limit = 20, actor?: string): Promise<AgentJobSummary[]> {
+    const owner = actor ?? this.subordinateName;
+    const args: JsonValue[] = owner === null ? [limit] : [limit, owner];
     const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), args);
 
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status, label: job.label ?? null, ...(job.output !== undefined && { output: job.output }) }));
   }
 
-  getModelSpec(): Promise<string | null> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (this.subordinateName !== null) return (yield* this.ownSnapshot(this.subordinateName)).model.model;
-
-      return (yield* Effect.promise(async () => this.callHttp('getStoredModelSpec', ModelSpecSchema))).spec;
-    }));
+  async cancelJob(jobId: string): Promise<{ ok: boolean }> {
+    return await this.callHttp('cancelBackgroundJob', CancelJobSchema, this.subordinateName === null ? [jobId] : [jobId, this.subordinateName]);
   }
 
-  setModel(spec: string): Promise<{ spec: string }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const name = this.subordinateName;
+  async getModelSpec(): Promise<string | null> {
+    if (this.subordinateName !== null) return (await this.ownSnapshot(this.subordinateName)).model.model;
 
-      if (name !== null) return { spec: v.parse(SetModelResultSchema, yield* this.callRpc('setActorModel', [name, spec])).spec };
-
-      return { spec: (yield* Effect.promise(async () => this.callHttp('setModel', SetModelResultSchema, [spec]))).spec };
-    }));
+    return (await this.callHttp('getStoredModelSpec', ModelSpecSchema)).spec;
   }
 
-  getReasoningEffort(): Promise<ReasoningEffort | null> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (this.subordinateName !== null) return (yield* this.ownSnapshot(this.subordinateName)).reasoningEffort;
+  async setModel(spec: string): Promise<{ spec: string }> {
+    const name = this.subordinateName;
 
-      return (yield* Effect.promise(async () => this.callHttp('getReasoningEffort', ReasoningEffortResultSchema))).effort;
-    }));
+    if (name !== null) return { spec: v.parse(SetModelResultSchema, await this.callRpc('setActorModel', [name, spec])).spec };
+
+    return { spec: (await this.callHttp('setModel', SetModelResultSchema, [spec])).spec };
+  }
+
+  async getReasoningEffort(): Promise<ReasoningEffort | null> {
+    if (this.subordinateName !== null) return (await this.ownSnapshot(this.subordinateName)).reasoningEffort;
+
+    return (await this.callHttp('getReasoningEffort', ReasoningEffortResultSchema)).effort;
   }
 
   async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
@@ -832,17 +832,15 @@ export class CloudAgentClient implements AgentClient {
     return await this.callHttp('setEvolutionConfig', EvolutionConfigSchema, [decodeJsonValue({ value: view })]);
   }
 
-  listModels(): Promise<AgentModelMenu> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const menu = yield* Effect.promise(async () => listCloudAvailableModels(this.origin, this.token));
+  async listModels(): Promise<AgentModelMenu> {
+    const menu = await listCloudAvailableModels(this.origin, this.token);
 
-      // Only an empty menu with no failures is an error; provider failures are reported to the picker.
-      if (menu.models.length === 0 && menu.failures.length === 0) {
-        return yield* Effect.die(new Error('No cloud models are available.'));
-      }
+    // Only an empty menu with no failures is an error; provider failures are reported to the picker.
+    if (menu.models.length === 0 && menu.failures.length === 0) {
+      throw new Error('No cloud models are available.');
+    }
 
-      return menu;
-    }));
+    return menu;
   }
 
   async testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
@@ -857,106 +855,97 @@ export class CloudAgentClient implements AgentClient {
     }
   }
 
-  private ensureOpen(): Effect.Effect<void, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      if (this.closed) return yield* Effect.die(new Error('Cloud workspace client is closed.'));
+  private async ensureOpen(): Promise<void> {
+    if (this.closed) throw new Error('Cloud workspace client is closed.');
 
-      if (this.ws?.readyState === WebSocket.OPEN) return;
+    if (this.ws?.readyState === WebSocket.OPEN) return;
 
-      const joined = this.connectPromise;
+    if (this.connectPromise) {
+      await this.connectPromise;
 
-      if (joined) {
-        yield* (yield* Effect.promise(() => joined));
+      if (this.closed) throw new Error('Cloud workspace client closed while connecting.');
 
-        if (this.closed) return yield* Effect.die(new Error('Cloud workspace client closed while connecting.'));
+      return;
+    }
 
-        return;
-      }
+    this.connectPromise = this.openSocket();
 
-      // Held: a second caller joins this connect and answers its failure, and no caller leaves it unhandled.
-      const connecting = hold(this.openSocket());
-      this.connectPromise = connecting;
+    try {
+      await this.connectPromise;
 
-      return yield* Effect.ensuring(Effect.gen({ self: this }, function* () {
-        yield* (yield* Effect.promise(() => connecting));
-
-        if (this.closed) return yield* Effect.die(new Error('Cloud workspace client closed while connecting.'));
-      }), Effect.sync(() => {
-        this.connectPromise = null;
-      }));
-    });
+      if (this.closed) throw new Error('Cloud workspace client closed while connecting.');
+    } finally {
+      this.connectPromise = null;
+    }
   }
 
-  private openSocket(): Effect.Effect<void, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      if (this.closed) return yield* Effect.die(new Error('Cloud workspace client is closed.'));
-      const { ticket } = yield* Effect.promise(async () => createCloudAgentConnectTicket(this.origin, this.token, this.cloudName));
+  private async openSocket(): Promise<void> {
+    if (this.closed) throw new Error('Cloud workspace client is closed.');
+    const { ticket } = await createCloudAgentConnectTicket(this.origin, this.token, this.cloudName);
 
-      if (this.closed) return yield* Effect.die(new Error('Cloud workspace client closed while creating its connect ticket.'));
+    if (this.closed) throw new Error('Cloud workspace client closed while creating its connect ticket.');
 
-      // The actor segment under the workspace room, shared with the browser and the edge. There is no child
-      // Durable Object, so the SDK's facet hop answers not-found.
-      const room = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`;
+    // The actor segment under the workspace room, shared with the browser and the edge. There is no child
+    // Durable Object, so the SDK's facet hop answers not-found.
+    const room = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`;
 
-      const actorPath = this.subordinateName
-        ? `${room}/${hostedActorSocketPath(this.subordinateName)}`
-        : room;
+    const actorPath = this.subordinateName
+      ? `${room}/${hostedActorSocketPath(this.subordinateName)}`
+      : room;
 
-      const url = new URL(actorPath, this.origin.replace(/\/+$/, ''));
-      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-      url.searchParams.set('ticket', ticket);
+    const url = new URL(actorPath, this.origin.replace(/\/+$/, ''));
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.searchParams.set('ticket', ticket);
 
-      const ws = new WebSocket(url.toString());
-      this.ws = ws;
-      ws.addEventListener('message', (event) => this.handleMessage(event));
-      // One drop per socket generation: `error` then `close` would report it twice.
-      let dropped = false;
+    const ws = new WebSocket(url.toString());
+    this.ws = ws;
+    ws.addEventListener('message', (event) => this.handleMessage(event));
+    // One drop per socket generation: `error` then `close` would report it twice.
+    let dropped = false;
 
-      const onDrop = (): Effect.Effect<void> => Effect.suspend(() => {
-        if (dropped) return Effect.void;
-        dropped = true;
+    const onDrop = async (): Promise<void> => {
+      if (dropped) return;
+      dropped = true;
 
-        if (this.ws === ws) this.ws = null;
-        this.failPendingRpcs(new Error('Cloud workspace connection closed.'));
+      if (this.ws === ws) this.ws = null;
+      this.failPendingRpcs(new Error('Cloud workspace connection closed.'));
 
-        return Effect.catchCause(this.rebindInFlightTurns(), (failed) => Effect.sync(() => {
-          const cause = Cause.squash(failed);
-
-          this.failInFlight(new Error(
-            `Could not reconnect to resume this cloud turn: ${renderThrownChain({ cause })}`,
-            { cause },
-          ));
-        }));
-      });
-
-      ws.addEventListener('close', () => detach(onDrop()));
-      ws.addEventListener('error', () => detach(onDrop()));
-
-      yield* Effect.promise(async () => new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), 15_000);
-
-        const finish = (outcome: () => void): void => {
-          clearTimeout(timeout);
-          outcome();
-        };
-
-        ws.addEventListener('open', () => {
-          finish(resolve);
-        }, { once: true });
-        ws.addEventListener('error', () => {
-          finish(() => reject(new Error('Could not connect to cloud agent.')));
-        }, { once: true });
-        ws.addEventListener('close', () => {
-          finish(() => reject(new Error('Cloud workspace connection closed before it opened.')));
-        }, { once: true });
-      }));
-
-      if (this.closed) {
-        ws.close();
-
-        return yield* Effect.die(new Error('Cloud workspace client closed while connecting.'));
+      try {
+        await this.rebindInFlightTurns();
+      } catch (cause) {
+        this.failInFlight(new Error(
+          `Could not reconnect to resume this cloud turn: ${renderThrownChain({ cause })}`,
+          { cause },
+        ));
       }
+    };
+
+    ws.addEventListener('close', () => detach(Effect.promise(onDrop)));
+    ws.addEventListener('error', () => detach(Effect.promise(onDrop)));
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), 15_000);
+
+      const settle = (outcome: () => void): void => {
+        clearTimeout(timeout);
+        outcome();
+      };
+
+      ws.addEventListener('open', () => {
+        settle(resolve);
+      }, { once: true });
+      ws.addEventListener('error', () => {
+        settle(() => reject(new Error('Could not connect to cloud agent.')));
+      }, { once: true });
+      ws.addEventListener('close', () => {
+        settle(() => reject(new Error('Cloud workspace connection closed before it opened.')));
+      }, { once: true });
     });
+
+    if (this.closed) {
+      ws.close();
+      throw new Error('Cloud workspace client closed while connecting.');
+    }
   }
 
   private handleMessage(event: MessageEvent): void {
@@ -1032,7 +1021,7 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    if (payload.body?.trim()) active.apply(payload.body, payload.replay === true);
+    active.apply(payload);
 
     if (payload.done) {
       if (this.stoppingTurnIds.has(id)) return;
@@ -1084,31 +1073,29 @@ export class CloudAgentClient implements AgentClient {
    * Rebind, never resubmit: the DO persisted each turn and keeps its stream resumable, so a rebind cannot produce a
    * second turn. A turn already awaiting rebind made no progress and is reported instead.
    */
-  private rebindInFlightTurns(): Effect.Effect<void, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      if (this.closed || this.activeTurns.size === 0) return;
+  private async rebindInFlightTurns(): Promise<void> {
+    if (this.closed || this.activeTurns.size === 0) return;
 
-      for (const [id, turn] of this.activeTurns) {
-        if (!turn.awaitingRebind) continue;
-        this.activeTurns.delete(id);
-        this.emit({
-          type: 'error',
-          message: 'The cloud workspace connection dropped again before this turn could be resumed.'
-            + ' It is still running there. Its answer lands in the workspace transcript.',
-        });
-        turn.settle(true);
-      }
+    for (const [id, turn] of this.activeTurns) {
+      if (!turn.awaitingRebind) continue;
+      this.activeTurns.delete(id);
+      this.emit({
+        type: 'error',
+        message: 'The cloud workspace connection dropped again before this turn could be resumed.'
+          + ' It is still running there. Its answer lands in the workspace transcript.',
+      });
+      turn.settle(true);
+    }
 
-      if (this.activeTurns.size === 0) return;
+    if (this.activeTurns.size === 0) return;
 
-      for (const turn of this.activeTurns.values()) {
-        turn.awaitingRebind = true;
-        turn.resumeAcked = false;
-      }
+    for (const turn of this.activeTurns.values()) {
+      turn.awaitingRebind = true;
+      turn.resumeAcked = false;
+    }
 
-      yield* this.ensureOpen();
-      this.requestStreamResume();
-    });
+    await this.ensureOpen();
+    this.requestStreamResume();
   }
 
   private resume(stream: string, turnId: string | undefined): void {

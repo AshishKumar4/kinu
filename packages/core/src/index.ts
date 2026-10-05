@@ -361,7 +361,7 @@ export type { SessionFilePlane } from './session/payload';
 
 export type { MessageReference, MessagePartReference, ActorReadAuthority } from './session/messages';
 
-export { answerParts, SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
+export { answerParts, drawnStep, SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
 
 export { encodeModelMessageValues, decodeModelMessageValues } from './session/message-codec';
 
@@ -543,11 +543,11 @@ export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from './tools/tool-schema';
 
 export {
-  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens, omitEmptyOptionalArgs,
+  describeMcpTool, toolSurfaceTokens, omitEmptyOptionalArgs,
   buildMcpToolSet, listMcpToolsLeniently,
-  McpToolSurfaceSchema,
+  McpToolSurfaceSchema, McpToolSurfaceCache, servedMcpDescriptors,
   type SerializableToolDescriptor, type RemoteMcpTool, type McpToolRefusal, type ListedMcpTools,
-  type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild,
+  type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild, type McpServedSurface,
 } from './tools/mcp-surface';
 
 export {
@@ -939,7 +939,7 @@ export {
   withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach, type ShellReach,
   busyShell, callJob, createBashShell, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
   type MachineShells,
-  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, sandboxSizeLabel,
+  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending, sandboxSizeLabel,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   deviceToolchainAnswer, freshDeviceToolchain,
@@ -1000,7 +1000,7 @@ export {
 
 export { explainSandboxError } from './tools/sandbox-errors';
 
-export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
+export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
@@ -1131,10 +1131,10 @@ export {
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema,
   parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, jsonResultOrVoid, projectJsonValue, nonEmptyString,
-  stringifyOr, type JsonPrimitive, type JsonObject, type JsonValue,
+  type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
-export { MarkdownFrontmatterError, parseMarkdownFrontmatter, readMarkdownFrontmatter } from './utils/markdown-frontmatter';
+export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/markdown-frontmatter';
 
 export { compareCodeUnits } from './utils/text';
 
@@ -1482,7 +1482,7 @@ export { isoDate, today, nowMs } from './utils/date';
 // Branching heads
 export type {
   HeadId, HeadBudget, HeadInput, HeadReport, HeadReportStatus, HeadUnsettledStatus,
-  HeadStep, HeadStepToolCall, HeadRunView, HeadRunHeadView,
+  HeadStep, HeadRunView, HeadRunHeadView,
   Evidence, Decision, ArtifactRef,
   SplitRequest, MergeResult, HeadScore, MergeStrategy,
   HeadFileChange, HeadFileChangeSet,
@@ -1527,7 +1527,7 @@ export {
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
-  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
+  type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
   WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,
   JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, lastOutputLines, jobName, shortJobId, type JobName,
   type JobOutputFrame, type JobOutputTail,
@@ -2151,7 +2151,7 @@ export {
 } from './read-models/background-event';
 
 export {
-  appendHeadDelta, retireHeadDelta, stepAsMessage, deltaAsMessage, NO_HEAD_DELTAS,
+  appendHeadDelta, retireHeadDelta, deltaAsMessage, NO_HEAD_DELTAS,
   type HeadDelta, type HeadDeltaKind, type HeadDeltas,
 } from './read-models/head-chat';
 
@@ -2454,3 +2454,4 @@ export type {
   AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';
+

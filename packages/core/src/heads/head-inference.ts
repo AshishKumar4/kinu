@@ -2,14 +2,14 @@
 // strategy/node-agent.ts). Every turn is a claimed actor turn on `ActorSession`.
 // Inherited context: docs/EXPLORATION.md "Inherited context".
 
-import { Cause, Effect } from 'effect';
 import { z } from 'zod';
+import { Effect } from 'effect';
 import { invalidToolCallRefusal, oneOf } from '../tools/tool-schema';
 import {
   tool,
   type ToolSet, type LanguageModel, type ModelMessage, type StepResult, type ToolExecutionOptions,
 } from 'ai';
-import type { ObserveStream } from '../chat';
+import type { ObserveStream, StepRecord } from '../chat';
 import type { HostedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
@@ -18,7 +18,7 @@ import type { PromptModelContext } from '../prompting/model-profile';
 import type { ResolvedModelWindow } from '../context-window';
 import {
   EVIDENCE_KINDS,
-  type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
+  HeadStepPartsSchema, type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
@@ -26,13 +26,14 @@ import { MissionBudgetExhausted, type MissionBudgetRefusal, type MissionScope } 
 import { failedToolOutcome, type ToolOutcome } from '../tools/outcome';
 import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { nanoid } from '../utils/nanoid';
-import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary';
+import { extractFinalText, synthesizeHeadSummary } from './head-summary';
+import { drawnStep } from '../session/transcript';
+import { encodeModelMessageValues } from '../session/message-codec';
 import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { renderThrownChain, toKinuError, type KinuError, settleLogged } from '../obs/index';
-import { settle, settleSync } from '../obs/effect';
+import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
 import type { BuiltinToolName } from '../tools/registry';
 import { agentAffinityKey } from '../providers/workers-ai';
 import type { ActorTurnClaim, ClaimOutcome } from '../orchestrator/actor-claims';
@@ -74,7 +75,7 @@ export interface HeadToolCall extends ToolCallRecord {
   outcome: ToolOutcome;
 }
 
-import { permitInPlan } from '../execution/work-mode';
+import { callableToolNames, permitInPlan } from '../execution/work-mode';
 import type { Clock } from '../types/clock';
 
 const RecordEvidenceInputSchema = z.object({
@@ -122,29 +123,7 @@ export function withHeadCaptureRecording(tools: ToolSet, capture: HeadCapture): 
   const out: ToolSet = {};
 
   for (const [name, entry] of Object.entries(tools)) {
-    const execute = entry.execute;
-
-    out[name] = !execute ? entry : Object.assign({}, entry, {
-      execute: (input: never, options: ToolExecutionOptions) => settle(Effect.gen(function* () {
-        const value = projectJsonValue({ value: input });
-        const args: JsonObject = isJsonObject(value) ? value : { input: value };
-
-        return yield* Effect.promise(async () => execute(input, options)).pipe(
-          Effect.tap((result) => Effect.sync(() => capture.recordToolCall({
-            name, args, result: projectJsonValue({ value: result }),
-            outcome: { success: true }, toolCallId: options.toolCallId,
-          }))),
-          Effect.onError((failed) => Effect.sync(() => {
-            const err = Cause.squash(failed);
-
-            capture.recordToolCall({
-              name, args, result: renderThrownChain({ cause: err }),
-              outcome: failedToolOutcome({ cause: err }), toolCallId: options.toolCallId,
-            });
-          })),
-        );
-      })),
-    });
+    out[name] = recordingTool(name, entry, capture);
   }
 
   return out;
@@ -164,6 +143,39 @@ function recordRefusedCalls(step: StepResult<ToolSet>, capture: HeadCapture): vo
       outcome: failedToolOutcome({ cause: refusal }), toolCallId: part.toolCallId,
     });
   }
+}
+
+function recordingTool<Entry extends ToolSet[string]>(
+  name: string,
+  entry: Entry,
+  capture: HeadCapture,
+): Entry {
+  const execute = entry.execute;
+
+  if (!execute) return entry;
+
+  return Object.assign({}, entry, {
+    execute: async (input: never, options: ToolExecutionOptions) => {
+      const value = projectJsonValue({ value: input });
+      const args: JsonObject = isJsonObject(value) ? value : { input: value };
+
+      try {
+        const result = await execute(input, options);
+        capture.recordToolCall({
+          name, args, result: projectJsonValue({ value: result }),
+          outcome: { success: true }, toolCallId: options.toolCallId,
+        });
+
+        return result;
+      } catch (err) {
+        capture.recordToolCall({
+          name, args, result: renderThrownChain({ cause: err }),
+          outcome: failedToolOutcome({ cause: err }), toolCallId: options.toolCallId,
+        });
+        throw err;
+      }
+    },
+  });
 }
 
 const HEAD_PROMPT_TOOL_NAMES = [
@@ -505,7 +517,7 @@ interface NextTurnInput {
 
 async function appendNextTurnInput({ session, deps, conversation, turnId, kind, messages }: NextTurnInput): Promise<void> {
   for (const [part, message] of messages.entries()) {
-    const reference = await session.canonical.append({ id: `${turnId}:${kind}:${part}`, message, origin: 'input', turnId, assertOwner: () => deps.actor.handle.current() });
+    const reference = await session.canonical.append({ id: `${turnId}:${kind}:${part}`, message, origin: 'input', turnId, assertOwner: () => Effect.sync(() => deps.actor.handle.assertCurrent()) });
     conversation.push(await session.canonical.messages.materialize(reference));
   }
 }
@@ -528,20 +540,18 @@ async function materializeMessages(session: ActorSession, references: readonly M
 }
 
 /** A report that fails becomes the run's failure, joined to any it already had. */
-function reportConversation(deps: HeadInferenceDeps, input: HeadInput, conversation: readonly ModelMessage[], failure: KinuError | undefined): Effect.Effect<KinuError | undefined> {
-  return Effect.catchCause(Effect.sync(() => {
+function reportConversation(deps: HeadInferenceDeps, input: HeadInput, conversation: readonly ModelMessage[], failure: KinuError | undefined): KinuError | undefined {
+  try {
     deps.reportMessages?.(conversation);
-
-    return failure;
-  }), (failed) => {
-    const cause = Cause.squash(failed);
-
-    return Effect.succeed(toKinuError({
+  } catch (cause) {
+    return toKinuError({
       doing: `report agent ${input.id} conversation`,
       cause: failure === undefined ? cause : new AggregateError([failure, cause], 'execution and conversation reporting failed'),
       otherwise: 'unavailable',
-    }));
-  });
+    });
+  }
+
+  return failure;
 }
 
 interface HeadSummaryInput {
@@ -585,226 +595,239 @@ function streamRelay(deps: HeadInferenceDeps): { observeStream?: HeadInferenceDe
  * is an `errored` report keeping the run's steps and usage. No turn reaches `AgentOrchestrator.recordTurn`
  * (tests/unit-headless-learning.test.ts).
  */
-export function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
-  return settle(Effect.gen(function* () {
-    const { capture, mission, clock } = deps;
-    const startedAt = clock.now();
+export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
+  const { capture, mission, clock } = deps;
+  const startedAt = clock.now();
 
-    let refusal: MissionBudgetRefusal | null = null;
+  let refusal: MissionBudgetRefusal | null = null;
 
-    const outOfBudget = async (): Promise<boolean> => {
-      if (!mission || refusal) return refusal !== null;
-      refusal = await mission.port.guard('model_call', mission.labels);
+  const outOfBudget = async (): Promise<boolean> => {
+    if (!mission || refusal) return refusal !== null;
+    refusal = await mission.port.guard('model_call', mission.labels);
 
-      return refusal !== null;
-    };
+    return refusal !== null;
+  };
 
-    const active = (): Effect.Effect<void> => (deps.isAborted() ? Effect.die(new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError')) : Effect.void);
+  const assertActive = (): void => {
+    if (deps.isAborted()) throw new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError');
+  };
 
-    // Only the mission ledger is asked here; a cancel is cut by the turn's signal and `assertActive`.
-    const prepareModelStep = (): Effect.Effect<undefined, KinuError> => Effect.gen(function* () {
-      if (deps.isAborted()) return undefined;
-      yield* Effect.promise(outOfBudget);
+  // Only the mission ledger is asked here; a cancel is cut by the turn's signal and `assertActive`.
+  const prepareModelStep = async () => {
+    if (deps.isAborted()) return undefined;
+    await outOfBudget();
 
-      if (refusal !== null) return yield* new MissionBudgetExhausted(refusal);
+    if (refusal !== null) throw new MissionBudgetExhausted(refusal);
 
-      return undefined;
-    });
+    return undefined;
+  };
 
-    // One dense counter across every turn: `head_steps` is keyed `${id}-s${seq}`, so a per-turn
-    // counter would overwrite earlier turns. Steps with no prose, reasoning or tool call are not recorded.
-    let recorded = 0;
-    let lastText = '';
-    let lastReasoning = '';
-    const canonicalClaims: ActorTurnClaim[] = [];
-    const canonicalOutput: MessageReference[] = [];
-    const canonicalParts: MessagePartReference[] = [];
+  // One dense counter across every turn: `head_steps` is keyed `${id}-s${seq}`, so a per-turn
+  // counter would overwrite earlier turns. Steps with no prose, reasoning or tool call are not recorded.
+  let recorded = 0;
+  /** A step record holds the turn's messages so far; the step's own start where the last step's ended. */
+  let stepStart = 0;
+  let lastText = '';
+  let lastReasoning = '';
+  let canonicalClaim: ActorTurnClaim | null = null;
+  const canonicalOutput: MessageReference[] = [];
+  const canonicalParts: MessagePartReference[] = [];
 
-    const session = deps.actor.session;
-    const seed = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
+  const session = deps.actor.session;
+  const seed = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
 
-    // Bridged before the first await, so a cancel during seed restore still interrupts.
-    const unbridgeCancel = bridgeCancel(deps.signal, session);
+  // Bridged before the first await, so a cancel during seed restore still interrupts.
+  const unbridgeCancel = bridgeCancel(deps.signal, session);
 
-    if (deps.delegation) yield* Effect.promise(() => session.restoreWorkingHistory());
-    else yield* Effect.promise(() => session.restoreHistory(seed));
-    const conversation: ModelMessage[] = [];
+  if (deps.delegation) await session.restoreWorkingHistory();
+  else await session.restoreHistory(seed);
+  const conversation: ModelMessage[] = [];
 
-    const system = deps.framing?.system
-      ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
+  const system = deps.framing?.system
+    ?? buildHeadSystemPrompt(input, callableToolNames(input.mode, deps.tools), deps.workspaceLayout);
 
-    const modelContext = { ...promptModelContext(deps.model), ...deps.window };
+  const modelContext = { ...promptModelContext(deps.model), ...deps.window };
 
-    /** A stream that died before its first step settles nothing; half a conversation is worse than none. */
-    let settled = false;
-    /** Classified with the natural path so an abort reads the same between or inside steps. */
-    let failure: KinuError | undefined;
+  /** A stream that died before its first step settles nothing; half a conversation is worse than none. */
+  let settled = false;
+  /** Classified with the natural path so an abort reads the same between or inside steps. */
+  let failure: KinuError | undefined;
 
-    const onStep = async (step: StepResult<ToolSet>): Promise<void> => {
-      if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
-      recordRefusedCalls(step, capture);
-      const traced = toHeadStep(step);
+  const onStep = async (step: StepResult<ToolSet>, record: StepRecord): Promise<void> => {
+    if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
+    recordRefusedCalls(step, capture);
+    // Drawn as the transcript draws the recorded step, so a call keeps its id and a failure reads as one.
+    const parts = v.parse(HeadStepPartsSchema, drawnStep(encodeModelMessageValues(record.messages.slice(stepStart))));
 
-      if (traced) {
-        const seq = recorded++;
+    stepStart = record.messages.length;
 
-        // A failed trace write must not kill the work; the sink can be an RPC.
-        await settleLogged('head.step_trace_failed', { doing: 'record a head step trace', otherwise: 'io' }, () => deps.reportStep?.(seq, traced), { headId: input.id, seq });
-      }
+    if (parts.length > 0) {
+      const seq = recorded++;
 
-      const usage = normalizeUsage(step.usage);
-
-      // An unreported step meters nothing.
-      if (!usageReported(usage)) return;
-      capture.recordStepUsage(usage);
-      // Charged per step so the guard reads a current ledger.
-      await mission?.port.debit(usageTotal(usage) ?? 0, {
-        labels: mission.labels, calls: 1, usage,
-      });
-    };
-
-    yield* Effect.catchCause(Effect.gen(function* () {
-      for (let index = 0; ; index++) {
-        // Checked before every turn: an agent spawned into a spent mission gets no free inference.
-        if (deps.isAborted() || (yield* Effect.promise(outOfBudget))) break;
-
-        // Derived, not minted: a recovered activation re-admits the same turn under the next epoch.
-        const turnId = deps.delegation?.assignmentId ?? input.id;
-
-        const lease = session.beginTurn(
-          { runId: deps.runId, turnId: index === 0 ? turnId : `${turnId}#${index}` },
-          input.mode, Date.now(),
+      // A failed trace write must not kill the work; the sink can be an RPC.
+      try {
+        await deps.reportStep?.(seq, { parts });
+      } catch (err) {
+        diagnostics.failure(
+          'head.step_trace_failed',
+          toKinuError({ doing: 'record a head step trace', cause: err, otherwise: 'io' }),
+          { headId: input.id, seq },
         );
-
-        let turnFailed = false;
-
-        yield* Effect.ensuring(Effect.gen(function* () {
-          if (index === 0 && deps.delegation) {
-            const { birthContext } = deps.delegation;
-            yield* Effect.promise(() => session.openDelegatedTurn(lease, { messages: seed, birthContext: async () => birthContext }));
-          }
-
-          const resolved = yield* Effect.promise(() => deps.profile({ availableTools: Object.keys(deps.tools), workMode: input.mode }));
-          session.bindProfile(lease, resolved.profile, resolved.inputs);
-
-          const stopWhen = async (): Promise<boolean> => {
-            if (deps.isAborted()) return true;
-
-            return await outOfBudget();
-          };
-
-          // Read per turn so a promotion lands between turns, never mid-turn.
-          const loopVersion = yield* Effect.promise(() => deps.actor.runtime.identity.scaffold.version());
-
-          const outcome = yield* Effect.promise(() => session.execute(lease, {
-            task: input.task,
-            loopVersion,
-            chat: {
-              model: deps.model,
-              system,
-              tools: deps.tools,
-              modelContext,
-              cache: {
-                providerId: modelContext.provider,
-                modelId: modelContext.id,
-                sessionKey: agentAffinityKey(input.rootId),
-              },
-              stopWhen,
-              onStep,
-              ...streamRelay(deps),
-            },
-            extensions: [{ name: 'kinu.head-lifetime', prepareStep: () => settle(prepareModelStep()) }],
-            dynamic: deps.dynamic,
-            assertActive: () => settleSync(active()),
-            scaffoldStreamOptions: { onStep, stopWhen, prepareStep: () => settle(prepareModelStep()) },
-          }, (event) => {
-            // One frame per delta, in order, never held.
-            if (event.type === 'text-delta') {
-              deps.reportDelta?.('text', event.delta);
-
-              return;
-            }
-
-            if (event.type === 'reasoning-delta') {
-              deps.reportDelta?.('reasoning', event.delta);
-
-              return;
-            }
-
-            // Recorded as a root turn records them.
-            if (event.type === 'model-fallback') {
-              deps.actor.stores.eventRecorder.emit(deps.runId, { type: 'model_fallback', from: event.from, to: event.to, reason: event.reason });
-
-              return;
-            }
-
-            if (event.type !== 'done') return;
-            settled = true;
-          }));
-
-          if (outcome.claim !== null) {
-            canonicalClaims.push(outcome.claim);
-            canonicalOutput.push(...outcome.outputReferences);
-            canonicalParts.push(...outcome.outputPartReferences);
-            conversation.push(...(yield* Effect.promise(() => materializeMessages(session, outcome.outputReferences))));
-          }
-
-          if (outcome.failure !== null) {
-            turnFailed = true;
-            failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: outcome.failure, otherwise: 'unavailable' });
-          }
-
-          // The runner's selected answer (chat.ts answerFromSteps), not `text`, which may be a synthesized stand-in.
-          if (outcome.answer !== null) lastText = outcome.answer;
-
-          if (!turnFailed && !outcome.interrupted) yield* Effect.promise(() => adviseCompletedTurn({ session, input, deps, lease, outcome }));
-
-          session.settleTurnClaim(lease, turnClaimOutcome(turnFailed, outcome.interrupted));
-        }), Effect.sync(() => {
-          session.finishTurn(lease);
-        }));
-
-        if (failure !== undefined || deps.isAborted()) break;
-
-        const resumed = yield* Effect.promise(async () => deps.resume?.());
-
-        if (!resumed) break;
-        yield* Effect.promise(() => appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, kind: 'resume', messages: resumed }));
       }
-    }), (failed) => Effect.sync(() => {
-      failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: Cause.squash(failed), otherwise: 'unavailable' });
-    })).pipe(Effect.ensuring(Effect.sync(unbridgeCancel)));
-
-    if (settled) failure = yield* reportConversation(deps, input, conversation, failure);
-
-    if (refusal) {
-      return exhaustedMissionReport({ input, capture, refusal, wallClockMs: clock.now() - startedAt, stepCount: recorded });
     }
 
-    const outcome = classifyHeadOutcome(deps, failure);
-    const { status, stopReason } = outcome;
-    const summary = headSummary({ input, capture, outcome, final: { text: lastText, reasoningText: lastReasoning } });
+    const usage = normalizeUsage(step.usage);
 
-    const canonicalClaim = canonicalClaims.at(-1) ?? null;
+    // An unreported step meters nothing.
+    if (!usageReported(usage)) return;
+    capture.recordStepUsage(usage);
+    // Charged per step so the guard reads a current ledger.
+    await mission?.port.debit(usageTotal(usage) ?? 0, {
+      labels: mission.labels, calls: 1, usage,
+    });
+  };
 
-    const canonicalCompletion = canonicalClaim === null ? undefined : {
-      turnId: canonicalClaim.turnId, runId: canonicalClaim.runId, outputReferences: canonicalOutput, outputPartReferences: canonicalParts,
-      finalTextReference: yield* Effect.promise(() => session.recordTranscriptText(canonicalClaim, 'report', summary, canonicalOutput)),
-    };
+  try {
+    for (let index = 0; ; index++) {
+      // Checked before every turn: an agent spawned into a spent mission gets no free inference.
+      if (deps.isAborted() || await outOfBudget()) break;
 
-    return {
-      id: input.id, status, summary,
-      canonicalCompletion,
-      evidence: [...capture.evidence],
-      decisions: [...capture.decisions],
-      artifactRefs: [...capture.artifacts],
-      fileChanges: capture.files.snapshot(),
-      childHeadIds: [...capture.childHeadIds],
-      toolCalls: [...capture.toolCalls],
-      stepCount: recorded,
-      usage: capture.usage,
-      wallClockMs: clock.now() - startedAt,
-      errorMessage: status === 'completed' ? undefined : stopReason ?? undefined,
-    };
-  }));
+      // Derived, not minted: a recovered activation re-admits the same turn under the next epoch.
+      const turnId = deps.delegation?.assignmentId ?? input.id;
+
+      const lease = session.beginTurn(
+        { runId: deps.runId, turnId: index === 0 ? turnId : `${turnId}#${index}` },
+        input.mode, Date.now(),
+      );
+
+      stepStart = 0;
+
+      let turnFailed = false;
+
+      try {
+        if (index === 0 && deps.delegation) {
+          const { birthContext } = deps.delegation;
+          await session.openDelegatedTurn(lease, { messages: seed, birthContext: async () => birthContext });
+        }
+
+        const resolved = await deps.profile({ availableTools: Object.keys(deps.tools), workMode: input.mode });
+        session.bindProfile(lease, resolved.profile, resolved.inputs);
+
+        const stopWhen = async (): Promise<boolean> => {
+          if (deps.isAborted()) return true;
+
+          return await outOfBudget();
+        };
+
+        const outcome = await session.execute(lease, {
+          task: input.task,
+          // Read per turn so a promotion lands between turns, never mid-turn.
+          loopVersion: await deps.actor.runtime.identity.scaffold.version(),
+          chat: {
+            model: deps.model,
+            system,
+            tools: deps.tools,
+            modelContext,
+            cache: {
+              providerId: modelContext.provider,
+              modelId: modelContext.id,
+              sessionKey: agentAffinityKey(input.rootId),
+            },
+            stopWhen,
+            onStep,
+            ...streamRelay(deps),
+          },
+          extensions: [{ name: 'kinu.head-lifetime', prepareStep: prepareModelStep }],
+          dynamic: deps.dynamic,
+          assertActive,
+          scaffoldStreamOptions: { onStep, stopWhen, prepareStep: prepareModelStep },
+        }, (event) => {
+          // One frame per delta, in order, never held.
+          if (event.type === 'text-delta') {
+            deps.reportDelta?.('text', event.delta);
+
+            return;
+          }
+
+          if (event.type === 'reasoning-delta') {
+            deps.reportDelta?.('reasoning', event.delta);
+
+            return;
+          }
+
+          // Recorded as a root turn records them.
+          if (event.type === 'model-fallback') {
+            deps.actor.stores.eventRecorder.emit(deps.runId, { type: 'model_fallback', from: event.from, to: event.to, reason: event.reason });
+
+            return;
+          }
+
+          if (event.type !== 'done') return;
+          settled = true;
+        });
+
+        if (outcome.claim !== null) {
+          canonicalClaim = outcome.claim;
+          canonicalOutput.push(...outcome.outputReferences);
+          canonicalParts.push(...outcome.outputPartReferences);
+          conversation.push(...await materializeMessages(session, outcome.outputReferences));
+        }
+
+        if (outcome.failure !== null) {
+          turnFailed = true;
+          failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: outcome.failure, otherwise: 'unavailable' });
+        }
+
+        // The runner's selected answer (chat.ts answerFromSteps), not `text`, which may be a synthesized stand-in.
+        if (outcome.answer !== null) lastText = outcome.answer;
+
+        if (!turnFailed && !outcome.interrupted) await adviseCompletedTurn({ session, input, deps, lease, outcome });
+
+        session.settleTurnClaim(lease, turnClaimOutcome(turnFailed, outcome.interrupted));
+      } finally {
+        session.finishTurn(lease);
+      }
+
+      if (failure !== undefined || deps.isAborted()) break;
+
+      const resumed = await deps.resume?.();
+
+      if (!resumed) break;
+      await appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, kind: 'resume', messages: resumed });
+    }
+  } catch (err) {
+    failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
+  } finally {
+    unbridgeCancel();
+  }
+
+  if (settled) failure = reportConversation(deps, input, conversation, failure);
+
+  if (refusal) {
+    return exhaustedMissionReport({ input, capture, refusal, wallClockMs: clock.now() - startedAt, stepCount: recorded });
+  }
+
+  const outcome = classifyHeadOutcome(deps, failure);
+  const { status, stopReason } = outcome;
+  const summary = headSummary({ input, capture, outcome, final: { text: lastText, reasoningText: lastReasoning } });
+
+  const canonicalCompletion = canonicalClaim === null ? undefined : {
+    turnId: canonicalClaim.turnId, runId: canonicalClaim.runId, outputReferences: canonicalOutput, outputPartReferences: canonicalParts,
+    finalTextReference: await session.recordTranscriptText(canonicalClaim, 'report', summary, canonicalOutput),
+  };
+
+  return {
+    id: input.id, status, summary,
+    canonicalCompletion,
+    evidence: [...capture.evidence],
+    decisions: [...capture.decisions],
+    artifactRefs: [...capture.artifacts],
+    fileChanges: capture.files.snapshot(),
+    childHeadIds: [...capture.childHeadIds],
+    toolCalls: [...capture.toolCalls],
+    stepCount: recorded,
+    usage: capture.usage,
+    wallClockMs: clock.now() - startedAt,
+    errorMessage: status === 'completed' ? undefined : stopReason ?? undefined,
+  };
 }

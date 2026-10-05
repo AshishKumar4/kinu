@@ -9,8 +9,8 @@ import { createShellSession } from '../safety/approval-gate';
 import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
-import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerated, toKinuError, type Refusal } from '../obs/index';
-import { isVfsError, isVfsErrorCode, syscallError, type VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
+import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -231,33 +231,33 @@ function sandboxFailure(input: { doing: string; cause: unknown }): KinuError {
   return toKinuError({ ...input, otherwise: transient ? 'unavailable' : 'io' });
 }
 
-interface Failed { readonly cause: unknown }
-
-function tried<T>(run: () => Promise<T>): Effect.Effect<T, Failed> {
-  return Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) });
+export class SandboxPending extends KinuError {
+  constructor(reason: string) {
+    super('unavailable', reason);
+  }
 }
 
-function withSandboxRetry<T>(call: Effect.Effect<T, Failed>, attempts = 3): Effect.Effect<T, Failed> {
-  const attempt = (i: number): Effect.Effect<T, Failed> => Effect.catch(call, (failed) => {
-    const err = failed.cause;
+async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastErr: unknown;
 
-    // A classified `unavailable` is a verdict: marker text in its reason must not re-enter the retry loop.
-    if ((err instanceof KinuError && err.code === 'unavailable') || !isSandboxTransientError(err instanceof Error ? err : String(err)) || i === attempts - 1) {
-      return Effect.fail(failed);
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+
+      // A classified `unavailable` is a verdict: marker text in its reason must not re-enter the retry loop.
+      if (err instanceof KinuError && err.code === 'unavailable') throw err;
+
+      if (!isSandboxTransientError(err instanceof Error ? err : String(err)) || i === attempts - 1) {
+        throw err;
+      }
+
+      await new Promise(r => setTimeout(r, 500 * Math.pow(2, i)));
     }
+  }
 
-    return Effect.andThen(Effect.promise(() => new Promise(r => setTimeout(r, 500 * Math.pow(2, i)))), attempt(i + 1));
-  });
-
-  return attempt(0);
-}
-
-function surfaced<T>(call: Effect.Effect<T, Failed>): Effect.Effect<T> {
-  return Effect.catch(call, (failed) => Effect.die(failed.cause));
-}
-
-function refusedAs<A, B>(doing: string, call: Effect.Effect<A, Failed>, answer: (value: A) => B): Effect.Effect<B | Refusal> {
-  return Effect.match(call, { onSuccess: answer, onFailure: (failed) => refusalOf(sandboxFailure({ doing, cause: failed.cause })) });
+  throw lastErr;
 }
 
 function normalize(res: { output?: string; stdout?: string; stderr?: string; exitCode?: number; cwd?: string }): CommandResult {
@@ -291,31 +291,34 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   const previews = previewHostSuffix !== undefined && previewHostSuffix.length > 0;
   let active = false;
 
-  const touch = (): void => {
+  const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
     if (!active) {
       active = true;
       activated?.();
     }
+
+    return fn();
   };
 
-  const touching = <T>(run: () => Promise<T>): Effect.Effect<T, Failed> => tried(() => {
-    touch();
-
-    return run();
-  });
-
   /** `unprobeable` is not evidence either way; each caller decides what it means. */
-  const probeListener = (box: SandboxHandle, port: number): Effect.Effect<{ listening: boolean } | { unprobeable: unknown }> => Effect.match(
-    withSandboxRetry(touching(() => box.exec(healthProbeCommand(port), { cwd: WORKSPACE_BACKUP_DIR }))),
-    {
-      onSuccess: (probe) => ({ listening: !healthProbeSilent((probe.stdout ?? probe.output ?? '').toString().trim()) }),
-      onFailure: (failed) => ({ unprobeable: failed.cause }),
-    },
-  );
+  const probeListener = async (
+    box: SandboxHandle, port: number,
+  ): Promise<{ listening: boolean } | { unprobeable: unknown }> => {
+    try {
+      const probe = await withSandboxRetry(() => touch(() =>
+        box.exec(healthProbeCommand(port), { cwd: WORKSPACE_BACKUP_DIR })));
+
+      const out = (probe.stdout ?? probe.output ?? '').toString().trim();
+
+      return { listening: !healthProbeSilent(out) };
+    } catch (cause) {
+      return { unprobeable: cause };
+    }
+  };
 
   /** The one exposure path. A probe that cannot run is stepped over: the exposure reports its own error. */
-  const exposeOn = (box: SandboxHandle, suffix: string, port: number, name?: string): Effect.Effect<PortExposureResult, Failed> => Effect.gen(function* () {
-    const probe = yield* probeListener(box, port);
+  const exposeOn = async (box: SandboxHandle, suffix: string, port: number, name?: string): Promise<PortExposureResult> => {
+    const probe = await probeListener(box, port);
 
     if ('unprobeable' in probe) {
       diagnostics.failure('sandbox.port_probe_failed', toKinuError({
@@ -332,14 +335,14 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
       };
     }
 
-    const { urlToken } = yield* tried(() => box.portToken(port, name));
+    const { urlToken } = await box.portToken(port, name);
     const opts: SandboxExposeOptions = { hostname: suffix, token: urlToken };
 
     if (name !== undefined) opts.name = name;
-    const exposed = yield* withSandboxRetry(touching(() => box.exposePort(port, opts)));
+    const exposed = await withSandboxRetry(() => touch(() => box.exposePort(port, opts)));
 
     return { supported: true, url: exposed.url, port, name, route: exposed.route };
-  });
+  };
 
   const tools: ExecutorProvider['tools'] = {
     exec: {
@@ -367,33 +370,33 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
         const call = machineShellCall(command, exec, { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
 
-        const dispatch = Effect.suspend(() => {
-          touch();
+        try {
+          // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
+          // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
+          return await names.hold(exec.name, callJob(exec), async () => {
+            const res = await touch(() => {
+              if (signal?.aborted) throw notDispatched();
+              // The signal is added only when given, so an adapter can tell "none" from "already fired".
+              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR };
 
-          if (signal?.aborted) return Effect.fail({ cause: notDispatched() });
-          const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR };
+              if (signal !== undefined) opts.signal = signal;
 
-          if (signal !== undefined) opts.signal = signal;
+              if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
 
-          if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
+              if (output !== undefined) opts.output = call.output(output);
 
-          if (output !== undefined) opts.output = call.output(output);
+              return handle.exec(call.command, opts);
+            });
 
-          return tried(() => handle.exec(call.command, opts));
-        });
-
-        return settle(tried(() => names.hold(exec.name, callJob(exec), () => settle(withSandboxRetry(dispatch).pipe(
-          Effect.map((res) => {
             const settled = call.settle({ ...res, stdout: res.stdout ?? res.output ?? '' });
 
             return reportsCwd({ context: args[1] }) ? commandResultAt(settled) : normalize(settled);
-          }),
-          Effect.catch((failed) => Effect.die(failed.cause)),
-        )), (message) => refusalOf(new KinuError('unavailable', message)))).pipe(
-          Effect.catch((failed) => (classifyErrorCode(failed) === 'cancelled'
-            ? Effect.die(failed.cause)
-            : Effect.succeed(refusalOf(sandboxFailure({ doing: `sandbox exec \`${command}\``, cause: failed.cause }))))),
-        ));
+          }, (message) => refusalOf(new KinuError('unavailable', message)));
+        } catch (err) {
+          if (classifyErrorCode({ cause: err }) === 'cancelled') throw err;
+
+          return refusalOf(sandboxFailure({ doing: `sandbox exec \`${command}\``, cause: err }));
+        }
       },
     },
     readFile: {
@@ -407,10 +410,18 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
           return refusalOf(new KinuError('bad_input', 'sandbox readFile: path must be a non-empty string'));
         }
 
-        return settle(refusedAs(`sandbox readFile ${path}`, withSandboxRetry(touching(() => handle.readFile(path))), (r) => (r.exitCode && r.exitCode !== 0
+        try {
+          const r = await withSandboxRetry(() => touch(() => handle.readFile(path)));
+
           // A failed read is only an exit code, so `io`: `missing` would over-claim.
-          ? refusalOf(new KinuError('io', `sandbox readFile ${path}: exit ${r.exitCode}`))
-          : r.content ?? '')));
+          if (r.exitCode && r.exitCode !== 0) {
+            return refusalOf(new KinuError('io', `sandbox readFile ${path}: exit ${r.exitCode}`));
+          }
+
+          return r.content ?? '';
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: `sandbox readFile ${path}`, cause: err }));
+        }
       },
     },
     writeFile: {
@@ -428,7 +439,13 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
           return refusalOf(new KinuError('bad_input', 'sandbox writeFile: content must be a string'));
         }
 
-        return settle(refusedAs(`sandbox writeFile ${path}`, withSandboxRetry(touching(() => handle.writeFile(path, content))), () => `wrote ${path}`));
+        try {
+          await withSandboxRetry(() => touch(() => handle.writeFile(path, content)));
+
+          return `wrote ${path}`;
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: `sandbox writeFile ${path}`, cause: err }));
+        }
       },
     },
     listFiles: {
@@ -444,16 +461,22 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
         const dir = path === undefined || path === '' ? WORKSPACE_BACKUP_DIR : path;
 
-        return settle(refusedAs(`sandbox listFiles ${dir}`, withSandboxRetry(touching(() => handle.listFiles(dir, { recursive: false }))), (r) => (r?.files?.length
-          ? r.files
+        try {
+          const r = await withSandboxRetry(() => touch(() => handle.listFiles(dir, { recursive: false })));
+
+          if (!r?.files?.length) return '';
+
+          return r.files
             .map(f => {
               const name = f.name ?? f.path ?? '';
               const isDir = f.isDirectory ?? f.type === 'directory';
 
               return `${isDir ? 'd' : '-'} ${name}`;
             })
-            .join('\n')
-          : '')));
+            .join('\n');
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: `sandbox listFiles ${dir}`, cause: err }));
+        }
       },
     },
     readdir: {
@@ -471,7 +494,13 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
           return refusalOf(new KinuError('bad_input', 'sandbox deleteFile: path must be a non-empty string'));
         }
 
-        return settle(refusedAs(`sandbox deleteFile ${path}`, withSandboxRetry(touching(() => Promise.resolve(handle.deleteFile(path)))), () => `deleted ${path}`));
+        try {
+          await withSandboxRetry(() => touch(() => Promise.resolve(handle.deleteFile(path))));
+
+          return `deleted ${path}`;
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: `sandbox deleteFile ${path}`, cause: err }));
+        }
       },
     },
     exists: {
@@ -486,8 +515,14 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
           return refusalOf(new KinuError('bad_input', 'sandbox exists: path must be a non-empty string'));
         }
 
-        return settle(refusedAs(`sandbox exists ${path}`, withSandboxRetry(touching(() => handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`))),
-          (res) => ((res.stdout ?? res.output ?? '').trim().includes('true') ? 'true' : 'false')));
+        try {
+          const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`)));
+          const out = (res.stdout ?? res.output ?? '').trim();
+
+          return out.includes('true') ? 'true' : 'false';
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: `sandbox exists ${path}`, cause: err }));
+        }
       },
     },
     exposePort: {
@@ -508,10 +543,16 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
           return refusalOf(new KinuError('bad_input', `sandbox exposePort: invalid port ${String(args[0])}`));
         }
 
-        // `bad_input`: the caller must start the server first; `unavailable` or `missing` would misfile it.
-        return settle(refusedAs(`sandbox exposePort ${p}`, exposeOn(handle, previewHostSuffix, p, name), (exposed) => (exposed.supported
-          ? exposedPortText(exposed.url, p, exposed.route)
-          : refusalOf(new KinuError('bad_input', exposed.reason)))));
+        try {
+          const exposed = await exposeOn(handle, previewHostSuffix, p, name);
+
+          // `bad_input`: the caller must start the server first; `unavailable` or `missing` would misfile it.
+          return exposed.supported
+            ? exposedPortText(exposed.url, p, exposed.route)
+            : refusalOf(new KinuError('bad_input', exposed.reason));
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: `sandbox exposePort ${p}`, cause: err }));
+        }
       },
     },
     unexposePort: {
@@ -524,10 +565,14 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
           return refusalOf(new KinuError('bad_input', `sandbox unexposePort: invalid port ${String(args[0])}`));
         }
 
-        return settle(refusedAs(`sandbox unexposePort ${port}`, Effect.andThen(
-          withSandboxRetry(touching(() => Promise.resolve(handle.unexposePort(port)))),
-          tried(() => handle.notePortRemoved(port)),
-        ), () => `unexposed ${port}`));
+        try {
+          await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(port))));
+          await handle.notePortRemoved(port);
+
+          return `unexposed ${port}`;
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: `sandbox unexposePort ${port}`, cause: err }));
+        }
       },
     },
     listPorts: {
@@ -537,9 +582,14 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
         if (!previewHostSuffix) return previewsUnconfigured();
 
-        // The tool is listPorts, the verb both executors declare.
-        return settle(refusedAs('sandbox listPorts', withSandboxRetry(touching(() => handle.getExposedPorts(previewHostSuffix))),
-          (ports) => JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })))));
+        try {
+          // The tool is listPorts, the verb both executors declare.
+          const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
+
+          return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: 'sandbox listPorts', cause: err }));
+        }
       },
     },
     startProcess: {
@@ -566,14 +616,18 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
           { value: v.is(v.string(), rawOpts) ? rawOpts : rawOpts?.cwd },
         ) ?? WORKSPACE_BACKUP_DIR;
 
-        // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
-        const started = Effect.suspend(() => {
-          touch();
+        try {
+          // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
+          const started = await touch(async () => {
+            await withSandboxRetry(() => handle.ensureReady());
 
-          return Effect.andThen(withSandboxRetry(tried(() => handle.ensureReady())), tried(() => handle.startSupervisedProcess(command, { cwd })));
-        });
+            return handle.startSupervisedProcess(command, { cwd });
+          });
 
-        return settle(refusedAs(`sandbox startProcess \`${command}\``, started, (process) => JSON.stringify({ ...process, cwd, restartable: true })));
+          return JSON.stringify({ ...started, cwd, restartable: true });
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: `sandbox startProcess \`${command}\``, cause: err }));
+        }
       },
     },
     stopProcess: {
@@ -586,8 +640,14 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
           return refusalOf(new KinuError('bad_input', 'sandbox stopProcess: processId must be a string'));
         }
 
-        return settle(refusedAs(`sandbox stopProcess ${processId}`, withSandboxRetry(touching(() => handle.stopSupervisedProcess(processId))),
-          (result) => JSON.stringify({ processId, ...result })));
+        try {
+          const result = await withSandboxRetry(() =>
+            touch(() => handle.stopSupervisedProcess(processId)));
+
+          return JSON.stringify({ processId, ...result });
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: `sandbox stopProcess ${processId}`, cause: err }));
+        }
       },
     },
     rest: {
@@ -614,11 +674,17 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
       execute: async (): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
 
-        return settle(refusedAs('sandbox listProcesses', withSandboxRetry(touching(async () => {
-          await handle.ensureReady();
+        try {
+          const rows = await withSandboxRetry(() => touch(async () => {
+            await handle.ensureReady();
 
-          return handle.listSupervisedProcesses();
-        })), (rows) => JSON.stringify(rows)));
+            return handle.listSupervisedProcesses();
+          }));
+
+          return JSON.stringify(rows);
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: 'sandbox listProcesses', cause: err }));
+        }
       },
     },
   };
@@ -636,7 +702,10 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         }
 
         // Retried: a resize repeated after a lost answer finds its size already applied.
-        return settle(refusedAs(`sandbox resize ${size}`, withSandboxRetry(touching(() => handle.resize(size))), (resized) => resizedText(resized, sizes)));
+        return settle(Effect.match(Effect.tryPromise({
+          try: () => withSandboxRetry(() => touch(() => handle.resize(size))),
+          catch: (cause) => sandboxFailure({ doing: `sandbox resize ${size}`, cause }),
+        }), { onSuccess: (resized) => resizedText(resized, sizes), onFailure: refusalOf }));
       },
     };
   }
@@ -718,25 +787,29 @@ declare namespace sandbox {
         return { supported: false, reason: `invalid port ${port}` };
       }
 
-      return settle(Effect.catch(exposeOn(handle, previewHostSuffix, port, opts?.name), (failed) => Effect.succeed({ supported: false as const, reason: renderThrownChain(failed) })));
+      try {
+        return await exposeOn(handle, previewHostSuffix, port, opts?.name);
+      } catch (err) {
+        return { supported: false, reason: renderThrownChain({ cause: err }) };
+      }
     },
 
     async unexposePort(port) {
       if (!handle) return;
-
       // No catch: unexposing an unexposed port already succeeds; other errors must surface.
-      return settle(Effect.asVoid(surfaced(withSandboxRetry(touching(() => Promise.resolve(handle.unexposePort(Number(port))))))));
+      await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
     },
 
     async listExposedPorts() {
       if (!handle || !previewHostSuffix) return [];
+      const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
 
-      return settle(Effect.map(surfaced(withSandboxRetry(touching(() => handle.getExposedPorts(previewHostSuffix)))), (ports) => (ports ?? []).map(p => ({
+      return (ports ?? []).map(p => ({
         port: p.port,
         url: p.url,
         name: p.name,
         status: 'unknown' as const,
-      }))));
+      }));
     },
   };
 }
@@ -770,94 +843,96 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
     return null;
   };
 
-  const serving = <T>(path: string, syscall: string, op: () => Promise<T>): Effect.Effect<T, VfsError> => Effect.catch(tried(op), (failed) => {
-    const { cause } = failed;
-    const code = cause instanceof Error ? errnoOf(cause) : null;
+  const serving = async <T>(path: string, syscall: string, op: () => Promise<T>): Promise<T> => {
+    try {
+      return await op();
+    } catch (cause) {
+      if (!(cause instanceof Error)) throw cause;
 
-    if (code === null || !(cause instanceof Error)) return Effect.die(cause);
+      const code = errnoOf(cause);
 
-    return Effect.fail(syscallError(code, syscall, path, { cause }));
-  });
+      if (code === null) throw cause;
+
+      throw syscallError(code, syscall, path, { cause });
+    }
+  };
 
   return {
-    readFile(path) {
-      return settle(Effect.gen(function* () {
-        const result = yield* serving(path, 'open', () => handle.readFile(path, { encoding: 'base64' }));
+    async readFile(path) {
+      const result = await serving(path, 'open', () => handle.readFile(path, { encoding: 'base64' }));
 
-        if (result.exitCode != null && result.exitCode !== 0) {
-          return yield* Effect.fail(syscallError('ENOENT', 'open', path, { detail: `no such file or directory (exit ${result.exitCode})` }));
-        }
+      if (result.exitCode != null && result.exitCode !== 0) {
+        throw syscallError('ENOENT', 'open', path, { detail: `no such file or directory (exit ${result.exitCode})` });
+      }
 
-        return result.encoding === 'base64' ? base64ToBytes(result.content ?? '') : new TextEncoder().encode(result.content ?? '');
-      }));
+      return result.encoding === 'base64' ? base64ToBytes(result.content ?? '') : new TextEncoder().encode(result.content ?? '');
     },
 
     /** Bounded window via `dd` + base64; the SDK's `readFile` has no offset/length. Bounds validated before use. */
-    readRange(path, offset, length) {
-      return settle(Effect.gen(function* () {
-        if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-          return yield* Effect.fail(syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' }));
-        }
+    async readRange(path, offset, length) {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
+        throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
+      }
 
-        const r = yield* Effect.promise(() => handle.exec(
-          `set -o pipefail; dd if=${shellQuote(path)} bs=1 skip=${String(offset)} count=${String(length)} status=none | base64 -w 0`,
-        ));
+      const r = await handle.exec(
+        `set -o pipefail; dd if=${shellQuote(path)} bs=1 skip=${String(offset)} count=${String(length)} status=none | base64 -w 0`,
+      );
 
-        if ((r.exitCode ?? 0) !== 0) {
-          return yield* Effect.fail(syscallError('EIO', 'read', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined }));
-        }
+      if ((r.exitCode ?? 0) !== 0) {
+        throw syscallError('EIO', 'read', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
+      }
 
-        return base64ToBytes(r.stdout ?? r.output ?? '');
-      }));
+      return base64ToBytes(r.stdout ?? r.output ?? '');
     },
 
-    writeFile(path, data) {
-      return settle(Effect.asVoid(serving(path, 'open', () => handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }))));
+    async writeFile(path, data) {
+      await serving(path, 'open', () => handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }));
     },
 
-    readdir(path) {
-      return settle(Effect.map(serving(path, 'scandir', () => handle.listFiles(path, { recursive: false })), (result) => (result.files ?? [])
+    async readdir(path) {
+      const result = await serving(path, 'scandir', () => handle.listFiles(path, { recursive: false }));
+
+      return (result.files ?? [])
         .map((entry) => ({ name: nameOf(entry), entry }))
         .filter(({ name }) => name.length > 0)
         .map(({ name, entry }) => {
           const type = isDir(entry) ? 'directory' as const : 'file' as const;
 
           return { name, type, stat: { size: entry.size ?? 0, mtimeMs: 0, type } };
-        })));
+        });
     },
 
     // The devbox lists by lstat, so only `follow: false` can name a link; a followed stat keeps the listed entry.
-    stat(path, options) {
+    async stat(path, options) {
       const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
 
-      if (clean === '/' || clean === '') return Promise.resolve({ size: 0, mtimeMs: 0, type: 'directory' as const });
+      if (clean === '/' || clean === '') return { size: 0, mtimeMs: 0, type: 'directory' };
 
       const name = clean.slice(clean.lastIndexOf('/') + 1);
 
-      return settle(Effect.map(tolerated(serving(clean, 'stat', () => handle.listFiles(vfsDirname(clean), { recursive: false })), 'enoent'), (listing) => {
-        const entry = listing === undefined ? undefined : (listing.files ?? []).find((file) => nameOf(file) === name);
+      const listing = await tolerateAsync(() => serving(clean, 'stat', () =>
+        handle.listFiles(vfsDirname(clean), { recursive: false })), 'enoent');
 
-        if (entry === undefined) return null;
-        const size = entry.size ?? 0;
+      if (listing === undefined) return null;
+      const entry = (listing.files ?? []).find((file) => nameOf(file) === name);
 
-        if (options?.follow === false && entry.type === 'symlink') return { size, mtimeMs: 0, type: 'symlink' as const };
+      if (!entry) return null;
 
-        return { size, mtimeMs: 0, type: isDir(entry) ? 'directory' as const : 'file' as const };
-      }));
+      const size = entry.size ?? 0;
+
+      if (options?.follow === false && entry.type === 'symlink') return { size, mtimeMs: 0, type: 'symlink' };
+
+      return { size, mtimeMs: 0, type: isDir(entry) ? 'directory' : 'file' };
     },
 
-    unlink(path) {
-      return settle(Effect.asVoid(serving(path, 'unlink', () => handle.deleteFile(path))));
-    },
+    async unlink(path) { await serving(path, 'unlink', () => handle.deleteFile(path)); },
 
-    mkdir(path, opts) {
-      return settle(Effect.gen(function* () {
-        const r = yield* Effect.promise(() => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`));
+    async mkdir(path, opts) {
+      const r = await handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`);
 
-        if ((r.exitCode ?? 0) !== 0) {
-          return yield* Effect.fail(syscallError('EIO', 'mkdir', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined }));
-        }
-      }));
+      if ((r.exitCode ?? 0) !== 0) {
+        throw syscallError('EIO', 'mkdir', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
+      }
     },
 
   };

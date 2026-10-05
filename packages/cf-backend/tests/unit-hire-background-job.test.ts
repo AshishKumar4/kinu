@@ -75,6 +75,7 @@ function serverBox(clock: HandClock, killed: string[] = []) {
 
       return execRecords({ stdout, stderr: null, exitCode: exitCode.promise }, { exited: () => {}, cancelled: async () => {} });
     },
+    releaseUntimed: async () => {},
     // The process tree ends as the runtime ends it: the command exits on the signal.
     killUntimed: async (execId: string) => {
       const end = running.get(execId);
@@ -191,6 +192,32 @@ test("the owner's cancel ends a hired agent's job and its command, and wakes the
   await driveUntil(workspace, 'the cancel never woke the hire', () => woken(jobId) !== undefined);
 
   expect((await workspace.agent.listBackgroundJobs(20, name))[0]).toMatchObject({ id: jobId, status: 'cancelled' });
+});
+
+test("the owner's retry runs a hired agent's settled job again as the hire, and its settle wakes the hire", async () => {
+  const { clock, workspace, name, heard, woken, job } = await hiredServer();
+  const jobId = present(job, "the hire's job").id;
+
+  await clock.whenArmed(2);
+  clock.advance(SERVES_MS);
+  await driveUntil(workspace, 'the settle never woke the hire', () => woken(jobId) !== undefined);
+
+  const retried = await workspace.agent.retryBackgroundJob(jobId, name);
+  const retryId = present(retried.jobId, `the retry's job, answered ${JSON.stringify(retried)}`);
+  expect((await workspace.agent.listBackgroundJobs(20, name))[0]).toMatchObject({ id: retryId, kind: 'shell' });
+  expect(await workspace.agent.listBackgroundJobs(20)).toEqual([]);
+
+  // The same command runs on the box again, its output in the hire's view, and its settle is the hire's next turn.
+  // The first call armed its window, its server's life and an output flush; the retry arms its server's and a flush.
+  await clock.whenArmed(5);
+  clock.advance(SERVES_MS);
+  await driveUntil(workspace, "the retry's settle never woke the hire", () => woken(retryId) !== undefined);
+
+  expect(await workspace.agent.listBackgroundJobs(20, name)).toMatchObject([
+    { id: retryId, status: 'completed' }, { id: jobId, status: 'completed', retriedBy: retryId },
+  ]);
+  expect(heard.get('hire')?.join('')).toBe(SERVING + SERVING);
+  expect(heard.get('workspace')).toEqual([]);
 });
 
 test("the owner's Stop ends a call still in its foreground, on the box too", async () => {

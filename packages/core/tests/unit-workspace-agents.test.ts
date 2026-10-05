@@ -45,7 +45,7 @@ function workspace() {
 
     new SubordinateRosterStore(exec, parent).create({
       name, actorReference: actorReferenceOf(child), birth: null, deleteRequested: false,
-      status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime, taskEventId: null, ...rest,
+      status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, taskEventId: null, ...rest,
     });
 
     return child;

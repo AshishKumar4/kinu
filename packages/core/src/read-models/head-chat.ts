@@ -1,9 +1,8 @@
 /**
- * A head's journalled steps and its in-flight step as chat messages. Kept together because both
- * must render through `MessageView` identically; the live state is two strings per head.
+ * A head's in-flight step as a chat message; its journalled steps are already drawn parts (`HeadStep`). The live state is
+ * two strings per head.
  */
 import type { UIMessage } from "ai";
-import type { HeadStep } from '../heads/types';
 
 export interface HeadDelta {
   readonly text: string;
@@ -47,27 +46,6 @@ export function retireHeadDelta(
   next.delete(headId);
 
   return next;
-}
-
-/**
- * `dynamic-tool` parts: the head's tool set is not statically known to the browser. A call with no
- * recorded output stays `input-available`, drawn as still running.
- */
-export function stepAsMessage(step: HeadStep, index: number, headId: string): UIMessage {
-  const parts: UIMessage["parts"] = [];
-
-  if (step.reasoning) parts.push({ type: "reasoning", text: step.reasoning, state: "done" });
-
-  if (step.text) parts.push({ type: "text", text: step.text, state: "done" });
-
-  for (const [callIndex, call] of step.toolCalls.entries()) {
-    const toolCallId = `${headId}-s${index}-t${callIndex}`;
-    parts.push(call.output === undefined
-      ? { type: "dynamic-tool", toolName: call.name, toolCallId, state: "input-available", input: call.input }
-      : { type: "dynamic-tool", toolName: call.name, toolCallId, state: "output-available", input: call.input, output: call.output });
-  }
-
-  return { id: `${headId}-s${index}`, role: "assistant", parts };
 }
 
 /**

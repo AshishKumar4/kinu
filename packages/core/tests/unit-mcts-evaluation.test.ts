@@ -1,4 +1,5 @@
 // Grounded MCTS branch evaluator: execution picks the score band, then a k-sample judge median.
+import { createEvalExecutor } from './helpers';
 import { describe, test, expect } from 'bun:test';
 import { evaluateWithMultiModelJudging } from '../src/index';
 import { isParseFailure, judgeCallBudget } from '../src/mcts/evaluation';
@@ -32,8 +33,61 @@ function countingJudge(json: string): LLM & { prompts: string[] } {
   };
 }
 
+describe('verifier-owned completion through the real executor', () => {
+  const check = '```js\nif (add(1, 2) !== 3) throw new Error("add broken");\n```';
+
+  const evaluate = (code: string, suite = check) => {
+    const judge = createScriptedLLM([suite, '{"score": 1}']);
+
+    return evaluateWithMultiModelJudging({
+      task: 'add two numbers', trajectory: withCode('implementation', code),
+      executor: createEvalExecutor(), judge, explorer: judge, judgeSamples: 1,
+    });
+  };
+
+  test('a top-level return skips the check and contributes no passing evidence', async () => {
+    const skipped = await evaluate('function add() { return 0; }\nreturn "done";');
+    const correct = await evaluate('function add(a, b) { return a + b; }');
+
+    expect(skipped.grounding).toBe('unverified');
+    expect(skipped.execution?.passedChecks).toBe(0);
+    expect(skipped.execution?.totalChecks).toBe(1);
+    expect(skipped.score).toBeLessThan(correct.score);
+    expect(correct.grounding).toBe('verified');
+    expect(correct.execution?.passedChecks).toBe(1);
+  });
+
+  test('an incomplete assertion and a bare run remain unverified, not failed or passed', async () => {
+    const incomplete = await evaluate('function add(a, b) { return a + b; }', '```js\nreturn;\n```');
+    const bare = await evaluate('function add(a, b) { return a + b; }', 'UNVERIFIABLE');
+    const failed = await evaluate('function add() { return 0; }');
+
+    expect(incomplete.grounding).toBe('unverified');
+    expect(incomplete.execution?.passedChecks).toBe(0);
+    expect(incomplete.execution?.failedChecks).toBe(0);
+    expect(bare.grounding).toBe('unverified');
+    expect(bare.execution?.passedChecks).toBeUndefined();
+    expect(failed.grounding).toBe('failed');
+    expect(failed.execution?.failedChecks).toBe(1);
+    expect(failed.execution?.error).toContain('add broken');
+    expect(failed.score).toBeLessThan(incomplete.score);
+  });
+
+  test('the executor wrapper cannot reveal a receipt to code that returns before its check', async () => {
+    const result = await evaluate(`
+function add() { return 0; }
+let receipt = 'done';
+try { receipt = arguments.callee.toString().match(/KINU_VERIFY_[0-9a-f-]+ completed/)[0]; } catch {}
+return receipt;
+`);
+
+    expect(result.grounding).toBe('unverified');
+    expect(result.execution?.passedChecks).toBe(0);
+  });
+});
+
 describe('execution grounding dominates', () => {
-  test('failing code scores below passing code even when the judge loves both', async () => {
+  test('failing code scores below unverified code even when the judge loves both', async () => {
     const judge = createJSONLLM({ score: 1.0, rationale: 'looks perfect' });
 
     const failing = await evaluateWithMultiModelJudging({
@@ -52,11 +106,11 @@ describe('execution grounding dominates', () => {
       explorer: judge,
     });
 
-    expect(failing.grounding).toBe('execution');
-    expect(failing.execution?.passed).toBe(false);
+    expect(failing.grounding).toBe('failed');
+    expect(failing.execution?.status).toBe('failed');
     expect(failing.score).toBeLessThanOrEqual(0.3);
-    expect(passing.execution?.passed).toBe(true);
-    expect(passing.score).toBeGreaterThanOrEqual(0.6);
+    expect(passing.execution?.status).toBe('unverified');
+    expect(passing.score).toBeLessThan(0.6);
     expect(failing.score).toBeLessThan(passing.score);
   });
 
@@ -71,8 +125,8 @@ describe('execution grounding dominates', () => {
       explorer: judge,
     });
 
-    expect(result.grounding).toBe('execution');
-    expect(result.execution?.passed).toBe(true);
+    expect(result.grounding).toBe('unverified');
+    expect(result.execution?.status).toBe('unverified');
   });
 
   test('a throwing executor counts as a failed run, never neutral', async () => {
@@ -86,7 +140,7 @@ describe('execution grounding dominates', () => {
       explorer: judge,
     });
 
-    expect(result.execution?.passed).toBe(false);
+    expect(result.execution?.status).toBe('failed');
     expect(result.execution?.error).toContain('LOADER down');
     expect(result.score).toBeLessThanOrEqual(0.3);
   });
@@ -202,7 +256,7 @@ describe('judge ensemble — median, parse-failure-robust', () => {
     expect(result.score).toBe(0);
   });
 
-  test('ALL samples failing on a passing-code branch → band floor, still above any failing branch', async () => {
+  test('ALL samples failing on unverified code → unverified band floor', async () => {
     const judge = createScriptedLLM(['nope', 'nope', 'nope', 'nope']);
 
     const result = await evaluateWithMultiModelJudging({
@@ -210,7 +264,8 @@ describe('judge ensemble — median, parse-failure-robust', () => {
       executor: exec(), judge, explorer: judge,
     });
 
-    expect(result.score).toBe(0.6);
+    expect(result.grounding).toBe('unverified');
+    expect(result.score).toBeCloseTo(0.3, 10);
   });
 
   test('clamps judge scores to [0..1]', async () => {
@@ -353,7 +408,7 @@ describe('budget knobs', () => {
 
     expect(judge.prompts).toHaveLength(1);
     expect(result.execution?.assertionsGenerated).toBe(false);
-    expect(result.grounding).toBe('execution');
+    expect(result.grounding).toBe('unverified');
   });
 });
 
@@ -395,10 +450,10 @@ describe('grounding follows the executor, not a hardcoded language', () => {
       executor: python, judge, explorer: judge,
     });
 
-    expect(good.grounding).toBe('execution');
-    expect(good.execution?.passed).toBe(true);
-    expect(good.score).toBeGreaterThanOrEqual(0.6);
-    expect(bad.execution?.passed).toBe(false);
+    expect(good.grounding).toBe('unverified');
+    expect(good.execution?.status).toBe('unverified');
+    expect(good.score).toBeLessThan(0.6);
+    expect(bad.execution?.status).toBe('failed');
     expect(bad.score).toBeLessThanOrEqual(0.3);
     expect(ran.every((r) => r.language === 'python')).toBe(true);
   });
@@ -499,8 +554,8 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
       maxLLMCalls: 1,
     });
 
-    expect(result.grounding).toBe('execution');
-    expect(result.execution?.passed).toBe(false);
+    expect(result.grounding).toBe('failed');
+    expect(result.execution?.status).toBe('failed');
     expect(result.score).toBeCloseTo(0.05, 10);
     expect(result.judgeSamplesUsed).toBe(0);
     expect(judge.prompts).toHaveLength(0);
@@ -770,7 +825,7 @@ describe('partial credit: the fail band is positioned by MEASURED checks, not th
 
   /** The judge scores every branch identically, so it cannot be the source of any ordering. */
   function suiteJudge(score: number): LLM {
-    const suite = CHECKS.map((c) => `\`\`\`js\nif (!globalThis.${c}) throw new Error('${c}');\n\`\`\``).join('\n\n');
+    const suite = CHECKS.map((c) => `\`\`\`js\nif (!widget.${c}) throw new Error('${c}');\n\`\`\``).join('\n\n');
 
     const reply = (prompt: string) =>
       prompt.includes('verification harness') ? suite : JSON.stringify({ score });
@@ -781,25 +836,12 @@ describe('partial credit: the fail band is positioned by MEASURED checks, not th
     };
   }
 
-  function partialExecutor(passing: number): Executor {
-    return {
-      languages: ['javascript'],
-      async execute(source: string) {
-        const index = CHECKS.findIndex((c) => source.includes(`throw new Error('${c}')`));
-
-        if (index === -1) return { result: undefined };
-
-        return index < passing
-          ? { result: undefined }
-          : { result: undefined, error: `${CHECKS[index]} failed` };
-      },
-    };
-  }
-
   const evaluate = (passing: number) => evaluateWithMultiModelJudging({
     task: 'implement the widget',
-    trajectory: withCode('an approach', 'const widget = 1;'),
-    executor: partialExecutor(passing),
+    trajectory: withCode('an approach', `const widget = ${JSON.stringify(
+      Object.fromEntries(CHECKS.map((name, index) => [name, index < passing])),
+    )};`),
+    executor: createEvalExecutor(),
     judge: suiteJudge(0.5),
     explorer: suiteJudge(0.5),
   });
@@ -822,7 +864,7 @@ describe('partial credit: the fail band is positioned by MEASURED checks, not th
 
   test('all four held is a pass, and the judge positions inside the pass band', async () => {
     const all = await evaluate(4);
-    expect(all.execution?.passed).toBe(true);
+    expect(all.execution?.status).toBe('verified');
     expect(all.execution?.passedChecks).toBe(4);
     expect(all.score).toBeCloseTo(0.6 + 0.4 * 0.5, 10);
   });

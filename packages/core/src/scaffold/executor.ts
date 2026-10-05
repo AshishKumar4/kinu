@@ -327,6 +327,8 @@ function buildHostProvider(opts: ScaffoldRunControl & {
         for await (const chunk of llmStream(parsed.output)) {
           if (chunk.type === 'native-tool-output') await pushEvent({ type: 'model_output', streamId, output: chunk.output });
           else {
+            chunk.source = 'scaffold';
+
             if (chunk.type === 'text-delta') acc += chunk.delta;
             await pushEvent({ type: 'model_chunk', streamId, chunk });
           }

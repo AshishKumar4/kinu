@@ -92,7 +92,7 @@ import { agentDisplayLabel, clipText } from '@kinu.run/core/tui';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
   buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers, evolutionWork,
-  jobWork, lastPrinted, newerTail,
+  jobOwners, jobWork, lastPrinted, newerTail, type TuiJobOwner,
   type TuiHubData, type TuiHubRow, type TuiWorkEntry, type TuiHubView, type TuiSubagentChat,
 } from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
@@ -193,6 +193,7 @@ function persistedTranscriptEvent(event: AgentClientEvent): boolean {
     || event.type === 'text-delta'
     || event.type === 'tool-call'
     || event.type === 'tool-result'
+    || event.type === 'step-cut'
     || event.type === 'step-finish'
     || event.type === 'turn-end'
     || event.type === 'error';
@@ -454,11 +455,13 @@ function ChatScene({
   const writeThinking = useMemo(() => writeLiveMessage(activeThinkingRef, setMessages), []);
   const thinkingStream = useStreamingBuffer(writeThinking);
   const turnMeterRef = useRef<TurnMeter | null>(null);
+  const stepOutputsRef = useRef(new Set<string>());
 
   const appendThinking = useCallback((delta: string) => {
     if (!activeThinkingRef.current) {
       const id = `msg-${++msgIdRef.current}`;
       activeThinkingRef.current = id;
+      stepOutputsRef.current.add(id);
       setMessages((prev) => [...prev, { id, role: 'thinking', content: '', live: true }]);
       thinkingStream.start();
     }
@@ -469,6 +472,7 @@ function ChatScene({
   const beginSegment = useCallback(() => {
     const id = `msg-${++msgIdRef.current}`;
     activeSegmentRef.current = id;
+    stepOutputsRef.current.add(id);
     const segment: DisplayMessage = { id, role: 'assistant', content: '', live: true };
     setMessages((prev) => [...prev, segment]);
     stream.start();
@@ -1418,6 +1422,7 @@ function ChatScene({
         // A new segment opens lazily on the first text-delta — start clean.
         sealSegment();
         sealThinking();
+        stepOutputsRef.current.clear();
         turnStreamedTextRef.current = false;
         turnMeterRef.current ??= { startedAt: Date.now(), streamedChars: 0 };
         setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
@@ -1463,7 +1468,24 @@ function ChatScene({
         } satisfies Omit<DisplayMessage, 'id'>);
 
         return;
+      case 'step-cut': {
+        const cut = stepOutputsRef.current;
+        stepOutputsRef.current = new Set();
+        activeSegmentRef.current = null;
+        activeThinkingRef.current = null;
+        stream.clear();
+        thinkingStream.clear();
+        setMessages((previous) => previous.filter((message) => !cut.has(message.id)));
+        setTurnPhase('thinking');
+
+        return;
+      }
+
       case 'step-finish':
+        if (activeSegmentRef.current) stream.finish();
+        sealSegment();
+        sealThinking();
+        stepOutputsRef.current.clear();
         setTurnPhase(`step ${event.stepIndex}`);
 
         return;
@@ -1497,7 +1519,7 @@ function ChatScene({
         return;
       }
     }
-  }, [addMessage, appendThinking, beginSegment, dispatchInput, handleBroadcast, handleTurnEnd, sealSegment, sealThinking, setTurnPhase, stream]);
+  }, [addMessage, appendThinking, beginSegment, dispatchInput, handleBroadcast, handleTurnEnd, sealSegment, sealThinking, setTurnPhase, stream, thinkingStream]);
 
   // Connect once per client; re-runs when a walk-back fork swaps in a sibling client.
   useEffect(() => {
@@ -2236,8 +2258,12 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
 }
 
 async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError' | 'work' | 'workError' | 'helpers'>> {
-  const [subordinates, work, jobs] = await Promise.allSettled([readSubordinates(client), client.workspaceWork(), client.listJobs(20)]);
-  const evolution = [...jobs.status === 'fulfilled' ? jobWork(jobs.value) : [], ...subordinates.status === 'fulfilled' ? subordinates.value.evolution : []];
+  const [subordinates, work] = await Promise.allSettled([readSubordinates(client), client.workspaceWork()]);
+  const owners = subordinates.status === 'fulfilled' ? subordinates.value.owners : [];
+  // Each agent's own jobs, the workspace's first, each under the agent that runs it.
+  const jobs = await Promise.allSettled([client.listJobs(20), ...owners.map((owner) => client.listJobs(20, owner.name))]);
+  const jobRows = jobs.flatMap((listed, at) => (listed.status === 'fulfilled' ? jobWork(listed.value, owners[at - 1]) : []));
+  const evolution = [...jobRows, ...subordinates.status === 'fulfilled' ? subordinates.value.evolution : []];
 
   return {
     ...(subordinates.status === 'fulfilled'
@@ -2270,7 +2296,7 @@ function readSubagentConversation(client: AgentClient, target: { path: string[];
   });
 }
 
-async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'> & { evolution: TuiWorkEntry[] }> {
+async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'> & { evolution: TuiWorkEntry[]; owners: TuiJobOwner[] }> {
   const entries: SubordinateChild[] = [];
   let cursor: SeekCursor | undefined;
 
@@ -2286,7 +2312,7 @@ async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, '
     ? [{ name: entry.name, actorId: entry.actorReference.actorId }]
     : []);
 
-  return { subordinates: subordinatesFromRoster(entries), helpers, evolution: evolutionWork(entries) };
+  return { subordinates: subordinatesFromRoster(entries), helpers, evolution: evolutionWork(entries), owners: jobOwners(entries) };
 }
 
 

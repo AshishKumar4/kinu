@@ -604,6 +604,19 @@ if [ "$KINU_PROMOTE" != "1" ]; then
   echo -e "${GREEN}✅ Worker release artifact published to R2${NC}"
 fi
 
+# The devbox tools tarball the image's golden snapshot installs (D65) must be in the
+# store bucket before a box can start: refused by name, never built here.
+KINU_BACKUP_BUCKET="$(bun -e '
+  const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(config.r2_buckets?.find((bucket) => bucket.binding === "BACKUP_BUCKET")?.bucket_name ?? "");
+' "$KINU_BUILT_CONFIG")"
+if [ -z "$KINU_BACKUP_BUCKET" ]; then
+  publish_red "$KINU_BUILT_CONFIG binds no BACKUP_BUCKET"
+  return 1
+fi
+bun "$KINU_ROOT/scripts/devbox-tools.ts" check "$KINU_BACKUP_BUCKET" \
+  || { publish_red "the devbox tools tarball is missing from $KINU_BACKUP_BUCKET; publish it as the line above says"; return 1; }
+
 # ── Step 2b: The reset ────────────────────────────────────────
 # After the build, so a red gate or a failed build deletes nothing; the upload
 # below is then the genesis deploy.

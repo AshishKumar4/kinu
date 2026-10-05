@@ -10,9 +10,9 @@ import {
   CONTEXT_EDIT_BOUNDARIES, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_VIA,
   type OpenTurnIdentity, type RunEvent, type RunEventInput, type RunEventType,
 } from './types';
-import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
+import { JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
 import { boundedInt, boundPageQuery } from '../utils/bounds';
-import { USAGE_FIELDS, UsageSchema, type Usage } from '../usage';
+import { USAGE_FIELDS, UsageSchema, addUsage, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
 import { PROVIDER_WAIT_SOURCES } from '../providers/types';
 import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../types/app-store';
@@ -162,8 +162,10 @@ export const RunEventSchema = v.variant('type', [
 ]);
 
 /** Step messages are stored in the session codec's durable form. */
-function stampRunEvent(input: RunEventInput, eventIndex: number, runId: string): RunEvent {
-  const base = { eventIndex, runId, timestamp: new Date().toISOString() };
+type UnindexedEvent = RunEvent extends infer Event ? Event extends RunEvent ? Omit<Event, 'eventIndex'> : never : never;
+
+function stampRunEvent(input: RunEventInput, runId: string): UnindexedEvent {
+  const base = { runId, timestamp: new Date().toISOString() };
 
   if (input.type !== 'step_finish') return { ...input, ...base };
   const { messages, ...rest } = input;
@@ -233,7 +235,7 @@ export type RunEventListener = (event: RunEvent) => void;
 export interface DeferredRunEvent {
   readonly event: RunEvent;
   /** Call once, after the caller's transaction commits. */
-  publish(): void;
+  readonly publish: () => void;
 }
 
 /** Actor id is in the primary key: `run_id` is per activation and `event_index` restarts per run,
@@ -309,7 +311,7 @@ function spendTallyOf(row: Omit<SpendAggregateRow, 'source'>): SpendTally {
 }
 
 export class RunEventRecorder {
-  private readonly nextIndex = new Map<string, number>();
+  private publications: (() => void)[] | null = null;
   private readonly listeners = new Set<RunEventListener>();
   readonly actorId: string;
 
@@ -319,65 +321,70 @@ export class RunEventRecorder {
 
   emit(runId: string, input: RunEventInput): RunEvent {
     const deferred = this.emitDeferred(runId, input);
-    deferred.publish();
+
+    if (this.publications === null) deferred.publish();
+    else this.publications.push(deferred.publish);
 
     return deferred.event;
   }
 
+  collect<T>(write: () => T) {
+    const previous = this.publications;
+    const publications: (() => void)[] = [];
+    this.publications = publications;
+
+    try {
+      const value = write();
+
+      return { value, publish: () => { for (const publish of publications) publish(); } };
+    } finally { this.publications = previous; }
+  }
+
   /**
    * For callers inside a SQL transaction: the row rolls back with it, and `publish()` runs after
-   * commit so no subscriber hears of an undone write. A rollback leaves an `event_index` gap.
+   * commit so no subscriber hears of an undone write.
    */
   emitDeferred(runId: string, input: RunEventInput): DeferredRunEvent {
-    const event = stampRunEvent(input, this.allocateIndex(runId), runId);
-    this.persist(event);
+    return settleSync(Effect.map(this.persist(stampRunEvent(input, runId)), (event) => {
 
-    if (event.type === 'run_start') this.noteOperatorRequest(event);
+      if (event.type === 'run_start') this.noteOperatorRequest(event);
 
-    if (event.type === 'run_start' && event.turn !== undefined) {
-      void this.sql`INSERT INTO open_turns (actor_id, run_id, opened_at) VALUES (${this.actorId}, ${runId}, ${event.timestamp})`;
-    }
+      if (event.type === 'run_start' && event.turn !== undefined) {
+        void this.sql`INSERT INTO open_turns (actor_id, run_id, opened_at) VALUES (${this.actorId}, ${runId}, ${event.timestamp})`;
+      }
 
-    if (event.type === 'run_end') void this.sql`DELETE FROM open_turns WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
+      if (event.type === 'run_end') void this.sql`DELETE FROM open_turns WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
 
-    return {
-      event,
-      publish: () => settleSync(Effect.forEach(this.listeners, (listener) => Effect.try({
-        try: () => listener(event),
-        catch: (cause) => toKinuError({ doing: 'notify a run-event listener', cause, otherwise: 'io' }),
-      }).pipe(Effect.catch((failure) => Effect.sync(() => {
-        diagnostics.failure('event.listener_failed', failure, { runId, eventType: event.type });
-      }))), { discard: true })),
-    };
+      return {
+        event,
+        publish: () => settleSync(Effect.forEach(this.listeners, (listener) => Effect.try({
+          try: () => listener(event),
+          catch: (cause) => toKinuError({ doing: 'notify a run-event listener', cause, otherwise: 'io' }),
+        }).pipe(Effect.catch((failure) => Effect.sync(() => {
+          diagnostics.failure('event.listener_failed', failure, { runId, eventType: event.type });
+        }))), { discard: true })),
+      };
+    }));
   }
 
-  private allocateIndex(runId: string): number {
-    const cached = this.nextIndex.get(runId);
+  private persist(ev: UnindexedEvent): Effect.Effect<RunEvent, KinuError> {
+    return Effect.flatMap(Effect.sync(() => {
+      this.actor.assertCurrent();
 
-    if (cached != null) {
-      this.nextIndex.set(runId, cached + 1);
+      return this.sql<{ payload: string }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+        SELECT ${this.actorId}, ${ev.runId}, COALESCE(MAX(event_index), -1) + 1, ${ev.type},
+          json_set(${JSON.stringify(ev)}, '$.eventIndex', COALESCE(MAX(event_index), -1) + 1), ${ev.timestamp}
+        FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${ev.runId}
+        RETURNING payload`[0];
+    }), (stored) => {
+      if (stored === undefined) return Effect.fail(new KinuError('io', 'a persisted run event returned no row'));
 
-      return cached;
-    }
+      return Effect.sync(() => {
+        if (ev.type === 'scaffold_promotion' || ev.type === 'scaffold_rollback') markStoreChanged(this.sql);
 
-    const rows = this.sql<{ max_idx: number | null }>`
-      SELECT MAX(event_index) AS max_idx FROM run_events
-      WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
-
-    const max = rows[0]?.max_idx ?? -1;
-    const next = max + 1;
-    this.nextIndex.set(runId, next + 1);
-
-    return next;
-  }
-
-  // Plain INSERT: a collision means a second writer, and raises instead of replacing.
-  private persist(ev: RunEvent): void {
-    this.actor.assertCurrent();
-    void this.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
-      VALUES (${this.actorId}, ${ev.runId}, ${ev.eventIndex}, ${ev.type}, ${JSON.stringify(ev)}, ${ev.timestamp})`;
-
-    if (ev.type === 'scaffold_promotion' || ev.type === 'scaffold_rollback') markStoreChanged(this.sql);
+        return parseStoredRunEvent(stored.payload);
+      });
+    });
   }
 
   private noteOperatorRequest(start: Extract<RunEvent, { type: 'run_start' }>): void {
@@ -610,9 +617,7 @@ export class RunEventRecorder {
     return rows.map((r) => parseStoredRunEvent(r.payload));
   }
 
-  /** Per-step durable output, so a run killed before the backend's per-turn write is recoverable.
-   *  Pairing is complete within each row, so concatenation needs no repair. */
-  transcript(runId: string): ModelMessage[] {
+  finishedSteps(runId: string): { readonly messages: readonly JsonValue[]; readonly usage: Usage | undefined }[] {
     this.actor.assertCurrent();
 
     const rows = this.sql<{ payload: string }>`
@@ -623,43 +628,53 @@ export class RunEventRecorder {
     return rows.flatMap((r) => {
       const event = parseStoredRunEvent(r.payload);
 
-      return event.type === 'step_finish' ? decodeModelMessageValues(event.messages ?? []) : [];
+      return event.type === 'step_finish' ? [{ messages: event.messages ?? [], usage: event.usage }] : [];
     });
   }
 
-  /** The newest open turn with its completed steps, found through `open_turns`. */
+  /** Sealed-step output in run order. */
+  transcript(runId: string): ModelMessage[] {
+    return this.finishedSteps(runId).flatMap((step) => decodeModelMessageValues(step.messages));
+  }
+
+  /** The newest open turn's run, found through `open_turns`; null when no turn is open. */
+  openRun(): string | null {
+    this.actor.assertCurrent();
+
+    return this.sql<{ run_id: string }>`
+      SELECT run_id FROM open_turns WHERE actor_id = ${this.actorId}
+      ORDER BY opened_at DESC, rowid DESC LIMIT 1`[0]?.run_id ?? null;
+  }
+
+  /** The newest open turn with its completed steps and what they reported using. */
   openTurn(): {
     readonly runId: string;
     readonly turn: OpenTurnIdentity;
     readonly steps: ModelMessage[];
     readonly finishedSteps: number;
+    readonly usage: Usage;
   } | null {
-    this.actor.assertCurrent();
+    const runId = this.openRun();
 
-    const pointer = this.sql<{ run_id: string }>`
-      SELECT run_id FROM open_turns WHERE actor_id = ${this.actorId}
-      ORDER BY opened_at DESC, rowid DESC LIMIT 1`[0];
-
-    if (pointer === undefined) return null;
+    if (runId === null) return null;
 
     const row = this.sql<{ run_id: string; payload: string }>`
       SELECT run_id, payload FROM run_events
-      WHERE actor_id = ${this.actorId} AND run_id = ${pointer.run_id} AND type = ${'run_start' satisfies RunEventType}
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_start' satisfies RunEventType}
       ORDER BY event_index LIMIT 1`[0];
 
-    if (row === undefined) return settleSync(Effect.fail(new KinuError('io', `run ${pointer.run_id} is recorded open with no start`)));
+    if (row === undefined) return settleSync(Effect.fail(new KinuError('io', `run ${runId} is recorded open with no start`)));
     // An unparseable start row propagates.
     const start = parseStoredRunEvent(row.payload);
 
     if (start.type !== 'run_start' || start.turn === undefined) return settleSync(Effect.fail(new KinuError('io', `run ${row.run_id} is recorded open without a turn`)));
 
-    const steps = this.transcript(row.run_id);
+    const recorded = this.finishedSteps(row.run_id);
 
-    const finishedSteps = this.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM run_events
-      WHERE actor_id = ${this.actorId} AND run_id = ${row.run_id} AND type = ${'step_finish' satisfies RunEventType}`[0]?.n ?? 0;
-
-    return { runId: row.run_id, turn: start.turn, steps, finishedSteps };
+    return {
+      runId: row.run_id, turn: start.turn, steps: recorded.flatMap((step) => decodeModelMessageValues(step.messages)), finishedSteps: recorded.length,
+      usage: recorded.reduce<Usage>((sum, step) => (step.usage === undefined ? sum : addUsage(sum, step.usage)), {}),
+    };
   }
 
   /** Filtered in SQL so `limit` is a real bound. Ties on `ts` break by rowid: `event_index`

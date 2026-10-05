@@ -44,10 +44,7 @@ export class ForkConversation {
     this.messages = new SessionMessages(workspace.sql, this.actor, this.payloads);
     this.context = new SessionContext(workspace.sql, this.actor, (write) => this.transactionSync(write), this.messages);
 
-    this.transcript = new SessionTranscript({
-      sql: workspace.sql, actor: this.actor, sessionId: CHAT_SESSION_ID, messages: this.messages, payloads: this.payloads,
-      transactionSync: (write) => this.transactionSync(write), selection: () => this.context.selected(),
-    });
+    this.transcript = new SessionTranscript({ sql: workspace.sql, actor: this.actor, sessionId: CHAT_SESSION_ID, messages: this.messages, payloads: this.payloads, atomic: (write) => this.transactionSync(write), selection: () => this.context.selected(), });
   }
 
   transactionSync<T>(write: () => T): T {

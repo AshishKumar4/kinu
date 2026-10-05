@@ -67,7 +67,7 @@ function setup() {
   const admit = (creationId: string, assignment: SubordinateBirth['assignment'] = { body: 'Read the source.', mode: 'plan' }) => roster.create({
     name: 'reader', actorReference: null, deleteRequested: false,
     birth: { creationId, seed: { name: 'reader', displayName: '', nameOrigin: 'auto', role: 'researcher', mission: 'Read the source.', lifetime: 'durable', origin: 'agent' }, assignment },
-    status: 'working', currentTask: 'Read the source.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null,
+    status: 'working', currentTask: 'Read the source.', createdAt: 100, dismissedAt: null, taskEventId: null,
   });
 
   return { database, child, childActor, directory, main, roster, runtime, admit, events,

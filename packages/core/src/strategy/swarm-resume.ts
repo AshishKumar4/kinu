@@ -10,7 +10,7 @@
 
 import { Effect, Cause } from 'effect';
 import { settleSync } from '../obs/effect';
-import type { ModelMessage } from 'ai';
+import { getToolName, isToolUIPart, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { diagnostics, renderThrownChain } from '../obs/index';
@@ -468,17 +468,21 @@ function reconstructedTurns(steps: readonly HeadStep[]): ModelMessage[] {
   for (const step of steps) {
     const parts: string[] = [];
 
-    if (step.reasoning) parts.push(step.reasoning);
+    for (const part of step.parts) {
+      if ((part.type === 'text' || part.type === 'reasoning') && part.text.trim() !== '') parts.push(part.text.trim());
 
-    if (step.text) parts.push(step.text);
+      if (!isToolUIPart(part)) continue;
+      let output: unknown;
 
-    for (const call of step.toolCalls) {
+      if (part.state === 'output-available') output = part.output;
+      else if (part.state === 'output-error') output = part.errorText;
+
       const body = [
-        call.input === undefined ? '' : `in: ${JSON.stringify(call.input)}`,
-        call.output === undefined ? '' : `out: ${JSON.stringify(call.output)}`,
+        part.input === undefined ? '' : `in: ${JSON.stringify(part.input)}`,
+        output === undefined ? '' : `out: ${JSON.stringify(output)}`,
       ].filter((half) => half.length > 0).join('\n');
 
-      parts.push(body.length > 0 ? `[${call.name}]\n${body}` : `[${call.name}]`);
+      parts.push(body.length > 0 ? `[${getToolName(part)}]\n${body}` : `[${getToolName(part)}]`);
     }
 
     if (parts.length === 0) continue;

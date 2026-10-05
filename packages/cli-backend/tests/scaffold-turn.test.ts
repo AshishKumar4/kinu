@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { AgentRuntime, LLMProviderConfig } from '@kinu.run/core';
-import { initWorkspaceSchema, WORKSPACE_RUN_ID } from '@kinu.run/core';
+import { CHAT_SESSION_ID, initWorkspaceSchema, WORKSPACE_RUN_ID } from '@kinu.run/core';
 import {
   initScaffoldTables, initAgentConfigTable,
   getPendingScaffold, getCurrentScaffoldVersion,
@@ -189,6 +189,38 @@ describe('a promoted scaffold drives a local turn', () => {
       expect(streamed(events)).toBe('the default loop answered');
     });
   }
+
+  test('a delegated native step and the scaffold\'s next tool step each reach the ledger once, in order', async () => {
+    const { db, rt, session, events } = await setup('the default loop answered');
+
+    try {
+      await installScaffold(rt, { version: 1, status: 'current', code: `async function run() {
+        await host.defaultInference();
+        await host.callTool('memory', { action: 'search', query: 'anything' });
+        await host.emit({ type: 'text_delta', text: 'program follow-up' });
+        await host.emit({ type: 'step_finish', stepIndex: 2 });
+      }` });
+      await session.send('Continue from the delegated answer.', { id: crypto.randomUUID() });
+      const run = session.listRuns().items[0];
+
+      if (run === undefined) throw new Error('the delegated turn left no run');
+      const rows = session.getRunEvents(run.runId);
+
+      expect(rows.filter((row) => row.type === 'step_finish' || row.type === 'tool_call_end')).toMatchObject([
+        { type: 'step_finish', stepIndex: 1, usage: { input: 5, output: 7 } },
+        { type: 'tool_call_end', name: 'memory', outcome: { success: true } },
+        { type: 'step_finish', stepIndex: 2 },
+      ]);
+      const ended = events.find((event) => event.type === 'turn-end');
+
+      expect(ended?.turn.steps).toBe(2);
+      expect(ended?.turn.usage).toEqual({ input: 5, output: 7 });
+      const transcript = await rt.stores.history.transcript(CHAT_SESSION_ID).history();
+
+      expect(transcript.flatMap((row) => row.role === 'assistant' ? row.parts.flatMap((part) => part.type === 'text' ? [part.text] : []) : []))
+        .toEqual(['the default loop answered', 'program follow-up']);
+    } finally { await session.end(); db.close(); }
+  });
 
   test('a scaffold can reach the agent tool surface through host.callTool', async () => {
     const { rt, session, events } = await setup('unused');

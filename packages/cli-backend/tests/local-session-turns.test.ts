@@ -3,6 +3,7 @@ import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { AwaitedList, present, scratchDir, scratchPath, scriptedAdvisorPort, scriptedTurnModel } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type LanguageModel, type ModelMessage } from 'ai';
@@ -10,7 +11,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import type { TemporaryAgentPort } from '@kinu.run/core';
 import {
-  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER, initWorkspaceSchema,
+  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER, initWorkspaceSchema,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type SessionEvent } from '../src/local-session';
@@ -51,7 +52,9 @@ test('parallel native calls retain their SDK identities after reverse completion
 
   const events = new AwaitedList<SessionEvent>();
 
-  const session = new LocalAgentSession({ rt, db, model, noAutoEvolve: true, onEvent: (event) => {
+  rt.actor.config.setLearning(false);
+
+  const session = new LocalAgentSession({ rt, db, model, onEvent: (event) => {
     events.push(event);
 
     if (event.type === 'tool-result' && event.toolCallId === 'call-B') first.resolve();
@@ -74,6 +77,66 @@ test('parallel native calls retain their SDK identities after reverse completion
     await session.end();
     db.close();
   }
+});
+
+test('a native ledger failure cannot finish an uncommitted step or add its usage to the turn', async () => {
+  const { db, rt } = workspaceRuntime();
+  const events: SessionEvent[] = [];
+
+  const model = scriptedTurnModel({ doGenerate: () => ({
+    content: [{ type: 'text', text: 'not a recorded step' }], finishReason: { unified: 'stop', raw: undefined },
+    usage: { inputTokens: { total: 7, noCache: 7, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 2, text: 2, reasoning: undefined } }, warnings: [],
+  }) });
+
+  rt.actor.config.setLearning(false);
+  const session = new LocalAgentSession({ rt, db, model, onEvent: (event) => { events.push(event); } });
+
+  try {
+    db.exec("CREATE TRIGGER refuse_step BEFORE INSERT ON run_events WHEN NEW.type = 'step_finish' BEGIN SELECT RAISE(ABORT, 'the step row was refused'); END");
+    await session.send('Run one step.', { id: crypto.randomUUID() });
+    const run = session.listRuns().items[0];
+
+    if (run === undefined) throw new Error('the attempted turn has no run');
+    expect(session.getRunEvents(run.runId).filter((event) => event.type === 'step_finish')).toEqual([]);
+    const ended = events.find((event) => event.type === 'turn-end');
+
+    if (ended?.type !== 'turn-end') throw new Error('the failed turn never closed');
+    expect({ steps: ended.turn.steps, usage: ended.turn.usage, hadError: ended.turn.hadError }).toEqual({ steps: 0, usage: undefined, hadError: true });
+  } finally { await session.end(); db.close(); }
+});
+
+test('an output-limit continuation records each sealed step once across SDK calls', async () => {
+  const { db, rt } = workspaceRuntime();
+  let call = 0;
+
+  const model = scriptedTurnModel({ doGenerate: () => {
+    const first = call++ === 0;
+
+    return {
+      content: [{ type: 'text', text: first ? 'first half' : 'second half' }],
+      finishReason: { unified: first ? 'length' : 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    };
+  } });
+
+  const events: SessionEvent[] = [];
+  rt.actor.config.setLearning(false);
+  const session = new LocalAgentSession({ rt, db, model, onEvent: (event) => { events.push(event); } });
+
+  try {
+    await session.send('Continue until the answer is complete.', { id: crypto.randomUUID() });
+    const run = session.listRuns().items[0];
+
+    if (run === undefined) throw new Error('the turn left no run');
+    const steps = session.getRunEvents(run.runId).filter((event) => event.type === 'step_finish');
+
+    expect(steps.map((event) => ({ step: event.stepIndex,
+      text: drawnStep(event.messages ?? []).flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : []).join(''),
+    }))).toEqual([{ step: 1, text: 'first half' }, { step: 2, text: 'second half' }]);
+    expect(events.flatMap((event) => event.type === 'turn-end' ? [event.turn.steps] : [])).toEqual([2]);
+  } finally { await session.end(); db.close(); }
 });
 
 describe('LocalAgentSession.send — a user turn', () => {
@@ -427,13 +490,14 @@ describe('LocalAgentSession.send — a user turn', () => {
     let observed: PromptMessage[] = [];
     const events = new AwaitedList<SessionEvent>();
 
+    rt.actor.config.setLearning(false);
+
     const resumed = new LocalAgentSession({
       rt,
       db,
       model: historyCapturingModel('next answer', (messages) => { observed = messages; }),
       onEvent: (e) => events.push(e),
-      noAutoEvolve: true,
-    });
+          });
 
     await resumed.send('what did I say?', { id: crypto.randomUUID() });
     await resumed.end();
@@ -470,10 +534,12 @@ describe('LocalAgentSession.send — a user turn', () => {
     function resume(db: Database, rt: ReturnType<typeof createCLIRuntime>) {
       let observed: PromptMessage[] = [];
 
+      rt.actor.config.setLearning(false);
+
       const session = new LocalAgentSession({
         rt, db,
         model: historyCapturingModel('ok', (messages) => { observed = messages; }),
-        onEvent: () => {}, noAutoEvolve: true,
+        onEvent: () => {},
       });
 
       return {
@@ -940,7 +1006,8 @@ class AdvisedSession extends LocalAgentSession {
 describe('LocalAgentSession — the advisor is a hire, not a wait', () => {
   function setupWithAdvisor(model?: LanguageModel) {
     const { db, rt } = workspaceRuntime();
-    const session = new AdvisedSession({ rt, db, model: model ?? fakeModel('rotated the staging keys'), onEvent: () => {}, noAutoEvolve: true });
+    rt.actor.config.setLearning(false);
+    const session = new AdvisedSession({ rt, db, model: model ?? fakeModel('rotated the staging keys'), onEvent: () => {} });
     const advisor = scriptedAdvisorPort();
 
     rt.actor.config.setAdvisorEnabled(true);

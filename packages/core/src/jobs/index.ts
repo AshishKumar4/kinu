@@ -34,10 +34,13 @@ export {
   backgroundJobWakeTrigger,
   MAX_CONCURRENT_DETACHED_JOBS,
   type BackgroundJobRunnerDeps,
+  type JobHolder,
   type JobResumer,
   type JobRetirement,
   type WorkspaceJobPorts,
 } from './runner';
+
+export { processJobHolder } from './process-holder';
 
 export { AgentWakeQueue } from './wake-queue';
 

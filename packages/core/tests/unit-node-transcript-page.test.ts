@@ -5,7 +5,7 @@ import type { SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { describe, expect, test } from 'bun:test';
 import { createTestActors, createTestSql, present } from '@kinu.run/test-utils';
-import { createTestWorkspace } from './helpers';
+import { createTestWorkspace, saidStep, stepText } from './helpers';
 import {
   HeadJournal, initHeadsTables, type HeadInput,
 } from '../src/index';
@@ -36,7 +36,7 @@ function seeded(n: number) {
   journal.insertSpawn(spawn(NODE, RUN));
 
   for (let i = 0; i < n; i++) {
-    journal.appendStep(NODE, i, { text: `step ${i}`, toolCalls: [] });
+    journal.appendStep(NODE, i, saidStep(`step ${i}`));
   }
 
   return { sql: sql.sql, actor, journal };
@@ -48,7 +48,7 @@ function walkSteps(sql: SqlExecutor, actor: ActorHandle, limit: number): string[
 
   for (;;) {
     const view = present(readNodeTranscript(sql, actor, { runId: RUN, nodeId: NODE }, { limit, cursor }), 'the node transcript page');
-    texts.unshift(...view.steps.items.map((s) => s.text));
+    texts.unshift(...view.steps.items.map(stepText));
 
     if (view.steps.status === 'end') return texts;
     cursor = view.steps.next;
@@ -68,7 +68,7 @@ describe('node transcript paging', () => {
     const steps = view.steps;
     expect(steps.status).toBe('more');
     // Newest PAGE first; within it, reading order.
-    expect(steps.items.map((s) => s.text)).toEqual(['step 4', 'step 5', 'step 6']);
+    expect(steps.items.map(stepText)).toEqual(['step 4', 'step 5', 'step 6']);
 
     if (steps.status !== 'more') return;
     expect(steps.next.after).toBe(`${NODE}-s4`);
@@ -86,7 +86,7 @@ describe('node transcript paging', () => {
     const view = present(readNodeTranscript(sql, actor, { runId: RUN, nodeId: NODE }, { limit: 8 }), 'the short trace page');
 
     expect(view.steps.status).toBe('end');
-    expect(view.steps.items.map((s) => s.text)).toEqual(['step 0', 'step 1']);
+    expect(view.steps.items.map(stepText)).toEqual(['step 0', 'step 1']);
     expect(view.stepCount).toBe(2);
   });
 

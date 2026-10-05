@@ -1,5 +1,3 @@
-import { Effect } from 'effect';
-import { settle } from '../obs/effect';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { validateUIMessages, type UIMessage } from 'ai';
@@ -107,6 +105,67 @@ function answeredTexts(parts: readonly JsonObject[], answer: string): number[] {
   return covered;
 }
 
+function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role']): JsonObject[] {
+  const projected: JsonObject[] = [];
+  const calls = new Map<string, JsonObject>();
+
+  for (const part of parts) {
+    if (part.type === 'tool-call') {
+      const id = v.parse(v.string(), part.toolCallId);
+      const call: JsonObject = { type: `tool-${v.parse(v.string(), part.toolName)}`, toolCallId: id, state: 'input-available', input: part.input ?? null };
+      calls.set(id, call);
+      projected.push(call);
+    } else if (part.type === 'tool-result') {
+      const id = v.parse(v.string(), part.toolCallId);
+      const call = calls.get(id);
+
+      if (call === undefined) throw new KinuError('io', 'public tool result has no call in its entry');
+      const output = v.parse(JsonObjectSchema, part.output);
+      call.state = output.type === 'error-text' || output.type === 'error-json' ? 'output-error' : 'output-available';
+
+      if (call.state === 'output-error') call.errorText = v.is(v.string(), output.value) ? output.value : JSON.stringify(output.value);
+      else call.output = output.value ?? output;
+    } else if (part.type === 'file' || part.type === 'image') {
+      const carrier = part.data ?? part.image;
+      const string = v.safeParse(v.string(), carrier);
+      const url = v.safeParse(v.object({ $url: v.string() }), carrier);
+      const binary = v.safeParse(v.object({ $binary: v.string() }), carrier);
+      const mediaType = v.is(v.string(), part.mediaType) ? part.mediaType : 'application/octet-stream';
+      let address: string;
+
+      if (url.success) address = url.output.$url;
+      else if (binary.success) address = `data:${mediaType};base64,${binary.output.$binary}`;
+      else if (string.success) address = /^(https?:|data:|\/)/u.test(string.output) ? string.output : `data:${mediaType};base64,${string.output}`;
+      else throw new KinuError('io', 'stored attachment has no native data carrier');
+      const file: JsonObject = { type: 'file', mediaType, url: address };
+
+      if (part.filename !== undefined) file.filename = part.filename;
+      projected.push(file);
+    } else {
+      const { providerOptions, ...value } = part;
+
+      if (providerOptions !== undefined) value.providerMetadata = providerOptions;
+
+      if (role === 'assistant' && (value.type === 'text' || value.type === 'reasoning')) value.state = 'done';
+
+      projected.push(value);
+    }
+  }
+
+  return projected;
+}
+
+const StepMessageSchema = v.looseObject({ content: v.union([v.string(), v.array(JsonObjectSchema)]) });
+
+/** A recorded step projected for display. */
+export function drawnStep(messages: readonly JsonValue[]): JsonObject[] {
+  return drawnParts(messages.flatMap((message) => {
+    const { content } = v.parse(StepMessageSchema, message);
+
+    return v.is(v.string(), content) ? [{ type: 'text', text: content }] : content;
+  }), 'assistant');
+}
+
 export function readSessionTranscript(sql: SqlExecutor, authority: ActorReadAuthority, sessionId: string, files: (() => Promise<Pick<VFS, 'readFile'>>) | null): SessionTranscriptReader {
   const payloads = new SessionPayloadReader(files);
 
@@ -189,20 +248,18 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return result;
   }
 
-  page(request: PositionPageRequest = {}): Promise<Page<ConversationProjection, PositionCursor>> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const page = this.pageIds(request);
-      const items: ConversationProjection[] = [];
+  async page(request: PositionPageRequest = {}): Promise<Page<ConversationProjection, PositionCursor>> {
+    const page = this.pageIds(request);
+    const items: ConversationProjection[] = [];
 
-      for (const row of page.items) {
-        const projected = yield* Effect.promise(() => this.project(row.id));
+    for (const row of page.items) {
+      const projected = await this.project(row.id);
 
-        if (projected === null) return yield* new KinuError('missing', 'conversation entry disappeared');
-        items.push(projected);
-      }
+      if (projected === null) throw new KinuError('missing', 'conversation entry disappeared');
+      items.push(projected);
+    }
 
-      return { ...page, items };
-    }));
+    return { ...page, items };
   }
 
 
@@ -275,46 +332,42 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return (await this.parts(references)).flatMap((part) => (part.type === 'text' ? [v.parse(v.string(), part.text)] : []));
   }
 
-  parts(references: readonly ConversationPartReference[], cache = new Map<string, readonly StoredPart[]>()): Promise<JsonObject[]> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const parts: JsonObject[] = [];
+  async parts(references: readonly ConversationPartReference[], cache = new Map<string, readonly StoredPart[]>()): Promise<JsonObject[]> {
+    const parts: JsonObject[] = [];
 
-      for (const ref of references) {
-        let message = cache.get(ref.messageId);
+    for (const ref of references) {
+      let message = cache.get(ref.messageId);
 
-        if (message === undefined) { message = yield* Effect.promise(() => this.messages.materializeParts({ messageId: ref.messageId })); cache.set(ref.messageId, message); }
+      if (message === undefined) { message = await this.messages.materializeParts({ messageId: ref.messageId }); cache.set(ref.messageId, message); }
 
-        const part = message.find(value => value.partNo === ref.partNo);
+      const part = message.find(value => value.partNo === ref.partNo);
 
-        if (part === undefined) return yield* new KinuError('io', 'conversation reference names a part its message does not hold');
+      if (part === undefined) throw new KinuError('io', 'conversation reference names a part its message does not hold');
 
-        if (ref.textRange === undefined) parts.push(part.value);
-        else {
-          const { start, length } = ref.textRange;
-          const text = v.parse(v.string(), part.value.text);
+      if (ref.textRange === undefined) parts.push(part.value);
+      else {
+        const { start, length } = ref.textRange;
+        const text = v.parse(v.string(), part.value.text);
 
-          if (part.value.type !== 'text' || !Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0 || start + length > text.length) return yield* new KinuError('io', 'conversation text range exceeds its recorded part');
-          parts.push({ ...part.value, text: text.slice(start, start + length) });
-        }
+        if (part.value.type !== 'text' || !Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0 || start + length > text.length) throw new KinuError('io', 'conversation text range exceeds its recorded part');
+        parts.push({ ...part.value, text: text.slice(start, start + length) });
       }
+    }
 
-      this.actor.assertCurrent();
+    this.actor.assertCurrent();
 
-      return parts;
-    }));
+    return parts;
   }
 
-  history(limit = 10_000): Promise<UIMessage[]> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const messages: UIMessage[] = [];
+  async history(limit = 10_000): Promise<UIMessage[]> {
+    const messages: UIMessage[] = [];
 
-      const entries = this.entries(limit);
-      const parts = yield* Effect.promise(() => this.messages.materializePartsOf([...new Set(entries.flatMap((entry) => entry.parts.map((part) => part.messageId)))]));
+    const entries = this.entries(limit);
+    const parts = await this.messages.materializePartsOf([...new Set(entries.flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
 
-      for (const entry of entries) messages.push(yield* this.materializeEntry(entry, parts));
+    for (const entry of entries) messages.push(await this.materializeEntry(entry, parts));
 
-      return messages;
-    }));
+    return messages;
   }
 
   /** Entries and their messages in one statement each, however many entries. */
@@ -357,77 +410,20 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return false;
   }
 
-  message(id: string): Promise<UIMessage | null> {
-    return settle(Effect.suspend(() => {
-      const entry = this.read(id);
+  async message(id: string): Promise<UIMessage | null> {
+    const entry = this.read(id);
 
-      return entry === null ? Effect.succeed(null) : this.materializeEntry(entry);
-    }));
+    return entry === null ? null : this.materializeEntry(entry);
   }
 
-  private filePart(part: JsonObject): Effect.Effect<JsonObject, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const native = yield* Effect.promise(() => this.payloads.resolveMedia(part));
-      const carrier = native.data ?? native.image;
-      const string = v.safeParse(v.string(), carrier);
-      const url = v.safeParse(v.object({ $url: v.string() }), carrier);
-      const binary = v.safeParse(v.object({ $binary: v.string() }), carrier);
-      const mediaType = v.is(v.string(), native.mediaType) ? native.mediaType : 'application/octet-stream';
-      let address: string;
+  private async materializeEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>): Promise<UIMessage> {
+      const parts: JsonObject[] = [];
 
-      if (url.success) address = url.output.$url;
-      else if (binary.success) address = `data:${mediaType};base64,${binary.output.$binary}`;
-      else if (string.success) address = /^(https?:|data:|\/)/u.test(string.output) ? string.output : `data:${mediaType};base64,${string.output}`;
-      else return yield* new KinuError('io', 'stored attachment has no native data carrier');
-      const file: JsonObject = { type: 'file', mediaType, url: address };
-
-      if (native.filename !== undefined) file.filename = native.filename;
-
-      return file;
-    });
-  }
-
-  private materializeEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>): Effect.Effect<UIMessage, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const parts = yield* Effect.promise(() => this.parts(entry.parts, cache));
-      const projected: JsonObject[] = [];
-      const calls = new Map<string, JsonObject>();
-
-      for (const part of parts) {
-        if (part.type === 'tool-call') {
-          const id = v.parse(v.string(), part.toolCallId);
-          const call: JsonObject = { type: `tool-${v.parse(v.string(), part.toolName)}`, toolCallId: id, state: 'input-available', input: part.input ?? null };
-          calls.set(id, call);
-          projected.push(call);
-        } else if (part.type === 'tool-result') {
-          const id = v.parse(v.string(), part.toolCallId);
-          const call = calls.get(id);
-
-          if (call === undefined) return yield* new KinuError('io', 'public tool result has no call in its entry');
-          const output = v.parse(JsonObjectSchema, part.output);
-          call.state = output.type === 'error-text' || output.type === 'error-json' ? 'output-error' : 'output-available';
-
-          if (call.state === 'output-error') call.errorText = v.is(v.string(), output.value) ? output.value : JSON.stringify(output.value);
-          else call.output = output.value ?? output;
-        } else if (part.type === 'file' || part.type === 'image') {
-          projected.push(yield* this.filePart(part));
-        } else {
-          const { providerOptions, ...value } = part;
-
-          if (providerOptions !== undefined) value.providerMetadata = providerOptions;
-
-          // A recorded answer is finished: its streamed text and reasoning read back as done, not mid-stream.
-          if (entry.role === 'assistant' && (value.type === 'text' || value.type === 'reasoning')) value.state = 'done';
-
-          projected.push(value);
-        }
-      }
-
+      for (const part of await this.parts(entry.parts, cache)) parts.push(part.type === 'file' || part.type === 'image' ? await this.payloads.resolveMedia(part) : part);
+      const projected = drawnParts(parts, entry.role);
       const message: StoredUiMessage = { id: entry.id, role: entry.role, parts: projected };
 
-      const metadata = entry.metadata;
-
-      if (metadata !== null) message.metadata = yield* Effect.promise(() => this.payloads.read(metadata));
+      if (entry.metadata !== null) message.metadata = await this.payloads.read(entry.metadata);
       this.actor.assertCurrent();
 
       // An answer with nothing in it is a recorded turn the UI shows as empty; the SDK validator rejects only its part count.
@@ -439,16 +435,14 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
         return empty;
       }
 
-      const validated = yield* Effect.promise(() => validateUIMessages({ messages: [message] }));
+      const validated = await validateUIMessages({ messages: [message] });
       this.actor.assertCurrent();
       const result = validated[0];
 
-      if (result === undefined) return yield* new KinuError('io', 'conversation entry did not materialize');
+      if (result === undefined) throw new KinuError('io', 'conversation entry did not materialize');
 
       return result;
-    });
   }
-
 }
 
 /** Every row's parts point at `reference`. */
@@ -467,18 +461,18 @@ interface SteerBatch {
 interface TranscriptWriterStores extends TranscriptStores<ActorHandle, SessionPayloads> {
   readonly messages: SessionMessages;
   /** Runs one write as a transaction on the same connection as `sql`. */
-  readonly transactionSync: <T>(write: () => T) => T;
+  readonly atomic: <T>(write: () => T) => T;
   /** Stamped on entries naming no context, so a fork at that entry restores the model context held there. */
   readonly selection: () => ContextSelection | null;
 }
 
 export class SessionTranscript extends SessionTranscriptReader<ActorHandle, SessionPayloads> {
-  private readonly transactionSync: <T>(write: () => T) => T;
+  private readonly atomic: <T>(write: () => T) => T;
   private readonly selection: () => ContextSelection | null;
 
   constructor(stores: TranscriptWriterStores) {
     super(stores);
-    this.transactionSync = stores.transactionSync;
+    this.atomic = stores.atomic;
     this.selection = stores.selection;
   }
 
@@ -529,7 +523,7 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
   }
 
   appendUser(entry: PreparedConversationEntry): void {
-    this.transactionSync(() => { if (!this.has(entry.id)) this.record(entry); });
+    this.atomic(() => { if (!this.has(entry.id)) this.record(entry); });
   }
 
   appendAssistant(entry: PreparedConversationEntry): void {
@@ -537,7 +531,7 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
   }
 
   record(entry: PreparedConversationEntry): void {
-    this.transactionSync(() => {
+    this.atomic(() => {
       this.actor.assertCurrent();
       const actorId = this.actor.actorId;
       const context = entry.context === undefined ? this.selection() : entry.context;
@@ -553,7 +547,7 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
 
   /** A rewind: `position` and everything after it is deleted, parts with it; the chat keeps no branch. */
   truncate(position: number): void {
-    this.transactionSync(() => {
+    this.atomic(() => {
       this.actor.assertCurrent();
       void this.sql`DELETE FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND position >= ${position}`;
     });

@@ -40,13 +40,14 @@ export function dockerContainer(name: string, fault: (argv: readonly string[]) =
         ...Object.entries(options.env ?? {}).flatMap(([key, value]) => ['-e', `${key}=${value}`]),
       ];
 
-      const child = Bun.spawn(['docker', ...flags, name, ...argv], {
+      // The process records its pid in the container before it becomes `argv`, so `pid` is the container's own.
+      const pidFile = `/tmp/docker-exec-${crypto.randomUUID()}`;
+
+      const child = Bun.spawn(['docker', ...flags, name, 'sh', '-c', 'echo $$ > "$0" && exec "$@"', pidFile, ...argv], {
         stdin: 'pipe',
         stdout: options.stdout === 'ignore' ? 'ignore' : 'pipe',
         stderr: options.stderr === 'ignore' ? 'ignore' : 'pipe',
       });
-
-      options.signal?.addEventListener('abort', () => { child.kill(); }, { once: true });
 
       const input = options.stdin === 'pipe'
         ? new WritableStream<Uint8Array>({
@@ -61,9 +62,15 @@ export function dockerContainer(name: string, fault: (argv: readonly string[]) =
       if (injected?.kind === 'lose') throw injected.error;
       const stdout = child.stdout ?? null;
       const stderr = child.stderr ?? null;
+      const read = inContainer(name, ['sh', '-c', 'until [ -s "$0" ]; do sleep 0.01; done; cat "$0"; rm "$0"', pidFile]);
+
+      if (read.status !== 0) throw new Error(`the exec's pid was not read: ${read.stderr}`);
+      const pid = Number(read.stdout);
+      // As the runtime's abort does (D38: exit 137).
+      options.signal?.addEventListener('abort', () => { inContainer(name, ['kill', '-9', String(pid)]); }, { once: true });
 
       return {
-        pid: child.pid,
+        pid,
         isPty: false,
         stdin: input,
         stdout,
@@ -76,7 +83,7 @@ export function dockerContainer(name: string, fault: (argv: readonly string[]) =
 
           return { stdout: out, stderr: err, exitCode };
         },
-        kill: (signal) => { child.kill(signal); },
+        kill: (signal) => { inContainer(name, ['kill', `-${String(signal ?? 15)}`, String(pid)]); },
         resize: () => unmodelled('exec resize'),
       };
     },

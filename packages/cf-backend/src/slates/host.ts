@@ -1,4 +1,3 @@
-import { Effect, Cause } from 'effect';
 import { markStoreChanged } from '@kinu.run/core';
 import { exports } from 'cloudflare:workers';
 import { WorkspaceId } from '@agent-core/core';
@@ -24,7 +23,7 @@ import {
 } from '@kinu.run/core';
 import { SLATES_ROOT } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, toKinuError, type Refusal, settle } from '@kinu.run/core/obs';
+import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
 import { ROOT_SLATE_CALLER, slateCallerKey, slateCredentialKey, shareCaller, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
@@ -133,27 +132,24 @@ export class SlateHost {
   }
 
   /** As the owner's root: publishing reads committed versions, never the caller's live tree. */
-  private blueprints(): Effect.Effect<WorkspaceBlueprints, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const slates = yield* Effect.promise(async () => this.sources(CRED_SESSION_USER));
+  private async blueprints(): Promise<WorkspaceBlueprints> {
+    const slates = await this.sources(CRED_SESSION_USER);
 
-      if (this.content === undefined) return yield* new KinuError('io', 'Slate content was not initialized');
+    if (this.content === undefined) throw new KinuError('io', 'Slate content was not initialized');
 
-      return new WorkspaceBlueprints({ slates, content: this.content,
-        shares: new SlateShareStore(this.deps.ctx.storage.sql),
-      });
+    return new WorkspaceBlueprints({ slates, content: this.content,
+      shares: new SlateShareStore(this.deps.ctx.storage.sql),
     });
   }
 
-  /** `body`'s value, or its refusal as the slate answer carries it. */
-  private blueprintAnswer<Value>(doing: string, body: (blueprints: WorkspaceBlueprints) => Effect.Effect<Value, KinuError>): Effect.Effect<SlateAnswer<Value>> {
-    return Effect.catchCause(Effect.gen({ self: this }, function* (): Effect.gen.Return<SlateAnswer<Value>, KinuError> {
-      yield* Effect.promise(async () => this.deps.session());
+  private async blueprintAnswer<Value>(doing: string, body: (blueprints: WorkspaceBlueprints) => Promise<Value> | Value): Promise<SlateAnswer<Value>> {
+    try {
+      await this.deps.session();
 
-      return { ok: true, value: yield* body(yield* this.blueprints()) };
-    }), (failed) => Effect.sync((): SlateAnswer<Value> => ({
-      ok: false, ...refusalOf(toKinuError({ doing, cause: Cause.squash(failed), otherwise: 'io' })),
-    })));
+      return { ok: true, value: await body(await this.blueprints()) };
+    } catch (cause) {
+      return { ok: false, ...refusalOf(toKinuError({ doing, cause, otherwise: 'io' })) };
+    }
   }
 
   private async liveShares(): Promise<WorkspaceLiveShares> {
@@ -166,45 +162,39 @@ export class SlateHost {
   }
 
   /** Uses `get`, not `live`: a revoked row still reads; refusing it is the caller's job. */
-  readLiveShare(share: string): Promise<{ share: LiveShareRecord; title: string; description: string } | null> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const record = this.live.get(share);
+  async readLiveShare(share: string): Promise<{ share: LiveShareRecord; title: string; description: string } | null> {
+    const record = this.live.get(share);
 
-      if (record === undefined) return null;
-      let project: SlateProject | undefined;
+    if (record === undefined) return null;
+    let project: SlateProject | undefined;
 
-      yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-        project = yield* Effect.promise(async () => this.project(CRED_SESSION_USER, record.slate));
-      }), (failed) => Effect.gen({ self: this }, function* () {
-        const cause = Cause.squash(failed);
+    try {
+      project = await this.project(CRED_SESSION_USER, record.slate);
+    } catch (cause) {
+      if (cause instanceof KinuError && cause.code === 'denied') throw cause;
+      project = undefined;
+    }
 
-        if (cause instanceof KinuError && cause.code === 'denied') return yield* Effect.failCause(failed);
-        project = undefined;
-      }));
-
-      return {
-        share: record,
-        title: project?.slate.title ?? project?.name ?? record.slate,
-        description: '',
-      };
-    }));
+    return {
+      share: record,
+      title: project?.slate.title ?? project?.name ?? record.slate,
+      description: '',
+    };
   }
 
   /** `readLiveShare` through the S6 gate: missing is 'missing', revoked is 'denied'. */
-  readLiveShareRecord(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
-    type Read = SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>;
-
-    return settle(Effect.catchCause(Effect.gen({ self: this }, function* (): Effect.gen.Return<Read> {
+  async readLiveShareRecord(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
+    try {
       const record = this.live.live(share);
-      const read = yield* Effect.promise(async () => this.readLiveShare(share));
+      const read = await this.readLiveShare(share);
 
       return {
         ok: true,
         value: { record, title: read?.title ?? record.slate, description: read?.description ?? '' },
       };
-    }), (failed) => Effect.sync((): Read => ({
-      ok: false, ...refusalOf(toKinuError({ doing: `read live share ${share}`, cause: Cause.squash(failed), otherwise: 'io' })),
-    }))));
+    } catch (cause) {
+      return { ok: false, ...refusalOf(toKinuError({ doing: `read live share ${share}`, cause, otherwise: 'io' })) };
+    }
   }
 
   /** Re-reads the share row now (S6: a revoked share refuses before a process starts). */
@@ -359,57 +349,47 @@ export class SlateHost {
   }
 
   /** Unparseable slates are omitted; they surface as `problem` rows on the graph. */
-  projects(caller: SlateCaller): Promise<Record<string, SlateProject>> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const session = yield* Effect.promise(async () => this.deps.session());
-      const vfs = session.vfs.as(caller.cred);
-      const projects: Record<string, SlateProject> = {};
+  async projects(caller: SlateCaller): Promise<Record<string, SlateProject>> {
+    const session = await this.deps.session();
+    const vfs = session.vfs.as(caller.cred);
+    const projects: Record<string, SlateProject> = {};
 
-      if (!vfs.exists(SLATES_ROOT)) return projects;
+    if (!vfs.exists(SLATES_ROOT)) return projects;
 
-      for (const entry of vfs.readdir(SLATES_ROOT)) {
-        if (entry.type !== 'directory') continue;
+    for (const entry of vfs.readdir(SLATES_ROOT)) {
+      if (entry.type !== 'directory') continue;
 
-        yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-          projects[entry.name] = yield* Effect.promise(async () => this.project(caller.cred, entry.name));
-        }), (failed) => Effect.gen({ self: this }, function* () {
-          const cause = Cause.squash(failed);
-
-          if (classifyErrorCode({ cause }) !== 'bad_input') return yield* Effect.failCause(failed);
-        }));
+      try {
+        projects[entry.name] = await this.project(caller.cred, entry.name);
+      } catch (cause) {
+        if (classifyErrorCode({ cause }) !== 'bad_input') throw cause;
       }
+    }
 
-      return projects;
-    }));
+    return projects;
   }
 
   /** Re-reads the row now; refused when revoked. */
   readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>> {
-    return settle(this.blueprintAnswer('reading blueprint ' + share, (blueprints) => Effect.sync(() => blueprints.read(share))));
+    return this.blueprintAnswer('reading blueprint ' + share, (blueprints) => blueprints.read(share));
   }
 
   blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>> {
-    return settle(this.blueprintAnswer('exporting blueprint ' + share, (blueprints) => Effect.sync(() => blueprints.bundle(share))));
+    return this.blueprintAnswer('exporting blueprint ' + share, (blueprints) => blueprints.bundle(share));
   }
 
   /** The projection each user reads is written by the caller. */
-  shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
-    return settle(Effect.flatMap(
-      this.blueprintAnswer('sharing blueprint ' + share, (blueprints) => Effect.sync(() => blueprints.shareWith(share, users))),
-      (answer) => Effect.promise(() => this.changedShares(answer)),
-    ));
+  async shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
+    return this.changedShares(await this.blueprintAnswer('sharing blueprint ' + share, (blueprints) => blueprints.shareWith(share, users)));
   }
 
   /** Never starts its process. */
   admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
-    return settle(this.blueprintAnswer('admitting a blueprint', (blueprints) => Effect.promise(async () => blueprints.admit(this.deps.workspace, bundle))));
+    return this.blueprintAnswer('admitting a blueprint', (blueprints) => blueprints.admit(this.deps.workspace, bundle));
   }
 
-  shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
-    return settle(Effect.flatMap(
-      this.blueprintAnswer('sharing slate ' + share, () => Effect.sync(() => this.live.addUsers(share, users))),
-      (answer) => Effect.promise(() => this.changedShares(answer)),
-    ));
+  async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
+    return this.changedShares(await this.blueprintAnswer('sharing slate ' + share, () => this.live.addUsers(share, users)));
   }
 
   private async changedShares<Answer extends { readonly ok: boolean }>(answer: Answer): Promise<Answer> {
@@ -417,30 +397,28 @@ export class SlateHost {
   }
 
   /** A live share goes by its slate's title. */
-  shareCards(titles: ReadonlyMap<string, string>): Promise<WorkspaceOverviewShare[]> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const blueprints = yield* this.blueprints();
-      const cards: WorkspaceOverviewShare[] = [];
+  async shareCards(titles: ReadonlyMap<string, string>): Promise<WorkspaceOverviewShare[]> {
+    const blueprints = await this.blueprints();
+    const cards: WorkspaceOverviewShare[] = [];
 
-      for (const record of blueprints.list()) {
-        if (record.revokedAt !== null) continue;
-        const heading = this.blueprintHeadings.get(record.id) ?? blueprints.heading(record.id);
-        this.blueprintHeadings.set(record.id, heading);
-        cards.push({ kind: 'blueprint', share: record.id, slate: record.slate, ...heading, createdAt: record.createdAt, users: [...record.users] });
-      }
+    for (const record of blueprints.list()) {
+      if (record.revokedAt !== null) continue;
+      const heading = this.blueprintHeadings.get(record.id) ?? blueprints.heading(record.id);
+      this.blueprintHeadings.set(record.id, heading);
+      cards.push({ kind: 'blueprint', share: record.id, slate: record.slate, ...heading, createdAt: record.createdAt, users: [...record.users] });
+    }
 
-      for (const record of this.live.list()) {
-        if (record.revokedAt !== null) continue;
+    for (const record of this.live.list()) {
+      if (record.revokedAt !== null) continue;
 
-        cards.push({
-          kind: 'live', share: record.id, slate: record.slate, title: titles.get(record.slate) ?? record.slate, description: '',
-          createdAt: record.createdAt, bindings: record.grant.members.length, users: [...record.users],
-          visibility: record.visibility, fork: record.grant.fork !== false,
-        });
-      }
+      cards.push({
+        kind: 'live', share: record.id, slate: record.slate, title: titles.get(record.slate) ?? record.slate, description: '',
+        createdAt: record.createdAt, bindings: record.grant.members.length, users: [...record.users],
+        visibility: record.visibility, fork: record.grant.fork !== false,
+      });
+    }
 
-      return cards;
-    }));
+    return cards;
   }
 
   liveShareAdmitsUser(share: string, userId: string): boolean {
@@ -449,17 +427,17 @@ export class SlateHost {
 
   /** Admission is checked only by the caller. */
   liveShareBundle(record: LiveShareRecord): Promise<SlateAnswer<BlueprintBundle>> {
-    return settle(this.blueprintAnswer(`exporting live share ${record.id}`, (blueprints) => Effect.promise(async () => blueprints.liveBundle(record.slate))));
+    return this.blueprintAnswer(`exporting live share ${record.id}`, (blueprints) => blueprints.liveBundle(record.slate));
   }
 
   shareLive(share: string): Promise<SlateAnswer<{ share: LiveShareRecord; url: string | null }>> {
-    return settle(this.blueprintAnswer('opening share ' + share, () => Effect.gen({ self: this }, function* () {
+    return this.blueprintAnswer('opening share ' + share, async () => {
       const record = this.live.get(share);
 
-      if (record === undefined) return yield* new KinuError('missing', 'No such share');
+      if (record === undefined) throw new KinuError('missing', 'No such share');
 
-      return { share: record, url: yield* Effect.promise(async () => this.deps.shareUrl(record.handle)) };
-    })));
+      return { share: record, url: await this.deps.shareUrl(record.handle) };
+    });
   }
 
   private async sources(cred: VfsCred): Promise<WorkspaceSlates> {
@@ -501,77 +479,73 @@ export class SlateHost {
     return { ok: true, value: projectJsonValue({ value: revoked }) };
   }
 
-  operation(caller: SlateCaller, input: SlateOperation): Promise<SlateCallResult> {
-    return settle(Effect.gen({ self: this }, function* () {
-      return yield* Effect.catchCause(Effect.gen({ self: this }, function* (): Effect.gen.Return<SlateCallResult, KinuError> {
-        const parsed = v.safeParse(SlateOperationSchema, input);
+  async operation(caller: SlateCaller, input: SlateOperation): Promise<SlateCallResult> {
+    try {
+      const parsed = v.safeParse(SlateOperationSchema, input);
 
-        if (!parsed.success) return yield* new KinuError('bad_input', 'Slate operation does not match its declared fields', { cause: new v.ValiError(parsed.issues) });
-        const operation = parsed.output;
-        requireSlateWorkMode(operation, caller.workMode);
+      if (!parsed.success) throw new KinuError('bad_input', 'Slate operation does not match its declared fields', { cause: new v.ValiError(parsed.issues) });
+      const operation = parsed.output;
+      requireSlateWorkMode(operation, caller.workMode);
 
-        switch (operation.op) {
-          case 'list': {
-            const listing = yield* Effect.promise(async () => this.list(caller));
+      switch (operation.op) {
+        case 'list': {
+          const listing = await this.list(caller);
 
-            return { ok: true, value: { slates: listing.slates.map((slate) => ({ ...slate, bindings: [...slate.bindings] })), problems: listing.problems.map((problem) => ({ ...problem })) } };
-          }
-
-          case 'preview': return yield* Effect.promise(async () => this.preview(caller, operation.id));
-          case 'methods': return { ok: true, value: [...(yield* Effect.promise(async () => this.ensure(caller, operation.id))).methods] };
-          case 'call': return yield* Effect.promise(async () => this.call({ caller, id: operation.id, method: operation.method, args: operation.args ?? [] }));
-          case 'remove': return yield* Effect.promise(async () => this.remove(caller, operation.id));
-          case 'history': {
-            yield* Effect.promise(async () => this.deps.session());
-            const id = new SlateId(operation.id);
-            const slate = this.store.getSlate(id);
-
-            if (slate === undefined) return yield* new KinuError('missing', 'No durable slate record; commit source or open a preview first');
-
-            if (slate.workspaceId.value !== this.deps.workspace) return yield* new KinuError('denied', 'Slate belongs to another workspace');
-
-            const page = this.store.versionPage(id, operation.after);
-
-            return { ok: true, value: projectJsonValue({ value: { slate: slate.toData(), versions: page.versions.map((version) => version.toData()), next: page.next } }) };
-          }
-
-          case 'commit': return { ok: true, value: projectJsonValue({ value: (yield* Effect.promise(async () => (await this.sources(caller.cred)).commit(new SlateId(operation.id)))).toData() }) };
-          case 'fork': return { ok: true, value: projectJsonValue({ value: (yield* Effect.promise(async () => (await this.sources(caller.cred)).fork(new SlateVersionId(operation.version)))).toData() }) };
-          case 'restore': return { ok: true, value: projectJsonValue({ value: (yield* Effect.promise(async () => (await this.sources(caller.cred)).restore(new SlateId(operation.id), new SlateVersionId(operation.version)))).toData() }) };
-          // Publishing and sharing are the owner's alone; a hosted actor never exports on the owner's behalf.
-          case 'inspect':
-          case 'publish':
-          case 'unshare':
-          case 'shares':
-          case 'share':
-          case 'liveShares':
-          case 'viewerRequests': {
-            if (caller.path.length > 0) return yield* new KinuError('denied', 'Only the workspace root publishes, shares or revokes slates');
-            const blueprints = yield* this.blueprints();
-
-            switch (operation.op) {
-              case 'inspect': return { ok: true, value: projectJsonValue({ value: blueprints.inspect(operation.id, operation.version, operation.include) }) };
-              case 'publish': return yield* Effect.promise(async () => this.changedShares({ ok: true, value: projectJsonValue({ value: await blueprints.publish(operation.id, operation.version, operation.include) }) }));
-              case 'unshare': return yield* Effect.promise(async () => this.changedShares(await this.unshare(operation.share, blueprints)));
-
-              case 'shares': return { ok: true, value: projectJsonValue({ value: blueprints.list() }) };
-              case 'share': {
-                return yield* Effect.promise(async () => this.changedShares({ ok: true, value: projectJsonValue({ value: await (await this.liveShares()).share(operation.id, operation.visibility, operation.approved, operation.fork) }) }));
-              }
-
-              case 'liveShares': return { ok: true, value: projectJsonValue({ value: this.live.list().map((row) => ({ ...row, paused: this.sharePaused(row) })) }) };
-              case 'viewerRequests': return { ok: true, value: projectJsonValue({ value: this.live.requests(operation.share) }) };
-            }
-          }
-
-          case 'graph': return { ok: true, value: projectJsonValue({ value: yield* Effect.promise(async () => (await this.liveShares()).graph(operation.id)) }) };
+          return { ok: true, value: { slates: listing.slates.map((slate) => ({ ...slate, bindings: [...slate.bindings] })), problems: listing.problems.map((problem) => ({ ...problem })) } };
         }
-      }), (failed) => Effect.sync((): SlateCallResult => {
-        const cause = Cause.squash(failed);
 
-        return { ok: false, ...refusalOf(toKinuError({ doing: 'slate operation', cause, otherwise: 'io' })) };
-      }));
-    }));
+        case 'preview': return await this.preview(caller, operation.id);
+        case 'methods': return { ok: true, value: [...(await this.ensure(caller, operation.id)).methods] };
+        case 'call': return await this.call({ caller, id: operation.id, method: operation.method, args: operation.args ?? [] });
+        case 'remove': return await this.remove(caller, operation.id);
+        case 'history': {
+          await this.deps.session();
+          const id = new SlateId(operation.id);
+          const slate = this.store.getSlate(id);
+
+          if (slate === undefined) throw new KinuError('missing', 'No durable slate record; commit source or open a preview first');
+
+          if (slate.workspaceId.value !== this.deps.workspace) throw new KinuError('denied', 'Slate belongs to another workspace');
+
+          const page = this.store.versionPage(id, operation.after);
+
+          return { ok: true, value: projectJsonValue({ value: { slate: slate.toData(), versions: page.versions.map((version) => version.toData()), next: page.next } }) };
+        }
+
+        case 'commit': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).commit(new SlateId(operation.id))).toData() }) };
+        case 'fork': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).fork(new SlateVersionId(operation.version))).toData() }) };
+        case 'restore': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).restore(new SlateId(operation.id), new SlateVersionId(operation.version))).toData() }) };
+        // Publishing and sharing are the owner's alone; a hosted actor never exports on the owner's behalf.
+        case 'inspect':
+        case 'publish':
+        case 'unshare':
+        case 'shares':
+        case 'share':
+        case 'liveShares':
+        case 'viewerRequests': {
+          if (caller.path.length > 0) throw new KinuError('denied', 'Only the workspace root publishes, shares or revokes slates');
+          const blueprints = await this.blueprints();
+
+          switch (operation.op) {
+            case 'inspect': return { ok: true, value: projectJsonValue({ value: blueprints.inspect(operation.id, operation.version, operation.include) }) };
+            case 'publish': return await this.changedShares({ ok: true, value: projectJsonValue({ value: await blueprints.publish(operation.id, operation.version, operation.include) }) });
+            case 'unshare': return await this.changedShares(await this.unshare(operation.share, blueprints));
+
+            case 'shares': return { ok: true, value: projectJsonValue({ value: blueprints.list() }) };
+            case 'share': {
+              return await this.changedShares({ ok: true, value: projectJsonValue({ value: await (await this.liveShares()).share(operation.id, operation.visibility, operation.approved, operation.fork) }) });
+            }
+
+            case 'liveShares': return { ok: true, value: projectJsonValue({ value: this.live.list().map((row) => ({ ...row, paused: this.sharePaused(row) })) }) };
+            case 'viewerRequests': return { ok: true, value: projectJsonValue({ value: this.live.requests(operation.share) }) };
+          }
+        }
+
+        case 'graph': return { ok: true, value: projectJsonValue({ value: await (await this.liveShares()).graph(operation.id) }) };
+      }
+    } catch (cause) {
+      return { ok: false, ...refusalOf(toKinuError({ doing: 'slate operation', cause, otherwise: 'io' })) };
+    }
   }
 
   async list(caller: SlateCaller): Promise<{ slates: SlateSummary[]; problems: SlateProblem[] }> {
@@ -610,50 +584,40 @@ export class SlateHost {
   }
 
   /** The application is the root's, so the URL is the same whoever asks and across launches. */
-  preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
-    return settle(Effect.gen({ self: this }, function* () {
-      return yield* Effect.catchCause(Effect.gen({ self: this }, function* (): Effect.gen.Return<SlateCallResult, KinuError> {
-        requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
-        const project = yield* Effect.promise(async () => this.project(caller.cred, id));
-        const app = yield* this.serve(id);
-        const preview = yield* Effect.promise(async () => this.deps.apps.url(app.port, app.capability));
+  async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
+    try {
+      requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
+      const project = await this.project(caller.cred, id);
+      const app = await this.serve(id);
+      const preview = await this.deps.apps.url(app.port, app.capability);
 
-        if (preview.url === undefined) return yield* new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
+      if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
 
-        this.deps.previewed?.(id);
+      this.deps.previewed?.(id);
 
-        return { ok: true, value: { url: preview.url, port: app.port, inline: { height: project.slate.inline.height } } };
-      }), (failed) => Effect.sync((): SlateCallResult => {
-        const cause = Cause.squash(failed);
-
-        return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' preview', cause, otherwise: 'io' })) };
-      }));
-    }));
+      return { ok: true, value: { url: preview.url, port: app.port, inline: { height: project.slate.inline.height } } };
+    } catch (cause) {
+      return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' preview', cause, otherwise: 'io' })) };
+    }
   }
 
   /** Answers the refusal instead of throwing, so the route can tell `missing` from `bad_input`. */
-  ensureDurable(owner: string): Promise<Refusal | null> {
-    return settle(Effect.gen({ self: this }, function* () {
-      return yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-        yield* this.serve(owner);
+  async ensureDurable(owner: string): Promise<Refusal | null> {
+    try {
+      await this.serve(owner);
 
-        return null;
-      }), (failed) => Effect.sync(() => {
-        const cause = Cause.squash(failed);
-
-        return refusalOf(toKinuError({ doing: 'slate ' + owner + ' durable app', cause, otherwise: 'io' }));
-      }));
-    }));
+      return null;
+    } catch (cause) {
+      return refusalOf(toKinuError({ doing: 'slate ' + owner + ' durable app', cause, otherwise: 'io' }));
+    }
   }
 
-  private serve(id: string): Effect.Effect<DurableAppIdentity, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const running = yield* Effect.promise(async () => this.booted(ROOT_SLATE_CALLER, id));
+  private async serve(id: string): Promise<DurableAppIdentity> {
+    const running = await this.booted(ROOT_SLATE_CALLER, id);
 
-      if (running.app === null) return yield* new KinuError('io', `Slate ${id} is running without its durable application`);
+    if (running.app === null) throw new KinuError('io', `Slate ${id} is running without its durable application`);
 
-      return running.app;
-    });
+    return running.app;
   }
 
   /** Ends processes, the durable application, the authored tree and its storage; committed versions stay. */
@@ -730,11 +694,11 @@ export class SlateHost {
   }
 
   /** Re-read the slate field on every call: a held stub proves its name, not today's reach. */
-  bindingCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
-    return settle(Effect.catchCause(Effect.gen({ self: this }, function* (): Effect.gen.Return<SlateCallResult, KinuError> {
+  async bindingCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
+    try {
       const parsed = v.safeParse(SlateBindingRequestSchema, request);
 
-      if (!parsed.success) return yield* new KinuError('bad_input', 'A binding call is { member, args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) });
+      if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) });
 
       if (name === SLATE_HOST_BINDING) return this.releaseInvocation(caller, id, parsed.output);
 
@@ -765,7 +729,7 @@ export class SlateHost {
       // The share row is re-read now, so a revoked share refuses mid-flight.
       if (caller.share !== undefined) {
         if (issued?.viewer === undefined) {
-          return yield* new KinuError('denied', 'A viewer binding call must name the invocation it was issued under');
+          throw new KinuError('denied', 'A viewer binding call must name the invocation it was issued under');
         }
 
         const viewer = issued.viewer;
@@ -776,22 +740,27 @@ export class SlateHost {
 
         if (governor !== undefined && governor.guard('model_call', [shareSpendLabel(share.id)]) !== null) {
           this.live.recordCall(viewer.request, { slate: id, binding: name, member: parsed.output.member, effect: 'mutate', ok: false });
-
-          return yield* new KinuError('budget', 'This share is paused for today');
+          throw new KinuError('budget', 'This share is paused for today');
         }
 
-        const project = yield* Effect.promise(async () => this.project(caller.cred, id));
+        const project = await this.project(caller.cred, id);
+        let call;
 
-        // A refused route or run is recorded against the share before it answers.
-        const call = yield* Effect.onError(
-          Effect.sync(() => routeViewerBindingCall({ id, project, name, request: parsed.output, chain, viewer, grant: share.grant })),
-          () => Effect.sync(() => { this.live.recordCall(viewer.request, { slate: id, binding: name, member: parsed.output.member, effect: 'mutate', ok: false }); }),
-        );
+        try {
+          call = routeViewerBindingCall({ id, project, name, request: parsed.output, chain, viewer, grant: share.grant });
+        } catch (cause) {
+          this.live.recordCall(viewer.request, { slate: id, binding: name, member: parsed.output.member, effect: 'mutate', ok: false });
+          throw cause;
+        }
 
-        const result = yield* Effect.onError(
-          Effect.promise(async () => this.run(caller, call.route, viewer)),
-          () => Effect.sync(() => { this.live.recordCall(viewer.request, { slate: id, binding: name, member: call.member, effect: call.effect, ok: false }); }),
-        );
+        let result: SlateCallResult;
+
+        try {
+          result = await this.run(caller, call.route, viewer);
+        } catch (cause) {
+          this.live.recordCall(viewer.request, { slate: id, binding: name, member: call.member, effect: call.effect, ok: false });
+          throw cause;
+        }
 
         this.live.recordCall(viewer.request, { slate: id, binding: name, member: call.member, effect: call.effect, ok: result.ok });
 
@@ -800,12 +769,12 @@ export class SlateHost {
         return result;
       }
 
-      const project = yield* Effect.promise(async () => this.project(caller.cred, id));
+      const project = await this.project(caller.cred, id);
 
-      return yield* Effect.promise(async () => this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output, chain })));
-    }), (failed) => Effect.sync((): SlateCallResult => ({
-      ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} binding ${name}`, cause: Cause.squash(failed), otherwise: 'io' })),
-    }))));
+      return await this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output, chain }));
+    } catch (cause) {
+      return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} binding ${name}`, cause, otherwise: 'io' })) };
+    }
   }
 
   private async run(caller: SlateCaller, route: SlateBindingRoute, viewer?: SlateViewer): Promise<SlateCallResult> {
@@ -832,43 +801,46 @@ export class SlateHost {
   }
 
   /** One Cap'n Web HTTP-batch RPC; the invocation id lives exactly as long as the call. */
-  call(request: SlateAppCall): Promise<SlateCallResult> {
+  async call(request: SlateAppCall): Promise<SlateCallResult> {
     const { caller, id, method, args, chain = [], viewer } = request;
     const invocation = crypto.randomUUID();
     this.invocations.set(invocation, viewer === undefined ? { id, chain } : { id, chain, viewer });
 
-    return settle(Effect.ensuring(Effect.catchCause(Effect.gen({ self: this }, function* (): Effect.gen.Return<SlateCallResult, KinuError> {
+    try {
       requireWorkModePermission(caller.workMode, false, 'Calling authored slate code');
 
-      if (!isSlateMethodName(method)) return yield* new KinuError('bad_input', `"${method}" is not an app method name`);
+      if (!isSlateMethodName(method)) throw new KinuError('bad_input', `"${method}" is not an app method name`);
       const parsed = v.safeParse(v.array(JsonValueSchema), args);
 
-      if (!parsed.success) return yield* new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
-      const process = yield* Effect.promise(async () => this.ensure(caller, id));
+      if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
+      const process = await this.ensure(caller, id);
 
       if (!process.methods.includes(method)) {
-        return yield* new KinuError('bad_input', `Slate ${id} has no method ${method}; its class exports ${process.methods.join(', ')}`);
+        throw new KinuError('bad_input', `Slate ${id} has no method ${method}; its class exports ${process.methods.join(', ')}`);
       }
 
       const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(process, invocation);
 
-      // Dispose here, not at transport end, or workerd reports the read-loop rejection as unhandled.
-      return yield* Effect.ensuring(Effect.gen(function* () {
-        const raw: unknown = yield* Effect.promise(async () => stub[method](...parsed.output));
+      try {
+        const raw: unknown = await stub[method](...parsed.output);
         const value = v.safeParse(JsonValueSchema, raw === undefined ? null : raw);
 
-        if (!value.success) return yield* new KinuError('bad_input', 'Slate method must return a JSON value', { cause: new v.ValiError(value.issues) });
+        if (!value.success) throw new KinuError('bad_input', 'Slate method must return a JSON value', { cause: new v.ValiError(value.issues) });
 
-        return { ok: true, value: value.output } as const;
-      }), Effect.sync(() => { stub[Symbol.dispose](); }));
-    }), (failed) => Effect.sync((): SlateCallResult => {
-      const cause = Cause.squash(failed);
+        return { ok: true, value: value.output };
+      } finally {
+        // Dispose here, not at transport end, or workerd reports the read-loop rejection as unhandled.
+        stub[Symbol.dispose]();
+      }
+    } catch (cause) {
       const refusal = refusalFromThrown({ cause });
 
       if (refusal !== null) return { ok: false, ...refusal };
 
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id}.${method}`, cause, otherwise: 'io' })) };
-    })), Effect.sync(() => { this.invocations.delete(invocation); })));
+    } finally {
+      this.invocations.delete(invocation);
+    }
   }
 
   async ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {

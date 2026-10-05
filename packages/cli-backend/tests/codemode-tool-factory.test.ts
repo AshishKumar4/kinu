@@ -5,6 +5,7 @@ import { asSchema, jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import type { CodemodeProvider, CraftedToolSource, JsonValue, SlateOperation } from '@kinu.run/core';
 import { CODEMODE_CODE_DESCRIPTION, SlateOperationSchema, WORKSPACE_ROOT, codemodeSurface, createInlineExecutor } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { toolExecute, scriptedTurnModel, createTestRuntime, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { inWorkMode, successfulToolOutcome, renderDynamicContextBlock, runChat, DynamicContextLedger, craftedToolDeclarations } from '@kinu.run/core';
@@ -20,14 +21,14 @@ interface ExecuteToolResult {
 type ExecuteTool = (args: { code: string }) => Promise<ExecuteToolResult>;
 
 function makeTool(): ExecuteTool {
-  const factory = createNodeCodemodeToolFactory();
+  const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) });
 
   return toolExecute(factory({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] }));
 }
 
 describe('createNodeCodemodeToolFactory — the code field the model reads', () => {
   test('the input schema describes a script body, not an arrow function', async () => {
-    const built = createNodeCodemodeToolFactory()({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 
     const schema = v.parse(v.object({
       jsonSchema: v.object({
@@ -66,7 +67,7 @@ describe('createNodeCodemodeToolFactory — external tools', () => {
     const { rt } = createTestRuntime();
     // The surface core builds; this runtime has no crafted-tools table to read.
     const surface = { ...codemodeSurface(rt, {}, () => external), craftedTools: () => [] };
-    const run = toolExecute<{ code: string }, ExecuteToolResult>(createNodeCodemodeToolFactory()(surface));
+    const run = toolExecute<{ code: string }, ExecuteToolResult>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })(surface));
     external = { mcp_tracker_find_issue: lookup };
 
     expect(await run({ code: 'return await tools["mcp_tracker_find_issue"]({ title: "login" });' })).toEqual({ result: { id: 'ISSUE-7' } });
@@ -78,7 +79,7 @@ describe('createNodeCodemodeToolFactory — external tools', () => {
 describe('createNodeCodemodeToolFactory — console capture + implicit return', () => {
   test('saving a crafted tool preserves the native description and makes the next call usable', async () => {
     let crafted: CraftedToolSource[] = [];
-    const factory = createNodeCodemodeToolFactory();
+    const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) });
     const surface = { native: {}, external: () => ({}), craftedTools: () => crafted, providers: [] };
     const first = factory(surface);
     crafted = [{ name: 'cache_echo', description: 'Return the supplied text', code: 'async (text) => text' }];
@@ -93,7 +94,7 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
   });
 
   test('the provider sees the callable declaration in the ledger and a real call returns its output', async () => {
-    const codemode = createNodeCodemodeToolFactory()({ native: {}, providers: [], external: () => ({}), craftedTools: () => [
+    const codemode = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({ native: {}, providers: [], external: () => ({}), craftedTools: () => [
       { name: 'cache_echo', description: 'Return the supplied text', code: 'async (text) => text' },
     ] });
 
@@ -200,6 +201,7 @@ function makeToolWithFailingProvider(error: Error) {
   };
 
   const factory = createNodeCodemodeToolFactory({
+    reach: narrowToolSurface(undefined),
     extraProviders: [provider],
   });
 
@@ -251,6 +253,7 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
     // Each provider's `types` must reach the description, or its callables are reachable but undiscoverable.
     // Capability and executor providers arrive by different routes.
     const factory = createNodeCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       extraProviders: [{
         name: 'memory',
         types: 'export declare const memory: {\n  save(content: string): Promise<unknown>;\n};\n',
@@ -276,7 +279,7 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
 
 describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock', () => {
   function makeToolOverStore(store: Map<string, string>): ExecuteTool {
-    const built = createNodeCodemodeToolFactory()({
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
       native: {},
       external: () => ({}), craftedTools: () => [...store].map(([name, code]) => ({ name, description: name, code })),
       providers: [],
@@ -312,7 +315,7 @@ describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock'
         tools: { hijack: { description: 'x', execute: async () => 'provider' } },
     };
 
-    const built = createNodeCodemodeToolFactory({ extraProviders: [provider] })({
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [provider] })({
       native: {},
       external: () => ({}), craftedTools: () => [{ name: 'real', description: 'r', code: 'async () => "crafted"' }],
       providers: [],
@@ -346,7 +349,7 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
     // The shared docstring promises `tools.<name>(input)` for every native tool.
     const seen: string[] = [];
 
-    const built = createNodeCodemodeToolFactory()({
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
       native: surfaceWith(async ({ command }) => {
         seen.push(command);
 
@@ -366,7 +369,7 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
   });
 
   test('native tools are declared by their own schemas and crafted declarations ride the live ledger', () => {
-    const built = createNodeCodemodeToolFactory()({
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
       native: surfaceWith(async () => ''),
       external: () => ({}), craftedTools: () => [{ name: 'double', description: 'Doubles a number', code: 'async () => 2' }],
       providers: [],
@@ -380,7 +383,7 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
   });
 
   test('the sandbox does not bind its own entry', async () => {
-    const built = createNodeCodemodeToolFactory()({
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
       native: surfaceWith(async () => ''),
       external: () => ({}), craftedTools: () => [],
       providers: [],
@@ -433,7 +436,7 @@ test('a program writes only into the workspace it was given, and Plan refuses be
   const commands: string[] = [];
 
   const execute = toolExecute<{ code: string }, ExecuteToolResult>(
-    createNodeCodemodeToolFactory({ extraProviders: [mapWorkspace(files, commands)] })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
+    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [mapWorkspace(files, commands)] })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
   );
 
   const code = [
@@ -467,7 +470,7 @@ test('a failed fs call keeps the code and path the workspace names, once', async
   };
 
   const execute = toolExecute<{ code: string }, ExecuteToolResult>(
-    createNodeCodemodeToolFactory({ extraProviders: [workspace] })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
+    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [workspace] })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
   );
 
   const out = await execute({
@@ -482,7 +485,7 @@ test('a synchronous call fails naming the awaited call that replaces it, and tha
   const commands: string[] = [];
 
   const execute = toolExecute<{ code: string }, ExecuteToolResult>(
-    createNodeCodemodeToolFactory({ extraProviders: [mapWorkspace(files, commands)] })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
+    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [mapWorkspace(files, commands)] })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
   );
 
   // Issue #23: the model reached for execSync and read its output synchronously.
@@ -519,7 +522,7 @@ test('each workspace.slates member reaches the slate host as one operation, and 
   });
 
   const execute = toolExecute<{ code: string }, ExecuteToolResult>(
-    createNodeCodemodeToolFactory({ extraProviders: [workspace] })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
+    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [workspace] })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
   );
 
   // Issue #28: a slate is its class, so the class's own `remove` is a call and the lifecycle is `$remove`.

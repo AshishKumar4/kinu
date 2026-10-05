@@ -64,14 +64,23 @@ test('a call cut off after its effect runs once, and the model is told it may ha
   const marks = scratchPath('lost-tool-call', 'marks.txt');
   const lines = () => existsSync(marks) ? readFileSync(marks, 'utf8').split('\n').filter(Boolean).length : 0;
 
-  const dying = new LocalAgentSession({ rt, db, model: model([markCall(marks)], []), noAutoEvolve: true, onEvent: () => {} });
+  rt.actor.config.setLearning(false);
+  let dyingEnded = false;
+
+  const dying = new LocalAgentSession({
+    rt, db, model: model([markCall(marks)], []),
+    onEvent: (event) => { dyingEnded ||= event.type === 'turn-end'; },
+  });
+
   await dying.connectMcp(SERVERS);
   const dead = dying.send('mark the file', { id: crypto.randomUUID() });
-  await until(() => lines() === 1);
+  // Ends on the mark, or on the dying turn's own end if its call never ran, so a mismatch fails instead of spinning.
+  await until(() => lines() === 1 || dyingEnded);
+  expect(lines()).toBe(1);
 
   const prompts: Prompt[] = [];
   const events: SessionEvent[] = [];
-  const next = new LocalAgentSession({ rt, db, model: model([answer], prompts), noAutoEvolve: true, onEvent: (event) => events.push(event) });
+  const next = new LocalAgentSession({ rt, db, model: model([answer], prompts), onEvent: (event) => events.push(event) });
   await next.connectMcp(SERVERS);
   await until(() => events.some((event) => event.type === 'turn-end'));
   await next.end();

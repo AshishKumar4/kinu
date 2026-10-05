@@ -24,6 +24,25 @@ const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional res
   };
 });
 
+/** Set while `collectEvalTasks` imports the task files: a task is gathered, not registered. */
+let collected: EvalTask[] | null = null;
+
+/** Every task the eval files declare, for a runner that is not one case per task (`reactive.ts`). */
+export async function collectEvalTasks(): Promise<EvalTask[]> {
+  const tasks: EvalTask[] = [];
+  collected = tasks;
+
+  try {
+    for (const name of readdirSync(join(import.meta.dirname, '../tasks')).filter((file) => file.endsWith('.eval.ts')).sort()) {
+      await import(join(import.meta.dirname, '../tasks', name));
+    }
+  } finally {
+    collected = null;
+  }
+
+  return tasks;
+}
+
 /**
  * Register one task as model x arm x trial cases. Trials run concurrently, each on its own
  * workspace and its own account (`slot.ts`), so a task takes as long as its slowest trial. A missing
@@ -32,6 +51,12 @@ const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional res
  * beside every other family's runs (`resolveArtifactRoot`), never under a swept root.
  */
 export function defineTaskEval(task: EvalTask): void {
+  if (collected !== null) {
+    collected.push(task);
+
+    return;
+  }
+
   const matrix = evalMatrix(process.env, ARMS.map((arm) => arm.id));
   const target = resolveEvalTarget(process.env);
 

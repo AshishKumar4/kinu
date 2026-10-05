@@ -21,3 +21,15 @@ test("recoverBackgroundJobs settles a swarm node's job its ended loop left runni
   expect(jobColumn(db, 'bgjob-node', 'error')).toContain('interrupted');
   expect(events.items.some((e) => e.type === 'turn-start' && e.kind === 'programmatic')).toBe(false);
 });
+
+// Main's queue (b), 2026-10-03: the CLI listed the workspace's jobs alone; the cloud lists any hosted actor's.
+test("an agent's jobs are listed by its name, apart from the workspace's own", async () => {
+  const { db, rt, session } = setup();
+  const hire = registerLocalActor(rt.actor, { name: 'builder', creationId: 'builder', origin: 'agent', lifetime: 'durable' });
+
+  db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${hire.reference.actorId}', 'bgjob-hire', 'shell', 'build', 'running', 1)`);
+
+  expect((await session.listBackgroundJobs(20, 'builder')).map((job) => job.id)).toEqual(['bgjob-hire']);
+  expect(await session.listBackgroundJobs(20)).toEqual([]);
+  await expect(session.listBackgroundJobs(20, 'nobody')).rejects.toThrow('No agent named nobody');
+});

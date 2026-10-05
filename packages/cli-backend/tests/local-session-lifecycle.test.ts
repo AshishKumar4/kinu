@@ -2,7 +2,8 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
 import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
-import { initWorkspaceSchema, JobOutputFrameSchema, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
+import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,8 +17,10 @@ import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
+import { staticModelPlane } from '../src/profile-authority';
+import { OS_LEASE_PROCESS } from '../src/agent-host/lease-process';
 import * as v from 'valibot';
-import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, } from './helpers/local-session';
+import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, swarmsOn, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, } from './helpers/local-session';
 
 const jobStatus = (db: Database, id: string) => jobColumn(db, id, 'status');
 
@@ -80,7 +83,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(events.items).toContainEqual({ type: 'broadcast', event: { type: 'pending_actions_changed' } });
     await session.end();
 
-    const reopened = new LocalAgentSession({ rt, db, model: fakeModel('noted'), noAutoEvolve: true, onEvent: (event) => events.push(event) });
+    rt.actor.config.setLearning(false);
+    const reopened = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: (event) => events.push(event) });
 
     try {
       expect(await reopened.listDeferredApprovals()).toEqual([parked, sandboxAction]);
@@ -109,7 +113,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const db = new Database(scratchPath('local-session-placed', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: project });
-    const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: () => {}, noAutoEvolve: true });
+    rt.actor.config.setLearning(false);
+    const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: () => {}, });
     const shell = present(rt.shell, 'the placed shell');
 
     try {
@@ -750,8 +755,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const events = new AwaitedList<SessionEvent>();
 
+    rt.actor.config.setLearning(false);
+
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('recovered event'), onEvent: (e) => events.push(e), noAutoEvolve: true,
+      rt, db, model: fakeModel('recovered event'), onEvent: (e) => events.push(e),
     });
 
     expect(hub(db).pending()).toEqual([]);
@@ -779,8 +786,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const nextEvents = new AwaitedList<SessionEvent>();
 
+    rt.actor.config.setLearning(false);
+
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('should not run'), onEvent: (e) => nextEvents.push(e), noAutoEvolve: true,
+      rt, db, model: fakeModel('should not run'), onEvent: (e) => nextEvents.push(e),
     });
 
     next.reclaimStrandedEventDeliveries();
@@ -817,6 +826,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const received: Array<{ atMs?: number; label?: string }> = [];
 
     const codemodeTool = createNodeCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
@@ -846,6 +856,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     let arms = 0;
 
     const codemodeTool = createNodeCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
@@ -1008,6 +1019,33 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(db.query<{ c: number }, []>(`SELECT COUNT(*) c FROM fibers`).get()?.c).toBe(0);
     expect(db.query(`SELECT COUNT(*) c FROM fibers WHERE id='f1'`).get()).toEqual({ c: 0 });
     expect(events.items.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job')).toBe(true);
+  });
+
+  // Main, 2026-10-03: a TUI opening while the daemon ran a job re-drove it as an orphan, so it ran twice.
+  test('recoverBackgroundJobs leaves a job another live process runs to it, and recovers one whose process is gone', async () => {
+    const { db, rt, session } = setup();
+    const daemon = Bun.spawn(['sleep', '600']);
+    const gone = Bun.spawn(['true']);
+    await gone.exited;
+
+    try {
+      for (const [id, fiber, pid] of [['bgjob-held', 'f-held', daemon.pid], ['bgjob-gone', 'f-gone', gone.pid]] as const) {
+        db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', '${id}', 'shell', 'build', 'running', 1)`);
+        db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', '${fiber}', 'bg:run', '{"phase":"running","jobId":"${id}","kind":"shell"}', 1)`);
+        // As that process's own runner records the job it runs.
+        processJobHolder(rt.storage, { ...OS_LEASE_PROCESS, pid }).hold(id);
+      }
+
+      await session.recoverBackgroundJobs();
+      await session.settleBackgroundWork();
+
+      expect(jobStatus(db, 'bgjob-held')).toBe('running');
+      expect(db.query(`SELECT id FROM fibers`).all()).toEqual([{ id: 'f-held' }]);
+      expect(jobStatus(db, 'bgjob-gone')).toBe('failed');
+      expect(jobError(db, 'bgjob-gone')).toContain('interrupted');
+    } finally {
+      daemon.kill();
+    }
   });
 
   test('recoverBackgroundJobs fails an orphaned agents job whose row names an action the tool no longer has', async () => {
@@ -1218,6 +1256,25 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('remember this', { id: crypto.randomUUID() });
     const result = events.items.find((event) => event.type === 'tool-result');
     expect(JSON.stringify(result?.result)).toContain('found');
+  });
+
+  // Rank 36: the CLI narrowed eval's extra namespaces by the role, never its workspace one, so a revoked reach came back.
+  test("eval binds only the namespaces the role admits: a role without shell, file or slate reaches no workspace", async () => {
+    const analyst = { description: 'Reads memory.', instructions: 'Answer from memory.', tier: 'default', preset: 'audit', allowedTools: ['eval', 'memory'] } as const;
+
+    const { rt, session, events } = setup('unused', codemodeModel('return `${typeof workspace.exec} ${typeof memory}`'), {
+      profileAuthority: async () => {
+        const { catalog } = present(await swarmsOn(rt, staticModelPlane())(), "the workspace's own catalog");
+        const withAnalyst = { ...catalog, roles: { ...catalog.roles, analyst } };
+
+        return { authority: { kind: 'local' }, version: 0, digest: profileCatalogDigest(withAnalyst), catalog: withAnalyst };
+      },
+    });
+
+    rt.actor.config.setRoleSelection('analyst');
+    await session.send('look', { id: crypto.randomUUID() });
+    const result = events.items.find((event) => event.type === 'tool-result');
+    expect(JSON.stringify(result?.result)).toContain('undefined object');
   });
 
   test('the same call detaches once it crosses the policy threshold', async () => {

@@ -19,6 +19,7 @@ import type { TuiAgentSource } from '../../src/tui/tui-shell';
 import { createMemoryTuiPreferenceStore } from './tui-preferences';
 
 const EVOLUTION: EvolutionConfigView = {
+  learning: true,
   liveTrials: false,
   advisorEnabled: false,
   advisorMinSeverity: 'concern',
@@ -141,6 +142,7 @@ export function fakeClient(options: FakeClientOptions) {
     readMemory: async () => '',
     searchNodes: async () => [],
     listJobs: options.listJobs ?? (async () => []),
+    cancelJob: async () => ({ ok: false }),
     latestTakes: async () => null,
     pickTake: async () => { throw new Error('no takes'); },
     getModelSpec: async () => 'openai/gpt-5.5',

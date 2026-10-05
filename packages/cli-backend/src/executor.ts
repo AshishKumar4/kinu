@@ -8,10 +8,9 @@ import { decodeJsonValue, JsonValueSchema } from '@kinu.run/core';
 import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeFileSync, unlinkSync } from 'node:fs';
+import { writeFileSync, unlinkSync, rmSync } from 'node:fs';
 import * as v from 'valibot';
-import { Cause, Effect } from 'effect';
-import { classify, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { classify, renderThrownChain } from '@kinu.run/core/obs';
 import { requireBuild } from '@kinu.run/core';
 import { ISOLATED_BUN_FLAGS } from '@kinu.run/core';
 
@@ -63,9 +62,12 @@ export function createSandboxedExecutor(): Executor {
       // Provider functions cannot cross process boundaries; run in-process.
       const providerList: ResolvedProvider[] = normalizeProviders(providers);
 
-      return settle(providerList.some(p => Object.keys(p.fns).length > 0)
-        ? executeInProcess(code, providerList)
-        : executeInSubprocess(code));
+      if (providerList.some(p => Object.keys(p.fns).length > 0)) {
+        return executeInProcess(code, providerList);
+      }
+
+      // Apart on purpose: a verifier check cannot read its receipt, nor a probe the owner's project.
+      return executeInSubprocess(code);
     },
   };
 }
@@ -115,52 +117,50 @@ async function runToCompletion(
       stderr: await Bun.file(errFile).text(),
     };
   } finally {
-    unlinkSync(tmpFile);
+    rmSync(tmpFile, { force: true });
     unlinkSync(outFile);
     unlinkSync(errFile);
   }
 }
 
-function executeInSubprocess(code: string): Effect.Effect<ExecuteResult> {
-  return Effect.gen(function* () {
-    // A compiled binary may have no bun CLI beside it.
-    const bunBin = Bun.which('bun');
+async function executeInSubprocess(code: string): Promise<ExecuteResult> {
+  // A compiled binary may have no bun CLI beside it.
+  const bunBin = Bun.which('bun');
 
-    if (!bunBin) return yield* executeInProcess(code, []);
+  if (!bunBin) return executeInProcess(code, []);
 
-    const wrapper = `
-      try {
-        const result = await (
-          ${normalizeCode(code)}
-        )();
-        console.log(JSON.stringify({ ok: true, result: result ?? null }));
-      } catch (e) {
-        console.log(JSON.stringify({ ok: false, error: e.message ?? String(e) }));
-      }
-    `;
-
-    // Beside its temp script, not in the project, and reading no bunfig or .env.
-    const run = yield* Effect.promise(() => runToCompletion([bunBin, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', tmpdir()));
-
-    if (run.exitCode !== 0) {
-      return { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
+  const wrapper = `
+    await Bun.file(import.meta.path).delete();
+    try {
+      const result = await (
+        ${normalizeCode(code)}
+      )();
+      console.log(JSON.stringify({ ok: true, result: result ?? null }));
+    } catch (e) {
+      console.log(JSON.stringify({ ok: false, error: e.message ?? String(e) }));
     }
+  `;
 
-    const lastLine = run.stdout.trim().split('\n').pop() ?? '';
+  // Beside its temp script, not in the project, and reading no bunfig or .env.
+  const run = await runToCompletion([bunBin, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', tmpdir());
 
-    return yield* Effect.catchCause(Effect.sync((): ExecuteResult => {
-      const parsed = v.parse(subprocessResultSchema, JSON.parse(lastLine));
+  if (run.exitCode !== 0) {
+    return { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
+  }
 
-      if (parsed.ok) return { result: parsed.result };
+  const lastLine = run.stdout.trim().split('\n').pop() ?? '';
 
-      return { result: undefined, error: parsed.error ?? 'Unknown error' };
-    }), (failed) => {
-      const error = Cause.squash(failed);
+  try {
+    const parsed = v.parse(subprocessResultSchema, JSON.parse(lastLine));
 
-      // Not the wrapper's JSON line: the program printed its own answer.
-      return classify({ cause: error }) === 'malformed-input' ? Effect.succeed({ result: run.stdout.trim() || undefined }) : Effect.die(error);
-    });
-  });
+    if (parsed.ok) return { result: parsed.result };
+
+    return { result: undefined, error: parsed.error ?? 'Unknown error' };
+  } catch (error) {
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
+
+    return { result: run.stdout.trim() || undefined };
+  }
 }
 
 function normalizeProviders(
@@ -173,10 +173,15 @@ function normalizeProviders(
   return [{ name: 'codemode', fns: providers }];
 }
 
+/** The one body every in-process CLI program runs as, `eval`'s and the executor's: `prelude`, then the code's value. */
+export function programBody(code: string, prelude = ''): string {
+  return `${prelude}\nreturn (\n${normalizeCode(code)}\n)()`;
+}
+
 /** In-process execution: tool-backed code, or JS when no subprocess runtime is on PATH. */
-function executeInProcess(
+async function executeInProcess(
   code: string, providers: ResolvedProvider[],
-): Effect.Effect<ExecuteResult> {
+): Promise<ExecuteResult> {
   const context: Record<string, ExecutorNamespace> = {};
 
   for (const p of providers) {
@@ -197,12 +202,16 @@ function executeInProcess(
   const argNames = Object.keys(context);
   const argValues = argNames.map(k => context[k]);
 
-  return Effect.matchCause(Effect.promise(async () => {
-    const value: unknown = await new Function(...argNames, `return (\n${normalizeCode(code)}\n)()`)(...argValues);
+  try {
+    const fn = new Function(...argNames, programBody(code));
 
-    return value === undefined ? undefined : decodeJsonValue({ value });
-  }), {
-    onSuccess: (result): ExecuteResult => ({ result }),
-    onFailure: (failed): ExecuteResult => ({ result: undefined, error: renderThrownChain({ cause: Cause.squash(failed) }) }),
-  });
+    const value: unknown = await fn(...argValues);
+
+    return { result: value === undefined ? undefined : decodeJsonValue({ value }) };
+  } catch (error) {
+    return {
+      result: undefined,
+      error: renderThrownChain({ cause: error }),
+    };
+  }
 }

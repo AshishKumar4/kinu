@@ -12,7 +12,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ConversationRecall } from '../memory/conversation-search';
 import type { ExecutorProviderSurface } from '../execution/types';
 import {
-  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins,
+  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins, narrowToolSurface,
 } from './registry';
 import { TaskListStore } from './task-store';
 import { clampToolResult, withClampedToolResult, type ClampToolResultOptions } from './clamp';
@@ -457,7 +457,8 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
     const buildFromSurface = v.safeParse(v.function(), deps.codemodeTool);
 
     if (buildFromSurface.success && 'eval' in surface) {
-      const entry = { value: buildFromSurface.output(surface) };
+      // `eval` reaches only the namespaces the allowed tools reach.
+      const entry = { value: buildFromSurface.output(surface, narrowToolSurface(deps.allowed)) };
 
       if (isExecutableToolEntry(entry)) surface.eval = withCheckedInput('eval', entry.value);
     }

@@ -7,7 +7,7 @@
 import * as v from 'valibot';
 import { Devbox, type DevboxStore } from "../src/index";
 
-export { DevboxSyncGateway, DevboxOutbound, DevboxStoreGateway } from "../src/index";
+export { DevboxOutbound, DevboxStoreGateway } from "../src/index";
 
 interface Env {
   readonly Box: DurableObjectNamespace<ExampleBox>;

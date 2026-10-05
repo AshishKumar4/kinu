@@ -114,6 +114,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
 
     const factory = createCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'mode-probe', actor: 'mode-probe' } : null }), workspace: 'mode-probe',
       webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }),
       browserSessions: NO_BROWSERS,

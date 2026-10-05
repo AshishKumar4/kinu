@@ -1,7 +1,5 @@
 /** Host bridges (llmStream, callTool, history) an evolved scaffold uses from the codemode sandbox. */
 
-import { Effect } from 'effect';
-import { settle } from '../obs/effect';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import { runChat, type ChatOptions } from '../chat';
 import { ExtensionHost, type KinuExtension } from '../extension';
@@ -9,10 +7,10 @@ import { evidenceWindow } from '../utils/evidence-window';
 import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
 import { addUsage, type Usage } from '../usage';
 import type { CallAccount } from '../providers/quota';
-import { decodeJsonValue, stringifyOr } from '../utils/json';
+import { decodeJsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
 import { nanoid } from '../utils/nanoid';
-import { KinuError } from '../obs/index';
+import { renderThrownChain, KinuError } from '../obs/index';
 import { assertScaffoldActive, type ScaffoldRunControl, type ScaffoldToolOutput } from '../scaffold/executor';
 import type {
   ScaffoldHistoryEntry,
@@ -94,9 +92,9 @@ async function* streamScaffoldChat(
         outputs.set(part.toolCallId, { type: 'tool-output-available', toolCallId: part.toolCallId,
           output: part.output, preliminary: part.preliminary });
       },
-      onStep: async step => {
+      onStep: async (step, record) => {
         modelId = step.response.modelId;
-        await opts.streamOptions?.onStep?.(step);
+        await opts.streamOptions?.onStep?.(step, record);
       },
     })) {
       if (event.type === 'step-finish' && event.usage) usage = addUsage(usage, event.usage);
@@ -166,8 +164,12 @@ function renderMessage(message: ModelMessage): string {
 }
 
 function safeJson(input: { value: unknown }): string {
-  // `String()` on a cyclic object carries nothing; the reason replaces it.
-  return stringifyOr(input, (reason) => `unserializable host history part: ${reason}`) ?? 'null';
+  try {
+    return JSON.stringify(input.value) ?? 'null';
+  } catch (error) {
+    // `String()` on a cyclic object carries nothing; the reason replaces it.
+    return `unserializable host history part: ${renderThrownChain({ cause: error })}`;
+  }
 }
 
 /** `host.history`: read-only and budgeted by construction; every query is clamped. */
@@ -229,23 +231,21 @@ export function createScaffoldCallTool(
   const nonce = nanoid();
   const control = { signal, assertActive };
 
-  return (name, args) => {
-    return settle(Effect.gen(function* () {
-      assertScaffoldActive(control);
-      const execute = tools()[name]?.execute;
+  return async (name, args) => {
+    assertScaffoldActive(control);
+    const t = tools()[name];
 
-      if (!execute) return yield* new KinuError('missing', `tool not found: ${name}`);
+    if (!t?.execute) throw new KinuError('missing', `tool not found: ${name}`);
 
-      const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
-        messages: [],
-        toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
-      };
+    const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
+      messages: [],
+      toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
+    };
 
-      if (signal !== undefined) options.abortSignal = signal;
-      assertScaffoldActive(control);
-      const result = yield* Effect.promise(async () => execute(args, options));
+    if (signal !== undefined) options.abortSignal = signal;
+    assertScaffoldActive(control);
+    const result = await t.execute(args, options);
 
-      return result === undefined ? undefined : decodeJsonValue({ value: result });
-    }));
+    return result === undefined ? undefined : decodeJsonValue({ value: result });
   };
 }

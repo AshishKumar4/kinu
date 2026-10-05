@@ -375,7 +375,7 @@ test('read-only transcript authorization is checked again after payload access',
     const text = 'retained text '.repeat(100_000);
     const prepared = await s.messages.prepare({ role: 'user', content: text }, 'input');
     const reference = s.messages.insert(prepared, 'input');
-    const writer = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, transactionSync: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
+    const writer = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
     writer.appendUser(await writer.prepareUser({ id: 'public-input', turnId: 'turn', message: reference }));
     let authorized = true;
     let revokeDuringRead = false;
@@ -402,8 +402,8 @@ test('canonical transcript pages follow position order and stay session-scoped',
 
   try {
     initSessionTranscriptTables(s.rt.storage.execRaw);
-    const writer = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, transactionSync: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
-    const other = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'mcts', messages: s.messages, payloads: s.payloads, transactionSync: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
+    const writer = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
+    const other = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'mcts', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
 
     for (const [id, transcript] of [['root', writer], ['left', writer], ['foreign', other], ['right', writer]] as const) {
       const prepared = await s.messages.prepare({ role: 'user', content: id }, id);
@@ -466,7 +466,7 @@ test('drain recovery returns the newest nonempty canonical answer across sibling
 
   try {
     initSessionTranscriptTables(s.rt.storage.execRaw);
-    const transcript = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, transactionSync: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
+    const transcript = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
     const input = s.messages.insert(await s.messages.prepare({ role: 'user', content: 'request' }, 'input'), 'input');
     transcript.appendUser(await transcript.prepareUser({ id: 'ask', turnId: 'turn', message: input, metadata: { drainTurnId: 'drain' } }));
 
@@ -482,7 +482,7 @@ test('drain recovery returns the newest nonempty canonical answer across sibling
 /** A chat transcript whose turn streamed `parts`, settled with its last streamed text, or with `answer` written apart. */
 async function settledAnswer(s: ReturnType<typeof setup>, parts: JsonObject[], answer: string | null) {
   initSessionTranscriptTables(s.rt.storage.execRaw);
-  const transcript = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, transactionSync: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
+  const transcript = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
   const input = s.messages.insert(await s.messages.prepare({ role: 'user', content: 'list the folders' }, 'input'), 'input');
   transcript.appendUser(await transcript.prepareUser({ id: 'ask', turnId: 'turn', message: input, metadata: { drainTurnId: 'drain' } }));
   const output = s.messages.insert(await s.messages.prepareParts({ id: 'output', role: 'assistant', content: parts, envelope: {} }), 'output');

@@ -110,7 +110,6 @@ function rosterChild(
     currentTask: null,
     createdAt,
     dismissedAt: null,
-    lifetime: 'task',
     taskEventId: null,
   });
   fixture.roster(parent).dismiss(name, 5);

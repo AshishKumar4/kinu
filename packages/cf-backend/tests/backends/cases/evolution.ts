@@ -1,5 +1,6 @@
 /** How the agent changes itself, as the owner sees and overrules it. */
 import { expect } from 'bun:test';
+import * as v from 'valibot';
 import {
   CHAT_SESSION_ID, PlanReviewStore, bundledArtifact, drawArm, recordBranchTakeSet, sectionArtifact, startTrial, writeCandidate,
 } from '@kinu.run/core';
@@ -14,6 +15,27 @@ function pendingScaffold({ sql, actor }: SharedBackend, rationale: string): void
 }
 
 export const EVOLUTION_CASES: readonly SharedCase[] = [
+  {
+    title: 'the agent\'s learning setting is the one switch: off, a turn records nothing; back on, the next one is recorded',
+    covers: ['send'],
+    async run({ surface, sql, actor }) {
+      const recorded = () => sql<{ turn: string }>`SELECT turn FROM completed_turns WHERE actor_id = ${actor.actorId}`
+        .map((row) => v.parse(v.object({ userMessage: v.string() }), JSON.parse(row.turn)).userMessage);
+
+      const ended = () => sql<{ n: number }>`SELECT count(*) AS n FROM run_events WHERE actor_id = ${actor.actorId} AND type = 'run_end'`[0]?.n ?? 0;
+
+      // Both backends read the setting where a turn opens: an ended turn has read it.
+      actor.config.setLearning(false);
+      await surface.send('first');
+      await until(() => ended() === 1, 'the first turn ended');
+      actor.config.setLearning(true);
+      await surface.send('second');
+      await until(() => recorded().length > 0, 'the second turn is recorded');
+
+      // Turns settle in order, so the first had its chance before the second was recorded.
+      expect(recorded()).toEqual(['second']);
+    },
+  },
   {
     title: 'a live trial\'s turn reads its arm from its cache segment by the one seeded rule, and records it',
     covers: ['getEvolutionStatus'],

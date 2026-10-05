@@ -1,11 +1,11 @@
-import { Effect } from 'effect';
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type ProposerOutcome } from '@kinu.run/core';
-import { KinuError, settle } from '@kinu.run/core/obs';
+import { attempt, KinuError, settle } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import {
   DriverLeaseHold,
   OS_LEASE_PROCESS,
@@ -30,7 +30,7 @@ import {
   resolveProviderCredentials,
 } from './config';
 import { renameLocalAgent } from './agent-create';
-import { inspectLocalSubordinate, readLocalWorkspaceWork } from './local-inspection';
+import { inspectLocalSubordinate, localJobRunning, readLocalWorkspaceWork } from './local-inspection';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
 import {
@@ -72,6 +72,7 @@ interface LocalAgentClientOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
+  /** `--no-auto-evolve`: turns this agent's learning setting off before the session opens. */
   noAutoEvolve?: boolean;
   oneShot?: boolean;
   transcript?: CliSessionOptions;
@@ -80,51 +81,67 @@ interface LocalAgentClientOptions {
   cwd?: string;
 }
 
-export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
-  return settle(Effect.gen(function* () {
-    const dbPath = agentDbPath(name);
+export async function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
+  const dbPath = agentDbPath(name);
 
-    if (!existsSync(dbPath)) {
-      return yield* Effect.die(new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`));
+  if (!existsSync(dbPath)) {
+    throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
+  }
+
+  const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
+  const providerCredentials = resolveProviderCredentials();
+  const oauthStore = createOAuthStore();
+  const db = new Database(dbPath);
+
+  const cloud = resolveCloudSession();
+
+  const openConfig = {
+    llm: llmConfig, providerCredentials, oauthStore,
+    ...(cloud !== null && { cloud }),
+    checkpointKeep: loadConfigFile().checkpointKeep,
+    cwd: opts.cwd,
+  };
+
+  const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);
+
+  if (opts.noAutoEvolve === true) rt.actor.config.setLearning(false);
+
+  const client = new LocalAgentClient({
+    agentName: name,
+    rt,
+    db,
+    dbPath,
+    info,
+    refreshInfo: async () => (await openWorkspaceCLI(db, dbPath, openConfig)).info,
+    modelResolver: resolver,
+    mcpServers: resolveMcpServers(),
+    transcript: opts.transcript ?? {},
+    surface: opts.surface ?? 'interactive',
+  });
+
+  return client;
+}
+
+/** Only the process running a job can end it, so another live driver's job is refused, naming that process. */
+export function cancelLocalJob(name: string, id: string, daemonPid: number | null): Promise<{ ok: boolean }> {
+  return settle(Effect.gen(function* () {
+    if (daemonPid !== null && localJobRunning(name, id)) {
+      return yield* Effect.fail(new KinuError('unavailable', `${id} may be running in the local daemon (pid ${String(daemonPid)}); \`kinu daemon stop\` ends it`));
     }
 
-    const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
-    const providerCredentials = resolveProviderCredentials();
-    const oauthStore = createOAuthStore();
-    const db = new Database(dbPath);
-    const cloud = resolveCloudSession();
+    const client = yield* Effect.promise(() => openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true }));
 
-    const openConfig = {
-      llm: llmConfig, providerCredentials, oauthStore,
-      ...(cloud !== null && { cloud }),
-      checkpointKeep: loadConfigFile().checkpointKeep,
-      cwd: opts.cwd,
-    };
+    return yield* attempt({ doing: `cancelling job ${id}`, otherwise: 'unavailable' }, async () => {
+      await client.connect();
 
-    const { rt, info } = yield* Effect.promise(async () => openWorkspaceCLI(db, dbPath, openConfig));
-
-    const client = new LocalAgentClient({
-      agentName: name,
-      rt,
-      db,
-      dbPath,
-      info,
-      refreshInfo: async () => (await openWorkspaceCLI(db, dbPath, openConfig)).info,
-      modelResolver: resolver,
-      mcpServers: resolveMcpServers(),
-      noAutoEvolve: opts.noAutoEvolve ?? false,
-      transcript: opts.transcript ?? {},
-      surface: opts.surface ?? 'interactive',
-    });
-
-    return client;
+      return await client.cancelJob(id);
+    }).pipe(Effect.ensuring(Effect.promise(() => client.close())));
   }));
 }
 
 /** Core's proposer, the same one the cloud backend drives: one search on `target` (default the scaffold). */
 export async function runLocalOptimization(name: string, target?: string): Promise<ProposerOutcome> {
-  // Auto-evolution must not race the search.
-  const client = await openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true });
+  const client = await openLocalAgentClient(name, { surface: 'one-shot' });
 
   try {
     return await client.runOptimization(target);
@@ -147,7 +164,6 @@ interface LocalAgentClientDeps {
   /** Override only at composition/test boundaries. */
   profileAuthority?: LocalAgentSessionOpts['profileAuthority'];
   mcpServers: Record<string, McpServerConfig>;
-  noAutoEvolve: boolean;
   transcript: CliSessionOptions;
   /** 'one-shot' selects the background detach policy and marks turn continuity for the outcome ledger. */
   surface: InvocationSurface;
@@ -159,7 +175,6 @@ interface PendingLocalTurn {
   /** Null until the turn's own `turn-end` arrives; see `unfinishedTurn`. */
   result: AgentTurnResult | null;
 }
-
 
 /** A turn that never reported an end must not read as a clean empty success, or `kinu exec` exits 0 on a turn
  * that never ran. */
@@ -247,27 +262,24 @@ export class LocalAgentClient implements AgentClient {
     };
   }
 
-
   get cliSession(): CliSession {
     return this.activeCliSession;
   }
 
   /** The lease is taken before any pump, so the person learns the conversation is taken before typing. */
-  connect(): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const refusal = this.driverLease.acquire();
+  async connect(): Promise<void> {
+    const refusal = this.driverLease.acquire();
 
-      if (refusal) {
-        return yield* new KinuError(
-          refusal.refused.reason,
-          `${refusal.refused.error}. Close that session, or continue the conversation there.`,
-        );
-      }
+    if (refusal) {
+      throw new KinuError(
+        refusal.refused.reason,
+        `${refusal.refused.error}. Close that session, or continue the conversation there.`,
+      );
+    }
 
-      if (Object.keys(this.deps.mcpServers).length > 0) {
-        yield* Effect.promise(async () => this.session.connectMcp(this.deps.mcpServers));
-      }
-    }));
+    if (Object.keys(this.deps.mcpServers).length > 0) {
+      await this.session.connectMcp(this.deps.mcpServers);
+    }
   }
 
   subscribe(listener: (event: AgentClientEvent) => void): () => void {
@@ -327,24 +339,22 @@ export class LocalAgentClient implements AgentClient {
   }
 
   /** A fresh transcript artifact takes the entries recorded after the walk-back. */
-  fork(point: ForkPoint): Promise<AgentForkResult> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (this.awaiting.size > 0) return yield* Effect.die(new Error('Cannot fork while a turn is running.'));
-      const rows = yield* Effect.promise(async () => this.history());
-      const pivotRow = rows[findForkPivot(rows, point)];
+  async fork(point: ForkPoint): Promise<AgentForkResult> {
+    if (this.awaiting.size > 0) throw new Error('Cannot fork while a turn is running.');
+    const rows = await this.history();
+    const pivotRow = rows[findForkPivot(rows, point)];
 
-      if (pivotRow === undefined) return yield* Effect.die(new Error('Could not locate that message in the durable conversation.'));
-      yield* Effect.promise(async () => this.session.revertConversation(pivotRow.id));
-      yield* Effect.promise(async () => this.session.end());
-      this.activeCliSession = createCliSession(this.agentName, {
-        ...this.deps.transcript,
-        conversationId: this.canonicalConversation,
-      });
-      this.session = this.createAgentSession();
-      yield* Effect.promise(async () => this.connect());
+    if (pivotRow === undefined) throw new Error('Could not locate that message in the durable conversation.');
+    await this.session.revertConversation(pivotRow.id);
+    await this.session.end();
+    this.activeCliSession = createCliSession(this.agentName, {
+      ...this.deps.transcript,
+      conversationId: this.canonicalConversation,
+    });
+    this.session = this.createAgentSession();
+    await this.connect();
 
-      return { client: this, label: `branch ${this.activeCliSession.id}` };
-    }));
+    return { client: this, label: `branch ${this.activeCliSession.id}` };
   }
 
   stop(): string[] {
@@ -397,7 +407,7 @@ export class LocalAgentClient implements AgentClient {
       memorySize: info.memorySize,
       dbSize: statSync(this.deps.dbPath).size,
       toolCount: this.session.toolNames().length,
-      autoEvolve: !this.deps.noAutoEvolve,
+      autoEvolve: this.deps.rt.actor.config.getLearning(),
       context: this.session.contextFill(),
     };
   }
@@ -476,10 +486,14 @@ export class LocalAgentClient implements AgentClient {
     }));
   }
 
-  async listJobs(limit = 20): Promise<AgentJobSummary[]> {
-    const jobs = await this.session.listBackgroundJobs(limit);
+  async listJobs(limit = 20, actor?: string): Promise<AgentJobSummary[]> {
+    const jobs = await this.session.listBackgroundJobs(limit, actor);
 
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status, label: job.label, ...(job.output !== undefined && { output: job.output }) }));
+  }
+
+  cancelJob(jobId: string): Promise<{ ok: boolean }> {
+    return this.session.cancelBackgroundJob(jobId);
   }
 
   async getModelSpec(): Promise<string | null> {
@@ -532,7 +546,6 @@ export class LocalAgentClient implements AgentClient {
       db: this.deps.db,
       model: this.deps.model,
       modelResolver: this.deps.modelResolver,
-      noAutoEvolve: this.deps.noAutoEvolve,
       backgroundPolicy: BACKGROUND_POLICY[this.deps.surface],
       oneShot: this.deps.surface === 'one-shot',
       onEvent: (event) => this.handleSessionEvent(event),
@@ -582,6 +595,8 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
     case 'text-delta':
     case 'reasoning-delta':
       return { type: event.type, delta: event.delta };
+    case 'step-cut':
+      return event;
     case 'tool-call':
       return { type: 'tool-call', toolName: event.toolName, toolCallId: event.toolCallId, args: event.args };
     case 'tool-result':

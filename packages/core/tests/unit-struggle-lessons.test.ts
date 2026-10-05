@@ -67,6 +67,39 @@ describe('a struggling turn teaches one lesson about its tool', () => {
     expect(lessons()).toEqual([{ id: 'tl-t-1', revision: 1, text: LESSON, helpful: 0, harmful: 0, status: 'active' }]);
   });
 
+  test('the agent\'s learning setting, switched off, stops the next turn learning; switched on, it learns again', async () => {
+    const { rt, lessons, prompts, learn, evolution } = engine({ update: null, text: LESSON });
+
+    rt.actor.config.setLearning(false);
+    expect(evolution.recordsTurns).toBe(false);
+    await learn(turn('t-off', [REFUSED]));
+    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([]);
+    expect(prompts).toEqual([]);
+
+    rt.actor.config.setLearning(true);
+    await learn(turn('t-on', [REFUSED]));
+    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([{ turn_id: 't-on' }]);
+    expect(lessons()).toHaveLength(1);
+  });
+
+  test('a detached turn tail keeps its own learning gate after the turn closes', async () => {
+    const { rt, lessons, learn, evolution } = engine({ update: null, text: LESSON });
+    const continueTail = Promise.withResolvers<void>();
+
+    const tail = evolution.withTurnLearning(async () => {
+      await continueTail.promise;
+      await learn(turn('tail', [REFUSED]));
+    });
+
+    rt.actor.config.setLearning(false);
+    await learn(turn('independent', [REFUSED]));
+    expect(lessons()).toEqual([]);
+    continueTail.resolve();
+    await tail;
+    expect(lessons()).toHaveLength(1);
+    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([{ turn_id: 'tail' }]);
+  });
+
   test('learning twice from one turn records, scores and asks once', async () => {
     const { lessons, prompts, learn } = engine({ update: null, text: LESSON });
 
@@ -121,7 +154,8 @@ describe('a struggling turn teaches one lesson about its tool', () => {
 
     await learn(turn('t-1', [], [{ id: 'tl-seed-edit', revision: 1 }, { id: 'tl-seed-shell', revision: 1 }]));
 
-    expect(lessons().map(({ id, helpful }) => ({ id, helpful }))).toEqual([
+    // By id: seeds written across a millisecond tick list in insertion order.
+    expect(lessons().map(({ id, helpful }) => ({ id, helpful })).sort((a, b) => a.id.localeCompare(b.id))).toEqual([
       { id: 'tl-seed-edit', helpful: 1 }, { id: 'tl-seed-shell', helpful: 0 }, { id: 'tl-seed-unshown', helpful: 0 },
     ]);
   });

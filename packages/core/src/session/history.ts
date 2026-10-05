@@ -145,13 +145,13 @@ export class SessionHistory {
 
     if (parts.some((part) => part.kind === 'tool-call')) return 'tools';
 
-    return parts.some((part) => part.kind === 'text' && v.parse(v.string(), part.value.text) !== '') ? 'text' : null;
+    return parts.some((part) => (part.kind === 'text' || part.kind === 'reasoning') && v.parse(v.string(), part.value.text) !== '') ? 'text' : null;
   }
 
   transcript(sessionId: string): SessionTranscript {
     return new SessionTranscript({ sql: this.dependencies.sql, actor: this.dependencies.actor, sessionId,
       messages: this.messages, payloads: this.messages.payloads,
-      transactionSync: this.dependencies.transactionSync, selection: () => this.context.selected() });
+      atomic: this.dependencies.transactionSync, selection: () => this.context.selected() });
   }
 
   clearConversation(sessionId: string, assertIdle: () => Effect.Effect<void, KinuError>): ContextSelection {

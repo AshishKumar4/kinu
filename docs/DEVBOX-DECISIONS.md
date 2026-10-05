@@ -123,6 +123,21 @@ against three slots does not explain the refusal. The Containers docs read
 counts toward `max_instances` nor how long a destroyed instance holds its
 place. Staging now takes production's 10 (D36).
 
+P8. The first containers to start from a snapshot all at once wait for the
+platform to fetch it; a second wave from the same snapshot does not.
+Measured 2026-10-03 (run `vb10030503dm`, `bench-artifacts/h2h/tail.ts`,
+`runs/tail.log`), Medium, one 10 GB snapshot per design, 20 boxes started
+together, two waves 15 s apart, wake timed to the end of the gate:
+
+| snapshot | first wave, ms | second wave, ms |
+|---|---|---|
+| the workspace on the root | 12,432 to 60,761, median 46,000 | 351 to 8,890, median 1,400 |
+| the workspace in a thin pool on the root | 9,118 to 54,877, median 36,000 | 330 to 1,956, median 610 |
+
+All 80 wakes succeeded. Single wakes from a snapshot measured 0.3 to 2 s
+in D64, so the first wave's 9 to 61 s is the fetch, and it lands on every
+design that wakes from a snapshot: nothing in a box can shorten it.
+
 ## Decisions
 
 D1. Admission is port-proven. The container-start path proves the control
@@ -969,6 +984,34 @@ turn by that id, and a tab that reconnects before the re-drive opens is told
 STREAM_PENDING (the SDK's #1784 frame) and RESUMING once it opens. A tab still sees
 the dead activation's steps only from the commit. Pins:
 `packages/cf-backend/tests/unit-chat-reopened-turn.test.ts`.
+(8) 2026-10-01 (lane/staging-fix-resume): that last gap is closed, on one path for
+every join. Measured through the actor harness on 35c5a634d with the shipped
+`useAgentChat`: a tab that redialled into the re-drive drew step 3 alone, and a
+tab reloading inside a normal turn was replayed the relay's chunks, never the ledger.
+A join's replay now restates from the ledger each finished step it records
+(`step_finish` messages, drawn by the transcript's own projection), marked
+`restated`, then the relay's chunks of the steps after them. At this revision the
+ledger writer consumed the full stream beside the relay's UI stream. A step was
+restated only once its row existed and the relay had sent its last chunk. The
+relay kept chunks with their step; no chunk store returned. A client skipped a
+restated step it held whole and a same-stream step as far as it had read. Following
+another activation silently cut its private accumulator at the re-run step; that
+did not retract text already emitted to a terminal or ACP client.
+
+(9) 2026-10-01: core announces a text or reasoning step that a restart retracts
+before the re-run's first delta. The wire carries transient `data-kinu-step-cut`
+with the one-based `stepIndex`; a restart between completed steps emits none.
+Web and TUI remove that step's partial output. CLI JSON emits `step_cut`. ACP
+keeps its append-only partial, emits one restart notice, then streams the re-run;
+plain CLI output uses the notice too, on stderr when stdout is a pipe. Live token
+streaming is unchanged. The same replay path serves normal reloads and re-drives,
+and an already-open client keeps completed steps rather than resetting them.
+The CLI archive and server publish together; the chat wire has no negotiated
+version check or compatibility path.
+Measured by `unit-chat-reopened-turn`, `cloud-agent-client`, `chat-app` and ACP
+suites, and a source CLI smoke with a real dropped socket: JSON emitted one cut
+between `tw` and `two`, with final text `one, two`; a pipe kept the model's text on
+stdout and the single notice on stderr.
 
 D23-N. Every instance of the host namespace answers `supervisorOp` with the
 hosted runtime (2026-09-21, this commit; the Nimbus upgrade to core 0.12.0,
@@ -1101,6 +1144,47 @@ stream-parts reads, and four open-container/part pre-reads. All 51 stream append
 remain; the working-context origin check and abandoned-stream recovery reads
 remain. The unchanged workerd chat-session parity fixture passes.
 A lone surrogate from a malformed provider stream now seals as streamed, not as bun's replacement characters; valid pairs remain byte-identical.
+
+2026-10-01: the owner-approved single writer commits a native step's seals,
+`tool_call_end` rows and `step_finish` usage and cost in the seal's transaction.
+The event consumer writes none of those rows for a native step; a cut
+step's collected results belong to its closing seal. Subscribers are notified
+after commit, and a rejected ledger write rolls back the seals as well. A re-drive
+restores the finished-step count and reported usage without debiting them again.
+The SDK's call-local response arrays are joined across fallback and output-limit
+calls before the seal and row share them, so a continuation cannot leave an empty
+step in the recorded prefix.
+The public-completion actor regression on the merged baseline `7d96877b9` lost
+step 2's tool and step rows, returned usage `1/1` rather than `3/3`, and kept two
+priced rows rather than three. With the single writer, the ledger and timeline
+hold all three steps in order and each cost once. A local output-limit turn
+previously recorded its second step without text; it now records both halves.
+The Workers restart suite checks conversation and per-run step-order invariants;
+its old whole-database golden pinned the resumed index reset and was removed,
+not re-recorded.
+
+2026-10-02: the native callback hands over one `StepRecord`, including its tool
+results and request, before the next model call. Internal `ChatEvent.source`
+marks the producer, not a consumer mode switch; scaffold-authored events remain
+the consumer's to record even after `defaultInference`. A local promoted
+scaffold that delegates, then runs its own tool step, retains both steps and
+the tool in order, with the native usage only once. Run-event indices come from
+the committed rows, so two recorders sharing a database cannot reuse a cached
+index after another writer or a rollback.
+
+The Workers restart check also exposed two model histories: request preparation
+classified a failed tool into `error-json`, but its seal kept the SDK's raw
+`error-text`. A re-drive had no SDK step metadata to reconstruct the envelope,
+lost `reason: missing` and changed the cached prefix. Error feedback now joins
+the `StepRecord` before the seal; live requests and re-drives use those recorded
+messages. The request-time reclassification is gone. The failed/success/image
+regression compares the live and re-driven tool-message bytes, not just the
+last answer or the error's words.
+
+Provenance is stamped where each event is produced. An extra async-generator
+wrapper had delayed consumption enough for the model's fourth request to miss
+the nudge after three failed tools; removing that hop restores the nudge at
+that request without delaying live output or adding a consumer mode switch.
 
 D25. A wake proves a recycle only after the stop confirms (`b6a6ace00`,
 2026-09-04). The 2026-09-04 rerun (`kinu-devbox-bench-20260904142724`) saw
@@ -2644,7 +2728,10 @@ An earlier version of this entry framed it as one, with a bar for replacing
 the chain; that framing was wrong and is withdrawn (git history keeps it).
 
 The design:
-- Base image. `cloudflare/debian-trixie`, pinned by digest. Cloudflare
+- Base image. `cloudflare/debian-trixie`, by name: it cannot be pinned by
+  digest (run `p5510020813`: `inspect()` reports `cloudflare/debian-trixie`
+  with no digest, and the account's registry credentials get 401 on the
+  managed image's manifest). D65 records what a roll does to a snapshot. Cloudflare
   distributes and prepares it on eligible hosts before requests arrive
   (blog.cloudflare.com/faster-agent-sandboxes). Our own Ubuntu image
   (`block-lower/Dockerfile`) is downloaded by every new host, and every
@@ -2817,6 +2904,53 @@ What the measurements decide:
 - The deltas are compacted into a new base at the rest once they outgrow a
   share of it. With the workspace on the disk, that is a repack of the
   disk: no overlay to reseat and no holders to stop.
+
+The registry, measured 2026-10-02 (run `p5510020813`, `l5510020823`,
+`l5510020825dep`, `bench-artifacts/storage-designs/`):
+- Each snapshot adds two tags, `rootfs-set-*` and `rootfs-snapshot-*`, to a
+  `cloudchamber-snapshots/<hash>` repository (or to the image's own repository
+  for a snapshot of our image). Both name one manifest with one layer, the
+  snapshot's own increment: 67 MB for a 64 MiB base, 4.7 KB after a 3 KB
+  edit, 10.5 MB after a 10 MiB write. The manifest's annotations carry
+  `snapshot_id` and `parent_snapshot_id`, so snapshots form a lineage from
+  the first save.
+- Snapshot tags do not count toward the 50 GB image limit. With 574.5 GB of
+  snapshot layers (143 snapshots, every one a bench leftover) beside 17.6 GB
+  of images, a 1 MiB image push succeeded (`limit-push-1002.log`). The 143
+  were then deleted (`registry-snapshots-1002.json` is the record); none
+  belonged to a production or staging instance, and no product code
+  snapshots. Bench runs delete their own snapshot tags since.
+- A child restores exactly after its ancestors' tags are deleted: C1 and C2
+  after their base's tags, and C2 after both ancestors', at once, after 30
+  minutes and after 90 minutes (n=2 each, all exact). Whether the platform
+  keeps an ancestor's data until the child's 30 days end is unknown; a
+  sweep therefore deletes only snapshots outside every live lineage until
+  that is measured.
+- Depth costs little: wakes on fresh objects at lineage depth 1, 10 and 30
+  took 0.20, 0.20 and 0.28 s median (n=10 each, all exact; one depth-30 wake
+  took 1.7 s). Re-rooting is not needed for wake time.
+- Growth between sweeps is the boxes' own saves: each box adds its first
+  save (the whole workspace, about 0.4 GB for a fresh npm app) and then each
+  save's increment. An eval pass makes 20 to 40 boxes, several passes a day,
+  so a daily sweep sees on the order of 10 to 80 GB, none of it against the
+  image limit.
+
+Built so far (2026-10-02, `980ee7404`): a hybrid box (`Devbox.hybrid`, off
+by default). A rest commits the disk chain (`disk-chain.ts`), then takes a
+snapshot; the next wake starts from it unless the chain moved past it or it
+is 29 days old. A snapshot start that fails or is not admitted within 10 s
+is destroyed and the box starts from the image: the start hook mounts the
+chain's layers lazily (O(layers), inside the gate) and records an incident
+naming the time it restored to and the excluded folders to rebuild. A
+finished copy to the disk becomes the plain workspace at the next start, its
+overlay upper merged in. A box the older chain holds keeps its overlay until
+the disk chain's first base. Limits as built: a delta holds whole files, so
+an in-place write re-sends the file; ticks run from the object (no in-box
+sync loop); no snapshot is taken during a session; the golden snapshot and
+`cloudflare/debian-trixie` are not yet used. Tests: the real chain in the
+image (`disk-chain-image.test.ts`: a base and deltas recover exactly lazily
+and then as plain disk, compaction, a baseline mismatch) and the box with a
+model chain (`hybrid.test.ts`, red on the box before it, then green).
 
 D56. The box decides its own rest from its own use; the workspace neither
 asks nor tells it (2026-10-01, corrected the same day). This replaces D35's
@@ -3288,6 +3422,405 @@ the pin. Live on `f5d992608` (run `sbs10020453nmlive`, one Medium box, 2 GiB
 of random data): the base saved in 37.8 s and committed 2,147,508,224 bytes.
 The box woke twice, in 4.2 s and 3.1 s at the driver, both exact. The first
 256 MiB read in 11.1 s and 3.2 s, and the whole workspace in 41 s and 25 s.
+
+D62. The hybrid is the only path; the older chain is deleted, and a reset,
+not a converter, takes boxes across (2026-10-02). Every box now keeps its
+workspace on the container's disk, takes a platform snapshot at each rest
+and backs it up with the disk chain (D55). The `hybrid` flag, the
+`snapshot-chain` strategy and its overlay-on-store chain, the container's own
+sync program (`sync.js`, `DevboxSyncGateway`, D30), the work-directory holder
+release (D61), extraction mode and the chunked delta stager are gone: 4,041
+source lines and 10,782 test lines deleted, 102 and 185 added. The image no
+longer carries `sync.js` (`01b8221c…`, built from this tree; the three
+binaries are unchanged).
+
+No converter. AGENTS.md ships a storage-format change as a reset
+deployment, and the promotion that ships this one resets production
+(`scripts/reset.ts`), as staging was reset. Measured before deciding
+(2026-10-02, read-only listing): `kinu-backups` held 7 boxes, two with
+bytes (76.5 MB and 9.6 MB, both base-only), and `kinu-backups-staging` none.
+The reset already empties the new layout: it deletes every object under
+`boxes/` in the store bucket, and the disk chain writes only under
+`boxes/<box>/backups/disk/`; both buckets hold nothing outside `boxes/`. The
+snapshot and chain records live in the Durable Objects the reset deletes.
+What a reset does not reach is the snapshots themselves: each sits in the
+image's registry repository as two `rootfs-*` tags (D55), shared by
+production and staging, and its annotations name no box, app or
+environment, so a reset cannot tell its own from the other environment's.
+Once their objects are gone nothing references them; they lapse in 30 days
+and do not count toward the image limit (D55). This is a known effect of a
+reset, accepted on 2026-10-02 rather than splitting the repository per
+environment: the registry sweep, held for the owner's token decision, is where
+they get cleaned.
+
+One fix the deletion surfaced. A snapshot's disk can keep the S3Mount
+marker of the mount it was taken under, and the first mount after a wake
+then failed ("invalid S3 mount route selection") because the box skipped
+the unmount for a container it had just started. A snapshot start now runs
+that unmount (`quiesce-order.test.ts`, red before the change).
+
+D63. A large file changed in place travels as the blocks that changed, and
+the block lower composes it through every layer (2026-10-02, option (a) of
+the D55 follow-up). D55's disk chain sent each changed file whole. A dev
+session's databases and logs are written in place, so one 4 KiB page write
+re-sent the whole file at every save. Measured before building (local, the
+image, `bench-artifacts/inplace/measure.log`): a session with a 616 MB SQLite
+database, a 165 MB JSONL log, a git repo and a 1 GiB file written in place
+re-sent 1.85 GB per save.
+
+What a save does now. A regular file of 1 MiB or more, changed since the last
+save and with its block digests cached, is read once in 16 KiB blocks. Each
+block whose SHA-256 differs from the cached one becomes a chunk (an all-zero
+block becomes a hole), indexed in the block lower's authenticated page format.
+Its record (path, size, mode, owner, mtime, index) goes in
+`.devbox-delta/manifest.json` (`v: 3`), and the layer's `tree/` holds the
+other changed files whole and the whiteouts. The cache is the digests of each
+large file as the record holds it. A save stages the next cache beside the
+current one, and it becomes current only once the record names the layer,
+under one lock that also drops a cache built for a rev the inventory has
+moved past. A base caches every large file whose size and mtime held across
+the pack and the read, and a recovery caches its copy to disk. A file with no
+cache travels whole once and is cached from then on.
+
+What a recovery does. Every layer is a lazy squashfs mount; the deltas'
+`tree/` directories are overlay lowers, and `devbox-block-lower` sits above
+them all. It serves a file whose newest version is a block record. It reads
+each block from the newest layer that holds it, down to the file's last whole
+copy, each record's index looked up by that version's own size. A file a newer
+layer replaced or removed is not served, so the overlay reads that layer. A
+record with no earlier version beneath it is EIO, never zeros. The crate lost
+the older chain's single-delta CLI, its opacity probe and the v2 manifest.
+
+Measured (local, image built from this tree, 2 CPUs, real FUSE and the shipped
+publisher, the store served in the container; `bench-artifacts/block-deltas/`,
+`session.jsonl`, the same session as above):
+
+| Step | Result |
+|---|---|
+| base of the 1.85 GB workspace | 25.2 s, 1.42 GB stored, 3 large files cached |
+| each of 10 saves | 9.34 to 9.41 MB moved (was 1.85 GB), 1.8 to 3.6 s |
+| what a save records | about 1,000 blocks of the database, 100 of the 1 GiB file, 7 or 8 of the log |
+| recovery of 11 layers | attached in 2.4 s, lazily |
+| every file read through the layers | 49 s, exact (sha256 of every file) |
+| first save after the recovery | 9.48 MB: the copy's cache held |
+
+The image tests are red on the committed chain and green now
+(`image-red.log`, `image-green.log`): the earlier test's 4 KiB write into an
+8 MiB file moves under 256 KiB, and a new test stacks block records over
+four saves (growth, a punch, a truncation below an earlier growth, a
+re-edited block), then recovers exactly lazily, as a plain disk, and from
+the store again. A bug that test found is fixed: a record's index was looked
+up by the served file's size, so a version shorter than the one below read
+as EIO. The crate's unit tests cover the resolution through layers, a
+shadowing newer layer, a missing earlier version and a corrupt chunk.
+
+The image is `e7444653…`, built from this tree; its other binaries are
+unchanged. Lines: the crate +684 / -526, `disk-chain.ts` +195 / -32. The record's
+format is `disk-chain/2`; no box holds `/1` (the hybrid was opt-in until
+D62), and a format change ships as a reset.
+
+D64. The hybrid's live runs pass, after three fixes they found (2026-10-02).
+Run `sbs10021640nhyf` (`bench-artifacts/hybrid-live/`): the bench fixture of
+this tree, image `e7444653…`, Medium, `durable_object` policy, three fresh
+boxes, each through a base and a block delta (16,384 bytes moved), a rest, a
+wake from its snapshot, a second rest, the snapshot lost (the bench points
+the record at an id the platform does not hold), a wake, a rest and a wake of
+the recovered box. Every Worker, application and bucket is deleted, and so
+is every snapshot tag the runs made.
+
+| Step, n=3 | Driver | The box's restore | Result |
+|---|---|---|---|
+| rest (commit, then snapshot) | 4.4 to 7.1 s | | committed |
+| wake from the snapshot | 0.64, 0.65, 0.89 s | 34 to 38 ms | exact, excluded folders included |
+| wake with the snapshot lost | 4.3, 4.5, 5.3 s | 3.5 to 4.1 s | image start, lazy recovery of 3 layers; exact without the excluded folders; the notice names the time and the folders |
+| wake of the recovered box | 0.66, 0.72, 1.13 s | 157 to 210 ms | "recovery made plain", exact |
+
+What the runs found, each red first:
+- A snapshot start the platform refuses ("Snapshot … was not found")
+  fails its first exec at once, and the cutover started the image. The
+  10 s cutover timer was an `AbortSignal.timeout` handed to that exec; it
+  fired 10 s later and took the image's container down mid-recovery. The
+  timer is now cleared once the exec settles (`hybrid.test.ts`, on fake
+  timers, red on the old form).
+- The recovery started the block lower as `cd / && setsid nohup … >log &`.
+  The background shell held the exec's stdout, and the platform's exec
+  answers when stdout closes, so the mount step held the start gate past its
+  25 s budget. The whole job is redirected now. `disk-chain-image.test.ts`
+  answers an exec when its stdout closes, as the platform does; on the old
+  form its recoveries held until a 60 s bound added for that run failed them
+  (`bench-artifacts/block-deltas/image-pipe-red.log`).
+- A discard deleted every listed key in one call: R2 refuses a delete of no
+  keys (10027), and lists 1,000 at a time. A box with no objects failed its
+  teardown, and one with more than 1,000 kept the rest. The discard now
+  pages and skips an empty delete; the test bucket models both limits.
+
+Each snapshot's manifest names its box: `deployment_id` is the Durable
+Object id under the `durable_object` policy. That maps a tag to a box and so
+to an environment's bucket, which the sweep can use.
+
+D65. Snapshots are deleted by lineage: a snapshot nothing can wake again is
+deleted with its whole lineage, and a live lineage is kept whole
+(2026-10-02). A rest after a wake from snapshot S takes a child of S, so S
+stays: the record holds the new snapshot's ancestors (`lineage`, root
+first) and the time its root was taken. A lineage is dead when its box is
+discarded, when a wake could not use it and started from the image (the
+cutover, a moved chain, another image, an aged root), or when the bench
+loses it; the box then lists every snapshot of that lineage in
+`devbox:dead-snapshots` and deletes them after the rest's stop, after a
+cutover and after a discard. A deletion never holds a save or a wake: a
+refusal is logged in the platform's words and asked again at the next
+sweep. The 29-day rule counts from the lineage's root, not its newest
+snapshot, until probe (b) below says a child keeps its parent alive.
+
+The registry client (`src/snapshot-registry.ts`) mints push credentials
+with a Containers-scoped API token (`DEVBOX_REGISTRY_TOKEN`, Account >
+Containers > Edit, declared in `infra-manifest.ts`), finds the repository
+holding `rootfs-snapshot-<sha256(id)>` in the catalog, reads its set id and
+deletes `rootfs-snapshot-*` and `rootfs-set-<sha256(set id)>`. A box with no
+token keeps its dead snapshots until it has one; they lapse in 30 days.
+Live (run `sbs10021734nhsw`, image `e7444653…`, Medium, two boxes through
+D64's steps, all exact): the re-rooted box deleted its two-snapshot lineage
+during the run, the teardown's discards deleted the rest, and the
+repository held no tag of the run afterwards.
+
+What a snapshot is in the registry (read 2026-10-02 from that run's tags):
+both tags name one OCI manifest with one layer, a btrfs send stream. A
+root's layer is the whole rootfs increment over the image (75.8 MB) and its
+`subject` is the image's manifest. A child's layer is an incremental stream
+(64,470 B) whose `subject` is its parent's manifest, with
+`parent_snapshot_id` in its annotations. So restoring a child needs its
+parent's layer, and probe (a) asks whether the registry keeps it once the
+parent's tags are gone. `deployment_id` is the Durable Object's id under
+the `durable_object` policy, so every tag maps to its box.
+
+A roll of `cloudflare/debian-trixie` should leave existing snapshots
+restorable on the base they were taken from. A snapshot carries its own
+base: after a Worker moved from image A to image B, a restore of a snapshot
+taken on A ran A's shim (`a2973893…`) and `inspect()` named A, while a fresh
+start on B ran B's shim with an empty workspace (D51, run
+`snap09302048b2`); with A's tag deleted from the registry the restore still
+worked (`snap09302053b3`); and a root snapshot's manifest names its image's
+manifest as its `subject`. The box's image check compares the configured
+image string, which a roll does not change, so a box keeps waking its own
+snapshot across a roll. Not measured: a roll of a managed image itself,
+which only Cloudflare can do.
+
+The long probes, started 2026-10-02 (`bench-artifacts/snapshot-life/`): a
+throwaway Worker with an hourly Cron Trigger takes every reading and writes
+it to its R2 bucket, then deletes its snapshots' tags, its container
+application and itself after the last one; the bucket keeps the readings.
+Each question runs on our image and on trixie. (a) P -> C with P's tags
+deleted on day 0: C restored at 1 h and then daily to 14 days, and P's tags,
+manifest and layer read by digest each time. (b) P -> C untouched: C
+restored every 3 days and P never; from day 28 to 36, daily, whether C
+restores and whether P's tags, manifest and layer still exist. Run
+`life10021741`, Worker and bucket `kinu-life10021741`; the readings are
+`readings/<lineage>/<hours>h.json`. Until the owner mints the
+Containers-scoped token, the Worker holds the deploy token as its secret;
+that is temporary, and the secret is swapped when the scoped token exists.
+
+Day 0 of (a), both bases: C's manifest names P's manifest as its `subject`
+and P as `parent_snapshot_id`, and does not name P's layer; C's one layer
+is an incremental btrfs stream (5,644 B on our image, 6,216 B on trixie)
+over P's 67 MB layer. P's two tags deleted (204, 204): both then answer
+404, while P's manifest by digest and P's layer blob still answer 200, and
+C restored exact at once (324 ms, 449 ms to its first exec). Under OCI's
+rules a `subject` points from the referrer to its subject and does not keep
+the subject, so only the time series can say whether the registry's
+collection spares an untagged parent.
+
+D66. A box starts from a golden snapshot of `cloudflare/debian-trixie`
+with the pinned tools, and its tools reach it as one tarball (2026-10-03,
+the owner's design of D55, built). The image keeps only what a container
+needs from us; everything a box runs is in the tools tarball, which the
+Dockerfile's `tools` stage builds (`scripts/devbox-tools.ts build`) and
+upstream.json pins by sha256: an offline apt repository of the closure of
+the 15 Debian packages a box needs, taken from snapshot.debian.org on
+2026-10-02, and our four binaries (bun, block lower, squashfuse, the shim).
+Two builds with no cache made the same tarball (`75164f17…`, 100.8 MB). The
+deploy refuses a store bucket that lacks it, by name; the developer who
+re-pins runs `devbox-tools.ts publish <bucket>` for each environment.
+
+The golden object, one object of the box's class (`devbox-golden`), starts
+the base, pipes the tarball in from the store, installs it with apt over the
+local repository (no network), checks the tools and FUSE, and snapshots.
+It rebuilds when the pinned tools move, and at 25 days, when it also
+restores the previous golden so both stay alive. A platform roll of the
+base is not a rebuild: a snapshot keeps the base it was taken on, and the
+next refresh takes the new one. The Worker's 15-minute cron asks the golden
+object (the owner's choice, 2026-10-03: no deploy step, route or secret);
+with nothing to do it answers without starting a container, and the first
+box of a new deployment that finds no golden asks for the build. A box
+starts from its own snapshot, else the golden. A golden of other tools still
+serves; the box then installs the pinned tarball inside its start gate. A
+golden the platform refuses is reported lost and the next is used. With no
+golden at all, the box does not start a container and does not install in
+its gate: its readiness is pending with the reason, the golden object
+records it, and when a build verifies, the golden object tells each waiting
+box once to start; a failed build's words become each waiting box's reason.
+The box arms no clock for it. `tini` is the container's init, from the
+tarball.
+
+Measured on Medium, the `durable_object` policy, internet off
+(`bench-artifacts/storage-designs/`, runs `g5510022003debs`,
+`g5510022009rfr`; n=5 each, all checked: FUSE, the block lower, bun 1.4.2,
+`Files`):
+
+| | in the gate | with the pipe from R2 |
+|---|---|---|
+| fresh install of everything | 12.2 to 26.0 s (median 13.2) | 14.9 to 31.2 s |
+| refresh, nothing changed | 1.42 to 1.64 s, 0 packages | the box compares the stamp first and does nothing |
+| refresh, one .deb and bun changed | 1.46 to 1.64 s (apt 236 to 306 ms) | 3.5 to 5.0 s |
+
+The fresh install does not fit the 25 s gate every time, so it never runs in
+one: only the golden object installs from scratch, outside every box's
+gate. Plain `dpkg -i` cannot do it: the managed base is 13.6 against 13.7
+packages, and pre-dependencies need ordering, which apt over a local
+repository gives.
+
+Live (run `sbs10030035ngld`, the bench fixture of this tree, two Medium
+boxes): the golden built in 20.4 s; each box started from it (`debian 13.6`,
+tools `75164f17`, bun 1.4.2, tini as pid 1), then D64's steps: a wake from
+its snapshot in 0.40 and 0.61 s, a lost snapshot recovered lazily in 4.7
+and 4.8 s with the notice, the recovered box woken in 0.56 and 0.62 s; all
+exact. Every Worker, application, bucket and snapshot tag of the run was
+deleted, the golden's with the product's registry client.
+
+D67. What a box in `repair` is missing reaches the agent through the
+incident inbox and nothing else, and a recovery is told as a recovery
+(2026-10-03). The admission no longer carries `incomplete`: the adapter
+accepted `repair` and dropped it, `exec()` discarded `ensureReady()`'s
+answer, and nothing in core or the host read it, so the comment that a
+caller "learns from the call itself" was false. `devboxState().unready`
+still names what is missing.
+
+Proved through the agent's own path
+(`cf-backend/tests/unit-sandbox-repair-notice.test.ts`): its commands go
+through the sandbox executor and `adaptCloudflareSandbox` to a Devbox on the
+container harness, and the box's incidents go through KinuDevbox's
+restatement (now one function, `lifecycleIncident`) to a real workspace's
+`acceptSandboxLifecycleIncident`, whose inbox turns are counted. A service
+that does not restart, on a snapshot wake and on a lost-snapshot recovery:
+the agent's first command, the one that woke the box, ran with the
+restoration already settled in `repair`; its files were exact; exactly one
+inbox notice named the service ("(process p1)") with the container's cause.
+
+The test found one defect, fixed red first
+(`bench-artifacts/repair/recovery-notice-red.log`): the recovery notice was
+filed as an `attach` incident, so the agent was told "The workspace container
+failed at the attach stage ... sandbox tools are refused until an attach
+succeeds" about a recovery that had succeeded. It is its own stage now,
+`recovered`, told as what it is: the time the workspace came back to, the
+folders to rebuild (`bun install`, not `npm install`), and that every tool
+works.
+
+A failed final boot stamp changes nothing a user or agent can see
+(`tests/stamp-repair.test.ts`). The early stamp writes this container's id
+to the file and the row before the attach; the final step only re-reads it,
+so its failure leaves the identity whole. The box settles in `repair` with
+"the boot id stamp failed", and that is all: no incident (there is nothing
+to act on), operations admitted, saves commit (no replacement is seen), the
+heartbeat starts nothing. Nothing retries it but `attachNow()`, which no host
+calls, so `ready` stays false until the next restoration; no host reads
+`ready`. A pid from an earlier boot is fenced by the kernel's boot id each
+process record carries, not by this stamp: on the real image, a record from
+another boot naming a live pid reads lost and a stop never signals it
+(`tests/processes-image.test.ts`).
+
+Live (run `sbs10030449nrps`, image `e7444653…` on the trixie golden, two
+Medium boxes, a service on port 8123 that cannot come back after its
+`.serve` file is removed before the rest):
+
+| | box 1 | box 2 |
+|---|---|---|
+| wake from the snapshot | 6.6 s, `repair`: "port 8123 never answered", 1 notice, exact | 6.8 s, the same |
+| lost snapshot, the first command is the wake | 8.8 s, lazy over 3 layers, exact, `repair`, 2 notices in all | 9.2 s, the same |
+| the recovered box woken | 6.8 s, "recovery made plain", exact | 6.9 s, the same |
+| the kernel's boot id | changed at every wake | changed at every wake |
+| the restarted service, read and stopped | `failed`, nothing signalled | `failed`, nothing signalled |
+
+The wakes take 6 s more than D64's because the box waits out the port's
+probe window before it settles in `repair`. The kernel's boot id changing at
+every wake is what makes every process record a snapshot restores read as
+another boot.
+
+One fact the run measured, for the record: `/tmp` is on the rootfs, so a
+snapshot carries `/tmp/devbox-boot-id`. After a snapshot wake the file holds
+the previous container's id, and the box treats the woken container as the
+one it stamped. Nothing is wrong today: a rest deletes the settled row before
+the snapshot, so a wake restores in full. But the stamp now names a
+snapshot's lineage, not a container: a replacement started from the same
+snapshot without the box's start would not be seen. Not observed; the
+kernel's boot id would see it.
+
+D68. The hybrid stays; a thin-pool virtual disk, vblk alone and btrfs change
+detection are rejected (2026-10-03).
+Five arms on one workload (`bench-artifacts/h2h/`: `h2h.sh`, `h2hx`, the
+drivers and `table.md`), Medium, n=5 a figure unless the table says
+otherwise: A production's chain (2f660875cc), B platform snapshots alone, C
+the hybrid (this lane), D vblk alone (E's lost-snapshot path), E platform
+snapshots with vblk-T (ext4 on a dm-thin volume in a pool on the root, R2 by
+block). Rows at 0.25, 2, 10 and 18 GB and D63's long session.
+
+| at 2 GB | A | B | C | E |
+|---|---|---|---|---|
+| warm wake, ms | none | 594 | 386 | 495 |
+| snapshot lost, ms | 7,199 | none | 7,346 | 1,449 |
+| 3 KB save, ms (pause) | 142,338 (72) | 2,747 (775) | 980 (53) | 944 (74) |
+| 3 KB save moves | 1.5 GB | 20 KB | 10 KB | 8.5 MB |
+| 100 MiB save, ms | 173,272 | 4,707 | 6,585 | 1,934 |
+| session: R2 after 10 saves | 2.8 GB | none | 1.5 GB | 8.2 GB |
+
+Every arm restored exactly where it ran. E is rejected on reliability, not
+speed. It cannot hold 18 GB: with the pool sized to all the disk but 512 MiB
+and ext4 reserving nothing (18.2 GB free to ext4), the 18 GB tree still met
+ENOSPC, 3 of 3. The thin metadata is 16.5 MB and the pool file costs nothing
+beyond its size; the loss is ext4 in place of the root's btrfs, which
+compresses (zstd) and keeps small files inline. And a rewrite that a save's
+snapshot pins past the pool's free space fails ext4 with I/O errors, and the
+workspace goes read-only (2 GB under write pressure: 3 of 5 writable). B has
+no backup, a 600 to 1,100 ms pause, and fills the disk when rewrites follow
+snapshots. A takes minutes a save and fails saves on E2BIG (fixed on
+integration by 84525f638 and d4fa3062e).
+
+C's own failures, to fix next: at 10 to 18 GB a save meets ENOSPC staging or
+reading a delta back; and the fault soak (104 cycles,
+`h2h/runs/sbs10031343nsoak1-soak.jsonl`) found a box left terminal by a kill
+during its copy, the store mount failing after a kill, and one silent loss.
+The 10 GB base's failure, 4 of 4, was mksquashfs reading a duplicate back
+from an archive already punched (a7fb584b3).
+
+A btrfs-native backup (`btrfs send -p`) saves in 4 to 15 ms of pause and
+sends exact extents, but a send stream restores only by replay (`btrfs
+receive` at about 9 s a GB): no lazy restore. A platform snapshot keeps
+neither a nested subvolume nor a snapshot of the root (2 of 2), so btrfs can
+serve C only as change detection within one container's life (10 GB: 10 to
+22 ms snapshot and 4 to 53 ms `send --no-data`, against C's 518 to 604 ms
+walk). Backup stores, from a box through its gateway, 16 KiB GETs: R2 150 ms
+p50, the box's Durable Object 9.5 ms, KV 7 ms on a warm cache only; the
+object's 10 GB and 2 MB-row limits make it the place for indexes and hot
+blocks, R2 for the bulk. KV is not used: its writes took 167 to 382 ms and
+its cold reads were not measured.
+
+Decided: C. E and D are rejected for the reliability above. btrfs change
+detection is not built: it saves about 0.6 s a save at 10 GB, but loses its
+base snapshot at every wake (so the first save after one walks anyway) and its
+held snapshot pins rewritten blocks, which deepens C's ENOSPC at 10 to 18 GB.
+
+D69. An untimed command's kill and a supervised process's stop end it by
+one operation, and answer only once nothing it started is alive
+(2026-10-03). `END_TREE` (`src/processes.ts`) sends TERM to the command's
+tree and to each process group a member of it leads, at once rather than
+leaves first, sends KILL to whatever outlives `TERM_GRACE_MS`, and returns
+once none of them is alive; a zombie counts as gone. The untimed kill (D37)
+answered as soon as the processes it listed first were gone, and did not
+wait after its KILL. The stop (D48) watched the group alone. An untimed
+command now starts under `setsid -w`, so it leads its own group as a
+supervised one does, whatever group the runtime gave the exec. In the real
+image (`tests/kill-image.test.ts`, under docker), a shell answers TERM by
+starting a process that ignores TERM, and exits. On bfb0f35a9 the untimed
+kill answered with that process still running; now both callers answer once
+it is gone, and a command that ignores TERM ends on KILL under both.
 
 ## Measurement contract for a strategy comparison
 

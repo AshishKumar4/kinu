@@ -35,6 +35,7 @@ import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
+import type { Usage } from '../usage';
 import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
 import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
@@ -78,7 +79,10 @@ export type SessionEvent =
       /** Both minted at admission. */
       turnId: string; messageId: string;
       /** A rerun answers every leftover as one turn; a transport closes their requests with it. */
-      carried: readonly string[] }
+      carried: readonly string[];
+      /** Steps before this activation. */
+      finishedSteps: number }
+  | { type: 'step-cut'; stepIndex: number }
   | { type: 'text-delta'; delta: string }
   /** Shown live; never the answer, never stored. */
   | { type: 'reasoning-delta'; delta: string }
@@ -87,7 +91,7 @@ export type SessionEvent =
   | { type: 'turn-end'; turn: CompletedTurn }
   | { type: 'error'; message: string }
   | { type: 'evolution'; event: string; message: string }
-  // Kept apart from `evolution`: `kinu exec --no-auto-evolve` silences evolution while jobs may still settle.
+  // Kept apart from `evolution`: an agent with learning off says no evolution while its jobs may still settle.
   | { type: 'background'; event: string; message: string }
   | { type: 'broadcast'; event: BroadcastEvent }
   /** The durable head moved; surfaces redraw from the store. */
@@ -123,6 +127,7 @@ interface TurnContinuation {
   readonly runId: string;
   readonly messageId: string;
   readonly finishedSteps: number;
+  readonly usage: Usage;
   /** The outputs the cut step left open, named before a claim seals them. */
   readonly openOutputs: readonly string[];
 }
@@ -782,13 +787,11 @@ export class ChatSession {
 
   private async runPump(): Promise<void> {
     try {
-      let item: QueueItem | undefined;
-
       for (;;) {
         // Before the item leaves the queue, so it still counts as in flight to a message sent meanwhile; and so the
         // turn's own measure is the newer.
         await this.revision;
-        item = this.queue.shift();
+        const item = this.queue.shift();
 
         if (item === undefined) break;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
@@ -827,8 +830,9 @@ export class ChatSession {
         let opened: OpenedTurn | null = null;
 
         try {
-          opened = await this.openTurn(item);
-          await this.runOpenedTurn(item, opened);
+          const opening = await this.openTurn(item);
+          opened = opening;
+          await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening));
         } catch (err) {
           diagnostics.failure(
             'turn.processing_failed',
@@ -915,7 +919,7 @@ export class ChatSession {
 
     this.emit({
       type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId,
-      carried: (item.steerIds ?? []).filter((id) => id !== this.turnId),
+      carried: (item.steerIds ?? []).filter((id) => id !== this.turnId), finishedSteps: item.continuation?.finishedSteps ?? 0,
     });
 
     return { event, mode, turnId: this.turnId, runId: this.runId };
@@ -1028,6 +1032,8 @@ export class ChatSession {
 
     if (item.continuation !== undefined && partial === 'text') {
       await this.actorSession.retractCutStep(lease, item.continuation.openOutputs);
+      this.emit({ type: 'step-cut', stepIndex: item.continuation.finishedSteps + 1 });
+      await this.delivery;
     }
 
     /** A Stop before any output leaves the operator's row alone. */
@@ -1042,6 +1048,7 @@ export class ChatSession {
       cacheKeptAliveUntil,
       ...(item.continuation !== undefined && {
         resumedSteps: item.continuation.finishedSteps,
+        resumedUsage: item.continuation.usage,
         resumedMidStep: partial !== null,
       }),
     }, (event) => {
@@ -1346,7 +1353,7 @@ export class ChatSession {
     const open = this.eventRecorder.openTurn();
 
     if (open === null) return;
-    const { runId, turn, steps, finishedSteps } = open;
+    const { runId, turn, steps, finishedSteps, usage } = open;
     const openOutputs = this.actorSession.canonical.openOutputs(runId);
 
     const item: QueueItem = {
@@ -1361,6 +1368,7 @@ export class ChatSession {
         runId,
         messageId: turn.messageId,
         finishedSteps,
+        usage,
         openOutputs,
       },
       settle: () => {},

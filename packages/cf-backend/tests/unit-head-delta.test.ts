@@ -1,9 +1,8 @@
 // Defends: a landed step painted twice (durable step plus live tail). The journal is the authority;
 // part states are asserted because `MessageView` places its live caret by part state.
 import { describe, expect, test } from 'bun:test';
-import type { HeadStep } from '@kinu.run/core';
 import {
-  appendHeadDelta, deltaAsMessage, retireHeadDelta, stepAsMessage,
+  appendHeadDelta, deltaAsMessage, retireHeadDelta,
   type HeadDelta,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
@@ -109,47 +108,5 @@ describe('the arriving step, as the chat draws it', () => {
 
     expect(first.id).toBe(second.id);
     expect(deltaAsMessage({ text: 'a', reasoning: '' }, 'h2')?.id).not.toBe(first.id);
-  });
-});
-
-describe('the journalled step, as the chat draws it', () => {
-  const step = (over: Partial<HeadStep> = {}): HeadStep =>
-    ({ text: 'Bounded the body.', toolCalls: [], ...over });
-
-  test('every part of a recorded step is CLOSED — a landed step is never live', () => {
-    const message = stepAsMessage(step({ reasoning: 'The header lies.' }), 0, 'h1');
-    expect(message.parts).toEqual([
-      { type: 'reasoning', text: 'The header lies.', state: 'done' },
-      { type: 'text', text: 'Bounded the body.', state: 'done' },
-    ]);
-  });
-
-  test('a call with no recorded output still reads as running', () => {
-    const message = stepAsMessage(
-      step({ toolCalls: [{ name: 'read', input: { path: '/x' } }] }),
-      2, 'h1',
-    );
-
-    expect(message.parts.at(-1)).toEqual({
-      type: 'dynamic-tool', toolName: 'read', toolCallId: 'h1-s2-t0',
-      state: 'input-available', input: { path: '/x' },
-    });
-  });
-
-  test('a settled call carries its output', () => {
-    const message = stepAsMessage(
-      step({ toolCalls: [{ name: 'read', input: { path: '/x' }, output: 'ok' }] }),
-      1, 'h1',
-    );
-
-    expect(message.parts.at(-1)).toEqual({
-      type: 'dynamic-tool', toolName: 'read', toolCallId: 'h1-s1-t0',
-      state: 'output-available', input: { path: '/x' }, output: 'ok',
-    });
-  });
-
-  test('step ids are per step, so the trace is stable while it grows', () => {
-    expect(stepAsMessage(step(), 0, 'h1').id).toBe('h1-s0');
-    expect(stepAsMessage(step(), 1, 'h1').id).toBe('h1-s1');
   });
 });

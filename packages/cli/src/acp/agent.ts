@@ -18,7 +18,7 @@ import {
 import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
 import { settleLogged } from '@kinu.run/core/obs';
 import { literalText } from '@kinu.run/core/tui';
-import type { AgentClient, AgentClientEvent } from '../agent-client';
+import { STEP_RESTART_NOTICE, type AgentClient, type AgentClientEvent } from '../agent-client';
 import { toAgentPrompt } from './prompt';
 import * as v from 'valibot';
 
@@ -139,6 +139,8 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
 
   const toUpdate = (event: AgentClientEvent): SessionNotification['update'] | null => {
     switch (event.type) {
+      case 'step-cut':
+        return { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: STEP_RESTART_NOTICE } };
       case 'text-delta':
         return { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: event.delta } };
       case 'tool-call':

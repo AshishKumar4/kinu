@@ -29,9 +29,9 @@ export const EVAL_MODELS = {
 
 export type EvalTier = keyof typeof EVAL_MODELS;
 
-/** Every optional mechanism's position; `evolution` matters because `noAutoEvolve` can silently disable learning. */
+/** Every optional mechanism's position; `evolution` matters because the `learning` setting can silently disable it. */
 export interface EvalArmState {
-  /** Auto-evolution wired on: the inverse of LocalAgentSession's noAutoEvolve. */
+  /** Auto-evolution wired on: the agent's `learning` setting. */
   readonly evolution: boolean;
   readonly settle: string;
   readonly tools: readonly string[];

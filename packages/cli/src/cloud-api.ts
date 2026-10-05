@@ -136,6 +136,8 @@ const CloudTriggerSchema = v.object({
 
 export const CloudTriggerListSchema = v.object({ triggers: v.array(CloudTriggerSchema) });
 
+export const CancelJobSchema = v.object({ ok: v.boolean() });
+
 export const CloudBackgroundJobSchema = v.object({
   id: v.string(), kind: v.string(), status: v.string(), createdAt: v.optional(v.number()),
   settledAt: v.optional(v.nullable(v.number())), error: v.optional(v.nullable(v.string())),

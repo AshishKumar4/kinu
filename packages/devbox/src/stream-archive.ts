@@ -1,11 +1,11 @@
 // The container's publisher (D57): mksquashfs streams each layer to the store as it builds it.
-import { shellPath } from './chunked-delta';
 import { DEVBOX_RUNTIME_DIR } from './storage';
 
 const MIB = 1024 * 1024;
 
-/** The platform's tmpfs, measured in a Medium container (D55). */
-const PLATFORM_TMPFS_BYTES = 64 * MIB;
+export function shellPath(path: string): string {
+  return `'${path.replaceAll("'", `'\\''`)}'`;
+}
 
 /** Parts, parts in flight, and the most of an archive the disk holds while it streams (a soft bound). */
 export interface StreamProfile {
@@ -17,17 +17,18 @@ export interface StreamProfile {
 /** Four 5 MiB parts held a 10 GiB base to about 13 MiB/s a box (D57); D53's E′ shape (D58). */
 export const DISK_STREAM: StreamProfile = { partBytes: 16 * MIB, partsInFlight: 16, windowBytes: 512 * MIB };
 
-/** R2 refuses a part under 5 MiB unless it is the last, and the window must hold two parts. */
-export const TMPFS_STREAM: StreamProfile = { partBytes: 5 * MIB, partsInFlight: 2, windowBytes: PLATFORM_TMPFS_BYTES / 4 };
-
 /** Publishes the archive as it grows (D57), past the mount (D15). Exits: 1 the store, 2 usage, 3 the
- *  store's account of the object, 4 mksquashfs failed, 5 mksquashfs claimed success with no archive. */
+ *  store's account of the object, 4 the archiver or its input, 5 no archive. */
 const STREAM_SCRIPT = `// devbox-stream-v1
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, openSync, readSync, rmSync, statSync } from 'node:fs';
 
-const [url, partArg, inFlightArg, windowArg, archive, separator, ...archiver] = process.argv.slice(2);
+const [url, partArg, inFlightArg, windowArg, archive, separator, ...rest] = process.argv.slice(2);
+// \`--input <argv>\`: what the archiver reads as stdin.
+const cut = rest.indexOf('--input');
+const archiver = cut === -1 ? rest : rest.slice(0, cut);
+const input = cut === -1 ? [] : rest.slice(cut + 1);
 const partBytes = Number(partArg);
 const inFlight = Number(inFlightArg);
 const windowBytes = Number(windowArg);
@@ -37,9 +38,9 @@ function refuse(code, message) {
   process.exit(code);
 }
 
-if (url === undefined || archive === undefined || separator !== '--' || archiver.length === 0 || !Number.isSafeInteger(partBytes) || partBytes <= 0
+if (url === undefined || archive === undefined || separator !== '--' || archiver.length === 0 || (cut !== -1 && input.length === 0) || !Number.isSafeInteger(partBytes) || partBytes <= 0
   || !Number.isSafeInteger(inFlight) || inFlight <= 0 || !Number.isSafeInteger(windowBytes) || windowBytes < 2 * partBytes) {
-  refuse(2, 'usage: stream.mjs <url> <partBytes> <partsInFlight> <windowBytes> <archive> -- <archiver argv>');
+  refuse(2, 'usage: stream.mjs <url> <partBytes> <partsInFlight> <windowBytes> <archive> -- <archiver argv> [--input <producer argv>]');
 }
 
 async function answered(label, response) {
@@ -74,14 +75,47 @@ function read(number, size) {
   return bytes;
 }
 
-// mksquashfs writes its output in order and returns to it once, for the superblock at offset 0, so every part but
-// the first is final once the file has grown past it; the first uploads last. Each part's bytes are punched out of
-// the disk once the store holds them, so the archive never needs more disk than the window.
-const child = spawn(archiver[0], archiver.slice(1), { stdio: ['ignore', 'ignore', 'pipe'] });
+// mksquashfs writes in order, then once to the superblock at 0: a part is final once the file grows past
+// it, so the first uploads last. Stored parts are punched out of the disk.
+// Each side of the FIFO execs into its own pid, so a stop or a kill reaches the process itself.
+const fifo = archive + '.in';
+let producer;
+let inputWords = '';
+let inputExit;
+let produced = Promise.resolve();
+
+if (input.length > 0) {
+  rmSync(fifo, { force: true });
+  const made = spawnSync('mkfifo', [fifo], { encoding: 'utf8' });
+
+  if (made.status !== 0) refuse(2, 'mkfifo ' + fifo + ': ' + made.stderr);
+  producer = spawn('sh', ['-c', 'exec "$@" > "$0"', fifo, ...input], { stdio: ['ignore', 'ignore', 'pipe'] });
+  producer.stderr.on('data', (chunk) => { inputWords += chunk; });
+  produced = new Promise((resolve) => { producer.on('close', (code, signal) => { inputExit = code ?? signal ?? 'unknown'; resolve(); }); });
+}
+
+const child = input.length > 0
+  ? spawn('sh', ['-c', 'exec "$@" < "$0"', fifo, ...archiver], { stdio: ['ignore', 'ignore', 'pipe'] })
+  : spawn(archiver[0], archiver.slice(1), { stdio: ['ignore', 'ignore', 'pipe'] });
 let archiverWords = '';
 child.stderr.on('data', (chunk) => { archiverWords += chunk; });
 let exit;
 const exited = new Promise((resolve) => { child.on('close', (code, signal) => { exit = code ?? signal ?? 'unknown'; resolve(); }); });
+// A failed input may never open the FIFO the archiver waits on.
+void produced.then(() => { if (inputExit !== undefined && inputExit !== 0 && exit === undefined) child.kill('SIGKILL'); });
+
+/** Its producer cannot finish without it. */
+async function settleInput() {
+  if (exit !== 0 && inputExit === undefined) producer?.kill('SIGKILL');
+  await produced;
+  rmSync(fifo, { force: true });
+}
+
+function archiverFailure() {
+  const own = 'mksquashfs exited ' + exit + ': ' + (archiverWords.trim() || 'no output');
+
+  return inputExit !== undefined && inputExit !== 0 ? 'its input exited ' + inputExit + ': ' + (inputWords.trim() || 'no output') + '; ' + own : own;
+}
 const digests = [];
 const pending = new Set();
 const freed = new Set();
@@ -146,11 +180,12 @@ async function abort(error) {
 
   if (exit === undefined) child.kill('SIGKILL');
   await exited;
+  await settleInput();
   rmSync(archive, { force: true });
 
   if (archiverFailed) {
     if (uploadId !== undefined) await fetch(url + '?uploadId=' + uploadId, { method: 'DELETE' }).catch(() => undefined);
-    refuse(4, 'mksquashfs exited ' + exit + ': ' + (archiverWords.trim() || 'no output'));
+    refuse(4, archiverFailure());
   }
 
   if (uploadId !== undefined) {
@@ -180,6 +215,7 @@ try {
 
   if (stopped) child.kill('SIGCONT');
   await exited;
+  await settleInput();
   await Promise.all(pending);
 
   if (failure !== undefined) throw failure;
@@ -187,11 +223,11 @@ try {
   await abort(error);
 }
 
-if (exit !== 0) {
+if (exit !== 0 || (inputExit !== undefined && inputExit !== 0)) {
   rmSync(archive, { force: true });
 
   if (uploadId !== undefined) await fetch(url + '?uploadId=' + uploadId, { method: 'DELETE' }).catch(() => undefined);
-  refuse(4, 'mksquashfs exited ' + exit + ': ' + (archiverWords.trim() || 'no output'));
+  refuse(4, archiverFailure());
 }
 
 const size = sizeNow();
@@ -291,39 +327,37 @@ function archiveExcludeFile(patterns: readonly string[]): string {
   return lines.map(line => `${line}\n`).join('');
 }
 
-interface ArchiveInput {
-  readonly sourceDir: string;
-  readonly archivePath: string;
-  readonly excludeFile: string;
-  readonly excludes: readonly string[];
-}
+/** `tar`: a command that prints an uncompressed tar. */
+export type ArchiveSource =
+  | { readonly sourceDir: string; readonly excludeFile: string; readonly excludes: readonly string[] }
+  | { readonly tar: string };
+
+type ArchiveInput = ArchiveSource & { readonly archivePath: string };
+
+const ARCHIVER = '/usr/bin/nice -n 10 /usr/bin/mksquashfs';
+
+const ARCHIVE_FLAGS = '-noappend -no-duplicates -comp zstd -Xcompression-level 1 -no-progress';
 
 /** Patterns travel as base64 so none becomes shell syntax; `-ef` carries non-anchored lines.
  *  `nice` lets the script stop the archiver (D57); `-no-duplicates`: copies read back are holes. */
 function archiverParts(input: ArchiveInput) {
+  const parent = input.archivePath.slice(0, input.archivePath.lastIndexOf('/'));
+  const clear = `mkdir -p ${shellPath(parent)} && rm -f ${shellPath(input.archivePath)}`;
+
+  if ('tar' in input) {
+    return { prepare: clear, archiver: `${ARCHIVER} - ${shellPath(input.archivePath)} -tar ${ARCHIVE_FLAGS} --input ${input.tar}` };
+  }
+
   let bytes = '';
 
   for (const byte of new TextEncoder().encode(archiveExcludeFile(input.excludes))) {
     bytes += String.fromCharCode(byte);
   }
 
-  const encoded = btoa(bytes);
-  const parent = input.archivePath.slice(0, input.archivePath.lastIndexOf('/'));
-
   return {
-    prepare: `mkdir -p ${shellPath(parent)} && rm -f ${shellPath(input.archivePath)} `
-      + `&& printf %s ${shellPath(encoded)} | base64 -d > ${shellPath(input.excludeFile)}`,
-    archiver: `/usr/bin/nice -n 10 /usr/bin/mksquashfs ${shellPath(input.sourceDir)} ${shellPath(input.archivePath)} `
-      + `-noappend -no-duplicates -comp zstd -Xcompression-level 1 -no-progress -wildcards -ef ${shellPath(input.excludeFile)}`,
+    prepare: `${clear} && printf %s ${shellPath(btoa(bytes))} | base64 -d > ${shellPath(input.excludeFile)}`,
+    archiver: `${ARCHIVER} ${shellPath(input.sourceDir)} ${shellPath(input.archivePath)} ${ARCHIVE_FLAGS} -wildcards -ef ${shellPath(input.excludeFile)}`,
   };
-}
-
-/** The archive written whole, for local extraction; prints `<rc> <bytes>`. */
-export function archiveCommand(input: ArchiveInput): string {
-  const { prepare, archiver } = archiverParts(input);
-
-  return `${prepare} && ${archiver} >/dev/null; rc=$?; printf '%s %s' "$rc" `
-    + `"$(stat -c %s ${shellPath(input.archivePath)} 2>/dev/null || echo 0)"`;
 }
 
 /** One command: a spot container can be replaced between execs. Prints `<rc> <bytes> <etag>`. */

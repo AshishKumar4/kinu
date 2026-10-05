@@ -10,7 +10,7 @@ import { readDefaultTier } from './profiles';
 import { Cause, Effect } from 'effect';
 import { renderThrownChain, settle } from '@kinu.run/core/obs';
 
-interface LocalModelResolverOptions {
+export interface LocalModelResolverOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;

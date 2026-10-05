@@ -3,14 +3,13 @@
  * stopping aborts an in-flight question and best-effort denies it so the blocked device RPC unblocks.
  */
 
-import { Cause, Effect } from 'effect';
 import type {
   DeviceConsentDecision,
   DeviceConsentSurface,
   PendingDeviceConsent,
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
-import { renderThrownChain, settle, settleLogged } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { waitForAnswer } from '@kinu.run/core';
 import { literalText } from '@kinu.run/core/tui';
 
@@ -40,50 +39,64 @@ export function watchDeviceConsents(
   const abort = new AbortController();
   const handled = new Set<string>();
 
-  const tick = (): Effect.Effect<void> => Effect.catchCause(Effect.gen(function* () {
-    const pending = yield* Effect.promise(() => consents.listPending());
+  const tick = async () => {
+    try {
+      const pending = await consents.listPending();
 
-    if (abort.signal.aborted) return;
+      if (abort.signal.aborted) return;
 
-    // Ids that left the pending list never reappear; forgetting them keeps the set bounded.
-    const live = new Set(pending.map((item) => item.consentId));
+      // Ids that left the pending list never reappear; forgetting them keeps the set bounded.
+      const live = new Set(pending.map((item) => item.consentId));
 
-    for (const id of handled) if (!live.has(id)) handled.delete(id);
+      for (const id of handled) if (!live.has(id)) handled.delete(id);
 
-    const consent = pending.find((item) => !handled.has(item.consentId));
+      const consent = pending.find((item) => !handled.has(item.consentId));
 
-    if (!consent) return;
+      if (!consent) return;
 
-    const outcome = yield* Effect.promise(() => opts.present(consent, abort.signal));
-    handled.add(consent.consentId);
+      const outcome = await opts.present(consent, abort.signal);
+      handled.add(consent.consentId);
 
-    if (outcome === 'cancelled') {
-      // Deny so the blocked device RPC unblocks; reported here because the outer guard drops 'cancelled' failures.
-      yield* Effect.catchCause(Effect.promise(() => consents.resolve(consent.consentId, 'deny')), (failed) => Effect.sync(() => {
-        opts.note('error', `Could not withdraw the request to use ${consent.deviceLabel}. It expires on its own: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
-      }));
+      if (outcome === 'cancelled') {
+        // Deny so the blocked device RPC unblocks; reported here because the outer guard drops 'cancelled' failures.
+        try {
+          await consents.resolve(consent.consentId, 'deny');
+        } catch (err) {
+          opts.note('error', `Could not withdraw the request to use ${consent.deviceLabel}. It expires on its own: ${renderThrownChain({ cause: err })}`);
+        }
 
-      return;
+        return;
+      }
+
+      if (outcome === null) return;
+      const result = await consents.resolve(consent.consentId, outcome);
+
+      if (abort.signal.aborted) return;
+
+      if (result.ok) opts.note('resolved', decisionFeedback(outcome));
+      else opts.note('stale', 'That request is no longer waiting for an answer.');
+    } catch (err) {
+      if (!abort.signal.aborted) {
+        opts.note('error', renderThrownChain({ cause: err }));
+      }
     }
-
-    if (outcome === null) return;
-    const result = yield* Effect.promise(() => consents.resolve(consent.consentId, outcome));
-
-    if (abort.signal.aborted) return;
-
-    if (result.ok) opts.note('resolved', decisionFeedback(outcome));
-    else opts.note('stale', 'That request is no longer waiting for an answer.');
-  }), (failed) => Effect.sync(() => {
-    if (!abort.signal.aborted) {
-      opts.note('error', renderThrownChain({ cause: Cause.squash(failed) }));
-    }
-  }));
+  };
 
   // Runs until `stop`; a failure past the tick's own reporting ends the loop and is recorded, never an unhandled rejection.
-  const done = settleLogged('consent.poll_failed', { doing: 'polling pending device consents', otherwise: 'io' }, () => waitForAnswer(
-    () => settle(Effect.as(tick(), undefined)),
-    { intervalMs: CONSENT_POLL_MS, signal: abort.signal },
-  ));
+  const done = (async () => {
+    try {
+      await waitForAnswer(async () => {
+        await tick();
+
+        return undefined;
+      }, { intervalMs: CONSENT_POLL_MS, signal: abort.signal });
+    } catch (cause) {
+      diagnostics.failure(
+        'consent.poll_failed',
+        toKinuError({ doing: 'polling pending device consents', cause, otherwise: 'io' }),
+      );
+    }
+  })();
 
   return {
     stop() {
@@ -99,8 +112,8 @@ function decisionFeedback(decision: DeviceConsentDecision): string {
   return decision === 'always' ? 'Approved (always).' : 'Approved once.';
 }
 
-/** Answers null on EOF or abort. */
-type ConsentAskLine = (question: string, signal: AbortSignal) => Effect.Effect<string | null>;
+/** Resolves null on EOF or abort. */
+type ConsentAskLine = (question: string, signal: AbortSignal) => Promise<string | null>;
 
 /** Interactive stdin gets a y/a/n prompt; non-interactive runs print instructions once per request so the turn never stalls silently. */
 export function watchTerminalConsents(
@@ -119,7 +132,7 @@ export function watchTerminalConsents(
         return Promise.resolve(null);
       }
 
-      return settle(promptConsentDecision(consent, askLine, signal));
+      return promptConsentDecision(consent, askLine, signal);
     },
     note: (kind, message) => {
       console.log(kind === 'error' ? `${ERR('error')} ${message}` : DIM(`  ${message}`));
@@ -162,33 +175,31 @@ export function watchHeadlessConsents(
   });
 }
 
-function promptConsentDecision(
+async function promptConsentDecision(
   consent: PendingDeviceConsent,
   askLine: ConsentAskLine,
   signal: AbortSignal,
-): Effect.Effect<DeviceConsentDecision | 'cancelled'> {
-  return Effect.gen(function* () {
-    console.log(`\n${WARN(`This agent wants to use ${consent.deviceLabel}`)}`);
-    console.log(`  ${DIM('Device:')}  ${consent.deviceLabel}`);
-    console.log(`  ${DIM('Method:')}  ${consent.method}`);
-    console.log(`  ${DIM('Command:')} ${literalText(consent.command || '(command)')}`);
+): Promise<DeviceConsentDecision | 'cancelled'> {
+  console.log(`\n${WARN(`This agent wants to use ${consent.deviceLabel}`)}`);
+  console.log(`  ${DIM('Device:')}  ${consent.deviceLabel}`);
+  console.log(`  ${DIM('Method:')}  ${consent.method}`);
+  console.log(`  ${DIM('Command:')} ${literalText(consent.command || '(command)')}`);
 
-    while (!signal.aborted) {
-      const answer = yield* askLine(`${DIM('[y] allow once · [a] always allow · [n] deny ›')} `, signal);
+  while (!signal.aborted) {
+    const answer = await askLine(`${DIM('[y] allow once · [a] always allow · [n] deny ›')} `, signal);
 
-      if (signal.aborted) return 'cancelled';
+    if (signal.aborted) return 'cancelled';
 
-      if (answer === null) return 'deny'; // EOF
-      const normalized = answer.trim().toLowerCase();
+    if (answer === null) return 'deny'; // EOF
+    const normalized = answer.trim().toLowerCase();
 
-      if (normalized === 'y' || normalized === 'yes' || normalized === 'o') return 'once';
+    if (normalized === 'y' || normalized === 'yes' || normalized === 'o') return 'once';
 
-      if (normalized === 'a' || normalized === 'always') return 'always';
+    if (normalized === 'a' || normalized === 'always') return 'always';
 
-      if (normalized === 'n' || normalized === 'no') return 'deny';
-      console.log(DIM('  Answer y, a or n.'));
-    }
+    if (normalized === 'n' || normalized === 'no') return 'deny';
+    console.log(DIM('  Answer y, a or n.'));
+  }
 
-    return 'cancelled';
-  });
+  return 'cancelled';
 }

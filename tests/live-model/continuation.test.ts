@@ -101,7 +101,7 @@ async function continueTurn(model: LanguageModel, history: readonly ModelMessage
   for await (const event of runChat({
     model, system: SYSTEM, history: [...history, { role: 'user', content: question }], tools,
     // Each step hands over the turn's messages so far.
-    persistStep: async (messages) => { produced = [...messages]; },
+    persistStep: async (record) => { produced = record.messages; },
     onStep: (step) => { recordLiveModelSpend(step.usage); },
   })) {
     if (event.type === 'text-delta') text += event.delta;

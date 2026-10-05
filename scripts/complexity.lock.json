@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-03",
-  "files": 2976,
-  "functions": 79199,
+  "measuredAt": "2026-10-04",
+  "files": 2977,
+  "functions": 78135,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -42,11 +42,15 @@
       "complexity": 41
     },
     {
-      "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction>gen",
-      "complexity": 39
+      "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
+      "complexity": 40
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand>gen",
+      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
+      "complexity": 38
+    },
+    {
+      "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
       "complexity": 38
     },
     {
@@ -59,10 +63,6 @@
     },
     {
       "key": "packages/core/src/strategy/swarm.ts#swarmValidity",
-      "complexity": 37
-    },
-    {
-      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
       "complexity": 37
     },
     {
@@ -102,19 +102,11 @@
       "complexity": 34
     },
     {
-      "key": "packages/devbox/tests/support/delta-shell.ts#DeltaShell.line",
-      "complexity": 34
-    },
-    {
       "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
       "complexity": 34
     },
     {
       "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput>gen",
-      "complexity": 33
-    },
-    {
-      "key": "packages/devbox/src/chunked-delta.ts#planDeltaPublication",
       "complexity": 33
     },
     {
@@ -130,15 +122,7 @@
       "complexity": 32
     },
     {
-      "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction>gen>gen",
-      "complexity": 32
-    },
-    {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
-      "complexity": 32
-    },
-    {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>attachChainOnce",
       "complexity": 32
     },
     {
@@ -170,31 +154,19 @@
       "complexity": 31
     },
     {
+      "key": "packages/cf-backend/src/slates/host.ts#SlateHost.operation",
+      "complexity": 31
+    },
+    {
       "key": "packages/cf-backend/tests/workerd/http-model-fake.ts#probeControl",
       "complexity": 31
     },
     {
-      "key": "packages/cli/src/chat-loop.ts#applySlashOutcome>gen",
-      "complexity": 31
-    },
-    {
-      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
-      "complexity": 31
-    },
-    {
-      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep",
+      "key": "packages/cli/src/chat-loop.ts#applySlashOutcome",
       "complexity": 31
     },
     {
       "key": "packages/core/src/scaffold/chat-transform.ts#scaffoldTurn",
-      "complexity": 31
-    },
-    {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>commitChain",
-      "complexity": 31
-    },
-    {
-      "key": "packages/devbox/tests/snapshot-chain.test.ts#shellLabel",
       "complexity": 31
     },
     {
@@ -210,11 +182,11 @@
       "complexity": 30
     },
     {
-      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
+      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
       "complexity": 30
     },
     {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>checkpoint",
+      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
       "complexity": 30
     },
     {
@@ -238,23 +210,15 @@
       "complexity": 29
     },
     {
-      "key": "packages/cf-backend/src/slates/host.ts#SlateHost.operation>gen>gen",
-      "complexity": 29
-    },
-    {
       "key": "packages/cf-backend/tests/helpers/actor-harness.ts#chatSessionTurns>admit",
       "complexity": 29
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand>gen",
+      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
       "complexity": 29
     },
     {
       "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
-      "complexity": 29
-    },
-    {
-      "key": "packages/core/src/chat.ts#ProviderCall.consume",
       "complexity": 29
     },
     {
@@ -314,6 +278,14 @@
       "complexity": 28
     },
     {
+      "key": "packages/core/src/chat.ts#ProviderCall.consume",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
+      "complexity": 28
+    },
+    {
       "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply>gen",
       "complexity": 28
     },
@@ -334,15 +306,7 @@
       "complexity": 28
     },
     {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>stageChunkedDelta",
-      "complexity": 28
-    },
-    {
       "key": "scripts/agents-fields.ts#collectReads>walkExcept",
-      "complexity": 28
-    },
-    {
-      "key": "scripts/bench-devbox-block-attach.ts#measureLarge",
       "complexity": 28
     },
     {

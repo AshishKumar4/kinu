@@ -3,7 +3,7 @@
  * inline/block lists, one-level maps, `#` comments). Tabs and multi-line strings are rejected.
  */
 
-import { Cause, Data, Effect } from 'effect';
+import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import type { JsonObject, JsonValue } from './json';
 
@@ -17,20 +17,16 @@ export interface FrontmatterParseError {
   line: number;       // 1-based, within the front-matter block
 }
 
-export class MarkdownFrontmatterError extends Data.TaggedError('MarkdownFrontmatterError')<{ readonly message: string }> {
+export class MarkdownFrontmatterError extends Error {
   constructor(public readonly detail: FrontmatterParseError) {
-    super({ message: `front-matter parse error at line ${detail.line}: ${detail.message}` });
+    super(`front-matter parse error at line ${detail.line}: ${detail.message}`);
+    this.name = 'MarkdownFrontmatterError';
   }
 }
 
 /** Throws on malformed front-matter; returns the whole source as body when there is none. */
 export function parseMarkdownFrontmatter(src: string): MarkdownDoc {
   return settleSync(frontmatterDoc(src));
-}
-
-/** `parseMarkdownFrontmatter`, answering null for malformed front-matter instead of throwing it. */
-export function readMarkdownFrontmatter(src: string): MarkdownDoc | null {
-  return settleSync(Effect.catchCause(frontmatterDoc(src), (failed) => (Cause.squash(failed) instanceof MarkdownFrontmatterError ? Effect.succeed(null) : Effect.failCause(failed))));
 }
 
 function frontmatterDoc(src: string): Effect.Effect<MarkdownDoc> {

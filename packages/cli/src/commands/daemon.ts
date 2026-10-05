@@ -372,6 +372,10 @@ function logSessionEvent(agentName: string, event: SessionEvent): void {
   if (event.type === 'evolution' || event.type === 'background') log(`${agentName}: [${event.event}] ${event.message}`);
 }
 
+export function liveDaemonPid(): number | null {
+  return readLivePid();
+}
+
 function readLivePid(): number | null {
   const contents = tolerate(() => readFileSync(PID_PATH, 'utf-8'), 'enoent');
 

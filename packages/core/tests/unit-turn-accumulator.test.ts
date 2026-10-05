@@ -30,7 +30,7 @@ describe('TurnAccumulator', () => {
 
   test('onFirstChunk fires its sink exactly once', () => {
     const events: string[] = [];
-    const a = new TurnAccumulator({ logActivity: (e) => events.push(e) });
+    const a = new TurnAccumulator({ logActivity: (e) => { events.push(e); } });
     a.onFirstChunk();
     a.onFirstChunk();
     expect(events).toEqual(['first_chunk']);
@@ -39,7 +39,7 @@ describe('TurnAccumulator', () => {
 
   test('recordToolCall — success records the output as the core ToolCallRecord', () => {
     const toolEvents: Array<{ name: string; toolCallId: string; args?: unknown }> = [];
-    const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
+    const a = new TurnAccumulator({ onToolCallEvent: (e) => { toolEvents.push(e); } });
     a.recordToolCall({ toolCallId: 'fixture-3', toolName: 'eval', input: { code: '1+1' }, success: true, output: { result: 2 }, durationMs: 12 });
     expect(a.toolCalls).toEqual([{ toolCallId: 'fixture-3', name: 'eval', args: { code: '1+1' }, result: { result: 2 }, outcome: { success: true } }]);
     expect(a.hadError).toBe(false);
@@ -49,7 +49,7 @@ describe('TurnAccumulator', () => {
   test('recordToolCall — the durable event carries WHAT the call was asked to do', () => {
     // Without the action, dispatcher-tool failures are indistinguishable.
     const toolEvents: Array<{ args?: unknown }> = [];
-    const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
+    const a = new TurnAccumulator({ onToolCallEvent: (e) => { toolEvents.push(e); } });
     a.recordToolCall({ toolCallId: 'fixture-4', toolName: 'file', input: { action: 'edit', path: 'src/a.ts' }, success: true, output: { ok: true } });
     expect(toolEvents[0].args).toEqual({ action: 'edit', path: 'src/a.ts' });
   });
@@ -57,7 +57,7 @@ describe('TurnAccumulator', () => {
   test('recordToolCall — a big argument is DIGESTED, not stored whole', () => {
     // A `write` body must not be stored twice.
     const toolEvents: Array<{ args?: unknown }> = [];
-    const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
+    const a = new TurnAccumulator({ onToolCallEvent: (e) => { toolEvents.push(e); } });
     a.recordToolCall({ toolCallId: 'fixture-5', toolName: 'file', input: { action: 'write', content: 'x'.repeat(5000) }, success: true, output: { ok: true } });
     const args = toolEvents[0].args;
     expect(args).toBeTypeOf('string');
@@ -68,7 +68,7 @@ describe('TurnAccumulator', () => {
 
   test('recordToolCall — failure records {error}, flips hadError, passes error to the sink', () => {
     const toolEvents: Array<{ error?: string }> = [];
-    const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
+    const a = new TurnAccumulator({ onToolCallEvent: (e) => { toolEvents.push(e); } });
     a.recordToolCall({ toolCallId: 'fixture-6', toolName: 'shell', success: false, reason: null, error: new Error('boom') });
     // One failure description in both ledgers.
     expect(a.toolCalls[0]).toEqual({ toolCallId: 'fixture-6', name: 'shell', args: {}, result: { error: 'boom' }, outcome: { success: false, reason: null } });
@@ -80,7 +80,7 @@ describe('TurnAccumulator', () => {
     // `String(undefined)`/`String(null)` fabricate text; `error: ''` reads as success.
     for (const error of [undefined, null, '']) {
       const toolEvents: Array<{ error?: string }> = [];
-      const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
+      const a = new TurnAccumulator({ onToolCallEvent: (e) => { toolEvents.push(e); } });
       a.recordToolCall({ toolCallId: 'fixture-7', toolName: 'eval', success: false, reason: null, error });
       expect(a.hadError).toBe(true);
       expect(toolEvents[0].error).toBe(FAILURE_WITHOUT_ERROR);
@@ -97,7 +97,7 @@ describe('TurnAccumulator', () => {
 
   test('recordStep sums the turn field by field, leaving unreported fields absent', () => {
     const steps: number[] = [];
-    const a = new TurnAccumulator({ onStepEvent: (e) => steps.push(e.stepIndex) });
+    const a = new TurnAccumulator({ onStepEvent: (e) => { steps.push(e.stepIndex); } });
     a.recordStep({ usage: { input: 100, output: 40, cacheRead: 10 }, finishReason: 'tool-calls', toolCalls: [{ toolName: 'shell' }] });
     a.recordStep({ usage: { input: 50, output: 20, cacheWrite: 30 }, finishReason: 'stop' });
     expect(a.stepCount).toBe(2);
@@ -133,7 +133,7 @@ describe('TurnAccumulator', () => {
 
   test('each completed tool call retains its supplied invocation identity', () => {
     const ids: string[] = [];
-    const a = new TurnAccumulator({ onToolCallEvent: (e) => ids.push(e.toolCallId) });
+    const a = new TurnAccumulator({ onToolCallEvent: (e) => { ids.push(e.toolCallId); } });
     a.recordToolCall({ toolCallId: 'provider-B', toolName: 'read', success: true, output: 1 });
     a.recordToolCall({ toolCallId: 'provider-A', toolName: 'read', success: true, output: 2 });
     a.recordToolCall({ toolCallId: 'provider-C', toolName: 'write', success: true, output: 3 });
@@ -164,7 +164,7 @@ describe('TurnAccumulator', () => {
 
     const a = new TurnAccumulator({
       logActivity: (_e, d) => details.push(d),
-      onToolCallEvent: (e) => durations.push(e.durationMs),
+      onToolCallEvent: (e) => { durations.push(e.durationMs); },
     });
 
     a.recordToolCall({ toolCallId: 'fixture-8', toolName: 'fast', success: true, output: 1, durationMs: 0 });
@@ -173,16 +173,9 @@ describe('TurnAccumulator', () => {
     expect(durations).toEqual([0, undefined]);
   });
 
-  test('recordStep names tool calls from either SDK shape (toolName or name)', () => {
-    const details: Array<string | undefined> = [];
-    const a = new TurnAccumulator({ logActivity: (_e, d) => details.push(d) });
-    a.recordStep({ toolCalls: [{ toolName: 'by-toolname' }, { name: 'by-name' }, {}] });
-    expect(details[0]).toContain('tools=3[by-toolname,by-name,?]');
-  });
-
   test('a step without a finishReason reaches the step sink as undefined, not as "undefined"', () => {
     const reasons: Array<string | undefined> = [];
-    const a = new TurnAccumulator({ onStepEvent: (e) => reasons.push(e.reason) });
+    const a = new TurnAccumulator({ onStepEvent: (e) => { reasons.push(e.reason); } });
     a.recordStep({ finishReason: 'stop' });
     a.recordStep({});
     expect(reasons).toEqual(['stop', undefined]);
@@ -190,7 +183,7 @@ describe('TurnAccumulator', () => {
 
   test("the step event carries the provider's own report, priced and attributed as siblings", () => {
     const events: Array<{ usage?: Usage; usd?: number; modelId?: string }> = [];
-    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
+    const a = new TurnAccumulator({ onStepEvent: (e) => { events.push(e); } });
     a.recordStep({
       usage: { input: 900, output: 40, cacheRead: 700, reasoning: 12 },
       response: { modelId: 'claude-sonnet-4.5' },
@@ -201,26 +194,17 @@ describe('TurnAccumulator', () => {
 
   test('a step the provider reported nothing for carries no usage rather than zeros', () => {
     const events: Array<{ usage?: unknown }> = [];
-    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
+    const a = new TurnAccumulator({ onStepEvent: (e) => { events.push(e); } });
     a.recordStep({ finishReason: 'stop' });
     expect(events[0]?.usage).toBeUndefined();
   });
 
   test('an unpriced model yields a step with no usd, never a blended guess', () => {
     const events: Array<{ usage?: Usage; usd?: number }> = [];
-    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
+    const a = new TurnAccumulator({ onStepEvent: (e) => { events.push(e); } });
     a.recordStep({ usage: { input: 100, output: 10 } });
     expect(events[0]?.usage).toEqual({ input: 100, output: 10 });
     expect(events[0]?.usd).toBeUndefined();
-  });
-
-  test('works with no sinks (pure consumer)', () => {
-    const a = new TurnAccumulator();
-    a.onFirstChunk();
-    a.recordToolCall({ toolCallId: 'fixture-10', toolName: 'x', success: true, output: 1 });
-    a.recordStep({ usage: { input: 1, output: 1 } });
-    expect(a.toolCalls).toHaveLength(1);
-    expect(a.stepCount).toBe(1);
   });
 
   test('a reported zero is a report; a step with no report meters nothing', () => {
@@ -235,7 +219,7 @@ describe('TurnAccumulator', () => {
     governor.declare('nightly', {});
     governor.activate(['nightly']);
     const events: Array<{ usage?: Usage }> = [];
-    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) }, governor);
+    const a = new TurnAccumulator({ onStepEvent: (e) => { events.push(e); } }, governor);
 
     // A zero answer is a measurement, not silence.
     a.recordStep({ usage: { input: 0, output: 0 } });

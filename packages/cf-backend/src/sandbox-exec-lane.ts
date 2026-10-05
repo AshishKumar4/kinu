@@ -4,16 +4,16 @@
  * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
 
-import { jsonResultOrVoid, WORKSPACE_BACKUP_DIR, type OutputSink, type SandboxHandle } from '@kinu.run/core';
-import { attempt, classifyErrorCode, diagnostics, flight, KinuError, renderThrownChain, settle, settleLogged, type ErrorCode } from "@kinu.run/core/obs";
+import { jsonResultOrVoid, SandboxPending, WORKSPACE_BACKUP_DIR, type OutputSink, type SandboxHandle } from '@kinu.run/core';
+import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import { collectExecRecords, devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
-import { Cause, Effect } from 'effect';
+import { Effect } from 'effect';
 import type { KinuDevbox } from "./kinu-devbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
 type ContainerOperations = Pick<KinuDevbox,
-  "execUntimed" | "execUntimedStream" | "killUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles"
+  "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
   | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved" | "resize" | "portListeners" | "answerRest">;
 
@@ -25,9 +25,8 @@ const PREVIEWS_UNPUBLISHABLE =
 const DEVBOX_FAILURE_CODES: Readonly<Record<DevboxErrorCode, ErrorCode>> = {
   io: 'io', configuration: 'unavailable', 'invalid-input': 'bad_input', 'not-ready': 'unavailable',
   cancelled: 'cancelled', missing: 'missing', file: 'io', process: 'io',
-  'start-overrun': 'timeout', 'start-interrupted': 'unavailable', 'container-changed': 'unavailable',
-  'layer-unreadable': 'io', 'chain-advanced': 'io', 'delta-namespace': 'io', 'mount-marker': 'unsupported',
-  refused: 'unavailable',
+  'start-overrun': 'timeout', 'start-interrupted': 'unavailable', 'chain-advanced': 'io', 'mount-marker': 'unsupported',
+  refused: 'unavailable', indeterminate: 'io',
 };
 
 /** A terminal refusal names what its reader can do; the owner's own is on the Environment card (D52). */
@@ -56,55 +55,43 @@ function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
  * output whole. An abort ends its process tree and reports once it is gone; a refused kill is reported as itself,
  * since the process is still running, and a command that finished first is returned as finished.
  */
-function execWithoutDeadline(
+async function execWithoutDeadline(
   handle: Pick<KinuDevbox, "execUntimed" | "execUntimedStream" | "killUntimed">,
   command: string,
-  { cwd, signal, env }: { readonly cwd?: string | undefined; readonly signal?: AbortSignal | undefined; readonly env?: Readonly<Record<string, string>> | undefined },
+  { cwd, signal, env, execId }: {
+    readonly cwd?: string | undefined; readonly signal?: AbortSignal | undefined; readonly env?: Readonly<Record<string, string>> | undefined; readonly execId: string;
+  },
   output: OutputSink | undefined,
 ) {
-  return Effect.suspend(() => {
-    const execId = crypto.randomUUID();
-    const options = { cwd: cwd ?? WORKSPACE_BACKUP_DIR, execId, ...(env !== undefined && { env }) };
+  const options = { cwd: cwd ?? WORKSPACE_BACKUP_DIR, execId, ...(env !== undefined && { env }) };
 
-    const ran = output === undefined
-      ? handle.execUntimed(command, options)
-      : handle.execUntimedStream(command, options).then((stream) => collectExecRecords(stream, (name, data) => { output.write(name, data); }));
+  const ran = output === undefined
+    ? handle.execUntimed(command, options)
+    : handle.execUntimedStream(command, options).then((stream) => collectExecRecords(stream, (name, data) => { output.write(name, data); }));
 
-    let verdict: Promise<boolean> | undefined;
+  // Set only on abort: true means this call ended the process tree, false that the command had already exited.
+  let verdict: Promise<boolean> | undefined;
+  const { promise: killRefused, reject } = Promise.withResolvers<never>();
 
-    // Only a refused kill ends the wait; a granted one leaves `ran` to finish.
-    const killRefused = Effect.callback<void>((resume) => {
-      if (signal === undefined) return;
+  const kill = (): void => {
+    verdict = handle.killUntimed(execId);
+    verdict.catch(reject);
+  };
 
-      if (signal.aborted) {
-        resume(Effect.void);
+  if (signal?.aborted === true) kill();
+  else signal?.addEventListener("abort", kill, { once: true });
 
-        return;
-      }
+  try {
+    const result = await Promise.race([ran, killRefused]);
 
-      const aborted = (): void => { resume(Effect.void); };
+    if (verdict !== undefined && await verdict) {
+      throw new DOMException(`sandbox exec cancelled: its container process tree was ended (exec ${execId})`, "AbortError");
+    }
 
-      signal.addEventListener("abort", aborted, { once: true });
-
-      return Effect.sync(() => { signal.removeEventListener("abort", aborted); });
-    }).pipe(Effect.andThen(Effect.suspend(() => {
-      const killing = handle.killUntimed(execId);
-      verdict = killing;
-
-      return Effect.andThen(Effect.promise(() => killing), Effect.never);
-    })));
-
-    return Effect.gen(function* () {
-      const result = yield* Effect.raceFirst(Effect.promise(() => ran), killRefused);
-      const killing = verdict;
-
-      if (killing !== undefined && (yield* Effect.promise(() => killing))) {
-        return yield* Effect.die(new DOMException(`sandbox exec cancelled: its container process tree was ended (exec ${execId})`, "AbortError"));
-      }
-
-      return result;
-    });
-  });
+    return result;
+  } finally {
+    signal?.removeEventListener("abort", kill);
+  }
 }
 
 /** No conflict queue here: `Devbox` serializes resource conflicts for every caller of the container. */
@@ -127,29 +114,57 @@ export function adaptCloudflareSandbox(
   portsMoved?: () => Promise<void>,
 ): SandboxHandle {
   // Memoized on the promise so concurrent first calls share it; failures are not cached.
-  // One configuration at a time, held once it lands; a failed one is retried.
-  const configured = flight(() => Effect.promise(configure), { keep: 'success' });
+  let inFlight: Promise<void> | null = null;
 
-  const onContainerEffect = <T>(run: Effect.Effect<T>): Effect.Effect<T, KinuError> => Effect.catchCause(Effect.gen(function* () {
-    yield* configured();
-    const readiness = yield* Effect.promise(() => handle.resolveReadiness());
+  const configured = async (): Promise<void> => {
+    if (inFlight !== null) return await inFlight;
+    const configuring = configure();
+    inFlight = configuring;
 
-    if (readiness.kind === 'pending') return yield* new KinuError('unavailable', readiness.reason);
+    try {
+      await configuring;
+    } catch (error) {
+      inFlight = null;
+      throw error;
+    }
+  };
 
-    return yield* run;
-  }), (failed) => Effect.fail(fromDevbox({ cause: Cause.squash(failed) })));
+  const onContainer = <T>(run: () => Promise<T>): Effect.Effect<T, KinuError> => Effect.tryPromise({
+    try: async () => {
+      await configured();
+      const readiness = await handle.resolveReadiness();
 
-  const onContainer = <T>(run: () => Promise<T>): Effect.Effect<T, KinuError> => onContainerEffect(Effect.promise(run));
+      if (readiness.kind === 'pending') throw new SandboxPending(readiness.reason);
+
+      return await run();
+    },
+    catch: (cause) => fromDevbox({ cause }),
+  });
 
 
   return {
     ensureReady: () => settle(onContainer(() => Promise.resolve())),
-    exec: (command, opts) => settle(onContainerEffect(Effect.suspend(() => {
+    // One launch id per call: after a lost reply the same id reads the box's answer, never a second launch.
+    exec: (command, opts) => {
       const signals = [opts?.signal, opts?.timeout === undefined ? undefined : AbortSignal.timeout(opts.timeout)].filter((held) => held !== undefined);
       const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+      const execId = crypto.randomUUID();
+      const ready = onContainer(() => Promise.resolve());
+      const run = callDevbox(() => execWithoutDeadline(handle, command, { cwd: opts?.cwd, signal, env: opts?.env, execId }, opts?.output));
+      // The exec call itself gave no verdict, and nothing cancelled it: it may or may not have reached the box.
+      const lost = (failure: KinuError): boolean => signal?.aborted !== true && failure.code === 'io' && devboxFailure({ cause: failure.cause }) === undefined;
 
-      return execWithoutDeadline(handle, command, { cwd: opts?.cwd, signal, env: opts?.env }, opts?.output);
-    }))),
+      const again = Effect.andThen(ready, run).pipe(Effect.mapError((failure) => (lost(failure)
+        ? new KinuError('io', `the box lost the reply twice, so whether \`${command}\` ran is unknown (exec ${execId}); it was not run again`, { cause: failure })
+        : failure)));
+
+      return settle(Effect.andThen(ready, run.pipe(
+        Effect.catch((failure) => (lost(failure) ? again : Effect.fail(failure))),
+        Effect.ensuring(callDevbox(() => handle.releaseUntimed(execId)).pipe(
+          Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('sandbox.exec_release_failed', failure, { execId }); })),
+        )),
+      )));
+    },
     // Not `onContainer`: a read never starts a container.
     portListeners: (stamp, ports) => settle(callDevbox(() => handle.portListeners(stamp, ports))),
     readFile: (path, opts) => settle(onContainer(() => handle.readFile(path, opts))),
@@ -199,7 +214,15 @@ export function adaptCloudflareSandbox(
 
           if (label === null || label.port !== row.port) return;
 
-          await settleLogged('preview.refresh_failed', { doing: 'refreshing a published sandbox preview', otherwise: 'unavailable' }, () => index.refresh(row.port, label.token), { port: row.port });
+          try {
+            await index.refresh(row.port, label.token);
+          } catch (cause) {
+            diagnostics.failure('preview.refresh_failed', toKinuError({
+              doing: 'refreshing a published sandbox preview',
+              cause,
+              otherwise: 'unavailable',
+            }), { port: row.port });
+          }
         }));
       }
 
@@ -213,10 +236,11 @@ export function adaptCloudflareSandbox(
         processId: row.processId, pid: row.pid, status: row.status,
         command: row.command, restartable: row.restartable,
       })))),
-    resize: (size) => settle(Effect.andThen(
-      Effect.catchCause(configured(), (failed) => Effect.fail(fromDevbox({ cause: Cause.squash(failed) }))),
-      callDevbox(() => handle.resize(size)),
-    )),
+    resize: (size) => settle(callDevbox(async () => {
+      await configured();
+
+      return await handle.resize(size);
+    })),
     // Not `onContainer`: an answer never starts a resting container.
     answerRest: (answer) => settle(callDevbox(() => handle.answerRest(answer))),
     // DO rows only: no egress, no attach wait, since the token must be mintable before its exposure.

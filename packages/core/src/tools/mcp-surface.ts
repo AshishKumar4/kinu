@@ -13,6 +13,7 @@ import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 import { mcpToolKey, suffixedMcpToolKey } from './mcp-naming';
 import { quoteUntrusted } from '../safety/untrusted-text';
+import { sha256Hex } from '../safety/argument-digest';
 
 /** An MCP tool after crossing the RPC seam, with namespacing context for dispatch. */
 export interface SerializableToolDescriptor {
@@ -214,6 +215,19 @@ export function toolSurfaceTokens(surface: ToolSurfacePriceable): number {
   return estimateTokens(JSON.stringify(surface).length);
 }
 
+/** The catalog as admission names and orders it, whatever the budget: a repeated key takes its server's name. */
+export function servedMcpDescriptors(descriptors: readonly SerializableToolDescriptor[]): SerializableToolDescriptor[] {
+  const keyUses = new Map<string, number>();
+
+  for (const descriptor of descriptors) keyUses.set(descriptor.toolKey, (keyUses.get(descriptor.toolKey) ?? 0) + 1);
+
+  return descriptors
+    .map((descriptor) => ((keyUses.get(descriptor.toolKey) ?? 0) > 1
+      ? { ...descriptor, toolKey: suffixedMcpToolKey(descriptor.serverName, descriptor.name) }
+      : descriptor))
+    .sort(byServerThenTool);
+}
+
 /** Deterministic order (server, then tool) keeps the surface's content hash stable. */
 function byServerThenTool(a: SerializableToolDescriptor, b: SerializableToolDescriptor): number {
   if (a.serverName !== b.serverName) return a.serverName < b.serverName ? -1 : 1;
@@ -230,21 +244,12 @@ export interface McpDescriptorAdmission {
 
 /** Admits as much of a remote catalog as the remaining budget carries. Prose gets equal shares of what
  *  remains; schemas are never truncated, so an unfitting descriptor is deferred whole and reported. */
-export function admitMcpDescriptors(
+function admitMcpDescriptors(
   descriptors: readonly SerializableToolDescriptor[],
   budget: McpSurfaceBudget,
 ): McpDescriptorAdmission {
   const total = Math.max(0, stepContextLimit(budget) - budget.nativeToolTokens);
-
-  const keyUses = new Map<string, number>();
-
-  for (const descriptor of descriptors) keyUses.set(descriptor.toolKey, (keyUses.get(descriptor.toolKey) ?? 0) + 1);
-
-  const ordered = descriptors
-    .map((descriptor) => ((keyUses.get(descriptor.toolKey) ?? 0) > 1
-      ? { ...descriptor, toolKey: suffixedMcpToolKey(descriptor.serverName, descriptor.name) }
-      : descriptor))
-    .sort(byServerThenTool);
+  const ordered = servedMcpDescriptors(descriptors);
 
   const admitted: SerializableToolDescriptor[] = [];
   const lost = new Map<string, number>();
@@ -276,6 +281,53 @@ export function admitMcpDescriptors(
   }));
 
   return { admitted, deferred };
+}
+
+/** What a backend's MCP connections serve: descriptors, and the configured servers that produced none. */
+export interface McpServedSurface {
+  readonly descriptors: readonly SerializableToolDescriptor[];
+  readonly unavailable: readonly { server: string; reason: string }[];
+}
+
+/**
+ * The one admission stage, read every turn against that turn's budget. Keyed by a hash of the served descriptors,
+ * never a mutation watermark (watermarks reset on cold start while rows survive); `read` failures propagate.
+ */
+export class McpToolSurfaceCache<Tools> {
+  private key: string | null = null;
+  private built: Tools | null = null;
+  private lastUnavailable: readonly { server: string; reason: string }[] = [];
+  private lastDeferred: McpDescriptorAdmission['deferred'] = [];
+
+  constructor(private readonly build: (descriptors: readonly SerializableToolDescriptor[]) => Promise<Tools>) {}
+
+  /** The servers whose tools the last budget could not carry. */
+  get deferred(): McpDescriptorAdmission['deferred'] {
+    return this.lastDeferred;
+  }
+
+  /** Configured servers, and deferred tools, absent from the last served surface. */
+  get unavailable(): readonly { server: string; reason: string }[] {
+    return this.lastUnavailable;
+  }
+
+  /** Rebuilds only when the admitted set could differ: the key holds the descriptors and every budget input. */
+  async refresh(read: () => Promise<McpServedSurface>, budget: McpSurfaceBudget): Promise<Tools> {
+    const served = await read();
+    const admission = admitMcpDescriptors(served.descriptors, budget);
+
+    const key = `${sha256Hex(JSON.stringify(served.descriptors))}:${String(budget.contextWindow)}`
+      + `:${String(budget.modelOutputLimit)}:${String(budget.nativeToolTokens)}`;
+
+    this.lastUnavailable = [...served.unavailable, ...admission.deferred];
+    this.lastDeferred = admission.deferred;
+
+    if (this.built !== null && key === this.key) return this.built;
+    this.built = await this.build(admission.admitted);
+    this.key = key;
+
+    return this.built;
+  }
 }
 
 /** Schema priced first; description then title get what the share has left. Clipped text is marked. */

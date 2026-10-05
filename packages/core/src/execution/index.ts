@@ -41,7 +41,7 @@ export {
 } from './shell-session';
 
 export {
-  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError,
+  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
   WORKSPACE_BACKUP_DIR, sandboxSizeLabel,
 } from './sandbox';
 

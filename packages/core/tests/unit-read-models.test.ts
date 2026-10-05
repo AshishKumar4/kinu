@@ -647,7 +647,7 @@ describe('executor file plane', () => {
 });
 
 describe('background-job control plane', () => {
-  test('a settled job retries through its stored input on the raw surface', () => {
+  test('a settled job retries through its stored input on the raw surface', async () => {
     const { db, jobs, runner, detached } = jobPlane();
     const seen: JsonValue[] = [];
 
@@ -665,8 +665,8 @@ describe('background-job control plane', () => {
     jobs.create({ id: 'j1', kind: 'search', workMode: 'build', input: JSON.stringify({ q: 'kinu' }), now: 1 });
     jobs.settle('j1', 0, 'old result', 2);
 
-    const retry = retryBackgroundJob({
-      jobs, jobRunner: runner, rawTools: () => tools, logActivity: () => undefined,
+    const retry = await retryBackgroundJob({
+      jobs, jobRunner: runner, rawTools: async () => tools, logActivity: () => undefined,
     }, 'j1');
 
     expect(retry.ok).toBe(true);
@@ -676,22 +676,22 @@ describe('background-job control plane', () => {
     db.close();
   });
 
-  test('retry states the reason it cannot run rather than failing silently', () => {
+  test('retry states the reason it cannot run rather than failing silently', async () => {
     const { db, jobs, runner } = jobPlane();
-    const deps = { jobs, jobRunner: runner, rawTools: (): ToolSet => ({}), logActivity: () => undefined };
+    const deps = { jobs, jobRunner: runner, rawTools: async (): Promise<ToolSet> => ({}), logActivity: () => undefined };
 
-    expect(retryBackgroundJob(deps, 'missing')).toEqual({ ok: false, error: 'job not found' });
+    expect(await retryBackgroundJob(deps, 'missing')).toEqual({ ok: false, error: 'job not found' });
 
     jobs.create({ id: 'running', kind: 'shell', workMode: 'build', input: '{}', now: 1 });
-    expect(retryBackgroundJob(deps, 'running')).toEqual({ ok: false, error: 'job still running' });
+    expect(await retryBackgroundJob(deps, 'running')).toEqual({ ok: false, error: 'job still running' });
 
     jobs.create({ id: 'noinput', kind: 'shell', workMode: 'build', now: 1 });
     jobs.settle('noinput', 0, 'r', 2);
-    expect(retryBackgroundJob(deps, 'noinput')).toEqual({ ok: false, error: 'no stored input to retry' });
+    expect(await retryBackgroundJob(deps, 'noinput')).toEqual({ ok: false, error: 'no stored input to retry' });
 
     jobs.create({ id: 'gone', kind: 'vanished', workMode: 'build', input: '{}', now: 1 });
     jobs.settle('gone', 0, 'r', 2);
-    expect(retryBackgroundJob(deps, 'gone')).toEqual({ ok: false, error: 'tool "vanished" unavailable' });
+    expect(await retryBackgroundJob(deps, 'gone')).toEqual({ ok: false, error: 'tool "vanished" unavailable' });
     db.close();
   });
 

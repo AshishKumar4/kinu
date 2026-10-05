@@ -1,6 +1,6 @@
 /**
  * The subordinate roster (`actor_subordinates`): the parent's record of who works for it.
- * Durable and task-lifetime helpers share the table, distinguished by `lifetime`.
+ * Durable and task-lifetime helpers share the table; the lifetime is the actor's, or its birth's before it exists.
  */
 
 import { Cause, Effect } from 'effect';
@@ -23,14 +23,16 @@ import type { AgentConfigStore } from '../config/store';
 import type { NameOrigin } from '../identity/naming';
 
 const ROSTER_COLUMNS =
-  'actor_id, name, status, current_task, created_at, dismissed_at, lifetime, task_event_id, actor_reference, birth_request, delete_requested';
+  'actor_id, name, status, current_task, created_at, dismissed_at, task_event_id, actor_reference, birth_request, delete_requested';
 
-/** Who made the hire is its actor's `origin`; before birth confirms an actor, the birth's seed carries it. */
+/** Who made the hire, and for how long, are its actor's; before birth confirms an actor, the birth's seed carries them. */
 const ROSTER_PROJECTION =
   'name, COALESCE((SELECT origin FROM workspace_actors WHERE actor_id = json_extract(actor_subordinates.actor_reference, \'$.actorId\')), '
   + 'json_extract(birth_request, \'$.seed.origin\')) AS origin, status, current_task AS currentTask, '
   + 'created_at AS createdAt, dismissed_at AS dismissedAt, '
-  + 'lifetime, task_event_id AS taskEventId, actor_reference AS actorReference, birth_request AS birth, delete_requested AS deleteRequested';
+  + 'COALESCE((SELECT lifetime FROM workspace_actors WHERE actor_id = json_extract(actor_subordinates.actor_reference, \'$.actorId\')), '
+  + 'json_extract(birth_request, \'$.seed.lifetime\')) AS lifetime, '
+  + 'task_event_id AS taskEventId, actor_reference AS actorReference, birth_request AS birth, delete_requested AS deleteRequested';
 
 /** Every column a compensating restore overwrites, except the conflict key. */
 const ROSTER_RESTORE_CONFLICT = `
@@ -39,7 +41,6 @@ const ROSTER_RESTORE_CONFLICT = `
          current_task = excluded.current_task,
          created_at = excluded.created_at,
          dismissed_at = excluded.dismissed_at,
-         lifetime = excluded.lifetime,
          task_event_id = excluded.task_event_id,
          actor_reference = excluded.actor_reference, birth_request = excluded.birth_request, delete_requested = excluded.delete_requested`;
 
@@ -73,8 +74,8 @@ function parseStoredRosterRow(row: SqlExecRow): Effect.Effect<SubordinateRosterE
   }), (failed) => Effect.fail(new KinuError('io', 'Stored subordinate roster data is malformed.', { cause: Cause.squash(failed) })));
 }
 
-/** What a roster write stores; `origin` is read from the actor, never written here. */
-type RosterRow = Omit<SubordinateRosterEntry, 'origin'>;
+/** What a roster write stores; `origin` and `lifetime` are read from the actor, never written here. */
+type RosterRow = Omit<SubordinateRosterEntry, 'origin' | 'lifetime'>;
 
 export interface SubordinateTitle {
   readonly displayName: string;
@@ -113,7 +114,6 @@ export function initSubordinateRosterTable(sql: SqlExec): void {
     current_task  TEXT,
     created_at    INTEGER NOT NULL,
     dismissed_at INTEGER,
-    lifetime      TEXT NOT NULL DEFAULT 'durable' CHECK (lifetime IN ('durable','task')),
     task_event_id TEXT,
     actor_reference TEXT,
     birth_request TEXT, delete_requested INTEGER NOT NULL DEFAULT 0 CHECK (delete_requested IN (0,1)),
@@ -145,14 +145,13 @@ export class SubordinateRosterStore {
   private writeRow(entry: RosterRow, onConflict: string): void {
     this.actor.assertCurrent();
     this.sql.exec(
-      `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
+      `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
       this.actorId,
       entry.name,
       entry.status,
       entry.currentTask,
       entry.createdAt,
       entry.dismissedAt,
-      entry.lifetime,
       entry.taskEventId,
       entry.actorReference === null ? null : JSON.stringify(entry.actorReference),
       entry.birth === null ? null : JSON.stringify(entry.birth), entry.deleteRequested ? 1 : 0,

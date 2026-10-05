@@ -1,6 +1,6 @@
-import { Effect, Cause, type Exit } from 'effect';
 import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction } from "react";
 import { useAgent } from "agents/react";
+import { Effect } from "effect";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
   branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, JobOutputFrameSchema, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE,
@@ -10,7 +10,7 @@ import {
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import { explorationForkTree, stringifyOr } from "@kinu.run/core";
+import { explorationForkTree } from "@kinu.run/core";
 import type {
   MemoryEntry,
   ForkNode,
@@ -28,7 +28,7 @@ import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
 import { looksLikeSecretField, parseMemoryNotes, type InlineSteer } from "@kinu.run/core";
-import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate, settleLogged, settle, detach, hold, recording } from "@kinu.run/core/obs";
+import { detach, diagnostics, KinuError, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -606,7 +606,7 @@ export type SnapshotLoad = "loaded" | "superseded" | { failed: string };
 
 /** A landed snapshot clears its seeded surfaces' failures, except any whose own refresh was
  *  admitted after this load started. The reason is returned; retry cadence is the caller's. */
-export function loadWorkspaceSnapshot(
+export async function loadWorkspaceSnapshot(
   read: (
     isCurrent: () => boolean,
     isSourceCurrent: (source: LiveRefreshSource) => boolean,
@@ -624,8 +624,8 @@ export function loadWorkspaceSnapshot(
   const isSourceCurrent = (source: LiveRefreshSource): boolean =>
     seededReads.get(source)?.() ?? false;
 
-  return settle(Effect.catchCause(Effect.gen(function* () {
-    yield* Effect.promise(() => read(isCurrent, isSourceCurrent));
+  try {
+    await read(isCurrent, isSourceCurrent);
 
     if (!isCurrent()) return "superseded";
     report("snapshot", null);
@@ -633,13 +633,13 @@ export function loadWorkspaceSnapshot(
     for (const [source, stillCurrent] of seededReads) if (stillCurrent()) report(source, null);
 
     return "loaded";
-  }), (cause) => Effect.sync((): SnapshotLoad => {
+  } catch (error) {
     if (!isCurrent()) return "superseded";
-    const failed = errorMessage({ cause: Cause.squash(cause) });
+    const failed = errorMessage({ cause: error });
     report("snapshot", failed);
 
     return { failed };
-  })));
+  }
 }
 
 export interface LiveResourceRead<Value> {
@@ -650,24 +650,21 @@ export interface LiveResourceRead<Value> {
   readonly isCurrent: () => boolean;
 }
 
-/** A live-data task's failure, recorded: nothing awaits the task, and its next run reads again. */
-function recordingLiveFailure(record: (error: KinuError) => void): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
-  return recording({ doing: 'refreshing live workspace data', otherwise: 'io' }, record);
-}
-
-export function refreshLiveResource<Value>(
+export async function refreshLiveResource<Value>(
   { source, read, apply, report, isCurrent }: LiveResourceRead<Value>,
 ): Promise<void> {
-  return settle(Effect.suspend(() => isCurrent() ? Effect.catchCause(Effect.gen(function* () {
-    const value = yield* Effect.promise(read);
+  if (!isCurrent()) return;
+
+  try {
+    const value = await read();
 
     if (!isCurrent()) return;
     apply(value);
     report(source, null);
-  }), (cause) => Effect.sync(() => {
+  } catch (error) {
     if (!isCurrent()) return;
-    report(source, errorMessage({ cause: Cause.squash(cause) }));
-  })) : Effect.void));
+    report(source, errorMessage({ cause: error }));
+  }
 }
 
 export interface UnavailableDevice { id: string; label: string; lastSeenAt: number | null }
@@ -1022,6 +1019,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const {
     messages,
+    setMessages,
     sendMessage,
     regenerate,
     clearHistory,
@@ -1036,6 +1034,31 @@ export function useKinu(target?: string | KinuActorAddress) {
     getInitialMessages: null,
     // Matches the SDK default (cloudflare/agents#2058), pinned so an upstream change cannot move it.
     throttle: 50,
+    onData: (chunk) => {
+      if (chunk.type !== 'data-kinu-step-cut') return;
+      const { stepIndex } = v.parse(v.object({ stepIndex: v.number() }), chunk.data);
+
+      setMessages((current) => {
+        let answer: UIMessage | undefined;
+
+        for (let index = current.length - 1; index >= 0; index -= 1) {
+          const candidate = current[index];
+
+          if (candidate?.role !== 'assistant') continue;
+          answer = candidate;
+          break;
+        }
+
+        if (answer === undefined) return current;
+        let step = 0;
+
+        return current.map((message) => message !== answer ? message : { ...message, parts: message.parts.filter((part) => {
+          if (part.type === 'step-start') step += 1;
+
+          return step < stepIndex;
+        }) });
+      });
+    },
   });
 
   /** The SDK's flag is false during `submitted` (message sent, no token yet); including it keeps
@@ -1062,7 +1085,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     [],
   );
 
-  const chatStreamReports = useRef(new Set<Promise<Exit.Exit<void>>>());
+  const chatStreamReports = useRef(new Set<Promise<void>>());
 
   // Always live: the transport only surfaces this for a request id still in flight.
   useEffect(() => {
@@ -1070,17 +1093,20 @@ export function useKinu(target?: string | KinuActorAddress) {
     setChatError({ body: streamError.message || String(streamError), replayed: false });
     const reports = chatStreamReports.current;
 
-    const report: Promise<Exit.Exit<void>> = hold(Effect.ensuring(Effect.catchCause(Effect.promise(async () => {
-      await reportChatStreamFailure(streamError, subordinate === undefined ? "root" : "actor", {
-        release: await pageDeployedBuildSha(),
-        route: routeTemplateOf(location.pathname),
-      });
-    }), (failed) => Effect.sync(() => {
-      diagnostics.event("client_error.reporter_failed", { reason: renderThrownChain({ cause: Cause.squash(failed) }) });
-    })), Effect.sync(() => {
-      reports.delete(report);
-    })));
+    let report: Promise<void> | null = null;
 
+    report = (async () => {
+      try {
+        await reportChatStreamFailure(streamError, subordinate === undefined ? "root" : "actor", {
+          release: await pageDeployedBuildSha(),
+          route: routeTemplateOf(location.pathname),
+        });
+      } catch (cause) {
+        diagnostics.event("client_error.reporter_failed", { reason: renderThrownChain({ cause }) });
+      } finally {
+        if (report !== null) reports.delete(report);
+      }
+    })();
     reports.add(report);
   }, [streamError, subordinate]);
 
@@ -1116,7 +1142,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const [loadGeneration, setLoadGeneration] = useState(0);
   const failureStreak = useRef(0);
   const snapshotLoadTaskId = useRef(0);
-  const snapshotLoadTasks = useRef(new Map<number, Promise<Exit.Exit<void>>>());
+  const snapshotLoadTasks = useRef(new Map<number, Promise<void>>());
 
   // `agentRef` indirection keeps the recovery callbacks stable across renders.
   const agentRef = useRef(agent);
@@ -1142,7 +1168,13 @@ export function useKinu(target?: string | KinuActorAddress) {
       sessionRecovery.socketOpened(isFirst);
 
       if (!isFirst) {
-        await settleLogged('session.build_check_failed', { doing: 'check the deployed build after reconnect', otherwise: 'io' }, () => refreshDeployedBuild());
+        try {
+          await refreshDeployedBuild();
+        } catch (cause) {
+          diagnostics.failure('session.build_check_failed', toKinuError({
+            doing: 'check the deployed build after reconnect', cause, otherwise: 'io',
+          }));
+        }
       }
     };
 
@@ -1157,20 +1189,16 @@ export function useKinu(target?: string | KinuActorAddress) {
   const rpc = useMemo(() => {
     const call = bindRpc(agent);
 
-    return <T,>(method: string, args: unknown[] = []): Promise<T> => {
-      return settle(Effect.gen(function* () {
-        return yield* Effect.catchCause(Effect.gen(function* () {
-          const value = yield* Effect.promise(async () => call<T>(method, args));
-          sessionRecovery.rpcSucceeded();
+    return async <T,>(method: string, args: unknown[] = []): Promise<T> => {
+      try {
+        const value = await call<T>(method, args);
+        sessionRecovery.rpcSucceeded();
 
-          return value;
-        }), (failed) => Effect.gen(function* () {
-          const cause = Cause.squash(failed);
-          sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN);
-
-          return yield* Effect.failCause(failed);
-        }));
-      }));
+        return value;
+      } catch (cause) {
+        sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN);
+        throw cause;
+      }
     };
   }, [agent, sessionRecovery, loadGeneration]);
 
@@ -1179,7 +1207,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   useEffect(() => {
     if (connectionStatus !== "connected") return;
 
-    const id = setInterval(() => detach(Effect.gen(function* () {
+    const id = setInterval(() => detach(Effect.promise(async () => {
       if (agent.readyState !== WebSocket.OPEN) return;
 
       if (!isSubordinate) {
@@ -1188,13 +1216,13 @@ export function useKinu(target?: string | KinuActorAddress) {
         return;
       }
 
-      // The read the tab already depends on, so a corpse fails the ping and the load identically.
-      yield* Effect.catchCause(Effect.gen(function* () {
-        yield* Effect.promise(() => rpc("getActorSnapshot", [subordinate]));
+      try {
+        // The read the tab already depends on, so a corpse fails the ping and the load identically.
+        await rpc("getActorSnapshot", [subordinate]);
         setSourceError("snapshot", null);
-      }), (cause) => Effect.sync(() => {
-        setSourceError("snapshot", errorMessage({ cause: Cause.squash(cause) }));
-      }));
+      } catch (cause) {
+        setSourceError("snapshot", errorMessage({ cause }));
+      }
     })), 25_000);
 
     return () => clearInterval(id);
@@ -1205,30 +1233,37 @@ export function useKinu(target?: string | KinuActorAddress) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
     const taskId = ++snapshotLoadTaskId.current;
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      try {
+        const outcome = await loadWorkspaceSnapshot(
+          isSubordinate ? loadSubordinateData : loadAllData,
+          setSourceError,
+          (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
+          isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
+        );
 
-    const task = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const outcome = yield* Effect.promise(() => loadWorkspaceSnapshot(
-        isSubordinate ? loadSubordinateData : loadAllData,
-        setSourceError,
-        (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
-        isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
-      ));
+        if (disposed || outcome === "superseded") return;
 
-      if (disposed || outcome === "superseded") return;
+        if (outcome === "loaded") {
+          failureStreak.current = 0;
 
-      if (outcome === "loaded") {
-        failureStreak.current = 0;
+          return;
+        }
 
-        return;
+        const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
+        failureStreak.current += 1;
+        timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
+      } catch (cause) {
+        diagnostics.failure('workspace.initial_snapshot_task_failed', toKinuError({
+          doing: 'refreshing live workspace data',
+          cause,
+          otherwise: 'io',
+        }));
+      } finally {
+        snapshotLoadTasks.current.delete(taskId);
       }
-
-      const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
-      failureStreak.current += 1;
-      timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
-    }), recordingLiveFailure((failure) => diagnostics.failure('workspace.initial_snapshot_task_failed', failure))), Effect.sync(() => {
-      snapshotLoadTasks.current.delete(taskId);
-    })));
-
+    })();
     snapshotLoadTasks.current.set(taskId, task);
 
     return () => {
@@ -1318,7 +1353,15 @@ export function useKinu(target?: string | KinuActorAddress) {
     } finally {
       abandonTurnIfOwner(sendLatch.current, aborting);
 
-      await settleLogged('workspace.abort_refresh_failed', { doing: 'refreshing live workspace data', otherwise: 'io' }, () => refreshBackgroundJobs());
+      try {
+        await refreshBackgroundJobs();
+      } catch (cause) {
+        diagnostics.failure('workspace.abort_refresh_failed', toKinuError({
+          doing: 'refreshing live workspace data',
+          cause,
+          otherwise: 'io',
+        }));
+      }
     }
   }, [stop, rpc, refreshBackgroundJobs]);
 
@@ -1329,7 +1372,11 @@ export function useKinu(target?: string | KinuActorAddress) {
 
     // The server pushes the fact, not the rows; one re-read updates every open tab.
     const reread = async (resource: string, refresh: () => Promise<void>): Promise<void> => {
-      await settleLogged('workspace.live_refresh_failed', { doing: 'refreshing live workspace data', otherwise: 'io' }, () => refresh(), { resource });
+      try {
+        await refresh();
+      } catch (cause) {
+        diagnostics.failure('workspace.live_refresh_failed', toKinuError({ doing: 'refreshing live workspace data', cause, otherwise: 'io' }), { resource });
+      }
     };
 
     const adoptPlan = (plan: PlanReview | null): void => {
@@ -1463,7 +1510,7 @@ export function useKinu(target?: string | KinuActorAddress) {
         }
     };
 
-    const received = (event: Parameters<typeof handler>[0]) => detach(Effect.promise(async () => handler(event)));
+    const received = (event: MessageEvent) => detach(Effect.promise(() => handler(event)));
 
     agent.addEventListener("message", received);
 
@@ -1486,19 +1533,21 @@ export function useKinu(target?: string | KinuActorAddress) {
     isCurrent: liveRefreshAdmission.admit(actorKey, `consentResolution:${consentId}`),
   }), [actorKey, liveRefreshAdmission, rpc, setConsentResolutionError]);
 
-  const refreshExposedPorts = useCallback(() => settle(Effect.gen(function* () {
+  const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
 
-    const results = yield* Effect.forEach(["workspace", "sandbox"], (executor) => Effect.matchCause(
-      Effect.promise(() => rpc<ExposedPortList>("getExposedPorts", [executor])),
-      {
-        onSuccess: (result) => ({ executor, result }) satisfies ExecutorPortRefresh,
-        onFailure: (cause) => ({
+    const results = await Promise.all(["workspace", "sandbox"].map(async (executor) => {
+      try {
+        const result = await rpc<ExposedPortList>("getExposedPorts", [executor]);
+
+        return { executor, result } satisfies ExecutorPortRefresh;
+      } catch (cause) {
+        return {
           executor,
-          result: { ports: [], error: errorMessage({ cause: Cause.squash(cause) }) },
-        }) satisfies ExecutorPortRefresh,
-      },
-    ), { concurrency: 'unbounded' });
+          result: { ports: [], error: errorMessage({ cause }) },
+        } satisfies ExecutorPortRefresh;
+      }
+    }));
 
     if (generation !== exposedPortsRefreshGeneration.current) return;
     setPinnedPorts((previous) => {
@@ -1517,7 +1566,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
       return next.ports;
     });
-  })), [rpc]);
+  }, [rpc]);
 
   const liveReads = useMemo((): Partial<Record<LiveRead, () => Promise<void>>> => ({
     getExposedPorts: refreshExposedPorts,
@@ -1540,17 +1589,24 @@ export function useKinu(target?: string | KinuActorAddress) {
   ]);
 
   const liveRefreshTaskId = useRef(0);
-  const liveRefreshTasks = useRef(new Map<number, Promise<Exit.Exit<void>>>());
+  const liveRefreshTasks = useRef(new Map<number, Promise<void>>());
 
   const rereadLive = useCallback((reads: readonly LiveRead[], also: readonly (() => Promise<void>)[] = []): void => {
     const taskId = ++liveRefreshTaskId.current;
 
-    const task = hold(Effect.ensuring(Effect.catchCause(
-      Effect.asVoid(Effect.promise(() => Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]))),
-      recordingLiveFailure((failure) => diagnostics.failure('workspace.live_refresh_failed', failure)),
-    ), Effect.sync(() => {
-      liveRefreshTasks.current.delete(taskId);
-    })));
+    const task = (async () => {
+      try {
+        await Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]);
+      } catch (cause) {
+        diagnostics.failure('workspace.live_refresh_failed', toKinuError({
+          doing: 'refreshing live workspace data',
+          cause,
+          otherwise: 'io',
+        }));
+      } finally {
+        liveRefreshTasks.current.delete(taskId);
+      }
+    })();
 
     liveRefreshTasks.current.set(taskId, task);
   }, [liveReads]);
@@ -1580,15 +1636,18 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   /** Never edits the claim locally: the server's `turn_claim` frame retires the button, so a refused
    *  recovery still shows as stuck. Resolves the failure reason (also the workspace notice) or null. */
-  const recoverTurn = useCallback((): Promise<string | null> => settle(Effect.gen(function* () {
+  const recoverTurn = useCallback(async (): Promise<string | null> => {
     setSourceError("recover", null);
+    let thrown: { cause: unknown } | null = null;
 
-    const reason = yield* Effect.matchCause(Effect.promise(() => rpc("recoverStrandedTurn", [])), {
-      onSuccess: () => null,
-      onFailure: (cause) => `Recovery failed: ${errorMessage({ cause: Cause.squash(cause) })}`,
-    });
+    try {
+      await rpc("recoverStrandedTurn", []);
+    } catch (cause) {
+      thrown = { cause };
+    }
 
-    if (reason !== null) {
+    if (thrown !== null) {
+      const reason = `Recovery failed: ${errorMessage(thrown)}`;
       setSourceError("recover", reason);
 
       return reason;
@@ -1597,7 +1656,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     refreshLiveData();
 
     return null;
-  })), [refreshLiveData, rpc, setSourceError]);
+  }, [refreshLiveData, rpc, setSourceError]);
 
   const wasStreaming = useRef(false);
   useEffect(() => {
@@ -1656,12 +1715,18 @@ export function useKinu(target?: string | KinuActorAddress) {
     })));
     setTurnClaim(snap.turnClaim);
 
-    await settleLogged('workspace.snapshot_followup_refresh_failed', { doing: 'refreshing live workspace data', otherwise: 'io' }, async () => {
+    try {
       await Promise.all([
         refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshPendingConsents(),
         ...(isSubordinate ? [] : [liveReads.listWorkspaceAgents?.()]),
       ]);
-    });
+    } catch (cause) {
+      diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
+        doing: 'refreshing live workspace data',
+        cause,
+        otherwise: 'io',
+      }));
+    }
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
@@ -1831,33 +1896,41 @@ export function useKinu(target?: string | KinuActorAddress) {
       return;
     }
 
-    // Published only while this query is still the newest.
-    searchTimer.current = setTimeout(() => detach(Effect.catchCause(Effect.gen(function* () {
-      const results = yield* Effect.promise(() => rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q]));
+    searchTimer.current = setTimeout(() => detach(Effect.promise(async () => {
+      // Published only while this query is still the newest.
+      let thrown: { cause: unknown } | null = null;
 
-      if (seq !== searchSeq.current) return;
-      setSourceError("memory", null);
-      setMemory((results ?? []).map(r => ({
-        path: r.path,
-        content: r.snippet,
-        matchScore: r.rrfScore,
-        updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
-        savedBy: null,
-      })));
-    }), (cause) => Effect.sync(() => {
-      if (seq === searchSeq.current) setSourceError("memory", `Memory search failed: ${errorMessage({ cause: Cause.squash(cause) })}`);
-    }))), MEMORY_SEARCH_DEBOUNCE_MS);
+      try {
+        const results = await rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q]);
+
+        if (seq !== searchSeq.current) return;
+        setSourceError("memory", null);
+        setMemory((results ?? []).map(r => ({
+          path: r.path,
+          content: r.snippet,
+          matchScore: r.rrfScore,
+          updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
+          savedBy: null,
+        })));
+      } catch (err) {
+        thrown = { cause: err };
+      }
+
+      if (thrown !== null && seq === searchSeq.current) {
+        setSourceError("memory", `Memory search failed: ${errorMessage(thrown)}`);
+      }
+    })), MEMORY_SEARCH_DEBOUNCE_MS);
   }, [rpc, memoryContent, setSourceError]);
 
   /** Resolves null on success or the failure reason, which is also recorded on `error` after the
    *  picker is rolled back. Callers reporting "Saved" must check the result; it never rejects. */
-  const setModel = useCallback((modelId: string): Promise<string | null> => {
+  const setModel = useCallback(async (modelId: string): Promise<string | null> => {
     setAgentStatus(prev => prev ? { ...prev, model: modelId } : prev);
 
-    return settle(Effect.catchCause(Effect.gen(function* () {
+    try {
       const r = subordinate === undefined
-        ? yield* Effect.promise(() => rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId]))
-        : yield* Effect.promise(() => rpc<{ ok?: boolean; spec?: string }>("setActorModel", [subordinate, modelId]));
+        ? await rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId])
+        : await rpc<{ ok?: boolean; spec?: string }>("setActorModel", [subordinate, modelId]);
 
       // The server may have normalized the spec.
       const spec = r?.spec;
@@ -1866,40 +1939,38 @@ export function useKinu(target?: string | KinuActorAddress) {
       setSourceError("model", null);
 
       return null;
-    }), (failed) => Effect.gen(function* () {
+    } catch (err) {
       // Roll back to the stored spec so the picker never shows an unsaved model.
-      const reason = `Could not switch model: ${errorMessage({ cause: Cause.squash(failed) })}`;
+      let reason = `Could not switch model: ${errorMessage({ cause: err })}`;
 
-      const rollback = yield* Effect.catchCause(Effect.gen(function* () {
+      try {
         const stored = subordinate === undefined
-          ? yield* Effect.promise(() => rpc<{ spec?: string | null }>("getStoredModelSpec", []))
-          : { spec: (yield* Effect.promise(() => rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]))).model.model };
+          ? await rpc<{ spec?: string | null }>("getStoredModelSpec", [])
+          : { spec: (await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate])).model.model };
 
         setAgentStatus(prev => prev ? { ...prev, model: stored.spec ?? '' } : prev);
+      } catch (rollbackErr) {
+        reason += `. Could not re-read the saved model either (${errorMessage({ cause: rollbackErr })}), so the picker may not show the saved model`;
+      }
 
-        return '';
-      }), (rollbackFailed) => Effect.succeed(
-        `. Could not re-read the saved model either (${errorMessage({ cause: Cause.squash(rollbackFailed) })}), so the picker may not show the saved model`,
-      ));
+      setSourceError("model", reason);
 
-      setSourceError("model", reason + rollback);
-
-      return reason + rollback;
-    })));
+      return reason;
+    }
   }, [rpc, setSourceError, subordinate]);
 
   /** Null clears to the tier's. Optimistic, rolled back on refusal. */
-  const setReasoningEffort = useCallback((effort: ReasoningEffort | null): Promise<void> => {
+  const setReasoningEffort = useCallback(async (effort: ReasoningEffort | null): Promise<void> => {
     const before = agentStatus?.reasoningEffort ?? null;
     setAgentStatus((prev) => prev ? { ...prev, reasoningEffort: effort } : prev);
 
-    return settle(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(() => rpc("setReasoningEffort", subordinate === undefined ? [effort] : [effort, subordinate]));
+    try {
+      await rpc("setReasoningEffort", subordinate === undefined ? [effort] : [effort, subordinate]);
       setSourceError("model", null);
-    }), (failed) => Effect.sync(() => {
+    } catch (err) {
       setAgentStatus((prev) => prev ? { ...prev, reasoningEffort: before } : prev);
-      setSourceError("model", `Could not set the thinking level: ${errorMessage({ cause: Cause.squash(failed) })}`);
-    })));
+      setSourceError("model", `Could not set the thinking level: ${errorMessage({ cause: err })}`);
+    }
   }, [rpc, setSourceError, subordinate, agentStatus?.reasoningEffort]);
 
   const setDisplayName = useCallback(async (displayName: string): Promise<string> => {
@@ -2079,7 +2150,8 @@ function errorMessage({ cause }: { cause: unknown }): string {
 
   if (text.success && text.output.trim()) return text.output;
 
-  return stringifyOr({ value: cause }, (reason) => `unrenderable error: ${reason}`) ?? "unknown error";
+  try { return JSON.stringify(cause) || "unknown error"; }
+  catch (error) { return `unrenderable error: ${renderThrownChain({ cause: error })}`; }
 }
 
 function formatNaturalList(values: readonly string[]): string {

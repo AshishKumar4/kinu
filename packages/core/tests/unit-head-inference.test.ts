@@ -5,13 +5,13 @@ import { describe, test, expect } from 'bun:test';
 import { seedTranscriptEntry, createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
 import { actorJobsFor, createTestWorkspace, conversationsFor } from './helpers';
 import { buildHeadToolSet } from '../src/heads/head-tools';
-import type { LanguageModel, ModelMessage } from 'ai';
+import { jsonSchema, tool, type LanguageModel, type ModelMessage } from 'ai';
 import { hostedSeatsOver } from './helpers-actor-host';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
 } from '../src/heads/head-inference';
-import type { Decision, Evidence, HeadInput, SerializedMessage } from '../src/heads/types';
+import type { Decision, Evidence, HeadInput, HeadStep, SerializedMessage } from '../src/heads/types';
 import {
   inheritedContextFromHistory, inheritedContextOmissionNote,
   inheritedContextFromTranscript,
@@ -157,6 +157,38 @@ describe('runHeadInference — report assembly', () => {
     expect(report.summary).toContain('Postgres');     // synthesizeHeadSummary fallback
     expect(report.evidence).toHaveLength(1);
     expect(report.decisions).toHaveLength(1);
+  });
+});
+
+describe('a head step as the node view reads it', () => {
+  // 2026-10-03 (DUPLICATE-PATHS rank 19): a re-projected step dropped a call's failure and renamed the call, so the node
+  // view drew a failed tool spinning under an invented id while the head's own record held both.
+  test('a failed call reads as failed, under the id the model gave it', async () => {
+    let calls = 0;
+
+    const model = scriptedTurnModel({ doGenerate: () => {
+      const first = calls++ === 0;
+
+      return {
+        content: first ? [{ type: 'tool-call', toolCallId: 'probe-1', toolName: 'probe', input: '{}' }] : [{ type: 'text', text: 'done' }],
+        finishReason: { unified: first ? 'tool-calls' : 'stop', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
+        warnings: [],
+      };
+    } });
+
+    const steps: HeadStep[] = [];
+
+    await runHeadInference(headInput({ inheritedContext: [] }), await deps(model, {
+      tools: { probe: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }), execute: async (): Promise<string> => { throw new Error('the probe broke'); } }) },
+      reportStep: (_seq, step) => { steps.push(step); },
+    }));
+
+    // Each step holds its own parts alone: the call in the first, the answer in the second.
+    expect(steps.map((step) => step.parts)).toEqual([
+      [expect.objectContaining({ type: 'tool-probe', toolCallId: 'probe-1', state: 'output-error', errorText: expect.stringContaining('the probe broke') })],
+      [{ type: 'text', text: 'done', state: 'done' }],
+    ]);
   });
 });
 

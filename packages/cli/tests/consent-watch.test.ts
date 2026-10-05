@@ -1,6 +1,6 @@
 // Shared device-consent watcher; each case awaits the poll it needs, so nothing sleeps for a number.
 import { describe, expect, test } from 'bun:test';
-import { Effect } from 'effect';
+
 import type {
   DeviceConsentDecision,
   DeviceConsentSurface,
@@ -274,7 +274,7 @@ describe('what a line-mode consent prompt prints', () => {
       await headless.settled(1);
       denied.stop();
       const terminal = makeSurface([bidi]);
-      const printedOnce = watchTerminalConsents(terminal.surface, 'agent', () => Effect.succeed('n'));
+      const printedOnce = watchTerminalConsents(terminal.surface, 'agent', async () => 'n');
       await terminal.polled(2);
       printedOnce.stop();
     } finally {

@@ -328,7 +328,7 @@ Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovi
 
 | Option | What it does |
 | --- | --- |
-| `--no-auto-evolve` | Turn off evolution after turns and sessions (local workspaces) |
+| `--no-auto-evolve` | Turn this agent's learning setting off: no ratings, lessons, proposals or trials |
 | `--transcript-dir <dir>` | Where to store transcripts |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | Base URL of your own model endpoint (env: KINU_BASE_URL) |
@@ -346,7 +346,7 @@ Run one task without the TUI and exit, for CI and scripts.
 | --- | --- |
 | `-w, --workspace <name>` | Workspace to run (default: the only one configured) |
 | `--json` | Emit line-delimited JSON events |
-| `--no-auto-evolve` | Turn off evolution after turns and sessions (local workspaces) |
+| `--no-auto-evolve` | Turn this agent's learning setting off: no ratings, lessons, proposals or trials |
 | `--transcript-dir <dir>` | Where to store transcripts |
 | `--no-transcript` | Do not record a transcript for this run |
 | `--model <id>` | Model ID (env: KINU_MODEL) |

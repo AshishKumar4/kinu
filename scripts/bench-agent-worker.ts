@@ -60,6 +60,7 @@ async function main(): Promise<void> {
   }
 
   const { rt } = await openWorkspaceCLI(db, input.dbPath, { llm: meteredLLM });
+  rt.actor.config.setLearning(input.autoEvolve);
 
   let steps = 0;
   let hadError = false;
@@ -77,7 +78,6 @@ async function main(): Promise<void> {
         process.stderr.write(`[worker] ${event.message}\n`);
       }
     },
-    noAutoEvolve: !input.autoEvolve,
     cwd: process.cwd(),
   });
 

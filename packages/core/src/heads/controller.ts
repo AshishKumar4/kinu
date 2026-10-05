@@ -688,7 +688,7 @@ ${evList}${artList}`;
   }).join('\n\n');
 
   const scoreGuidance = headScores.length > 0
-    ? '\nEach head carries a grounded outcome score (execution-verified when it left runnable code); weight higher-scoring heads more heavily when they conflict.\n'
+    ? '\nEach head carries a grounded outcome score; only verified means its independent checks completed. Failed and unverified are not passes. Weight stronger evidence more heavily when heads conflict.\n'
     : '';
 
   // Without this the model reads a head's silence as a signal and narrates a cause.

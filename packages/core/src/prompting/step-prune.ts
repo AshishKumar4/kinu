@@ -14,9 +14,9 @@
  */
 
 import type { AssistantModelMessage, ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
+import { renderThrownChain } from '../obs/index';
 import { StableCopies } from './stable-copies';
 import { stepContextLimit, type ModelWindow } from '../context-window';
-import { stringifyOr } from '../utils/json';
 
 /** A quarter of the allocation per pass (a fixed count is a no-op on 1M and clears 32k); never zero. */
 function stepPruneBatchTokens(limits: ModelWindow): number {
@@ -219,7 +219,11 @@ function estimateMessageTokens(message: ModelMessage): number {
 }
 
 function safeStringify(input: { value: unknown }): string {
-  return stringifyOr({ value: input.value, replacer: binaryReplacer }, (reason) => `unserializable step part: ${reason}`) ?? '';
+  try {
+    return JSON.stringify(input.value, binaryReplacer) ?? '';
+  } catch (error) {
+    return `unserializable step part: ${renderThrownChain({ cause: error })}`;
+  }
 }
 
 function jsonLength(input: { value: unknown }): number {

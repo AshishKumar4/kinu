@@ -520,8 +520,9 @@ describe('Live Smoke — one real turn per backend', () => {
 
       const toolNames: string[] = [];
       let errorMessage: string | null = null;
+      rt.actor.config.setLearning(false);
       session = new LocalAgentSession({
-        rt, db, model: liveChatModel(LLM_CONFIG), noAutoEvolve: true, oneShot: true,
+        rt, db, model: liveChatModel(LLM_CONFIG), oneShot: true,
         onEvent: (event: SessionEvent) => {
           if (event.type === 'tool-call') toolNames.push(event.toolName);
 

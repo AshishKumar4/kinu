@@ -10,6 +10,7 @@
  */
 
 import * as v from 'valibot';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { parseJsonValue } from '../utils/json';
 
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -24,8 +25,7 @@ import type {
 } from './types';
 import { DEFAULT_EVOLUTION_CONFIG } from './types';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
-import { Cause, Effect } from 'effect';
-import { settle, tolerate, settleLogged } from '../obs/index';
+import { tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
@@ -152,8 +152,10 @@ export class EvolutionEngine {
   /** The crafted-tool ledger the step clock writes through, so both timescales
      *  score crafted tools through one table. */
   readonly craftLedger: CraftLedger;
-  readonly recordsTurns: boolean;
+  /** A head or node the workspace does not evolve records nothing, whatever the setting. */
+  private readonly evolves: boolean;
   private recoveryPending = true;
+  private readonly learningScope = new AsyncLocalStorage<boolean>();
 
   constructor(
     rt: AgentRuntime, history: SessionHistory, config: Partial<EvolutionConfig> = {},
@@ -167,7 +169,7 @@ export class EvolutionEngine {
       SELECT evolves FROM workspace_actors WHERE actor_id = ${rt.actor.actorId}`[0];
 
     if (actor === undefined) throw new KinuError('missing', 'the evolution actor has no membership record');
-    this.recordsTurns = this.config.enabled && actor.evolves === 1;
+    this.evolves = actor.evolves === 1;
     // Opened on first use: an engine with evolution off never scores a crafted tool, and an agent in its own
     // isolate has no crafted-tool store (they are the workspace's).
     let ledger: CraftLedger | undefined;
@@ -228,8 +230,17 @@ export class EvolutionEngine {
     (this.config.transaction ?? ((run: () => void) => { run(); }))(body);
   }
 
+  /** A turn and the async work it starts keep one gate; independent work reads the live setting. */
+  withTurnLearning<Result>(body: () => Result): Result {
+    return this.learningScope.run(this.config.enabled && this.agentConfig.getLearning(), body);
+  }
+
   get enabled(): boolean {
-    return this.config.enabled;
+    return this.config.enabled && (this.learningScope.getStore() ?? this.agentConfig.getLearning());
+  }
+
+  get recordsTurns(): boolean {
+    return this.evolves && this.enabled;
   }
 
   onEvent(listener: EvolutionListener): void {
@@ -252,7 +263,7 @@ export class EvolutionEngine {
      * One lessons row, no model call. Bound to no turn, so it stays provisional forever.
      */
   recordRecovery(finding: RecoveryFinding): void {
-    if (!this.config.enabled) return;
+    if (!this.enabled) return;
 
     if (!recordRecoveryFinding(this.rt.storage.sql, this.rt.actor, finding)) return;
     this.emit({
@@ -335,7 +346,7 @@ export class EvolutionEngine {
      * turn. Either wins over the decision model's reading; trivial turns are not reviewed.
      */
   async reviewTurn(turn: CompletedTurn, followup: string | null): Promise<void> {
-    if (!this.config.enabled || isTrivialTurn(turn)) return;
+    if (!this.enabled || isTrivialTurn(turn)) return;
 
     // Keyed on the turn so a retry after eviction or a later refusal does not repeat the rating writes.
     const gradedKey = turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
@@ -457,7 +468,7 @@ export class EvolutionEngine {
    * refusal throws, for the ledger to retry or park. A turn with no id has none to key them by.
    */
   async learnFromTurn(completed: CompletedTurn): Promise<void> {
-    if (!this.config.enabled || completed.turnId === undefined || completed.turnId === '' || !owesTurnLessons(completed)) return;
+    if (!this.enabled || completed.turnId === undefined || completed.turnId === '' || !owesTurnLessons(completed)) return;
     const turn = { ...completed, turnId: completed.turnId };
     const { sql } = this.rt.storage;
     const { actor } = this.rt;
@@ -498,7 +509,7 @@ export class EvolutionEngine {
     followup: string | null,
     opts?: { storedRowId?: string },
   ): EnqueueOutcome {
-    if (!this.config.enabled) return 'queued';
+    if (!this.enabled) return 'queued';
     const outcome = this.sessionWindow.enqueueReview(turn, followup, opts);
 
     if (outcome !== 'queued') {
@@ -534,45 +545,40 @@ export class EvolutionEngine {
      * turn being opened. A row is retired only once its review ran. Undecodable rows
      * and missions over cap come back in `refused` with their disposition.
      */
-  runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (!this.config.enabled) return { reviewed: 0, refused: [] };
-      this.recoverInterruptedWork();
-      const taken = this.sessionWindow.takeQueuedReviews(MAX_TURN_REVIEWS_PER_OPEN);
-      const refused: RefusedTurnReview[] = [...taken.refused];
-      let reviewed = 0;
+  async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
+    if (!this.enabled) return { reviewed: 0, refused: [] };
+    this.recoverInterruptedWork();
+    const taken = this.sessionWindow.takeQueuedReviews(MAX_TURN_REVIEWS_PER_OPEN);
+    const refused: RefusedTurnReview[] = [...taken.refused];
+    let reviewed = 0;
 
-      for (const row of taken.reviews) {
-        const ran = yield* Effect.catchCause(Effect.as(Effect.promise(() => this.reviewTurn(row.turn, row.followup)), true), (failed) => Effect.sync(() => {
-          const err = Cause.squash(failed);
+    for (const row of taken.reviews) {
+      try {
+        await this.reviewTurn(row.turn, row.followup);
+      } catch (err) {
+        // A governor refusal is a decision: the row goes back unchanged. Any other throw
+        // also releases it untombstoned.
+        if (err instanceof MissionBudgetExhausted) {
+          refused.push({ id: row.id, reason: 'budget' });
+        } else {
+          diagnostics.failure(
+            'evolution.deferred_review_failed',
+            toKinuError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
+            { reviewId: row.id },
+          );
+        }
 
-          // A governor refusal is a decision: the row goes back unchanged. Any other throw
-          // also releases it untombstoned.
-          if (err instanceof MissionBudgetExhausted) {
-            refused.push({ id: row.id, reason: 'budget' });
-          } else {
-            diagnostics.failure(
-              'evolution.deferred_review_failed',
-              toKinuError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
-              { reviewId: row.id },
-            );
-          }
-
-          this.sessionWindow.releaseQueuedReview(row.id);
-
-          return false;
-        }));
-
-        if (!ran) continue;
-
-        // Before the lease settles, leaving a one-step crash window.
-        this.sessionWindow.recordReviewRan(row.id);
-        this.sessionWindow.settleReview(row.id);
-        reviewed++;
+        this.sessionWindow.releaseQueuedReview(row.id);
+        continue;
       }
 
-      return { reviewed, refused };
-    }));
+      // Before the lease settles, leaving a one-step crash window.
+      this.sessionWindow.recordReviewRan(row.id);
+      this.sessionWindow.settleReview(row.id);
+      reviewed++;
+    }
+
+    return { reviewed, refused };
   }
 
   /**
@@ -648,7 +654,7 @@ export class EvolutionEngine {
      * window carries negative signal.
      */
   async onSessionComplete(session: CompletedSession): Promise<void> {
-    if (!this.config.enabled) return;
+    if (!this.enabled) return;
 
     const windowsClosed = this.agentConfig.countClosedTurnWindow();
 
@@ -669,12 +675,12 @@ export class EvolutionEngine {
      * has trials on, then, with no trial running, one proposer search if a trigger holds. Never rejects: each step's
      * rows are durable, so a failure is said and the next pass resumes.
      */
-  runDueEvolution(): Promise<void> {
-    if (!this.recordsTurns || this.rt.actor.parentActorId !== null) return Promise.resolve();
+  async runDueEvolution(): Promise<void> {
+    if (!this.recordsTurns || this.rt.actor.parentActorId !== null) return;
     const { sql } = this.rt.storage;
     const { actor } = this.rt;
 
-    return settleLogged('evolution.proposer_failed', { doing: 'run the evolution pass', otherwise: 'unavailable' }, async () => {
+    try {
       advanceTrial(sql, actor);
 
       if (this.agentConfig.getLiveTrials()) startTrial(sql, actor);
@@ -685,7 +691,9 @@ export class EvolutionEngine {
       if (outcome.kind === 'searched') {
         this.emit({ type: 'reflection', message: `Proposer searched ${outcome.artifactId}: ${outcome.detail}` });
       }
-    });
+    } catch (err) {
+      diagnostics.failure('evolution.proposer_failed', toKinuError({ doing: 'run the evolution pass', cause: err, otherwise: 'unavailable' }));
+    }
   }
 
   private emitChangelogDigest(since: number): void {

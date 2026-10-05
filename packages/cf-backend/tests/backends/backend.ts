@@ -196,8 +196,10 @@ function cli(): SharedBackend {
   rt.checkpoints = checkpoints;
   const modelResolver = scriptedResolver();
 
+  rt.actor.config.setLearning(false);
+
   const session = new LocalAgentSession({
-    rt, db, model: DONE_MODEL, modelResolver, noAutoEvolve: true, onEvent: () => {},
+    rt, db, model: DONE_MODEL, modelResolver, onEvent: () => {},
   });
 
   return {

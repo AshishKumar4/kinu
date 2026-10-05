@@ -57,7 +57,8 @@ describe('tool_call_end', () => {
     const db = new Database(scratchPath('tool-duration-row', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
-    const session = new LocalAgentSession({ rt, db, model: searchingModel(), noAutoEvolve: true, onEvent: () => {} });
+    rt.actor.config.setLearning(false);
+    const session = new LocalAgentSession({ rt, db, model: searchingModel(), onEvent: () => {} });
 
     await session.send('What do you remember?', { id: crypto.randomUUID() });
     await session.end();

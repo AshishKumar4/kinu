@@ -686,7 +686,7 @@ describe('team action routing', () => {
   test('assign and message refuse a task-lifetime row before trying anything', async () => {
     const h = makeTeamHarness();
     // A task agent answers its one brief and retires; more work belongs to a durable hire.
-    h.roster.create({ name: 'ask-auditor-a1b2c3', actorReference: null, birth: { creationId: 'c-auditor', seed: { name: 'ask-auditor-a1b2c3', displayName: 'Auditor', nameOrigin: 'auto', role: 'auditor', mission: 'Is the migration reversible?', lifetime: 'task', origin: 'agent' }, assignment: null }, deleteRequested: false, status: 'working', currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
+    h.roster.create({ name: 'ask-auditor-a1b2c3', actorReference: null, birth: { creationId: 'c-auditor', seed: { name: 'ask-auditor-a1b2c3', displayName: 'Auditor', nameOrigin: 'auto', role: 'auditor', mission: 'Is the migration reversible?', lifetime: 'task', origin: 'agent' }, assignment: null }, deleteRequested: false, status: 'working', currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000, dismissedAt: null, taskEventId: 'evt-1' });
     const before = h.roster.get('ask-auditor-a1b2c3');
 
     const attempts: Array<() => Promise<object>> = [

@@ -137,7 +137,7 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
 
 /** What a turn tells its trial while it waits: how many steps its runs have recorded (a stream that dropped shows no
  *  more, and the ledger does), and through `watching` the jobs it waits on. */
-type TurnHooks = { readonly stepped: (steps: number) => void; readonly watching: WatchOptions };
+export type TurnHooks = { readonly stepped: (steps: number) => void; readonly watching: WatchOptions };
 
 /** Where a trial records what stopped it early, and how long the turn it stopped had run. */
 type StopRecord = { readonly turns: EvalTurnResult[]; readonly errors: HarnessError[]; readonly turnWallMs: number };
@@ -165,7 +165,7 @@ function recordStop(thrown: { readonly cause: unknown }, { turns, errors, turnWa
 }
 
 /** One turn: its seeded files, the prompt, the wait until the workspace settles, and the checks. */
-async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, { stepped, watching }: TurnHooks): Promise<EvalTurnResult> {
+export async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, { stepped, watching }: TurnHooks): Promise<EvalTurnResult> {
   if (turn.fresh) {
     await timeline.span('evict', async () => {
       await session.abortActivation();

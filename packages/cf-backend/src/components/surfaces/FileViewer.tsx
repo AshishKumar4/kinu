@@ -1,15 +1,14 @@
 /** Text rides the viewer RPC; images, PDFs and saves (PUT) ride the raw-bytes route. */
-import { Effect, Cause } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
 import {
   CheckIcon, DownloadSimpleIcon, FileIcon, PencilSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
-import { renderThrownChain, detach } from "@kinu.run/core/obs";
+import { renderThrownChain } from "@kinu.run/core/obs";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { MarkdownContent, CodeBlock } from "./shared";
 import {
-  FileWriteConflict, fileTextEditable, readMarkdownFrontmatter, putFileBytes, sandboxedHtml, textRenderOf,
+  FileWriteConflict, fileTextEditable, MarkdownFrontmatterError, parseMarkdownFrontmatter, putFileBytes, sandboxedHtml, textRenderOf,
   viewerKindOf, type FileText, type TextRender,
 } from "@kinu.run/core";
 
@@ -56,20 +55,18 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
     setAsSource(false);
   }, [path]);
 
-  const save = useCallback((text: string) => detach(Effect.gen(function* () {
+  const save = useCallback(async (text: string) => {
     if (file?.revision === undefined) return;
     setSaving(true);
     setSaveError(null);
     setConflict(false);
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => putFileBytes(rawHref, text, file.revision));
+    try {
+      await putFileBytes(rawHref, text, file.revision);
       setDraft(null);
       reload();
       onSaved?.();
-    }), (failed) => Effect.sync(() => {
-      const error = Cause.squash(failed);
-
+    } catch (error) {
       if (error instanceof FileWriteConflict) {
         setConflict(true);
         // Keep `draft`: a peer won the CAS, not this editor's text.
@@ -77,10 +74,10 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
       } else {
         setSaveError(renderThrownChain({ cause: error }));
       }
-    })), Effect.sync(() => {
+    } finally {
       setSaving(false);
-    }));
-  })), [file?.revision, onSaved, rawHref, reload]);
+    }
+  }, [file?.revision, onSaved, rawHref, reload]);
 
   const content = file?.content ?? "";
   const editable = kind === "text" && fileTextEditable(file);
@@ -109,7 +106,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
             )
           ) : (
             <>
-              <button data-files-save disabled={saving} onClick={() => save(draft)}
+              <button data-files-save disabled={saving} onClick={() => void save(draft)}
                 className="flex items-center gap-1 p-t-control p-accent hover:underline p-1 disabled:opacity-50"
                 title={`Save ${name}`}>
                 <CheckIcon size={12} />{saving ? "Saving…" : "Save"}
@@ -179,9 +176,16 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
 }
 
 function frontmatterAsCode(markdown: string): string {
-  const body = readMarkdownFrontmatter(markdown)?.body;
+  let body: string;
 
-  if (body === undefined || body.length === markdown.length) return markdown;
+  try {
+    body = parseMarkdownFrontmatter(markdown).body;
+  } catch (caught) {
+    if (caught instanceof MarkdownFrontmatterError) return markdown;
+    throw caught;
+  }
+
+  if (body.length === markdown.length) return markdown;
   const head = markdown.slice(0, markdown.length - body.length);
 
   return `\`\`\`yaml\n${head.slice(head.indexOf("\n") + 1, head.lastIndexOf("\n---"))}\n\`\`\`\n\n${body}`;

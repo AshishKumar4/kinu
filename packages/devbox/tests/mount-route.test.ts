@@ -3,8 +3,7 @@ import { createHash } from 'node:crypto';
 import { Files } from '@cloudflare/sandbox';
 import { ContainerRoutes } from '../src/gateway';
 import { classifyRecovery } from '../src/lifecycle';
-import { storeRouteHost } from '../src/snapshot-chain';
-import { storeSource } from '../src/store-gateway';
+import { storeRouteHost, storeSource } from '../src/store-gateway';
 import { chainBox, type ChainBox, type ChainTestBox } from './support/chain-box';
 import { Devbox, harness, type FakeSandbox } from './support/devbox-harness';
 import type { StoredValue } from '../src/storage';
@@ -29,8 +28,8 @@ async function refused(marker?: GuestMarker, arrange?: (container: FakeSandbox) 
   const unexpected = (): never => { throw new Error('a refused registration must not install routing'); };
 
   const routes = new ContainerRoutes({
-    container: container.handle(), files: new Files(container.handle()), prefix, owner: { binding: 'Box', id: 'owner' }, internet: false,
-    bindings: { DevboxStoreGateway: unexpected, DevboxSyncGateway: unexpected, DevboxOutbound: unexpected },
+    container: container.handle(), files: new Files(container.handle()), prefix, internet: false,
+    bindings: { DevboxStoreGateway: unexpected, DevboxOutbound: unexpected },
   });
 
   try {
@@ -103,14 +102,13 @@ test('the SDK marker of a root mount rebinds its route, rooted at this box\'s pr
   const unreached = (): never => { throw new Error('a store route must not be called while it is installed'); };
 
   const routes = new ContainerRoutes({
-    container: container.handle(), files: new Files(container.handle()), prefix, owner: { binding: 'Box', id: 'owner' }, internet: false,
+    container: container.handle(), files: new Files(container.handle()), prefix, internet: false,
     bindings: {
       DevboxStoreGateway: ({ props }) => {
         stores.push(props);
 
         return { fetch: unreached, connect: unreached };
       },
-      DevboxSyncGateway: () => ({ fetch: unreached, connect: unreached }),
       DevboxOutbound: ({ props }) => {
         installed.push(Object.keys(props.routes).sort());
 

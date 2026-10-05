@@ -1,5 +1,7 @@
 [
   "handler_absorbs/wire packages/core/src/plans/plan-annotation-save.ts#enqueue",
   "logged_default/wire packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#annotationSaves",
+  "logged_default/wire packages/cf-backend/src/hooks/use-kinu.ts#refreshLiveResource",
+  "logged_default/wire packages/core/src/jobs/runner.ts#failUnsettled",
   "message_only/other packages/agent-utils/src/vfs/addressing.ts#vfsAddressingHint"
 ]

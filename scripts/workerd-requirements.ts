@@ -1,5 +1,5 @@
 import type { ObjectPattern } from 'oxc-parser';
-import { moduleEdges } from './import-graph';
+import { moduleEdges } from './module-edges';
 import { collapsePath, IMPORT_CANDIDATES, importUses, literalString, NAMESPACE, parse, type SyntaxNode } from './syntax';
 
 function memberName(node: SyntaxNode): string | undefined {

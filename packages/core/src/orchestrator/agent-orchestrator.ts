@@ -49,6 +49,7 @@ export interface AgentOrchestratorDeps {
   engine: Pick<
     EvolutionEngine,
     | 'enabled'
+    | 'withTurnLearning'
     | 'recordsTurns'
     | 'recoverInterruptedWork'
     | 'sessionWindow'
@@ -161,6 +162,10 @@ export class AgentOrchestrator {
     this.observeRecoveries = evolutionEnabled;
     this.inbox.beginTurn(continuation, readSignalId(metadata));
     this.deps.budget?.activate(this.activeMissions);
+  }
+
+  withTurnLearning<Result>(body: () => Result): Result {
+    return this.deps.engine.withTurnLearning(body);
   }
 
   /** Restrict a Build turn to plan after accounting opens: closes improvement lanes without resetting accounting. */

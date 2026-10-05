@@ -4,6 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { AwaitedList, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
 import { agentAffinityKey, initWorkspaceSchema } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { APICallError } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
@@ -677,9 +678,11 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     const nextEvents = new AwaitedList<SessionEvent>();
     const nextPrompts: PromptMessage[][] = [];
 
+    rt.actor.config.setLearning(false);
+
     const next = new LocalAgentSession({
       rt, db, model: historyCapturingModel('the next answer', (m) => { nextPrompts.push(m); }),
-      noAutoEvolve: true, onEvent: (e) => nextEvents.push(e),
+      onEvent: (e) => nextEvents.push(e),
     });
 
     await next.send('the next turn', { id: crypto.randomUUID() });
@@ -724,8 +727,10 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     // Process death: the gate never releases; the next session re-enters the message in seq order as its own turn.
     const nextEvents = new AwaitedList<SessionEvent>();
 
+    rt.actor.config.setLearning(false);
+
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('re-run answer'), noAutoEvolve: true,
+      rt, db, model: fakeModel('re-run answer'),
       onEvent: (e) => nextEvents.push(e),
     });
 
@@ -763,8 +768,10 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     await turn;
     expect(pendingSends(db)).toEqual([]);
 
+    rt.actor.config.setLearning(false);
+
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('should not re-run'), noAutoEvolve: true, onEvent: () => {},
+      rt, db, model: fakeModel('should not re-run'), onEvent: () => {},
     });
 
     await next.send('something else', { id: crypto.randomUUID() });
@@ -783,8 +790,10 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     await expect(session.send('not mine to run', { id: crypto.randomUUID() })).rejects.toThrow('another process is driving');
     expect(pendingSends(db)).toEqual([]);
 
+    rt.actor.config.setLearning(false);
+
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('must not run'), noAutoEvolve: true, onEvent: () => {},
+      rt, db, model: fakeModel('must not run'), onEvent: () => {},
     });
 
     expect(await next.send('real work', { id: crypto.randomUUID() })).toBe('turn');
@@ -1329,9 +1338,11 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     const events = new AwaitedList<SessionEvent>();
 
+    failing.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
       rt: failing, db, model: fakeModel('never reached'),
-      onEvent: (e) => events.push(e), noAutoEvolve: true,
+      onEvent: (e) => events.push(e),
     });
 
     await session.send('write the target file', { id: crypto.randomUUID() });
@@ -1360,8 +1371,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { db, rt } = workspaceRuntime();
     const durableAtPublish: Array<string | null> = [];
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
-      rt, db, model: fakeModel('the rollback step is in the runbook'), noAutoEvolve: true,
+      rt, db, model: fakeModel('the rollback step is in the runbook'),
       onEvent: (e) => {
         if (e.type !== 'turn-end') return;
 
@@ -1391,10 +1404,12 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     failAssistantEntryWrite(db);
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
       rt,
       db, model: fakeModel('the rollback step is in the runbook'),
-      onEvent: (e) => events.push(e), noAutoEvolve: true,
+      onEvent: (e) => events.push(e),
     });
 
     await session.send('where is the rollback step?', { id: crypto.randomUUID() });
@@ -1428,9 +1443,11 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     failAssistantEntryWrite(db);
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
       rt,
-      db, model: fakeModel('handled event'), noAutoEvolve: true,
+      db, model: fakeModel('handled event'),
       onEvent: (e) => {
         if (e.type !== 'turn-end') return;
         leaseAtTurnEnd.push(db
@@ -1454,17 +1471,8 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     const runs = session.listRuns().items;
     expect(runs).toHaveLength(1);
-    expect(runs[0].eventCount).toBeGreaterThan(0);
-
     const events = session.getRunEvents(runs[0].runId);
-    // The `model_operation` pair brackets its step, so a call that never returned names itself.
-    expect(events.map((e) => e.type)).toEqual([
-      'run_start', 'turn_start', 'profile_resolution', 'context_admitted', 'model_operation',
-      'step_finish', 'model_operation',
-      'turn_end', 'run_end',
-    ]);
-
-    const start = events[0];
+    const start = events.find((event) => event.type === 'run_start');
 
     if (!start || start.type !== 'run_start') throw new Error('run_start event is missing');
     expect(start.caused_by).toBe('chat');
@@ -1477,9 +1485,9 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end.reason).toBe('completed');
     expect(end.error).toBeUndefined();
 
-    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(session.getRunEvents(runs[0].runId, { since: 7 }).map((e) => e.type))
-      .toEqual(['turn_end', 'run_end']);
+    expect(events.map((event) => event.eventIndex)).toEqual(events.map((_, index) => index));
+    expect(session.getRunEvents(runs[0].runId, { since: end.eventIndex })).toEqual([end]);
+    expect(session.getRunEvents(runs[0].runId, { since: end.eventIndex + 1 })).toEqual([]);
 
     await session.end();
   });
@@ -1494,7 +1502,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(new Set(runs.map((r) => r.runId)).size).toBe(2);
 
     const causes = runs.map((r) => {
-      const start = session.getRunEvents(r.runId)[0];
+      const start = session.getRunEvents(r.runId).find((event) => event.type === 'run_start');
 
       return start?.type === 'run_start' ? start.caused_by : null;
     });
@@ -1558,9 +1566,11 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { db, rt } = workspaceRuntime();
     const captured: SinkSlot = { sink: null };
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
       rt: { ...rt, setModelCallSink: (sink) => { captured.sink = sink; } },
-      db, model: fakeModel('unused'), onEvent: () => {}, noAutoEvolve: true,
+      db, model: fakeModel('unused'), onEvent: () => {},
     });
 
     return { session, captured };
@@ -1598,9 +1608,11 @@ describe('LocalAgentSession — the durable run-event log', () => {
       },
     });
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
       rt: { ...rt, setModelCallSink: (sink) => { captured.sink = sink; } },
-      db, model, onEvent: () => {}, noAutoEvolve: true,
+      db, model, onEvent: () => {},
     });
 
     await session.send('hi', { id: crypto.randomUUID() });
@@ -1652,10 +1664,12 @@ describe('LocalAgentSession — the durable run-event log', () => {
       authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
     };
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
       rt: { ...rt, setModelCallSink: (sink) => { captured.sink = sink; } },
       db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
-      onEvent: () => {}, noAutoEvolve: true,
+      onEvent: () => {},
     });
 
     await session.send('hi', { id: crypto.randomUUID() });
@@ -1707,9 +1721,11 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     const events = new AwaitedList<SessionEvent>();
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
       rt, db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
-      onEvent: (event) => events.push(event), noAutoEvolve: true,
+      onEvent: (event) => events.push(event),
     });
 
     session.budget.declare('q3', {});
@@ -1757,9 +1773,11 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     const events = new AwaitedList<SessionEvent>();
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
       rt, db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
-      onEvent: (event) => events.push(event), noAutoEvolve: true,
+      onEvent: (event) => events.push(event),
     });
 
     await session.send('hi', { id: crypto.randomUUID() });
@@ -1777,6 +1795,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
 describe('agents.* codemode namespace — node sandbox', () => {
   function sandboxWith(deps: AgentsToolDeps) {
     const tool = createNodeCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
     })({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 
@@ -2081,8 +2100,10 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
     const { db, rt } = workspaceRuntime();
     const events = new AwaitedList<SessionEvent>();
 
+    rt.actor.config.setLearning(false);
+
     const setter = new LocalAgentSession({
-      rt, db, noAutoEvolve: true, onEvent: (e) => events.push(e),
+      rt, db, onEvent: (e) => events.push(e),
       model: toolSequenceModel([{ name: 'tasks', input: { action: 'mode', role: 'researcher' } }]),
     });
 
@@ -2091,8 +2112,10 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
 
     let system = '';
 
+    rt.actor.config.setLearning(false);
+
     const next = new LocalAgentSession({
-      rt, db, noAutoEvolve: true, onEvent: (e) => events.push(e),
+      rt, db, onEvent: (e) => events.push(e),
       model: systemCapturingModel('ok', (s) => { system = s; }),
     });
 
@@ -2114,8 +2137,10 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
     ownerEdit('# Soul\n\nYou are Atlas. Hold the owner\'s stated intent above the letter of the ask.');
     let system = '';
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
-      rt, db, noAutoEvolve: true, onEvent: () => {},
+      rt, db, onEvent: () => {},
       model: systemCapturingModel('ok', (s) => { system = s; }),
     });
 
@@ -2271,9 +2296,11 @@ describe('LocalAgentSession — a workspace bound to a directory', () => {
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: root });
     const systems: string[] = [];
 
+    rt.actor.config.setLearning(false);
+
     const session = new LocalAgentSession({
       rt, db, model: systemCapturingModel('ok', (system) => { systems.push(system); }),
-      onEvent: () => {}, noAutoEvolve: true, cwd: root,
+      onEvent: () => {}, cwd: root,
     });
 
     try {

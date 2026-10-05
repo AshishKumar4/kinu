@@ -1,4 +1,3 @@
-import { Effect } from 'effect';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The `eval` codemode tool, shared by every CF actor with a runtime. Crafted tools are re-read
@@ -10,7 +9,7 @@ import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool, type ToolSet } from 'ai';
 import { execCallArgs, readDeviceRequestChannel, type ActorHandle, type AgentsToolDeps, type CodemodeSurface, type DeviceRequestChannel, type ExecutionRouter } from "@kinu.run/core";
 import { createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
-import { KinuError, settle } from '@kinu.run/core/obs';
+import { KinuError } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
 } from "./codemode-sandbox";
@@ -27,7 +26,8 @@ export interface CodemodeFactoryOptions {
   agents?: () => AgentsToolDeps;
   extraProviders?: () => CodemodeProvider[];
   onExecutorUsed?: (name: string) => void;
-  reach?: ToolSurfaceNarrowing;
+  /** Which namespaces the turn's role or allowed tools reach: none is bound past it. */
+  reach: ToolSurfaceNarrowing;
 }
 
 export interface CodemodeFactory {
@@ -69,40 +69,39 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
   return {
     async callTool(surface, name, input) {
-      const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, () => settle(Effect.gen({ self: this }, function* () {
+      const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async () => {
         const functions = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.native));
         const entry = Object.hasOwn(functions, name) ? functions[name] : undefined;
 
         if (entry !== undefined) {
-          if (options.reach !== undefined && !options.reach.allowsTool(name)) return yield* new KinuError('denied', `${name} is not within this actor's reach right now`);
+          if (!options.reach.allowsTool(name)) throw new KinuError('denied', `${name} is not within this actor's reach right now`);
 
-          return yield* Effect.promise(async () => entry.execute(input));
+          return entry.execute(input);
         }
 
-        if (name === 'eval' || (options.reach !== undefined && !options.reach.allowsTool(name) && !options.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
-          return yield* new KinuError('denied', `${name} is not within this actor's reach right now`);
+        if (name === 'eval' || (!options.reach.allowsTool(name) && !options.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
+          throw new KinuError('denied', `${name} is not within this actor's reach right now`);
         }
 
         if (!surface.craftedTools().some((tool) => tool.name === name)) {
-          return yield* new KinuError('missing', `tools has no member ${name}`);
+          throw new KinuError('missing', `tools has no member ${name}`);
         }
 
         const execute = this.toolFor(surface).execute;
 
-        if (execute === undefined) return yield* new KinuError('unavailable', 'The codemode executor is not callable');
+        if (execute === undefined) throw new KinuError('unavailable', 'The codemode executor is not callable');
 
-        const result = v.parse(v.object({ result: v.optional(JsonValueSchema) }), yield* Effect.promise(async () => execute({
+        const result = v.parse(v.object({ result: v.optional(JsonValueSchema) }), await execute({
           code: `return await tools[${JSON.stringify(name)}](${JSON.stringify(input)});`,
-        }, { toolCallId: `slate-${crypto.randomUUID()}`, messages: [] })));
+        }, { toolCallId: `slate-${crypto.randomUUID()}`, messages: [] }));
 
         return result.result;
-      })));
+      });
 
       return call(input);
     },
     toolFor(surface) {
-      const reach = (tools: ToolSet): ToolSet => options.reach === undefined ? tools
-        : Object.fromEntries(Object.entries(tools).filter(([name]) => options.reach?.allowsTool(name)));
+      const reach = (tools: ToolSet): ToolSet => Object.fromEntries(Object.entries(tools).filter(([name]) => options.reach.allowsTool(name)));
 
       const reachable = reach(surface.native);
 
@@ -124,7 +123,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
         if (options.extraProviders) providers.push(...options.extraProviders());
         providers.push(webProvider, ...executorProviders);
-        const bound = providersInWorkMode(mode, options.reach?.narrowProviders(providers) ?? providers);
+        const bound = providersInWorkMode(mode, options.reach.narrowProviders(providers));
 
         const built = createCodeTool({
           // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.
@@ -166,25 +165,23 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       return withCraftedToolDeclarations(permitInPlan({
         ...unrestricted,
         execute: (input, context) => {
-          return settle(Effect.gen(function* () {
-            const selected = currentWorkMode() === 'plan' ? (planning ??= build('plan')) : unrestricted;
-            const execute = selected.execute;
+          const selected = currentWorkMode() === 'plan' ? (planning ??= build('plan')) : unrestricted;
+          const execute = selected.execute;
 
-            if (execute === undefined) return yield* Effect.die(new Error('Codemode executor is not callable'));
-            const channel = readDeviceRequestChannel({ toolOptions: context });
+          if (execute === undefined) throw new Error('Codemode executor is not callable');
+          const channel = readDeviceRequestChannel({ toolOptions: context });
 
-            return yield* Effect.promise(() => withCodemodeProgram(async () => {
-              const outer = deviceRequests;
+          return withCodemodeProgram(async () => {
+            const outer = deviceRequests;
 
-              if (channel !== undefined) deviceRequests = channel;
+            if (channel !== undefined) deviceRequests = channel;
 
-              try {
-                return v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), await execute(input, context));
-              } finally {
-                deviceRequests = outer;
-              }
-            }));
-          }));
+            try {
+              return v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), await execute(input, context));
+            } finally {
+              deviceRequests = outer;
+            }
+          });
         },
       }), surface.craftedTools);
     },

@@ -11,6 +11,8 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { sha256Hex } from '../safety/argument-digest';
 import type { ExecOutcome } from '../execution/exec-result';
+import { verificationToken, verificationReceipt, verifiedPayload } from '../execution/verification';
+import { hmacSha256Signer } from '../utils/crypto';
 import type { MeasurementContext } from './objective';
 import { Effect } from 'effect';
 import { diagnostics, renderThrownChain, settle, toKinuError, tolerateAsync } from '../obs/index';
@@ -39,6 +41,57 @@ const DEADLINE_MS = 10_000;
  * not `Math.random`: both arms of a paired comparison must see a bit-identical instance.
  */
 const HARNESS_PROLOGUE = `
+const verifierNow = process.hrtime.bigint;
+
+// The verifier shares the candidate's realm, so lock its intrinsics before importing the candidate.
+function lockRealm() {
+  const seen = new Set();
+  function freeze(value) {
+    if (value === null || (typeof value !== 'object' && typeof value !== 'function') || seen.has(value)) return;
+    seen.add(value);
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      freeze(descriptor.value);
+      freeze(descriptor.get);
+      freeze(descriptor.set);
+    }
+    freeze(Object.getPrototypeOf(value));
+    Object.freeze(value);
+  }
+  const globals = [
+    'Object', 'Function', 'Array', 'Number', 'Boolean', 'String', 'Symbol', 'BigInt',
+    'Math', 'JSON', 'Reflect', 'Proxy', 'Promise', 'Date', 'RegExp',
+    'Map', 'Set', 'WeakMap', 'WeakSet', 'WeakRef', 'FinalizationRegistry',
+    'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Atomics',
+    'Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array',
+    'Int32Array', 'Uint32Array', 'Float16Array', 'Float32Array', 'Float64Array',
+    'BigInt64Array', 'BigUint64Array',
+    'Error', 'AggregateError', 'EvalError', 'RangeError', 'ReferenceError',
+    'SyntaxError', 'TypeError', 'URIError', 'SuppressedError',
+    'Iterator', 'DisposableStack', 'AsyncDisposableStack', 'Intl', 'Temporal',
+    'eval', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
+    'decodeURI', 'decodeURIComponent', 'encodeURI', 'encodeURIComponent', 'escape', 'unescape',
+    'Infinity', 'NaN', 'undefined',
+  ];
+  const syntax = [
+    Object.getPrototypeOf([][Symbol.iterator]()),
+    Object.getPrototypeOf(new Map()[Symbol.iterator]()),
+    Object.getPrototypeOf(new Set()[Symbol.iterator]()),
+    Object.getPrototypeOf(''[Symbol.iterator]()),
+    Object.getPrototypeOf(''.matchAll(/(?:)/g)),
+    Object.getPrototypeOf(function* () {}),
+    Object.getPrototypeOf(async function () {}),
+    Object.getPrototypeOf(async function* () {}),
+  ];
+  for (const intrinsic of syntax) freeze(intrinsic);
+  for (const name of globals) {
+    if (!Object.getOwnPropertyDescriptor(globalThis, name)) continue;
+    const value = globalThis[name];
+    freeze(value);
+    Object.defineProperty(globalThis, name, { value, writable: false, configurable: false });
+  }
+}
+
 function mulberry32(a) {
   return function () {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -85,15 +138,15 @@ function meter(fn) {
  *  candidate, which is not. */
 function measure(fn, input, oracle, limit) {
   OPS = 0; LIMIT = limit; UNTIL = Date.now() + P.deadlineMs;
-  const t0 = process.hrtime.bigint();
+  const t0 = verifierNow();
   try {
     const out = fn(input, oracle);
-    return { out, err: null, ops: OPS, ms: Number(process.hrtime.bigint() - t0) / 1e6 };
+    return { out, err: null, ops: OPS, ms: Number(verifierNow() - t0) / 1e6 };
   } catch (e) {
     const kind = e instanceof Budget || e instanceof Deadline ? '' : 'threw: ';
     return {
       out: undefined, err: kind + String((e && e.message) || e),
-      ops: OPS, ms: Number(process.hrtime.bigint() - t0) / 1e6,
+      ops: OPS, ms: Number(verifierNow() - t0) / 1e6,
     };
   }
 }
@@ -115,7 +168,22 @@ async function loadSolve(spec) {
   }
 }
 
-const emit = (o) => { console.log('RESULT ' + JSON.stringify(o)); };
+const verifierLog = console.log.bind(console);
+const verifierJson = JSON.stringify.bind(JSON);
+const verifierAssign = Object.assign.bind(Object);
+const verifierObject = Object.create.bind(Object);
+const verifierPending = [];
+const emit = (o) => {
+  const payload = verifierAssign(verifierObject(null), {
+    refOps: o.refOps, candOps: o.candOps, refMs: o.refMs, candMs: o.candMs,
+    correct: o.correct, failure: o.failure,
+  });
+  const json = verifierJson(payload);
+  verifierPending.push((async () => {
+    const signature = await verifierSign(json);
+    verifierLog('KINU_VERIFY_' + signature + ' ' + json);
+  })());
+};
 
 /** Structural equality over what a decoder returns: a primitive, or an array of
  *  primitives. Deliberately not general: an answer shape no task can compare is
@@ -226,8 +294,6 @@ export interface RatioMeasurement {
   readonly failure: string | null;
 }
 
-const RESULT_LINE = /^RESULT (.*)$/m;
-
 /** Exported so the registry's `spec` schema refuses a reference lacking it at validation time. */
 export const REFERENCE_SOLVE_DECLARATION = 'export function solve(';
 
@@ -249,24 +315,28 @@ async function removeOwnedFiles(ctx: MeasurementContext, files: readonly string[
 export function preflightRatioHarness(ctx: MeasurementContext): Promise<string | null> {
   verifications += 1;
   const probeFile = `${MEASURE_PREFIX}probe_${String(Date.now())}_${String(verifications)}.mjs`;
+  const token = verificationToken();
 
   return settle(Effect.gen(function* () {
-    const unwritable = yield* step(() => writeText(ctx.vfs, probeFile, `console.log('RESULT ' + JSON.stringify({ ok: 1 }));\n`)).pipe(Effect.match({
+    const receipt = yield* Effect.promise(() => verificationReceipt(token, 'completed'));
+
+    const unwritable = yield* step(() => writeText(ctx.vfs, probeFile, `console.log(${JSON.stringify(receipt)});\n`)).pipe(Effect.match({
       onSuccess: (): string | null => null,
       onFailure: (failed) => `the workspace filesystem would not accept the harness file ${probeFile}: ${renderThrownChain(failed)}`,
     }));
 
     if (unwritable !== null) return unwritable;
 
-    const result = yield* step(() => ctx.exec(`node ${probeFile}`)).pipe(Effect.match({
-      onSuccess: (run: ExecOutcome): string | null => {
-        const stdout = run.stdout ?? '';
+    const result = yield* step(async () => {
+      const run = await ctx.exec(`node ${probeFile}`);
+      const stdout = run.stdout ?? '';
 
-        return RESULT_LINE.test(stdout)
-          ? null
-          : `\`node ${probeFile}\` printed no RESULT line (exit ${String(run.exitCode)}). `
-            + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`;
-      },
+      return run.exitCode === 0 && await verifiedPayload(stdout, token) === 'completed'
+        ? null
+        : `\`node ${probeFile}\` printed no verifier receipt (exit ${String(run.exitCode)}). `
+          + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`;
+    }).pipe(Effect.match({
+      onSuccess: (preflight) => preflight,
       onFailure: (failed) => `\`node ${probeFile}\` could not be run in this workspace's shell: ${renderThrownChain(failed)}`,
     }));
 
@@ -298,6 +368,7 @@ export function runRatioMeasurement(
   const stamp = `${String(Date.now())}_${String(verifications)}`;
   const candidateFile = `${CANDIDATE_PREFIX}${stamp}.mjs`;
   const measureFile = `${MEASURE_PREFIX}${stamp}.mjs`;
+  const token = verificationToken();
 
   const measured = Effect.gen(function* () {
     const submitted = yield* step(() => readText(ctx.vfs, SOLUTION_FILE)).pipe(Effect.match({
@@ -312,27 +383,33 @@ export function runRatioMeasurement(
     const params = { ...problem.params, budgetMultiple: BUDGET_MULTIPLE, deadlineMs: DEADLINE_MS };
 
     const source = [
+      `import { unlink } from 'node:fs/promises';`,
+      `const RECEIPT = ${JSON.stringify(token)};`,
       `const P = ${JSON.stringify(params)};`,
       HARNESS_PROLOGUE,
+      `const verifierSign = await (${hmacSha256Signer.toString()})(RECEIPT);`,
       `const refSolve = ${yield* referenceAsExpression(problem.reference)};`,
+      `await unlink(${JSON.stringify(measureFile)});`,
+      ctx.nodeIsolated ? 'lockRealm();' : '',
       `const cand = await loadSolve('./${candidateFile}');`,
       problem.body,
+      'await Promise.all(verifierPending);',
     ].join('\n');
 
     yield* Effect.promise(() => writeText(ctx.vfs, measureFile, source));
 
     const run: ExecOutcome = yield* Effect.promise(() => ctx.exec(`node ${measureFile}`));
     const stdout = run.stdout ?? '';
-    const match = RESULT_LINE.exec(stdout);
+    const payload = yield* Effect.promise(() => verifiedPayload(stdout, token));
 
-    if (!match?.[1]) {
+    if (run.exitCode !== 0 || payload === null) {
       return yield* Effect.die(new Error(
-        `measurement harness produced no RESULT line (exit ${String(run.exitCode)}). `
+        `measurement harness produced no completed verifier result (exit ${String(run.exitCode)}). `
         + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`,
       ));
     }
 
-    const measurement = yield* parseMeasurement(match[1]);
+    const measurement = yield* parseMeasurement(payload);
     yield* Effect.promise(() => removeOwnedFiles(ctx, [candidateFile, measureFile]));
 
     return measurement;

@@ -3,11 +3,11 @@
  * orchestration through the BackendHost seam. Both CLI frontends drive one via send()/end().
  */
 
-import { Effect } from 'effect';
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { ConversationSearchStore, sameActorReference, testModel, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
+import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
 import type { Database } from 'bun:sqlite';
@@ -39,7 +39,7 @@ import { TierIdSchema,
   recoverActorTurns,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
-  type BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type TaskListStore,
+  BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type TaskListStore,
   WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
@@ -139,7 +139,7 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode,
+  McpToolSurfaceCache, servedMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, type McpServedSurface, type McpSurfaceBudget,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
@@ -149,10 +149,13 @@ import { TierIdSchema,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
   type ChatTurnInput, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal, settle, settleSync, settleLogged, settleLoggedSync, detach } from '@kinu.run/core/obs';
+import {
+  diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, detach, type Refusal,
+} from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
+import { OS_LEASE_PROCESS } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
 import { detectOrphanedFibers } from '@kinu.run/core';
@@ -191,7 +194,6 @@ export interface LocalOrchestrationInput {
   readonly session: () => LocalAgentSession;
   /** This host runs one task turn and exits; it never starts the cadence. */
   readonly oneShot: boolean;
-  readonly noAutoEvolve?: boolean;
 }
 
 type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
@@ -218,16 +220,11 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
   });
 
   const engine = new EvolutionEngine(input.runtime, input.history, {
-    enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
   });
 
   engine.onEvent((event) => { input.session().reportEvolutionEvent(event); });
-
-  const reportRunEvent = (event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void => {
-    input.session().reportActorRunEvent(input.runtime.actor, event);
-  };
 
   return {
     engine,
@@ -251,8 +248,8 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
       refinementLane: () => input.session().runRefinementLane(),
       sinks: {
         logActivity: (event, detail) => { input.session().logActivity(event, detail); },
-        onToolCallEvent: (ev) => { reportRunEvent({ type: 'tool_call_end', ...ev }); },
-        onStepEvent: (ev) => { reportRunEvent({ type: 'step_finish', ...ev }); },
+        onToolCallEvent: (ev) => input.session().recordActorStepEvent(input.runtime.actor, { type: 'tool_call_end', ...ev }),
+        onStepEvent: (ev) => input.session().recordActorStepEvent(input.runtime.actor, { type: 'step_finish', ...ev }),
       },
     },
   };
@@ -315,7 +312,6 @@ export interface LocalAgentSessionOpts {
    */
   providerRevision?: () => number;
   onEvent: (event: SessionEvent) => void;
-  noAutoEvolve?: boolean;
   /** One task turn then exit (`kinu exec`/`kinu run`): the next prompt never grades the previous
    *  turn, and the evolution pass is left to the scheduler daemon. */
   oneShot?: boolean;
@@ -332,6 +328,9 @@ export interface LocalAgentSessionOpts {
   /** The actor as the root's {@link LocalAgentHost} bound it; absent when this session owns it. */
   hosted?: LocalHostedSession;
 }
+
+/** A job fiber's checkpoint names its job. */
+const FiberJobSchema = v.looseObject({ jobId: v.string() });
 
 const TurnTierMetadataSchema = v.object({
   profile_tier: v.optional(TierIdSchema),
@@ -402,6 +401,7 @@ export class LocalAgentSession {
   private readonly jobs: BackgroundJobStore;
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
+  private readonly jobHolder: JobHolder;
   /** Every job operation in this session reaches the runner over the job's rows: the root's, or a node's or head's. */
   private readonly jobAuthorities: WorkspaceJobAuthorities;
   private readonly clock: Clock;
@@ -453,6 +453,8 @@ export class LocalAgentSession {
     (path, content) => this.instructionApprovals.trustOf(path, content);
   /** Whether this turn came from the parent; gates the `report` surface. */
   private turnIsParentAssigned = false;
+  /** The learning setting where the turn opened, as cf reads it: a change applies from the next turn. */
+  private turnLearns = false;
 
   /** The running turn's author-stamped metadata: plan submission is refused to a harness turn. */
   private turnDriving: JsonObject | undefined;
@@ -515,7 +517,6 @@ export class LocalAgentSession {
       eventLog: new EventLog(hubSql, this.rt.actor),
       session: () => this,
       oneShot: this.oneShot,
-      noAutoEvolve: opts.noAutoEvolve === true,
     });
 
     this.host = orchestration.deps.host;
@@ -589,6 +590,7 @@ export class LocalAgentSession {
       // No build identity for the builtin loop: a `bun`-run checkout has no build stamp.
       installedBuild: null,
       events: this.eventRecorder,
+      recording: this.eventRecorder,
       orchestration: orchestration.deps,
       advisorPort: () => this.advisorPort(),
       // The completion gate is RAM here: while it waits for its answer, the advisor records its note silently.
@@ -692,6 +694,7 @@ export class LocalAgentSession {
     });
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channel);
+    this.jobHolder = processJobHolder(this.rt.storage, OS_LEASE_PROCESS);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
@@ -716,6 +719,7 @@ export class LocalAgentSession {
       )),
       // Arms the session's one terminal-retry timer, which sweeps due jobs before replaying owed effects.
       scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
+      holder: this.jobHolder,
     } satisfies BackgroundJobRunnerDeps);
     this.jobAuthorities = new WorkspaceJobAuthorities({
       root: () => ({ kind: 'root', actorId: this.rt.actor.actorId, store: this.jobs, runner: this.jobRunner }),
@@ -724,9 +728,8 @@ export class LocalAgentSession {
     // Scaffold cold-start heal (DO onStart parity): the proposer edits scaffold/agent.js, so it must exist. Idempotent; tracked for end().
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
-    // The next turn awaits this before admitting input. A one-shot session opens with its first message in hand, so it
-    // takes no start-up measure; an interactive one records it before the pump admits input.
-    this.chat.measureSessionStart({ restored: this.chat.restoreHistory(), measure: !this.oneShot });
+    // The next turn awaits this before admitting input.
+    this.actorSession.orchestrator.track(this.chat.restoreHistory().then(() => { this.chat.measureSessionStart(); }), 'restoring working history');
     this.ensureModelState();
     this.rearmLocalAlarm();
   }
@@ -946,14 +949,12 @@ export class LocalAgentSession {
     return this.modelResolver?.listModels() ?? Promise.resolve({ models: [], failures: [] });
   }
 
-  testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (this.modelResolver === null) return yield* new KinuError('missing', 'this session has no model resolver to test through');
+  async testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+    if (this.modelResolver === null) throw new KinuError('missing', 'this session has no model resolver to test through');
 
-      const resolver = this.modelResolver;
+    const resolver = this.modelResolver;
 
-      return yield* Effect.promise(async () => testModel({ spec, resolve: (named, conversation) => resolver.resolveModel(named, conversation), report: this.modelCallSink, signal }));
-    }));
+    return testModel({ spec, resolve: (named, conversation) => resolver.resolveModel(named, conversation), report: this.modelCallSink, signal });
   }
 
   /** `caller` has no default: the model passes `'self'`, and core refuses a self cancel of an
@@ -985,12 +986,20 @@ export class LocalAgentSession {
     return jobResult(this.jobs, jobId);
   }
 
-  async listBackgroundJobs(limit = 20): Promise<ListedBackgroundJob[]> {
-    return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
+  /** `actor`: a `/`-joined path of names below this one, as the cloud names a hosted child; absent, this actor's own. */
+  async listBackgroundJobs(limit = 20, actor?: string): Promise<ListedBackgroundJob[]> {
+    if (actor === undefined) return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
+    const { directory } = localActorDirectory(this.rt.actor);
+    const owner = actor.split('/').reduce<ActorHandle | null>((parent, name) => (parent === null ? null : directory.resolveChild(parent, name)), this.rt.actor);
+
+    if (owner === null) return settleSync(Effect.fail(new KinuError('missing', `No agent named ${actor} in this workspace.`)));
+    const live = this.jobAuthorities.live(owner.actorId);
+
+    return listBackgroundJobs(new BackgroundJobStore(this.rt.storage.sql, owner), limit, (jobId) => live?.runner.output.tail(jobId));
   }
 
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return cancelBackgroundJob(this.jobRunner, jobId);
+    return cancelBackgroundJob((this.jobAuthorities.owning(jobId) ?? this.jobAuthorities.root()).runner, jobId);
   }
 
   getEvolutionChangelog(limit = 50): EvolutionChangelogView {
@@ -1107,11 +1116,16 @@ export class LocalAgentSession {
 
   /** Skips a window outliving the session so consumed events never bind to a dead pump's turn. */
   setTimer(fn: () => Promise<void>, ms: number): void {
-    setTimeout(() => detach(Effect.promise(async () => {
-      if (this.chat.closed) return;
-
-      await settleLogged('drain.timer_callback_failed', { doing: 'running the drain-debounce timer callback', otherwise: 'io' }, () => fn());
-    })), ms);
+    setTimeout(() => detach(Effect.promise(async () => { if (this.chat.closed) return;
+    
+    try {
+      await fn();
+    } catch (cause) {
+      diagnostics.failure(
+        'drain.timer_callback_failed',
+        toKinuError({ doing: 'running the drain-debounce timer callback', cause, otherwise: 'io' }),
+      );
+    } })), ms);
   }
 
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
@@ -1187,22 +1201,21 @@ export class LocalAgentSession {
 
   async connectMcp(servers: Record<string, McpServerConfig>): Promise<void> {
     if (!servers || Object.keys(servers).length === 0) return;
+    const conn = await connectMcpServers(servers, (message) => { this.emitMcp(message); }, this.lifetime.signal);
 
-    const log = (message: string): void => {
-      this.emit({ type: 'background', event: 'mcp', message });
+    this.mcpServed = {
+      descriptors: conn.descriptors,
+      unavailable: [
+        ...conn.diagnostics.filter((d) => d.status === 'failed').map((d) => ({
+          server: d.server, reason: d.reason ?? 'failed to start, so its tools are missing from this turn',
+        })),
+        ...conn.refused,
+      ],
     };
-
-    const conn = await connectMcpServers(servers, log, this.lifetime.signal);
-
-    // Admission is session-scoped, so the native figure is the full surface; a narrower turn keeps more room.
-    const admission = admitMcpDescriptors(conn.descriptors, {
-      ...this.modelCatalog.window(),
-      nativeToolTokens: toolSurfaceTokens(this.tools),
-    });
 
     // Admitted tools without a readOnly annotation run under the same durable claim as natives
     // (KINU-019: unwrapped MCP effects started unclaimed and replayed after reset).
-    this.extraTools = buildMcpToolSet(admission.admitted, {
+    this.mcpSurface = new McpToolSurfaceCache(async (admitted) => buildMcpToolSet(admitted, {
       call: (d, args, options) => conn.call(d.serverName, d.name, args, options.abortSignal),
       effectClaims: {
         sql: this.rt.storage.sql,
@@ -1215,25 +1228,39 @@ export class LocalAgentSession {
         budget: this.actorSession.orchestrator.acc.context,
         producer: 'external_tool',
       },
-    });
+    }));
     this.mcpClose = () => conn.close();
-    // Unavailable or deferred servers are named in the live context so the model can explain their absence.
-    this.mcpUnavailable = [
-      ...conn.diagnostics
-        .filter((d) => d.status === 'failed')
-        .map((d) => ({
-          source: `MCP server "${d.server}"`,
-          reason: d.reason ?? 'failed to start, so its tools are missing from this turn',
-        })),
-      ...[...conn.refused, ...admission.deferred].map((d) => ({
-        source: `MCP server "${d.server}"`,
-        reason: d.reason,
-      })),
-    ];
+    await this.admitMcp(await this.modelCatalog.resolved());
+  }
 
-    for (const d of admission.deferred) {
-      log(`mcp: ${d.server} deferred: ${d.reason}`);
+  private mcpServed: McpServedSurface | null = null;
+  private mcpSurface: McpToolSurfaceCache<ToolSet> | null = null;
+  private readonly mcpDeferred = new Set<string>();
+
+  private emitMcp(message: string): void {
+    this.emit({ type: 'background', event: 'mcp', message });
+  }
+
+  /** Against the window the next request runs on, so a switched model re-admits what fits it. */
+  private async admitMcp(window: Pick<McpSurfaceBudget, 'contextWindow' | 'modelOutputLimit'>): Promise<void> {
+    const served = this.mcpServed;
+
+    if (served === null || this.mcpSurface === null) return;
+
+    this.extraTools = await this.mcpSurface.refresh(async () => served, {
+      contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit, nativeToolTokens: toolSurfaceTokens(this.tools),
+    });
+    // Unavailable or deferred servers are named in the live context so the model can explain their absence.
+    this.mcpUnavailable = this.mcpSurface.unavailable.map((u) => ({ source: `MCP server "${u.server}"`, reason: u.reason }));
+    const deferred = this.mcpSurface.deferred;
+
+    for (const d of deferred) {
+      if (!this.mcpDeferred.has(d.server)) this.emitMcp(`mcp: ${d.server} deferred: ${d.reason}`);
     }
+
+    this.mcpDeferred.clear();
+
+    for (const d of deferred) this.mcpDeferred.add(d.server);
   }
 
   private mcpUnavailable: MissingCapability[] = [];
@@ -1288,7 +1315,7 @@ export class LocalAgentSession {
     return this.settleDeadline ??= this.clock.now() + this.jobRunner.policy.settleGraceMs;
   }
   /** Hold one settlement in the join set; it resolves only after removal so joiners terminate. */
-  private tracked(observe: () => Promise<void>): void {
+  private tracked(settle: () => Promise<void>): void {
     const { promise, resolve: markPruned } = Promise.withResolvers<void>();
     this.backgroundFibers.add(promise);
 
@@ -1298,14 +1325,14 @@ export class LocalAgentSession {
       markPruned();
     };
 
-    observe().then(prune, prune);
+    settle().then(prune, prune);
   }
 
   private trackFiber<T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> {
     const running = this.rt.schedule.fiber(name, fn);
     // Only a fiber that could not record its own outcome (database closed at teardown) reaches here.
     this.tracked(async () => {
-      await settleLogged('fiber.settle_observer_failed', { doing: 'recording a durable background fiber settlement', otherwise: 'io' }, async () => {
+      try {
         for (const outcome of await Promise.allSettled([running])) {
           if (outcome.status !== 'rejected') continue;
           diagnostics.failure(
@@ -1314,7 +1341,13 @@ export class LocalAgentSession {
             { fiber: name },
           );
         }
-      }, { fiber: name });
+      } catch (cause) {
+        diagnostics.failure(
+          'fiber.settle_observer_failed',
+          toKinuError({ doing: 'recording a durable background fiber settlement', cause, otherwise: 'io' }),
+          { fiber: name },
+        );
+      }
     });
 
     return running;
@@ -1400,6 +1433,11 @@ export class LocalAgentSession {
     });
 
     for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
+      const job = v.safeParse(FiberJobSchema, orphan.snapshot);
+
+      // Its process is alive and still running it.
+      if (job.success && this.jobHolder.heldElsewhere(job.output.jobId)) continue;
+
       if (orphan.name.startsWith('bg:')) await this.jobAuthorities.recover(orphan.snapshot);
       void this.rt.storage.sql`DELETE FROM fibers
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
@@ -1496,22 +1534,20 @@ export class LocalAgentSession {
     this.clearLocalAlarm();
     this.scheduledAlarmAt = ts;
     const delay = Math.max(0, ts - Date.now());
-    this.alarmTimer = setTimeout(() => detach(Effect.promise(async () => {
-      this.alarmTimer = null;
-      this.scheduledAlarmAt = null;
-
-      try {
-        await this.fireDueTriggers();
-      } catch (cause) {
-        const failure = toKinuError({
-          doing: 'firing the triggers due on this wake',
-          cause,
-          otherwise: 'io',
-        });
-
-        diagnostics.failure('schedule.due_triggers_failed', failure);
-      }
-    })), Math.min(delay, 2_147_483_647));
+    this.alarmTimer = setTimeout(() => detach(Effect.promise(async () => { this.alarmTimer = null;
+    this.scheduledAlarmAt = null;
+    
+    try {
+      await this.fireDueTriggers();
+    } catch (cause) {
+      const failure = toKinuError({
+        doing: 'firing the triggers due on this wake',
+        cause,
+        otherwise: 'io',
+      });
+    
+      diagnostics.failure('schedule.due_triggers_failed', failure);
+    } })), Math.min(delay, 2_147_483_647));
   }
 
   private clearLocalAlarm(): void {
@@ -1586,8 +1622,13 @@ export class LocalAgentSession {
 
     if (!id) return;
 
-    settleLoggedSync('event.run_row_write_failed', { doing: 'appending a row to the durable run-event log', otherwise: 'io' },
-      () => recorder.emit(id, input));
+    try { recorder.emit(id, input); }
+    catch (err) {
+      diagnostics.failure(
+        'event.run_row_write_failed',
+        toKinuError({ doing: 'appending a row to the durable run-event log', cause: err, otherwise: 'io' }),
+      );
+    }
   }
 
   /** One run's durable events (DO getRunEvents peer); `since` is the SSE resume index. */
@@ -1606,6 +1647,7 @@ export class LocalAgentSession {
     this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnIsParentAssigned = item.kind === 'programmatic';
+    this.turnLearns = this.engine.recordsTurns;
     this.turnDriving = authoredTurnMetadata(item);
 
     // A user message grades the previous turn, unless this is a one-shot process.
@@ -1619,6 +1661,11 @@ export class LocalAgentSession {
     const model = this.ensureModelState();
     this.activateToolMode(this.actorSession.workMode);
     const { execution } = await this.composeTurnRequest(resolved, model);
+    const context = execution.chat.modelContext;
+
+    await this.admitMcp(context?.contextWindow === undefined
+      ? await this.modelCatalog.resolved()
+      : { contextWindow: context.contextWindow, modelOutputLimit: context.modelOutputLimit ?? null });
     this.turnExternalTools = this.externalToolsFor(resolved.profile);
     this.recordSystemPromptHash(execution.chat.system);
     const sessionKey = this.cacheIdentity().sessionKey;
@@ -1660,7 +1707,8 @@ export class LocalAgentSession {
       workMode,
       availableTools: [
         ...candidateBuiltinNames,
-        ...Object.keys(this.extraTools),
+        // Every connected tool: what fits this turn's model is admitted after its window is known.
+        ...servedMcpDescriptors(this.mcpServed?.descriptors ?? []).map((descriptor) => descriptor.toolKey),
         // `report` is added to the toolset after this resolution; name it or a role's tool list drops it.
         ...(this.reportDeps !== null && parentAssigned ? [REPORT_TOOL] : []),
         // `submit_plan` lives outside BUILTIN_TOOLS; same reason as `report`.
@@ -1841,7 +1889,7 @@ export class LocalAgentSession {
       scopedTurn: projectJsonValue({ value: scoped }),
       recordedAt: Date.now(),
       // Frozen beside the turn so a replay records what the producing run had.
-      evolutionEnabled: this.engine.recordsTurns,
+      evolutionEnabled: this.turnLearns,
     };
 
     const parts: Writable<TerminalTurnParts> = {};
@@ -2027,23 +2075,27 @@ export class LocalAgentSession {
     this.clearTerminalRetry();
     this.terminalRetryAt = atMs;
 
-    const timer = setTimeout(() => detach(Effect.promise(async () => {
-      this.clearTerminalRetry();
-
-      // Job sweep first, in its own try: this timer is also a deferred job's wake, and only
-      // `recoverBackgroundJobs` reaches `recoverOrphans` otherwise.
-      await settleLogged('jobs.due_resume_failed', { doing: 'resuming a background job whose next attempt came due', otherwise: 'unavailable' }, () => this.jobRunner.recoverDueResumes());
-
-      try {
-        await this.recoverTerminalTransitions();
-      } catch (cause) {
-        const failure = toKinuError({
-          doing: 'retrying the effects a settled turn still owed', cause, otherwise: 'unavailable',
-        });
-
-        diagnostics.failure('turn.terminal_retry_failed', failure);
-      }
-    })), Math.max(0, atMs - Date.now()));
+    const timer = setTimeout(() => detach(Effect.promise(async () => { this.clearTerminalRetry();
+    
+    // Job sweep first, in its own try: this timer is also a deferred job's wake, and only
+    // `recoverBackgroundJobs` reaches `recoverOrphans` otherwise.
+    try {
+      await this.jobRunner.recoverDueResumes();
+    } catch (cause) {
+      diagnostics.failure('jobs.due_resume_failed', toKinuError({
+        doing: 'resuming a background job whose next attempt came due', cause, otherwise: 'unavailable',
+      }));
+    }
+    
+    try {
+      await this.recoverTerminalTransitions();
+    } catch (cause) {
+      const failure = toKinuError({
+        doing: 'retrying the effects a settled turn still owed', cause, otherwise: 'unavailable',
+      });
+    
+      diagnostics.failure('turn.terminal_retry_failed', failure);
+    } })), Math.max(0, atMs - Date.now()));
 
     timer.unref();
     this.terminalRetryTimer = timer;
@@ -2369,23 +2421,23 @@ export class LocalAgentSession {
     this.recordRunEvent({ type: 'budget_exhausted', ...refusal });
   }
 
-  reportActorRunEvent(actor: ActorHandle, event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void {
-    return settleSync(Effect.gen({ self: this }, function* () {
-      if (sameActorReference(actor, this.rt.actor)) {
-        this.recordRunEvent(event);
+  recordActorStepEvent(actor: ActorHandle, event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void {
+    if (sameActorReference(actor, this.rt.actor)) {
+      const runId = this.chat.currentRunId;
 
-        return;
-      }
+      if (runId !== null) this.eventRecorder.emit(runId, event);
 
-      const hosted = this.actorHost.hosted(actor);
-      const claim = hosted?.session.turnClaim;
+      return;
+    }
 
-      if (hosted === null || claim === undefined || claim === null) {
-        return yield* new KinuError('missing', 'A reporting actor has no active turn for its event.');
-      }
+    const hosted = this.actorHost.hosted(actor);
+    const claim = hosted?.session.turnClaim;
 
-      this.recordRunEvent(event, claim.runId, hosted.stores.eventRecorder);
-    }));
+    if (hosted === null || claim === undefined || claim === null) {
+      throw new KinuError('missing', 'A reporting actor has no active turn for its event.');
+    }
+
+    hosted.stores.eventRecorder.emit(claim.runId, event);
   }
 
   reportEvolutionEvent(event: { readonly type: string; readonly message: string }): void {
@@ -2419,7 +2471,6 @@ export class LocalAgentSession {
         // Heads and nodes run in this process, so this session is their fan-out and queue.
         session: () => this,
         oneShot: this.oneShot,
-        noAutoEvolve: !this.engine.enabled,
       }).deps,
       // A head inherits the parent's promoted program, making it a fork of this agent.
       loopFor: (bound) => ({
@@ -2749,7 +2800,7 @@ export class LocalAgentSession {
 
   /** The session's own job seams: a node's or head's output reaches the same listeners its chat's does. */
   private loopJobPorts(): WorkspaceJobPorts {
-    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null };
+    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null, holder: this.jobHolder };
   }
 
   /** A swarm actor no loop holds: its loop ended, with this process or before it, so its rows settle and wake nobody. */
@@ -2904,9 +2955,7 @@ export class LocalAgentSession {
           if (narrowing.allowsTool(name)) native[name] = entry;
         }
 
-        return createNodeCodemodeToolFactory({
-          extraProviders: narrowing.narrowProviders(this.codemodeProviders(mode)),
-        })({ ...surface, native });
+        return createNodeCodemodeToolFactory({ extraProviders: this.codemodeProviders(mode), reach: narrowing })({ ...surface, native });
       },
       agents: this.agentsToolDeps(mode),
       roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),

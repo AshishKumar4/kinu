@@ -436,7 +436,7 @@ export function createTeamToolDeps(deps: {
     deps.roster.create({
       name, actorReference: null, birth: { creationId, seed, assignment }, deleteRequested: false,
       status: ownerCreated ? 'idle' : 'working', currentTask: ownerCreated ? null : mission,
-      createdAt, dismissedAt: null, lifetime: 'durable', taskEventId: null,
+      createdAt, dismissedAt: null, taskEventId: null,
     });
     yield* Effect.promise(() => finishSubordinateBirth(deps.roster, deps.runtime, name));
 

@@ -1,11 +1,10 @@
-import type { DevboxSyncGateway, DevboxOutbound, SyncGatewayProps, OutboundProps } from './gateway';
+import type { DevboxOutbound, OutboundProps } from './gateway';
 import type { DevboxStoreGateway, StoreGatewayProps } from './store-gateway';
 
 export type DevboxExecOptions = Pick<ContainerExecOptions, 'cwd' | 'env' | 'signal'>;
 
 export interface GatewayBindings {
   readonly DevboxStoreGateway?: (options: { readonly props: StoreGatewayProps }) => Pick<Service<DevboxStoreGateway>, keyof Fetcher>;
-  readonly DevboxSyncGateway?: (options: { readonly props: SyncGatewayProps }) => Pick<Service<DevboxSyncGateway>, keyof Fetcher>;
   readonly DevboxOutbound?: (options: { readonly props: OutboundProps }) => Pick<Service<DevboxOutbound>, keyof Fetcher>;
 }
 
@@ -37,13 +36,3 @@ export interface ListedFile {
   readonly isDirectory: boolean;
 }
 
-/** The local extraction path still records a squashfs archive, not the rc's tar+zstd backup. */
-export interface DirectoryBackup {
-  readonly id: string;
-  readonly dir: string;
-}
-
-export interface BackupOptions {
-  readonly dir: string;
-  readonly excludes?: readonly string[];
-}

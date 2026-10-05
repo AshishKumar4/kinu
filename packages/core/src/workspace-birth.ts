@@ -1,11 +1,11 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from './types/agent-runtime';
-import type { RawSqlExec, SqlExecutor, Storage } from './types/primitives';
+import type { Executor, RawSqlExec, SqlExecutor, Storage } from './types/primitives';
 import type { LLMProviderConfig } from './llm';
 import { initAllTables } from './state/workspace-schema';
 import { seedSoul, UNTITLED_WORKSPACE_NAME } from './identity/soul';
 import {
-  createInlineCraftStore, createInlineExecutor,
+  createInlineCraftStore,
   createInlineWorkspace, wrapDatabase, type AgentDatabase,
 } from './identity/inline-primitives';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
@@ -51,7 +51,8 @@ function buildComponents(components: WorkspaceComponents) {
   memoryStore.ensureSchema();
   const memory = adaptMemory(memoryStore, vfs);
   const craftStore = createInlineCraftStore(db);
-  const executor = createInlineExecutor();
+  // Birth runs no program, so it holds no JavaScript runner of its own.
+  const executor: Executor = { languages: ['javascript'], execute: async () => ({ result: undefined, error: 'a workspace being born runs no programs' }) };
   initRunEventTables(execRaw);
 
   // A birth-time call is the new workspace's spend, unpriced: nothing is resolved yet.
