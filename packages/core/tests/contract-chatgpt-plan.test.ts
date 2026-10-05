@@ -4,7 +4,8 @@ import { describe, expect, test } from 'bun:test';
 import { APICallError, generateText, jsonSchema, streamText, tool, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import {
-  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, type AuthRequest, type JsonObject, type ModelCallDeps,
+  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, runChat, serverCompactor,
+  type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { KinuError } from '../src/obs/index';
 
@@ -131,6 +132,32 @@ async function streamFailure(model: LanguageModel): Promise<{ readonly error: un
     if (next.read.value.type === 'error') return { error: next.read.value.error };
   }
 }
+
+// preview-limitations (read 2026-10-05) requires store:false, forbids previous_response_id over HTTP, and says nothing of
+// compaction: OpenAI's server-side compaction is unproven on this route, so it stays off.
+describe('server-side compaction on the plan route', () => {
+  test('a GPT-5 turn asks for none, and a direct-route compaction item is not replayed here', async () => {
+    const api = openai(answered());
+    const model = createChatGptProvider().createModel('gpt-5.5', signedIn(api.fetch).deps);
+
+    for await (const _ of runChat({
+      model, modelSpec: 'chatgpt/gpt-5.5', modelContext: { id: 'chatgpt/gpt-5.5', contextWindow: 400_000 },
+      system: 'You are Kinu.', tools: {},
+      history: [
+        { role: 'user', content: 'older requirement' },
+        { role: 'assistant', content: [{ type: 'custom', kind: 'openai.compaction', providerOptions: { openai: { type: 'compaction', itemId: 'cmp_1', encryptedContent: 'ENCRYPTED' } } }] },
+        { role: 'user', content: 'next ask' },
+      ],
+    })) { /* drain */ }
+
+    const body = api.sent[0]?.body ?? {};
+
+    expect(serverCompactor('chatgpt/gpt-5.5')).toBeNull();
+    expect(body.context_management).toBeUndefined();
+    expect(JSON.stringify(body.input)).not.toContain('ENCRYPTED');
+    expect(JSON.stringify(body.input)).toContain('older requirement');
+  });
+});
 
 describe('the request the preview accepts', () => {
   test('streams statelessly with developer instructions, namespaced tools and no refused field', async () => {
