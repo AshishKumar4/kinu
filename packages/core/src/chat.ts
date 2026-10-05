@@ -37,7 +37,7 @@ import type { CountableRequest, InputTokenCount } from './providers/input-tokens
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
-import { isServerCompaction, serverCompactionOptions } from './providers/server-compaction';
+import { isServerCompaction, serverCompactionOptions, serverCompactor } from './providers/server-compaction';
 import { describeProviderError, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
@@ -659,6 +659,7 @@ async function admitRequest(opts: ChatOptions) {
     extensions,
     sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
+    model: opts.modelSpec ?? opts.modelContext?.id,
     providerReportedTokens: opts.providerReportedTokens,
     trigger: opts.transformTrigger ?? 'auto',
     abortSignal: opts.signal,
@@ -723,7 +724,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
 
       const base = await stepContext.base();
-      const assembled = await assembleTurnMessages({ ...assembly, history: base.messages, turnStart: base.turnStart, admission: undefined });
+      const assembled = await assembleTurnMessages({ ...serving, history: base.messages, turnStart: base.turnStart, admission: undefined });
 
       return { ...assembled, changed: base.changed };
     },
@@ -735,19 +736,23 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   const cache = turnCachePlan(opts, turnMessages);
   const rollTail = hasCacheMarkers(cache.strategy);
+  const forcedInput = opts.transformTrigger === 'force' ? admittedTokens : undefined;
+
+  /** One attempt's provider options: the turn's cache, the serving model's server compaction, then its own. */
+  const optionsFor = (spec: string | undefined, served: number | undefined, own: ChatOptions['providerOptions']) => mergeProviderOptions(
+    mergeProviderOptions(cache.providerOptions, serverCompactionOptions(spec, served, forcedInput)), own);
 
   /** The model each attempt calls, with the media it takes: the turn's for the primary, its own for a fallback. */
   let current = {
     ...primary,
     model: opts.model,
     accepts: opts.attachments?.accepts,
-    providerOptions: mergeProviderOptions(
-      mergeProviderOptions(cache.providerOptions, serverCompactionOptions(
-        opts.modelSpec ?? opts.modelContext?.id, opts.modelContext?.contextWindow, opts.transformTrigger === 'force' ? admittedTokens : undefined,
-      )),
-      opts.providerOptions,
-    ),
+    providerOptions: optionsFor(assembly.model, opts.modelContext?.contextWindow, opts.providerOptions),
   };
+
+  /** How the serving model's requests are assembled, and the request it sends before what the turn produced. */
+  let serving = assembly;
+  let base = cache.messages;
 
   const route = new FallbackRoute<ChatFallback>(opts);
   /** The fallback serving the turn, once one took over. */
@@ -975,20 +980,27 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     return { steps, produced: paired, finishReason: call.lastFinishReason, interrupted: cut, failure: null };
   };
 
-  const takeOver = (next: ChatFallback): void => {
+  /** A model that compacts with another provider, or none, cannot read the request built for the last one: rebuilt. */
+  const takeOver = async (next: ChatFallback): Promise<void> => {
     const bound = next.bind();
+    const served = resolveModelWindow(next.spec, null).contextWindow;
+    const rebuild = serverCompactor(next.spec) !== serverCompactor(serving.model);
 
-    current = { ...bound, spec: next.spec, accepts: next.accepts, providerOptions: mergeProviderOptions(cache.providerOptions, bound.providerOptions) };
+    serving = { ...assembly, model: next.spec, contextWindow: served };
+
+    if (rebuild) {
+      initialContextAvailable = false;
+      const history = initialContext?.messages ?? assembly.history;
+      base = turnCachePlan(opts, (await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined })).messages).messages;
+    }
+
+    current = { ...bound, spec: next.spec, accepts: next.accepts, providerOptions: optionsFor(next.spec, served, bound.providerOptions) };
     servingFallback = next.spec;
     route.tried.push(next.spec);
   };
 
-  const callChain = async function* (
-    request: readonly ModelMessage[],
-    stepOffset: number,
-    responsePrefix: readonly ModelMessage[],
-  ): AsyncGenerator<ChatEvent, CallOutcome> {
-    const outcome = yield* callModel(request, stepOffset, responsePrefix);
+  const callChain = async function* (stepOffset: number, responsePrefix: readonly ModelMessage[]): AsyncGenerator<ChatEvent, CallOutcome> {
+    const outcome = yield* callModel([...base, ...responsePrefix], stepOffset, responsePrefix);
 
     if (outcome.failure === null) return outcome;
     const next = await route.next(servingFallback ?? opts.modelSpec, outcome.failure);
@@ -997,9 +1009,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: describeProviderError({ cause: outcome.failure.cause }), source: 'native' };
     const produced = responsePrefix.length === 0 ? outcome.produced : [...responsePrefix, ...outcome.produced];
 
-    takeOver(next);
+    await takeOver(next);
 
-    const rest = yield* callChain([...request, ...outcome.produced], stepOffset + outcome.steps.length, produced);
+    const rest = yield* callChain(stepOffset + outcome.steps.length, produced);
 
     return { ...rest, steps: [...outcome.steps, ...rest.steps], produced: [...outcome.produced, ...rest.produced] };
   };
@@ -1008,10 +1020,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   if (cooled !== undefined) {
     yield { type: 'model-fallback', from: current.spec, to: cooled.spec, reason: `${current.spec} is cooling down after failing over`, source: 'native' };
-    takeOver(cooled);
+    await takeOver(cooled);
   }
 
-  const first = yield* callChain(cache.messages, 0, []);
+  const first = yield* callChain(0, []);
   let steps: readonly StepResult<ToolSet>[] = first.steps;
   let responseMessages: ModelMessage[] = first.produced;
   let interrupted = first.interrupted;
@@ -1019,7 +1031,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // One output-limit continuation: the SDK does not continue a `length` finish with no pending call. The request is
   // the same prefix plus everything produced, so nothing is replayed. A second `length` finish is partial completion.
   if (!interrupted && first.finishReason === OUTPUT_LIMIT_REACHED) {
-    const continued = yield* callChain([...cache.messages, ...first.produced], first.steps.length, first.produced);
+    const continued = yield* callChain(first.steps.length, first.produced);
     steps = [...steps, ...continued.steps];
     responseMessages = [...responseMessages, ...continued.produced];
     interrupted = continued.interrupted;

@@ -58,6 +58,8 @@ export interface TransformContext {
   readonly messages: readonly ModelMessage[];
   readonly system: string;
   readonly contextWindow: number;
+  /** The model this request is built for: its server compaction, if any, decides the mode. */
+  readonly model?: string;
   /** Previous turn's measured prompt tokens; preferred over chars/4 estimates. */
   readonly providerReportedTokens?: number;
   readonly trigger: CompactionTrigger;

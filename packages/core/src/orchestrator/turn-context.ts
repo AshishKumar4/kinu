@@ -30,6 +30,8 @@ export interface TurnContextInput {
   extensions?: ExtensionHost;
   sessionKey: string;
   contextWindow: number;
+  /** The model the request is built for. */
+  model?: string | undefined;
   providerReportedTokens?: number;
   trigger: CompactionTrigger;
   abortSignal?: AbortSignal | undefined;
@@ -127,6 +129,7 @@ export function assembleTurnMessages(input: TurnContextInput): Promise<Assembled
         messages: history,
         system: input.system,
         contextWindow: input.contextWindow,
+        model: input.model,
         providerReportedTokens: input.providerReportedTokens,
         trigger,
         abortSignal: input.abortSignal,
