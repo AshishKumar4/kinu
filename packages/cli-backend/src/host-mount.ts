@@ -90,12 +90,15 @@ interface LocalPaths {
   readonly real: (path: string) => string;
 }
 
-/** Core's own-space paths (`/home/main`, `/slates`, a view's root) land in `space` as on the cloud; a relative one in the folder. */
+/**
+ * Core's own-space paths (`/home/main`, `/slates`, a view's root) land in `space` as on the cloud; a relative one in the folder.
+ * The one mapping the file plane routes by and its approval judges by, so every spelling of a path lands where it is judged.
+ */
 function localPaths(folder: string, space: string, views: readonly string[]): LocalPaths {
   const aliases = [WORKSPACE_ROOT, SLATES_ROOT, ...views.map((name) => `/${name}`)];
   const absolute = (path: string): string => workspacePath(path, folder);
 
-  const own = (path: string): string | null => {
+  const named = (path: string): string | null => {
     const at = absolute(path);
 
     if (at === space || at.startsWith(`${space}/`)) return at.slice(space.length) || '/';
@@ -103,10 +106,22 @@ function localPaths(folder: string, space: string, views: readonly string[]): Lo
     return aliases.some((alias) => at === alias || at.startsWith(`${alias}/`)) ? at : null;
   };
 
-  const real = (path: string): string => {
-    const named = own(path);
+  // `/local` in the own space is the folder, as the resolver names it (`<space>/local/x` is the folder's `x`).
+  const inFolder = (at: string): string | null => (at === FOLDER_SUBTREE || at.startsWith(`${FOLDER_SUBTREE}/`) ? at.slice(FOLDER_SUBTREE.length) : null);
 
-    return named === null ? absolute(path) : join(space, named);
+  const own = (path: string): string | null => {
+    const at = named(path);
+
+    return at === null || inFolder(at) !== null ? null : at;
+  };
+
+  const real = (path: string): string => {
+    const at = named(path);
+    const inside = at === null ? null : inFolder(at);
+
+    if (inside !== null) return join(folder, inside);
+
+    return at === null ? absolute(path) : join(space, at);
   };
 
   return { own, real };
@@ -139,7 +154,7 @@ export function localFilePlane(input: LocalFilePlane): MountedVfs {
   const machine = withMountTable(createHostMountVFS(input.folder, input.checkpoints), []);
   const folderFiles = rootedFiles(input.folder, createHostMountVFS(input.folder, input.checkpoints));
 
-  // The own space lists the folder where the resolver names it, `vfs://local`, so listing and reading agree.
+  // The own space lists the folder where the resolver names it, `vfs://local`; its files are reached through `localPaths`, never this mount.
   const folder: VfsMount = {
     name: FOLDER_SUBTREE.slice(1), files: () => folderFiles, absentReason: () => 'the folder is always mounted', filesOwner: 'agent',
   };
