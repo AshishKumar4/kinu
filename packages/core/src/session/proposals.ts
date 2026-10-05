@@ -1,4 +1,6 @@
 import type { ActorHandle } from '../identity/actor-handle';
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
 import type { ContextProposalClosure, StagedContextDeferral } from '../types/context-plane';
@@ -102,10 +104,10 @@ export class SessionProposals {
     return this.compose(id, this.context.entries(selection));
   }
 
-  apply(id: string, assertEpoch: () => void, validate: (entries: readonly ContextEntry[]) => StagedContextDeferral | null, turnId: string | null = null): ContextSelection | null {
-    return this.atomic(() => {
+  apply(id: string, assertEpoch: () => Effect.Effect<void, KinuError>, validate: (entries: readonly ContextEntry[]) => StagedContextDeferral | null, turnId: string | null = null): ContextSelection | null {
+    return this.atomic(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
-      assertEpoch();
+      yield* assertEpoch();
       const proposal = this.requirePending(id);
       const selected = this.context.selected();
 
@@ -124,7 +126,7 @@ export class SessionProposals {
       void this.sql`UPDATE context_proposals SET status='applied',deferred_reason=NULL WHERE actor_id=${actorId} AND proposal_id=${id}`;
 
       return committed;
-    });
+    })));
   }
 
   close(id: string, reason: ContextProposalClosure): void {

@@ -103,7 +103,7 @@ export class SessionHistory {
       const selected = this.context.selected() ?? this.context.initialize();
       this.dependencies.transactionSync(() => {
         if (!abandoned().some(candidate => candidate.message_id === row.message_id)) return;
-        this.context.commit(selected, { cause: 'output', turnId: null, assertEpoch: () => this.dependencies.actor.assertCurrent(), mutate: entries => {
+        this.context.commit(selected, { cause: 'output', turnId: null, assertEpoch: () => Effect.sync(() => this.dependencies.actor.assertCurrent()), mutate: entries => {
           this.messages.seal(row.message_id, content);
 
           if (row.origin !== 'output' || entries.some(entry => entry.messageId === row.message_id)) return entries;
@@ -120,7 +120,7 @@ export class SessionHistory {
     const empty = await this.messages.prepareContent([]);
     const selected = this.context.selected() ?? this.context.initialize();
 
-    this.context.commit(selected, { cause: 'edit', turnId: null, assertEpoch: assertOwner, mutate: (entries) => {
+    this.context.commit(selected, { cause: 'edit', turnId: null, assertEpoch: () => Effect.sync(assertOwner), mutate: (entries) => {
       for (const id of outputs) this.messages.seal(id, empty);
 
       return entries.filter((entry) => !cut.has(entry.messageId)).map((entry, position) => ({ ...entry, position }));
@@ -160,7 +160,7 @@ export class SessionHistory {
       const selected = this.context.selected() ?? this.context.initialize();
 
       for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
-      const cleared = this.context.commit(selected, { cause: 'edit', turnId: null, mutate: () => [], assertEpoch: () => settleSync(assertIdle()) });
+      const cleared = this.context.commit(selected, { cause: 'edit', turnId: null, mutate: () => [], assertEpoch: assertIdle });
       this.transcript(sessionId).clear();
 
       return cleared;
@@ -169,10 +169,10 @@ export class SessionHistory {
 
   /** Continue from before `entryId`: the context of the nearest earlier entry that recorded one branches, and
    *  `entryId` and everything after it is deleted. */
-  revertTo(sessionId: string, entryId: string, assertIdle: () => void): ContextSelection {
-    return this.dependencies.transactionSync(() => {
+  revertTo(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>): ContextSelection {
+    return this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.dependencies.actor.assertCurrent();
-      assertIdle();
+      yield* assertIdle();
       const transcript = this.transcript(sessionId);
       const entry = transcript.read(entryId);
 
@@ -188,7 +188,7 @@ export class SessionHistory {
       diagnostics.event('session.transcript_rewound', { session: sessionId, from: entryId, position: entry.position });
 
       return target;
-    });
+    })));
   }
 
   async materialize(kept: MaterializedHistory | null = null): Promise<MaterializedHistory> {
@@ -229,7 +229,7 @@ export class SessionHistory {
     this.dependencies.transactionSync(() => {
       assertOwner();
       this.messages.insertRender(prepared);
-      this.context.addRender({ messageId: prepared.id }, at, { turnId, assertEpoch: assertOwner });
+      this.context.addRender({ messageId: prepared.id }, at, { turnId, assertEpoch: () => Effect.sync(assertOwner) });
     });
   }
 
@@ -281,7 +281,7 @@ export class SessionHistory {
 
       for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
 
-      return { result: { selection: this.context.commit(selected, { cause: 'edit', turnId: options.turnId, mutate: () => entries, assertEpoch: options.assertOwner }), proposalId: null }, publication: null };
+      return { result: { selection: this.context.commit(selected, { cause: 'edit', turnId: options.turnId, mutate: () => entries, assertEpoch: () => Effect.sync(options.assertOwner) }), proposalId: null }, publication: null };
     });
 
     committed.publication?.publish();
@@ -320,7 +320,7 @@ export class SessionHistory {
     const refusal = before.calls.size > 0 || after.calls.size > 0 || after.results.size > 0 ? 'unpaired_tool_call' : null;
 
     const committed = this.dependencies.transactionSync(() => {
-      const applied = this.proposals.apply(pending.proposal_id, assertOwner, entries => {
+      const applied = this.proposals.apply(pending.proposal_id, () => Effect.sync(assertOwner), entries => {
         if (entries.length !== candidate.length || entries.some((entry, index) => entry.entryId !== candidate[index]?.entryId || entry.messageId !== candidate[index]?.messageId)) return 'history_rewritten';
 
         return refusal;
@@ -419,7 +419,7 @@ export class SessionHistory {
     });
   }
   activateInput(reference: MessageReference, turnId: string, assertOwner: () => void): ContextSelection {
-    return this.context.commit(null, { cause: 'input', turnId, assertEpoch: assertOwner, mutate: entries => {
+    return this.context.commit(null, { cause: 'input', turnId, assertEpoch: () => Effect.sync(assertOwner), mutate: entries => {
       const owned = this.dependencies.sql<{ entry_id: string }>`SELECT entry_id FROM context_memberships WHERE actor_id=${this.dependencies.actor.actorId} AND message_id=${reference.messageId} LIMIT 1`[0];
 
       return owned === undefined ? [...entries, { ...reference, entryId: reference.messageId, position: entries.length }] : entries;
@@ -434,7 +434,7 @@ export class SessionHistory {
     const selected = this.context.selected() ?? this.context.initialize();
     const prepared = await this.messages.prepare(input.message, input.id);
     let reference: MessageReference | null = null;
-    this.context.commit(selected, { cause: input.origin, turnId: input.turnId, assertEpoch: input.assertOwner, mutate: entries => {
+    this.context.commit(selected, { cause: input.origin, turnId: input.turnId, assertEpoch: () => Effect.sync(input.assertOwner), mutate: entries => {
       reference = this.messages.insert(prepared, input.origin, input.ingressId === undefined ? {} : { ingressId: input.ingressId });
 
       return [...entries, { ...reference, entryId: input.id, position: entries.length }];

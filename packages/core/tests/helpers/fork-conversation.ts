@@ -1,4 +1,5 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { Effect } from 'effect';
 /**
  * Canonical conversation seeding for the fork suites, through the production
  * writers rather than hand INSERTs, so what a fork reads is what a turn wrote.
@@ -74,7 +75,7 @@ export class ForkConversation {
     let reference: MessageReference | null = null;
 
     if (input.working ?? true) {
-      this.context.commit(this.selection(), { cause: origin, turnId: null, assertEpoch: () => this.actor.assertCurrent(), mutate: (entries) => {
+      this.context.commit(this.selection(), { cause: origin, turnId: null, assertEpoch: () => Effect.sync(() => this.actor.assertCurrent()), mutate: (entries) => {
         reference = this.messages.insert(prepared, origin);
 
         return [...entries, { ...reference, entryId: input.id, position: entries.length }];
@@ -142,7 +143,7 @@ export class ForkConversation {
       cause: 'context_transform', turnId: null,
       mutate: (entries) => entries.filter((entry) => entry.entryId !== entryId)
         .map((entry, position) => ({ ...entry, position })),
-      assertEpoch: () => this.actor.assertCurrent(),
+      assertEpoch: () => Effect.sync(() => this.actor.assertCurrent()),
     });
   }
 }

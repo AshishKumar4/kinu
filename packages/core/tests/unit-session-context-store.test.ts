@@ -35,12 +35,12 @@ test('message publication rolls back with its membership and can be retried', as
   try {
     const selected = s.context.initialize();
     const prepared = await s.messages.prepare({ role: 'user', content: 'hello' }, 'input');
-    expect(() => s.context.commit(selected, { cause: 'input', turnId: 'turn', assertEpoch: () => s.rt.actor.assertCurrent(), mutate: () => {
+    expect(() => s.context.commit(selected, { cause: 'input', turnId: 'turn', assertEpoch: () => Effect.sync(() => s.rt.actor.assertCurrent()), mutate: () => {
       s.messages.insert(prepared, 'input');
       throw new Error('crash before membership');
     } })).toThrow('crash before membership');
     expect(s.context.entries(selected)).toEqual([]);
-    const committed = s.context.commit(selected, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
+    const committed = s.context.commit(selected, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => Effect.sync(() => s.rt.actor.assertCurrent()) });
     expect(await s.messages.materialize(present(s.context.entries(committed)[0], 'the committed context entry'))).toEqual({ role: 'user', content: 'hello' });
   } finally { s.testSql.close(); }
 });
@@ -106,12 +106,12 @@ test('pruning and branching preserve historical selection without resurrecting r
   try {
     const prepared = await s.messages.prepare({ role: 'assistant', content: 'recorded' }, 'answer');
     const initial = s.context.initialize();
-    const original = s.context.commit(initial, { cause: 'output', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
+    const original = s.context.commit(initial, { cause: 'output', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], assertEpoch: () => Effect.sync(() => s.rt.actor.assertCurrent()) });
     const fork = s.context.fork(original);
-    const pruned = s.context.commit(original, { cause: 'context_transform', turnId: 'turn', mutate: () => [], assertEpoch: () => s.rt.actor.assertCurrent() });
+    const pruned = s.context.commit(original, { cause: 'context_transform', turnId: 'turn', mutate: () => [], assertEpoch: () => Effect.sync(() => s.rt.actor.assertCurrent()) });
     expect(s.context.entries(pruned)).toEqual([]);
     expect(s.context.entries(original)).toEqual(s.context.entries(fork));
-    s.context.select(pruned, fork, () => {});
+    s.context.select(pruned, fork, () => Effect.void);
     expect(s.context.selected()).toEqual(fork);
     expect(() => s.context.entries({ contextId: 'missing', revision: 0 })).toThrow('revision does not exist');
   } finally { s.testSql.close(); }
@@ -124,19 +124,19 @@ test('reverting a context selects an isolated branch that survives reader recons
     const assertOwner = () => s.rt.actor.assertCurrent();
     const input = await s.messages.prepare({ role: 'user', content: 'initial instruction' }, 'input');
     const initial = s.context.initialize();
-    const original = s.context.commit(initial, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(input, 'input'), entryId: 'input', position: 0 }], assertEpoch: assertOwner });
+    const original = s.context.commit(initial, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(input, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => Effect.sync(assertOwner) });
     const summary = await s.messages.prepare({ role: 'user', content: 'compacted instruction' }, 'summary');
-    const compacted = s.context.commit(original, { cause: 'context_transform', turnId: 'turn', mutate: () => [{ ...s.messages.insert(summary, 'context_transform'), entryId: 'summary', position: 0 }], assertEpoch: assertOwner });
+    const compacted = s.context.commit(original, { cause: 'context_transform', turnId: 'turn', mutate: () => [{ ...s.messages.insert(summary, 'context_transform'), entryId: 'summary', position: 0 }], assertEpoch: () => Effect.sync(assertOwner) });
     const before = s.rt.storage.sql<{ total: number }>`SELECT COUNT(*) AS total FROM session_messages`[0]?.total;
     const restored = s.context.fork(original);
-    s.context.select(compacted, restored, assertOwner);
+    s.context.select(compacted, restored, () => Effect.sync(assertOwner));
     const reopened = new SessionContext(s.rt.storage.sql, s.rt.actor, write => s.rt.storage.transactionSync(write), s.messages);
     expect(reopened.selected()).toEqual(restored);
     expect(reopened.entries(restored)).toEqual(s.context.entries(original));
     expect(s.rt.storage.sql<{ total: number }>`SELECT COUNT(*) AS total FROM session_messages`[0]?.total).toBe(before);
 
     const edited = await s.messages.prepare({ role: 'user', content: 'branch instruction' }, 'edit');
-    const branch = reopened.commit(restored, { cause: 'edit', turnId: null, mutate: () => [{ ...s.messages.insert(edited, 'edit'), entryId: 'input', position: 0 }], assertEpoch: assertOwner });
+    const branch = reopened.commit(restored, { cause: 'edit', turnId: null, mutate: () => [{ ...s.messages.insert(edited, 'edit'), entryId: 'input', position: 0 }], assertEpoch: () => Effect.sync(assertOwner) });
     const originalEntry = s.context.entries(original)[0];
     const compactedEntry = s.context.entries(compacted)[0];
     const branchEntry = reopened.entries(branch)[0];
@@ -166,8 +166,8 @@ test('a context reads what is stored: another reader\'s revision, and one writte
     };
 
     const read = async (selection: ContextSelection) => Promise.all(s.context.entries(selection).map(async entry => (await s.messages.materialize(entry)).content));
-    const first = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', assertEpoch: assertOwner, mutate: await said('one') });
-    const second = other.commit(first, { cause: 'input', turnId: 'turn', assertEpoch: assertOwner, mutate: await said('two') });
+    const first = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', assertEpoch: () => Effect.sync(assertOwner), mutate: await said('one') });
+    const second = other.commit(first, { cause: 'input', turnId: 'turn', assertEpoch: () => Effect.sync(assertOwner), mutate: await said('two') });
 
     expect(await read(second)).toEqual(['one', 'two']);
     const three = await said('three');
@@ -179,8 +179,8 @@ test('a context reads what is stored: another reader\'s revision, and one writte
       })).toThrow('rolled back after its revision');
     };
 
-    rolledBack(() => s.context.commit(second, { cause: 'input', turnId: 'third', assertEpoch: assertOwner, mutate: three }));
-    const third = other.commit(second, { cause: 'input', turnId: 'third', assertEpoch: assertOwner, mutate: await said('four') });
+    rolledBack(() => s.context.commit(second, { cause: 'input', turnId: 'third', assertEpoch: () => Effect.sync(assertOwner), mutate: three }));
+    const third = other.commit(second, { cause: 'input', turnId: 'third', assertEpoch: () => Effect.sync(assertOwner), mutate: await said('four') });
 
     expect(third.revision).toBe(second.revision + 1);
     expect(await read(third)).toEqual(['one', 'two', 'four']);
@@ -188,8 +188,8 @@ test('a context reads what is stored: another reader\'s revision, and one writte
     // Both writes open the same row; the retry also drops the last entry.
     const five = s.messages.insert(await s.messages.prepare({ role: 'user', content: 'five' }, 'five'), 'input');
     const replaced = (entries: readonly ContextEntry[]) => entries.map((entry, position) => (position === 0 ? { ...five, entryId: 'five', position } : entry));
-    rolledBack(() => s.context.commit(third, { cause: 'edit', turnId: 'fourth', assertEpoch: assertOwner, mutate: replaced }));
-    const fourth = other.commit(third, { cause: 'edit', turnId: 'fourth', assertEpoch: assertOwner, mutate: (entries) => replaced(entries).slice(0, 2) });
+    rolledBack(() => s.context.commit(third, { cause: 'edit', turnId: 'fourth', assertEpoch: () => Effect.sync(assertOwner), mutate: replaced }));
+    const fourth = other.commit(third, { cause: 'edit', turnId: 'fourth', assertEpoch: () => Effect.sync(assertOwner), mutate: (entries) => replaced(entries).slice(0, 2) });
 
     expect(await read(fourth)).toEqual(['five', 'two']);
   } finally {
@@ -218,7 +218,7 @@ test('a past revision reads back as it was after a transform and a clear, by a r
     const origin = (await writer.materialize()).selection;
 
     writer.context.commit(origin, {
-      cause: 'context_transform', turnId: null, assertEpoch: () => undefined,
+      cause: 'context_transform', turnId: null, assertEpoch: () => Effect.void,
       mutate: current => current.slice(-1).map(entry => ({ ...entry, position: 0 })),
     });
     writer.clearConversation(CHAT_SESSION_ID, () => Effect.void);
@@ -256,7 +256,7 @@ test('a held turn context follows sealed output, an authored edit and a selected
     expect(edited.rendered).toEqual([]);
 
     const branch = other.context.fork(opened.selection);
-    other.context.select(edited.selection, branch, assertOwner);
+    other.context.select(edited.selection, branch, () => Effect.sync(assertOwner));
     const selected = await history.stepBase(assertOwner, 'turn', null, edited);
     expect(selected.messages).toEqual([{ role: 'user', content: 'instruction' }]);
     expect(selected.selection).toEqual(branch);
@@ -268,7 +268,7 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
 
   try {
     const image = await s.messages.prepare({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] }, 'image');
-    const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(image, 'input'), entryId: 'image', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
+    const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(image, 'input'), entryId: 'image', position: 0 }], assertEpoch: () => Effect.sync(() => s.rt.actor.assertCurrent()) });
     const reference = present(s.context.entries(selected)[0], 'the image entry');
     expect(await s.messages.materialize(reference)).toEqual({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] });
     const stored = await s.messages.materializeParts(reference);
@@ -293,7 +293,7 @@ test('a sealed row that is JSON but not a message is refused on read', async () 
 
     try {
       const prepared = await s.messages.prepare({ role: 'user', content: [{ type: 'text', text: 'hello' }] }, 'input');
-      const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
+      const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => Effect.sync(() => s.rt.actor.assertCurrent()) });
       const reference = present(s.context.entries(selected)[0], 'the input entry');
       s.testSql.db.run("UPDATE session_messages SET content_json = ? WHERE message_id = 'input'", [content]);
       await expect(s.messages.materialize(reference), layer).rejects.toThrow(KinuError);
@@ -352,12 +352,12 @@ test('staged removal preserves an appended tail and rejects a changed target', a
     const assertOwner = () => s.rt.actor.assertCurrent();
     const proposals = new SessionProposals(s.rt.storage.sql, s.rt.actor, s.context, write => s.rt.storage.transactionSync(write));
     const prepared = await s.messages.prepare({ role: 'user', content: 'old' }, 'old');
-    const base = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'old', position: 0 }], assertEpoch: assertOwner });
+    const base = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'old', position: 0 }], assertEpoch: () => Effect.sync(assertOwner) });
     const old = present(s.context.entries(base)[0], 'the staged entry');
     proposals.stage({ id: 'remove', base, author: s.rt.actor.actorId, via: 'session', cause: 'context_transform', turnId: 'turn', changes: [{ entryId: old.entryId, expected: old, replacement: null }] });
     const tail = await s.messages.prepare({ role: 'assistant', content: 'new work' }, 'tail');
-    s.context.commit(base, { cause: 'output', turnId: 'turn', mutate: entries => [...entries, { ...s.messages.insert(tail, 'output'), entryId: 'tail', position: 1 }], assertEpoch: assertOwner });
-    const applied = proposals.apply('remove', assertOwner, () => null);
+    s.context.commit(base, { cause: 'output', turnId: 'turn', mutate: entries => [...entries, { ...s.messages.insert(tail, 'output'), entryId: 'tail', position: 1 }], assertEpoch: () => Effect.sync(assertOwner) });
+    const applied = proposals.apply('remove', () => Effect.sync(assertOwner), () => null);
 
     if (applied === null) throw new Error('unexpected deferred edit');
     expect(s.context.entries(applied).map(entry => entry.messageId)).toEqual(['tail']);
@@ -444,7 +444,20 @@ test('reverting to an entry deletes it and continues on the context recorded bef
     const before = history.context.selected();
 
     if (before === null) throw new Error('a context is selected after three turns');
-    const reverted = history.revertTo('default', 'ask-3', () => {});
+
+    const entriesBefore = chat.entries();
+    let checks = 0;
+
+    const idle = () => Effect.suspend(() => (++checks === 2
+      ? Effect.die(new Error('a turn started mid-revert'))
+      : Effect.void));
+
+    expect(() => history.revertTo('default', 'ask-3', idle)).toThrow('a turn started mid-revert');
+    expect(checks).toBe(2);
+    expect(history.context.selected()).toEqual(before);
+    expect(chat.entries()).toEqual(entriesBefore);
+
+    const reverted = history.revertTo('default', 'ask-3', () => Effect.void);
     expect(reverted).not.toEqual(before);
     expect(history.context.selected()).toEqual(reverted);
     expect((await history.materialize()).messages.map(message => message.content)).toEqual(['one', 'one answered', 'two', 'two answered']);
@@ -454,7 +467,7 @@ test('reverting to an entry deletes it and continues on the context recorded bef
     const fourth = await history.append({ id: 'ask-4', message: { role: 'user', content: 'four' }, origin: 'input', turnId: 'ask-4', assertOwner });
     chat.record({ ...await chat.prepareUser({ id: 'ask-4', turnId: 'ask-4', message: fourth }) });
     expect(chat.entries().map(entry => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2', 'ask-4']);
-    expect(history.revertTo('default', 'ask-1', () => {})).toMatchObject({ revision: 0 });
+    expect(history.revertTo('default', 'ask-1', () => Effect.void)).toMatchObject({ revision: 0 });
     expect((await history.materialize()).messages).toEqual([]);
     expect(chat.entries()).toEqual([]);
     expect(() => history.revertTo('default', 'ask-2', () => { throw new Error('turn is active'); })).toThrow('turn is active');

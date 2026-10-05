@@ -618,9 +618,7 @@ export class ChatSession {
 
   /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
   async revertTo(entryId: string): Promise<void> {
-    await this.actorSession.revertConversation(this.sessionId, entryId, () => {
-      if (this.turnInFlight()) throw new KinuError('denied', REVERT_NEEDS_IDLE);
-    });
+    await this.actorSession.revertConversation(this.sessionId, entryId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void);
     this.emit({ type: 'history-reverted', entryId });
     await this.flushEvents();
   }

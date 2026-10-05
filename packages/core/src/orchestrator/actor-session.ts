@@ -445,11 +445,8 @@ export class ActorSession {
   }
 
   /** Refused while a turn is in flight; `assertIdle` is the host's further condition, raised in the same transaction. */
-  async revertConversation(sessionId: string, entryId: string, assertIdle: () => void): Promise<void> {
-    this.canonical.revertTo(sessionId, entryId, () => {
-      if (this.inFlight) throw new KinuError('denied', REVERT_NEEDS_IDLE);
-      assertIdle();
-    });
+  async revertConversation(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>): Promise<void> {
+    this.canonical.revertTo(sessionId, entryId, () => this.inFlight ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : assertIdle());
     this.dynamic.unload();
     await this.restoreWorkingHistory();
   }
