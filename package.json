@@ -188,7 +188,9 @@
   "patchedDependencies": {
     "@plannotator/ui@0.46.1": "patches/@plannotator%2Fui@0.46.1.patch",
     "agents@0.24.0": "patches/agents@0.24.0.patch",
-    "@cloudflare/codemode@0.5.2": "patches/@cloudflare%2Fcodemode@0.5.2.patch"
+    "@cloudflare/codemode@0.5.2": "patches/@cloudflare%2Fcodemode@0.5.2.patch",
+    "@nimbus-sh/core@0.15.0": "patches/@nimbus-sh%2Fcore@0.15.0.patch",
+    "@nimbus-sh/worker@0.13.1": "patches/@nimbus-sh%2Fworker@0.13.1.patch"
   },
   "//overrides:hono": "hono is pinned here because the resolve lands 4.12.23 under `@modelcontextprotocol/sdk@1.29.0` (which declares `^4.11.4`), below 4.13.5: GHSA-gqvv-2mrq-wpjv, GHSA-g6gw-c38x-mqfc and GHSA-crvj-82cr-hjcx — a `toSSG()` write outside the output directory, unbounded dot-notation nesting in `parseBody()`, and a query parser that reads past the URL fragment — are all fixed in 4.13.5. 4.13.7 satisfies the declared range. Delete it once the MCP SDK's range resolves to 4.13.5 or later without it.",
   "//overrides:miniflare": "Direct Miniflare pins stay at 5.20260926.0-alpha until the routing smoke in kinu-logs/miniflare-upstream/ISSUE-2026-09-30.md passes on Bun: 5.20260930.0-alpha bypasses dispatchFetch's dispatcher there. The held release pins vulnerable undici 7.29.0, so its subtree stays on 7.29.1; the latest Cloudflare plugins' nested Miniflare already pins 7.29.1. Lift this hold on the first Miniflare release that passes that smoke.",

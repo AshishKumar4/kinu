@@ -302,6 +302,8 @@
   "patchedDependencies": {
     "agents@0.24.0": "patches/agents@0.24.0.patch",
     "@cloudflare/codemode@0.5.2": "patches/@cloudflare%2Fcodemode@0.5.2.patch",
+    "@nimbus-sh/core@0.15.0": "patches/@nimbus-sh%2Fcore@0.15.0.patch",
+    "@nimbus-sh/worker@0.13.1": "patches/@nimbus-sh%2Fworker@0.13.1.patch",
     "@plannotator/ui@0.46.1": "patches/@plannotator%2Fui@0.46.1.patch",
   },
   "overrides": {
