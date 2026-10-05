@@ -42,7 +42,6 @@ import {
   mintSubordinateName,
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
-  facetHomeReleaser,
   readMission,
   recoverSubordinateLifecycles,
   terminalTaskReport,
@@ -494,11 +493,7 @@ export class LocalAgentHost {
       // Every hirer here, the root included, is an entry of this process.
       sayToParent: (child, signal) => this.sayToHirer(child, signal),
       runtimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
-      filesFor: async (bound) => {
-        if (!ws.rt.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
-
-        return ws.rt.filesForActor(bound.handle);
-      },
+      filesFor: (bound) => ws.rt.filesForActor(bound.handle),
       loopFor: (bound) => {
         const parentId = bound.reference.parentActorId;
         const parentEntry = parentId === null ? null : this.requireActorEntry(parentId);
@@ -580,26 +575,17 @@ export class LocalAgentHost {
       ...openConfig, agentName: binding.name, actor: bound.handle,
     });
 
-    const shared = await shareLocalWorkspacePlane(built, parent.ws.rt, openConfig.facet);
+    const shared = shareLocalWorkspacePlane(built, parent.ws.rt);
     runtimes.set(bound.reference.actorId, shared);
 
     return shared;
   }
 
   /** Remove one destroyed actor's scratch home, named from its storage key and kind; its rows go with the directory row. */
-  private async discardActorBytes(
-    ws: LocalHostedAgent,
-    record: WorkspaceActor,
-  ): Promise<void> {
-    const agentName = actorHomeName(record);
+  private discardActorBytes(ws: LocalHostedAgent, record: WorkspaceActor): Promise<void> {
+    cleanupFacetScratch(ws.rt.space, actorHomeName(record));
 
-    if (ws.rt.space) {
-      cleanupFacetScratch(ws.rt.space, agentName);
-
-      return;
-    }
-
-    if (ws.rt.nodeHome) await facetHomeReleaser(ws.rt.nodeHome())(agentName);
+    return Promise.resolve();
   }
 
   private async buildEntry(input: {

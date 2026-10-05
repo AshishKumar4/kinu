@@ -93,7 +93,7 @@ export const TOOLS_SECTION = definePromptSection(
  * from the `worker.isolate.memory` catalog fact, not a measured `resourceLimits`. */
 export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
   "executors/workspace",
-  "{{memoryMb}}{{#if cliLocal}}{{/if}}{{#if cliVfs}}{{/if}}",
+  "{{memoryMb}}{{#if cliLocal}}{{/if}}",
   workspaceExecutorLine.trimEnd(),
 );
 
@@ -130,10 +130,10 @@ export const EXECUTORS_SECTION = definePromptSection(
   executorsSection.trimEnd(),
 );
 
-/** Where each plane is on this workspace's machine: a fact per workspace, after the shared prefix; not doctrine. */
+/** Each prefix as the `vfs://` subtree it names, and where each subtree is on this machine: a fact per workspace, after the shared prefix. */
 export const PLANES_SECTION = definePromptSection(
   "executors/planes",
-  "{{planes}}",
+  "{{aliases}}{{mounts}}",
   planesSection.trimEnd(),
 );
 

@@ -201,11 +201,6 @@ export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space' | 
   };
 }
 
-/** The in-SQLite plane's reach. */
-export function databaseFileReach(table: MountedVfs, planes: PathPlanes): FileReach {
-  return { planes, userRoots: () => table.userRoots(), locate: null, parksWrites: false };
-}
-
 function withinRoot(root: string, candidate: string): boolean {
   const distance = relative(root, candidate);
 

@@ -1840,11 +1840,11 @@ describe('agents.* codemode namespace — node sandbox', () => {
       },
     });
 
-    const db = new Database(':memory:');
+    const db = new Database(scratchPath('workspace', 'agent.db'));
     // Production initializer: a swarm node claims a working revision in the workspace's tables
     // (without it, `no such table: actor_working_revisions`).
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
     return { deps: { mode: 'build', swarms: true, swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
   }
@@ -2322,8 +2322,8 @@ describe('LocalAgentSession — a workspace bound to a directory', () => {
 
     expect(systems.length).toBeGreaterThanOrEqual(2);
     expect(new Set(systems).size).toBe(1);
-    expect(systems[0]).toContain('`local://` the folder');
+    expect(systems[0]).toContain('`local://` is `vfs://local`');
     // The real roots are the workspace's own, so they ride the byte-identical prompt too.
-    expect(systems[0]).toContain(`\`local://\` is \`${resolvePath(root)}\``);
+    expect(systems[0]).toContain(`\`vfs://local\` is \`${resolvePath(root)}\``);
   });
 });

@@ -178,10 +178,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 30
-    },
-    {
       "key": "packages/cli-backend/src/opencode-provider.ts#discoverModels",
       "complexity": 30
     },
@@ -215,6 +211,10 @@
     },
     {
       "key": "packages/cf-backend/tests/helpers/actor-harness.ts#chatSessionTurns>admit",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
       "complexity": 29
     },
     {

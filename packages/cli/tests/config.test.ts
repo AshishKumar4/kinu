@@ -10,9 +10,7 @@ import {
 } from "@kinu.run/core";
 import { Database } from "bun:sqlite";
 import { createCLIRuntime } from '@kinu.run/cli-backend';
-import {
-  readWorkspaceDisplayName, readWorkspaceIdentityId,
-} from "../src/config";
+import { readWorkspaceDisplayName } from "../src/config";
 import * as v from 'valibot';
 
 describe("CLI config safety", () => {
@@ -82,15 +80,13 @@ describe("CLI config safety", () => {
     const dbPath = join(dir, "agent.db");
     const db = new Database(dbPath, { create: true });
     db.exec("PRAGMA journal_mode = WAL");
-    const rt = createCLIRuntime(db, { llm: null, agentName: 'Smokey' });
+    const rt = createCLIRuntime(db, { llm: null, agentName: 'Smokey', cwd: scratchDir('cli-wal-read-folder') });
     rt.actor.config.setDisplayName('Smokey');
-    const identityId = readWorkspaceIdentityId(dbPath);
     db.query("PRAGMA wal_checkpoint(TRUNCATE)").get();
     db.close();
     rmSync(`${dbPath}-wal`, { force: true });
     rmSync(`${dbPath}-shm`, { force: true });
 
-    expect(readWorkspaceIdentityId(dbPath)).toBe(identityId);
     expect(readWorkspaceDisplayName(dbPath)).toBe("Smokey");
   });
 });

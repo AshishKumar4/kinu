@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { buildSystemPromptSync } from '../src/prompt';
+import { localPlanes } from '../src/vfs/resolve';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import { PROMPT_MATRIX } from './fixtures/prompt-surface-matrix';
@@ -78,14 +79,13 @@ describe('the agent works in prefixed paths, and is told where each plane is', (
 
   test('the static block makes prefixes the tools\' paths and a person\'s links; the workspace block names the real roots', () => {
     const { rt } = createTestRuntime();
-    const planes = { cwd: '/home/ana/acme', home: '/home/ana', devices: null, views: [], roots: [{ root: 'vfs', at: '/home/ana/.kinu/acme' }, { root: 'local', at: '/home/ana/acme' }] };
+    const planes = localPlanes({ space: '/home/ana/.kinu/acme', folder: '/home/ana/acme', home: '/home/ana', views: [] });
     const prompt = buildSystemPromptSync({ ...rt, planes }, local.opts);
 
     expect(prompt).toContain('The `file` tool and `workspace.*` take these as paths');
     expect(prompt).toContain('a link they open');
-    expect(prompt).toContain('`local://` the folder');
-    expect(prompt).toContain('Here `vfs://` is `/home/ana/.kinu/acme` and `local://` is `/home/ana/acme`.');
-    expect(prompt.indexOf('Here `vfs://`')).toBeGreaterThan(prompt.indexOf('## Execution environments'));
+    expect(prompt).toContain('Prefixes name parts of `vfs://`: `local://` is `vfs://local`. Here `vfs://` is `/home/ana/.kinu/acme` and `vfs://local` is `/home/ana/acme`.');
+    expect(prompt.indexOf('Prefixes name parts of')).toBeGreaterThan(prompt.indexOf('## Execution environments'));
     expect(prompt).toContain('read-only at `vfs://agent`');
   });
 
@@ -94,7 +94,14 @@ describe('the agent works in prefixed paths, and is told where each plane is', (
     const prompt = buildSystemPromptSync(rt, full.opts);
 
     expect(prompt).toContain('The `file` tool and `workspace.*` take these as paths');
-    expect(prompt).not.toContain('`local://` the folder');
-    expect(prompt).toContain('Here `vfs://` is `/` and `sandbox://` is `/sandbox`; a machine\'s `<name>://` is `/pc/<name>`.');
+    expect(prompt).toContain('Prefixes name parts of `vfs://`: `local://` is `vfs://`, `sandbox://` is `vfs://sandbox` and a machine\'s `<device>://` is `vfs://pc/<device>`. Here `vfs://` is `/`.');
+  });
+
+  // 2026-10-04: the prompt named each prefix by hand. A new prefix is one row of the table, and the prompt states it.
+  test('a prefix the table gains is stated with no other edit', () => {
+    const { rt } = createTestRuntime();
+    const planes = { ...rt.planes, prefixes: [...rt.planes.prefixes, { prefix: 'drive', subtree: '/shared' }] };
+
+    expect(buildSystemPromptSync({ ...rt, planes }, full.opts)).toContain('`drive://` is `vfs://shared`');
   });
 });

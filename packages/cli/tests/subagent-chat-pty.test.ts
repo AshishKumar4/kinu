@@ -11,6 +11,7 @@ import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { makeSql, makeSqlExec, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
+import { placeLocalWorkspace } from './helpers/local-refs';
 import { runTuiInPty } from './helpers/pty-screen';
 
 const repoRoot = resolve(import.meta.dir, '../../..');
@@ -83,10 +84,11 @@ async function workspaceThatHired(home: string, name: string, subagent: { name: 
 test('the Agent Hub lists a hired subagent and Enter opens its conversation', async () => {
   const home = await kinuHome();
   await workspaceThatHired(home, 'shop', { name: 'scout', displayName: 'Scout' });
+  const folder = placeLocalWorkspace(home, 'shop');
 
   await runTuiInPty(cliBin, {
     args: ['chat', 'shop'],
-    cwd: scratchDir('subagent-chat-cwd'),
+    cwd: folder,
     cols: 120,
     rows: 32,
     env: { KINU_HOME: home, KINU_SKIP_DAEMON: '1', KINU_UPDATE_CHECK: '0' },

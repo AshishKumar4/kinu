@@ -10,6 +10,8 @@ import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import { AGENT_HOME, agentDbPath, updateConfigFile } from '../src/config';
 import { inspectLocalSubordinate, readLocalMemory, searchLocalMemory } from '../src/local-inspection';
+import { present } from '@kinu.run/test-utils';
+import { scratchDir } from '../../test-utils/src/scratch';
 
 if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu')) || !resolve(AGENT_HOME).startsWith(resolve(tmpdir()))) {
   throw new Error(`local-inspection suite refuses to run against a real Kinu home (${AGENT_HOME}); scripts/test-preload.ts provides a throwaway one.`);
@@ -72,20 +74,20 @@ describe('local inspection of memory', () => {
 
   test('reads MEMORY.md itself, never a reassembly of its search index', async () => {
     const db = new Database(agentDbPath(MEMORY_NAME));
-    const rt = createCLIRuntime(db, { llm: { name: 'offline', baseURL: 'http://localhost:0', headers: {}, model: 'offline-model' } });
+    const rt = createCLIRuntime(db, { llm: { name: 'offline', baseURL: 'http://localhost:0', headers: {}, model: 'offline-model' }, cwd: scratchDir('inspection-folder') });
     await rt.memory.write(MEMORY_PATH, '# Memory\n\nindexed note\n');
-    await writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/${MEMORY_PATH}`, '# Memory\n\nedited in the shell\n');
+    await writeText(present(rt.agentStateVfs, 'the agent state'), `${WORKSPACE_ROOT}/${MEMORY_PATH}`, '# Memory\n\nedited in place\n');
     // The same file the agent's memory reads, not a second one beside it.
-    expect(await rt.memory.read(MEMORY_PATH)).toBe('# Memory\n\nedited in the shell\n');
+    expect(await rt.memory.read(MEMORY_PATH)).toBe('# Memory\n\nedited in place\n');
     db.close();
 
-    expect(await readLocalMemory(MEMORY_NAME)).toBe('# Memory\n\nedited in the shell\n');
+    expect(await readLocalMemory(MEMORY_NAME)).toBe('# Memory\n\nedited in place\n');
   });
 
   // The agent's own search ranks every term wherever it falls; inspection asks the same index the same way.
   test('searches as the agent does: terms in any order', async () => {
     const db = new Database(agentDbPath(MEMORY_NAME));
-    const rt = createCLIRuntime(db, { llm: { name: 'offline', baseURL: 'http://localhost:0', headers: {}, model: 'offline-model' } });
+    const rt = createCLIRuntime(db, { llm: { name: 'offline', baseURL: 'http://localhost:0', headers: {}, model: 'offline-model' }, cwd: scratchDir('inspection-folder') });
     await rt.memory.write(MEMORY_PATH, '# Memory\n\nthe wrangler deploy goes to staging\n');
     await rt.memory.index(MEMORY_PATH);
     const agentHits = (await rt.memory.search('staging wrangler', 5)).map((hit) => hit.path);

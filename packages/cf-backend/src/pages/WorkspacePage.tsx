@@ -32,7 +32,7 @@ import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
 import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
-import { filesFocusOf, hasComparableTakes, type FilesFocus } from "@kinu.run/core";
+import { cloudPlanes, filesFocusOf, hasComparableTakes, referencePrefixes, WORKSPACE_ROOT, type FilesFocus } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
@@ -748,7 +748,9 @@ export default function WorkspacePage() {
     show("Files");
   }, [show]);
 
-  const fileLinks = useMemo(() => ({ roots: ['vfs', 'sandbox'], open: openFile }), [openFile]);
+  // Every prefix, and each live machine's own name: `<name>://x` opens that machine's file in Files.
+  const machines = useMemo(() => state.executors.flatMap((executor) => executor.mounts ?? []), [state.executors]);
+  const fileLinks = useMemo(() => ({ roots: referencePrefixes(cloudPlanes(WORKSPACE_ROOT), machines), open: openFile }), [machines, openFile]);
   const [landingFile, setLandingFile] = useState<string | null>(() => new URLSearchParams(location.search).get("file"));
 
   useEffect(() => {

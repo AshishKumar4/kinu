@@ -113,9 +113,9 @@ queue and no new persisted format.
 
 `FILE_TOOL_ACTIONS` is `read`, `write`, `edit`, `list`, `stat`, and `search`.
 `file`, workspace `shell`, and `workspace.*` all address `rt.storage.vfs`. On
-hosted, the actor DO owns its Nimbus workspace. On CLI, it is the working
-directory when one is set, otherwise the in-SQLite tree. Containers and devices
-keep separate files, mounted at `/sandbox` and `/pc`.
+hosted, the actor DO owns its Nimbus workspace. On CLI, it is this machine's
+files: the workspace's folder, and its own space at `~/.kinu/<workspace>/`.
+Containers and devices keep separate files, mounted at `/sandbox` and `/pc`.
 
 ### Why it exists
 

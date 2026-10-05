@@ -58,17 +58,15 @@ function routerOf(rt: AgentRuntime): ExecutionRouter {
   return present(rt.executionRouter, 'the runtime execution router');
 }
 
-function makeParent(cwd?: string): LocalParent {
+function makeParent(cwd = scratchDir('head-runtime-folder')): LocalParent {
   const dbPath = scratchPath('head-runtime-parent', 'parent.db');
   const db = new Database(dbPath);
   // Production initializer first: hosted heads take claimed turns, which need tables `createCLIRuntime` does not create.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
-    llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
+    llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' }, cwd,
   };
-
-  if (cwd !== undefined) config.cwd = cwd;
 
   return Object.assign(createCLIRuntime(db, config), { db });
 }
@@ -563,9 +561,8 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 });
 
 describe('a local head forks the parent runtime (the caffe-fork capability)', () => {
-  test("sees the parent's workspace, runs real commands, keeps its own scratch private", async () => {
-    const dir = scratchDir('head-runtime-cwd');
-    writeFileSync(join(dir, 'hello.txt'), 'from the real machine');
+  // A head's scratch is its own home in the own space, beside the folder they share (2026-10-04).
+  test("sees the parent's workspace, runs real commands, keeps its own scratch in its home", async () => {
     const parent = makeParent();
     await writeText(parent.storage.vfs, 'hello.txt', 'from the parent workspace');
     const rt = await createHeadRuntime(parent, 'h');
@@ -577,8 +574,8 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     expect(routerOf(rt).getProvider('device')).toBeUndefined();
 
-    await writeText(rt.storage.vfs, `/home/head-${rt.actor.storageKey}/scratch.txt`, 'head-only');
-    expect(existsSync(join(dir, 'scratch.txt'))).toBe(false);
+    expect((await present(rt.shell, 'the head shell').exec('echo head-only > "$HOME/scratch.txt"')).exitCode).toBe(0);
+    expect(existsSync(join(parent.cwd, 'scratch.txt'))).toBe(false);
     expect(await exists(parent.storage.vfs, 'scratch.txt')).toBe(false);
     expect(rt.storage.sql).toBe(parent.storage.sql);
     expect(rt.actor.actorId).not.toBe(parent.actor.actorId);
@@ -707,7 +704,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
     };
 
     const runtime = createCLIHeadRuntime(headDeps(
-      scratchProbeModel(barrier(2, () => {}), (id) => `/home/${actorHomeName({ origin: 'swarm', storageKey: key(id) })}/note.txt`),
+      scratchProbeModel(barrier(2, () => {}), (id) => `${parent.space}/home/${actorHomeName({ origin: 'swarm', storageKey: key(id) })}/note.txt`),
       { journal: () => journal, parentRuntime: parent },
     ));
 

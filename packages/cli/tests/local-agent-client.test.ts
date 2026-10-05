@@ -209,7 +209,7 @@ function setup(model: LanguageModel, profileAuthority: CliProfileSource = async 
   const db = new Database(dbPath, { create: true });
   // The production initializer, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('client-folder') });
   rt.actor.config.setLearning(false);
 
   const info = {
@@ -243,7 +243,7 @@ function openPersistentClient(
   const dbPath = join(home, 'agent.db');
   const db = new Database(dbPath);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('client-folder') });
   rt.actor.config.setLearning(false);
 
   const info = {

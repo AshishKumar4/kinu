@@ -3,7 +3,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu.run/core';
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, localPlanes } from '@kinu.run/core';
 import { LOCAL_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu.run/cli-backend';
 import {
   describePromptAttachment,
@@ -163,7 +163,7 @@ describe('resolvePromptAttachments', () => {
     mkdirSync(join(space, 'slates', 'board'), { recursive: true });
     writeFileSync(join(space, 'slates', 'board', 'shot.png'), PNG_BYTES);
     writeFileSync(join(folder, 'notes.txt'), 'in the folder');
-    const planes = { cwd: folder, home: folder, devices: null, views: [], roots: [{ root: 'vfs', at: space }, { root: 'local', at: folder }] };
+    const planes = localPlanes({ space, folder, home: folder, views: [] });
 
     const result = await resolvePromptAttachments('see @vfs://slates/board/shot.png and @local://notes.txt not @sandbox://x', { limitBytes: CAP, cwd: folder, planes });
 

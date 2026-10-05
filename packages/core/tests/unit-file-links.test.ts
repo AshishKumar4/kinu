@@ -1,13 +1,10 @@
 // 2026-10-04: a file the agent named was plain text. Each reference is a link: a local workspace's to the file on this
 // machine, a cloud workspace's to its Files surface; code blocks and other schemes stay as written.
 import { describe, expect, test } from 'bun:test';
-import type { PathPlanes } from '../src/vfs/resolve';
+import { localPlanes } from '../src/vfs/resolve';
 import { cloudFileLinks, filesFocusOf, linkFileReferences, localFileLinks } from '../src/read-models/file-links';
 
-const PLANES: PathPlanes = {
-  cwd: '/home/ana/acme', home: '/home/ana', devices: null, views: [],
-  roots: [{ root: 'vfs', at: '/home/ana/.kinu/acme' }, { root: 'local', at: '/home/ana/acme' }],
-};
+const PLANES = localPlanes({ space: '/home/ana/.kinu/acme', folder: '/home/ana/acme', home: '/home/ana', views: [] });
 
 describe('a reference opens the file it names', () => {
   test('locally as the file on this machine; one that climbs out of its plane names nothing', () => {
@@ -16,13 +13,14 @@ describe('a reference opens the file it names', () => {
     expect(links.roots).toEqual(['vfs', 'local']);
     expect(links.href('vfs://slates/my board/index.ts')).toBe('file:///home/ana/.kinu/acme/slates/my%20board/index.ts');
     expect(links.href('local://src/app.ts')).toBe('file:///home/ana/acme/src/app.ts');
+    expect(links.href('vfs://local/src/app.ts')).toBe('file:///home/ana/acme/src/app.ts');
     expect(links.href('vfs://../../etc/passwd')).toBeNull();
   });
 
   test('on the cloud as the workspace\'s Files page, landing on the reference', () => {
     const links = cloudFileLinks('https://kinu.run', 'acme');
 
-    expect(links.roots).toEqual(['vfs', 'sandbox']);
+    expect(links.roots).toEqual(['vfs', 'local', 'sandbox']);
     expect(links.href('vfs://home/main/a b.md')).toBe('https://kinu.run/workspace/acme?file=vfs%3A%2F%2Fhome%2Fmain%2Fa+b.md');
     expect(links.href('sandbox://w/x')).toBe('https://kinu.run/workspace/acme?file=sandbox%3A%2F%2Fw%2Fx');
   });

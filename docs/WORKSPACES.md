@@ -80,16 +80,15 @@ A workspace holds the state. Agents are the actors that work inside it.
   purpose. Agent state (SOUL.md, scaffold, memory, craft store, conversation,
   every ledger) always lives in its own SQLite-backed filesystem. The
   workspace plane that `file`, `shell`, `eval` and AGENTS.md address binds to
-  the directory on the agent's ref (`CLIRuntimeConfig.cwd`, never
-  `process.cwd()`). With no directory bound, both planes are the one in-SQLite
-  tree an isolated fixture or eval episode gets. With a directory bound, the
+  the folder on the agent's ref (`CLIRuntimeConfig.cwd`, required, never
+  `process.cwd()`); a fixture or eval episode binds a scratch folder. The
   agent reads its own memory, SOUL.md and scaffold at `/agent`, a read-only view
   of that state (`core/src/vfs/agent-view.ts`), and the `file` tool reaches an
   absolute path outside the directory as the shell does: each operation is
   reviewed as the command it amounts to (`cat`, `tee`, `rm -rf`, ...) under the
-  shell's approval mode and grants. Relative file paths resolve at the acting
-  agent's home (`/home/main` for main, `core/src/vfs/workspace-path.ts`) and `..` climbs as on
-  Linux; permissions and the approval gate decide what the path may reach.
+  shell's approval mode and grants. Relative file paths resolve where the agent
+  works (its home on the cloud, `/home/main` for main; the folder locally; `core/src/vfs/resolve.ts`) and `..`
+  climbs as on Linux; permissions and the approval gate decide what the path may reach.
   `/home/user` (`NIMBUS_WORKSPACE_ROOT`) links to the home only because Nimbus
   0.13.1 still names it in PATH, XDG and `/etc/passwd`, even with HOME set to
   `/home/main` (measured 2026-10-01; values in [Storage](STORAGE.md)). Delete the

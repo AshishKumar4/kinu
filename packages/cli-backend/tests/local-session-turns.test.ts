@@ -491,17 +491,6 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(text).not.toContain('OFFLINE');
   });
 
-  test('a workspace opened without a directory is told it lives in its database, not in a directory', async () => {
-    let observed: PromptMessage[] = [];
-    const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
-    await session.send('hi', { id: crypto.randomUUID() });
-
-    const text = String(present(observed.find((m) => m.role === 'system'), 'the system prompt message').content);
-    expect(text).toContain('kept in this workspace\'s database');
-    expect(text).not.toContain('rooted in the directory');
-    expect(text).not.toContain('with the Worker');
-  });
-
   // Issue #36: a local workspace has neither mount, so nothing the model reads may offer one.
   test('cli-local offers no /pc or /sandbox in its prompt or its tool schemas', async () => {
     const base = fakeModel('ok');

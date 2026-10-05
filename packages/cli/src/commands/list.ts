@@ -12,7 +12,7 @@ function databaseSize(name: string): number | undefined {
 }
 
 export async function listCommand(): Promise<void> {
-  // This project's agents, then the ones no project claims.
+  // This project's agents.
   const localAgents = listLocalAgentNames();
   const configuredAgents = Object.values(loadConfigFile().agents ?? {});
   const cloudSession = resolveCloudSession();

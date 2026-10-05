@@ -134,6 +134,26 @@ for (const name of testBackends()) {
       }
     });
 
+    // 2026-10-04: vfs:// is the one tree an agent sees, and every other prefix is an alias for a subtree of it.
+    test('a prefix and its vfs:// long form read the same file, and the file tool prints the shorter', async () => {
+      const plane = await publicPlane(name);
+
+      try {
+        const written = v.parse(v.object({ reference: v.string() }), await plane.file({ action: 'write', path: 'notes/alias.txt', content: 'one' }));
+
+        // The cloud's `local://` is its own files, `vfs://` itself; a local workspace's is its folder, `vfs://local`.
+        const forms = name === 'cf'
+          ? ['vfs://home/main/notes/alias.txt', 'local://home/main/notes/alias.txt']
+          : ['local://notes/alias.txt', 'vfs://local/notes/alias.txt'];
+
+        expect(written.reference).toBe(forms[0]);
+
+        for (const form of forms) expect(await plane.file({ action: 'read', path: form })).toContain('one');
+      } finally {
+        plane.end?.();
+      }
+    });
+
     // 2026-10-04: a shell given `vfs://x` ran it as a relative path. The shell takes its machine's paths; a refusal names the real one.
     test('the shell refuses a plane reference and names the path it has for it', async () => {
       const plane = await publicPlane(name);
