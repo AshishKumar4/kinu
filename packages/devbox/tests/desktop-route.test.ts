@@ -73,3 +73,31 @@ test('the desktop\'s port is never a preview', async () => {
   await expect(box.exposePort(6080, { hostname: 'preview.test' })).rejects.toThrow('6080');
   expect(await box.getExposedPorts('preview.test')).toEqual([]);
 });
+
+// HiddenGrasshopper's review of 29de5aed3: core's exposeOn asks portToken first, which left a 6080 row that a
+// restore then exposed and published, and a preview with no cookie reached the desktop's port.
+test('the desktop\'s port mints no token, so nothing is left for a restore to expose', async () => {
+  const { box, rows } = await startedBox();
+
+  await expect(box.portToken(6080)).rejects.toThrow('6080');
+  expect(rows.has('devbox:port:6080')).toBe(false);
+});
+
+test('a stored 6080 row is never exposed on restore, nor served as a preview', async () => {
+  const { box, rows, container } = harness(DesktopBox);
+  const reached: number[] = [];
+
+  rows.set('devbox:port:6080', { port: 6080, token: 'tok6080', createdAt: 1 });
+  container.listening.add(6080);
+  container.portAnswer = (port) => {
+    reached.push(port);
+
+    return new Response('', { status: 200 });
+  };
+
+  await box.devboxStartup();
+
+  const preview = await box.fetch(new Request('https://box/_devbox/preview/6080/tok6080/websockify'));
+
+  expect({ exposed: await box.getExposedPorts('preview.test'), status: preview.status, reached }).toEqual({ exposed: [], status: 404, reached: [] });
+});
