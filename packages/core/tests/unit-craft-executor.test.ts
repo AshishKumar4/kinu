@@ -112,6 +112,27 @@ describe('crafted-tool execution integration', () => {
     expect(await runProgram(rt, 'return await tools.quiet();')).toEqual({ result: 'ok' });
   });
 
+  test.each([
+    ['a throwing body', 'async () => { throw new Error("broken body"); }'],
+    ['malformed stored source', 'async () => {'],
+    ['a non-callable source', '42'],
+  ])('one bad crafted tool fails alone: %s', async (_kind, code) => {
+    const { rt } = createTestRuntime();
+    rt.craftStore.create({ name: 'broken', description: 'broken', code });
+    rt.craftStore.create({ name: 'double', description: 'double', code: 'async (n) => n * 2' });
+    const tools = actorTools(rt, { codemode: programCodemode() });
+
+    const { result } = v.parse(v.object({ result: v.object({
+      before: v.number(), failed: v.object({ success: v.literal(false), error: v.string() }), after: v.number(),
+    }) }), await toolExecute<{ code: string }, JsonValue>(tools.eval)({
+      code: 'const before = await tools.double(2); const failed = await tools.broken(); const after = await tools.double(3); return { before, failed, after };',
+    }));
+
+    expect(result.before).toBe(4);
+    expect(result.failed.error).toContain(craftFailureMarker('broken'));
+    expect(result.after).toBe(6);
+  });
+
   test('a tool rewritten mid-turn runs its new body in the next program', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({ name: 'identity', description: 'returns arg', code: 'async (x) => x' });
