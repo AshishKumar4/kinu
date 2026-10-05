@@ -279,6 +279,8 @@ function unawaited(work: Promise<unknown>, lost: string): void {
   });
 }
 
+const DESKTOP_PORT_REFUSED = Effect.fail(new DevboxError('invalid-input', `port ${String(DESKTOP_PORT)} is the desktop's, and is never a preview`));
+
 function fileFault(failure: DevboxError): DevboxError {
   const error = failure.cause;
 
@@ -2309,7 +2311,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Must be asked before the first exposure: restarts re-expose each port with its stored
    *  token, so the first exposure must use the same token for the preview URL to survive. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }> {
-    return settle(attempt('io', async () => {
+    return settle(port === DESKTOP_PORT ? DESKTOP_PORT_REFUSED : attempt('io', async () => {
       return await this.#resources.run(portScope(port), () => this.#portToken(port, name));
     }));
   }
@@ -2481,11 +2483,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     port: number,
     options: { name?: string; hostname: string; token?: string },
   ) {
-    const exposed = port === DESKTOP_PORT
-      ? Effect.fail(new DevboxError('invalid-input', `port ${String(DESKTOP_PORT)} is the desktop's, and is never a preview`))
-      : this.#claimed(portScope(port), attempt("file", () => this.#expose(port, options)));
-
-    return await settle(exposed.pipe(Effect.mapError(fileFault)));
+    return await settle(port === DESKTOP_PORT
+      ? DESKTOP_PORT_REFUSED
+      : this.#claimed(portScope(port), attempt("file", () => this.#expose(port, options))).pipe(Effect.mapError(fileFault)));
   }
 
   /** Revocation touches only this object's preview rows, never the container, so it skips
@@ -2933,7 +2933,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async #portSpecs(): Promise<readonly PortExposureSpec[]> {
-    return [...(await this.ctx.storage.list<PortExposureSpec>({ prefix: PORT_SPEC_PREFIX })).values()];
+    return [...(await this.ctx.storage.list<PortExposureSpec>({ prefix: PORT_SPEC_PREFIX })).values()].filter((spec) => spec.port !== DESKTOP_PORT);
   }
 
   #routeClient: ContainerRoutes | undefined;
@@ -2972,7 +2972,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return Effect.gen({ self: this }, function* () {
       const spec = yield* attempt('io', () => this.ctx.storage.get<PortExposureSpec>(`${PORT_SPEC_PREFIX}${port}`));
 
-      if (spec === undefined || !sameToken(spec.token, token)) return new Response('Preview not exposed', { status: 404 });
+      if (port === DESKTOP_PORT || spec === undefined || !sameToken(spec.token, token)) return new Response('Preview not exposed', { status: 404 });
 
       return yield* this.#withActiveCaller(attempt('io', async () => {
         await this.ensureReady();
