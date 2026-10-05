@@ -21,6 +21,10 @@ import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 import type { BrowserSessions } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
+import { jsonSchema, tool as defineTool } from 'ai';
+import type { JsonObject, UserCaller } from '@kinu.run/core';
+import { callUserMcpTool } from '../../src/user-mcp-call';
+import type { McpToolCall } from '../../src/user/user-do';
 
 const NO_BROWSER_RUN = { missing: 'this probe reaches no Browser Run' };
 
@@ -100,6 +104,74 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     });
 
     return JSON.stringify({ first, second, planned, declarations: { before, after: declarations() }, delta: updated.at(-1)?.content });
+  }
+
+  /**
+   * An eval stopped while its calls are held: a native tool that answers only when stopped, and an MCP tool whose
+   * server holds the call. The user stops as the server takes it; the hub records each call id and each cancel.
+   */
+  async stopDuringHeldCalls(): Promise<{ answer: string; called: string[]; cancelled: string[] }> {
+    const sql = bindAgentSql(this);
+    initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
+    const stop = new AbortController();
+    const called: string[] = [];
+    const cancelled: string[] = [];
+    const caller: UserCaller = { workspaceToken: 'stop-probe' };
+
+    const stub = {
+      userMcp_callTool: (_caller: UserCaller, call: McpToolCall): Promise<string> => {
+        called.push(call.id);
+        queueMicrotask(() => { stop.abort(); });
+
+        return new Promise<string>(() => {});
+      },
+      userMcp_cancelCall: async (_caller: UserCaller, callId: string): Promise<void> => { cancelled.push(callId); },
+    };
+
+    const native = {
+      hold: defineTool({
+        description: 'Answers only when stopped',
+        inputSchema: jsonSchema<JsonObject>({ type: 'object' }),
+        execute: (_args, options) => new Promise<string>((resolve) => {
+          options.abortSignal?.addEventListener('abort', () => { resolve('stopped'); }, { once: true });
+        }),
+      }),
+    };
+
+    const external = {
+      mcp_srv_hold: defineTool({
+        description: 'Held by its server',
+        inputSchema: jsonSchema<JsonObject>({ type: 'object' }),
+        execute: async (args, options) => callUserMcpTool({ stub, caller }, { serverId: 'srv', name: 'hold' }, args, options.abortSignal),
+      }),
+    };
+
+    const factory = createCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
+      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'stop-probe', actor: 'stop-probe' } : null }), workspace: 'stop-probe',
+      webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }),
+      browserSessions: NO_BROWSERS,
+      rt: {
+        storage: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT },
+        actor: bindActorHandle(sql, {
+          actorId: 'stop-probe', workspaceId: 'stop-probe', parentActorId: null,
+          name: 'stop-probe', storageKey: 'stop-probe',
+        }, () => Effect.void),
+        executionRouter: { getProviders: () => [] },
+      },
+    });
+
+    const execute = factory.toolFor({ cwd: WORKSPACE_ROOT, native, external: () => external, craftedTools: () => [], providers: [] }).execute;
+
+    if (execute === undefined) throw new Error('No callable codemode tool');
+
+    const answer = await execute({ code: [
+      'const native = tools.hold({});',
+      'const mcp = tools.mcp_srv_hold({});',
+      'return { native: await native, mcp: await mcp };',
+    ].join('\n') }, { toolCallId: 'stop-probe', messages: [], context: undefined, abortSignal: stop.signal });
+
+    return { answer: JSON.stringify(answer ?? null), called, cancelled };
   }
 
   async code(mode: WorkMode, code: string): Promise<{ answer: string; file: string }> {

@@ -227,6 +227,7 @@ import { Hono, type Context } from 'hono';
 import { AdviceJobs } from './advice-jobs';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from './wake-jobs';
 import { rawPath, rethrow } from './api/context';
+import { callUserMcpTool } from './user-mcp-call';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
 interface ModelDimensions {
@@ -2260,9 +2261,8 @@ export abstract class ActorAgent extends Agent<Env> {
       // `buildMcpToolSet` puts every non-readOnly tool behind the same durable claim as natives,
       // using ambient turn deps because this cache is shared across turns (KINU-019).
       buildMcpToolSet(descriptors, {
-        call: async (d, args) => {
-          const rawResult = await this.requireOwnerUserDO()
-            .userMcp_callTool(await this.userCaller(), d.serverId, d.name, args);
+        call: async (d, args, options) => {
+          const rawResult = await callUserMcpTool({ stub: this.requireOwnerUserDO(), caller: await this.userCaller() }, d, args, options.abortSignal);
 
           const response = v.parse(JsonValueSchema, JSON.parse(rawResult));
 
@@ -3063,7 +3063,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (!reach.allowsTool(descriptor.toolKey)) return yield* new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
 
-          return v.parse(JsonValueSchema, JSON.parse(yield* Effect.promise(async () => stub.userMcp_callTool(caller, route.server, route.tool, route.args))));
+          return v.parse(JsonValueSchema, JSON.parse(yield* Effect.promise(async () => callUserMcpTool({ stub, caller }, descriptor, route.args, undefined))));
         }
 
         case 'agent': {

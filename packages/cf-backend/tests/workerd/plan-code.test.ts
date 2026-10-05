@@ -41,3 +41,17 @@ it('hosted Plan analysis reads files and keeps research state without writes or 
   expect(built.file).toBe('changed');
   expect(JSON.parse(built.answer)).toMatchObject({ result: 'network allowed' });
 });
+
+// 2026-10-05: Stop left an eval's tool calls running on the cloud. The vendor's createCodeTool runs its executor without
+// the call's signal, so native calls never saw it, and an MCP call is an RPC to the user's hub, which no signal crosses.
+it('a stopped eval settles its held native and MCP calls at once, and the hub is told to cancel the call it holds', async () => {
+  const root = env.SLATE_ACTOR_ROOT.get(env.SLATE_ACTOR_ROOT.idFromName('stop-held'));
+  const stopped = await root.stopDuringHeldCalls();
+
+  // A stopped call reaches the program as its failure, as a refused one does.
+  expect(JSON.parse(stopped.answer)).toMatchObject({ result: {
+    native: 'stopped', mcp: { reason: 'cancelled', error: expect.stringContaining('hold was stopped before its MCP server answered') },
+  } });
+  expect(stopped.called).toHaveLength(1);
+  expect(stopped.cancelled).toEqual(stopped.called);
+});

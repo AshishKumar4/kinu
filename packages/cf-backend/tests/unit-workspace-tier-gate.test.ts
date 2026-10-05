@@ -95,7 +95,8 @@ const GATED_CALLS: GatedCall[] = [
 
   { capability: 'workspaces.read', name: 'getWorkspaceTitle', run: (u, c) => u.getWorkspaceTitle(c, WORKSPACE) },
   { capability: 'mcp.tools', name: 'userMcp_toolDescriptors', run: (u, c) => u.userMcp_toolDescriptors(c) },
-  { capability: 'mcp.tools', name: 'userMcp_callTool', run: (u, c) => u.userMcp_callTool(c, 'srv', 'tool', {}) },
+  { capability: 'mcp.tools', name: 'userMcp_callTool', run: (u, c) => u.userMcp_callTool(c, { serverId: 'srv', name: 'tool', args: {}, id: 'call-1' }) },
+  { capability: 'mcp.tools', name: 'userMcp_cancelCall', run: (u, c) => u.userMcp_cancelCall(c, 'call-1') },
 
   { capability: 'mcp.manage', name: 'userMcp_list', run: (u, c) => u.userMcp_list(c) },
   { capability: 'mcp.manage', name: 'userMcp_presets', run: (u, c) => u.userMcp_presets(c) },

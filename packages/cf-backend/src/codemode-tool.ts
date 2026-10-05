@@ -106,15 +106,15 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
       const reachable = reach(surface.native);
 
-      const build = (mode: WorkMode): Tool => {
+      // Built per call with the call's signal: createCodeTool runs its executor without the tool call's options,
+      // so a program's tool calls are stopped with its eval only through what this closure binds.
+      const build = (mode: WorkMode, signal: AbortSignal | undefined): Tool => {
         const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'));
-        // No signal: createCodeTool runs its executor without the tool call's options, so a program's
-        // calls here cannot be stopped with its eval, and the user DO's MCP call takes none either.
 
         // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
         const toolsProvider: CodemodeProvider = {
           name: CRAFTED_TOOL_NAMESPACE,
-          tools: nativeToolFunctions(toolsInWorkMode(mode, reachable), undefined),
+          tools: nativeToolFunctions(toolsInWorkMode(mode, reachable), signal),
           // Declared by schemas
           types: '',
           positionalArgs: true,
@@ -133,12 +133,12 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
           description: renderCodemodeDescription(bound.map((provider) => provider.types)),
           tools: bound,
           executor: {
-            // Per call: crafted set and prelude are rebuilt; native fns were frozen at build time.
+            // Crafted set and prelude are read as the program starts.
             execute: (code, resolved) => {
               const crafted = surface.craftedTools();
               const failures = Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute]));
 
-              const external = Object.fromEntries(Object.entries(nativeToolFunctions(toolsInWorkMode(mode, reach(surface.external())), undefined))
+              const external = Object.fromEntries(Object.entries(nativeToolFunctions(toolsInWorkMode(mode, reach(surface.external())), signal))
                 .map(([name, entry]) => [name, entry.execute]));
 
               const live = Array.isArray(resolved)
@@ -162,14 +162,10 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         return { ...built, inputSchema: codemodeInputSchema() };
       };
 
-      const unrestricted = build('build');
-      let planning: Tool | undefined;
-
       return withCraftedToolDeclarations(permitInPlan({
-        ...unrestricted,
+        ...build('build', undefined),
         execute: (input, context) => {
-          const selected = currentWorkMode() === 'plan' ? (planning ??= build('plan')) : unrestricted;
-          const execute = selected.execute;
+          const execute = build(currentWorkMode() === 'plan' ? 'plan' : 'build', context.abortSignal).execute;
 
           if (execute === undefined) throw new Error('Codemode executor is not callable');
           const channel = readDeviceRequestChannel({ toolOptions: context });
