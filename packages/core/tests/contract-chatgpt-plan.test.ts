@@ -7,7 +7,7 @@ import {
   asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, runChat, serverCompactor,
   type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
-import { KinuError } from '../src/obs/index';
+import { KinuError, createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 
 interface Sent {
   readonly url: string;
@@ -374,6 +374,31 @@ describe('the model list', () => {
       ['gpt-6.1-sol', 'GPT-6.1 Sol', 400_000],
       ['gpt-6-luna', 'GPT-6 Luna', null],
     ]);
+  });
+  // Each window as the plan's catalog gives it on 2026-10-02 (OMP's generated `openai-codex` catalog): `context_window`
+  // is the standard-priced window, `max_context_window` the most the model takes.
+  test('a model\'s window is the most its catalog row allows, and the rows it hides are logged once, by slug', async () => {
+    const api = openai(Response.json({
+      models: [
+        { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6-Sol', visibility: 'list', priority: 1, context_window: 272_000, max_context_window: 872_000 },
+        { slug: 'gpt-6.1-sol', display_name: 'GPT-6.1-Sol', visibility: 'hide', priority: 0, context_window: 272_000, max_context_window: 872_000 },
+        { slug: 'gpt-5.5', display_name: 'GPT-5.5', visibility: 'list', priority: 5, context_window: 272_000, max_context_window: 272_000 },
+        { slug: 'gpt-6.1-sol-wm', visibility: 'experimental' },
+      ],
+    }));
+
+    const logger = createRecordingLogger();
+    const restore = setDiagnosticsSink(logger);
+
+    try {
+      const models = await createChatGptProvider().listModels(signedIn(api.fetch).deps);
+
+      expect(models.map((model) => [model.id, model.contextWindow ?? null])).toEqual([['gpt-5.6-sol', 872_000], ['gpt-5.5', 272_000]]);
+      expect(logger.emitted.filter((r) => r.event === 'provider.catalog_hidden').map((r) => r.fields))
+        .toEqual([{ provider: 'chatgpt', hidden: 'gpt-6.1-sol:hide,gpt-6.1-sol-wm:experimental' }]);
+    } finally {
+      restore();
+    }
   });
 });
 

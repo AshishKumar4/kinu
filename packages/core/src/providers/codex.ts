@@ -263,7 +263,9 @@ export function chatgptCatalogRows(answer: { readonly body: unknown }): ChatGptC
         id,
         label: nonEmptyString({ value: row.display_name }) ?? id,
         capabilities,
-        contextWindow: positiveInteger({ value: row.context_window }) ?? positiveInteger({ value: row.max_context_window }),
+        // `context_window` is the standard-priced window, `max_context_window` the most the model takes (OMP's
+        // discovery/codex.ts and compat/context-window.ts): Kinu sizes a turn to the most.
+        contextWindow: largest(positiveInteger({ value: row.context_window }), positiveInteger({ value: row.max_context_window })),
         inputModalities: inputModalities.length > 0 ? inputModalities : undefined,
         reasoningEfforts,
       },
@@ -273,9 +275,26 @@ export function chatgptCatalogRows(answer: { readonly body: unknown }): ChatGptC
   });
 }
 
+function largest(...windows: readonly (number | undefined)[]): number | undefined {
+  const known = windows.filter((window) => window !== undefined);
+
+  return known.length === 0 ? undefined : Math.max(...known);
+}
+
+/** The rows a provider's own visibility rule shows. The rest are logged once per listing, by slug and visibility, so a
+ *  model the account's catalog withholds can be told from one it lacks. */
+export function shownCatalogRows(provider: string, rows: readonly ChatGptCatalogRow[], shows: (visibility: string | undefined) => boolean): ChatGptCatalogRow[] {
+  const hidden = rows.filter((row) => !shows(row.visibility));
+
+  if (hidden.length > 0) {
+    diagnostics.event('provider.catalog_hidden', { provider, hidden: hidden.map((row) => `${row.model.id}:${row.visibility ?? 'unset'}`).join(',') });
+  }
+
+  return rows.filter((row) => shows(row.visibility));
+}
+
 function parseCodexModels(input: { body: unknown }): ModelInfo[] {
-  return chatgptCatalogRows(input)
-    .filter((row) => row.visibility === 'list' || row.visibility === undefined)
+  return shownCatalogRows('codex', chatgptCatalogRows(input), (visibility) => visibility === 'list' || visibility === undefined)
     .sort((a, b) => (b.priority - a.priority) || (a.model.label ?? a.model.id).localeCompare(b.model.label ?? b.model.id))
     .map((row) => row.model);
 }
