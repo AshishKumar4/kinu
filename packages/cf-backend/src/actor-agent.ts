@@ -1834,6 +1834,7 @@ export abstract class ActorAgent extends Agent<Env> {
       history: (limit) => this.chatTranscript.history(limit),
       admitted: async (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
+      retry: (id) => this.chatLoop.retry(id),
       interrupt: () => {
         this.chatLoop.interrupt();
         this.stopSubtree(this.actorHandle().actorId);

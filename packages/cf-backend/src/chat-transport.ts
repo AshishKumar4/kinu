@@ -14,12 +14,13 @@ import {
   type ChatProtocolEvent,
 } from 'agents/chat';
 import type { UIMessage, UIMessageChunk } from 'ai';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
   isWorkMode, INTERRUPTED_TURN, JsonValueSchema,
   type ChatTransport, type JsonObject, type ObservedCall, type PromptFile, type SendLanding, type SessionEvent, type WorkMode,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
+import { attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
 export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState'>;
 
@@ -37,6 +38,8 @@ export interface ChatWire {
   admitted(id: string): Promise<boolean>;
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. */
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
+  /** None on hosted wires. */
+  retry?(id: string): Promise<SendLanding>;
   interrupt(): void;
   clear(): Promise<void>;
 }
@@ -337,8 +340,14 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   private async admitChatRequest(requestId: string, body: string | undefined): Promise<void> {
     const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
 
-    if (parsed === null || !parsed.success || parsed.output.trigger === 'regenerate-message') {
+    if (parsed === null || !parsed.success) {
       this.done(requestId);
+
+      return;
+    }
+
+    if (parsed.output.trigger === 'regenerate-message') {
+      await this.retryRequest(requestId);
 
       return;
     }
@@ -376,6 +385,34 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     release();
 
     if (opener === null) this.done(requestId, taken.length === 0 ? {} : { landed: 'mid-turn' });
+  }
+
+  retryRequest(requestId: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const history = yield* Effect.promise(() => this.wire.history(TRANSCRIPT_WINDOW));
+      const newest = [...history].reverse().find((message) => message.role === 'user');
+
+      const retry = this.wire.retry?.bind(this.wire);
+
+      if (retry === undefined) return this.done(requestId, { error: 'Retry runs on the workspace\'s own chat; send the message to this agent again.' });
+
+      if (newest === undefined) return this.done(requestId, { error: 'There is no message to retry.' });
+      const { id } = newest;
+
+      this.requests.set(id, requestId);
+
+      const landing = yield* attemptInItsWords('io', () => retry(id)).pipe(Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('chat.retry_refused', failure);
+        this.requests.delete(id);
+        this.done(requestId, { error: refusalOf(failure).error });
+
+        return null;
+      })));
+
+      if (landing === null || landing === 'turn') return;
+      this.requests.delete(id);
+      this.done(requestId, { landed: 'mid-turn' });
+    }));
   }
 
   private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {
