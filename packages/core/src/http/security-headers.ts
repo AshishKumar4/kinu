@@ -3,6 +3,8 @@
  * `'unsafe-inline'` scripts are tolerated: the app has no HTML-injection sink.
  */
 
+import { DESKTOP_CLIENT_ROOT } from './desktop-client';
+
 const BASE_CSP = [
   "default-src 'self'",
   "style-src 'self' 'unsafe-inline'",
@@ -54,6 +56,23 @@ function appDocumentCsp(url: URL, previewOrigin: string | null): string {
   ].join('; ');
 }
 
+/** Framed by the app alone; its socket's host, port and path are settings a user can edit, so only this
+ *  origin is reachable whatever they say. */
+function desktopClientCsp(url: URL): string {
+  return [
+    "default-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "script-src 'self' 'unsafe-inline'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'self'",
+    `connect-src 'self' ${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}`,
+    "img-src 'self' data:",
+    "frame-src 'none'",
+  ].join('; ');
+}
+
 /** Non-HTML responses are returned untouched. */
 export function withAppSecurityHeaders(
   response: Response,
@@ -63,8 +82,12 @@ export function withAppSecurityHeaders(
   if (!response.headers.get('content-type')?.includes('text/html')) return response;
   const headers = new Headers(response.headers);
 
+  const desktopClient = url.pathname.startsWith(DESKTOP_CLIENT_ROOT);
+
   for (const [key, value] of Object.entries(BASE_HEADERS)) headers.set(key, value);
-  headers.set('content-security-policy', appDocumentCsp(url, previewOrigin));
+
+  if (desktopClient) headers.set('x-frame-options', 'SAMEORIGIN');
+  headers.set('content-security-policy', desktopClient ? desktopClientCsp(url) : appDocumentCsp(url, previewOrigin));
 
   return new Response(response.body, {
     status: response.status,

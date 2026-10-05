@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-04",
-  "files": 2973,
-  "functions": 74372,
+  "files": 2980,
+  "functions": 74535,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -170,10 +170,6 @@
       "complexity": 31
     },
     {
-      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
-      "complexity": 31
-    },
-    {
       "key": "tests/first-run/exploration.first-run.ts#describe>liveTest>run",
       "complexity": 31
     },
@@ -242,6 +238,10 @@
       "complexity": 29
     },
     {
+      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
+      "complexity": 29
+    },
+    {
       "key": "packages/core/src/web/hero-canvas.ts#createCanvasRenderer>render",
       "complexity": 29
     },
@@ -287,10 +287,6 @@
     },
     {
       "key": "packages/cli/src/config.ts#resolveLLMConfig",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/chat.ts#ProviderCall.consume",
       "complexity": 28
     },
     {

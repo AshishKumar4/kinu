@@ -11,7 +11,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import type { TemporaryAgentPort } from '@kinu.run/core';
 import {
-  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER, initWorkspaceSchema, OUTPUT_CONTINUATION_EVENT,
+  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER, initWorkspaceSchema, OUTPUT_CONTINUATION_EVENT, sha256Hex,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type SessionEvent } from '../src/local-session';
@@ -396,28 +396,23 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     expect(fileParts).toHaveLength(0);
 
-    const referenced = present(
-      observed.find((m) => m.role === 'user' && JSON.stringify(m.content).includes('attachments/')),
-      'the user message carrying the attachment reference',
-    );
+    // The whole reference, so nothing else in the prompt (a worktree path, an instruction) can stand in for it.
+    const path = `attachments/${sha256Hex(pdfBytes)}.pdf`;
+    const reference = `[Attachment resume.pdf (application/pdf, ${pdfBytes.length} bytes) saved to ${path} (read it with your file tools)]`;
 
-    const referencedJson = JSON.stringify(referenced.content);
-    const path = present(/saved to (\S+)/.exec(referencedJson)?.[1], 'the saved attachment path');
+    const carriesReference = (message: PromptMessage): boolean => message.role === 'user'
+      && message.content.some((part) => part.type === 'text' && part.text === reference);
 
-    expect(referencedJson).toContain('resume.pdf');
-    expect(path).toStartWith('attachments/');
-
+    const referenced = present(observed.find(carriesReference), 'the user message carrying the attachment reference');
     const stored = await rt.storage.vfs.readFile(path);
+
     expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(pdfBytes));
 
     await session.send('continue', { id: crypto.randomUUID() });
 
-    const again = present(
-      captures[1].find((m) => m.role === 'user' && JSON.stringify(m.content).includes('attachments/')),
-      'the re-sanitized message carrying the attachment reference',
-    );
+    const again = present(captures[1].find(carriesReference), 'the re-sanitized message carrying the attachment reference');
 
-    expect(JSON.stringify(again.content)).toBe(referencedJson);
+    expect(again.content).toEqual(referenced.content);
   });
 
   test('facts ride the dynamic-context block, never the system prompt', async () => {

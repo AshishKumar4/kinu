@@ -494,7 +494,6 @@ function buildCLIRuntime(
     modelLanes,
     ...(decide !== undefined && { decide }),
     executionRouter, shell, checkpoints,
-    nodeIsolated: true,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
   }), {
@@ -718,7 +717,6 @@ async function buildCLIHeadRuntime(
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,
     executionRouter, shell,
-    nodeIsolated: parent.nodeIsolated,
   };
 
   if (checkpoints) runtimeOptions.checkpoints = checkpoints;

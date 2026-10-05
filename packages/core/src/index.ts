@@ -769,10 +769,16 @@ export {
 
 export {
   acceptedMediaForModel,
+  attachmentBytes,
   sanitizeAttachmentsForModel,
+  storeAttachment,
   type AttachmentPolicy,
   type MediaModality,
 } from './prompting/attachment-sanitizer';
+
+export { rasterImage, type RasterImage } from './utils/raster-image';
+
+export { compactsServerSide, isServerCompaction, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {
   DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type RuntimeFacts, type DynamicTask, type MissingCapability,
@@ -1008,7 +1014,7 @@ export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, 
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  workspacePath, NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT,
+  workspacePath, SLATES_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {
@@ -1574,7 +1580,7 @@ export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type Actor
 
 
 export {
-  ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
+  ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
@@ -2108,6 +2114,8 @@ export {
 export { KINU_USER_AGENT, kinuUserAgent } from './utils/user-agent';
 
 export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';
+
+export { desktopClientUrl } from './http/desktop-client';
 
 export { serveApp } from './http/app-shell';
 

@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
+import type { LanguageModelV2CallOptions, LanguageModelV2Prompt } from '@ai-sdk/provider';
+import * as v from 'valibot';
 import {
   NO_COUNT_ENDPOINT, openWorkspaceMainActor, profileCatalogDigest, type LLMProviderConfig, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
@@ -62,6 +63,40 @@ function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) =>
       };
     },
   });
+}
+
+/** A fake that answers `answer` and hands each streamed request's options to `onRequest`. */
+function providerOptionsModel(answer: string, onRequest: (options: LanguageModelV2CallOptions) => void): LanguageModel {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+  return new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doStream: async (options) => {
+      onRequest(options);
+
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: '0' });
+            controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+            controller.enqueue({ type: 'text-end', id: '0' });
+            controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  });
+}
+
+/** The server-side compaction trigger a request asked for, or null. */
+function compactionTrigger(options: LanguageModelV2CallOptions): number | null {
+  const asked = v.safeParse(v.object({ anthropic: v.object({ contextManagement: v.object({ edits: v.tuple([v.object({ trigger: v.object({ value: v.number() }) })]) }) }) }), options.providerOptions);
+
+  return asked.success ? asked.output.anthropic.contextManagement.edits[0].trigger.value : null;
 }
 
 function reasoningModel(thought: string, answer: string): LanguageModel {
@@ -670,6 +705,39 @@ describe('LocalAgentClient', () => {
     await client.close();
 
     expect(asksSentWith(prompts, 'what came first?')).toHaveLength(5);
+  });
+
+  // A Claude model that compacts server-side folds on its provider (core providers/server-compaction.ts): /compact arms
+  // the next request to ask for it, or says a conversation under the provider's floor has nothing to fold.
+  test('/compact on a Claude model that compacts server-side asks for it on the next request, once', async () => {
+    const compacted = async (asks: number) => {
+      const triggers: (number | null)[] = [];
+      // Long answers: a long ask is saved to a file instead.
+      const { client } = setup(providerOptionsModel('findings '.repeat(4_000), (options) => { triggers.push(compactionTrigger(options)); }));
+      const sizes = gateSizes(client);
+      await client.connect();
+      await client.setModel('anthropic/claude-opus-4-7');
+
+      for (let turn = 0; turn < asks; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+      const before = triggers.at(-1) ?? null;
+      const outcome = await client.localControls.compact();
+      await client.send('what came first?', { cwd: '/work' });
+      const armed = { trigger: triggers.at(-1) ?? null, admitted: sizes.at(-1) ?? 0 };
+      await client.send('and after that?', { cwd: '/work' });
+      const after = triggers.at(-1) ?? null;
+      await client.close();
+
+      return { outcome, before, armed, after };
+    };
+
+    const long = await compacted(5);
+    const short = await compacted(1);
+
+    expect({ outcome: long.outcome, after: long.after }).toEqual({ outcome: 'armed', after: long.before });
+    expect(long.armed.trigger).toBeLessThan(long.armed.admitted);
+    expect(long.armed.trigger).toBeGreaterThanOrEqual(50_000);
+    expect(short).toMatchObject({ outcome: 'nothing', armed: { trigger: short.before }, after: short.before });
   });
 
   test('a turn sent while /compact folds waits for the fold and runs on it', async () => {

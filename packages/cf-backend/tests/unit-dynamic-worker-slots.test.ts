@@ -125,8 +125,8 @@ describe("a read across every agent's isolate", () => {
     expect(await spend).toEqual(expect.any(Array));
   });
 
-  // Only a call that ran frees a platform slot: refused calls that woke each other would resend in a loop.
-  test('refused calls are not sent again until a call that ran ends, then every call completes', async () => {
+  // A refusal pauses the ledger's admissions (50 ms, doubling to 2 s), so refused calls never resend in a loop.
+  test('refused calls are not sent again at once, then every call completes once a call that ran ends', async () => {
     const workspace = orchestratorHarness();
 
     await hire(workspace, 3);

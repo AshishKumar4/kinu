@@ -87,7 +87,7 @@ last.
 a delta before its own input if state changed. Nothing before it moves.
 
 - **Cold cache.** If the previous request is older than its provider's idle lifetime, nothing is cached anyway, so rewriting is free: the stored blocks collapse into one full block before the new input (`promptCacheWarm`, `orchestrator/actor-session.ts`).
-- **Compaction.** At 85 % of the context window (the default `light` preset; it compacts to 35 %), the first rung drops every superseded dynamic block and keeps one full block at the newest position. Only then does the ladder run: superseded file reads, failed tool inputs, old tool output, reasoning, the remaining tool output, then assistant runs, with a prefix summary as the last resort (`packages/compaction`).
+- **Compaction.** At 85 % of the context window (the default `light` preset; it compacts to 35 %), the first rung drops every superseded dynamic block and keeps one full block at the newest position. Only then does the ladder run: older images and files move to the agent's home, each left as a `vfs://` link its `file` tool opens again (the newest two images stay), then superseded file reads, failed tool inputs, old tool output, reasoning, the remaining tool output, then assistant runs, with a prefix summary as the last resort (`packages/compaction`).
 
 ## What a hired agent and a swarm node see
 

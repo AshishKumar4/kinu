@@ -33,7 +33,7 @@ async function publicPlane(name: 'cf' | 'cli') {
         await files.writeFile(path, new TextEncoder().encode(text));
       },
       // The own home is the Nimbus tree's, and a relative path starts there.
-      home: '/home/main', workdir: '/home/main', legacyHomes: ['/home/user'],
+      home: '/home/main', workdir: '/home/main',
       hostFile: null,
     };
   }
@@ -62,7 +62,7 @@ async function publicPlane(name: 'cf' | 'cli') {
     shell: present(rt.shell, 'the local shell'),
     write: async (path: string, text: string) => { await rt.storage.vfs.writeFile(path, new TextEncoder().encode(text)); },
     end: () => db.close(),
-    home: join(space, 'home', 'main'), workdir: cwd, legacyHomes: [],
+    home: join(space, 'home', 'main'), workdir: cwd,
     hostFile: (path: string) => readFileSync(path, 'utf8'),
   };
 }
@@ -77,7 +77,7 @@ for (const name of testBackends()) {
 
         for (const path of [
           '/home/main/notes/item.txt', '/home//main/notes/item.txt', '/home/main/notes/./item.txt', '/home/main/notes/item.txt/',
-          `${plane.home}/notes/item.txt`, ...plane.legacyHomes.map((home) => `${home}/notes/item.txt`),
+          `${plane.home}/notes/item.txt`,
         ]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }

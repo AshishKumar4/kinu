@@ -35,7 +35,6 @@ export function localNodeRuntime(owner: CLIRuntime, actor: ActorHandle, source: 
     get fastLlm() { return source.fastLlm; },
     executionRouter: source.executionRouter,
     shell: source.shell,
-    nodeIsolated: source.nodeIsolated,
     checkpoints: source.checkpoints,
     setShellApprovalChannel: source.setShellApprovalChannel,
     setTurnFileLedgerProvider: source.setTurnFileLedgerProvider,

@@ -592,6 +592,33 @@ describe('summaries', () => {
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
   });
 
+  // Owner, 2026-10-04: a Claude model that compacts server-side (core providers/server-compaction.ts) takes the
+  // provider's summary instead of better-compact's, and only what follows the provider's summary is sent.
+  test('a model that compacts server-side gets no better-compact summary, and the request opens at the provider\'s', async () => {
+    const summarized = (model: string) => rig({ model: () => model });
+    const messages: ModelMessage[] = [];
+
+    for (let i = 0; i < 8; i++) {
+      messages.push(user(`requirement ${i}: ${'detail '.repeat(1_000)}`));
+      messages.push(assistant([{ type: 'text', text: `noted ${i}` }]));
+    }
+
+    const own = summarized('anthropic/claude-haiku-4-5');
+    await own.transform(messages);
+    const server = summarized('anthropic/claude-opus-4-7');
+    await server.transform(messages);
+
+    const compacted: ModelMessage[] = [
+      user('older ask'), assistant([{ type: 'text', text: 'older answer' }]),
+      user('the ask the provider compacted at'),
+      assistant([{ type: 'text', text: 'Summary of everything so far.', providerOptions: { anthropic: { type: 'compaction' } } }, { type: 'text', text: 'Continuing.' }]),
+      user('next ask'),
+    ];
+
+    expect({ own: own.prompts.length > 0, server: server.prompts, sent: await server.transform(compacted) })
+      .toEqual({ own: true, server: [], sent: compacted.slice(2) });
+  });
+
   test('a split first turn upgrades the exact compacted fragment', async () => {
     const { ports, prompts, transform } = rig();
 

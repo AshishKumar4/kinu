@@ -1,4 +1,5 @@
 import { exists as nimbusExists, readText, type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { direntType } from '../vfs/dirent';
 /**
  * DeviceTunnelExecutor (`device.*`): the user's machines via a daemon connected through the UserDO hub.
  * A fleet: with several live machines a call must name one (`{ device }`); files mount per machine under `/pc/<name>`.
@@ -778,14 +779,12 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
         if (isJsonObject(entry)) {
           const name = v.safeParse(v.string(), entry.name);
 
-          if (name.success) {
-            if (entry.type === 'symlink') return { name: name.output, type: 'symlink' as const };
+          const kind = v.safeParse(v.string(), entry.type);
 
-            return { name: name.output, type: entry.type === 'directory' || entry.type === 'dir' ? 'directory' as const : 'file' as const };
-          }
+          if (name.success) return { name: name.output, type: direntType(kind.success ? kind.output : undefined) };
         }
 
-        return { name: JSON.stringify(entry), type: 'file' as const };
+        return { name: JSON.stringify(entry), type: 'unknown' as const };
       });
     })),
 

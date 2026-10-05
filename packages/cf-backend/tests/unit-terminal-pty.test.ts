@@ -267,6 +267,40 @@ describe('attaching a terminal', () => {
 });
 
 /** Terminal failures, preflight included, must carry the workspace and executor tags; control flow is unchanged. */
+describe('opening the desktop (D70)', () => {
+  test('the container is prepared, then the box\'s desktop gets the upgrade without the caller\'s credentials', async () => {
+    const { deps, trace } = harness();
+
+    const request = new Request(`https://app.example/api/workspaces/${WORKSPACE}/desktop`, {
+      headers: {
+        upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-version': '13', 'sec-websocket-protocol': 'binary',
+        cookie: '__Host-kinu_session=s3cr3t', 'x-kinu-user-id': 'u_1', origin: 'https://app.example',
+      },
+    });
+
+    expect((await terminalRequest(request, deps))?.status).toBe(200);
+    expect(trace.calls).toEqual(['prepareTerminal:sandbox', 'noteTerminalActivity', 'terminal']);
+    expect(new URL(trace.request?.url ?? '').pathname).toBe('/_devbox/desktop');
+    expect([...trace.request?.headers.keys() ?? []].sort()).toEqual(['connection', 'sec-websocket-protocol', 'sec-websocket-version', 'upgrade']);
+  });
+
+  test('a desktop request that is not an upgrade touches nothing', async () => {
+    const { deps, trace } = harness();
+
+    expect((await terminalRequest(new Request(`https://app.example/api/workspaces/${WORKSPACE}/desktop`), deps))?.status).toBe(400);
+    expect(trace.calls).toEqual([]);
+  });
+
+  test('a desktop that fails to open names the desktop, not a terminal', async () => {
+    const { deps } = harness({ attach: () => Promise.reject(new Error('the desktop did not start: (EE) Fatal server error')) });
+    const request = new Request(`https://app.example/api/workspaces/${WORKSPACE}/desktop`, { headers: { upgrade: 'websocket' } });
+    const { value, logs } = await recorded(() => terminalRequest(request, deps));
+
+    expect(value?.status).toBe(503);
+    expect(logs.map((log) => log.event)).toEqual(['desktop.attach_failed']);
+  });
+});
+
 describe('a terminal failure names the workspace and the executor', () => {
   function terminalRows(
     logs: readonly RecordedLog[], event: string,

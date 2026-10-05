@@ -3,9 +3,6 @@ import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 /** The canonical home directory for workspace-relative paths. */
 export const WORKSPACE_ROOT = '/home/main';
 
-/** Nimbus 0.14's runners still default to it (2026-10-02, NIMBUS-ASKS 7). Delete when they derive from HOME. */
-export const NIMBUS_WORKSPACE_ROOT = '/home/user';
-
 /** Every agent's. */
 export const SLATES_ROOT = '/slates';
 
