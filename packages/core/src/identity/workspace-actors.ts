@@ -183,11 +183,10 @@ export class WorkspaceActorDirectory {
   }
 
   /** `also` runs after the directory's own checks and can only refuse further, never authorise. */
-  private issue(row: WorkspaceActor, also?: () => void): ActorHandle {
-    const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => {
-      if (this.ended.has(row.actorId)) throw new KinuError('missing', 'The actor identity is no longer present.');
-      also?.();
-    });
+  private issue(row: WorkspaceActor, also?: () => Effect.Effect<void, KinuError>): ActorHandle {
+    const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => (this.ended.has(row.actorId)
+      ? Effect.fail(new KinuError('missing', 'The actor identity is no longer present.'))
+      : also?.() ?? Effect.void));
 
     this.handles.add(handle);
 
@@ -203,7 +202,7 @@ export class WorkspaceActorDirectory {
     return row;
   }
 
-  open(actorId: string, also?: () => void): ActorHandle {
+  open(actorId: string, also?: () => Effect.Effect<void, KinuError>): ActorHandle {
     const row = this.retained(actorId);
 
     if (!row || row.retiringAt !== null || row.deletedAt !== null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
