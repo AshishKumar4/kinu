@@ -96,7 +96,15 @@ export function localPlanes(input: { readonly space: string; readonly folder: st
   };
 }
 
-const REFERENCE = /^([^\s/:]+):\/\/(.*)$/su;
+/** What a prefix's name may hold, as references are read: no whitespace, `/` or `:`. */
+const PREFIX_NAME = String.raw`[^\s/:]+`;
+
+const REFERENCE = new RegExp(String.raw`^(${PREFIX_NAME}):\/\/(.*)$`, 'su');
+
+/** Whether `name` can stand before `://`: a machine's own name is its prefix only when it can. */
+export function isPrefixName(name: string): boolean {
+  return new RegExp(String.raw`^${PREFIX_NAME}$`, 'u').test(name);
+}
 
 export function resolvePath(path: string, planes: PathPlanes): ResolvedPath {
   return settleSync(resolvedPath(path, planes));
@@ -188,7 +196,7 @@ function shortestReference(absolute: string, planes: PathPlanes): { readonly pre
 
     if (row.prefix !== DEVICE_PREFIX) return [{ prefix: row.prefix, text: `${row.prefix}://${relativeTo(row.subtree, vfs)}` }];
     const [machine = '', ...path] = relativeTo(row.subtree, vfs).split('/');
-    const taken = machine === '' || RESERVED_ROOTS.includes(machine) || planes.prefixes.some((other) => other.prefix === machine);
+    const taken = !isPrefixName(machine) || RESERVED_ROOTS.includes(machine) || planes.prefixes.some((other) => other.prefix === machine);
 
     return taken ? [] : [{ prefix: machine, text: `${machine}://${path.join('/')}` }];
   });

@@ -75,6 +75,18 @@ describe('a machine path formats to the reference of the plane that holds it', (
       expect(deviceMountSegment(named, [named])).toBe('dev-9');
     }
   });
+
+  // Release review, 2026-10-05: a machine named "Work Laptop" printed as Work Laptop://x, which reads back as a relative path.
+  test('a machine whose name no prefix can carry is mounted under its id, and every reference to it reads back', () => {
+    for (const name of ['Work Laptop', 'ashish:mac', 'tab\there']) {
+      const named: DeviceFleetEntry = { id: 'dev-9', name, os: 'linux', hostname: 'l', connected: true };
+      expect(deviceMountSegment(named, [named])).toBe('dev-9');
+    }
+
+    const spaced = '/pc/Work Laptop/home/user/report.txt';
+    expect(formatPath(spaced, CF)).toBe('vfs://pc/Work Laptop/home/user/report.txt');
+    expect(resolvePath(formatPath(spaced, CF), CF).absolute).toBe(spaced);
+  });
 });
 
 describe('a shell takes its machine\'s paths', () => {
