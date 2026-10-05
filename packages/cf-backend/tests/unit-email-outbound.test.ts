@@ -16,6 +16,7 @@ import {
 } from '../src/email/outbound';
 import { EmailOutbox } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
+import { refuseUnlistedHeaders } from './helpers/email-service';
 
 function makeExec(db: Database): SqlExec {
   return sqlExec(db);
@@ -52,7 +53,10 @@ function fakeSendBinding(opts: { fail?: boolean } = {}) {
   function send(message: SendEmailBuilder): Promise<EmailSendResult>;
   async function send(message: EmailMessage | SendEmailBuilder): Promise<EmailSendResult> {
     if (opts.fail) throw new Error('E_SENDER_NOT_VERIFIED');
-    sent.push(v.parse(SentEmailSchema, message));
+    const parsed = v.parse(SentEmailSchema, message);
+
+    refuseUnlistedHeaders(parsed.headers);
+    sent.push(parsed);
 
     return { messageId: `out-${sent.length}` };
   }
@@ -130,8 +134,6 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
         References: '<root@mail.example.com> <abc@mail.example.com>',
       },
     });
-    // The idempotency key rides the wire as a stable Message-ID (SPEC §7.4).
-    expect(sent[0].headers?.['Message-ID']).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
 
     expect(replies.findOpenByEvent(eventId)).toBeNull();
 
@@ -239,7 +241,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 });
 
 describe('sendOwnerEmail — changelog digests + job completions', () => {
-  test('sends from the agent address to the owner with a tagged subject + stable Message-ID', async () => {
+  test('sends from the agent address to the owner with a tagged subject', async () => {
     const { binding, sent } = fakeSendBinding();
 
     const ok = await sendOwnerEmail({
@@ -255,8 +257,7 @@ describe('sendOwnerEmail — changelog digests + job completions', () => {
       subject: '[Scout] Evolution changelog digest',
       text: 'Self-change digest: 3 entries…',
     });
-    expect(sent[0].headers?.['Auto-Submitted']).toBe('auto-generated');
-    expect(sent[0].headers?.['Message-ID']).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
+    expect(sent[0].headers).toEqual({ 'Auto-Submitted': 'auto-generated' });
   });
 
   test('skips quietly when the platform email pieces are missing', async () => {
@@ -375,7 +376,6 @@ describe('the receipt an accepted message gets immediately', () => {
     expect(delivered).toEqual({ delivered: true });
     expect(sent).toHaveLength(2);
     expect(sent[1].text).toBe('Staging is green.');
-    expect(sent[0].headers?.['Message-ID']).not.toBe(sent[1].headers?.['Message-ID']);
   });
 });
 

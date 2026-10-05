@@ -2385,7 +2385,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         input: v.object({
           drainTurnId: v.string(), answer: v.string(), requestId: v.string(),
         }),
-        // Replayable: the outbound-email intent log stamps a deterministic Message-ID per channel.
+        // Replayable: the outbound-email outbox sends each channel's key once.
         // A batch with an open channel reports `owed`, keeping its lease and row for recovery.
         run: async ({ drainTurnId, answer }) => {
           const closed = await this.completeEventBatch(drainTurnId, answer);
@@ -3346,7 +3346,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }),
       )));
 
-      // Re-drive `pending` outbound email; the stored Message-ID makes re-send idempotent (SPEC §7.4).
+      // Re-drive `pending` outbound email (SPEC §7.4).
       await tick.span('alarm.email_reconcile', (span) => settle(Effect.catchCause(
         Effect.promise(async () => {
           if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
