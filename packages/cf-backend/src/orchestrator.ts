@@ -61,7 +61,7 @@ import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  admitHostedTask, hostedDelegationBudget, hostedRetryTools, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
+  admitHostedTask, hostedDelegationBudget, hostedRetryTools, hostedSubordinateRuntime, relayHostedReport, retireStalledTask, retryHostedMessage,
   hostedTaskEnding, reclaimSettledExplorationActors,
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
@@ -2129,6 +2129,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       history: (limit) => this.agentStores(actorId).history(limit),
       admitted: (id) => this.agentStores(actorId).admitted(id),
       send: (input) => whenActorTakesInput(this.boundSql, actorId, () => sendNow(input)),
+      retry: (id) => whenActorTakesInput(this.boundSql, actorId, () => retryHostedMessage(this.hostedSeams(), reference, {
+        messageId: id, reopen: async () => { await (await facet()).reopen(snapshot(), id); },
+      })),
       interrupt: () => {
         this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));
         this.stopSubtree(actorId);

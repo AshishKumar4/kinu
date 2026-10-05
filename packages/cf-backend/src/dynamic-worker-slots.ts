@@ -99,6 +99,7 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     scrollConversation: (...args) => settle(through((isolate) => isolate.scrollConversation(...args))),
     browseConversations: (...args) => settle(through((isolate) => isolate.browseConversations(...args))),
     admitted: (...args) => settle(through((isolate) => isolate.admitted(...args))),
+    reopen: (...args) => settle(through((isolate) => isolate.reopen(...args))),
     interrupt: (...args) => settle(through((isolate) => isolate.interrupt(...args))),
     clear: (...args) => settle(through((isolate) => isolate.clear(...args))),
     recover: (...args) => settle(through((isolate) => isolate.recover(...args))),

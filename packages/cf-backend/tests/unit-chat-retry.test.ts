@@ -5,7 +5,9 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
+import { actorConnectionTag } from '@kinu.run/core';
 import { gatewayWorkspace, storedChat, workspaceFiles, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 import { socketConnection } from './helpers/bindings';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
@@ -34,7 +36,7 @@ function done(frames: readonly string[], id: string) {
   });
 }
 
-function listen(agent: HarnessOrchestratorAgent) {
+function listen(agent: HarnessOrchestratorAgent, actorId: string | null = null) {
   const frames = new AwaitedList<string>();
   const fanout = agent.broadcast.bind(agent);
 
@@ -46,7 +48,9 @@ function listen(agent: HarnessOrchestratorAgent) {
     },
   });
 
-  const wire: Connection = socketConnection({ id: 'retry-conn', send: (data: string) => { frames.push(data); } });
+  const wire: Connection = socketConnection({
+    id: 'retry-conn', tags: actorId === null ? [] : [actorConnectionTag(actorId)], send: (data: string) => { frames.push(data); },
+  });
 
   return { wire, frames };
 }
@@ -128,5 +132,58 @@ describe('Retry on a failed turn', () => {
     const chat = await storedChat(workspace);
     expect(chat.map((message) => message.role)).toEqual(['user', 'assistant']);
     expect(JSON.stringify(chat[1])).toContain('Answered on retry.');
+  });
+
+  test('on a hosted agent\'s chat, keeps the completed step, does its work once, and finishes the answer', async () => {
+    const prompts: string[] = [];
+    let refused = false;
+
+    const workspace = gatewayWorkspace(stubAiBinding((run) => {
+      const sent = requestOf(run).messages;
+
+      if (!JSON.stringify(sent).includes(ASK)) return chatCompletion(run, '{"title":"Deploy notes"}');
+      prompts.push(JSON.stringify(sent));
+
+      if (!sent.some((message) => message.role === 'tool')) {
+        return toolCallCompletion(run, { tool: 'shell', args: { command: `echo ran >> ${COUNTER}` } }, 'call_0');
+      }
+
+      if (!refused) {
+        refused = true;
+
+        return Response.json({ error: { message: 'Bad Request: a cache_control block is malformed' } }, { status: 400 });
+      }
+
+      return chatCompletion(run, 'The deploy ran, noted once.');
+    }));
+
+    const { agent } = workspace;
+    await workspace.started;
+    const { subordinate } = await agent.createSubordinateAgent();
+
+    if (subordinate.actorId === null) throw new Error('the added agent has no actor');
+    const { wire, frames } = listen(agent, subordinate.actorId);
+
+    const ask = async (id: string, trigger: 'submit-message' | 'regenerate-message') => {
+      await agent.onMessage(wire, request(id, trigger));
+      await agent.terminalRetryPass();
+      await joinHarnessFibers();
+      await frames.until((sent) => done(sent, id).length > 0);
+    };
+
+    const counted = async () => (await agent.execWorkspaceCommand(`cat /home/sub-*/${COUNTER}`)).stdout;
+
+    await ask('first', 'submit-message');
+    expect(refused).toBe(true);
+    expect(await counted()).toBe('ran\n');
+    const asked = prompts[0]?.split(ASK).length;
+
+    await ask('retry', 'regenerate-message');
+    expect(done(frames.items, 'retry')[0]?.error).toBeUndefined();
+    expect(await counted()).toBe('ran\n');
+    const last = prompts.at(-1) ?? '';
+    expect(last.split(ASK).length).toBe(asked);
+    expect(last).toContain('"role":"tool"');
+    expect(JSON.stringify(frames.items)).toContain('The deploy ran, noted once.');
   });
 });
