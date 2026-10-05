@@ -20,6 +20,17 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
 
 const dialogText = (page: Page) => page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
 
+/** Presses the control whose words begin with `words`, as a reader finds it. */
+async function clickByText(page: Page, selector: string, words: string): Promise<void> {
+  await page.waitForFunction((sel, text) => [...document.querySelectorAll(sel)].some((node) => (node.textContent ?? '').trim().startsWith(text)), {}, selector, words);
+  await page.$$eval(selector, (nodes, text) => {
+    const target = nodes.find((node) => (node.textContent ?? '').trim().startsWith(text));
+
+    if (!(target instanceof HTMLElement)) throw new Error(`${text} absent`);
+    target.click();
+  }, words);
+}
+
 /** The primary nav, painted, once each row's own colour transition has ended. */
 async function navPaint(page: Page): Promise<{ label: string; background: string; ink: string; top: number; bottom: number }[]> {
   return page.$$eval('nav[aria-label="Primary"] a', async (anchors) => {
@@ -141,7 +152,7 @@ describe('account panels', () => {
             await providers.waitForSelector('[role="dialog"]');
             await settleAccountFixture(providers);
             await providers.waitForFunction(
-              () => document.querySelector('[role="dialog"]')?.textContent?.includes('Connect ChatGPT'),
+              () => document.querySelector('[role="dialog"]')?.textContent?.includes('Use your computer'),
             );
 
             const text = await dialogText(providers);
@@ -227,6 +238,33 @@ describe('account panels', () => {
       }
 
       
+    });
+  });
+
+  test('ChatGPT connects two ways: a machine gets its connect command, and an address pasted back here signs in', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'setupmodal&panel=providers', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('[role="dialog"]');
+        await settleAccountFixture(page);
+        await page.waitForSelector('[data-chatgpt-connect]');
+
+        // No machine is connected: choosing the computer hands the command that installs Kinu and connects it.
+        await clickByText(page, '[data-chatgpt-connect] button', 'Use your computer');
+        await page.waitForSelector('[data-chatgpt-way="computer"] [data-connect-command]');
+        expect(await page.$eval('[data-connect-command]', (code) => code.textContent ?? '')).toContain('--connect');
+        await clickByText(page, '[data-chatgpt-connect] button', 'Cancel');
+
+        // Here: the sign-in opens at OpenAI, and the address the browser lands on is pasted back.
+        await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here');
+        await page.waitForSelector('[data-chatgpt-way="here"] input');
+        await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
+        await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish');
+        await page.waitForFunction(() => document.body.textContent?.includes("You're using your ChatGPT plan") === true);
+      } finally {
+        await page.close();
+      }
     });
   });
 

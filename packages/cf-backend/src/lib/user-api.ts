@@ -112,8 +112,6 @@ const ModelMenuSchema = v.object({
   accounts: v.optional(v.record(v.string(), v.array(v.string()))),
 });
 
-export type DeviceFlowStart = v.InferOutput<typeof DeviceFlowStartSchema>;
-
 export type CliSetup = v.InferOutput<typeof CliSetupSchema>;
 
 export type PollResult = v.InferOutput<typeof PollResultSchema>;
@@ -297,10 +295,6 @@ export const setCredential    = (key: string, value: Credential) =>
 export const deleteCredential = (key: string) =>
   settle(api(OkSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}`));
 
-const DeviceFlowStartSchema = v.object({
-  userCode: v.string(), deviceAuthId: v.string(), pollIntervalSec: v.number(), portalURL: v.string(),
-});
-
 const CodexStatusSchema = v.object({
   connected: v.boolean(), accountId: v.nullable(v.string()), expiresAt: v.nullable(v.number()),
   startedFlow: v.nullable(v.object({ userCode: v.string(), portalURL: v.string(), pollIntervalSec: v.number() })),
@@ -311,10 +305,6 @@ const PollResultSchema = v.object({
 });
 
 export const codexStatus      = () => settle(api(CodexStatusSchema, 'GET', '/codex'));
-
-export const startCodexFlow   = () => settle(api(DeviceFlowStartSchema, 'POST', '/codex/start'));
-
-export const pollCodexFlow    = () => settle(api(PollResultSchema, 'POST', '/codex/poll'));
 
 /** Where the owner reviews and limits what Kinu spends of their ChatGPT plan. */
 export const CHATGPT_USAGE_URL = 'https://chatgpt.com/settings/usage';
@@ -343,6 +333,15 @@ export const chatgptPlan = () => settle(api(ChatGptPlanSchema, 'GET', '/chatgpt'
 export const startChatGptSignIn = () => settle(api(ChatGptMachineSignInSchema, 'POST', '/chatgpt/sign-in'));
 
 export const signOutChatGpt = () => settle(api(v.object({ unconfirmed: v.nullable(v.string()) }), 'DELETE', '/chatgpt'));
+
+export const cancelChatGptSignIn = () => settle(api(v.object({ cancelled: v.boolean() }), 'DELETE', '/chatgpt/sign-in'));
+
+/** The browser that opens `authorizeUrl` lands on `redirectUri`; that address is pasted back. */
+export const startChatGptPaste = () => settle(api(v.object({ authorizeUrl: v.string(), redirectUri: v.string() }), 'POST', '/chatgpt/paste/start'));
+
+export const finishChatGptPaste = (url: string) => settle(api(
+  v.object({ outcome: v.picklist(['signed_in', 'declined', 'plan_declined']), email: v.nullable(v.string()) }), 'POST', '/chatgpt/paste/finish', { url },
+));
 
 export const startClaudeSignIn = () => settle(api(v.object({ url: v.string() }), 'POST', '/claude/start'));
 

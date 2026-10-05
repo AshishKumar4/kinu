@@ -322,6 +322,40 @@ function galleryChatGptStatus() {
 /** Flips when the gallery's Claude sign-in finishes with the fixture's code. */
 let settingsClaudeConnected = false;
 
+/** `&chatgpt=device`: a machine that signs in; without, none is connected yet. */
+function chatgptFixture(path: string, method: string): Response | null {
+  if (path === "/api/user/chatgpt") {
+    return fixtureJson(CHATGPT_DEVICE
+      ? { device: GALLERY_DEVICE, status: galleryChatGptStatus(), account: null, machineSignIn: null }
+      : { device: null, status: null, account: settingsChatGptSignedIn ? { email: "owner@example.com" } : null, machineSignIn: null });
+  }
+
+  if (path === "/api/user/chatgpt/sign-in" && method === "POST") {
+    if (!CHATGPT_DEVICE) return fixtureJson({ state: "waiting_for_machine" });
+    settingsChatGptSignedIn = true;
+
+    return fixtureJson({ state: "open", authorizeUrl: "about:blank", device: GALLERY_DEVICE });
+  }
+
+  if (path === "/api/user/chatgpt/sign-in" && method === "DELETE") return fixtureJson({ cancelled: true });
+
+  if (path === "/api/user/chatgpt/paste/start" && method === "POST") {
+    return fixtureJson({ authorizeUrl: "about:blank", redirectUri: "http://127.0.0.1:1455/auth/callback" });
+  }
+
+  if (path === "/api/user/chatgpt/paste/finish" && method === "POST") {
+    settingsChatGptSignedIn = true;
+
+    return fixtureJson({ outcome: "signed_in", email: "owner@example.com" });
+  }
+
+  if (path === "/api/user/devices" && method === "POST") {
+    return fixtureJson({ origin: location.origin, installCommand: `curl -fsSL ${location.origin}/install.sh | sh -s -- --connect kd_9f2c71a4` });
+  }
+
+  return null;
+}
+
 async function settingsSectionsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
   if (path === "/api/user/credentials") {
     return fixtureJson([
@@ -377,16 +411,9 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
       : fixtureJson({ error: "Codex status fixture failed" }, 503);
   }
 
-  // `&chatgpt=device`: a machine that signs in; without, the Codex device code.
-  if (path === "/api/user/chatgpt") {
-    return fixtureJson(CHATGPT_DEVICE ? { device: GALLERY_DEVICE, status: galleryChatGptStatus() } : { device: null, status: null });
-  }
+  const chatgpt = chatgptFixture(path, method);
 
-  if (path === "/api/user/chatgpt/sign-in" && method === "POST") {
-    settingsChatGptSignedIn = true;
-
-    return fixtureJson({ authorizeUrl: "about:blank", device: GALLERY_DEVICE });
-  }
+  if (chatgpt !== null) return chatgpt;
 
   if (path === "/api/user/models") {
     // Different effort lists per model: the tier levels are the model's, never a fixed three.

@@ -3,26 +3,25 @@
  * Each read is its own resource and fails visibly: a swallowed rejection shows a connected account as disconnected.
  */
 import { Effect } from 'effect';
-import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
-import { Combobox, Loader } from "@cloudflare/kumo";
-import { CheckIcon, ArrowSquareOutIcon, PlugIcon } from "@phosphor-icons/react";
+import { useState, type ReactNode } from "react";
+import { Combobox } from "@cloudflare/kumo";
+import { CheckIcon, PlugIcon } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
   listCredentials, setCredential, deleteCredential,
-  codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex, startClaudeSignIn, finishClaudeSignIn,
+  codexStatus, disconnectCodex, startClaudeSignIn, finishClaudeSignIn,
   chatgptPlan, signOutChatGpt,
   listAvailableModels, listProviderCatalog, getProfileCatalog, updateProfileCatalog,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
   listUnrevokedGrants, dismissUnrevokedGrant, type UnrevokedGrant,
   type CredentialSummary,
-  type ProviderCatalogEntry, type DeviceFlowStart,
+  type ProviderCatalogEntry,
   type CloudflareGatewayStatus, type CloudflareAccountStatus,
 } from "@/lib/user-api";
 import type { ProfileCatalogEnvelope } from '@kinu.run/core';
 import { Card, Choice, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
-import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { ChatGptConnect, ChatGptPlanUsage } from "@/components/account/ChatGptConnect";
@@ -121,15 +120,16 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
                     {(status) => (
                       <CardSlot resource={chatgpt.resource} what="your ChatGPT plan" onRetry={reloadAll}>
                         {(plan) => {
-                          // A machine's own sign-in wins; the Codex device code is the way in without one.
-                          const planSignedIn = plan.status?.signedIn === true;
+                          // Signed in through a machine or pasted back here; a stored Codex credential predates both.
+                          const planSignedIn = plan.status?.signedIn === true || plan.account !== null;
+                          const planEmail = plan.account?.email ?? plan.status?.email ?? 'signed in';
                           const codexAccount = status.accountId === null ? undefined : <>account {status.accountId.slice(0, 8)}…</>;
 
                           return (
                             <ProviderEntry provider="chatgpt" name="ChatGPT"
-                              method={plan.device === null ? "Device code" : `Sign in with ChatGPT on ${plan.device.label}`}
+                              method="Sign in with ChatGPT"
                               connected={status.connected || planSignedIn}
-                              detail={planSignedIn ? <>{plan.status?.email ?? 'signed in'} on {plan.device?.label}</> : codexAccount}
+                              detail={planSignedIn ? <>{planEmail}{plan.account === null && plan.device !== null ? <> on {plan.device.label}</> : null}</> : codexAccount}
                               disconnect={async () => {
                                 if (!planSignedIn) {
                                   await disconnectCodex();
@@ -142,7 +142,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
                                 if (unconfirmed !== null) alert(`OpenAI did not confirm it revoked the sign-in (${unconfirmed}). Disconnect Kinu under Apps in ChatGPT settings to be sure.`);
                               }}
                               onChanged={reloadAll}
-                              connect={<ChatGptConnect plan={plan} legacy={<CodexConnect onChanged={reloadAll} />} onChanged={reloadAll} />}>
+                              connect={<ChatGptConnect plan={plan} onChanged={reloadAll} />}>
                               {planSignedIn && <ChatGptPlanUsage />}
                             </ProviderEntry>
                           );
@@ -334,73 +334,6 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
       )}
       {error && <p className="text-xs p-danger">{error}</p>}
     </Field>
-  );
-}
-
-/** ChatGPT's device code: the owner enters it at OpenAI while this polls. */
-function CodexConnect({ onChanged }: { onChanged: () => void }) {
-  const [flow, setFlow] = useState<DeviceFlowStart | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
-
-  const start = useCallback(() => detach(Effect.gen(function* () {
-    setError(null);
-
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      const f = yield* Effect.promise(async () => startCodexFlow());
-      setFlow(f);
-
-      const stopPolling = () => {
-        if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-
-        setFlow(null);
-      };
-
-      // A failed poll request is shown, and polling goes on.
-      pollRef.current = setInterval(() => detach(Effect.catchCause(Effect.gen(function* () {
-        const result = yield* Effect.promise(() => pollCodexFlow());
-
-        if (result.connected) {
-          stopPolling();
-          onChanged();
-        } else if (result.error) {
-          // A reported error (expired/denied/no flow) is terminal; pending returns { connected: false }.
-          stopPolling();
-          setError(result.error);
-        } else {
-          setError(null);
-        }
-      }), showing(setError))), Math.max(3, f.pollIntervalSec) * 1000);
-    }), showing(setError));
-  })), [onChanged]);
-
-  if (flow) {
-    return (
-      <Field label={<>Open <a href={flow.portalURL} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">{flow.portalURL}</a> and enter this code</>}>
-        <div className="flex flex-wrap items-center gap-3">
-          <code className="rounded-md border p-border p-fill px-4 py-2 font-mono text-2xl tracking-widest p-text select-all">{flow.userCode}</code>
-          <CopyButton value={flow.userCode} what="the device code" size={14}
-            className="p-btn-quiet inline-flex size-8 items-center justify-center" />
-          <a
-            href={flow.portalURL}
-            target="_blank" rel="noopener noreferrer"
-            className="p-btn-quiet inline-flex size-8 items-center justify-center"
-            title="Open portal"
-          ><ArrowSquareOutIcon size={14} /></a>
-        </div>
-        <p className="p-meta p-text-3 flex items-center gap-2"><Loader size="sm" /> Waiting for you to authorize…</p>
-        {error && <p className="text-xs p-danger">{error}</p>}
-      </Field>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      <FilledButton onClick={start}>Connect ChatGPT</FilledButton>
-      {error && <p className="text-xs p-danger">{error}</p>}
-    </div>
   );
 }
 

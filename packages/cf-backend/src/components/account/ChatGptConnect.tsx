@@ -1,14 +1,21 @@
-/** Sign in with ChatGPT on the owner's machine (ADR P1); `legacy`, the Codex device code, without one. */
-import { useEffect, useState, type ReactNode } from "react";
+/** Connect a ChatGPT plan two ways: through a machine running Kinu, which keeps the sign-in, or here, by pasting back
+ *  the local address the sign-in lands on. */
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { Effect } from "effect";
+import { ArrowSquareOutIcon, DesktopTowerIcon, GlobeIcon } from "@phosphor-icons/react";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
-import { CHATGPT_USAGE_URL, chatgptPlan, startChatGptSignIn, type ChatGptPlan } from "@/lib/user-api";
+import {
+  CHATGPT_USAGE_URL, cancelChatGptSignIn, chatgptPlan, finishChatGptPaste, registerDevice, startChatGptPaste, startChatGptSignIn,
+  type ChatGptPlan,
+} from "@/lib/user-api";
 import { BrandMark } from "@/components/ui/BrandMark";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
+import { inputCls } from "@/components/ui/form";
 
-/** How often a waiting sign-in asks the machine whether the browser came back. */
+/** How often a waiting sign-in is read. */
 const SIGN_IN_POLL_MS = 2_000;
 
 /** SIWC UI guidelines' wording and link. */
@@ -22,53 +29,36 @@ export function ChatGptPlanUsage() {
   );
 }
 
-export function ChatGptConnect({ plan, legacy, onChanged }: { plan: ChatGptPlan; legacy: ReactNode; onChanged: () => void }) {
-  const [waiting, setWaiting] = useState(false);
+type Way = "computer" | "here";
+
+const PASTE_OUTCOME = {
+  declined: "You cancelled the sign-in at OpenAI. Open the link again to retry.",
+  plan_declined: "You signed in without allowing ChatGPT plan usage. Open the link again and allow it.",
+} as const;
+
+export function ChatGptConnect({ plan, onChanged }: { plan: ChatGptPlan; onChanged: () => void }) {
+  const [way, setWay] = useState<Way | null>(null);
   const [welcome, setWelcome] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const shown = (failure: { readonly cause?: unknown }) => Effect.sync(() => { setError(renderThrownChain({ cause: failure.cause ?? failure })); });
+  const shown = useCallback((failure: { readonly cause?: unknown }) => Effect.sync(() => { setError(renderThrownChain({ cause: failure.cause ?? failure })); }), []);
 
-  // While the browser is away, ask the machine whether it came back.
-  useEffect(() => {
-    if (!waiting) return undefined;
+  const finished = useCallback((first: boolean) => {
+    setWay(null);
 
-    const timer = window.setInterval(() => detach(attempt({ doing: "reading the ChatGPT sign-in", otherwise: "io" }, chatgptPlan).pipe(
-      Effect.map(({ status: now }) => {
-        if (now?.signedIn === true) {
-          setWaiting(false);
+    if (first) setWelcome(true);
+    else onChanged();
+  }, [onChanged]);
 
-          if (now.firstSignIn) setWelcome(true);
-          else onChanged();
-        } else if (now !== null && !now.pending) {
-          setWaiting(false);
-          setError(now.lastFailure ?? "The sign-in did not finish.");
-        }
-      }),
-      Effect.catch(shown),
-    )), SIGN_IN_POLL_MS);
+  const cancel = useCallback(() => detach(attempt({ doing: "cancelling the ChatGPT sign-in", otherwise: "io" }, cancelChatGptSignIn).pipe(
+    Effect.map(() => { setWay(null); setError(null); }),
+    Effect.catch(shown),
+  )), [shown]);
 
-    return () => { window.clearInterval(timer); };
-  }, [waiting, onChanged]);
-
-  if (plan.device === null) return <>{legacy}</>;
-  const { device, status } = plan;
-
-  const signIn = () => {
-    setError(null);
-    // Opened inside the click, so no popup blocker stands between the owner and the sign-in.
-    const tab = window.open("", "_blank");
-
-    return attempt({ doing: "starting the ChatGPT sign-in", otherwise: "io" }, startChatGptSignIn).pipe(
-      Effect.map((started) => {
-        if (started.state !== "open") tab?.close();
-        else if (tab === null) window.location.assign(started.authorizeUrl);
-        else tab.location.href = started.authorizeUrl;
-        setWaiting(true);
-      }),
-      Effect.catch((failure) => Effect.andThen(Effect.sync(() => tab?.close()), shown(failure))),
-    );
-  };
+  const gaveUp = useCallback((reason: string) => {
+    setWay(null);
+    setError(reason);
+  }, []);
 
   const dismiss = () => {
     setWelcome(false);
@@ -76,22 +66,27 @@ export function ChatGptConnect({ plan, legacy, onChanged }: { plan: ChatGptPlan;
   };
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3" data-chatgpt-connect>
       <p className="rounded-md px-3 py-2 text-xs p-notice-warning">
-        Using your ChatGPT plan from kinu.run goes through your own device. OpenAI&apos;s open-source terms cover locally hosted apps, so you connect at your own risk.
+        OpenAI&apos;s open-source terms cover locally hosted apps, so you connect your ChatGPT plan to kinu.run at your own risk.
       </p>
-      {status?.planDeclined === true && (
-        <p className="text-xs p-text-2">{status.email ?? "Your ChatGPT account"} signed in without ChatGPT plan usage. Continue with ChatGPT to allow it.</p>
+      {plan.status?.planDeclined === true && (
+        <p className="text-xs p-text-2">{plan.status.email ?? "Your ChatGPT account"} signed in without ChatGPT plan usage. Sign in again to allow it.</p>
       )}
-      <div className="flex flex-wrap items-center gap-3">
-        <FilledButton onClick={() => detach(signIn())} disabled={waiting}>Continue with ChatGPT</FilledButton>
-        {waiting && <span className="p-meta p-text-3 flex items-center gap-2"><Loader size="sm" /> Waiting for the browser to come back to {device.label}…</span>}
-      </div>
-      <p className="p-meta p-text-3">
-        Signs in on {device.label}, which keeps the sign-in and carries your ChatGPT plan&apos;s requests. Open it in a browser on that machine.
-      </p>
-
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {way === null && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <WayButton icon={<DesktopTowerIcon size={16} />} title="Use your computer"
+            text="Sign in on a machine running Kinu. The sign-in stays on that machine." onClick={() => { setError(null); setWay("computer"); }} />
+          <WayButton icon={<GlobeIcon size={16} />} title="Sign in here"
+            text="Sign in in this browser, then paste back the address it lands on." onClick={() => { setError(null); setWay("here"); }} />
+        </div>
+      )}
+      {way === "computer" && <OnYourComputer plan={plan} onDone={finished} onGaveUp={gaveUp} onFailed={shown} />}
+      {way === "here" && <SignInHere onDone={finished} onFailed={shown} />}
+      {way !== null && (
+        <button type="button" onClick={cancel} className="p-meta p-text-3 underline-offset-2 hover:p-text hover:underline">Cancel</button>
+      )}
+      {error && <p role="alert" className="text-xs p-danger">{error}</p>}
       {welcome && (
         <Modal title="You're using your ChatGPT plan" icon={<BrandMark brand="openai" size={16} bare />} onClose={dismiss}
           footer={<FilledButton onClick={dismiss}>Got it</FilledButton>}>
@@ -101,6 +96,138 @@ export function ChatGptConnect({ plan, legacy, onChanged }: { plan: ChatGptPlan;
           </p>
         </Modal>
       )}
+    </div>
+  );
+}
+
+function WayButton({ icon, title, text, onClick }: { icon: ReactNode; title: string; text: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick}
+      className="flex flex-col items-start gap-1 rounded-xl border p-border px-3.5 py-3 text-left transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-neutral-tint)]">
+      <span className="flex items-center gap-2 text-[13px] font-medium p-text">{icon}{title}</span>
+      <span className="p-meta p-text-3">{text}</span>
+    </button>
+  );
+}
+
+type Failed = (failure: { readonly cause?: unknown }) => Effect.Effect<void>;
+
+/** Signs in through a machine, first handing the command that connects one. */
+function OnYourComputer({ plan, onDone, onGaveUp, onFailed }: {
+  plan: ChatGptPlan; onDone: (first: boolean) => void; onGaveUp: (reason: string) => void; onFailed: Failed;
+}) {
+  const [current, setCurrent] = useState(plan);
+  const [command, setCommand] = useState<string | null>(null);
+
+  useEffect(() => {
+    detach(attempt({ doing: "starting the ChatGPT sign-in", otherwise: "io" }, startChatGptSignIn).pipe(
+      Effect.map((machineSignIn) => { setCurrent((was) => ({ ...was, machineSignIn })); }),
+      Effect.catch(onFailed),
+    ));
+  }, [onFailed]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => detach(attempt({ doing: "reading the ChatGPT sign-in", otherwise: "io" }, chatgptPlan).pipe(
+      Effect.map((now) => {
+        const ended = now.status;
+
+        if (ended?.signedIn === true) onDone(ended.firstSignIn);
+        // A sign-in the machine opened and then gave up on ends here, in its own words.
+        else if (now.machineSignIn?.state !== "waiting_for_machine" && ended !== null && !ended.pending && ended.lastFailure !== null) onGaveUp(ended.lastFailure);
+        else setCurrent(now);
+      }),
+      Effect.catch(onFailed),
+    )), SIGN_IN_POLL_MS);
+
+    return () => { window.clearInterval(timer); };
+  }, [onDone, onGaveUp, onFailed]);
+
+  const signIn = current.machineSignIn;
+  const needsMachine = signIn?.state === "waiting_for_machine";
+
+  useEffect(() => {
+    if (!needsMachine || command !== null) return;
+    detach(attempt({ doing: "making the connect command", otherwise: "io" }, () => registerDevice()).pipe(
+      Effect.map(({ installCommand }) => { setCommand(installCommand); }),
+      Effect.catch(onFailed),
+    ));
+  }, [needsMachine, command, onFailed]);
+
+  if (signIn?.state === "open") {
+    return (
+      <div className="space-y-2" data-chatgpt-way="computer" data-chatgpt-state="open">
+        <p className="text-xs p-text-2">Sign in from a browser on <span className="font-medium p-text">{signIn.device.label}</span>. The sign-in comes back to that machine.</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <a href={signIn.authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-btn-quiet inline-flex items-center gap-1.5 px-3 py-1.5 text-xs">
+            <ArrowSquareOutIcon size={12} /> Open ChatGPT sign-in
+          </a>
+          <CopyButton value={signIn.authorizeUrl} what="the sign-in link" size={13} className="p-btn-quiet inline-flex size-7 items-center justify-center" />
+        </div>
+        <p className="flex items-center gap-2 p-meta p-text-3"><Loader size="sm" /> Waiting for the sign-in to finish on {signIn.device.label}…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2" data-chatgpt-way="computer" data-chatgpt-state="waiting">
+      <p className="text-xs p-text-2">Run this on your computer. It installs the Kinu CLI and connects the machine; the sign-in then opens there.</p>
+      {command !== null && (
+        <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
+          <code data-connect-command className="p-t-code p-text flex-1 break-all select-all">{command}</code>
+          <CopyButton value={command} what="the connect command" size={13} className="p-text-3 hover:p-text shrink-0" />
+        </div>
+      )}
+      <p className="flex items-center gap-2 p-meta p-text-3"><Loader size="sm" /> Waiting for your machine…</p>
+    </div>
+  );
+}
+
+/** Signs in here; the local address the browser lands on is pasted back. */
+function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; onFailed: Failed }) {
+  const [started, setStarted] = useState<{ authorizeUrl: string; redirectUri: string } | null>(null);
+  const [pasted, setPasted] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    detach(attempt({ doing: "starting the ChatGPT sign-in", otherwise: "io" }, startChatGptPaste).pipe(
+      Effect.map(setStarted),
+      Effect.catch(onFailed),
+    ));
+  }, [onFailed]);
+
+  const finish = useCallback(() => {
+    setBusy(true);
+    setNote(null);
+    detach(attempt({ doing: "finishing the ChatGPT sign-in", otherwise: "io" }, () => finishChatGptPaste(pasted.trim())).pipe(
+      Effect.map((answer) => {
+        if (answer.outcome === "signed_in") onDone(true);
+        else setNote(PASTE_OUTCOME[answer.outcome]);
+      }),
+      Effect.catch(onFailed),
+      Effect.ensuring(Effect.sync(() => setBusy(false))),
+    ));
+  }, [pasted, onDone, onFailed]);
+
+  if (started === null) return <p className="flex items-center gap-2 p-meta p-text-3" data-chatgpt-way="here"><Loader size="sm" /> Preparing the sign-in…</p>;
+
+  return (
+    <div className="space-y-3" data-chatgpt-way="here">
+      <div className="space-y-1.5">
+        <p className="text-xs p-text-2">1. Open ChatGPT and sign in.</p>
+        <a href={started.authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-btn-quiet inline-flex items-center gap-1.5 px-3 py-1.5 text-xs">
+          <ArrowSquareOutIcon size={12} /> Open ChatGPT sign-in
+        </a>
+      </div>
+      <div className="space-y-1.5">
+        <p className="text-xs p-text-2">2. Your browser then lands on a page that does not load, at an address starting with <code className="font-mono">{started.redirectUri}</code>. Copy that whole address and paste it here.</p>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input value={pasted} onChange={(event) => setPasted(event.target.value)} placeholder={`${started.redirectUri}?code=…`}
+            aria-label="Address the sign-in landed on" className={`${inputCls} text-xs`} disabled={busy} />
+          <FilledButton onClick={finish} disabled={busy || pasted.trim() === ""} className="shrink-0">{busy ? "Finishing…" : "Finish"}</FilledButton>
+        </div>
+      </div>
+      {note && <p className="text-xs p-warning">{note}</p>}
     </div>
   );
 }
