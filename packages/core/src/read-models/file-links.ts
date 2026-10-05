@@ -22,12 +22,12 @@ export function localFileLinks(planes: PathPlanes): FileLinks {
   };
 }
 
-/** A cloud workspace's files open on its Files surface, which lands on `?file=<reference>`. */
-export function cloudFileLinks(origin: string, workspace: string): FileLinks {
+/** A cloud workspace's files open on its Files surface, which lands on `?file=<reference>`; `machines` are its live ones. */
+export function cloudFileLinks(origin: string, workspace: string, machines: readonly string[] = []): FileLinks {
   const page = new URL(APP_ROUTES.workspace.replace(':agentId', encodeURIComponent(workspace)), origin);
 
   return {
-    roots: referencePrefixes(cloudPlanes(WORKSPACE_ROOT)),
+    roots: referencePrefixes(cloudPlanes(WORKSPACE_ROOT), machines),
     href: (reference) => {
       page.searchParams.set('file', reference);
 
