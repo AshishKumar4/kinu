@@ -84,4 +84,13 @@ describe('core-layering', () => {
     sources.delete(`${C}prompts/role.md`);
     expect(() => findViolations(sources)).toThrow('names no file in the corpus');
   });
+
+  test('JSON protocol modules retain their layer boundary without parsing data as code', () => {
+    const sources = corpus({
+      'execution/a.ts': 'import protocol from "../orchestrator/protocol.json";',
+      'orchestrator/protocol.json': '{"method":"exec"}',
+    });
+
+    expect(findViolations(sources).map(keyOf)).toEqual([`${C}execution/a.ts -> ${C}orchestrator/protocol.json (value)`]);
+  });
 });

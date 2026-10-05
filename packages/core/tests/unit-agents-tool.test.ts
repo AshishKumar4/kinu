@@ -534,7 +534,7 @@ describe('agents tool — the swarm refusal seam', () => {
 
   /** Built here so the extra key is not an excess property on a `ToolExecutionOptions` literal. */
   function spawnAnnouncing(announce: () => void) {
-    return { toolCallId: 'tc-swarm', messages: [], [SPAWN_STARTED_OPTION]: announce };
+    return { toolCallId: 'tc-swarm', messages: [], context: undefined, [SPAWN_STARTED_OPTION]: announce };
   }
 
   test('a swarm with no preset is refused at the seam — before the spawn is announced', async () => {

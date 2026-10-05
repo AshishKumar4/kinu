@@ -14,7 +14,8 @@ import {
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
 import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { ChatGptPlanUsage } from "./account/ChatGptConnect";
-import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
+import { Cause, Effect } from "effect";
+import { detach, diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import * as v from 'valibot';
 
 const ModelMenuEntrySchema = v.object({
@@ -246,17 +247,13 @@ export function ConnectedModelPicker({
   const [menu, setMenu] = useState<ModelMenu | null | { error: string }>(null);
 
   const fetchModels = useCallback(() => {
-    const loadFailed = (...rejection: [unknown]): void => {
-      const error = renderThrownChain({ cause: rejection[0] });
+    setMenu(null);
+    detach(Effect.catchCause(Effect.map(Effect.promise(listAvailableModels), setMenu), (failed) => Effect.sync(() => {
+      const error = renderThrownChain({ cause: Cause.squash(failed) });
 
       diagnostics.event("model_picker.load_failed", { error });
       setMenu({ error });
-    };
-
-    setMenu(null);
-    listAvailableModels()
-      .then(setMenu)
-      .catch(loadFailed);
+    })));
   }, []);
 
   useEffect(() => { fetchModels(); }, [fetchModels]);

@@ -1,11 +1,12 @@
-import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { actorHomeName } from '@kinu.run/core';
-import { scratchDir } from '@kinu.run/test-utils';
-import { cleanupFacetCwdScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
+import { actorHomeName, codemodeSurface, narrowToolSurface, type JsonValue } from '@kinu.run/core';
+import { scratchDir, toolExecute } from '@kinu.run/test-utils';
+import { cleanupFacetScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
+import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { registerLocalActor } from '@kinu.run/core';
 
 interface LocalRoot {
@@ -14,7 +15,7 @@ interface LocalRoot {
   readonly dbPath: string;
 }
 
-function rootRuntime(state: string, cwd?: string): LocalRoot {
+function rootRuntime(state: string, cwd = scratchDir('facet-plane-folder')): LocalRoot {
   const dbPath = join(state, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
@@ -23,12 +24,12 @@ function rootRuntime(state: string, cwd?: string): LocalRoot {
 }
 
 /** A child over its root's database: same handle, same file, its own actor row. */
-async function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): Promise<CLIRuntime> {
+function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): CLIRuntime {
   const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), origin: 'agent', lifetime: 'durable' });
   const facet = actorHomeName({ origin: 'agent', storageKey: binding.storageKey });
   const child = createCLIRuntime(root.db, { llm: null, cwd: parent.cwd, facet, actorBinding: binding });
 
-  return shareLocalWorkspacePlane(child, parent, facet);
+  return shareLocalWorkspacePlane(child, parent);
 }
 
 async function exec(rt: CLIRuntime, command: string) {
@@ -37,41 +38,21 @@ async function exec(rt: CLIRuntime, command: string) {
   return rt.shell.exec(command);
 }
 
-const home = (actor: CLIRuntime) => `/home/${actorHomeName({ origin: 'agent', storageKey: actor.actor.storageKey })}`;
-
 describe('local actor file-plane identity', () => {
-  test('same-name children under two parents have distinct homes and private scratch', async () => {
-    const state = scratchDir('facet-plane-sqlite');
-    const root = rootRuntime(state);
-    const left = await childRuntime(root.rt, root, 'left');
-    const right = await childRuntime(root.rt, root, 'right');
-    const alpha = await childRuntime(left, root, 'reader');
-    const beta = await childRuntime(right, root, 'reader');
-    expect(alpha.actor.name).toBe(beta.actor.name);
-    expect(alpha.actor.actorId).not.toBe(beta.actor.actorId);
-    expect(home(alpha)).not.toBe(home(beta));
-    expect(readdirSync(state).filter((entry) => entry.endsWith('.db'))).toEqual(['agent.db']);
-    await writeText(alpha.storage.vfs, `${home(alpha)}/notes`, 'alpha');
-    expect(await readText(beta.storage.vfs, `${home(alpha)}/notes`)).toBe('alpha');
-    await expect(writeText(beta.storage.vfs, `${home(alpha)}/intruder`, 'beta')).rejects.toMatchObject({ code: 'EACCES' });
-    expect((await exec(beta, `echo beta > ${home(alpha)}/intruder`)).exitCode).not.toBe(0);
-    expect((await exec(alpha, 'echo private > /tmp/note')).exitCode).toBe(0);
-    expect((await exec(beta, 'cat /tmp/note')).exitCode).not.toBe(0);
-    expect(await exists(root.rt.storage.vfs, '/tmp/note')).toBe(false);
-  });
-
-  test('directory-bound children retain logical names and use distinct physical HOME values', async () => {
+  // 2026-10-04: a child's scratch was `<folder>/.kinu/facets/<key>`, in the user's project; it is its own home in the own space.
+  test('directory-bound children work in the folder, with their own home in the own space beside the database', async () => {
     const state = scratchDir('facet-plane-cwd');
     const project = join(state, 'project');
     mkdirSync(project);
     const root = rootRuntime(state, project);
-    const child = await childRuntime(root.rt, root, 'reader');
+    const child = childRuntime(root.rt, root, 'reader');
     const key = actorHomeName({ origin: 'agent', storageKey: child.actor.storageKey });
     expect((await exec(child, 'pwd; echo "$HOME"; echo "$TMPDIR"')).stdout.trim().split('\n')).toEqual([
-      resolve(project), join(project, '.kinu', 'facets', key), join(project, '.kinu', 'facets', key, 'tmp'),
+      resolve(project), join(state, 'home', key), join(state, 'home', key, 'tmp'),
     ]);
     expect((await exec(child, 'echo shared > shared.txt')).exitCode).toBe(0);
-    expect(await readText(root.rt.storage.vfs, 'shared.txt')).toBe('shared\n');
+    expect(await readText(root.rt.storage.vfs, join(project, 'shared.txt'))).toBe('shared\n');
+    expect(readdirSync(project)).toEqual(['shared.txt']);
     expect(child.identity.name).toBe('reader');
   });
 
@@ -89,15 +70,40 @@ describe('local actor file-plane identity', () => {
     const project = join(state, 'project');
     mkdirSync(project);
     const root = rootRuntime(state, project);
-    const one = await childRuntime(root.rt, root, 'one');
-    const two = await childRuntime(root.rt, root, 'two');
+    const one = childRuntime(root.rt, root, 'one');
+    const two = childRuntime(root.rt, root, 'two');
     expect((await exec(one, 'echo keep > keep.txt')).exitCode).toBe(0);
     const oneKey = actorHomeName({ origin: 'agent', storageKey: one.actor.storageKey });
     const twoKey = actorHomeName({ origin: 'agent', storageKey: two.actor.storageKey });
-    const facets = join(project, '.kinu', 'facets');
-    expect(readdirSync(join(facets, oneKey))).toEqual(['tmp']);
-    cleanupFacetCwdScratch(project, oneKey);
-    expect(readdirSync(facets)).toEqual([twoKey]);
-    expect(existsSync(join(project, 'keep.txt'))).toBe(true);
+    expect(readdirSync(join(state, 'home', oneKey))).toEqual(['tmp']);
+    cleanupFacetScratch(state, oneKey);
+    expect(existsSync(join(state, 'home', oneKey))).toBe(false);
+    expect(existsSync(join(state, 'home', twoKey))).toBe(true);
+    expect(readdirSync(project)).toEqual(['keep.txt']);
+  });
+
+  // Release review, 2026-10-04: joining the plane rebuilt the child's shell under the root's policy, so the
+  // child's narrowing was lost and a force-push the root had granted reached the box.
+  test("a joined child keeps its own narrowing of the root's grants", async () => {
+    const root = rootRuntime(scratchDir('facet-plane-grants'));
+    root.rt.actor.config.grantShellApproval([{ rule: 'git-force-push', executor: 'workspace' }]);
+    const child = childRuntime(root.rt, root, 'publisher');
+    child.actor.config.grantShellApproval([{ rule: 'package-publish', executor: 'workspace' }]);
+    const command = 'git push --force origin main';
+    expect((await exec(root.rt, command)).stderr).not.toContain('NOT RUN');
+    const refused = await exec(child, command);
+    expect(refused.stderr).toContain('NOT RUN: needs owner approval');
+    expect(refused.stderr).toContain('git-force-push');
+  });
+
+  // Release review, 2026-10-04: eval's Node `process` and `fs` started in the root's home, so a child's relative
+  // paths missed the files its own shell wrote. A child works in its workspace's folder, as its shell does.
+  test("a joined child's eval starts where its shell does", async () => {
+    const root = rootRuntime(scratchDir('facet-plane-eval-home'));
+    const child = childRuntime(root.rt, root, 'writer');
+    expect((await exec(child, 'echo mine > note.txt')).exitCode).toBe(0);
+    const run = toolExecute<{ code: string }, { result: JsonValue }>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })(codemodeSurface(child, {})));
+    const read = await run({ code: 'return [process.cwd(), await require("fs/promises").readFile("note.txt", "utf8")];' });
+    expect(read.result).toEqual([child.cwd, 'mine\n']);
   });
 });

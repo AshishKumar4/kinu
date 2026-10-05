@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Fiber, Scheduler } from 'effect';
 import type { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { classifyErrorCode, KinuError, renderThrownChain, toKinuError, type ErrorCode } from './error';
+import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, toKinuError, type ErrorCode, type Refusal } from './error';
+import { classify, type ExpectedFailure } from './expected-failure';
 
 const WITHIN_ONE_EVENT = new Scheduler.MixedScheduler('sync');
 
@@ -11,12 +12,17 @@ export function attempt<A>(
   return Effect.tryPromise({ try: run, catch: (cause) => toKinuError({ ...input, cause }) });
 }
 
+const worded = (otherwise: ErrorCode, { cause }: { readonly cause: unknown }): KinuError =>
+  (cause instanceof KinuError ? cause : new KinuError(classifyErrorCode({ cause }) ?? otherwise, renderThrownChain({ cause }), { cause }));
+
 /** {@link attempt} for a callee whose refusal is already worded for its reader: its message is kept, not replaced. */
 export function attemptInItsWords<A>(otherwise: ErrorCode, run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
-  return Effect.tryPromise({
-    try: run,
-    catch: (cause) => (cause instanceof KinuError ? cause : new KinuError(classifyErrorCode({ cause }) ?? otherwise, renderThrownChain({ cause }), { cause })),
-  });
+  return Effect.tryPromise({ try: run, catch: (cause) => worded(otherwise, { cause }) });
+}
+
+/** {@link attemptInItsWords} for a thrown defect. */
+export function inItsWords<A>(otherwise: ErrorCode, effect: Effect.Effect<A>): Effect.Effect<A, KinuError> {
+  return Effect.catchDefect(effect, (cause) => Effect.fail(worded(otherwise, { cause })));
 }
 
 interface SettleOptions {
@@ -36,12 +42,18 @@ function fail(cause: Cause.Cause<KinuError | VfsError>, options?: SettleOptions)
   );
 }
 
+/** The only runner. Its awaits add hops a bare `await` lacks, so a call forwarded when a gate opens stays a promise chain. */
 export async function settle<A>(effect: Effect.Effect<A, KinuError | VfsError>, options?: SettleOptions): Promise<A> {
   const exit = await Effect.runPromiseExit(effect, { scheduler: WITHIN_ONE_EVENT, signal: options?.signal });
 
   if (Exit.isSuccess(exit)) return exit.value;
 
   return fail(exit.cause, options);
+}
+
+/** A run whose promise is stored and joined later: it never rejects, and its holder decides what the exit means. */
+export function hold<A, E>(effect: Effect.Effect<A, E>): Promise<Exit.Exit<A, E>> {
+  return settle(Effect.exit(effect));
 }
 
 export function settleSync<A>(effect: Effect.Effect<A, KinuError | VfsError>, options?: Pick<SettleOptions, 'interrupted'>): A {
@@ -53,4 +65,84 @@ export function settleSync<A>(effect: Effect.Effect<A, KinuError | VfsError>, op
   if (Cause.isAsyncFiberError(defect)) Effect.runFork(Fiber.interrupt(defect.fiber));
 
   return fail(exit.cause, options);
+}
+
+export function refusing(doing: string, otherwise: ErrorCode): (failed: Cause.Cause<unknown>) => Effect.Effect<Refusal> {
+  return (failed) => Effect.sync(() => refusalOf(toKinuError({ doing, cause: Cause.squash(failed), otherwise })));
+}
+
+/** A failure nothing awaits, classified and handed to `record` (a diagnostic, a span): the work goes on. */
+export function recording(
+  failure: { readonly doing: string; readonly otherwise: ErrorCode },
+  record: (error: KinuError) => void,
+): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
+  return (failed) => Effect.sync(() => { record(toKinuError({ ...failure, cause: Cause.squash(failed) })); });
+}
+
+export function showing(show: (chain: string) => void): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
+  return (failed) => Effect.sync(() => { show(renderThrownChain({ cause: Cause.squash(failed) })); });
+}
+
+/** `effect` with the named failure passed as `undefined`. */
+export function tolerated<A, E>(effect: Effect.Effect<A, E>, expected: ExpectedFailure): Effect.Effect<A | undefined, E> {
+  return Effect.catchCause(effect, (cause) => (classify({ cause: Cause.squash(cause) }) === expected ? Effect.undefined : Effect.failCause(cause)));
+}
+
+/**
+ * Runs `operation`, returning `undefined` only for the named failure; anything else is rethrown
+ * as-is, unwrapped, to keep the failing frame on top.
+ */
+export function tolerate<T>(operation: () => T, expected: ExpectedFailure): T | undefined {
+  return settleSync(tolerated(Effect.sync(operation), expected));
+}
+
+/** `tolerate` for an operation that rejects rather than throws. */
+export function tolerateAsync<T>(operation: () => Promise<T>, expected: ExpectedFailure): Promise<T | undefined> {
+  return settle(tolerated(Effect.promise(operation), expected));
+}
+
+type FlightKey = string | number | null;
+
+interface FlightOptions<I> {
+  readonly key?: (input: I) => FlightKey;
+  readonly keep?: 'success' | 'exit';
+}
+
+export type Flight<I, A, E> = ((input: I) => Effect.Effect<A, E>) & { readonly forget: (key: FlightKey) => void };
+
+/** One run per key, joined by every caller (OBSERVABILITY.md). */
+export function flight<A, E extends KinuError | VfsError>(run: () => Effect.Effect<A, E>, options?: FlightOptions<void>): Flight<void, A, E>;
+export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => Effect.Effect<A, E>, options?: FlightOptions<I>): Flight<I, A, E>;
+export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => Effect.Effect<A, E>, options?: FlightOptions<I>): Flight<I, A, E> {
+  const held = new Map<FlightKey, Promise<Exit.Exit<A, E>>>();
+
+  const joined = (input: I): Effect.Effect<A, E> => Effect.suspend(() => {
+    const key = options?.key?.(input) ?? null;
+    let exit = held.get(key);
+
+    if (exit === undefined) {
+      let live = true;
+
+      const free = Effect.sync(() => {
+        if (exit === undefined) live = false;
+        else if (held.get(key) === exit) held.delete(key);
+      });
+
+      const ran = run(input);
+      let kept = Effect.ensuring(ran, free);
+
+      if (options?.keep === 'exit') kept = ran;
+      else if (options?.keep === 'success') kept = Effect.onError(ran, () => free);
+
+      exit = settle(Effect.exit(kept));
+
+      if (live) held.set(key, exit);
+    }
+
+    const settled = exit;
+
+    return Effect.flatten(Effect.promise(() => settled));
+  });
+
+  return Object.assign(joined, { forget: (key: FlightKey) => { held.delete(key); } });
 }

@@ -8,7 +8,7 @@ import {
   tool,
   type ToolSet, type LanguageModel, type ModelMessage, type StepResult, type ToolExecutionOptions,
 } from 'ai';
-import type { ObserveStream, StepRecord } from '../chat';
+import type { ObserveStream } from '../chat';
 import type { HostedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
@@ -154,7 +154,7 @@ function recordingTool<Entry extends ToolSet[string]>(
   if (!execute) return entry;
 
   return Object.assign({}, entry, {
-    execute: async (input: never, options: ToolExecutionOptions) => {
+    execute: async (input: never, options: ToolExecutionOptions<unknown>) => {
       const value = projectJsonValue({ value: input });
       const args: JsonObject = isJsonObject(value) ? value : { input: value };
 
@@ -624,8 +624,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // One dense counter across every turn: `head_steps` is keyed `${id}-s${seq}`, so a per-turn
   // counter would overwrite earlier turns. Steps with no prose, reasoning or tool call are not recorded.
   let recorded = 0;
-  /** A step record holds the turn's messages so far; the step's own start where the last step's ended. */
-  let stepStart = 0;
   let lastText = '';
   let lastReasoning = '';
   let canonicalClaim: ActorTurnClaim | null = null;
@@ -652,13 +650,11 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   /** Classified with the natural path so an abort reads the same between or inside steps. */
   let failure: KinuError | undefined;
 
-  const onStep = async (step: StepResult<ToolSet>, record: StepRecord): Promise<void> => {
+  const onStep = async (step: StepResult<ToolSet>, messages: readonly ModelMessage[]): Promise<void> => {
     if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
     recordRefusedCalls(step, capture);
     // Drawn as the transcript draws the recorded step, so a call keeps its id and a failure reads as one.
-    const parts = v.parse(HeadStepPartsSchema, drawnStep(encodeModelMessageValues(record.messages.slice(stepStart))));
-
-    stepStart = record.messages.length;
+    const parts = v.parse(HeadStepPartsSchema, drawnStep(encodeModelMessageValues(messages)));
 
     if (parts.length > 0) {
       const seq = recorded++;
@@ -698,8 +694,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         { runId: deps.runId, turnId: index === 0 ? turnId : `${turnId}#${index}` },
         input.mode, Date.now(),
       );
-
-      stepStart = 0;
 
       let turnFailed = false;
 

@@ -3656,6 +3656,10 @@ the 15 Debian packages a box needs, taken from snapshot.debian.org on
 Two builds with no cache made the same tarball (`75164f17…`, 100.8 MB). The
 deploy refuses a store bucket that lacks it, by name; the developer who
 re-pins runs `devbox-tools.ts publish <bucket>` for each environment.
+Since 2026-10-05 a store holds the tarball in parts of at most 256 MiB
+(`devbox-tools/<sha256>.tgz.0`, `.1`, …), which the box joins in order and
+checks against the pinned sha256 before it extracts anything: the desktop
+(D70) made the tarball 320 MiB, and `wrangler r2 object put` takes 300.
 
 The golden object, one object of the box's class (`devbox-golden`), starts
 the base, pipes the tarball in from the store, installs it with apt over the
@@ -3852,6 +3856,88 @@ image (`tests/kill-image.test.ts`, under docker), a shell answers TERM by
 starting a process that ignores TERM, and exits. On bfb0f35a9 the untimed
 kill answered with that process still running; now both callers answer once
 it is gone, and a command that ignores TERM ends on KILL under both.
+
+D70. The desktop is KasmVNC with its own web client, started by the first
+open and reached through `/_devbox/desktop` (2026-10-04). The probe ran on
+throwaway Medium boxes from integration 85285006f's image, each server driven
+by a real client in headless Chrome through the box's Durable Object, n=3
+boxes a server:
+
+| | KasmVNC 1.5, its client | TigerVNC, websockify, noVNC 1.6 |
+|---|---|---|
+| server listens, ms | 187 (169-196) | 703 (702-774) |
+| idle server PSS | 27 MB | 18 MB Xvnc and 34 MB websockify |
+| socket opens, ms (n=9) | 123 (119-1,189) | 156 (137-251) |
+| first frame after open, ms (n=9) | 218 (163-237) | 115 (108-188) |
+| click to screen, ms (n=60) | 66 (64-83) | 49 (32-83) |
+| full-screen scroll, MB/s (n=9) | 2.7 (2.6-3.1) | 9.3 (7.7-10.2) |
+| packages installed | 330 MB | 324 MB |
+
+Chromium with one tab is 402 MB PSS under both, and an idle screen sends 0
+bytes. The stack is 236 more packages in the tools tarball (336 MB, was 101
+MB): its offline install on trixie took 82 s locally, against 33 s before. KasmVNC's PointerEvent is 11 bytes (a 16-bit button mask, then x, y
+and two scroll deltas; kasmweb `core/rfb.js`), where RFB's is 6: with
+upstream noVNC 1.6 or 1.7 the server ends the session at the first click
+("unknown message type 144"), live 3 of 3 and locally. Kasm's client is not
+on npm and is not a library (its `display.js` imports its app UI), so the
+client is its prebuilt web app, vendored from the image's pinned `.deb`: the
+15 files it loads, 864 KB (`packages/cf-backend/public/kasmvnc/upstream.json`,
+`scripts/kasmvnc-client.ts`, `unit-kasmvnc-vendor.test.ts`). The app frames
+it from its own origin; its document policy allows framing by the app alone
+and sockets to the app's origin alone, so no client setting can point the
+socket elsewhere.
+
+The server listens on every interface, because the box reaches the container
+at the container's own address, and asks for the `binary` subprotocol and an
+`Origin`, which the Worker's allowlist strips and the box sets. Without
+`-publicIP`, KasmVNC queries STUN servers and exits when none answers: with
+no network it never listened (`tools-image.test.ts`). An open desktop is a
+bridged socket like a preview's, so it holds the box awake; port 6080 is
+refused as a preview. `desktop-image.test.ts` drives the vendored client in
+Chrome, through the Worker's route and the box's, to Chromium in the real
+image, and sees a click turn the screen; it fails without the box's
+`Origin`. `tools-image.test.ts` runs the start script with no network, so it
+fails without `-publicIP`, and opens the menu's browser as root.
+
+D71. The desktop stays on KasmVNC; Media over QUIC through Cloudflare's relay
+is rejected (2026-10-05). Probe only (`/mnt/local/kinu/tmp/moq-probe-save`):
+throwaway Medium boxes on integration 0b367f089's image, n=3 boxes, each
+publishing its X display (ffmpeg x11grab, libx264 ultrafast zerolatency,
+1280x800 at 30 fps, fMP4 into moq-rs's `moq-pub`, draft-14 branch) to the
+public draft-14 relay, played by moq-js main (WebTransport and WebCodecs).
+Every client ran with TLS verification off: the relay's certificate expired
+2026-10-04 20:33:59 UTC. All boxes, Workers and buckets were deleted.
+
+| | MoQ | KasmVNC (D70) |
+|---|---|---|
+| reaches the relay from a box | yes, QUIC/UDP | |
+| a viewer on another box or this host sees it | 0 of 12 | |
+| encode, % of one core: a strip changes / full-screen motion | 22 / 30 | |
+| bitrate, Mb/s | 0.11 a strip changes, 11.3-11.9 motion | 0 idle, 21-24 scrolling |
+| click to screen, ms (p50) | 124, in the box | 66, from this host |
+| glass to glass, ms (p50) | 109, in the box | |
+
+The relay delivers only within one relay server. A box read its own
+publication back 6 of 6; a second box in the same colo (DFW, the same egress
+IP) read 0 of 3; this host (DFW) read nothing in either direction, 0 of 9,
+while host to host worked 6 of 6, and the same ffmpeg stream from a local
+container played on this host. So the latency was measured with the player in
+the box: both clocks are the box's, and the figures exclude the viewer's
+network and the input path (`xdotool` in the box), where KasmVNC's 66 ms is
+the whole path through the Worker and the Durable Object. The box p50s were
+92, 109 and 137 ms glass to glass (p90 up to 360, n=1,366 frames) and 123, 124
+and 161 ms click to frame (97 to 213, n=60), on a box also running the encoder
+and the decoder. moq-pub takes 0.5 to 2.3% of a core; the motion's software
+rendering in Chromium takes 108 to 116%, so a two-core box is full. The
+motion and KasmVNC's scrolling are different content, so the bitrates
+compare only roughly.
+
+Authorization is from the documentation, unmeasured (no token with the MoQ
+permission): a token is relay-wide, publishes or subscribes or both, expires
+within a year, and travels in the URL path, so it reaches access logs; there
+is no namespace scope. A workspace of its own means a relay of its own. Chrome's
+WebTransport over this host's WARP tunnel (MTU 1280) failed with a packet
+write error until its QUIC packets were capped at 1200 bytes.
 
 ## Measurement contract for a strategy comparison
 

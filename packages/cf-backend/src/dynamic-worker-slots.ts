@@ -1,4 +1,4 @@
-import { beginLoaderFetch, dynamicWorkerHeadroom, loaderLedgerStats, withDynamicWorkerCapNamed } from '@nimbus-sh/fabric/budgets.js';
+import { beginLoaderFetchWhenFree, loaderLedgerStats, withDynamicWorkerCapNamed } from '@nimbus-sh/fabric/budgets.js';
 import { classifyError } from '@nimbus-sh/platform/oom-classify.js';
 import { Cause, Effect, Exit } from 'effect';
 import { KinuError, settle } from '@kinu.run/core/obs';
@@ -16,43 +16,29 @@ function refusedBy(exit: Exit.Exit<unknown, unknown>): Error | null {
   return failure instanceof Error ? failure : new Error(REFUSED);
 }
 
+/** Fabric's ledger admits waits in order and pauses after a refusal; only Kinu knows when no wait can end. */
 export class AgentIsolateSlots {
-  #running = 0;
+  /** Keys Kinu has asked to hold, and how many times: with none of them held, nothing here will free a slot. */
+  readonly #asked = new Map<string, number>();
 
-  /** Calls that ran and ended: each freed a platform slot. */
+  /** Calls of Kinu's that ran and ended: each freed a platform slot. */
   #ended = 0;
-
-  readonly #waiting: Array<() => void> = [];
 
   constructor(private readonly ledger: DurableObjectState) {}
 
-  #wait(refusal: Error): Effect.Effect<void, KinuError> {
-    if (this.#running === 0) {
-      return Effect.fail(new KinuError('unavailable', withDynamicWorkerCapNamed(this.ledger, refusal).message, { cause: refusal }));
-    }
-
-    const { promise, resolve } = Promise.withResolvers<void>();
-
-    this.#waiting.push(resolve);
-
-    return Effect.promise(() => promise);
+  #oursHeld(): boolean {
+    return loaderLedgerStats(this.ledger).inFlightWorkers.some((key) => this.#asked.has(key));
   }
 
-  /** Only the end of a call that ran frees a platform slot, so only that wakes the waiting. */
-  #hold(key: string): (ran: boolean) => void {
-    const end = beginLoaderFetch(this.ledger, key);
+  #ask(key: string, by: number): void {
+    const count = (this.#asked.get(key) ?? 0) + by;
 
-    this.#running += 1;
+    if (count === 0) this.#asked.delete(key);
+    else this.#asked.set(key, count);
+  }
 
-    return (ran) => {
-      end();
-      this.#running -= 1;
-
-      if (!ran) return;
-      this.#ended += 1;
-
-      for (const wake of this.#waiting.splice(0)) wake();
-    };
+  #cap(refusal: Error): KinuError {
+    return new KinuError('unavailable', withDynamicWorkerCapNamed(this.ledger, refusal).message, { cause: refusal });
   }
 
   held<A>(key: string, open: () => Promise<AgentFacetCalls>, call: (isolate: AgentFacetCalls) => Promise<A>): Effect.Effect<A, KinuError> {
@@ -60,16 +46,25 @@ export class AgentIsolateSlots {
       const isolate = yield* Effect.promise(open);
 
       for (;;) {
-        if (!loaderLedgerStats(this.ledger).inFlightWorkers.includes(key) && dynamicWorkerHeadroom(this.ledger) === 0) {
-          yield* this.#wait(new Error(`${REFUSED}: every slot is held`));
-          continue;
+        const ledger = loaderLedgerStats(this.ledger);
+
+        // No headroom during a refusal's pause is not a full ledger: the pause ends by itself.
+        if (!this.#oursHeld() && !ledger.inFlightWorkers.includes(key) && ledger.pauseMs === 0 && ledger.headroom === 0) {
+          return yield* Effect.fail(this.#cap(new Error(`${REFUSED}: every slot is held`)));
         }
 
+        this.#ask(key, 1);
+        const end = yield* Effect.promise(() => beginLoaderFetchWhenFree(this.ledger, key));
         const sent = this.#ended;
-        const release = this.#hold(key);
 
         const exit = yield* Effect.exit(Effect.tryPromise({ try: () => call(isolate), catch: (cause) => cause })).pipe(
-          Effect.onExit((settled) => Effect.sync(() => release(!(Exit.isSuccess(settled) && refusedBy(settled.value) !== null)))),
+          Effect.onExit((settled) => Effect.sync(() => {
+            const refusal = Exit.isSuccess(settled) ? refusedBy(settled.value) : null;
+            end(refusal ?? undefined);
+            this.#ask(key, -1);
+
+            if (refusal === null) this.#ended += 1;
+          })),
         );
 
         if (Exit.isSuccess(exit)) return exit.value;
@@ -77,8 +72,8 @@ export class AgentIsolateSlots {
 
         if (refused === null) return yield* Effect.die(Cause.squash(exit.cause));
 
-        // A slot freed while the refusal was on its way: no later end would wake this call.
-        if (this.#ended === sent) yield* this.#wait(refused);
+        // A slot of Kinu's freed while the refusal was on its way is room; with none held or freed, none will come.
+        if (!this.#oursHeld() && this.#ended === sent) return yield* Effect.fail(this.#cap(refused));
       }
     });
   }

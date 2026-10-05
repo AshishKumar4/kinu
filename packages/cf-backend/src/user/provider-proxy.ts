@@ -16,7 +16,8 @@ import { errorResponse } from '@kinu.run/core';
 import { json } from '@kinu.run/core';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import { validateCredentialKey } from '@kinu.run/core';
-import { authoredRefusal, diagnostics, renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { authoredRefusal, diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { beneath } from '../api/context';
 import { inferenceProxyGate, type CliEnv } from '../cli/routes';
 
@@ -44,104 +45,123 @@ export const providerProxyRoutes = new Hono<CliEnv>();
 
 providerProxyRoutes.use(`${PROVIDER_PROXY_PATH}/*`, beneath(PROVIDER_PROXY_PATH, inferenceProxyGate));
 
-providerProxyRoutes.get(`${PROVIDER_PROXY_PATH}/credentials`, async (c) => json({
-  body: { credentials: await listProxyableCredentials(c.get('cli').userDO, await ownerCaller(c.env)) },
-}));
+providerProxyRoutes.get(`${PROVIDER_PROXY_PATH}/credentials`, (c) => settle(Effect.gen(function* () {
+  const owner = yield* Effect.promise(() => ownerCaller(c.env));
+
+  return json({ body: { credentials: yield* listProxyableCredentials(c.get('cli').userDO, owner) } });
+})));
 
 // Any method: `forwardUpstream` checks the target.
-providerProxyRoutes.all(`${PROVIDER_PROXY_PATH}/forward`, async (c) =>
-  forwardUpstream(c.req.raw, c.get('cli').userDO, await ownerCaller(c.env)));
+providerProxyRoutes.all(`${PROVIDER_PROXY_PATH}/forward`, (c) => settle(Effect.gen(function* () {
+  const owner = yield* Effect.promise(() => ownerCaller(c.env));
+
+  return yield* forwardUpstream(c.req.raw, c.get('cli').userDO, owner);
+})));
 
 providerProxyRoutes.all(`${PROVIDER_PROXY_PATH}/*`, beneath(PROVIDER_PROXY_PATH, async (c) =>
   errorResponse(404, `No such provider proxy route: ${c.req.method} ${c.req.path.slice(PROVIDER_PROXY_PATH.length)}`)));
 
 /** Proxyable = a base URL is derivable (credential or provider layer); others are omitted
  * rather than advertised and refused at send time. */
-async function listProxyableCredentials(
+function listProxyableCredentials(
   userDO: ProxyCredentialSource,
   owner: UserCaller,
-): Promise<ProxyableCredential[]> {
-  const stored = await userDO.listCredentials(owner);
-  const out: ProxyableCredential[] = [];
+): Effect.Effect<ProxyableCredential[]> {
+  return Effect.gen(function* () {
+    const stored = yield* Effect.promise(() => userDO.listCredentials(owner));
+    const out: ProxyableCredential[] = [];
 
-  for (const { key } of stored) {
-    if (isProxyDeniedCredentialKey(key)) continue;
-    let credentialBase: string | null;
+    for (const { key } of stored) {
+      if (isProxyDeniedCredentialKey(key)) continue;
 
-    try {
-      credentialBase = await userDO.getCredentialBaseURL(owner, key);
-    } catch (cause) {
-      const error = authoredRefusal({ doing: 'reading a credential\'s base URL', cause });
-      diagnostics.failure('provider_proxy.base_url_unread', error, { key });
-      out.push({ key, failure: renderThrownChain({ cause: error }) });
-      continue;
+      const read = yield* Effect.matchCause(Effect.promise(() => userDO.getCredentialBaseURL(owner, key)), {
+        onSuccess: (credentialBase) => ({ credentialBase }),
+        onFailure: (failed) => {
+          const error = authoredRefusal({ doing: 'reading a credential\'s base URL', cause: Cause.squash(failed) });
+          diagnostics.failure('provider_proxy.base_url_unread', error, { key });
+
+          return { refused: renderThrownChain({ cause: error }) };
+        },
+      });
+
+      if ('refused' in read) {
+        out.push({ key, failure: read.refused });
+        continue;
+      }
+
+      const credentialBase = read.credentialBase;
+
+      if (credentialBase) {
+        // Forwarding is https-only; non-https endpoints (e.g. the owner's own machine) are not proxyable.
+        if (credentialBase.startsWith('https://')) out.push({ key, baseURL: credentialBase });
+        continue;
+      }
+
+      if (yield* Effect.promise(() => providerProxyBaseURL(key, { fetch }))) out.push({ key });
     }
 
-    if (credentialBase) {
-      // Forwarding is https-only; non-https endpoints (e.g. the owner's own machine) are not proxyable.
-      if (credentialBase.startsWith('https://')) out.push({ key, baseURL: credentialBase });
-      continue;
-    }
-
-    if (await providerProxyBaseURL(key, { fetch })) out.push({ key });
-  }
-
-  return out;
+    return out;
+  });
 }
 
-async function forwardUpstream(
+function forwardUpstream(
   request: Request,
   userDO: ProxyCredentialSource,
   owner: UserCaller,
-): Promise<Response> {
-  const credKey = request.headers.get(PROXY_CRED_HEADER)?.trim();
-  const target = request.headers.get(PROXY_TARGET_HEADER)?.trim();
+): Effect.Effect<Response> {
+  return Effect.gen(function* () {
+    const credKey = request.headers.get(PROXY_CRED_HEADER)?.trim();
+    const target = request.headers.get(PROXY_TARGET_HEADER)?.trim();
 
-  if (!credKey) return errorResponse(400, `${PROXY_CRED_HEADER} is required: name the credential to attach.`);
+    if (!credKey) return errorResponse(400, `${PROXY_CRED_HEADER} is required: name the credential to attach.`);
 
-  if (!target) return errorResponse(400, `${PROXY_TARGET_HEADER} is required: name the upstream URL.`);
+    if (!target) return errorResponse(400, `${PROXY_TARGET_HEADER} is required: name the upstream URL.`);
 
-  try { validateCredentialKey(credKey); }
-  catch (cause) { return errorResponse(400, renderThrownChain({ cause: authoredRefusal({ doing: 'reading the credential key', cause }) })); }
+    const malformed = yield* Effect.catchCause(Effect.as(Effect.sync(() => validateCredentialKey(credKey)), null), (failed) => Effect.succeed(
+      errorResponse(400, renderThrownChain({ cause: authoredRefusal({ doing: 'reading the credential key', cause: Cause.squash(failed) }) })),
+    ));
 
-  if (isProxyDeniedCredentialKey(credKey)) {
-    return errorResponse(403, `${credKey} is not served by this proxy: Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);
-  }
+    if (malformed !== null) return malformed;
 
-  const base = await userDO.getCredentialBaseURL(owner, credKey)
-    ?? await providerProxyBaseURL(credKey, { fetch });
+    if (isProxyDeniedCredentialKey(credKey)) {
+      return errorResponse(403, `${credKey} is not served by this proxy: Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);
+    }
 
-  if (!base) {
-    return errorResponse(400, `No upstream endpoint is known for credential "${credKey}", so it cannot be proxied.`);
-  }
+    const base = (yield* Effect.promise(() => userDO.getCredentialBaseURL(owner, credKey)))
+      ?? (yield* Effect.promise(() => providerProxyBaseURL(credKey, { fetch })));
 
-  if (!proxyTargetAllowed(target, base, request.method)) {
-    return errorResponse(403, `${request.method} "${target}" is outside what credential "${credKey}" may be spent on (${base}).`);
-  }
+    if (!base) {
+      return errorResponse(400, `No upstream endpoint is known for credential "${credKey}", so it cannot be proxied.`);
+    }
 
-  const auth = await userDO.getAuthHeaders(owner, credKey);
+    if (!proxyTargetAllowed(target, base, request.method)) {
+      return errorResponse(403, `${request.method} "${target}" is outside what credential "${credKey}" may be spent on (${base}).`);
+    }
 
-  if (!auth) {
-    return errorResponse(401, `No usable credential is connected for "${credKey}". Connect it in your Kinu user settings.`);
-  }
+    const auth = yield* Effect.promise(() => userDO.getAuthHeaders(owner, credKey));
 
-  const headers = new Headers(request.headers);
+    if (!auth) {
+      return errorResponse(401, `No usable credential is connected for "${credKey}". Connect it in your Kinu user settings.`);
+    }
 
-  for (const name of STRIPPED_REQUEST_HEADERS) headers.delete(name);
+    const headers = new Headers(request.headers);
 
-  for (const [name, value] of Object.entries(auth)) headers.set(name, value);
+    for (const name of STRIPPED_REQUEST_HEADERS) headers.delete(name);
 
-  const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+    for (const [name, value] of Object.entries(auth)) headers.set(name, value);
 
-  // Manual redirect: following a 3xx would re-send the credential to an origin outside the
-  // allowlist. The 3xx is returned to the caller.
-  const init: RequestInit = {
-    method: request.method,
-    headers,
-    redirect: 'manual',
-  };
+    const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
 
-  if (hasBody) init.body = await request.arrayBuffer();
+    // Manual redirect: following a 3xx would re-send the credential to an origin outside the
+    // allowlist. The 3xx is returned to the caller.
+    const init: RequestInit = {
+      method: request.method,
+      headers,
+      redirect: 'manual',
+    };
 
-  return fetch(target, init);
+    if (hasBody) init.body = yield* Effect.promise(() => request.arrayBuffer());
+
+    return yield* Effect.promise(() => fetch(target, init));
+  });
 }

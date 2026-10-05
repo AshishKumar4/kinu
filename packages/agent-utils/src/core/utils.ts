@@ -1,7 +1,7 @@
 
 
 export function isAbortError<Failure>(err: Failure): err is Failure & Error {
-	return err instanceof Error && err.name === "AbortError";
+	return err instanceof Error && (err.name === "AbortError" || ('code' in err && err.code === 'cancelled'));
 }
 
 /** Each op after the last has ended; a failure is its caller's and never stops the next. */

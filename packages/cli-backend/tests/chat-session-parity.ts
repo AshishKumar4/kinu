@@ -3,7 +3,7 @@
  * with minted ids and clocks normalized; `chat-session-parity.test.ts` compares it to a recorded fixture.
  */
 import { Database } from 'bun:sqlite';
-import { AwaitedList, parityNormalizer, scratchPath, type ParityNormalizer } from '@kinu.run/test-utils';
+import { AwaitedList, parityNormalizer, scratchPath, type ParityNormalizer, scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { decodeJsonValue, initWorkspaceSchema, JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
@@ -309,7 +309,7 @@ async function durableRows(db: Database, norm: ParityNormalizer, transcript: Ses
 export async function runParityScenario(interruptRecovery = false): Promise<ParitySnapshot> {
   const db = new Database(scratchPath('chat-session-parity', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   const transcript = rt.stores.history.transcript('default');
 
   const eventsA = new AwaitedList<SessionEvent>();

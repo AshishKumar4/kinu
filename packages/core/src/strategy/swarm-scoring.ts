@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Scoring one candidate: the report gate, the instrument path (`measureChild`) and the
@@ -5,6 +6,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { evaluateWithMultiModelJudging, type BranchEvaluation } from '../mcts/evaluation';
 import { renderThrownChain } from '../obs/index';
+import { settle } from '../obs/effect';
 import { isTreeAdvance, judgeCallPool, JUDGE_MARGINALISATION_MIN } from './swarm';
 import type { ChildOutcome } from './swarm-resume';
 import { breaches, type PreparedParetoMeasurement } from './swarm-setup';
@@ -45,17 +47,17 @@ export function reportGate(input: {
   let lane: Promise<unknown> = Promise.resolve();
 
   return (candidate: string): Promise<string | null> => {
-    const measured = lane.then(async (): Promise<string | null> => {
-      let measurement: Measurement;
+    const measured = lane.then(() => settle(Effect.gen(function* () {
+      // The write sits inside the attempt so the returned promise never rejects.
+      const measurement: Measurement = yield* Effect.tryPromise({
+        try: async () => {
+          await writeText(ctx.vfs, verifier.artifact, candidate);
 
-      try {
-        // The write sits inside the try so the returned promise never rejects.
-        await writeText(ctx.vfs, verifier.artifact, candidate);
-        measurement = await verifier.verify(ctx);
-      } catch (error) {
-        return `the verifier could not run over what you reported: `
-          + `${renderThrownChain({ cause: error })}. Fix the answer and report again.`;
-      }
+          return verifier.verify(ctx);
+        },
+        catch: (error) => `the verifier could not run over what you reported: `
+          + `${renderThrownChain({ cause: error })}. Fix the answer and report again.`,
+      });
 
       if (measurement.kind === 'unmeasurable') {
         return `the verifier ran and could not measure what you reported: ${measurement.detail}. `
@@ -64,7 +66,7 @@ export function reportGate(input: {
       }
 
       return null;
-    });
+    }).pipe(Effect.catch((refusal) => Effect.succeed(refusal)))));
 
     // Advance on the measurement, not the caller, so a node cancelled in between
         // cannot leave the next one measuring its file.
@@ -78,124 +80,128 @@ export function reportGate(input: {
  * Measure one child: write it where the instrument reads, run it, classify the result.
  * Sequential: every candidate is written to the same path (*Isolation*).
  */
-export async function measureChild(input: {
+export function measureChild(input: ChildMeasurement): Promise<ChildOutcome> {
+  return settle(answered(measuredChild(input)));
+}
+
+interface ChildMeasurement {
   readonly ctx: MeasurementContext;
   readonly verifier: ResolvedVerifier;
   readonly measured: MeasuredObjective;
   readonly witnessVerifier: ResolvedVerifier | null;
   readonly baseline: number;
   readonly artifact: string;
-}): Promise<ChildOutcome> {
-  const { ctx, verifier, witnessVerifier, measured, baseline } = input;
-  await writeText(ctx.vfs, verifier.artifact, input.artifact);
-  let measurement: Measurement;
+}
 
-  try {
-    measurement = await verifier.verify(ctx);
-  } catch (error) {
-    return {
-      kind: 'instrument-faulted',
-      error: renderThrownChain({ cause: error }),
-    };
-  }
+/** `run`, its rejection read as the instrument faulting. */
+function instrumented<A>(run: () => Promise<A>, label = ''): Effect.Effect<A, ChildOutcome> {
+  return Effect.tryPromise({ try: run, catch: (error): ChildOutcome => ({ kind: 'instrument-faulted', error: `${label}${renderThrownChain({ cause: error })}` }) });
+}
 
-  let witnessFound: boolean | null = null;
+function answered(outcome: Effect.Effect<ChildOutcome, ChildOutcome>): Effect.Effect<ChildOutcome> {
+  return Effect.catch(outcome, (faulted) => Effect.succeed(faulted));
+}
 
-  if (measured.witness !== null) {
-    if (witnessVerifier === null) {
-      return { kind: 'instrument-faulted', error: 'witness verifier was not resolved' };
+function measuredChild(input: ChildMeasurement): Effect.Effect<ChildOutcome, ChildOutcome> {
+  return Effect.gen(function* () {
+    const { ctx, verifier, witnessVerifier, measured, baseline } = input;
+    yield* Effect.promise(() => writeText(ctx.vfs, verifier.artifact, input.artifact));
+    const measurement = yield* instrumented(() => verifier.verify(ctx));
+    let witnessFound: boolean | null = null;
+
+    if (measured.witness !== null) {
+      if (witnessVerifier === null) {
+        return { kind: 'instrument-faulted', error: 'witness verifier was not resolved' };
+      }
+
+      witnessFound = yield* instrumented(async () => {
+        await writeText(ctx.vfs, witnessVerifier.artifact, input.artifact);
+        const witness = await witnessVerifier.verify(ctx);
+
+        return witness.kind === 'measured' && witness.value === 1;
+      }, 'witness verifier: ');
     }
 
-    try {
-      await writeText(ctx.vfs, witnessVerifier.artifact, input.artifact);
-      const witness = await witnessVerifier.verify(ctx);
-      witnessFound = witness.kind === 'measured' && witness.value === 1;
-    } catch (error) {
+    if (measurement.kind === 'unmeasurable') {
+      return { kind: 'unmeasurable', detail: measurement.detail, witnessFound };
+    }
+
+    if (measured.floor && breaches(measured.floor, measured.direction, measurement.value)) {
       return {
-        kind: 'instrument-faulted',
-        error: `witness verifier: ${renderThrownChain({ cause: error })}`,
+        kind: 'sealed',
+        measurement,
+        breach: {
+          floor: measured.floor,
+          // Retained in full: a discarded measurement cannot adjudicate H1 against H2.
+          measured: measurement,
+          margin: floorMargin(measured.floor, measured.direction),
+          hypotheses: ['floor_wrong', 'verifier_gameable'],
+        },
+        witnessFound,
       };
     }
-  }
 
-  if (measurement.kind === 'unmeasurable') {
-    return { kind: 'unmeasurable', detail: measurement.detail, witnessFound };
-  }
-
-  if (measured.floor && breaches(measured.floor, measured.direction, measurement.value)) {
     return {
-      kind: 'sealed',
+      kind: 'scored',
       measurement,
-      breach: {
-        floor: measured.floor,
-        // Retained in full: a discarded measurement cannot adjudicate H1 against H2.
-        measured: measurement,
-        margin: floorMargin(measured.floor, measured.direction),
-        hypotheses: ['floor_wrong', 'verifier_gameable'],
-      },
+      score: normalisedScore({
+        value: measurement.value, baseline, target: measured.target,
+        direction: measured.direction, scale: measured.scale,
+      }),
       witnessFound,
     };
-  }
-
-  return {
-    kind: 'scored',
-    measurement,
-    score: normalisedScore({
-      value: measurement.value, baseline, target: measured.target,
-      direction: measured.direction, scale: measured.scale,
-    }),
-    witnessFound,
-  };
+  });
 }
 
 /** Measure each declared Pareto coordinate without synthesising an aggregate. */
-async function measureParetoChild(input: {
+function measureParetoChild(input: {
   readonly pareto: PreparedParetoMeasurement;
   readonly artifact: string;
-}): Promise<ChildOutcome> {
-  const evidence: Record<string, number> = {};
-  const details: string[] = [];
+}): Effect.Effect<ChildOutcome, ChildOutcome> {
+  return Effect.gen(function* () {
+    const evidence: Record<string, number> = {};
+    const details: string[] = [];
 
-  for (const instrument of input.pareto.instruments) {
-    try {
-      await writeText(input.pareto.ctx.vfs, instrument.verifier.artifact, input.artifact);
-      const measurement = await instrument.verifier.verify(input.pareto.ctx);
+    for (const instrument of input.pareto.instruments) {
+        const measurement = yield* instrumented(async () => {
+          await writeText(input.pareto.ctx.vfs, instrument.verifier.artifact, input.artifact);
 
-      if (measurement.kind === 'unmeasurable') {
-        return { kind: 'unmeasurable', detail: measurement.detail };
-      }
+          return instrument.verifier.verify(input.pareto.ctx);
+        });
 
-      for (const axisId of instrument.axisIds) {
-        const value = instrument.perInstance
-          ? measurement.perInstance?.[axisId]
-          : measurement.measured?.[axisId] ?? measurement.value;
-
-        if (value === undefined) {
-          return {
-            kind: 'unmeasurable',
-            detail: `Pareto instrument omitted declared axis "${axisId}".`,
-          };
+        if (measurement.kind === 'unmeasurable') {
+          return { kind: 'unmeasurable', detail: measurement.detail };
         }
 
-        evidence[axisId] = value;
-      }
+        for (const axisId of instrument.axisIds) {
+          const value = instrument.perInstance
+            ? measurement.perInstance?.[axisId]
+            : measurement.measured?.[axisId] ?? measurement.value;
 
-      details.push(measurement.detail);
-    } catch (error) {
-      return { kind: 'instrument-faulted', error: renderThrownChain({ cause: error }) };
+          if (value === undefined) {
+            return {
+              kind: 'unmeasurable',
+              detail: `Pareto instrument omitted declared axis "${axisId}".`,
+            };
+          }
+
+          evidence[axisId] = value;
+        }
+
+        details.push(measurement.detail);
     }
-  }
 
-  const checked = validateParetoEvidence(input.pareto.axes, evidence);
+    const checked = validateParetoEvidence(input.pareto.axes, evidence);
 
-  if ('reason' in checked) return { kind: 'unmeasurable', detail: checked.reason };
+    if ('reason' in checked) return { kind: 'unmeasurable', detail: checked.reason };
 
-  return {
-    kind: 'pareto',
-    axes: input.pareto.axes,
-    evidence: checked.evidence,
-    detail: details.join(' | '),
-  };
+    return {
+      kind: 'pareto',
+      axes: input.pareto.axes,
+      evidence: checked.evidence,
+      detail: details.join(' | '),
+    };
+  });
 }
 
 /**
@@ -205,7 +211,7 @@ async function measureParetoChild(input: {
  * ensemble falls below `minEnsemble` fails rather than scoring. A thrown judge
  * fails the run like a thrown verifier (*The closed verifier registry*).
  */
-async function judgeChild(input: {
+function judgeChild(input: {
   readonly rt: AgentRuntime;
   readonly mode: WorkMode;
   readonly samples: number;
@@ -217,68 +223,61 @@ async function judgeChild(input: {
   readonly answer: string;
   readonly siblings: readonly string[];
   readonly siblingsProducedCode: boolean;
-}): Promise<ChildOutcome> {
-  const { rt } = input;
+}): Effect.Effect<ChildOutcome, ChildOutcome> {
+  return Effect.gen(function* () {
+    const { rt } = input;
 
-  const options = {
-    task: input.task,
-    trajectory: input.answer,
-    siblings: input.siblings,
-    siblingsProducedCode: input.siblingsProducedCode,
-    // Plan mode never invokes the executor, so evaluation is judge-only.
-    executionPolicy: input.mode === 'plan' ? ('judge-only' as const) : ('grounded' as const),
-    executor: rt.executor,
-    explorer: rt.llm,
-    judgeSamples: input.samples,
-    // Funded from the request, never `DEFAULT_CONFIG.mcts.maxEvalLLMCalls`; see {@link judgeCallPool}.
-    maxLLMCalls: judgeCallPool(input.samples),
-  };
+    const options = {
+      task: input.task,
+      trajectory: input.answer,
+      siblings: input.siblings,
+      siblingsProducedCode: input.siblingsProducedCode,
+      // Plan mode never invokes the executor, so evaluation is judge-only.
+      executionPolicy: input.mode === 'plan' ? ('judge-only' as const) : ('grounded' as const),
+      executor: rt.executor,
+      explorer: rt.llm,
+      judgeSamples: input.samples,
+      // Funded from the request, never `DEFAULT_CONFIG.mcts.maxEvalLLMCalls`; see {@link judgeCallPool}.
+      maxLLMCalls: judgeCallPool(input.samples),
+    };
 
-  let evaluation: BranchEvaluation;
-
-  try {
     // Cross-model judge when the runtime holds one, else the explorer; absent key, not `undefined`.
-    evaluation = rt.judgeModel === undefined
-      ? await evaluateWithMultiModelJudging(options)
-      : await evaluateWithMultiModelJudging({ ...options, judge: rt.judgeModel });
-  } catch (error) {
-    return {
-      kind: 'instrument-faulted',
-      error: renderThrownChain({ cause: error }),
-    };
-  }
+    const evaluation: BranchEvaluation = yield* instrumented(async () => (rt.judgeModel === undefined
+      ? evaluateWithMultiModelJudging(options)
+      : evaluateWithMultiModelJudging({ ...options, judge: rt.judgeModel })));
 
-  if (evaluation.judgeSamplesAttempted > 0
-    && evaluation.judgeSamplesUsed < input.minEnsemble) {
-    // Dropped samples (timeouts, unparseable replies) left fewer opinions than the admitted floor.
-    return {
-      kind: 'instrument-faulted',
-      error: `the judge ensemble answered with ${String(evaluation.judgeSamplesUsed)} usable `
-        + `samples of the ${String(evaluation.judgeSamplesAttempted)} asked for, below the `
-        + `${String(input.minEnsemble)} this run was admitted at, so its median is a different `
-        + 'scorer from the one validity checked. A judge call that times out or will not parse '
-        + 'is dropped, so ask for more than the floor where the provider is being rate-limited.',
-    };
-  }
+    if (evaluation.judgeSamplesAttempted > 0
+      && evaluation.judgeSamplesUsed < input.minEnsemble) {
+      // Dropped samples (timeouts, unparseable replies) left fewer opinions than the admitted floor.
+      return {
+        kind: 'instrument-faulted',
+        error: `the judge ensemble answered with ${String(evaluation.judgeSamplesUsed)} usable `
+          + `samples of the ${String(evaluation.judgeSamplesAttempted)} asked for, below the `
+          + `${String(input.minEnsemble)} this run was admitted at, so its median is a different `
+          + 'scorer from the one validity checked. A judge call that times out or will not parse '
+          + 'is dropped, so ask for more than the floor where the provider is being rate-limited.',
+      };
+    }
 
-  if (evaluation.judgeSamplesAttempted > 0
-    && evaluation.judgeSamplesAttempted < input.samples) {
-    // Unreachable by construction: the pool is sized so the clamp cannot bind.
-    return {
-      kind: 'instrument-faulted',
-      error: `the judge ensemble realised ${String(evaluation.judgeSamplesAttempted)} of the `
-        + `${String(input.samples)} samples this run was admitted at, so its median is a different `
-        + 'scorer from the one validity checked. The per-evaluation pool was sized at '
-        + `${String(judgeCallPool(input.samples))} calls for exactly this reason.`,
-    };
-  }
+    if (evaluation.judgeSamplesAttempted > 0
+      && evaluation.judgeSamplesAttempted < input.samples) {
+      // Unreachable by construction: the pool is sized so the clamp cannot bind.
+      return {
+        kind: 'instrument-faulted',
+        error: `the judge ensemble realised ${String(evaluation.judgeSamplesAttempted)} of the `
+          + `${String(input.samples)} samples this run was admitted at, so its median is a different `
+          + 'scorer from the one validity checked. The per-evaluation pool was sized at '
+          + `${String(judgeCallPool(input.samples))} calls for exactly this reason.`,
+      };
+    }
 
-  return {
-    kind: 'judged',
-    score: evaluation.score,
-    ensemble: evaluation.judgeSamplesUsed,
-    grounding: evaluation.grounding,
-  };
+    return {
+      kind: 'judged',
+      score: evaluation.score,
+      ensemble: evaluation.judgeSamplesUsed,
+      grounding: evaluation.grounding,
+    };
+  });
 }
 
 /** One expansion, in order: scored, sealed on a breach, recorded, backpropagated, ranked. */
@@ -317,27 +316,27 @@ interface ScoreExpansionInput {
 
 /** Scoring paths in eligibility order: unfinished (unscored), Pareto, measured, judged.
  *  A child eligible for none is unscored, which is not a fault. */
-async function scoreOutcome(input: ScoreExpansionInput) {
+function scoreOutcome(input: ScoreExpansionInput): Effect.Effect<ChildOutcome | null> {
   const { expansion, pareto, measures, verifier, ctx, measured, baseline, judgeSamples } = input;
 
   if (expansion.incomplete !== null) {
-    return { kind: 'incomplete' as const, detail: expansion.incomplete.detail };
+    return Effect.succeed({ kind: 'incomplete', detail: expansion.incomplete.detail });
   }
 
-  if (pareto !== null) return measureParetoChild({ pareto, artifact: expansion.artifact });
+  if (pareto !== null) return answered(measureParetoChild({ pareto, artifact: expansion.artifact }));
 
   if (measures && verifier && ctx && measured && baseline !== null) {
-    return measureChild({
+    return answered(measuredChild({
       ctx, verifier, witnessVerifier: input.witnessVerifier, measured, baseline,
       artifact: expansion.artifact,
-    });
+    }));
   }
 
-  if (judgeSamples === null) return null;
+  if (judgeSamples === null) return Effect.succeed(null);
 
   const { rt, mode, resolved, siblings, languages } = input;
 
-  return judgeChild({
+  return answered(judgeChild({
     rt, mode, samples: judgeSamples, task: resolved.task,
     minEnsemble: isTreeAdvance(resolved.config.advance.kind)
       ? JUDGE_MARGINALISATION_MIN
@@ -347,103 +346,105 @@ async function scoreOutcome(input: ScoreExpansionInput) {
     siblingsProducedCode: siblings.some(
       (other) => readProposalCode(other.answer, languages)?.kind === 'runnable',
     ),
-  });
+  }));
 }
 
-export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusal | null> {
-  const {
-    expansion, measures, pareto, measured, identity, resolved, rt, sql, rootId, candidates, spentBy,
-    nodes, log, searchLedger, ledgerEpoch, rankDirection, state,
-  } = input;
+export function scoreExpansion(input: ScoreExpansionInput): Promise<Refusal | null> {
+  return settle(Effect.gen(function* () {
+    const {
+      expansion, measures, pareto, measured, identity, resolved, rt, sql, rootId, candidates, spentBy,
+      nodes, log, searchLedger, ledgerEpoch, rankDirection, state,
+    } = input;
 
-  let { publication, best, bestValue } = state;
+    let { publication, best, bestValue } = state;
 
-  const outcome = await scoreOutcome(input);
+    const outcome = yield* scoreOutcome(input);
 
-  if (outcome?.kind === 'instrument-faulted') {
-    searchLedger.fail(rootId, ledgerEpoch, Date.now());
+    if (outcome?.kind === 'instrument-faulted') {
+      searchLedger.fail(rootId, ledgerEpoch, Date.now());
 
-    return unavailable(`the ${pareto !== null || measures ? 'verifier' : 'judge'} faulted while scoring `
-      + `${expansion.id}, so no number this run produced can be trusted: ${outcome.error}`);
-  }
+      return unavailable(`the ${pareto !== null || measures ? 'verifier' : 'judge'} faulted while scoring `
+        + `${expansion.id}, so no number this run produced can be trusted: ${outcome.error}`);
+    }
 
-  const { breach, rank, ensemble, ...facts } = outcomeFacts(outcome);
-  const candidate: SwarmCandidate = { id: expansion.id, artifact: expansion.artifact, ...facts };
+    const { breach, rank, ensemble, ...facts } = outcomeFacts(outcome);
+    const candidate: SwarmCandidate = { id: expansion.id, artifact: expansion.artifact, ...facts };
 
-  // Seal first, so a sealed record always has its seal.
-  if (breach !== null) {
-    publication = { kind: 'sealed', breach };
+    // Seal first, so a sealed record always has its seal.
+    if (breach !== null) {
+      publication = { kind: 'sealed', breach };
 
-    if (identity !== null) sealRecords(sql, rt.actor, { identity, breach });
-    log.event('exploration.floor_breach', {
-      preset: resolved.preset,
-      metric: measured?.metric ?? '',
-      value: breach.measured.value,
-      floor: breach.floor.value,
-      margin: breach.margin,
-      hypotheses: breach.hypotheses.join(','),
+      if (identity !== null) sealRecords(sql, rt.actor, { identity, breach });
+      log.event('exploration.floor_breach', {
+        preset: resolved.preset,
+        metric: measured?.metric ?? '',
+        value: breach.measured.value,
+        floor: breach.floor.value,
+        margin: breach.margin,
+        hypotheses: breach.hypotheses.join(','),
+      });
+    }
+
+    candidates.push(candidate);
+    recordSwarmNode(sql, rt.actor, {
+      rootId,
+      nodeId: expansion.id,
+      record: {
+        outcome,
+        conclusion: expansion.conclusion,
+        aggregated: expansion.aggregated,
+        tokens: spentBy.get(expansion.id) ?? null,
+      },
     });
-  }
-
-  candidates.push(candidate);
-  recordSwarmNode(sql, rt.actor, {
-    rootId,
-    nodeId: expansion.id,
-    record: {
-      outcome,
+    insertSearchNode(sql, rt.actor, {
+      nodeId: expansion.id, parentNodeId: expansion.parentId, rootId,
+      task: resolved.task, action: '', observation: expansion.artifact,
+      depth: expansion.depth,
+    });
+    nodes.set(expansion.id, {
+      id: expansion.id, parentId: expansion.parentId, depth: expansion.depth,
+      artifact: expansion.artifact,
+      measurement: facts.measured,
+      score: facts.score,
+      pareto: facts.pareto,
+      proposal: expansion.proposal,
+      proposalError: expansion.proposalError,
+      granted: expansion.granted,
       conclusion: expansion.conclusion,
+      transcript: expansion.transcript,
+      compacted: null,
       aggregated: expansion.aggregated,
-      tokens: spentBy.get(expansion.id) ?? null,
-    },
-  });
-  insertSearchNode(sql, rt.actor, {
-    nodeId: expansion.id, parentNodeId: expansion.parentId, rootId,
-    task: resolved.task, action: '', observation: expansion.artifact,
-    depth: expansion.depth,
-  });
-  nodes.set(expansion.id, {
-    id: expansion.id, parentId: expansion.parentId, depth: expansion.depth,
-    artifact: expansion.artifact,
-    measurement: facts.measured,
-    score: facts.score,
-    pareto: facts.pareto,
-    proposal: expansion.proposal,
-    proposalError: expansion.proposalError,
-    granted: expansion.granted,
-    conclusion: expansion.conclusion,
-    transcript: expansion.transcript,
-    compacted: null,
-    aggregated: expansion.aggregated,
-  });
-
-  if (expansion.proposalError) {
-    log.event('swarm.proposal_unreadable', {
-      preset: resolved.preset, node: expansion.id, depth: expansion.depth,
-      error: expansion.proposalError,
     });
-  }
 
-  if (ensemble > 0) {
-    state.ensembles.push(ensemble);
-    searchLedger.observeJudgeEnsemble(rootId, ensemble);
-  }
+    if (expansion.proposalError) {
+      log.event('swarm.proposal_unreadable', {
+        preset: resolved.preset, node: expansion.id, depth: expansion.depth,
+        error: expansion.proposalError,
+      });
+    }
 
-  if (facts.score !== null) {
-    backpropagate(sql, rt.actor, expansion.id, facts.score);
-  } else if (outcome && outcome.kind !== 'pareto') {
-    const status = breach === null ? 'failed' : 'terminal';
-    void sql`UPDATE search_nodes SET status = ${status}
+    if (ensemble > 0) {
+      state.ensembles.push(ensemble);
+      searchLedger.observeJudgeEnsemble(rootId, ensemble);
+    }
+
+    if (facts.score !== null) {
+      backpropagate(sql, rt.actor, expansion.id, facts.score);
+    } else if (outcome && outcome.kind !== 'pareto') {
+      const status = breach === null ? 'failed' : 'terminal';
+      void sql`UPDATE search_nodes SET status = ${status}
       WHERE actor_id = ${rt.actor.actorId} AND id = ${expansion.id}`;
-  }
+    }
 
-  if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
-    best = candidate;
-    bestValue = rank;
-  }
+    if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
+      best = candidate;
+      bestValue = rank;
+    }
 
-  state.publication = publication;
-  state.best = best;
-  state.bestValue = bestValue;
+    state.publication = publication;
+    state.best = best;
+    state.bestValue = bestValue;
 
-  return null;
+    return null;
+  }));
 }

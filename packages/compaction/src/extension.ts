@@ -1,22 +1,25 @@
 /**
- * `transformContext` adapter over the better-compact ladder: encode history, run the engine (replay
- * or new plan), decode. The archive manifest is appended from the durable index, never stored in the
- * plan, so a rolled or degraded summary cannot lose it.
+ * `transformContext` over the better-compact ladder. The archive manifest is appended from the durable index,
+ * never stored in the plan, so a rolled or degraded summary cannot lose it.
  */
 
-import type { ModelMessage, TextPart } from 'ai';
-import type { KinuExtension, TransformContext } from '@kinu.run/core';
+import type { AssistantModelMessage, ModelMessage, TextPart } from 'ai';
+import type { KinuExtension, ServerCompactor, TransformContext } from '@kinu.run/core';
 import {
   buildCompactionSummaryPrompt,
+  serverCompactor,
+  isServerCompaction,
   stripCheckpointPreamble,
   wrapCompactionSummary,
+  COMPACTION_TRIGGER_PERCENT,
   CONTEXT_CHECKPOINT_PREFIX,
 } from '@kinu.run/core';
 import {
-  buildPlan,
+  attachmentCodec,
   createSummaryScheduler,
   createEngine,
   formatTranscript,
+  preparePlan,
   toPlanSnapshot,
   transformTurns,
   writeTranscript,
@@ -24,13 +27,16 @@ import {
   type BoundaryContextPlan,
   type BoundarySummaryJob,
   type BuildPlanInputs,
+  type CodecOps,
   type CompactionProfile,
   type EnginePorts,
+  type LadderSpec,
   type PlanSnapshot,
   type ProcessResult,
   type Summarizer,
   type Turn,
 } from '@better-compact/core';
+import { kinuAttachments, type AttachmentDeps } from './attachments';
 import { kinuCodec, kinuSpec } from './codec';
 import {
   deriveArchiveRange,
@@ -62,6 +68,8 @@ export interface CompactionExtensionDeps {
   profile?: CompactionProfile;
   /** Ledger-reset signal: reset on 'planned' and 'invalidated', keep on 'replayed'. */
   onOutcome?: (event: CompactionOutcomeEvent) => void;
+  model?: () => string;
+  attachments?: AttachmentDeps;
 }
 
 interface ForceRebuildInputs {
@@ -83,8 +91,11 @@ interface PrefixUpgradeInputs {
 }
 
 export function createCompactionExtension(deps: CompactionExtensionDeps): KinuExtension {
-  const profile = deps.profile ?? COMPACTION_PRESETS.light;
-  const engine = createEngine(kinuSpec, deps.ports);
+  const profile = deps.profile ?? { ...COMPACTION_PRESETS.light, triggerPercent: COMPACTION_TRIGGER_PERCENT };
+  const { attachments, model } = deps;
+  const spec: LadderSpec = attachments === undefined || model === undefined ? kinuSpec : { ...kinuSpec, attachments: kinuAttachments(attachments, model) };
+  const codec = attachmentCodec(kinuCodec, spec.attachments);
+  const engine = createEngine(spec, deps.ports);
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
 
   /** Per-turn summarizer: a cancelled turn cancels only its own calls and its abort is not a summary failure. */
@@ -120,10 +131,12 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
 
   // /compact: target 0; a trigger past the largest turn keeps the last exchanges.
   const buildInputs = (ctx: TransformContext, reportedTokens: number, turns: readonly Turn[]): BuildPlanInputs => ({
+    // A bypass drops a plan's summary; a server-compacting model keeps its own in history.
+    bypassSummaries: serverCompactor(ctx.model) !== null,
     sessionKey: ctx.sessionKey,
     contextLimit: ctx.contextWindow,
     triggerRatio: ctx.trigger === 'user'
-      ? (Math.max(0, ...turns.map((turn) => kinuCodec.estimateTurns([turn]))) + 1) / ctx.contextWindow
+      ? (Math.max(0, ...turns.map((turn) => codec.estimateTurns([turn]))) + 1) / ctx.contextWindow
       : profile.triggerPercent / 100,
     targetRatio: ctx.trigger === 'user' ? 0 : profile.targetPercent / 100,
     recentToolResultBudgetTokens: profile.recentToolTokens,
@@ -142,7 +155,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
    * woven prefix; needed because replay prices overhead as of plan build and never sees later blocks.
    */
   function relieveEphemeralPressure(ctx: TransformContext, turns: Turn[]): number {
-    const measured = measuredTokens(ctx, turns, 0);
+    const measured = measuredTokens(ctx, turns, 0, codec);
     const triggerTokens = Math.floor(ctx.contextWindow * profile.triggerPercent / 100);
 
     if (ctx.trigger === 'auto' && measured < triggerTokens) return 0;
@@ -162,7 +175,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     { turns, ctx, prior, reportedTokens, summarize }: ForceRebuildInputs,
   ): Promise<ProcessResult> {
     const inputs: BuildPlanInputs = { ...buildInputs(ctx, reportedTokens, turns), force: true, priorPlan: prior ?? undefined };
-    let plan = buildPlan(turns, inputs, kinuSpec);
+    let plan = await preparePlan(turns, inputs, spec, deps.ports.logger);
 
     if (!plan) return { outcome: 'unchanged' };
 
@@ -170,17 +183,18 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       const summaries = await summarize(plan.summaryJobs);
 
       if (Object.keys(summaries).length > 0) {
-        plan = buildPlan(
+        plan = await preparePlan(
           turns,
           { ...inputs, priorPlan: toPlanSnapshot(plan), assistantSummaries: summaries },
-          kinuSpec,
+          spec,
+          deps.ports.logger,
         ) ?? plan;
       }
     }
 
     await writeTranscript(plan, { transcripts: deps.ports.transcripts, logger: deps.ports.logger, codec: kinuCodec });
 
-    return { outcome: 'planned', turns: transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec), plan };
+    return { outcome: 'planned', turns: transformTurns(turns, plan.rawTailStartIndex, plan, spec), plan };
   }
 
   /** Replace a last-resort preview prefix summary with an LLM handoff summary and rebuild. Skipped when
@@ -207,7 +221,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       latestUserAsk: latestUserAsk(ctx.messages),
       previousSummary: previous,
       // Agents-SDK budget rule: 20% of the compacted content, floored at 100 tokens.
-      budgetTokens: Math.max(100, Math.floor(kinuCodec.estimateTurns(prefixTurns) * 0.2)),
+      budgetTokens: Math.max(100, Math.floor(codec.estimateTurns(prefixTurns) * 0.2)),
     });
 
     let body: string;
@@ -225,7 +239,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
 
     if (!body.trim()) return null;
 
-    const upgraded = buildPlan(
+    const upgraded = await preparePlan(
       turns,
       {
         ...buildInputs(ctx, reportedTokens, turns),
@@ -233,12 +247,13 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
         priorPlan: toPlanSnapshot(plan),
         prefixSummary: wrapCompactionSummary(body),
       },
-      kinuSpec,
+      spec,
+      deps.ports.logger,
     );
 
     if (!upgraded) return null;
     // Same range ⇒ same rangeHash ⇒ transcript already persisted at the same path.
-    const transformed = transformTurns(turns, upgraded.rawTailStartIndex, upgraded, kinuSpec);
+    const transformed = transformTurns(turns, upgraded.rawTailStartIndex, upgraded, spec);
     await deps.ports.plans.save(ctx.sessionKey, savedPlan(ctx, upgraded));
 
     return { outcome: 'planned', turns: transformed, plan: upgraded };
@@ -266,7 +281,8 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       ctx.abortSignal?.throwIfAborted();
 
       if (ctx.messages.length === 0 || ctx.contextWindow <= 0) return undefined;
-      const messages = [...ctx.messages];
+      const compactor = serverCompactor(ctx.model);
+      const messages = compactor === null ? [...ctx.messages] : sinceServerSummary(ctx.messages, compactor);
       const turns = kinuCodec.encode(messages);
 
       // Loaded before process (which may replace it) so the upgrade can thread the prior summary.
@@ -290,12 +306,13 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
         return summaries;
       };
 
-      const reportedTokens = measuredTokens(ctx, turns, relieveEphemeralPressure(ctx, turns));
+      const reportedTokens = measuredTokens(ctx, turns, relieveEphemeralPressure(ctx, turns), codec);
 
       const processed =
         ctx.trigger !== 'auto'
           ? await forceRebuild({ turns, ctx, prior, reportedTokens, summarize })
           : await engine.process({
+              bypassSummaries: compactor !== null,
               sessionKey: ctx.sessionKey,
               turns,
               contextLimit: ctx.contextWindow,
@@ -315,7 +332,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
           deps.onOutcome?.({ sessionKey: ctx.sessionKey, outcome: 'invalidated' });
         }
 
-        return undefined;
+        return messages.length === ctx.messages.length ? undefined : messages;
       }
 
       const upgraded =
@@ -405,10 +422,10 @@ function systemOverheadFloor(ctx: TransformContext): number {
 }
 
 /** Budgeted pressure: the provider's last total minus `ephemeralRelief`, floored by the history estimate. */
-function measuredTokens(ctx: TransformContext, turns: Turn[], ephemeralRelief: number): number {
+function measuredTokens(ctx: TransformContext, turns: Turn[], ephemeralRelief: number, codec: CodecOps): number {
   return Math.max(
     Math.max(0, (ctx.providerReportedTokens ?? 0) - ephemeralRelief),
-    kinuCodec.estimateTurns(turns) + systemOverheadFloor(ctx),
+    codec.estimateTurns(turns) + systemOverheadFloor(ctx),
   );
 }
 
@@ -433,6 +450,24 @@ function compactedTurnsForPlan(turns: Turn[], plan: BoundaryContextPlan): Turn[]
     ...turns.slice(0, turnIndex),
     { ...turn, items, fragmentKey: JSON.stringify(items.map((item) => item.key)) },
   ];
+}
+
+function sinceServerSummary(messages: readonly ModelMessage[], by: ServerCompactor): ModelMessage[] {
+  let summary = messages.length - 1;
+
+  while (summary >= 0 && !carriesServerSummary(messages[summary], by)) summary--;
+
+  if (summary < 0) return [...messages];
+  let ask = summary - 1;
+
+  while (ask >= 0 && messages[ask]?.role !== 'user') ask--;
+
+  return messages.slice(ask < 0 ? summary : ask);
+}
+
+function carriesServerSummary(message: ModelMessage | undefined, by: ServerCompactor): boolean {
+  return message?.role === 'assistant' && Array.isArray(message.content)
+    && message.content.some((part: Exclude<AssistantModelMessage['content'], string>[number]) => (part.type === 'text' || part.type === 'custom') && isServerCompaction(part.providerOptions, by));
 }
 
 /** Latest real user request across the full history, so "Active Task verbatim" is mechanical. */

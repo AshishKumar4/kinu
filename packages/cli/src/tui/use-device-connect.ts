@@ -10,7 +10,8 @@ import {
   dismissDeviceConnectPrompt,
   shouldOfferDeviceConnect,
 } from '../device-connect';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiKeyEvent } from './actions';
 
 export type DeviceConnectPromptState =
@@ -78,30 +79,28 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
     update({ phase: 'connecting', session, ticks: 0 });
     const stopWaiting = new AbortController();
     stopWaitingRef.current = stopWaiting;
-    startTransition(async () => {
-      try {
-        const auth = requireAuthConfig();
+    startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const auth = requireAuthConfig();
 
-        const result = await connectDevice(auth, {
-          session,
-          label: defaultDeviceName(),
-          signal: stopWaiting.signal,
-          onWaiting: () => {
-            const current = stateRef.current;
+      const result = yield* Effect.promise(() => connectDevice(auth, {
+        session,
+        label: defaultDeviceName(),
+        signal: stopWaiting.signal,
+        onWaiting: () => {
+          const current = stateRef.current;
 
-            if (current?.phase === 'connecting') update({ ...current, ticks: current.ticks + 1 });
-          },
-        });
+          if (current?.phase === 'connecting') update({ ...current, ticks: current.ticks + 1 });
+        },
+      }));
 
-        const outcome = describeConnectOutcome(result, session);
-        update({ phase: 'result', ok: outcome.ok, message: outcome.message });
-      } catch (cause) {
-        update({ phase: 'result', ok: false, message: renderThrownChain({ cause }) });
-      } finally {
-        stopWaitingRef.current = null;
-        lingerRef.current = setTimeout(close, RESULT_LINGER_MS);
-      }
-    });
+      const outcome = describeConnectOutcome(result, session);
+      update({ phase: 'result', ok: outcome.ok, message: outcome.message });
+    }), (failed) => Effect.sync(() => {
+      update({ phase: 'result', ok: false, message: renderThrownChain({ cause: Cause.squash(failed) }) });
+    })), Effect.sync(() => {
+      stopWaitingRef.current = null;
+      lingerRef.current = setTimeout(close, RESULT_LINGER_MS);
+    }))));
   }, [close, startTransition, update]);
 
   const handleKey = useCallback((key: TuiKeyEvent): boolean => {

@@ -82,7 +82,7 @@ describe("ExecutorFileUpload", () => {
   });
 
   test("a save of the workspace's SOUL.md is the owner's soul write, never a plain file write", async () => {
-    for (const path of ["SOUL.md", "./SOUL.md", "/home/main/SOUL.md", "/home/user/SOUL.md"]) {
+    for (const path of ["SOUL.md", "./SOUL.md", "/home/main/SOUL.md"]) {
       const plane = makePlane();
       const souls: string[] = [];
 

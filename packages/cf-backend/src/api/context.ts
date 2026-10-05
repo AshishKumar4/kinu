@@ -1,9 +1,10 @@
+import { Cause, Effect } from 'effect';
 import type { Context, Env as HonoEnv, MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
 import {
   err, OwnerCapabilityUnavailableError, ownerCaller, PUBLIC_MESSAGE, publicError, type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
 import type { AccessIdentity } from '../control-plane/access-gate';
 
@@ -31,18 +32,24 @@ export function apiPath(request: Request): string {
 }
 
 /** Hono sends HEAD to GET routes; a GET-only route passes it on. */
-export function noHead<E extends HonoEnv>(handler: MiddlewareHandler<E>): MiddlewareHandler<E> {
-  return async (c, next) => (c.req.method === 'HEAD' ? next() : handler(c, next));
+export function noHead<E extends HonoEnv>(handler: (c: Context<E>) => Effect.Effect<Response, KinuError>): MiddlewareHandler<E> {
+  return (c, next) => {
+    if (c.req.method === 'HEAD') return next();
+
+    return settle(handler(c));
+  };
 }
 
 /** A segment as spelled; routes decode it with `decodeURIComponent`, which throws on a bad escape, as before. */
 export function rawParam(c: Context, name: string): string {
-  const at = patternSegments(routePath(c)).findIndex((part) => part === `:${name}` || part.startsWith(`:${name}{`));
-  const segment = at < 0 ? undefined : c.req.path.split('/')[at];
+  return settleSync(Effect.gen(function* () {
+    const at = patternSegments(routePath(c)).findIndex((part) => part === `:${name}` || part.startsWith(`:${name}{`));
+    const segment = at < 0 ? undefined : c.req.path.split('/')[at];
 
-  if (segment === undefined) throw new Error(`route ${routePath(c)} has no :${name} segment`);
+    if (segment === undefined) return yield* Effect.die(new Error(`route ${routePath(c)} has no :${name} segment`));
 
-  return segment;
+    return segment;
+  }));
 }
 
 /** A `{regex}` may hold `/`. */
@@ -77,18 +84,17 @@ export function beneath<E extends HonoEnv>(prefix: string, handler: MiddlewareHa
 
 /** No root secret answers 503 naming it. */
 export function ownerGate<E extends FamilyEnv<OwnerCapabilityEnv, { owner: UserCaller }>>(): MiddlewareHandler<E> {
-  return async (c, next) => {
-    let owner: UserCaller;
+  return (c, next) => settle(Effect.gen(function* () {
+    const read = yield* Effect.catchCause(Effect.map(Effect.promise(() => ownerCaller(c.env)), (owner) => ({ owner })), (failed) => {
+      const cause = Cause.squash(failed);
 
-    try { owner = await ownerCaller(c.env); }
-    catch (cause) {
-      if (cause instanceof OwnerCapabilityUnavailableError) return err(503, cause.message);
-      throw cause;
-    }
+      return cause instanceof OwnerCapabilityUnavailableError ? Effect.succeed({ refused: err(503, cause.message) }) : Effect.failCause(failed);
+    });
 
-    c.set('owner', owner);
-    await next();
-  };
+    if ('refused' in read) return read.refused;
+    c.set('owner', read.owner);
+    yield* Effect.promise(() => next());
+  }));
 }
 
 /** Every router's `onError`: the chain goes to `http.request_failed` by route pattern; the client gets its class. */
@@ -101,5 +107,5 @@ export function routeError(cause: Error, c: Context): Response {
 
 /** A Durable Object router's `onError`: the caller sees the throw. */
 export function rethrow(error: Error): never {
-  throw error;
+  return settleSync(Effect.die(error));
 }

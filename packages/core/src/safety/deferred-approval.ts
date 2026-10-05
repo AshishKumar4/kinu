@@ -18,7 +18,7 @@ import {
 } from './approval-gate';
 import { boundWriteOf, type ApprovalContent, type BoundFileWrite } from './bound-write';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, KinuError, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, settleLoggedSync, toKinuError } from '../obs/index';
 import { serialQueue } from '@kinu.run/agent-utils';
 
 /** The `kinuEvent` kind a decision wakes the agent under; same mechanism as the background-job wake. */
@@ -463,15 +463,11 @@ export class DeferredApprovalQueue {
   }
 
   private audit(action: DeferredApproval): void {
-    try {
+    settleLoggedSync('approval.audit_emit_failed', { doing: 'recording an approval_consumed run event', otherwise: 'io' }, () => {
       this.deps.audit?.({
         approvalId: action.id, command: action.command, executor: action.executor,
       });
-    } catch (cause) {
-      diagnostics.failure('approval.audit_emit_failed', toKinuError({
-        doing: 'recording an approval_consumed run event', cause, otherwise: 'io',
-      }));
-    }
+    });
   }
 
   /** Deletes the bytes no queued or approved row names and no park is holding. */
@@ -582,14 +578,9 @@ export class DeferredApprovalQueue {
   }
 
   private notify(event: DeferredApprovalNotice): void {
-    try { this.deps.announce?.(event); }
-    catch (err) {
-      diagnostics.failure(
-        'approval.deferred_announce_failed',
-        toKinuError({ doing: 'announce a deferred-approval notice', cause: err, otherwise: 'io' }),
-        { notice: event.kind },
-      );
-    }
+    settleLoggedSync('approval.deferred_announce_failed', { doing: 'announce a deferred-approval notice', otherwise: 'io' }, () => {
+      this.deps.announce?.(event);
+    }, { notice: event.kind });
   }
 }
 

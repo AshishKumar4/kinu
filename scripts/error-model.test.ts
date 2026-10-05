@@ -111,6 +111,27 @@ test('the boundary file grows in the mechanisms it declares and in no other', ()
   expect(keysOf(outcome)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
 });
 
+test.each([
+  ['a function it names', 'packages/core/src/providers/model-test.ts', 'result-literal',
+    'export function testModel() { return { ok: true }; }\nexport function other() { return { ok: false }; }\n'],
+  ['the class it names', 'packages/core/src/types/file-edits.ts', 'error-class',
+    'export class FileRefusalError extends KinuError {}\nexport class OtherRefusal extends KinuError {}\n'],
+])('a declaration scoped `within` covers %s and not its sibling', (_what, file, mechanism, body) => {
+  expect(measured(LEGACY, [[file, body]]).filter(({ key }) => key.startsWith(file))).toEqual([{ key: `${file}#${mechanism}`, value: 1 }]);
+});
+
+test('a file may hold two declarations, each covering only its own mechanisms and names', () => {
+  const file = 'packages/core/src/tools/db-codemode.ts';
+
+  const body = 'export class AppBatchError extends KinuError {}\nexport class Other extends KinuError {}\n'
+    + 'export const tool = { execute() { return { ok: true }; } };\nexport function local() { return { ok: false }; }\n';
+
+  expect(measured(LEGACY, [[file, body]]).filter(({ key }) => key.startsWith(file))).toEqual([
+    { key: `${file}#error-class`, value: 1 },
+    { key: `${file}#result-literal`, value: 1 },
+  ]);
+});
+
 test('`settleSync` as a transactionSync callback\'s whole return is a bridge; anywhere else in the callback it is a finding', () => {
   const source = `
 import { settle, settleSync } from '../obs/index';
@@ -127,6 +148,10 @@ function ordinary(): number { const n = settleSync(writeEffect()); return n; }
 
   expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
     bridges: [`${FILE}:5`, `${FILE}:6`],
+    flights: [],
+    routes: [],
+    held: [],
+    react: [],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:11: a runner called mid-body; the effect is run once, at the edge, as its return`,
@@ -165,12 +190,186 @@ export function done(): number { return settle(1); }
 
   expect(bridgeSites(new Map([[FILE, bridged], ['packages/fixture/src/b.ts', local]]))).toEqual({
     bridges: [`${FILE}:11`, `${FILE}:13`, `${FILE}:13`, `${FILE}:14`, `${FILE}:3`, `${FILE}:4`, `${FILE}:5`, `${FILE}:7`],
+    flights: [],
+    routes: [],
+    held: [],
+    react: [],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:12: a runner returned outside an exported function or public member`,
       `${FILE}:15: a runner returned outside an exported function or public member`,
       `${FILE}:16: a runner called mid-body; the effect is run once, at the edge, as its return`,
       `${FILE}:8: a runner returned outside an exported function or public member`,
+    ],
+  });
+});
+
+test('a runner a Hono route handler returns is the edge; one mid-body, or in a handler-shaped arrow off a route, is not', () => {
+  const source = `
+import { Hono } from 'hono';
+import { settle } from '../obs/index';
+const app = new Hono();
+app.get('/a', (c) => settle(read(c)));
+app.post('/b', async (c) => { return settle(write(c)); });
+app.use(async (c, next) => settle(guard(c, next)));
+export const routes = new Hono().get('/c', (c) => settle(read(c))).delete('/d', (c) => settle(drop(c)));
+app.put('/e', async (c) => { const n = await settle(read(c)); return json(n); });
+app.patch('/f', async (c) => { await settle(first(c)); return settle(second(c)); });
+other.get('/g', (c) => settle(read(c)));
+queue.on('/h', (c) => settle(read(c)));
+app.get((c) => settle(read(c)));
+`;
+
+  expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
+    bridges: [],
+    flights: [],
+    routes: [`${FILE}:10`, `${FILE}:5`, `${FILE}:6`, `${FILE}:7`, `${FILE}:8`, `${FILE}:8`],
+    held: [],
+    react: [],
+    findings: [
+      `${FILE}:10: a runner called mid-body; the effect is run once, at the edge, as its return`,
+      `${FILE}:11: a runner returned outside an exported function or public member`,
+      `${FILE}:12: a settle whose caller never awaits it (React, a timer or a listener), so a rejection would float; run the answered effect with detach`,
+      `${FILE}:13: a runner returned outside an exported function or public member`,
+      `${FILE}:9: a runner called mid-body; the effect is run once, at the edge, as its return`,
+    ],
+  });
+});
+
+test('a flight built once and held is the one mid-body runner; a flight that shares no run is a finding', () => {
+  const source = `
+import { flight, settle } from '../obs/index';
+const boot = flight(bootEffect, { keep: 'success' });
+export class Box {
+  #start = flight(() => startEffect(this));
+  read() { return settle(Effect.andThen(this.#start(), boot())); }
+}
+export function host() { const opened = flight(openEffect, { key: (r: Ref) => r.id }); return { open: (r: Ref) => settle(opened(r)) }; }
+export function once() { const run = flight(onceEffect); return settle(run()); }
+export function inline() { return settle(flight(inlineEffect)()); }
+export const minted = flight(mintEffect, { key: () => nanoid() });
+export const dated = flight(dateEffect, { key: () => Date.now() });
+export const counted = flight(countEffect, { key: () => next++ });
+export async function mid() { const n = await settle(countEffect()); return n; }
+`;
+
+  expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
+    bridges: [`${FILE}:10`, `${FILE}:6`, `${FILE}:8`, `${FILE}:9`],
+    flights: [`${FILE}:3`, `${FILE}:5`, `${FILE}:8`],
+    routes: [],
+    held: [],
+    react: [],
+    findings: [
+      `${FILE}:10: a flight called where it is built runs once per call; build it once and hold it`,
+      `${FILE}:11: a flight keyed by a fresh value never joins a run; key it by what its callers share`,
+      `${FILE}:12: a flight keyed by a fresh value never joins a run; key it by what its callers share`,
+      `${FILE}:13: a flight keyed by a fresh value never joins a run; key it by what its callers share`,
+      `${FILE}:14: a runner called mid-body; the effect is run once, at the edge, as its return`,
+      `${FILE}:9: a flight called where it is built runs once per call; build it once and hold it`,
+    ],
+  });
+});
+
+test('a runner handed straight to a platform holder is a held root; stored first, chained or wrapped, it is a finding', () => {
+  const source = `
+import { settle } from '../obs/index';
+export class Host {
+  start(ctx: Ctx, deps: Deps) {
+    ctx.waitUntil(settle(warm()));
+    this.keepAliveWhile(() => settle(drain()));
+    deps.fiber('job', (fiberCtx) => settle(run(fiberCtx)), ({ cause }) => settle(failed(cause)));
+    const later = settle(index());
+    ctx.waitUntil(later);
+    ctx.waitUntil(settle(index()).then(done));
+    ctx.waitUntil(Promise.all([settle(a()), settle(b())]));
+    this.keepAliveWhile(async () => { await settle(drain()); });
+    queue.send(settle(other()));
+  }
+}
+`;
+
+  const midBody = 'a runner called mid-body; the effect is run once, at the edge, as its return';
+
+  expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
+    bridges: [],
+    flights: [],
+    routes: [],
+    held: [`${FILE}:5`, `${FILE}:6`, `${FILE}:7`, `${FILE}:7`],
+    react: [],
+    findings: [`${FILE}:10`, `${FILE}:11`, `${FILE}:11`, `${FILE}:12`, `${FILE}:13`, `${FILE}:8`].map((site) => `${site}: ${midBody}`),
+  });
+});
+
+test('React calls an intrinsic element\'s handler and an effect\'s, where only detach runs; it tracks a transition\'s or action\'s returned settle', () => {
+  const TSX = 'packages/fixture/src/panel.tsx';
+
+  const source = `
+import { detach, settle, settleSync } from '../obs/index';
+function Panel() {
+  const save = useCallback(() => detach(write()), []);
+  const open = useCallback(() => { return detach(write()); }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    detach(load(controller.signal));
+    return () => { controller.abort(); };
+  }, []);
+  useEffect(() => detach(load()), []);
+  useEffect(() => { void settle(load()); }, []);
+  const read = useCallback(() => settle(load()), []);
+  const theme = useMemo(() => settleSync(pick()), [registry]);
+  const later = () => detach(load());
+  const pending = settle(load());
+  const dialog = <Dialog onConfirm={() => settle(save())} onClose={() => detach(close())} />;
+  const quit = <button onClick={() => settle(save())} />;
+  const form = <form action={() => settle(save())} onSubmit={() => startTransition(() => detach(load()))} />;
+  const [state, act] = useActionState(() => settle(save()), null);
+  const pick = useCallback(() => start(() => settle(load())), []);
+  return <button onClick={() => detach(save())} onBlur={(event) => { event.preventDefault(); detach(save()); }} onFocus={() => startTransition(() => settle(load()))} />;
+}
+`;
+
+  const plain = `
+import { detach, settle, settleSync } from '../obs/index';
+function helper() {
+  useCallback(() => settle(write()), []);
+  useCallback(() => detach(write()), []);
+  setTimeout(() => settle(drain()), 10);
+  globalThis.setInterval(() => detach(poll()), 10);
+  queueMicrotask(() => { detach(drain()); });
+  socket.addEventListener('message', (event) => detach(read(event)));
+  process.on('SIGINT', () => settle(stop()));
+  rl.once('line', (line) => detach(answer(line)));
+  queue.push(() => detach(drain()));
+}
+`;
+
+  const midBody = 'a runner called mid-body; the effect is run once, at the edge, as its return';
+  const floats = 'a settle whose caller never awaits it (React, a timer or a listener), so a rejection would float; run the answered effect with detach';
+  const only = 'detach runs only where its caller never awaits: a timer, a listener, or a function a component hands out';
+  const drops = 'detach in a transition or action returns nothing React can track, so its pending state is dropped; return settle(…)';
+
+  expect(bridgeSites(new Map([[TSX, source], [FILE, plain]]))).toEqual({
+    bridges: [],
+    flights: [],
+    routes: [],
+    held: [],
+    react: [
+      `${FILE}:11`, `${FILE}:7`, `${FILE}:8`, `${FILE}:9`, `${TSX}:11`, `${TSX}:13`, `${TSX}:14`, `${TSX}:17`, `${TSX}:17`, `${TSX}:19`, `${TSX}:20`,
+      `${TSX}:22`, `${TSX}:22`, `${TSX}:22`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`,
+    ],
+    findings: [
+      `${FILE}:10: ${floats}`,
+      `${FILE}:12: ${only}`,
+      `${FILE}:4: a runner returned outside an exported function or public member`,
+      `${FILE}:5: ${only}`,
+      `${FILE}:6: ${floats}`,
+      `${TSX}:12: ${midBody}`,
+      `${TSX}:15: ${only}`,
+      `${TSX}:16: ${midBody}`,
+      `${TSX}:18: ${floats}`,
+      `${TSX}:19: ${drops}`,
+      // A transition start under another name is not recognized, so it stays a finding.
+      `${TSX}:21: a runner returned outside an exported function or public member`,
     ],
   });
 });

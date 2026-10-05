@@ -1,8 +1,8 @@
-import { Hono, type Context, type MiddlewareHandler } from 'hono';
+import { Hono, type Context, type MiddlewareHandler, type Next } from 'hono';
+import { Cause, Effect, Result } from 'effect';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
-import type { AuthIdentity } from '../auth/session';
 import {
   AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
   type AuthEnv,
@@ -44,7 +44,7 @@ import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
 import { noHead, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
-import { authoredRefusal, classify, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { authoredRefusal, classify, diagnostics, KinuError, renderThrownChain, toKinuError, settleLogged, settle } from '@kinu.run/core/obs';
 
 const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) });
 
@@ -110,32 +110,34 @@ for (const [path, contentType] of PUBLISHED_DOWNLOADS) {
   }));
 }
 
-cliPageRoutes.get('/cli/auth', noHead<CliPagesEnv>(async (c) => renderBrowserApproval(c.req.raw, c.env)));
+cliPageRoutes.get('/cli/auth', noHead<CliPagesEnv>((c) => renderBrowserApproval(c.req.raw, c.env)));
 
-cliPageRoutes.post('/cli/auth', async (c) => approveFromBrowser(c.req.raw, c.env));
+cliPageRoutes.post('/cli/auth', (c) => settle(approveFromBrowser(c.req.raw, c.env)));
 
-async function authenticateCli(c: CliContext): Promise<CliIdentity | Response> {
-  try {
-    const result = await authenticateCliToken(c.req.raw, c.env);
+function authenticateCli(c: CliContext): Effect.Effect<CliIdentity | Response> {
+  return Effect.catchCause(
+    Effect.map(Effect.promise(() => authenticateCliToken(c.req.raw, c.env)), (result) => (Result.isSuccess(result) ? result.success : err(401, result.failure))),
+    (failed) => {
+      const e = Cause.squash(failed);
 
-    return result.ok ? result.identity : err(401, result.error);
-  } catch (e) {
-    // No root secret: say so rather than surfacing an unexplained 500.
-    if (e instanceof OwnerCapabilityUnavailableError) return err(503, e.message);
-    throw e;
-  }
+      // No root secret: say so rather than surfacing an unexplained 500.
+      return e instanceof OwnerCapabilityUnavailableError ? Effect.succeed(err(503, e.message)) : Effect.failCause(failed);
+    },
+  );
 }
 
-const cliBearer: MiddlewareHandler<CliEnv> = async (c, next) => {
-  const cli = await authenticateCli(c);
+function cliBearer(c: CliContext, next: Next): Effect.Effect<Response | undefined> {
+  return Effect.gen(function* () {
+    const cli = yield* authenticateCli(c);
 
-  if (cli instanceof Response) return cli;
-  c.set('cli', cli);
-  await next();
-};
+    if (cli instanceof Response) return cli;
+    c.set('cli', cli);
+    yield* Effect.promise(() => next());
+  });
+}
 
-export const inferenceProxyGate: MiddlewareHandler<CliEnv> = async (c, next) => {
-  const cli = await authenticateCli(c);
+export const inferenceProxyGate: MiddlewareHandler<CliEnv> = (c, next) => settle(Effect.gen(function* () {
+  const cli = yield* authenticateCli(c);
 
   if (cli instanceof Response) return cli;
 
@@ -144,8 +146,8 @@ export const inferenceProxyGate: MiddlewareHandler<CliEnv> = async (c, next) => 
   }
 
   c.set('cli', cli);
-  await next();
-};
+  yield* Effect.promise(() => next());
+}));
 
 function cliPath(c: CliContext): string {
   return c.req.path.slice('/api/cli'.length) || '/';
@@ -153,41 +155,37 @@ function cliPath(c: CliContext): string {
 
 export const cliRoutes = new Hono<CliEnv>();
 
-cliRoutes.post('/api/cli/auth/start', async (c) => {
+const cliAuthFailed = (failed: Cause.Cause<unknown>) => cliAuthError(toError({ cause: Cause.squash(failed) }));
+
+cliRoutes.post('/api/cli/auth/start', (c) => settle(Effect.gen(function* () {
   const url = new URL(c.req.url);
-  const body = await safeJson(c.req.raw, v.object({ deviceName: v.optional(v.string()) }));
+  const body = yield* Effect.promise(() => safeJson(c.req.raw, v.object({ deviceName: v.optional(v.string()) })));
 
-  try {
-    return json({
-      body: await startCliAuth(c.env, {
-        origin: url.origin, approvalOrigin: approvalOrigin(c.env, url),
-        deviceName: body?.deviceName, clientKey: clientKey(c.req.raw),
-      }),
-    });
-  } catch (e) {
-    return cliAuthError(toError({ cause: e }));
-  }
-});
+  return yield* Effect.catchCause(Effect.map(Effect.promise(() => startCliAuth(c.env, {
+    origin: url.origin, approvalOrigin: approvalOrigin(c.env, url),
+    deviceName: body?.deviceName, clientKey: clientKey(c.req.raw),
+  })), (started) => json({ body: started })), cliAuthFailed);
+})));
 
-cliRoutes.post('/api/cli/auth/poll', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ deviceToken: v.optional(v.string()) }));
+cliRoutes.post('/api/cli/auth/poll', (c) => settle(Effect.gen(function* () {
+  const body = yield* Effect.promise(() => safeJson(c.req.raw, v.object({ deviceToken: v.optional(v.string()) })));
+  const deviceToken = body?.deviceToken;
 
-  if (!body?.deviceToken) return err(400, 'deviceToken required');
+  if (!deviceToken) return err(400, 'deviceToken required');
 
-  try {
-    return json({ body: await pollCliAuth(c.env, body.deviceToken, clientKey(c.req.raw)) });
-  } catch (e) {
-    return cliAuthError(toError({ cause: e }));
-  }
-});
+  return yield* Effect.catchCause(
+    Effect.map(Effect.promise(() => pollCliAuth(c.env, deviceToken, clientKey(c.req.raw))), (polled) => json({ body: polled })),
+    cliAuthFailed,
+  );
+})));
 
 // No JSON approval: this family runs ahead of the CSRF check, so a cookie-only POST could mint a token.
 
 // Not `/api/cli*`: that took `/api/client-errors`.
-cliRoutes.use('/api/cli/*', cliBearer);
+cliRoutes.use('/api/cli/*', (c, next) => settle(cliBearer(c, next)));
 
 // The agent RPC endpoint has its own per-method policy (AGENT_RPC_ACCESS), so it precedes the access-token gate.
-cliRoutes.post('/api/cli/workspaces/:name/rpc', async (c) => handleAgentRpc(c, decodeURIComponent(rawParam(c, 'name'))));
+cliRoutes.post('/api/cli/workspaces/:name/rpc', (c) => settle(Effect.suspend(() => handleAgentRpc(c, decodeURIComponent(rawParam(c, 'name'))))));
 
 cliRoutes.use('/api/cli/*', async (c, next) => {
   const denied = accessTokenDenial(c.get('cli'), c.req.method, cliPath(c));
@@ -309,19 +307,22 @@ cliRoutes.post('/api/cli/workspaces', async (c) => {
   return handleCreateWorkspaceRequest({ request: c.req.raw, env: c.env, userId: cli.userId, userDO: cli.userDO });
 });
 
-cliRoutes.delete('/api/cli/workspaces/:name', async (c) => {
-  const cli = c.get('cli');
+cliRoutes.delete('/api/cli/workspaces/:name', (c) => {
+  return settle(Effect.gen(function* () {
+    const cli = c.get('cli');
 
-  try {
-    const name = decodeURIComponent(rawParam(c, 'name'));
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const name = decodeURIComponent(rawParam(c, 'name'));
 
-    if (!(await cli.userDO.hasWorkspace(await ownerCaller(c.env), name))) return err(404, `Agent ${name} not found.`);
-    await cli.userDO.removeWorkspace(await ownerCaller(c.env), name, cli.userId);
+        if (!(await cli.userDO.hasWorkspace(await ownerCaller(c.env), name))) return err(404, `Agent ${name} not found.`);
+        await cli.userDO.removeWorkspace(await ownerCaller(c.env), name, cli.userId);
 
-    return json({ body: { ok: true } });
-  } catch (cause) {
-    throw authoredRefusal({ doing: 'deleting this workspace', cause });
-  }
+        return json({ body: { ok: true } });
+      },
+      catch: (cause) => authoredRefusal({ doing: 'deleting this workspace', cause }),
+    });
+  }));
 });
 
 cliRoutes.post('/api/cli/workspaces/:name/connect-ticket', async (c) => {
@@ -343,36 +344,40 @@ cliRoutes.post('/api/cli/workspaces/:name/connect-ticket', async (c) => {
   return json({ body: { ticket: issued.ticket, expiresAt: issued.expiresAt } });
 });
 
-cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', async (c) => {
-  const cli = c.get('cli');
-  const agent = await cliAgent(c.env, cli, decodeURIComponent(rawParam(c, 'name')));
+cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', (c) => {
+  return settle(Effect.gen(function* () {
+    const cli = c.get('cli');
+    const agent = yield* Effect.promise(async () => cliAgent(c.env, cli, decodeURIComponent(rawParam(c, 'name'))));
 
-  if (agent instanceof Response) return agent;
+    if (agent instanceof Response) return agent;
 
-  // Step-up gated on every path; the CLI's interactive-auth time is its token mint time.
-  if (!isFreshAuthTime(await sessionTokenMintedAt(c.env, cli))) {
-    return err(401, 'step-up auth required: run `kinu auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
-  }
+    // Step-up gated on every path; the CLI's interactive-auth time is its token mint time.
+    if (!isFreshAuthTime(yield* Effect.promise(async () => sessionTokenMintedAt(c.env, cli)))) {
+      return err(401, 'step-up auth required: run `kinu auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
+    }
 
-  // A webhook whose delivery URL cannot be signed is a row nobody can deliver to.
-  if (webhookRouteSecret(c.env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
-  const body = await safeJson(c.req.raw, WebhookRequestSchema);
+    // A webhook whose delivery URL cannot be signed is a row nobody can deliver to.
+    if (webhookRouteSecret(c.env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
+    const body = yield* Effect.promise(async () => safeJson(c.req.raw, WebhookRequestSchema));
 
-  if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
+    if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
+    const { label, auth_mode } = body;
 
-  try {
-    return json({
-      body: await agent.createDurableWebhook({
-        label: body.label,
-        auth_mode: body.auth_mode,
-        secret: body.secret,
-        accepted_content_type: body.accepted_content_type,
-        rate_limit_per_min: body.rate_limit_per_min,
-      }),
-    }, { status: 201 });
-  } catch (cause) {
-    throw authoredRefusal({ doing: 'creating this webhook', cause });
-  }
+    return yield* Effect.tryPromise({
+      try: async () => {
+        return json({
+          body: await agent.createDurableWebhook({
+            label,
+            auth_mode,
+            secret: body.secret,
+            accepted_content_type: body.accepted_content_type,
+            rate_limit_per_min: body.rate_limit_per_min,
+          }),
+        }, { status: 201 });
+      },
+      catch: (cause) => authoredRefusal({ doing: 'creating this webhook', cause }),
+    });
+  }));
 });
 
 cliRoutes.get('/api/cli/devices', async (c) => json({ body: await c.get('cli').userDO.listDevices(await ownerCaller(c.env)) }));
@@ -394,28 +399,40 @@ cliRoutes.all('/api/cli/credentials/:key', async (c, next) => {
   await next();
 });
 
-cliRoutes.post('/api/cli/credentials/:key', async (c) => {
-  const cli = c.get('cli');
-  const body = await safeJson(c.req.raw, JsonValueSchema);
+cliRoutes.post('/api/cli/credentials/:key', (c) => {
+  return settle(Effect.gen(function* () {
+    const cli = c.get('cli');
+    const body = yield* Effect.promise(async () => safeJson(c.req.raw, JsonValueSchema));
 
-  try { await cli.userDO.setCredential(await ownerCaller(c.env), c.get('key'), body); }
-  catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause }); }
+    yield* Effect.tryPromise({
+      try: async () => {
+        await cli.userDO.setCredential(await ownerCaller(c.env), c.get('key'), body);
+      },
+      catch: (cause) => authoredRefusal({ doing: 'storing this credential', cause }),
+    });
 
-  // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
-  notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
+    // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
+    notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
 
-  return json({ body: { ok: true } }, { status: 201 });
+    return json({ body: { ok: true } }, { status: 201 });
+  }));
 });
 
-cliRoutes.delete('/api/cli/credentials/:key', async (c) => {
-  const cli = c.get('cli');
+cliRoutes.delete('/api/cli/credentials/:key', (c) => {
+  return settle(Effect.gen(function* () {
+    const cli = c.get('cli');
 
-  try { await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key')); }
-  catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause }); }
+    yield* Effect.tryPromise({
+      try: async () => {
+        await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key'));
+      },
+      catch: (cause) => authoredRefusal({ doing: 'deleting this credential', cause }),
+    });
 
-  notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
+    notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
 
-  return json({ body: { ok: true } });
+    return json({ body: { ok: true } });
+  }));
 });
 
 cliRoutes.all('/api/cli/*', async (c) => err(404, `No such CLI route: ${c.req.method} ${cliPath(c)}`));
@@ -425,69 +442,61 @@ async function cliAgent<Id>(
 ): Promise<CliAgentTarget | Response> {
   const result = await claimOwnedWorkspace(env, cli.userId, name);
 
-  if (!result.ok) return err(result.status, result.error);
+  if (Result.isFailure(result)) return err(result.failure.status, result.failure.error);
 
-  return result.agent;
+  return result.success;
 }
 
 /** The one method-shaped transport; AGENT_RPC_ACCESS table membership is the dispatch allowlist. */
-async function handleAgentRpc(c: CliContext, name: string): Promise<Response> {
-  const cli = c.get('cli');
+function handleAgentRpc(c: CliContext, name: string): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const cli = c.get('cli');
 
-  const body = await safeJson(c.req.raw, v.object({
-    method: v.string(),
-    args: v.optional(v.array(JsonValueSchema)),
-  }));
+    const body = yield* Effect.promise(() => safeJson(c.req.raw, v.object({
+      method: v.string(),
+      args: v.optional(v.array(JsonValueSchema)),
+    })));
 
-  const rpcMethod = body?.method ?? '';
+    const rpcMethod = body?.method ?? '';
 
-  if (!rpcMethod) return err(400, 'method required');
-  const args = body?.args ?? [];
+    if (!rpcMethod) return err(400, 'method required');
+    const args = body?.args ?? [];
 
-  if (!isAgentRpcMethod(rpcMethod)) {
-    return err(404, `No such agent RPC method: ${rpcMethod}`);
-  }
-
-  const access = requiredRpcAccess(rpcMethod);
-
-  if (access === null || access === 'never') {
-    return err(404, `No such agent RPC method: ${rpcMethod}`);
-  }
-
-  if (cli.kind === 'access') {
-    const scope = rpcAccessScope(access);
-
-    if (!scope) return err(403, `${rpcMethod} requires an interactive CLI session token. Sign in with: kinu auth`);
-
-    if (!tokenAllows(cli, scope)) return err(403, `This access token does not have the ${scope} scope.`);
-  }
-
-  const agent = await cliAgent(c.env, cli, name);
-
-  if (agent instanceof Response) return agent;
-
-  // The table check above is the trust boundary; each method validates its own args.
-  let result: unknown;
-
-  try {
-    const invoke = v.parse(v.function(), agent[rpcMethod]);
-    result = await invoke(...args);
-  } catch (cause) {
-    throw authoredRefusal({ doing: `calling ${rpcMethod}`, cause });
-  }
-
-  // A failed fold leaves the write answered.
-  if (rpcMovesOverview(rpcMethod)) {
-    try {
-      await agent.requestOverviewPush();
-    } catch (cause) {
-      diagnostics.failure('cli.overview_fold_failed', toKinuError({
-        doing: 'asking a workspace to fold its tile after a CLI write', cause, otherwise: 'unavailable',
-      }), { workspace: name, method: rpcMethod });
+    if (!isAgentRpcMethod(rpcMethod)) {
+      return err(404, `No such agent RPC method: ${rpcMethod}`);
     }
-  }
 
-  return json({ body: { result: result ?? null } });
+    const access = requiredRpcAccess(rpcMethod);
+
+    if (access === null || access === 'never') {
+      return err(404, `No such agent RPC method: ${rpcMethod}`);
+    }
+
+    if (cli.kind === 'access') {
+      const scope = rpcAccessScope(access);
+
+      if (!scope) return err(403, `${rpcMethod} requires an interactive CLI session token. Sign in with: kinu auth`);
+
+      if (!tokenAllows(cli, scope)) return err(403, `This access token does not have the ${scope} scope.`);
+    }
+
+    const agent = yield* Effect.promise(() => cliAgent(c.env, cli, name));
+
+    if (agent instanceof Response) return agent;
+
+    // The table check above is the trust boundary; each method validates its own args.
+    const result: unknown = yield* Effect.tryPromise({
+      try: async () => v.parse(v.function(), agent[rpcMethod])(...args),
+      catch: (cause) => authoredRefusal({ doing: `calling ${rpcMethod}`, cause }),
+    });
+
+    // A failed fold leaves the write answered.
+    if (rpcMovesOverview(rpcMethod)) {
+      yield* Effect.promise(() => settleLogged('cli.overview_fold_failed', { doing: 'asking a workspace to fold its tile after a CLI write', otherwise: 'unavailable' }, () => agent.requestOverviewPush(), { workspace: name, method: rpcMethod }));
+    }
+
+    return json({ body: { result: result ?? null } });
+  });
 }
 
 /** The session token's mint time (minting requires a live browser approval); access tokens never qualify. */
@@ -540,34 +549,36 @@ function clientKey(request: Request): string {
     ?? 'unknown';
 }
 
-async function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>): Promise<Response> {
-  let identity: AuthIdentity;
+function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const identity = yield* Effect.catchCause(
+      Effect.promise(() => authenticateRequest(request, env)),
+      (failed) => accessError(toError({ cause: Cause.squash(failed) }), request),
+    );
 
-  try { identity = await authenticateRequest(request, env); }
-  catch (e) { return accessError(toError({ cause: e }), request); }
+    if (identity instanceof Response) return identity;
+    const url = new URL(request.url);
+    const code = url.searchParams.get('code');
 
-  const url = new URL(request.url);
-  const code = url.searchParams.get('code');
+    if (!code) return html('Connect the Kinu CLI', '<p>This link has no sign-in code. Run <code>kinu auth</code> in your terminal and open the link it prints.</p>', 400);
+    const requestInfo = yield* Effect.promise(() => inspectCliAuth(env.AUTH_KV, code));
 
-  if (!code) return html('Connect the Kinu CLI', '<p>This link has no sign-in code. Run <code>kinu auth</code> in your terminal and open the link it prints.</p>', 400);
-  const requestInfo = await inspectCliAuth(env.AUTH_KV, code);
+    if (!requestInfo) {
+      return html('Connect the Kinu CLI', '<p>This sign-in code is unknown or has expired. Run <code>kinu auth</code> again.</p>', 400);
+    }
 
-  if (!requestInfo) {
-    return html('Connect the Kinu CLI', '<p>This sign-in code is unknown or has expired. Run <code>kinu auth</code> again.</p>', 400);
-  }
+    if (requestInfo.status === 'expired') {
+      return html('Connect the Kinu CLI', '<p>This sign-in code has expired. Run <code>kinu auth</code> again.</p>', 400);
+    }
 
-  if (requestInfo.status === 'expired') {
-    return html('Connect the Kinu CLI', '<p>This sign-in code has expired. Run <code>kinu auth</code> again.</p>', 400);
-  }
+    if (requestInfo.status === 'approved' || requestInfo.status === 'consumed') {
+      return html('Connect the Kinu CLI', '<p>This terminal is already approved. You can go back to it.</p>');
+    }
 
-  if (requestInfo.status === 'approved' || requestInfo.status === 'consumed') {
-    return html('Connect the Kinu CLI', '<p>This terminal is already approved. You can go back to it.</p>');
-  }
+    const csrf = randomToken(32);
+    const expiresAt = new Date(requestInfo.expiresAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
 
-  const csrf = randomToken(32);
-  const expiresAt = new Date(requestInfo.expiresAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-
-  return html('Connect the Kinu CLI', `
+    return html('Connect the Kinu CLI', `
     <p>A terminal asked to sign in to your Kinu account.</p>
     <dl>
       <div><dt>Terminal</dt><dd>${escapeHtml(requestInfo.deviceName)}</dd></div>
@@ -582,57 +593,55 @@ async function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>
     </form>
     <p class="muted">Approve only if this code matches the one in your terminal.</p>
   `, 200, {
-    headers: {
-      'set-cookie': csrfCookie(csrf),
-      'cache-control': 'no-store',
-    },
+      headers: {
+        'set-cookie': csrfCookie(csrf),
+        'cache-control': 'no-store',
+      },
+    });
   });
 }
 
-async function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): Promise<Response> {
-  let identity: AuthIdentity;
+function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const identity = yield* Effect.catchCause(
+      Effect.promise(() => authenticateRequest(request, env)),
+      (failed) => accessError(toError({ cause: Cause.squash(failed) }), request),
+    );
 
-  try { identity = await authenticateRequest(request, env); }
-  catch (e) { return accessError(toError({ cause: e }), request); }
+    if (identity instanceof Response) return identity;
 
-  if (!isSameOriginPost(request)) {
-    return html('Connect the Kinu CLI', '<p>This approval did not come from the approval page. Open the link from your terminal again.</p>', 403);
-  }
+    if (!isSameOriginPost(request)) {
+      return html('Connect the Kinu CLI', '<p>This approval did not come from the approval page. Open the link from your terminal again.</p>', 403);
+    }
 
-  let form: FormData;
+    const form = yield* Effect.catchCause(Effect.promise(() => request.formData()), (failed) => (classify({ cause: Cause.squash(failed) }) === 'malformed-input'
+      ? Effect.succeed(html('Connect the Kinu CLI', '<p>The approval form was incomplete. Refresh the page and try again.</p>', 400))
+      : Effect.failCause(failed)));
 
-  try { form = await request.formData(); }
-  catch (error) {
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
+    if (form instanceof Response) return form;
 
-    return html('Connect the Kinu CLI', '<p>The approval form was incomplete. Refresh the page and try again.</p>', 400);
-  }
+    const code = textField(form, 'userCode');
+    const csrf = textField(form, 'csrf');
+    const cookieCsrf = readCookie(request, CLI_APPROVAL_CSRF_COOKIE_NAME);
 
-  const code = textField(form, 'userCode');
-  const csrf = textField(form, 'csrf');
-  const cookieCsrf = readCookie(request, CLI_APPROVAL_CSRF_COOKIE_NAME);
+    if (!csrf || !cookieCsrf || !timingSafeEqual(csrf, cookieCsrf)) {
+      return html('Connect the Kinu CLI', '<p>This approval page has expired. Refresh it and try again.</p>', 403);
+    }
 
-  if (!csrf || !cookieCsrf || !timingSafeEqual(csrf, cookieCsrf)) {
-    return html('Connect the Kinu CLI', '<p>This approval page has expired. Refresh it and try again.</p>', 403);
-  }
+    if (!code) return html('Connect the Kinu CLI', '<p>This link has no sign-in code. Run <code>kinu auth</code> in your terminal and open the link it prints.</p>', 400);
 
-  if (!code) return html('Connect the Kinu CLI', '<p>This link has no sign-in code. Run <code>kinu auth</code> in your terminal and open the link it prints.</p>', 400);
-
-  try {
-    await approveCliAuth(env, code, identity, clientKey(request));
-
-    return html('Connect the Kinu CLI', '<p>The Kinu CLI is connected. You can go back to your terminal.</p>', 200, {
+    return yield* Effect.catchCause(Effect.as(Effect.promise(() => approveCliAuth(env, code, identity, clientKey(request))), html('Connect the Kinu CLI', '<p>The Kinu CLI is connected. You can go back to your terminal.</p>', 200, {
       headers: {
         'set-cookie': clearCsrfCookie(),
         'cache-control': 'no-store',
       },
-    });
-  } catch (cause) {
-    const error = authoredRefusal({ doing: 'approving this sign-in', cause });
-    diagnostics.failure('cli.approval_failed', error);
+    })), (failed) => Effect.sync(() => {
+      const error = authoredRefusal({ doing: 'approving this sign-in', cause: Cause.squash(failed) });
+      diagnostics.failure('cli.approval_failed', error);
 
-    return html('Connect the Kinu CLI', `<p>${escapeHtml(renderThrownChain({ cause: error }))}</p>`, 400);
-  }
+      return html('Connect the Kinu CLI', `<p>${escapeHtml(renderThrownChain({ cause: error }))}</p>`, 400);
+    }));
+  });
 }
 
 function installPageResponse(origin: string): Response {
@@ -1159,31 +1168,31 @@ exec "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$CLI_DIR/cli.js" "$@"
 
 /** Rate limits are 429, caller-correctable code failures are 400, and
  *  everything else (KV outage, UserDO failure, …) is a real 500. */
-function cliAuthError(e: Error): Response {
-  if (e instanceof RateLimitError) return err(429, e.message);
+function cliAuthError(e: Error): Effect.Effect<Response, KinuError> {
+  if (e instanceof RateLimitError) return Effect.succeed(err(429, e.message));
 
-  if (e instanceof CliAuthCodeError) return err(400, e.message);
+  if (e instanceof CliAuthCodeError) return Effect.succeed(err(400, e.message));
 
-  throw toKinuError({ doing: 'answering a CLI sign-in request', cause: e, otherwise: 'io' });
+  return Effect.fail(toKinuError({ doing: 'answering a CLI sign-in request', cause: e, otherwise: 'io' }));
 }
 
-function accessError(e: Error, request?: Request): Response {
+function accessError(e: Error, request?: Request): Effect.Effect<Response, KinuError> {
   if (e instanceof AuthError) {
     if (e.status === 401 && request?.method === 'GET') {
       const url = new URL(request.url);
       const login = new URL('/login', url.origin);
       login.searchParams.set('return_to', url.pathname + url.search + url.hash);
 
-      return new Response(null, {
+      return Effect.succeed(new Response(null, {
         status: 302,
         headers: { location: login.toString(), 'cache-control': 'no-store' },
-      });
+      }));
     }
 
-    return err(e.status, e.message);
+    return Effect.succeed(err(e.status, e.message));
   }
 
-  throw toKinuError({ doing: 'approving a CLI sign-in', cause: e, otherwise: 'io' });
+  return Effect.fail(toKinuError({ doing: 'approving a CLI sign-in', cause: e, otherwise: 'io' }));
 }
 
 function html(title: string, body: string, status = 200, init: ResponseInit = {}): Response {

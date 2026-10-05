@@ -3,6 +3,7 @@
 import { withToolResultImages } from './providers/tool-result-images';
 import {
   APICallError,
+  InvalidResponseDataError,
   NoOutputGeneratedError,
   streamText,
   type ModelMessage,
@@ -36,12 +37,13 @@ import type { CountableRequest, InputTokenCount } from './providers/input-tokens
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
+import { isServerCompaction, serverCompactionOptions, serverCompactor } from './providers/server-compaction';
 import { describeProviderError, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
 import * as v from 'valibot';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
-import { normalizeUsage, usageReported, type Usage } from './usage';
+import { answeredPromptTokens, normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_RETRIES_HEADER } from './providers/rate-limit-retry';
 import type { FallbackCooldowns } from './providers/fallback-cooldown';
 import { FallbackRoute, type CallFailure } from './providers/fallback-route';
@@ -66,6 +68,8 @@ export type ChatEvent = (
   /** Cumulative turn outputs; an absent usage field is not zero. */
   | {
     type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[]; usage?: Usage;
+    /** Where the step's one request sampled more than once (`answeredPromptTokens`): the prompt it answered from. */
+    promptTokens?: number;
     finishReason?: string;
     text?: string;
     toolCalls?: ReadonlyArray<{ toolName: string }>;
@@ -154,9 +158,9 @@ export interface ChatOptions {
   budget?: MissionGovernor;
   /** An extra stop reason; there is no step cap to combine with (see UNBOUNDED_STEPS). */
   stopWhen?: StopCondition<ToolSet>;
-  /** Each finished step, raw and as recorded, awaited, since the sink may be another DO the next request waits for; a
-   *  throw rejects the turn. */
-  onStep?: (step: StepResult<ToolSet>, record: StepRecord) => Promise<void> | void;
+  /** Each finished step, raw and as its own recorded messages, awaited, since the sink may be another DO the next request
+   *  waits for; a throw rejects the turn. */
+  onStep?: (step: StepResult<ToolSet>, messages: readonly ModelMessage[]) => Promise<void> | void;
   /** Raw SDK output for a host UI bridge; not part of the serializable ChatEvent projection. */
   onToolOutput?: (output: ChatToolOutput) => Promise<void> | void;
   /** Where each call opens and closes its `model_operation` rows, so one in flight at process death shows in
@@ -186,7 +190,7 @@ export const INTERRUPTED_TURN = 'The turn was interrupted before it finished.';
 /** One call's frame, closed whichever way it left; never awaited, so the end row lands before `turn_end`. */
 function settleModelOperation(
   operation: ModelOperation,
-  stream: { totalUsage: PromiseLike<LanguageModelUsage>; response: PromiseLike<{ modelId: string }> },
+  stream: { usage: PromiseLike<LanguageModelUsage>; response: PromiseLike<{ modelId: string }> },
   cut: boolean,
 ): void {
   if (cut) {
@@ -195,9 +199,9 @@ function settleModelOperation(
     return;
   }
 
-  void Promise.all([stream.totalUsage, stream.response]).then(
-    ([totalUsage, response]) => operation.completed({
-      usage: normalizeUsage(totalUsage),
+  void Promise.all([stream.usage, stream.response]).then(
+    ([usage, response]) => operation.completed({
+      usage: normalizeUsage(usage),
       modelId: response.modelId,
     }),
     operationRejected(operation),
@@ -208,9 +212,14 @@ const operationRejected = (operation: ModelOperation) =>
   (...rejection: [unknown]): void => { operation.failed({ cause: rejection[0] }); };
 
 interface AnswerStep {
-  readonly text?: string;
+  readonly content: StepResult<ToolSet>['content'];
   readonly finishReason?: string;
   readonly toolCalls?: ReadonlyArray<unknown>;
+}
+
+/** A step's own prose: the provider's compaction summary is not the model speaking. */
+function stepText(step: AnswerStep): string {
+  return step.content.flatMap((part) => (part.type === 'text' && !isServerCompaction(part.providerMetadata) ? [part.text] : [])).join('');
 }
 
 /** The final step's text, or null to keep what streamed (earlier prose is narration); a toolless `length`-cut step
@@ -223,7 +232,7 @@ function answerFromSteps(
   let from = steps.length - 1;
 
   while (from > 0 && steps[from - 1]?.finishReason === OUTPUT_LIMIT_REACHED && (steps[from - 1]?.toolCalls?.length ?? 0) === 0) from -= 1;
-  const answer = steps.slice(from).map((step) => step.text ?? '').join('');
+  const answer = steps.slice(from).map(stepText).join('');
 
   return answer.trim() ? answer : null;
 }
@@ -257,6 +266,22 @@ const DEAD_STREAM = 'Model stream ended without output: the provider stream term
   + '(no finish reason, no content). The turn did not complete.';
 
 /** One provider call's state, as the SDK's stream drains into it via {@link ProviderCall.consume}. */
+/** The provider's compaction summary is for the model: the stream the owner sees leaves it out. */
+function withoutServerSummaries(stream: ReadableStream<UIMessageChunk>): ReadableStream<UIMessageChunk> {
+  const summaries = new Set<string>();
+
+  return stream.pipeThrough(new TransformStream<UIMessageChunk, UIMessageChunk>({
+    transform(chunk, controller) {
+      if (chunk.type === 'text-start' && isServerCompaction(chunk.providerMetadata)) summaries.add(chunk.id);
+
+      if ((chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end') && summaries.has(chunk.id)) return;
+
+      if (chunk.type === 'custom' && isServerCompaction(chunk.providerMetadata)) return;
+      controller.enqueue(chunk);
+    },
+  }));
+}
+
 class ProviderCall {
   /** Set by `onAbort`, or by the drain when the provider threw the abort reason first. */
   interrupted = false;
@@ -269,6 +294,8 @@ class ProviderCall {
   /** No finish reason and no output: a provider stream that died, which the SDK would record as a normal stop. */
   private deadFinalStep = false;
   private stepHadOutput = false;
+  /** Text the provider wrote for itself, its compaction summary, by stream id: kept for replay, never the answer. */
+  private readonly summaries = new Set<string>();
   /** The in-flight step's content: the SDK records only finished steps, so a cut would otherwise lose it. */
   private stepContent: Array<TextPart | ToolCallPart> = [];
 
@@ -289,12 +316,12 @@ class ProviderCall {
 
   constructor(private readonly fallback: string | undefined) {}
 
-  requestStarting(messages: ModelMessage[]): void {
+  /** Each step's request starts from the call's input and the seal's answers: ai 7 would carry the last step's
+   *  rewrite (markers, weave) and its raw tool outputs into the next one. */
+  requestStarting(initial: readonly ModelMessage[]): ModelMessage[] {
     this.stepSentAt = Date.now();
-    let at = messages.length - this.responseSoFar.length;
 
-    // The SDK reconstructs tool outputs for its next request; reuse the seal's one projection.
-    for (const message of this.responseSoFar) messages[at++] = message;
+    return [...initial, ...this.responseSoFar];
   }
 
   dispatched(toolCall: { toolCallId: string; toolName: string; input: unknown }): void {
@@ -313,8 +340,8 @@ class ProviderCall {
 
   /** SDK getters are read before stream consumers can lag the seal. */
   stepRecord(step: StepResult<ToolSet>, stepIndex: number, context: ContextComposition | undefined, prefix: readonly ModelMessage[]): StepRecord {
-    const messages = modelStepMessages(step, this.responseSoFar);
     const usage = normalizeUsage(step.usage);
+    const promptTokens = answeredPromptTokens(step.usage);
     const account = callAccountOf(step.response);
     const egress = step.response.headers?.[EGRESS_ROUTE_HEADER];
     const { modelId } = step.response;
@@ -331,12 +358,13 @@ class ProviderCall {
       return [record];
     });
 
-    return { messages: prefix.length === 0 ? messages : [...prefix, ...messages], toolResults, step: {
+    return { messages: [...prefix, ...this.responseSoFar, ...modelStepMessages(step)], toolResults, step: {
       stepIndex,
       finishReason: step.finishReason, text: step.text,
       toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
       request: { body, sentAt: this.stepSentAt },
       ...(usageReported(usage) && { usage }),
+      ...(promptTokens !== undefined && { promptTokens }),
       ...(account !== undefined && { account }),
       ...(egress !== undefined && { egress }),
       ...(context && { context }),
@@ -345,9 +373,13 @@ class ProviderCall {
     } };
   }
 
-  stepFinished(step: StepResult<ToolSet>, record: StepRecord, prefixLength: number): void {
+  /** Returns the step's own messages: what the record holds past this call's earlier steps. */
+  stepFinished(step: StepResult<ToolSet>, record: StepRecord, prefixLength: number): readonly ModelMessage[] {
     this.finishedSteps.push(step);
-    this.responseSoFar = prefixLength === 0 ? record.messages : record.messages.slice(prefixLength);
+    const response = prefixLength === 0 ? record.messages : record.messages.slice(prefixLength);
+    const own = response.slice(this.responseSoFar.length);
+
+    this.responseSoFar = response;
 
     for (const part of step.content) if (part.type === 'tool-call') {
       this.dispatchedCalls.delete(part.toolCallId);
@@ -355,6 +387,8 @@ class ProviderCall {
     }
 
     if (record.step !== undefined) this.pendingStepEvents.push({ ...record.step, responseMessages: record.messages });
+
+    return own;
   }
 
   nativePart(part: TextStreamPart<ToolSet>): void {
@@ -381,26 +415,15 @@ class ProviderCall {
 
   consume(chunk: TextStreamPart<ToolSet>): ChatEvent | null {
     switch (chunk.type) {
-      case 'text-delta': {
-        if (!chunk.text) return null;
-        this.stepHadOutput = true;
-        this.stepContent.push({ type: 'text', text: chunk.text });
-
-        return { type: 'text-delta', delta: chunk.text };
-      }
+      case 'text-start':
+      case 'text-delta':
+        return this.prose(chunk);
 
       case 'reasoning-delta':
-        return chunk.text ? { type: 'reasoning-delta', delta: chunk.text } : null;
+        return this.reasoning(chunk.text);
 
-      case 'tool-call': {
-        this.stepHadOutput = true;
-        this.stepContent.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input });
-        const refusal = invalidToolCallRefusal(chunk);
-
-        if (refusal !== undefined) this.refusedCalls.set(chunk.toolCallId, refusal);
-
-        return { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: parseToolArgs(chunk.input) };
-      }
+      case 'tool-call':
+        return this.toolCall(chunk);
 
       case 'tool-result':
         return this.toolResult(chunk, undefined);
@@ -412,15 +435,10 @@ class ProviderCall {
         return this.toolResult(chunk, refusal);
       }
 
-      case 'finish-step': {
-        // No finish reason and no output (reasoning-only included): the provider stream died.
-        this.lastFinishReason = chunk.finishReason;
-        this.deadFinalStep = !this.stepHadOutput && chunk.finishReason === 'other';
-        this.stepHadOutput = false;
-        this.stepContent = [];
+      case 'finish-step':
+        this.stepEnded(chunk.finishReason);
 
         return null;
-      }
 
       case 'error':
         this.failed({ cause: chunk.error });
@@ -428,17 +446,19 @@ class ProviderCall {
         return null;
 
       case 'abort':
+      case 'custom':
       case 'file':
       case 'finish':
       case 'raw':
       case 'reasoning-end':
+      case 'reasoning-file':
       case 'reasoning-start':
       case 'source':
       case 'start':
       case 'start-step':
       case 'text-end':
-      case 'text-start':
       case 'tool-approval-request':
+      case 'tool-approval-response':
       case 'tool-input-delta':
       case 'tool-input-end':
       case 'tool-input-start':
@@ -449,6 +469,42 @@ class ProviderCall {
       default:
         return null;
     }
+  }
+
+  private reasoning(text: string): ChatEvent | null {
+    return text ? { type: 'reasoning-delta', delta: text } : null;
+  }
+
+  private toolCall(chunk: Extract<TextStreamPart<ToolSet>, { type: 'tool-call' }>): ChatEvent {
+    this.stepHadOutput = true;
+    this.stepContent.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input });
+    const refusal = invalidToolCallRefusal(chunk);
+
+    if (refusal !== undefined) this.refusedCalls.set(chunk.toolCallId, refusal);
+
+    return { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: parseToolArgs(chunk.input) };
+  }
+
+  /** No finish reason and no output (reasoning-only included): the provider stream died. */
+  private stepEnded(finishReason: string): void {
+    this.lastFinishReason = finishReason;
+    this.deadFinalStep = !this.stepHadOutput && finishReason === 'other';
+    this.stepHadOutput = false;
+    this.stepContent = [];
+  }
+
+  private prose(chunk: Extract<TextStreamPart<ToolSet>, { type: 'text-start' | 'text-delta' }>): ChatEvent | null {
+    if (chunk.type === 'text-start') {
+      if (isServerCompaction(chunk.providerMetadata)) this.summaries.add(chunk.id);
+
+      return null;
+    }
+
+    if (!chunk.text || this.summaries.has(chunk.id)) return null;
+    this.stepHadOutput = true;
+    this.stepContent.push({ type: 'text', text: chunk.text });
+
+    return { type: 'text-delta', delta: chunk.text };
   }
 
   failed({ cause }: { readonly cause: unknown }): void {
@@ -487,14 +543,19 @@ class ProviderCall {
   failure(provider: string | undefined): CallFailure | null {
     if (this.interrupted) return null;
 
+    // The OpenAI-compatible adapter reports a stream that closed without a finish reason itself; others finish it as
+    // `other`, which the step's finish reads.
+    const reported = InvalidResponseDataError.isInstance(this.streamError) && this.streamError.data === undefined;
+    const dead = this.streamError === undefined ? this.deadFinalStep : reported && !this.streamedBeforeError;
+
+    if (dead) return { cause: new Error('model stream ended without output'), error: new Error(DEAD_STREAM), streamed: false };
+
     if (this.streamError !== undefined) {
       return {
         cause: this.streamError, streamed: this.streamedBeforeError,
         error: toProviderError({ doing: 'calling the model', cause: this.streamError, provider }),
       };
     }
-
-    if (this.deadFinalStep) return { cause: new Error('model stream ended without output'), error: new Error(DEAD_STREAM), streamed: false };
 
     return null;
   }
@@ -517,7 +578,7 @@ class ProviderCall {
 /** A call that finishes no step rejects the SDK's deferred accessors, unhandled if unread: tolerated for zero steps
  *  and cuts, anything else recorded as a defect. */
 function suppressDeferredRejections(
-  result: { steps: PromiseLike<unknown>; finishReason: PromiseLike<unknown>; rawFinishReason: PromiseLike<unknown>; totalUsage: PromiseLike<unknown> },
+  result: { steps: PromiseLike<unknown>; finishReason: PromiseLike<unknown>; rawFinishReason: PromiseLike<unknown>; usage: PromiseLike<unknown> },
   tolerated: () => boolean,
 ): void {
   const ignore = (error: Error): void => {
@@ -529,7 +590,7 @@ function suppressDeferredRejections(
     );
   };
 
-  for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.totalUsage]) deferred.then(undefined, ignore);
+  for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.usage]) deferred.then(undefined, ignore);
 }
 
 /** Provider prompt-cache plan; marker strategies re-roll tail breakpoints each step. Pass-through without opts.cache. */
@@ -549,7 +610,9 @@ function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answe
 
   if (!allText.trim()) {
     for (const step of steps) {
-      if (step.text?.trim()) allText += step.text;
+      const text = stepText(step);
+
+      if (text.trim()) allText += text;
     }
   }
 
@@ -596,6 +659,7 @@ async function admitRequest(opts: ChatOptions) {
     extensions,
     sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
+    model: opts.modelSpec ?? opts.modelContext?.id,
     providerReportedTokens: opts.providerReportedTokens,
     trigger: opts.transformTrigger ?? 'auto',
     abortSignal: opts.signal,
@@ -660,7 +724,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
 
       const base = await stepContext.base();
-      const assembled = await assembleTurnMessages({ ...assembly, history: base.messages, turnStart: base.turnStart, admission: undefined });
+      const assembled = await assembleTurnMessages({ ...serving, history: base.messages, turnStart: base.turnStart, admission: undefined });
 
       return { ...assembled, changed: base.changed };
     },
@@ -672,14 +736,23 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   const cache = turnCachePlan(opts, turnMessages);
   const rollTail = hasCacheMarkers(cache.strategy);
+  const forcedInput = opts.transformTrigger === 'force' ? admittedTokens : undefined;
+
+  /** One attempt's provider options: the turn's cache, the serving model's server compaction, then its own. */
+  const optionsFor = (spec: string | undefined, served: number | undefined, own: ChatOptions['providerOptions']) => mergeProviderOptions(
+    mergeProviderOptions(cache.providerOptions, serverCompactionOptions(spec, served, forcedInput)), own);
 
   /** The model each attempt calls, with the media it takes: the turn's for the primary, its own for a fallback. */
   let current = {
     ...primary,
     model: opts.model,
     accepts: opts.attachments?.accepts,
-    providerOptions: mergeProviderOptions(cache.providerOptions, opts.providerOptions),
+    providerOptions: optionsFor(assembly.model, opts.modelContext?.contextWindow, opts.providerOptions),
   };
+
+  /** How the serving model's requests are assembled, and the request it sends before what the turn produced. */
+  let serving = assembly;
+  let base = cache.messages;
 
   const route = new FallbackRoute<ChatFallback>(opts);
   /** The fallback serving the turn, once one took over. */
@@ -764,7 +837,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const result = streamText({
       model: current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts),
-      system: cache.system,
+      instructions: cache.system,
       maxRetries: route.callRetries,
       messages: await narrowedFor(request),
       tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(current))),
@@ -774,20 +847,22 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       experimental_repairToolCall: repairToolCall(),
       abortSignal: signal,
       headers: { [PROVIDER_RETRIES_HEADER]: String(route.callRetries) },
+      // A cache warm replays a step's request body, which ai 7 leaves out unless asked.
+      include: { requestBody: true },
       // The SDK default console.error dumped raw provider payloads; the rethrow below is the one place failures read.
       onError: ({ error }) => { call.streamError = error; },
-      experimental_onToolCallStart: ({ toolCall }) => { call.dispatched(toolCall); },
-      experimental_onToolCallFinish: ({ toolCall, durationMs }) => { call.settled(toolCall.toolCallId, durationMs); },
+      onToolExecutionStart: ({ toolCall }) => { call.dispatched(toolCall); },
+      onToolExecutionEnd: ({ toolCall, toolExecutionMs }) => { call.settled(toolCall.toolCallId, toolExecutionMs); },
       // The only terminal handover: an aborted run never settles `result.steps`.
       onAbort: ({ steps }) => { call.aborted(steps); },
       providerOptions: current.providerOptions,
       // Shared step pipeline, as Think's beforeStep composes it. Also stamps the request start
       // (`ProviderCall.requestStarting`).
-      prepareStep: ({ stepNumber, messages, steps }) => {
-        call.requestStarting(messages);
+      prepareStep: ({ stepNumber, initialMessages, steps }) => {
+        const messages = call.requestStarting(initialMessages);
         stepSpans.start(stepOffset + stepNumber);
 
-        return composePrepareStep({
+        const prepared = composePrepareStep({
           extensions,
           abortSignal: signal,
           cache: rollTail ? { strategy: cache.strategy } : null,
@@ -799,6 +874,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           context: stepContextPlane,
           turnStart,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
+
+        return prepared instanceof Promise ? prepared.then((done) => done ?? { messages }) : prepared ?? { messages };
       },
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
         async transform(part, controller) {
@@ -807,23 +884,23 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           controller.enqueue(part);
         },
       }),
-      onStepFinish: async (step) => {
+      onStepEnd: async (step) => {
         stepSpans.finish(step);
-        let record: StepRecord | null = null;
+        let own: readonly ModelMessage[] | null = null;
 
         try {
           stepCount++;
-          record = call.stepRecord(step, stepCount, meter?.take(), responsePrefix);
+          const record = call.stepRecord(step, stepCount, meter?.take(), responsePrefix);
           await opts.persistStep?.(record);
-          call.stepFinished(step, record, responsePrefix.length);
+          own = call.stepFinished(step, record, responsePrefix.length);
         } catch (cause) {
           call.stepFailure ??= { doing: 'recording a finished model step', cause };
         }
 
-        if (call.stepFailure !== null || record === null) return;
+        if (call.stepFailure !== null || own === null) return;
 
         try {
-          await opts.onStep?.(step, record);
+          await opts.onStep?.(step, own);
         } catch (cause) {
           call.stepFailure ??= { doing: 'run the step hook', cause };
         }
@@ -832,12 +909,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     suppressDeferredRejections(result, () => call.interrupted || signal.aborted);
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
-    const observed = opts.observeStream?.(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) }), { index: callIndex });
+    const observed = opts.observeStream?.(withoutServerSummaries(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) })), { index: callIndex });
 
     let drained = false;
 
     try {
-      for await (const chunk of result.fullStream) {
+      for await (const chunk of result.stream) {
         const event = call.consume(chunk);
 
         if (event !== null) {
@@ -903,20 +980,27 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     return { steps, produced: paired, finishReason: call.lastFinishReason, interrupted: cut, failure: null };
   };
 
-  const takeOver = (next: ChatFallback): void => {
+  /** A model that compacts with another provider, or none, cannot read the request built for the last one: rebuilt. */
+  const takeOver = async (next: ChatFallback): Promise<void> => {
     const bound = next.bind();
+    const served = resolveModelWindow(next.spec, null).contextWindow;
+    const rebuild = serverCompactor(next.spec) !== serverCompactor(serving.model);
 
-    current = { ...bound, spec: next.spec, accepts: next.accepts, providerOptions: mergeProviderOptions(cache.providerOptions, bound.providerOptions) };
+    serving = { ...assembly, model: next.spec, contextWindow: served };
+
+    if (rebuild) {
+      initialContextAvailable = false;
+      const history = initialContext?.messages ?? assembly.history;
+      base = turnCachePlan(opts, (await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined })).messages).messages;
+    }
+
+    current = { ...bound, spec: next.spec, accepts: next.accepts, providerOptions: optionsFor(next.spec, served, bound.providerOptions) };
     servingFallback = next.spec;
     route.tried.push(next.spec);
   };
 
-  const callChain = async function* (
-    request: readonly ModelMessage[],
-    stepOffset: number,
-    responsePrefix: readonly ModelMessage[],
-  ): AsyncGenerator<ChatEvent, CallOutcome> {
-    const outcome = yield* callModel(request, stepOffset, responsePrefix);
+  const callChain = async function* (stepOffset: number, responsePrefix: readonly ModelMessage[]): AsyncGenerator<ChatEvent, CallOutcome> {
+    const outcome = yield* callModel([...base, ...responsePrefix], stepOffset, responsePrefix);
 
     if (outcome.failure === null) return outcome;
     const next = await route.next(servingFallback ?? opts.modelSpec, outcome.failure);
@@ -925,9 +1009,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: describeProviderError({ cause: outcome.failure.cause }), source: 'native' };
     const produced = responsePrefix.length === 0 ? outcome.produced : [...responsePrefix, ...outcome.produced];
 
-    takeOver(next);
+    await takeOver(next);
 
-    const rest = yield* callChain([...request, ...outcome.produced], stepOffset + outcome.steps.length, produced);
+    const rest = yield* callChain(stepOffset + outcome.steps.length, produced);
 
     return { ...rest, steps: [...outcome.steps, ...rest.steps], produced: [...outcome.produced, ...rest.produced] };
   };
@@ -936,10 +1020,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   if (cooled !== undefined) {
     yield { type: 'model-fallback', from: current.spec, to: cooled.spec, reason: `${current.spec} is cooling down after failing over`, source: 'native' };
-    takeOver(cooled);
+    await takeOver(cooled);
   }
 
-  const first = yield* callChain(cache.messages, 0, []);
+  const first = yield* callChain(0, []);
   let steps: readonly StepResult<ToolSet>[] = first.steps;
   let responseMessages: ModelMessage[] = first.produced;
   let interrupted = first.interrupted;
@@ -947,7 +1031,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // One output-limit continuation: the SDK does not continue a `length` finish with no pending call. The request is
   // the same prefix plus everything produced, so nothing is replayed. A second `length` finish is partial completion.
   if (!interrupted && first.finishReason === OUTPUT_LIMIT_REACHED) {
-    const continued = yield* callChain([...cache.messages, ...first.produced], first.steps.length, first.produced);
+    const continued = yield* callChain(first.steps.length, first.produced);
     steps = [...steps, ...continued.steps];
     responseMessages = [...responseMessages, ...continued.produced];
     interrupted = continued.interrupted;

@@ -80,6 +80,8 @@ export class DefaultExecutionRouter implements ExecutionRouter {
 
       if (status.sizes !== undefined) Object.assign(info, { sizes: status.sizes });
 
+      if (status.mounts !== undefined) Object.assign(info, { mounts: status.mounts });
+
       if (p.resourceLimits !== undefined) Object.assign(info, { resourceLimits: p.resourceLimits });
 
       return info;

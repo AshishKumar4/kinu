@@ -1,7 +1,8 @@
 import * as v from 'valibot';
 import { asSchema, InvalidToolInputError, jsonSchema, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { KinuError, refusedInput } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, refusedInput, settle } from '../obs/index';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 
 export type ToolSchemaDialect = 'openai' | 'anthropic' | 'gemini';
@@ -285,30 +286,31 @@ export function withCheckedInput(name: string, entry: ToolSet[string]): ToolSet[
 
   return {
     ...entry,
-    execute: async (input, options) => {
+    execute: (input, options) => settle(Effect.gen(function* () {
       const schema = asSchema(entry.inputSchema);
       const validate = schema.validate?.bind(schema);
 
       if (validate !== undefined) {
-        const checked = await validate(input);
+        const checked = yield* Effect.promise(async () => validate(input));
 
-        if (!checked.success) throw refusedInput(name, checked.error);
+        if (!checked.success) return yield* Effect.fail(refusedInput(name, checked.error));
 
-        return execute(checked.value, options);
+        return yield* Effect.promise(async () => execute(checked.value, options));
       }
 
       contract ??= inputContract(entry);
+      const pending = contract;
       // A record admits an array; no tool takes one as its input.
       const fields = Array.isArray(input) ? undefined : v.safeParse(FieldsSchema, input);
 
       const problems = fields?.success
-        ? fieldProblems(name, await contract, fields.output)
+        ? fieldProblems(name, yield* Effect.promise(() => pending), fields.output)
         : [`${name} takes one object of named fields`];
 
-      if (problems.length > 0) throw new KinuError('bad_input', problems.join('; '));
+      if (problems.length > 0) return yield* new KinuError('bad_input', problems.join('; '));
 
-      return execute(input, options);
-    },
+      return yield* Effect.promise(async () => execute(input, options));
+    })),
   };
 }
 

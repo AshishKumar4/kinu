@@ -5,9 +5,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
-  CircleIcon, FolderOpenIcon, LockSimpleIcon, PlugIcon, TerminalIcon,
+  CircleIcon, DesktopIcon, FolderOpenIcon, LockSimpleIcon, PlugIcon, TerminalIcon,
 } from "@phosphor-icons/react";
-import { EXECUTOR_MOUNTS, type MountInfo } from "@kinu.run/core";
+import { EXECUTOR_MOUNTS, desktopClientUrl, type MountInfo } from "@kinu.run/core";
 import type { ExecutorCommandResult, Rpc } from "@kinu.run/core";
 import {
   executorLabel, isExecutorActive,
@@ -144,6 +144,8 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   onConnectDevice: () => void;
 }) {
+  const [desktop, setDesktop] = useState(false);
+
   if (mount === null) return <div className="flex-1 min-h-0" />;
 
   if (exec?.granted === false) {
@@ -162,15 +164,25 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
     );
   }
 
+  const showDesktop = exec?.name === "sandbox" && desktop;
+
   return (
     <>
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border shrink-0">
-        <TerminalIcon size={12} className="p-text-3" />
-        <span className="p-meta p-text-3">Terminal ·</span>
+        {showDesktop ? <DesktopIcon size={12} className="p-text-3" /> : <TerminalIcon size={12} className="p-text-3" />}
+        <span className="p-meta p-text-3">{showDesktop ? "Desktop ·" : "Terminal ·"}</span>
         <span className="p-annotation p-text-3">{executorLabel(mount.name)}</span>
+        {exec?.name === "sandbox" && (
+          <button
+            data-env-desktop
+            onClick={() => setDesktop(!desktop)}
+            className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded-md p-t-control p-text-2 p-fill hover:p-text"
+          >{showDesktop ? <><TerminalIcon size={12} />Terminal</> : <><DesktopIcon size={12} />Desktop</>}</button>
+        )}
       </div>
       <div className="flex-1 min-h-0">
-        {exec ? (
+        {showDesktop && <iframe data-desktop title="Desktop" src={desktopClientUrl(location, workspace)} className="w-full h-full border-0" />}
+        {!showDesktop && (exec ? (
           <TerminalPane
             workspace={workspace}
             executor={exec.name}
@@ -181,7 +193,7 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
           <div className="h-full flex items-center justify-center text-xs p-text-3">
             This environment has no command lane.
           </div>
-        )}
+        ))}
       </div>
     </>
   );

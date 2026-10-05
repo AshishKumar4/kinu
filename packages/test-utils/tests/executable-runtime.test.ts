@@ -56,7 +56,7 @@ describe('assertExecutableRuntime', () => {
 
     try {
       db.exec('PRAGMA journal_mode = WAL');
-      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM });
+      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM, cwd: scratchDir('exec-runtime-folder') });
       expect(rt.executionRouter).toBeTruthy();
       expect(rt.executionRouter?.getProviders().length ?? 0).toBeGreaterThan(0);
       expect(() => assertExecutableRuntime(rt, 'behaviour eval')).not.toThrow();

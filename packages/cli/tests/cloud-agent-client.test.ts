@@ -21,6 +21,8 @@ interface MockAgentServer {
   ticketRequests: Array<{ name: string; auth: string | null }>;
   connectUrls: URL[];
   rpcRequests: Array<{ method: string; args: JsonValue[] }>;
+  /** What `getExecutors` answers, as the workspace's router lists them. */
+  executors: JsonObject[];
   /** The DO chat projection rows. */
   chatMessages: Array<{ id: string; role: string; content: string; createdAt: number; metadata?: JsonObject }>;
   socket(): ServerWebSocket<unknown>;
@@ -68,6 +70,7 @@ function startMockAgentServer(options: ({
   const connectUrls: URL[] = [];
   const rpcRequests: MockAgentServer['rpcRequests'] = [];
   const chatMessages: MockAgentServer['chatMessages'] = [];
+  let executors: JsonObject[] = [];
   let ws: ServerWebSocket<unknown> | null = null;
 
   const server = Bun.serve({
@@ -116,6 +119,8 @@ function startMockAgentServer(options: ({
         }
 
         if (method === 'getReasoningEffort') return Response.json({ result: { effort: 'medium' } });
+
+        if (method === 'getExecutors') return Response.json({ result: executors });
 
         if (method === 'getActivitySnapshot') return Response.json({ result: { spend: SPEND_BEFORE_ACCOUNTS } });
 
@@ -179,6 +184,8 @@ function startMockAgentServer(options: ({
     ticketRequests,
     connectUrls,
     rpcRequests,
+    get executors() { return executors; },
+    set executors(next) { executors = next; },
     chatMessages,
     socket() {
       if (!ws) throw new Error('no websocket connection yet');
@@ -932,6 +939,37 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
     expect(moved).toEqual({ type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubordinates'] });
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hired' }, true));
+    await turn;
+    await client.close();
+  });
+
+  // 2026-10-04: the TUI linked a cloud workspace's vfs://pc/<machine>/x but not <machine>://x, because the client never
+  // read which machines are live. It reads them on connect, and again before it reports that the executors moved.
+  test('a live machine\'s own name links in chat, from connect and again when the executors move', async () => {
+    const mock = startMockAgentServer();
+    mock.executors = [
+      { name: 'workspace', kind: 'workspace' },
+      { name: 'device', kind: 'device', mounts: ['studio'] },
+    ];
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    expect(client.fileLinks.roots).not.toContain('studio');
+    await client.connect();
+    expect(client.fileLinks.roots).toEqual(['vfs', 'local', 'sandbox', 'studio']);
+    expect(client.fileLinks.href('studio://home/dev/a.md')).toBe(`${mock.origin}/workspace/helios?file=studio%3A%2F%2Fhome%2Fdev%2Fa.md`);
+
+    const turn = client.send('connect the rig');
+    const request = await firstChatRequest(mock);
+
+    mock.executors = [{ name: 'device', kind: 'device', mounts: ['rig'] }];
+    mock.reply({ type: 'reads_changed', reads: ['getExecutors', 'getToolDescriptions'] });
+
+    await waitFor(() => events.find((e) => e.type === 'broadcast' && e.event.type === 'reads_changed'), 'the executors moved');
+    expect(client.fileLinks.roots).toEqual(['vfs', 'local', 'sandbox', 'rig']);
+
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'connected' }, true));
     await turn;
     await client.close();
   });

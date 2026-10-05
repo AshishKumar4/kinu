@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { KinuError } from '../src/obs/error';
 import {
   ModelCatalogSession, contextWindowForModel, resolvePromptModelProfile, resolveEffectiveModelSpec,
   outputReserveTokens, stepContextLimit,
@@ -184,6 +185,35 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
     expect(await session.resolved()).toEqual({
       contextWindow: 1_048_576, modelOutputLimit: 131_072, windowMeasured: true,
     });
+  });
+
+  test('a refused lookup armed by a synchronous read is no unhandled rejection; `resolved` answers the refusal', async () => {
+    const unhandled: unknown[] = [];
+
+    const record = (...rejection: [unknown]): void => {
+      unhandled.push(rejection[0]);
+    };
+
+    process.on('unhandledRejection', record);
+
+    try {
+      const refused = Promise.withResolvers<ModelInfo>();
+
+      const session = new ModelCatalogSession({
+        effectiveSpec: () => 'some/refused-model',
+        lookup: async () => refused.promise,
+      });
+
+      expect(session.info()).toBeNull();
+      refused.reject(new KinuError('denied', 'the catalog refused this key'));
+      // The lookup has settled, and one event-loop turn later the runtime has reported this tick's unhandled rejections.
+      await Promise.allSettled([refused.promise]);
+      await new Promise<void>((turned) => { setImmediate(turned); });
+      expect(unhandled).toEqual([]);
+      await expect(session.resolved()).rejects.toThrow('the catalog refused this key');
+    } finally {
+      process.off('unhandledRejection', record);
+    }
   });
 
   test('a spec nothing has measured says so, and keeps saying so', async () => {

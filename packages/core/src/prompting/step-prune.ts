@@ -204,9 +204,11 @@ function estimateMessageTokens(message: ModelMessage): number {
           break;
         case 'image':
         case 'file':
+        case 'reasoning-file':
           chars += ESTIMATED_MEDIA_CHARS;
           break;
 
+        case 'custom':
         case 'tool-approval-request':
         case 'tool-approval-response':
         default:

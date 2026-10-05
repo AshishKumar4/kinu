@@ -212,7 +212,14 @@ export { OutputSinkSchema, ShellExecOptionsSchema, VfsRevisionSchema } from './t
 
 export { REAL_CLOCK, waitOn, every, type Clock } from './types/clock';
 
-export { referenceRoots, formatReference, type ReferenceRoot } from './vfs/references';
+export {
+  cloudFileLinks, filesFocusOf, linkFileReferences, localFileLinks, type FileLinks, type FilesFocus,
+} from './read-models/file-links';
+
+export {
+  cloudPlanes, findPlaneReferences, formatPath, localPlanes, machinePath, referencedPath, referencePrefixes, resolvePath, RESERVED_ROOTS,
+  type PathPlanes, type ResolvedPath,
+} from './vfs/resolve';
 
 export type * from './types/agent-runtime';
 
@@ -521,7 +528,7 @@ export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendant
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
 export {
-  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, registerLocalNode, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
+  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
 } from './state/local-actors';
 
 // open-38: one physical workspace SQLite for every logical actor.
@@ -763,10 +770,18 @@ export {
 
 export {
   acceptedMediaForModel,
+  attachmentBytes,
   sanitizeAttachmentsForModel,
+  storeAttachment,
   type AttachmentPolicy,
   type MediaModality,
 } from './prompting/attachment-sanitizer';
+
+export { rasterImage, type RasterImage } from './utils/raster-image';
+
+export { toolDescription } from './utils/tool-description';
+
+export { serverCompactor, isServerCompaction, type ServerCompactor, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {
   DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type RuntimeFacts, type DynamicTask, type MissingCapability,
@@ -951,17 +966,18 @@ export {
   type DeviceSandboxCapability, type DeviceSandboxReason,
   TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES,
   TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
-  DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError, DEVICE_UNRESPONSIVE,
+  DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
   WORKSPACE_HAS_NO_OWNER, isWorkspaceUnattachedError,
   SEVERAL_DEVICES_CONNECTED, isDeviceAmbiguityError,
   SANDBOX_UNAVAILABLE, isSandboxUnavailableError,
-  DEVICE_UNKNOWN_METHOD, isDeviceUnknownMethodError, DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
-  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL, DEVICE_EXEC_ACK_METHOD,
+  DEVICE_UNKNOWN_METHOD, DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
+  DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD,
   DEVICE_DUPLICATE_REQUEST, DeviceCancelResultSchema, nextDeviceRequestId,
   DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
-  DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE, DEVICE_PTY_CLOSE,
+  DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult, type DeviceExecOutput,
+  DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, isDeviceFailure, type DeviceMethod,
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_CHATGPT, DEVICE_RELAY, DeviceChatGptStatusSchema, EGRESS_ROUTE_HEADER,
   type DeviceChatGptMethod, type DeviceChatGptStatus, type DeviceRelayRequest, type RelayedProvider,
@@ -1002,7 +1018,7 @@ export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, 
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  workspacePath, NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT,
+  workspacePath, SLATES_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {
@@ -1056,7 +1072,7 @@ export {
 } from './skills/drive';
 
 export {
-  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
+  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
   type VfsMount, type MountableProvider, type MountedVfs,
   type VfsListedEntry,
@@ -1568,7 +1584,7 @@ export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type Actor
 
 
 export {
-  ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
+  ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
@@ -2102,6 +2118,8 @@ export {
 export { KINU_USER_AGENT, kinuUserAgent } from './utils/user-agent';
 
 export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';
+
+export { desktopClientUrl } from './http/desktop-client';
 
 export { serveApp } from './http/app-shell';
 

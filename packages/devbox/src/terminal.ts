@@ -99,7 +99,10 @@ export function terminalSocket(container: Container, params: URLSearchParams): P
     server.accept();
     const connection = new TerminalConnection({ process, server, input: process.stdin.getWriter(), output: process.stdout, abort });
     const cancelRead = connection.read();
-    server.addEventListener('message', event => connection.accept(event));
+    server.addEventListener('message', event => observe(Effect.promise(() => connection.accept(event)), {
+      success: () => undefined,
+      failure: () => { connection.close(1011, 'terminal input failed'); cancelRead(); },
+    }));
     server.addEventListener('close', () => { connection.close(1000, 'terminal detached'); cancelRead(); });
     server.addEventListener('error', () => { connection.close(1011, 'terminal transport failed'); cancelRead(); });
 

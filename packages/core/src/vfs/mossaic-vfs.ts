@@ -3,7 +3,9 @@ import type { VFS, VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
  * Kinu's `VFS` over a Mossaic tenant. Core never imports the Mossaic SDK; the hosted backend injects a
  * {@link MossaicClient}. Mossaic errors and stats are re-issued in Kinu's closed `VfsErrorCode` set.
  */
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { settle } from '../obs/effect';
 
 import { VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 
@@ -79,7 +81,7 @@ const MOSSAIC_CODES: readonly MossaicCode[] = [
 const MossaicFailure = v.object({ code: v.picklist(MOSSAIC_CODES), message: v.optional(v.string(), '') });
 
 /** Kinu's error for a Mossaic failure at `path`; an unrecognised throw is `EIO` with the original as `cause`. */
-function translate(failure: { cause: unknown }, path: string): Error {
+function translate(failure: { cause: unknown }, path: string): VfsError {
   const parsed = v.safeParse(MossaicFailure, failure.cause);
 
   if (parsed.success) {
@@ -94,12 +96,8 @@ function translate(failure: { cause: unknown }, path: string): Error {
   return Object.assign(new VfsError('EIO', `${message} (shared drive)`, path), { cause: failure.cause });
 }
 
-async function guarded<T>(path: string, op: () => Promise<T>): Promise<T> {
-  try {
-    return await op();
-  } catch (cause) {
-    throw translate({ cause }, path);
-  }
+function guarded<T>(path: string, op: () => Promise<T>): Effect.Effect<T, VfsError> {
+  return Effect.tryPromise({ try: op, catch: (cause) => translate({ cause }, path) });
 }
 
 const MossaicStatRecord = v.object({
@@ -118,33 +116,27 @@ const CHILDREN_PAGE = 1000;
 
 export function mossaicVfs(client: MossaicClient): MossaicVfs {
   return {
-    readFile: (path) => guarded(path, () => client.readFile(path)),
-    writeFile: (path, data) => guarded(path, () => client.writeFile(path, data)),
-    async stat(path) {
-      try {
-        return entryStat(await client.stat(path));
-      } catch (cause) {
-        const translated = translate({ cause }, path);
-
-        if (translated instanceof Error && 'code' in translated && translated.code === 'ENOENT') return null;
-        throw translated;
-      }
-    },
-    unlink: (path) => guarded(path, () => client.unlink(path)),
-    mkdir: (path, opts) => guarded(path, () => client.mkdir(path, opts)),
-    rename: (from, to) => guarded(from, () => client.rename(from, to)),
-    removeRecursive: (path) => guarded(path, () => client.removeRecursive(path)),
-    readlink: (path) => guarded(path, () => client.readlink(path)),
-    symlink: (target, path) => guarded(path, () => client.symlink(target, path)),
-    readRange: (path, offset, length) => guarded(path, async () => new Uint8Array(
-      await new Response(await client.createReadStream(path, { start: offset, end: offset + length })).arrayBuffer(),
+    readFile: (path) => settle(guarded(path, () => client.readFile(path))),
+    writeFile: (path, data) => settle(guarded(path, () => client.writeFile(path, data))),
+    stat: (path) => settle(guarded(path, async () => entryStat(await client.stat(path))).pipe(
+      Effect.catchIf((translated) => translated.code === 'ENOENT', () => Effect.succeed(null)),
     )),
-    async readdir(path) {
+    unlink: (path) => settle(guarded(path, () => client.unlink(path))),
+    mkdir: (path, opts) => settle(guarded(path, () => client.mkdir(path, opts))),
+    rename: (from, to) => settle(guarded(from, () => client.rename(from, to))),
+    removeRecursive: (path) => settle(guarded(path, () => client.removeRecursive(path))),
+    readlink: (path) => settle(guarded(path, () => client.readlink(path))),
+    symlink: (target, path) => settle(guarded(path, () => client.symlink(target, path))),
+    readRange: (path, offset, length) => settle(guarded(path, async () => new Uint8Array(
+      await new Response(await client.createReadStream(path, { start: offset, end: offset + length })).arrayBuffer(),
+    ))),
+    readdir: (path) => settle(Effect.gen(function* () {
       const listed: VfsDirent[] = [];
       let cursor: string | undefined;
 
       do {
-        const page = await guarded(path, () => client.listChildren(path, { limit: CHILDREN_PAGE, cursor, includeStat: true }));
+        const after = cursor;
+        const page = yield* guarded(path, () => client.listChildren(path, { limit: CHILDREN_PAGE, cursor: after, includeStat: true }));
 
         for (const child of page.entries) {
           const stat = child.stat === undefined
@@ -158,6 +150,6 @@ export function mossaicVfs(client: MossaicClient): MossaicVfs {
       } while (cursor !== undefined);
 
       return listed;
-    },
+    })),
   };
 }

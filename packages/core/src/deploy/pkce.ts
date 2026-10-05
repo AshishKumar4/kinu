@@ -1,6 +1,6 @@
 // Public OAuth client with PKCE (docs/SELF-DEPLOY.md): each deployment renews its own
 // refresh token, so no client secret can be shared. The verifier never leaves run storage.
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import * as v from 'valibot';
 import { settle } from '../obs/index';
 import { JsonObjectSchema } from '../utils/json';
@@ -59,10 +59,9 @@ const TokenAnswerSchema = v.object({
   error_description: v.optional(v.string()),
 });
 
-class DeployAuthError extends Error {
+class DeployAuthError extends Data.TaggedError('DeployAuthError')<{ readonly message: string }> {
   constructor(readonly code: string, message: string) {
-    super(message);
-    this.name = 'DeployAuthError';
+    super({ message });
   }
 }
 

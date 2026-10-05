@@ -5,6 +5,8 @@
  */
 
 import { generateText, streamText } from 'ai';
+import { Cause, Effect } from 'effect';
+import { settle } from '../obs/effect';
 import {
   beginModelOperation, type ModelCallReport, type ModelCallSink, type ModelCallSpend, type ModelOperationKind,
 } from '../events/model-call';
@@ -40,27 +42,23 @@ function reportOf(
 }
 
 /** Files the row before the caller parses the answer: the call was billed either way. */
-export async function generateReported(
+export function generateReported(
   request: GenerateRequest,
   call: ReportedCall,
   op: Exclude<ModelOperationKind, 'stream'> = 'complete',
 ): Promise<GenerateResult> {
-  const operation = beginModelOperation(call.spend, op, { spec: call.spec });
-  let result;
+  return settle(Effect.gen(function* () {
+    const operation = beginModelOperation(call.spend, op, { spec: call.spec });
 
-  try {
-    result = await generateText(request);
-  } catch (cause) {
-    operation.failed({ cause });
-    throw cause;
-  }
+    const result = yield* Effect.onError(Effect.promise(() => generateText(request)),
+      (cause) => Effect.sync(() => operation.failed({ cause: Cause.squash(cause) })));
 
-  // `totalUsage`, not `usage`: `usage` is the last step's only.
-  const usage = normalizeUsage(result.totalUsage);
-  operation.completed({ usage, modelId: result.response.modelId });
-  call.spend.report(reportOf(call, usage, result.response));
+    const usage = normalizeUsage(result.usage);
+    operation.completed({ usage, modelId: result.response.modelId });
+    call.spend.report(reportOf(call, usage, result.response));
 
-  return result;
+    return result;
+  }));
 }
 
 /** Files the row once the stream drains; an abandoned stream leaves only the start row. */
@@ -78,7 +76,7 @@ export async function* streamTextReported(
     if (onPart === undefined) {
       for await (const chunk of result.textStream) yield chunk;
     } else {
-      for await (const part of result.fullStream) {
+      for await (const part of result.stream) {
         // Like textStream
         if (part.type === 'error') throw part.error;
         onPart(part);
@@ -91,7 +89,7 @@ export async function* streamTextReported(
     throw cause;
   }
 
-  const usage = normalizeUsage(await result.totalUsage);
+  const usage = normalizeUsage(await result.usage);
   const response = await result.response;
   operation.completed({ usage, modelId: response.modelId });
   call.spend.report(reportOf(call, usage, response));
@@ -131,31 +129,23 @@ export function createWorkersAIEmbedder(opts: {
   const model = opts.model ?? '@cf/baai/bge-small-en-v1.5';
   const filed: ModelCallReport = { source: 'platform', usage: {}, spec: `workers-ai/${model}`, modelId: model };
 
-  const runOne = async (text: string): Promise<number[]> => {
-    const result = await binding.run(model, { text });
+  const runOne = (text: string): Effect.Effect<number[]> => Effect.flatMap(Effect.promise(() => binding.run(model, { text })), (result) => {
     opts.report(filed);
     const vec = result?.data?.[0];
 
-    if (!vec || vec.length === 0) {
-      throw new Error(`Workers AI embed returned no vector for model ${model}`);
-    }
-
-    return vec;
-  };
+    return !vec || vec.length === 0 ? Effect.die(new Error(`Workers AI embed returned no vector for model ${model}`)) : Effect.succeed(vec);
+  });
 
   return {
     dimensions: opts.dimensions ?? 384,
-    async embed(text: string) { return runOne(text); },
-    async embedBatch(texts: readonly string[]) {
-      const result = await binding.run(model, { text: [...texts] });
-      opts.report(filed);
-      const vectors = result?.data ?? [];
+    embed(text: string) { return settle(runOne(text)); },
+    embedBatch(texts: readonly string[]) {
+      return settle(Effect.flatMap(Effect.promise(() => binding.run(model, { text: [...texts] })), (result) => {
+        opts.report(filed);
+        const vectors = result?.data ?? [];
 
-      if (vectors.length !== texts.length) {
-        return Promise.all(texts.map((t) => runOne(t)));
-      }
-
-      return vectors;
+        return vectors.length === texts.length ? Effect.succeed(vectors) : Effect.forEach(texts, (t) => runOne(t), { concurrency: 'unbounded' });
+      }));
     },
   };
 }

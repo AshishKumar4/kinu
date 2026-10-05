@@ -1,8 +1,7 @@
-import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Nimbus 0.13.1 seeds `/home/user` and names it in PATH, XDG and passwd even with another HOME.
- * Kinu publishes that tree at `/home/main` and keeps the required link for Nimbus's live defaults.
+ * Nimbus before 0.15 seeded `/home/user`; a workspace from then has its tree there, or Kinu's link from there to
+ * `/home/main`. Since 0.15 HOME is the one home: the tree moves to `/home/main` and the link goes.
  * Cold boot and interrupted publication preserve the files and their ownership.
  * Slates are shared at `/slates`, where every agent makes and changes them.
  */
@@ -11,7 +10,7 @@ import { Database } from 'bun:sqlite';
 import { CRED_KERNEL, CRED_SESSION_USER, type SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import {
-  SESSION_UID, agentCred, agentIdentity, provisionAgentHome, settleWorkspaceRoot, type RootMoveVfs, actorHomeName } from '../src/vfs/agent-home';
+  SESSION_UID, agentCred, agentIdentity, provisionAgentHome, actorHomeName } from '../src/vfs/agent-home';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 
@@ -57,7 +56,7 @@ async function nimbusSeededWorkspace(): Promise<Database> {
 
 
 
-describe('Nimbus home initialization', () => {
+describe('a workspace seeded at /home/user', () => {
   test('boots with its files and SOUL.md at /home/main, and its slates at /slates', async () => {
     const { kernel } = await boot(await nimbusSeededWorkspace());
 
@@ -73,81 +72,54 @@ describe('Nimbus home initialization', () => {
     expect(kernel.stat('/home/main/SOUL.md').mode & 0o777).toBe(0o444);
   });
 
-  test('Nimbus home paths reach the one published tree from every plane', async () => {
-    const { bundle, user } = await boot(await nimbusSeededWorkspace());
-
-    expect(user.isSymlink('/home/user')).toBe(true);
-    expect(user.readlink('/home/user')).toBe('main');
-    expect(user.readFileString('/home/user/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
-    expect(await readText(bundle.vfs, '/home/user/notes.md')).toBe('# coupon regression\n');
-
-    // A write by the old name lands in the one tree.
-    await writeText(bundle.vfs, '/home/user/notes.md', '# fixed\n');
-    expect(await readText(bundle.vfs, '/home/main/notes.md')).toBe('# fixed\n');
-  });
-
   test('runs its shell from /home/main', async () => {
     const { bundle } = await boot(await nimbusSeededWorkspace());
-    const ran = await bundle.shell.exec('pwd && cat /home/user/notes.md && echo "$HOME"');
+    const ran = await bundle.shell.exec('pwd && cat notes.md && echo "$HOME"');
 
     expect(ran.stdout).toBe('/home/main\n# coupon regression\n/home/main\n');
   });
 
-  test('moves once: a second boot finds the same tree and changes nothing', async () => {
+  test('moves once: a second boot finds the same tree, and no /home/user', async () => {
     const database = await nimbusSeededWorkspace();
     await boot(database);
     const { kernel } = await boot(database);
 
-    expect(kernel.readdir('/home').map((entry) => `${entry.name}:${entry.type}`).sort((a, b) => a.localeCompare(b)))
-      .toEqual(['main:directory', 'user:symlink']);
+    expect(kernel.readdir('/home').map((entry) => `${entry.name}:${entry.type}`)).toEqual(['main:directory']);
     expect(kernel.readFileString('/home/main/notes.md')).toBe('# coupon regression\n');
   });
 });
 
 describe('a new workspace', () => {
-  test('has /home/main and the link from /home/user', async () => {
+  test('has /home/main and no /home/user', async () => {
     const { kernel, bundle } = await boot(new Database(':memory:'));
 
-    expect(kernel.isDirectory('/home/main')).toBe(true);
-    expect(kernel.readlink('/home/user')).toBe('main');
+    expect(kernel.readdir('/home').map((entry) => entry.name)).toEqual(['main']);
     await writeText(bundle.vfs, 'notes.md', 'fresh');
     expect(kernel.readFileString('/home/main/notes.md')).toBe('fresh');
   });
 });
 
-describe('the link', () => {
-  test('the public file plane keeps the Nimbus home link as its own inode', async () => {
-    const { bundle } = await boot(new Database(':memory:'));
+describe('the link an earlier boot made from /home/user', () => {
+  // Relative since Python's WASI refused an absolute target; an earlier boot made it absolute.
+  for (const target of ['main', '/home/main']) {
+    test(`goes on the next boot (${target}), and the home keeps its files`, async () => {
+      const database = await nimbusSeededWorkspace();
+      const { kernel } = await boot(database);
+      kernel.symlink(target, '/home/user');
 
-    expect(await bundle.vfs.stat('/home/user', { follow: false })).toMatchObject({ type: 'symlink' });
-    expect(await bundle.vfs.readlink('/home/user')).toBe('main');
-  });
+      const booted = (await boot(database)).kernel;
 
-  for (const operation of ['unlink', 'rename', 'removeRecursive'] as const) {
-    test(`${operation} of a writable Nimbus home link leaves the canonical home intact`, async () => {
-      const { bundle, kernel } = await boot(new Database(':memory:'));
-      kernel.chmod('/home', 0o777);
-      await writeText(bundle.vfs, 'notes.md', 'keep the home');
-
-      if (operation === 'rename') await bundle.vfs.rename('/home/user', '/home/nimbus-link');
-      else await bundle.vfs[operation]('/home/user');
-
-      expect(await readText(bundle.vfs, '/home/main/notes.md')).toBe('keep the home');
-      expect(kernel.exists('/home/user')).toBe(false);
-
-      if (operation === 'rename') expect(kernel.readlink('/home/nimbus-link')).toBe('main');
+      expect(booted.exists('/home/user')).toBe(false);
+      expect(booted.readFileString('/home/main/notes.md')).toBe('# coupon regression\n');
     });
   }
 
-  test('the agent can neither remove nor replace it', async () => {
-    const { bundle, kernel, user } = await boot(new Database(':memory:'));
+  test('to anywhere else stays', async () => {
+    const database = await nimbusSeededWorkspace();
+    const { kernel } = await boot(database);
+    kernel.symlink('/srv', '/home/user');
 
-    user.writeFile('/home/main/notes.md', 'mine');
-
-    expect(() => user.unlink('/home/user')).toThrow('EACCES');
-    expect(() => user.rename('/home/main/notes.md', '/home/user')).toThrow('EACCES');
-    expect((await bundle.shell.exec('rm /home/user')).exitCode).not.toBe(0);
-    expect(kernel.readlink('/home/user')).toBe('main');
+    expect((await boot(database)).kernel.readlink('/home/user')).toBe('/srv');
   });
 
   test("a workspace settled while /home was its agent's takes /home back on its next boot", async () => {
@@ -156,9 +128,9 @@ describe('the link', () => {
     // As a boot before this one left it.
     settled.kernel.chown('/home', SESSION_UID, SESSION_UID);
 
-    const { user } = await boot(database);
+    const { kernel } = await boot(database);
 
-    expect(() => user.unlink('/home/user')).toThrow('EACCES');
+    expect(kernel.stat('/home')).toMatchObject({ uid: 0, gid: 0 });
   });
 });
 
@@ -171,8 +143,7 @@ describe('a subagent', () => {
     const home = provisionAgentHome(kernel, name, agentIdentity(workspaceSql(database), name));
 
     expect(home).toBe('/home/sub-reviewer');
-    expect(kernel.readdir('/home').map((entry) => entry.name).sort((a, b) => a.localeCompare(b)))
-      .toEqual(['main', 'sub-reviewer', 'user']);
+    expect(kernel.readdir('/home').map((entry) => entry.name).sort((a, b) => a.localeCompare(b))).toEqual(['main', 'sub-reviewer']);
   });
 });
 
@@ -189,64 +160,21 @@ describe('a move cut short', () => {
     expect(booted.readFileString('/home/main/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
     expect(booted.readFileString('/slates/queue/package.json')).toBe('{"name":"queue"}');
     expect(booted.readFileString('/home/main/SOUL.md')).toBe(SOUL);
-    expect(booted.readlink('/home/user')).toBe('main');
+    expect(booted.exists('/home/user')).toBe(false);
   });
 
   test('finishes on the next boot when /home/user holds only what was not yet retired', async () => {
     const database = await nimbusSeededWorkspace();
     await boot(database);
-    // A boot that published everything and stopped while retiring the old name, deepest first, so before /home
-    // was taken from the agent.
+    // A boot that published everything and stopped while retiring the old name, deepest first.
     const { kernel, user } = await substrate(database);
     kernel.chown('/home', SESSION_UID, SESSION_UID);
-    user.unlink('/home/user');
     user.mkdir('/home/user/data', { recursive: true });
 
     const booted = (await boot(database)).kernel;
 
     expect(booted.readFileString('/home/main/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
-    expect(booted.readlink('/home/user')).toBe('main');
-  });
-
-  test('a boot that stops before the link leaves /home to the agent, so the next boot still starts', async () => {
-    const database = await nimbusSeededWorkspace();
-    const { kernel } = await substrate(database);
-    const stopping: RootMoveVfs = { ...kernel, symlink: () => { throw new Error('stopped before the link'); } };
-
-    expect(() => settleWorkspaceRoot(stopping)).toThrow('stopped before the link');
-    expect(kernel.stat('/home').uid).toBe(SESSION_UID);
-
-    const booted = (await boot(database)).kernel;
-
-    expect(booted.readlink('/home/user')).toBe('main');
-    expect(booted.readFileString('/home/main/notes.md')).toBe('# coupon regression\n');
-  });
-
-  test('a removed link comes back on the next boot', async () => {
-    const database = await nimbusSeededWorkspace();
-    const { kernel, user } = await boot(database);
-    // Its agent could remove the link while /home was its own, as every boot before this one left it.
-    kernel.chown('/home', SESSION_UID, SESSION_UID);
-    user.unlink('/home/user');
-
-    const booted = (await boot(database)).kernel;
-
-    expect(booted.readlink('/home/user')).toBe('main');
-    expect(booted.readFileString('/home/user/notes.md')).toBe('# coupon regression\n');
-  });
-
-  // Python runs on WASI, which refuses an absolute link target (ENOTCAPABLE) and so ran `cd /home/user/x && python3`
-  // in `/`: a static server listed the root, not the site. A relative target is followed.
-  test('an absolute link from an earlier boot is made relative on the next one', async () => {
-    const database = await nimbusSeededWorkspace();
-    const { kernel } = await boot(database);
-    kernel.unlink('/home/user');
-    kernel.symlink('/home/main', '/home/user');
-
-    const booted = (await boot(database)).kernel;
-
-    expect(booted.readlink('/home/user')).toBe('main');
-    expect(booted.readFileString('/home/user/notes.md')).toBe('# coupon regression\n');
+    expect(booted.exists('/home/user')).toBe(false);
   });
 });
 

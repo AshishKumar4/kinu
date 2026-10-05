@@ -6,9 +6,9 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema, type ActorHandle, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
-import { scratchPath, scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
+import { scratchDir, scratchPath, scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
 import {
-  historyOver, orchestratorHarness, workspaceFiles, workspaceMainActor,
+  historyOver, orchestratorHarness, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
 import { deviceHarness, WORKSPACE } from '../helpers/device-harness';
 import { pcAgentDaemon } from '../helpers/pc-agent-daemon';
@@ -152,7 +152,7 @@ async function cloudflare(): Promise<SharedBackend> {
       decideRefinement: (input) => agent.decideRefinement(input),
       revertConversation: (entryId) => agent.revertConversation(entryId),
       runOptimization: (target) => agent.runOptimization(target),
-      send: (text, id) => agent.send(text, id ?? crypto.randomUUID()),
+      send: (text, id) => sentTurn(agent, text, id ?? crypto.randomUUID()),
     },
   };
 }
@@ -191,7 +191,7 @@ function scriptedResolver(): LocalModelResolver {
 function cli(): SharedBackend {
   const db = new Database(scratchPath('shared-backend', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: NO_ENDPOINT });
+  const rt = createCLIRuntime(db, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
   const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
   rt.checkpoints = checkpoints;
   const modelResolver = scriptedResolver();

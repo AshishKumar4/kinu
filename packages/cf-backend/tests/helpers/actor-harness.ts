@@ -12,7 +12,7 @@ import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResul
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
-import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
+import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, Clock, ModelInfo, ModelRouteResolution, ActorToolsets } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
@@ -837,7 +837,7 @@ export function historyOver(
   harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actor: ActorHandle = workspaceMainActor(harness.db),
 ): SessionHistory {
   return new SessionHistory({
-    sql: sqlOver(harness.db), actor, transactionSync: (write) => write(),
+    sql: sqlOver(harness.db), actor, transactionSync: (write) => harness.db.transaction(write)(),
     files: async () => ({ vfs: workspaceFiles(harness.agent), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) }),
   });
 }
@@ -885,6 +885,13 @@ export async function wakeForDelegatedTask(
 /** Core's background-job journal over the object's stored rows. */
 export function jobsOver(db: Database): BackgroundJobStore {
   return new BackgroundJobStore(sqlOver(db), workspaceMainActor(db));
+}
+
+/** The owner's words through the public send, resolved once the turn they open has run, as the CLI's send resolves:
+ *  a lap count cannot bound a cf turn, which asks the owner's device over a real tunnel. */
+export async function sentTurn(agent: HarnessOrchestratorAgent, text: string, id: string): Promise<void> {
+  await agent.send(text, id);
+  await agent.harnessChatLoop.pumpPromise;
 }
 
 /** One owner message to the main actor, its turn run to the end on the models the workspace catalog routes to. */
@@ -1140,7 +1147,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     const textOf = (scripted: ScriptedAnswer): string =>
       scripted.text ?? scripted.parts?.flatMap((part) => part.type === 'text' ? [part.text] : []).join('') ?? '';
 
-    return new MockLanguageModelV3({
+    return new MockLanguageModelV4({
       provider: 'fake',
       modelId: 'fake-model',
       doGenerate: async (options) => {

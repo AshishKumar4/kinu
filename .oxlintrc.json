@@ -31,6 +31,7 @@
     "typescript/no-for-in-array": "error",
     "typescript/no-implied-eval": "off",
     "typescript/no-meaningless-void-operator": "error",
+    "typescript/no-misused-promises": ["error", { "checksVoidReturn": true, "checksConditionals": false, "checksSpreads": false }],
     "typescript/no-misused-spread": "error",
     "typescript/no-redundant-type-constituents": "error",
     "typescript/no-unsafe-unary-minus": "error",
@@ -210,6 +211,6 @@
     "dist",
     "tools/oxlint/anti-slop",
     "third_party/mossaic",
-    "scripts/security-scanner.bundle.js"
+    "scripts/security-scanner.bundle.js", "packages/cf-backend/public/kasmvnc"
   ]
 }

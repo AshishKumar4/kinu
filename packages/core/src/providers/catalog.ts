@@ -1,7 +1,7 @@
 // Dynamic models.dev source for providers usable with a stored `<id>.bearer` key.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
-import type { LanguageModelV3 } from '@ai-sdk/provider';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
 import type { DynamicProviderSource } from './registry';
 import type { ModelProvider, ProviderDeps } from './types';
@@ -91,7 +91,7 @@ function createCatalogProvider(providerId: string): ModelProvider {
     },
 
     createModel(modelId, deps): LanguageModel {
-      async function resolveModel(): Promise<LanguageModelV3> {
+      async function resolveModel(): Promise<LanguageModelV4> {
         const endpoint = await getModelsDevModelEndpoint(providerId, modelId, deps);
 
         if (endpoint === null) {
@@ -126,8 +126,8 @@ function createCatalogProvider(providerId: string): ModelProvider {
           : createOpenAICompatible({ name: providerId, baseURL, fetch: customFetch }).chatModel(modelId);
       }
 
-      const model: LanguageModelV3 = {
-        specificationVersion: 'v3', provider: providerId, modelId,
+      const model: LanguageModelV4 = {
+        specificationVersion: 'v4', provider: providerId, modelId,
         get supportedUrls() { return resolveModel().then((resolved) => resolved.supportedUrls); },
         async doGenerate(options) { return (await resolveModel()).doGenerate(options); },
         async doStream(options) { return (await resolveModel()).doStream(options); },

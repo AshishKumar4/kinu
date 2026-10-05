@@ -25,13 +25,14 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
-import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type PortHolders } from '@kinu.run/core';
+import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type PortHolders, cloudPlanes } from '@kinu.run/core';
 import type { ActorReference, HostedNodeHome, TierRefusals } from '@kinu.run/core';
 import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
-import { diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError, detach } from "@kinu.run/core/obs";
+import { Effect } from 'effect';
 import { kinuEgressParams } from "./egress/configure";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
@@ -339,7 +340,8 @@ export function createCFRuntime(
     stored: async (name) => await sessionShell.cwd?.(name) ?? null,
   });
 
-  const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession }, approvalPolicy);
+  const planes = cloudPlanes(home);
+  const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession, planes }, approvalPolicy);
 
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
@@ -381,7 +383,7 @@ export function createCFRuntime(
   const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
 
   const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
-    userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
+    planes, userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
   }, approvalPolicy);
 
   executionRouter.register(createNimbusWorkspaceExecutor({
@@ -391,7 +393,7 @@ export function createCFRuntime(
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
-      vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell,
+      vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell, planes,
       sql,
       ledger: () => access.acc?.().files,
       budget: () => access.acc?.().context,
@@ -551,7 +553,7 @@ export function createCFRuntime(
     storage: { vfs: agentFileVfs, home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
     toolFiles,
-    workspaceIsMachine: false,
+    planes,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
@@ -566,7 +568,6 @@ export function createCFRuntime(
     }),
     executionRouter,
     shell,
-    nodeIsolated: true,
     localVfs: baseWorkspaceVfs,
     deviceTransport,
     vectorStore,
@@ -684,7 +685,7 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
 
 function createRealSchedule(agent: AgentHost): Schedule {
   return {
-    after: async (ms, fn) => { setTimeout(fn, ms); },
+    after: async (ms, fn) => { setTimeout(() => detach(Effect.promise(fn)), ms); },
     cron: async () => {},
     fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
       return agent.runFiber(name, async (sdkCtx) => {

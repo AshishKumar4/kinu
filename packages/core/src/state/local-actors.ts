@@ -2,11 +2,10 @@
  * Local actor identity: one SQLite file, N logical actors, each a `workspace_actors` row.
  * The directory re-validates on every handle touch, so a retired actor stops answering at once.
  */
+import { Effect } from 'effect';
 import { WorkspaceActorDirectory, type CreateWorkspaceActor, type WorkspaceActor } from '../identity/workspace-actors';
 import { bindActorHandle, type ActorHandle, type ActorReference } from '../identity/actor-handle';
-import { explorationActorKey } from '../identity/actor-key';
 import type { SqlExecutor } from '../types/primitives';
-import type { NodeIdentity } from '../strategy/node-workspace';
 import { KinuError } from '../obs/error';
 
 interface LocalActorScope {
@@ -124,25 +123,17 @@ export function openLocalActor(parent: ActorHandle, name: string): LocalActorBin
   return bindChild(scope, entry.reference, name);
 }
 
-/** The one caller wanting a handle without a binding; others use `registerLocalActor` + `bindLocalActor`. */
-export function registerLocalNode(parent: ActorHandle, node: NodeIdentity): ActorHandle {
-  const scope = scopeFor(parent);
-  const entry = scope.directory.apply(parent, scope.path, { action: 'register', name: explorationActorKey(node.nodeId), creationId: node.nodeId, origin: 'swarm', lifetime: 'task' });
-  const actor = scope.directory.open(entry.reference.actorId);
-  actors.set(actor, { ...scope, path: scope.directory.storagePath(entry.reference) });
-
-  return actor;
-}
-
 /** Bind a handle to an actor this root issued; the directory row is the binding authority. */
 export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): ActorHandle {
   const scope = bindings.get(binding);
 
   if (!scope) throw new KinuError('denied', 'The actor binding was not issued by a local root.');
   scope.directory.validate(binding.reference, scope.path);
-  const validate = () => { scope.directory.validate(binding.reference, scope.path); };
 
-  const actor = bindActorHandle(sql, { ...binding.reference, name: binding.name, storageKey: binding.storageKey }, validate);
+  const actor = bindActorHandle(sql, { ...binding.reference, name: binding.name, storageKey: binding.storageKey }, () => Effect.sync(() => {
+    scope.directory.validate(binding.reference, scope.path);
+  }));
+
   actors.set(actor, scope);
 
   return actor;

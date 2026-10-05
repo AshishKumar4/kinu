@@ -3,6 +3,8 @@
  * and admin ids are emails, so both are written as {@link analyticsDigest}. Not a secret-hiding
  * primitive: workspace names are enumerable, so this does not replace read-path authorization.
  */
+import { Effect } from 'effect';
+import { settleSync } from '../effect';
 import { RESERVED_LOG_FIELDS } from '../log';
 
 /**
@@ -10,16 +12,18 @@ import { RESERVED_LOG_FIELDS } from '../log';
  * (readers resolve slots by name, so a duplicate would silently shadow). Values are never scrubbed.
  */
 export function assertPublishableNames(where: string, names: readonly string[]): void {
-  const seen: Record<string, true> = {};
+  return settleSync(Effect.gen(function* () {
+    const seen: Record<string, true> = {};
 
-  for (const name of names) {
-    if (RESERVED_LOG_FIELDS.some((field) => field === name)) {
-      throw new RangeError(`${where}: "${name}" is a reserved field name and may not be published`);
+    for (const name of names) {
+      if (RESERVED_LOG_FIELDS.some((field) => field === name)) {
+        return yield* Effect.die(new RangeError(`${where}: "${name}" is a reserved field name and may not be published`));
+      }
+
+      if (seen[name] === true) return yield* Effect.die(new RangeError(`${where}: "${name}" is declared twice`));
+      seen[name] = true;
     }
-
-    if (seen[name] === true) throw new RangeError(`${where}: "${name}" is declared twice`);
-    seen[name] = true;
-  }
+  }));
 }
 
 /**

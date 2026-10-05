@@ -1,6 +1,8 @@
 /** Each handler owns its preventDefault: which keys the editor still sees is behaviour. */
 import type { RefObject } from 'react';
 import type { KeyEvent, TextareaRenderable } from '@opentui/core';
+import { Cause, Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import type { TuiActionId } from './actions';
 import type { InputEffect, InputMachineEvent } from '@kinu.run/core';
 import type { ActiveSurface } from './chat-app';
@@ -90,20 +92,20 @@ export function composerKeyHandlers(deps: ComposerKeyDeps): Partial<Record<TuiAc
       key.preventDefault();
       deps.undoDraft();
     },
-    'editor.external': async (key) => {
+    'editor.external': (key) => {
       key.preventDefault();
       deps.setSelectionPending(true);
 
-      try {
-        const edited = await deps.externalDraft(deps.expandPastes(deps.input.current?.plainText ?? ''));
+      return settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+        const edited = yield* Effect.promise(() => deps.externalDraft(deps.expandPastes(deps.input.current?.plainText ?? '')));
         deps.setInputText(edited);
         deps.input.current?.gotoBufferEnd();
-      } catch (cause) {
-        deps.addError({ cause });
-      } finally {
+      }), (failed) => Effect.sync(() => {
+        deps.addError({ cause: Cause.squash(failed) });
+      })), Effect.sync(() => {
         deps.setSelectionPending(false);
         deps.input.current?.focus();
-      }
+      })));
     },
     'editor.history-previous': historyStep(true),
     'editor.history-next': historyStep(false),

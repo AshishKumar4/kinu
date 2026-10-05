@@ -1,4 +1,5 @@
 /** `/deploy` (docs/SELF-DEPLOY.md § The Cloudflare door). Public: the run key minted in this tab authorizes everything. */
+import { Effect } from 'effect';
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { CloudArrowUpIcon } from "@phosphor-icons/react";
@@ -7,13 +8,12 @@ import {
   deployDoor, deployOptions, mintRun,
   type DeployChoice, type DeployDoor, type DeployInputs, type DeployOptions, type DeploySnapshot,
 } from "@kinu.run/core/deploy";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { showing, detach } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Field, inputCls } from "@/components/ui/form";
 import { StepRow } from "@/components/deploy/DeployStepRow";
-import { showRejection } from "@/hooks/use-async-resource";
 
 /** The run key is a capability: `sessionStorage` under the run id, sent in an `authorization` header, never a URL. */
 function heldRunKey(runId: string): string {
@@ -98,37 +98,36 @@ function Answered({ options, runId, onStarted }: {
 
   useEffect(() => {
     let live = true;
-    const failed = showRejection(setErr, () => live);
-
     const door = doorFor(runId);
 
-    door.accounts().then((found) => {
+    const failed = showing((chain) => { if (live) setErr(chain); });
+
+    detach(Effect.all([
+      Effect.catchCause(Effect.map(Effect.promise(() => door.accounts()), (found) => {
       if (!live) return;
       setAccounts(found);
       setAnswers((held) => ({ ...held, accountId: held.accountId === "" ? found[0]?.id ?? "" : held.accountId }));
-    }).catch(failed);
-    door.zones().then((found) => { if (live) setZones(found); }).catch(failed);
+    }), failed),
+      Effect.catchCause(Effect.map(Effect.promise(() => door.zones()), (found) => { if (live) setZones(found); }), failed),
+    ], { concurrency: 'unbounded' }));
 
     return () => { live = false; };
   }, [runId]);
 
-  const deploy = async (): Promise<void> => {
+  const deploy = () => Effect.gen(function* () {
     setBusy(true);
     setErr(null);
 
     const door = doorFor(runId);
 
-    try {
+    return yield* Effect.catchCause(Effect.gen(function* () {
       for (const [name, value] of Object.entries(answers.keys)) {
-        if (value !== "") await door.holdProviderKey(name, value);
+        if (value !== "") yield* Effect.promise(async () => door.holdProviderKey(name, value));
       }
 
-      onStarted(await door.start(inputsFrom(answers)));
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
-      setBusy(false);
-    }
-  };
+      onStarted(yield* Effect.promise(async () => door.start(inputsFrom(answers))));
+    }), showing((chain) => { setErr(chain); setBusy(false); }));
+  });
 
   return (
     <section className="space-y-4" aria-label="Your deployment">
@@ -205,7 +204,7 @@ function Answered({ options, runId, onStarted }: {
       <div className="flex items-center justify-between gap-3">
         <p className="p-meta p-text-3">Kinu {options.version} will be uploaded into your account.</p>
         <FilledButton
-          onClick={() => void deploy()}
+          onClick={() => detach(deploy())}
           disabled={busy || answers.accountId === "" || answers.ownerEmail === ""}
           className="!h-9 !px-4 !text-sm"
         >
@@ -258,7 +257,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     if (!live) return;
     let mounted = true;
 
-    deployOptions(location.origin).then((offer) => { if (mounted) setOptions(offer); }).catch(showRejection(setErr, () => mounted));
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => deployOptions(location.origin)), (offer) => { if (mounted) setOptions(offer); }), showing((chain) => { if (mounted) setErr(chain); })));
 
     return () => { mounted = false; };
   }, [live]);
@@ -269,7 +268,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
 
     const door = doorFor(runId);
 
-    door.snapshot().then((held) => { if (mounted) setSnapshot(held); }).catch(showRejection(setErr, () => mounted));
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => door.snapshot()), (held) => { if (mounted) setSnapshot(held); }), showing((chain) => { if (mounted) setErr(chain); })));
 
     // The key rides the subprotocol list: a WebSocket URL cannot carry it and a browser sets no upgrade header.
     const opened = new WebSocket(door.socketUrl(), [...door.socketProtocols()]);
@@ -288,19 +287,15 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     };
   }, [live, runId]);
 
-  const signIn = async (): Promise<void> => {
-    try {
-      // An expired run is re-signed, not replaced: a fresh run would create a second set of everything.
-      const run = runId !== "" && heldRunKey(runId) !== "" ? runId : await openDeployRun();
+  const signIn = () => Effect.catchCause(Effect.gen(function* () {
+    // An expired run is re-signed, not replaced: a fresh run would create a second set of everything.
+    const run = runId !== "" && heldRunKey(runId) !== "" ? runId : (yield* Effect.promise(async () => openDeployRun()));
 
-      location.assign(await doorFor(run).authorize());
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
-    }
-  };
+    location.assign(yield* Effect.promise(async () => doorFor(run).authorize()));
+  }), showing(setErr));
 
-  const retry = useCallback((stepId: string): void => {
-    doorFor(runId).retry(stepId).then(setSnapshot).catch(showRejection(setErr));
+  const retry = useCallback((stepId: string) => {
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => doorFor(runId).retry(stepId)), setSnapshot), showing(setErr)));
   }, [runId]);
 
   const ownerEmail = snapshot?.steps.flatMap((row) => Object.entries(row.facts))
@@ -340,7 +335,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
                     + " its sign-in. The token stays with this run and is deleted when the run ends."
                     + " After that, your deployment uses its own."}
               </p>
-              <FilledButton onClick={() => void signIn()} className="mt-4 !h-9 !px-4 !text-sm">
+              <FilledButton onClick={() => detach(signIn())} className="mt-4 !h-9 !px-4 !text-sm">
                 Sign in with Cloudflare
               </FilledButton>
             </div>

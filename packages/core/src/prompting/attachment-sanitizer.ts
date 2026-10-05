@@ -5,7 +5,8 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
  * never changes, so index-anchored consumers stay valid.
  */
 
-import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
+import type { AssistantModelMessage, DataContent, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
+import { untagged } from '../utils/file-data';
 
 import type { ModelInputModality } from '../providers/types';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
@@ -136,23 +137,29 @@ async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Pro
     return sanitizeFilePart({ type: 'file', data: part.image, mediaType: part.mediaType }, policy);
   }
 
-  if (policy.accepts.has('image')) return null;
+  const data = untagged(part.image);
 
-  return replaceMedia(part.image, part.mediaType ?? 'image', undefined, policy);
+  if (data === null || policy.accepts.has('image')) return null;
+
+  return replaceMedia(data, part.mediaType ?? 'image', undefined, policy);
 }
 
 async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promise<TextPart | null> {
+  const data = untagged(part.data);
+
+  // The provider's own handle to a file it already holds: nothing here to read or store.
+  if (data === null) return null;
   const modality = mediaModalityFor(part.mediaType);
 
   if (modality !== null && policy.accepts.has(modality)) {
-    return modality !== 'image' && oversizeForInlineDocument(part.data)
-      ? replaceMedia(part.data, part.mediaType, part.filename, policy)
+    return modality !== 'image' && oversizeForInlineDocument(data)
+      ? replaceMedia(data, part.mediaType, part.filename, policy)
       : null;
   }
 
-  if (isTextMediaType(part.mediaType)) return inlineOrStoreText(part, policy);
+  if (isTextMediaType(part.mediaType)) return inlineOrStoreText(data, part, policy);
 
-  return replaceMedia(part.data, part.mediaType, part.filename, policy);
+  return replaceMedia(data, part.mediaType, part.filename, policy);
 }
 
 async function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Promise<TextPart | null> {
@@ -166,7 +173,7 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
   const bytes = new TextEncoder().encode(text);
 
   if (bytes.length <= INLINE_TEXT_MAX_BYTES) return null;
-  const path = await storeContentAddressed(bytes, 'text/plain', policy);
+  const path = await storeAttachment(policy.vfs, ATTACHMENTS_DIR, bytes, 'text/plain');
   const head = text.slice(0, PASTED_TEXT_PREVIEW_CHARS);
   policy.budget?.recordSpill({
     producer: 'pasted_text', omitted: text.length - head.length, referenced: true,
@@ -177,13 +184,13 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
 }
 
 /** Sized without decoding: base64 is ~4/3 of the bytes; remote URLs have no local payload. */
-function oversizeForInlineDocument(data: FilePart['data']): boolean {
+function oversizeForInlineDocument(data: DataContent | URL): boolean {
   const bytes = estimatePayloadBytes(data);
 
   return bytes !== null && bytes > OVERSIZE_ACCEPTED_DOC_MAX_BYTES;
 }
 
-function estimatePayloadBytes(data: FilePart['data']): number | null {
+function estimatePayloadBytes(data: DataContent | URL): number | null {
   if (data instanceof URL) return null;
 
   if (data instanceof Uint8Array) return data.byteLength;
@@ -216,8 +223,8 @@ function isTextMediaType(mediaType: string): boolean {
   return mediaType.startsWith('text/') || mediaType === 'image/svg+xml';
 }
 
-async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
-  const payload = decodePayload(file.data);
+async function inlineOrStoreText(data: DataContent | URL, file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
+  const payload = decodePayload(data);
 
   if (payload.kind === 'remote') return remoteReference(payload.url, file.mediaType, file.filename);
 
@@ -235,7 +242,7 @@ async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Prom
 }
 
 async function replaceMedia(
-  data: FilePart['data'],
+  data: DataContent | URL,
   mediaType: string,
   filename: string | undefined,
   policy: AttachmentPolicy,
@@ -253,7 +260,7 @@ async function storeAndReference(
   filename: string | undefined,
   policy: AttachmentPolicy,
 ): Promise<TextPart> {
-  const path = await storeContentAddressed(bytes, mediaType, policy);
+  const path = await storeAttachment(policy.vfs, ATTACHMENTS_DIR, bytes, mediaType);
   const basename = path.slice(ATTACHMENTS_DIR.length + 1);
   policy.budget?.recordSpill({ producer: 'attachment', omitted: bytes.length, referenced: true });
   const name = filename ?? basename;
@@ -264,25 +271,25 @@ async function storeAndReference(
   };
 }
 
-/** Reuse verifies the bytes: an existing path (truncated write, agent-written file) is not proof of content. */
-async function storeContentAddressed(
-  bytes: Uint8Array,
-  mediaType: string,
-  policy: AttachmentPolicy,
-): Promise<string> {
-  const path = `${ATTACHMENTS_DIR}/${sha256Hex(bytes)}.${extensionFor(mediaType)}`;
+/**
+ * `bytes` under `directory` by content (`<sha256>.<ext>`), the path returned once durable: the one attachment store,
+ * for a part the model cannot take and for one compaction moves out. Reuse verifies the bytes: an existing path
+ * (truncated write, agent-written file) is not proof of content.
+ */
+export async function storeAttachment(vfs: VFS, directory: string, bytes: Uint8Array, mediaType: string): Promise<string> {
+  const path = `${directory}/${sha256Hex(bytes)}.${extensionFor(mediaType)}`;
 
-  if (await holdsBytes(policy.vfs, path, bytes)) return path;
+  if (await holdsBytes(vfs, path, bytes)) return path;
 
   try {
-    await policy.vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
+    await vfs.mkdir(directory, { recursive: true });
   } catch (err) {
     if (classify({ cause: err }) !== 'eexist') {
       throw toKinuError({ doing: 'creating the attachments spill directory', cause: err, otherwise: 'io' });
     }
   }
 
-  await policy.vfs.writeFile(path, bytes);
+  await vfs.writeFile(path, bytes);
 
   return path;
 }
@@ -317,7 +324,15 @@ type DecodedPayload =
   | { kind: 'bytes'; bytes: Uint8Array }
   | { kind: 'remote'; url: string };
 
-function decodePayload(data: FilePart['data']): DecodedPayload {
+/** A part's payload as bytes; null for a remote URL, which has none here. */
+export function attachmentBytes(tagged: FilePart['data']): Uint8Array | null {
+  const data = untagged(tagged);
+  const payload = data === null ? null : decodePayload(data);
+
+  return payload?.kind === 'bytes' ? payload.bytes : null;
+}
+
+function decodePayload(data: DataContent | URL): DecodedPayload {
   if (data instanceof URL) return { kind: 'remote', url: data.toString() };
 
   if (data instanceof Uint8Array) return { kind: 'bytes', bytes: data };

@@ -3,6 +3,8 @@
  * is verified after writing, never merely requested.
  */
 
+import { Effect, Cause } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import { chmodSync, statSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -14,44 +16,52 @@ const SHARED_BITS = 0o077;
 
 /** Narrow `path` to owner-only and verify; callers holding a secret must let the throw propagate. */
 export function enforceOwnerOnly(path: string, mode: number = SECRET_FILE_MODE): void {
-  try {
-    chmodSync(path, mode);
-  } catch (caught) {
-    throw new Error(
-      `could not restrict ${path} to owner-only permissions`,
-      { cause: caught },
-    );
-  }
+  return settleSync(Effect.gen(function* () {
+    yield* Effect.catchCause(Effect.sync(() => {
+      chmodSync(path, mode);
+    }), (failed) => Effect.gen(function* () {
+      const caught = Cause.squash(failed);
 
-  const observed = statSync(path).mode & 0o777;
+      return yield* Effect.die(new Error(
+        `could not restrict ${path} to owner-only permissions`,
+        { cause: caught },
+      ));
+    }));
 
-  if ((observed & SHARED_BITS) !== 0) {
-    throw new Error(
-      `${path} is readable beyond its owner (mode ${observed.toString(8)}) ; refusing to leave a secret there`,
-    );
-  }
+    const observed = statSync(path).mode & 0o777;
+
+    if ((observed & SHARED_BITS) !== 0) {
+      return yield* Effect.die(new Error(
+        `${path} is readable beyond its owner (mode ${observed.toString(8)}) ; refusing to leave a secret there`,
+      ));
+    }
+  }));
 }
 
 /** Atomic owner-only write; the tmp file is narrowed before rename. */
 export function writeSecretFile(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  return settleSync(Effect.gen(function* () {
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
 
-  try {
-    writeFileSync(tmp, content, { mode: SECRET_FILE_MODE });
-    enforceOwnerOnly(tmp);
-    renameSync(tmp, path);
-  } catch (caught) {
-    try {
-      unlinkSync(tmp);
-    } catch (cleanup) {
-      throw new Error(`failed to write ${path} and could not remove ${tmp}`, { cause: cleanup });
-    }
+    yield* Effect.catchCause(Effect.sync(() => {
+      writeFileSync(tmp, content, { mode: SECRET_FILE_MODE });
+      enforceOwnerOnly(tmp);
+      renameSync(tmp, path);
+    }), (failed) => Effect.gen(function* () {
+      yield* Effect.catchCause(Effect.sync(() => {
+        unlinkSync(tmp);
+      }), (cleanupFailed) => Effect.gen(function* () {
+        const cleanup = Cause.squash(cleanupFailed);
 
-    throw caught;
-  }
+        return yield* Effect.die(new Error(`failed to write ${path} and could not remove ${tmp}`, { cause: cleanup }));
+      }));
 
-  enforceOwnerOnly(path);
+      return yield* Effect.failCause(failed);
+    }));
+
+    enforceOwnerOnly(path);
+  }));
 }
 
 export function ensureSecretDir(path: string): void {

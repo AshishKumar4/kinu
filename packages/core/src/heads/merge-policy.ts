@@ -4,6 +4,8 @@
  * every fixed-tier call; the backend only binds a routed (spec, effort) pair to a client.
  */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { generateReported, type GenerateRequest } from '../providers/model-invocation';
@@ -28,18 +30,23 @@ export interface HeadMergePolicyDeps {
 }
 
 /** Throws rather than answering null: `judge` is a `fixed`-tier producer. Private so no backend can resolve the route and bind something else. */
-function resolveHeadMergeRoute(profile: ResolvedTurnProfile): ModelRouteResolution {
-  const route = resolveModelRoute(HEAD_MERGE_SOURCE, profile);
+function resolveHeadMergeRoute(profile: ResolvedTurnProfile): Effect.Effect<ModelRouteResolution> {
+  return Effect.gen(function* () {
+    const route = resolveModelRoute(HEAD_MERGE_SOURCE, profile);
 
-  if (!route) throw new Error('the head merge cannot use the fixed platform model route');
+    if (!route) return yield* Effect.die(new Error('the head merge cannot use the fixed platform model route'));
 
-  return route;
+    return route;
+  });
 }
 
 /** Billed as the serving entry before its reply is parsed: a reply that fails the schema was paid for, and is no refusal to hand over on. */
 export function headMergeLLM(deps: HeadMergePolicyDeps): MergeLLMFn {
-  return async (prompt) => {
-    const text = await onRoute(resolveHeadMergeRoute(await deps.profile()), {}, async (serving) => {
+  return (prompt) => settle(Effect.gen(function* () {
+    const profile = yield* Effect.promise(() => deps.profile());
+    const route = yield* resolveHeadMergeRoute(profile);
+
+    const text = yield* Effect.promise(() => onRoute(route, {}, async (serving) => {
       const { model, providerOptions } = deps.bindMergeModel(serving);
       const request: GenerateRequest = { model, prompt: `${prompt}\n\n${jsonObjectOnlyInstruction()}`, ...routeRetryOptions(serving) };
 
@@ -47,8 +54,8 @@ export function headMergeLLM(deps: HeadMergePolicyDeps): MergeLLMFn {
       const spend = { source: HEAD_MERGE_SOURCE, report: deps.reportModelCall, operations: deps.operations } as const;
 
       return (await generateReported(request, { spend, spec: serving.model }, 'generate_json')).text;
-    });
+    }));
 
     return v.parse(MergeOutputSchema, extractJsonObject(text));
-  };
+  }));
 }

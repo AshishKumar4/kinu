@@ -22,8 +22,8 @@ import {
   type WriteObserver, isSubordinateOrigin, type TierRefusals,
 } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
-import { Effect } from 'effect';
+import { flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse } from './runtime';
 import type { LiveRead, TemporaryAgentPort } from '@kinu.run/core';
 
@@ -118,7 +118,10 @@ export function hostedActorPlacement(record: WorkspaceActor): HostedActorPlaceme
  */
 
 export class HostedActorHomes {
-  private readonly homes = new Map<string, Promise<Extract<NodeWorkspace, { isolation: 'private-home' }>>>();
+  private readonly homes = flight(({ record, reference }: { readonly record: WorkspaceActor; readonly reference: ActorReference }) => Effect.flatMap(
+    Effect.promise(() => this.provision(record, reference)),
+    (home) => (home.isolation === 'private-home' ? Effect.succeed(home) : Effect.fail(new KinuError('denied', 'A hosted actor requires its own credential.'))),
+  ), { key: ({ record }) => record.actorId, keep: 'success' });
 
   constructor(private readonly seams: Pick<WorkspaceHostSeams, 'homeHost' | 'directory'>) {}
 
@@ -134,26 +137,8 @@ export class HostedActorHomes {
 
   get(record: WorkspaceActor, reference: ActorReference): Promise<Extract<NodeWorkspace, { isolation: 'private-home' }>> | null {
     if (hostedActorPlacement(record).homeName === null) return null;
-    const held = this.homes.get(record.actorId);
 
-    if (held) return held;
-    let provisioning: Promise<Extract<NodeWorkspace, { isolation: 'private-home' }>> | null = null;
-
-    provisioning = (async (): Promise<Extract<NodeWorkspace, { isolation: 'private-home' }>> => {
-      try {
-        const home = await this.provision(record, reference);
-
-        if (home.isolation !== 'private-home') throw new KinuError('denied', 'A hosted actor requires its own credential.');
-
-        return home;
-      } catch (cause) {
-        if (this.homes.get(record.actorId) === provisioning) this.homes.delete(record.actorId);
-        throw cause;
-      }
-    })();
-    this.homes.set(record.actorId, provisioning);
-
-    return provisioning;
+    return settle(this.homes({ record, reference }));
   }
 
   require(record: WorkspaceActor, reference: ActorReference): Promise<Extract<NodeWorkspace, { isolation: 'private-home' }>> {
@@ -165,7 +150,7 @@ export class HostedActorHomes {
   }
 
   forget(actorId: string): void {
-    this.homes.delete(actorId);
+    this.homes.forget(actorId);
   }
 }
 
@@ -183,19 +168,21 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     installedBuild: seams.installedBuild(),
     workspace: seams.workspaceName,
     tracing: () => seams.tracing(),
-    filesFor: async (bound) => {
-      const provisioning = seams.homes.get(bound.record, bound.reference);
-      const box = seams.workspaceBox(hostedActorPlacement(bound.record).shellId);
+    filesFor: (bound) => {
+      return settle(Effect.gen(function* () {
+        const provisioning = seams.homes.get(bound.record, bound.reference);
+        const box = seams.workspaceBox(hostedActorPlacement(bound.record).shellId);
 
-      if (provisioning === null) {
-        if (bound.record.origin !== 'system') throw new KinuError('denied', 'Actor has no credentialed artifact home');
+        if (provisioning === null) {
+          if (bound.record.origin !== 'system') return yield* new KinuError('denied', 'Actor has no credentialed artifact home');
 
-        return { vfs: nimbusSessionFiles(box, { home: agentHome(MAIN_AGENT) }), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
-      }
+          return { vfs: nimbusSessionFiles(box, { home: agentHome(MAIN_AGENT) }), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
+        }
 
-      const home = await provisioning;
+        const home = yield* Effect.promise(async () => provisioning);
 
-      return { vfs: nimbusSessionFiles(box, home), artifactDirectory: agentArtifactDirectory(home.home) };
+        return { vfs: nimbusSessionFiles(box, home), artifactDirectory: agentArtifactDirectory(home.home) };
+      }));
     },
 
     runtimeFor: async (bound: BoundActor): Promise<AgentRuntime> => {
@@ -331,20 +318,24 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     /** Releases the home and state subtree on destroy only; an archived actor keeps its files. */
     advisorPort: (bound) => seams.advisorPort?.(bound.reference) ?? null,
 
-    discardBytes: async (record: WorkspaceActor): Promise<void> => {
-      const { homeName, shellId } = hostedActorPlacement(record);
+    discardBytes: (record: WorkspaceActor): Promise<void> => {
+      return settle(Effect.gen(function* () {
+        const { homeName, shellId } = hostedActorPlacement(record);
 
-      if (homeName !== null) await facetHomeReleaser(seams.homeHost())(homeName);
+        if (homeName !== null) yield* Effect.promise(async () => facetHomeReleaser(seams.homeHost())(homeName));
 
-      seams.homes.forget(record.actorId);
-      const box = seams.workspaceBox(shellId);
+        seams.homes.forget(record.actorId);
+        const box = seams.workspaceBox(shellId);
 
-      // A hired-but-idle actor never materialized its subtree, so absence is swallowed.
-      try {
-        await box.files.delete(actorStateRoot(record.storageKey), { recursive: true });
-      } catch (cause) {
-        if (!isVfsError(cause) || cause.code !== 'ENOENT') throw cause;
-      }
+        // A hired-but-idle actor never materialized its subtree, so absence is swallowed.
+        return yield* Effect.catchCause(Effect.gen(function* () {
+          yield* Effect.promise(async () => box.files.delete(actorStateRoot(record.storageKey), { recursive: true }));
+        }), (failed) => Effect.gen(function* () {
+          const cause = Cause.squash(failed);
+
+          if (!isVfsError(cause) || cause.code !== 'ENOENT') return yield* Effect.failCause(failed);
+        }));
+      }));
     },
   };
 

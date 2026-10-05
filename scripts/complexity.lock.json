@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-04",
-  "files": 2968,
-  "functions": 74175,
+  "measuredAt": "2026-10-05",
+  "files": 3000,
+  "functions": 77949,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -46,10 +46,6 @@
       "complexity": 40
     },
     {
-      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
-      "complexity": 39
-    },
-    {
       "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
       "complexity": 38
     },
@@ -58,15 +54,7 @@
       "complexity": 38
     },
     {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
-      "complexity": 37
-    },
-    {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
-      "complexity": 37
-    },
-    {
-      "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison",
       "complexity": 37
     },
     {
@@ -76,6 +64,14 @@
     {
       "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 37
+    },
+    {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
+      "complexity": 36
+    },
+    {
+      "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
+      "complexity": 36
     },
     {
       "key": "packages/core/src/tui/input-state.ts#reduceInput",
@@ -170,23 +166,11 @@
       "complexity": 31
     },
     {
-      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
-      "complexity": 31
-    },
-    {
       "key": "tests/first-run/exploration.first-run.ts#describe>liveTest>run",
       "complexity": 31
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
-      "complexity": 30
-    },
-    {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 30
-    },
-    {
-      "key": "packages/cli-backend/src/opencode-provider.ts#discoverModels",
       "complexity": 30
     },
     {
@@ -222,6 +206,10 @@
       "complexity": 29
     },
     {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
+      "complexity": 29
+    },
+    {
       "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
       "complexity": 29
     },
@@ -239,6 +227,10 @@
     },
     {
       "key": "packages/core/src/slates/capability-graph.ts#riskOf",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
       "complexity": 29
     },
     {
@@ -282,19 +274,7 @@
       "complexity": 28
     },
     {
-      "key": "packages/cli/src/commands/debug.ts#writeDebugBundle",
-      "complexity": 28
-    },
-    {
       "key": "packages/cli/src/config.ts#resolveLLMConfig",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/chat.ts#ProviderCall.consume",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/execution/hub-device-transport.ts#createHubDeviceTransport>rpc",
       "complexity": 28
     },
     {

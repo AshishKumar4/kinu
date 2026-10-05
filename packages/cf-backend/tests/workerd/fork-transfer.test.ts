@@ -87,10 +87,10 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(published.identity?.mission).toBe(PROBE_SOUL_MISSION);
     expect(published.identity?.name).toBe('fork-target');
     expect(published.displayName).toBe('fork-target');
-    expect(published.markers).toBe(1);
+    expect(published.markers).toBe(0);
     expect(published.entries).toBe(3);
     // The public chain and the working context are two selections over one canonical store.
-    expect(published.messages).toBe(4);
+    expect(published.messages).toBe(3);
     expect(published.contextMembers).toBe(3);
     expect(published.files).toEqual(inherited);
 

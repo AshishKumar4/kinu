@@ -1,4 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { WorkspacePlanReferenceSchema, JsonValueSchema, type JsonValue, type PlanReview, type SlateSummary } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { ExecutorInfo, Rpc } from '@kinu.run/core';
@@ -84,32 +86,32 @@ export function PreviewTabsGallery() {
   // Real root connection, for the arrival hint only.
   const { workspacePlanArrival } = useKinu('preview-tabs');
 
-  const rpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    const reply = (value: ReplyValue): Promise<T> => new Response(JSON.stringify(value)).json<T>();
+  const rpc: Rpc = useCallback(<T,>(method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
+    const reply = (value: ReplyValue): Effect.Effect<T> => Effect.promise(() => new Response(JSON.stringify(value)).json<T>());
 
-    if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
-    else if (method === 'getExecutorDiff' && broken) return reply({ mode: 'vfs-baseline', files: [], error: 'the change-set read failed' });
-    else if (method === 'getExecutorDiff' && args?.[0] === MACHINE.name) return reply(MACHINE_DIFF);
-    else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: edited ?? [] });
-    else if (method === 'getChangeNotes') return reply(keptNotes.current);
+    if (method === 'previewSlate') return yield* reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
+    else if (method === 'getExecutorDiff' && broken) return yield* reply({ mode: 'vfs-baseline', files: [], error: 'the change-set read failed' });
+    else if (method === 'getExecutorDiff' && args?.[0] === MACHINE.name) return yield* reply(MACHINE_DIFF);
+    else if (method === 'getExecutorDiff') return yield* reply({ mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: edited ?? [] });
+    else if (method === 'getChangeNotes') return yield* reply(keptNotes.current);
     else if (method === 'saveChangeNotes') {
       keptNotes.current = v.parse(v.array(JsonValueSchema), args?.[1]);
 
-      return reply({ ok: true, notes: keptNotes.current });
+      return yield* reply({ ok: true, notes: keptNotes.current });
     }
     else if (method === 'sendChangeNotes') {
       keptNotes.current = [];
 
-      return reply({ ok: true, notes: [] });
+      return yield* reply({ ok: true, notes: [] });
     }
     else if (method === 'resetWorkspaceBaseline' || method === 'restoreWorkspaceBaseline') {
       setEdited(method === 'restoreWorkspaceBaseline' ? EDITED : null);
 
-      return reply({ ok: true, files: 0, capturedAt: 0 });
+      return yield* reply({ ok: true, files: 0, capturedAt: 0 });
     }
     else if (method === 'listWorkspaceWork') {
       // The courier plan is already listed, so the arrival hint is the auto-open trigger, not a discovery read.
-      if (failHistory) throw new Error('Plan history temporarily unavailable');
+      if (failHistory) return yield* Effect.die(new Error('Plan history temporarily unavailable'));
 
       const ownerOf = (name: string, retired = false) => ({ actorId: `actor-${name}`, name, retired });
 
@@ -118,7 +120,7 @@ export function PreviewTabsGallery() {
         { owner: ownerOf('main'), plan: { ...ROOT_PLAN, revision: 1, status: 'superseded' as const, content: '# Earlier dashboard plan' }, tasks: [] },
       ] : [];
 
-      return reply({
+      return yield* reply({
         plans: [
           ...rootPlans,
           { owner: ownerOf('courier'), plan: ARRIVAL_PLAN, tasks: [] },
@@ -139,14 +141,14 @@ export function PreviewTabsGallery() {
       const next = { ...ROOT_PLAN, status: 'approved' as const, handoffAccepted: true, updatedAt: 3 };
       setPlan(next);
 
-      return reply({ ok: true, plan: next, queued: true });
+      return yield* reply({ ok: true, plan: next, queued: true });
     }
-    else if (method === 'savePlanReviewAnnotations') return reply({ ok: true, plan });
-    else if (method === 'getEvolutionChangelog') return reply({ entries: [], unseenCount: 0, seenAt: 0 });
-    else if (method === 'markChangelogSeen') return reply({ seenAt: 0 });
+    else if (method === 'savePlanReviewAnnotations') return yield* reply({ ok: true, plan });
+    else if (method === 'getEvolutionChangelog') return yield* reply({ entries: [], unseenCount: 0, seenAt: 0 });
+    else if (method === 'markChangelogSeen') return yield* reply({ seenAt: 0 });
 
-    throw new Error('Unexpected preview gallery RPC: ' + method);
-  }, [plan, edited, broken, failHistory, workerPlan]);
+    return yield* Effect.die(new Error('Unexpected preview gallery RPC: ' + method));
+  })), [plan, edited, broken, failHistory, workerPlan]);
 
   const workerRpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === 'decidePlanReview') {

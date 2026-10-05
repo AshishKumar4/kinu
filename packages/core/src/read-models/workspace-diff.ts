@@ -4,7 +4,7 @@
  */
 
 import type { CredentialedVfs, SnapshotInfo, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import type { VfsCred } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { PLATFORM_CATALOG } from '../platform-catalog';
@@ -14,7 +14,7 @@ import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
 import { attempt, diagnostics, KinuError, renderThrownChain, settle, tolerate, type ErrorCode } from '../obs/index';
 import { shellQuote } from '../utils/shell';
-import { NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 /**
  * A side past one SQLite row is listed as large, without a body (a write's preview too). Nimbus's diff does not say
@@ -40,9 +40,6 @@ const REVIEWED_UNDER_ROOT = ['home', SLATES_ROOT.slice(1)];
 
 /** Where the change-set names a path relative to the working directory, as the shell starting there does. */
 const WORKING_DIRECTORY = `${WORKSPACE_ROOT.slice(1)}/`;
-
-/** Nimbus's home is a link to the working directory, not a second reviewed tree. */
-const NIMBUS_HOME = NIMBUS_WORKSPACE_ROOT.slice(1);
 
 /** Repository scan depth below an executor's working directory, as VS Code bounds its scan. */
 const REPOSITORY_SCAN_DEPTH = 3;
@@ -104,7 +101,7 @@ function reviewedPath(path: string): string | null {
 
   if (!REVIEWED_UNDER_ROOT.includes(names[0] ?? '') || !names.every(reviewed)) return null;
 
-  if (path === NIMBUS_HOME || path.startsWith(`${NIMBUS_HOME}/`) || !path.includes('/')) return null;
+  if (!path.includes('/')) return null;
 
   return path.startsWith(WORKING_DIRECTORY) ? path.slice(WORKING_DIRECTORY.length) : `/${path}`;
 }
@@ -344,37 +341,39 @@ interface GitRecords {
  * The records, each at a line start. A patch line never starts with the mark: its lines are prefixed, and git
  * quotes a control character in a header path. What follows the end record is stderr.
  */
-function gitRecords(output: string): GitRecords {
-  const records: GitRecord[] = [];
-  let at = output.startsWith(MARK) ? 0 : output.indexOf(`\n${MARK}`) + 1;
+function gitRecords(output: string): Effect.Effect<GitRecords, KinuError> {
+  return Effect.gen(function* () {
+    const records: GitRecord[] = [];
+    let at = output.startsWith(MARK) ? 0 : output.indexOf(`\n${MARK}`) + 1;
 
-  while (at > 0 || (at === 0 && output.startsWith(MARK))) {
-    const tag = output.charAt(at + 1);
-    const count = RECORD_FIELDS.get(tag);
+    while (at > 0 || (at === 0 && output.startsWith(MARK))) {
+      const tag = output.charAt(at + 1);
+      const count = RECORD_FIELDS.get(tag);
 
-    if (count === undefined) throw new KinuError('io', `Unexpected git view record ${JSON.stringify(tag)}`);
-    const fields: string[] = [];
-    let next = at + 2;
+      if (count === undefined) return yield* new KinuError('io', `Unexpected git view record ${JSON.stringify(tag)}`);
+      const fields: string[] = [];
+      let next = at + 2;
 
-    for (let i = 0; i < count; i++) {
-      const end = output.indexOf('\0', next);
+      for (let i = 0; i < count; i++) {
+        const end = output.indexOf('\0', next);
 
-      if (end === -1) throw new KinuError('io', `Truncated git view record ${tag}`);
-      fields.push(output.slice(next, end));
-      next = end + 1;
+        if (end === -1) return yield* new KinuError('io', `Truncated git view record ${tag}`);
+        fields.push(output.slice(next, end));
+        next = end + 1;
+      }
+
+      if (output.charAt(next) !== '\n') return yield* new KinuError('io', `Malformed git view record ${tag}`);
+      next++;
+
+      if (tag === 'E') return { records, stderr: output.slice(next) };
+      const following = output.indexOf(`\n${MARK}`, next - 1);
+      const bodyEnd = following === -1 ? output.length : following + 1;
+      records.push({ tag, fields, body: output.slice(next, bodyEnd) });
+      at = following === -1 ? -1 : bodyEnd;
     }
 
-    if (output.charAt(next) !== '\n') throw new KinuError('io', `Malformed git view record ${tag}`);
-    next++;
-
-    if (tag === 'E') return { records, stderr: output.slice(next) };
-    const following = output.indexOf(`\n${MARK}`, next - 1);
-    const bodyEnd = following === -1 ? output.length : following + 1;
-    records.push({ tag, fields, body: output.slice(next, bodyEnd) });
-    at = following === -1 ? -1 : bodyEnd;
-  }
-
-  throw new KinuError('io', `The git view ended early: ${output.slice(-2000)}`);
+    return yield* new KinuError('io', `The git view ended early: ${output.slice(-2000)}`);
+  });
 }
 
 interface GitView {
@@ -392,70 +391,70 @@ function printedLine(field: string): string {
  * The records read back: each repository's files under its folder. Inside a repository the list is framed at its
  * top, under the top's name, so the enclosing repository and the ones below the working directory share one tree.
  */
-function gitView(output: string): GitView {
-  const { records, stderr } = gitRecords(output);
+function gitView(output: string): Effect.Effect<GitView, KinuError> {
+  return Effect.gen(function* () {
+    const { records, stderr } = yield* gitRecords(output);
 
-  if (records.some((record) => record.tag === 'X')) throw new KinuError('io', `A git command failed: ${stderr.trim()}`);
-  const enclosing = records.find((record) => record.tag === 'N');
-  const top = enclosing === undefined ? '' : printedLine(enclosing.fields[0] ?? '');
-  const base = top.slice(top.lastIndexOf('/') + 1);
-  const prefix = enclosing === undefined ? '' : printedLine(enclosing.fields[1] ?? '');
+    if (records.some((record) => record.tag === 'X')) return yield* new KinuError('io', `A git command failed: ${stderr.trim()}`);
+    const enclosing = records.find((record) => record.tag === 'N');
+    const top = enclosing === undefined ? '' : printedLine(enclosing.fields[0] ?? '');
+    const base = top.slice(top.lastIndexOf('/') + 1);
+    const prefix = enclosing === undefined ? '' : printedLine(enclosing.fields[1] ?? '');
 
-  const folderOf = (label: string): string => {
-    if (label === '') return base;
-    const relative = `${prefix}${label.replace(/^\.\//, '')}`;
+    const folderOf = (label: string): string => {
+      if (label === '') return base;
+      const relative = `${prefix}${label.replace(/^\.\//, '')}`;
 
-    return base === '' ? relative : `${base}/${relative}`;
-  };
+      return base === '' ? relative : `${base}/${relative}`;
+    };
 
-  const sections: { label: string; head: string; files: FileDiff[] }[] = [];
+    const sections: { label: string; head: string; files: FileDiff[] }[] = [];
 
-  for (const record of records) {
-    const [first = '', second = ''] = record.fields;
+    for (const record of records) {
+      const [first = '', second = ''] = record.fields;
 
-    if (record.tag === 'R') sections.push({ label: first, head: second, files: [] });
-    else if (record.tag === 'F') for (const file of parseGitDiff(record.body)) sections.at(-1)?.files.push({ ...file, path: first });
-  }
-
-  // find hands repositories over in directory order; the list reads in code-unit order, so the enclosing one ('') first.
-  sections.sort((a, b) => (a.label < b.label ? -1 : Number(a.label > b.label)));
-  const view: GitView = { files: [], repositories: [], heads: [] };
-
-  for (const section of sections) {
-    if (section.head !== '' && !v.safeParse(HeadCommitSchema, section.head).success) {
-      throw new KinuError('io', `Unexpected git HEAD in ${section.label || top}: ${section.head}`);
+      if (record.tag === 'R') sections.push({ label: first, head: second, files: [] });
+      else if (record.tag === 'F') for (const file of parseGitDiff(record.body)) sections.at(-1)?.files.push({ ...file, path: first });
     }
 
-    const folder = folderOf(section.label);
-    view.repositories.push(folder);
-    view.heads.push(`${folder}@${section.head}`);
+    // find hands repositories over in directory order; the list reads in code-unit order, so the enclosing one ('') first.
+    sections.sort((a, b) => (a.label < b.label ? -1 : Number(a.label > b.label)));
+    const view: GitView = { files: [], repositories: [], heads: [] };
 
-    for (const file of section.files) view.files.push({ ...file, path: folder === '' ? file.path : `${folder}/${file.path}` });
-  }
+    for (const section of sections) {
+      if (section.head !== '' && !v.safeParse(HeadCommitSchema, section.head).success) {
+        return yield* new KinuError('io', `Unexpected git HEAD in ${section.label || top}: ${section.head}`);
+      }
 
-  return view;
+      const folder = folderOf(section.label);
+      view.repositories.push(folder);
+      view.heads.push(`${folder}@${section.head}`);
+
+      for (const file of section.files) view.files.push({ ...file, path: folder === '' ? file.path : `${folder}/${file.path}` });
+    }
+
+    return view;
+  });
 }
 
-async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<ExecutorDiffResult> {
+function getGitDiff(rt: AgentRuntime, executorId: string): Effect.Effect<ExecutorDiffResult> {
   const provider = rt.executionRouter?.getProvider(executorId);
 
-  if (!provider) return { files: [], mode: 'git', error: `Executor "${executorId}" not found` };
+  if (!provider) return Effect.succeed({ files: [], mode: 'git', error: `Executor "${executorId}" not found` });
   const execTool = provider.tools.exec;
 
-  if (!execTool) return { files: [], mode: 'git', error: `Executor "${executorId}" has no exec tool` };
+  if (!execTool) return Effect.succeed({ files: [], mode: 'git', error: `Executor "${executorId}" has no exec tool` });
 
-  try {
-    const result = v.parse(CommandResultSchema, await execTool.execute(gitViewScript()));
+  return Effect.catchCause(Effect.gen(function* () {
+    const result = v.parse(CommandResultSchema, yield* Effect.promise(async () => execTool.execute(gitViewScript())));
 
-    if (!v.is(v.string(), result)) throw new KinuError(result.reason, result.error);
-    const view = gitView(result);
+    if (!v.is(v.string(), result)) return yield* new KinuError(result.reason, result.error);
+    const view = yield* gitView(result);
 
-    if (view.repositories.length === 0) return { files: [], mode: 'git', notGitRepo: true };
+    if (view.repositories.length === 0) return { files: [], mode: 'git', notGitRepo: true } satisfies ExecutorDiffResult;
 
-    return { files: view.files, mode: 'git', baseline: view.heads.join(' '), repositories: view.repositories };
-  } catch (err) {
-    return { files: [], mode: 'git', error: renderThrownChain({ cause: err }) };
-  }
+    return { files: view.files, mode: 'git', baseline: view.heads.join(' '), repositories: view.repositories } satisfies ExecutorDiffResult;
+  }), (failed) => Effect.succeed({ files: [], mode: 'git', error: renderThrownChain({ cause: Cause.squash(failed) }) } satisfies ExecutorDiffResult));
 }
 
 /** Whether a write at `path`, absolute as the workspace's file events name it, can move the change-set. */
@@ -535,8 +534,8 @@ export async function getExecutorDiff(
   if (executorId === 'workspace') {
     const r = await workspace();
 
-    return { files: r.files, mode: 'vfs-baseline', trackedSince: r.trackedSince, baseline: r.baseline };
+    return { files: r.files, mode: 'vfs-baseline', trackedSince: r.trackedSince, baseline: r.baseline } satisfies ExecutorDiffResult;
   }
 
-  return getGitDiff(rt, executorId);
+  return settle(getGitDiff(rt, executorId));
 }

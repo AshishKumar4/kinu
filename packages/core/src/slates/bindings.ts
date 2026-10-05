@@ -2,17 +2,20 @@ import * as v from 'valibot';
 import { isJsonObject, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
-import { attempt, settle, settleSync } from '../obs/effect';
-import { tolerateAsync } from '../obs/expected-failure';
+import { attempt, settle, settleSync, tolerateAsync } from '../obs/effect';
 import { vfsBasename, vfsDirname } from '../utils/vfs-helpers';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
-import { workspacePath } from '../vfs/workspace-path';
+import { cloudPlanes, resolvedPath } from '../vfs/resolve';
+import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { isSlateMethodName } from './rpc';
 import type { SlateReadModel } from './read-models';
 import type { SlateBinding, SlateProject } from './project';
 import { grantAdmits } from './capability-graph';
 import { memberEffect, toolActionEffect, toolActionMember } from './members';
 import type { ShareGrant } from './sharing';
+
+/** A slate runs on the cloud: its own space is the root, so `vfs://x` is `/x`. */
+export const SLATE_PLANES = cloudPlanes(WORKSPACE_ROOT);
 
 export const SlateBindingRequestSchema = v.strictObject({
   member: v.pipe(v.string(), v.minLength(1)),
@@ -172,15 +175,17 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
     }
 
     const named = v.safeParse(v.string(), args[0]);
+    const refused = new KinuError('denied', `${name}.${member} takes an absolute path or vfs:// reference inside ${binding.paths.join(', ')}`);
 
-    if (!named.success || !named.output.startsWith('/')) {
-      return Effect.fail(new KinuError('denied', `${name}.${member} takes an absolute path inside ${binding.paths.join(', ')}`));
-    }
+    if (!named.success || !(named.output.startsWith('/') || named.output.startsWith('vfs://'))) return Effect.fail(refused);
+    const within = binding.paths;
 
-    const forwarded = args.slice();
-    forwarded[0] = workspacePath(named.output, '/');
+    return Effect.mapError(Effect.map(resolvedPath(named.output, SLATE_PLANES), (resolved) => {
+      const forwarded = args.slice();
+      forwarded[0] = resolved.absolute;
 
-    return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args: forwarded, within: binding.paths });
+      return { kind: 'namespace' as const, namespace: binding.namespace, member, args: forwarded, within };
+    }), () => refused);
   }
 
   return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args });

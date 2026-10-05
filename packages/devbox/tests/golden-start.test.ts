@@ -1,12 +1,15 @@
 // D65 at the box: a box with a golden builder never starts the bare base. It wakes its own snapshot,
 // else the golden, and with no golden it waits until the golden object tells it, with no clock.
 import { expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import type { GoldenAnswer } from '../src/golden';
 import { TOOLS_STAMP } from '../src/tools';
 import type { BoxPeers } from '../src/devbox';
 import { ChainTestBox, asked, chainBox } from './support/chain-box';
 
-const PIN = 'a'.repeat(64);
+const PARTS = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])];
+
+const PIN = createHash('sha256').update(Buffer.concat(PARTS)).digest('hex');
 
 class Golden {
   answers: GoldenAnswer[] = [];
@@ -45,7 +48,8 @@ function fresh(answers: GoldenAnswer[]) {
   const made = chainBox(GoldenBox);
   made.container.addSnapshot('golden-1', new Map([[TOOLS_STAMP, PIN]]));
   made.container.addSnapshot('golden-0', new Map([[TOOLS_STAMP, 'b'.repeat(64)]]));
-  made.objects.set(`devbox-tools/${PIN}.tgz`, new Uint8Array([1, 2, 3]));
+
+  for (const [index, part] of PARTS.entries()) made.objects.set(`devbox-tools/${PIN}.tgz.${String(index)}`, part);
 
   return made;
 }
@@ -70,6 +74,23 @@ test('a box with no golden to start from waits with the reason, arms no clock, a
   });
 });
 
+test('a box evicted while it waits still starts when the golden object tells it; a destroyed one does not', async () => {
+  // Release review: the wait lived in memory, so the golden object's one notice reached a successor that knew nothing.
+  const ready: GoldenAnswer = { kind: 'ready', id: 'golden-1', tools: PIN };
+  const waiting = fresh([]);
+  await waiting.box.resolveReadiness();
+  golden.answers = [ready];
+  await waiting.evict().goldenReady(ready);
+  const destroyed = fresh([]);
+  await destroyed.box.resolveReadiness();
+  await destroyed.box.destroy();
+  golden.answers = [ready];
+  await destroyed.evict().goldenReady(ready);
+
+  expect({ evicted: waiting.container.startOptions.map(startedFrom), destroyed: destroyed.container.startOptions.length })
+    .toEqual({ evicted: ['golden-1'], destroyed: 0 });
+});
+
 test('a failed build becomes the waiting box\'s reason, said once', async () => {
   const { box, container } = fresh([]);
   await box.resolveReadiness();
@@ -87,8 +108,21 @@ test('a golden of other tools serves, and the box installs the pinned tools in i
   await box.devboxStartup();
   const order = container.sequence.filter(step => step === 'exec:tools-install' || step.startsWith('exec:stdin'));
 
-  expect({ starts: container.startOptions.map(startedFrom), order, stamp: container.files.get(TOOLS_STAMP), state: (await box.devboxState()).restoration })
-    .toEqual({ starts: ['golden-0'], order: ['exec:stdin /tmp/devbox-tools.tgz', 'exec:tools-install'], stamp: PIN, state: 'attached' });
+  expect({
+    starts: container.startOptions.map(startedFrom), order, archive: [...container.binaryFiles.get('/tmp/devbox-tools.tgz') ?? []],
+    stamp: container.files.get(TOOLS_STAMP), state: (await box.devboxState()).restoration,
+  }).toEqual({
+    starts: ['golden-0'], order: ['exec:stdin /tmp/devbox-tools.tgz', 'exec:stdin /tmp/devbox-tools.tgz', 'exec:tools-install'],
+    archive: [1, 2, 3, 4, 5], stamp: PIN, state: 'attached',
+  });
+});
+
+test('a store missing a part installs nothing: the archive is not the pinned one', async () => {
+  const { box, container, objects } = fresh([{ kind: 'ready', id: 'golden-0', tools: 'b'.repeat(64) }]);
+  objects.delete(`devbox-tools/${PIN}.tgz.1`);
+
+  await expect(box.devboxStartup()).rejects.toThrow(`is not the pinned tools ${PIN}`);
+  expect(container.files.get(TOOLS_STAMP)).toBe('b'.repeat(64));
 });
 
 test('a golden the platform refuses is reported lost, and the box starts from the one it is given next', async () => {

@@ -13,7 +13,8 @@ import {
   type SqlExecutor,
   JsonObjectSchema, type AgentSignal, type SendOutcome,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { diagnostics, KinuError, settleSync, toKinuError } from '@kinu.run/core/obs';
 
 /** Kinu's value for the SDK's `fiberRecoveryMaxAgeMs` (the SDK default); the one place it lives. */
 export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -147,7 +148,7 @@ export function classifyRecoveredFiber(
 ): FiberRecoveryResult {
   diagnostics.event('fiber.recovered', { fiber: ctx.name, fiberId: ctx.id });
 
-  try {
+  return settleSync(Effect.catchCause(Effect.sync((): FiberRecoveryResult => {
     if (ctx.name.startsWith(BACKGROUND_FIBER_PREFIX)) return redriveBackgroundJobLane(transports, ctx);
 
     // Not `settleEvolution()`: its promises died with the last isolate. `runDueSessionEvolution()`
@@ -170,10 +171,10 @@ export function classifyRecoveredFiber(
     if (ctx.name === FORK_NOTICE_LANE_FIBER) return redriveForkNoticeLane(transports, ctx);
 
     return unrecognisedLane(ctx);
-  } catch (err) {
+  }), (failed) => Effect.sync((): FiberRecoveryResult => {
     const failure = toKinuError({
       doing: `classifying the "${ctx.name}" fiber after eviction`,
-      cause: err,
+      cause: Cause.squash(failed),
       otherwise: 'io',
     });
 
@@ -181,7 +182,7 @@ export function classifyRecoveredFiber(
 
     // Terminal, not rethrown: a retained row would be re-offered every activation until max age.
     return { status: 'error', error: failure.message, snapshot: { lane: ctx.name, recovered: false } };
-  }
+  })));
 }
 
 /** Hands the lane's `body` to a carrier under its own fiber name. */

@@ -2,11 +2,13 @@
  *  workerd bounds connections awaiting headers and cancels one parked on another's release as hung (HTTP 500 1101
  *  on kinu.run, 2026-09-23). */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import { abortCause } from '../utils/abort';
 
 /** Sleep that an abort ends, rejecting with the signal's reason. */
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return Promise.reject(abortCause(signal));
+  if (signal?.aborted) return settle(Effect.die(abortCause(signal)));
   const { promise, resolve, reject } = Promise.withResolvers<void>();
 
   const timer = setTimeout(() => {
@@ -43,20 +45,22 @@ export class ProviderPacer {
 
   /** Waits out the host's cooldown, re-read after each sleep as a sibling may extend it. `onCooldown` gets the
    *  deadline so a caller can skip announcing its own. */
-  async admit(
+  admit(
     host: string,
     signal?: AbortSignal,
     opts?: { onCooldown?: (waitMs: number, untilMs: number, reason: string | undefined) => void },
   ): Promise<void> {
-    for (;;) {
-      if (signal?.aborted) throw abortCause(signal);
-      const cooldown = this.cooldowns.get(host);
-      const cooling = (cooldown?.untilMs ?? 0) - this.now();
+    return settle(Effect.gen({ self: this }, function* () {
+      for (;;) {
+        if (signal?.aborted) return yield* Effect.die(abortCause(signal));
+        const cooldown = this.cooldowns.get(host);
+        const cooling = (cooldown?.untilMs ?? 0) - this.now();
 
-      if (cooldown === undefined || cooling <= 0) return;
-      opts?.onCooldown?.(cooling, cooldown.untilMs, cooldown.reason);
-      await this.sleep(cooling, signal);
-    }
+        if (cooldown === undefined || cooling <= 0) return;
+        opts?.onCooldown?.(cooling, cooldown.untilMs, cooldown.reason);
+        yield* Effect.promise(() => this.sleep(cooling, signal));
+      }
+    }));
   }
 
   /** Record a cooldown of `ms`; its deadline, null if a later one holds. */

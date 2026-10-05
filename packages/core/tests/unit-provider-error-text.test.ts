@@ -1,6 +1,6 @@
 // Provider failures surface the provider's facts, not `[object Object]`, and the SDK's default
 // `onError` does not dump the payload to the console.
-import { stepCountIs } from 'ai';
+import { isStepCount } from 'ai';
 import { describe, test, expect, spyOn } from 'bun:test';
 import { APICallError, type LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
@@ -39,7 +39,7 @@ async function runToCompletion(model: LanguageModel): Promise<void> {
     system: 'sys',
     history: [{ role: 'user', content: 'go' }],
     tools: {},
-    stopWhen: stepCountIs(1),
+    stopWhen: isStepCount(1),
   })) { /* drain */ }
 }
 

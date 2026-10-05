@@ -6,7 +6,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { LanguageModelV3Content } from '@ai-sdk/provider';
+import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import { scriptedTurnModel, createTestActorsOver, unobservedSearchSeams, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
@@ -605,7 +605,7 @@ function nodeModel(opts: {
 
       generations += 1;
 
-      const content: LanguageModelV3Content[] = [];
+      const content: LanguageModelV4Content[] = [];
       let finish: 'stop' | 'tool-calls' = 'tool-calls';
 
       if (own === 0) {

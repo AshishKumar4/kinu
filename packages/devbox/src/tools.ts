@@ -14,6 +14,7 @@ export function toolsInstallCommand(archive: string, hash: string): string {
 
   return [
     'set -e', 'export DEBIAN_FRONTEND=noninteractive', 't0=$(date +%s%N)',
+    `[ "$(sha256sum < ${shellPath(archive)} | cut -c1-64)" = ${shellPath(hash)} ] || { echo ${shellPath(`${archive} is not the pinned tools ${hash}`)}; exit 1; }`,
     `tar -C / -xzf ${shellPath(archive)}`,
     '(cd / && sha256sum -c --quiet usr/local/lib/devbox/tools.sha256)',
     't1=$(date +%s%N)',

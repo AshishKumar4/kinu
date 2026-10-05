@@ -178,6 +178,26 @@ describe('withRateLimitRetry', () => {
     expect(harness.waits).toEqual([60_000, 60_000]);
   });
 
+  test.each([
+    ['default', undefined, 3], ['none', 0, 0], ['one', 1, 1],
+  ] as const)('SDK and transport share the %s retry budget', async (_label, requested, retries) => {
+    const harness = retryHarness([new Response('limited', {
+      status: 429, headers: { 'Retry-After': '1' },
+    })]);
+
+    const model = createOpenAICompatible({ name: 'stacked-retries', baseURL: 'https://api.example.com/v1', fetch: harness.wrapped }).chatModel('m');
+    const headers: Record<string, string> = {};
+
+    if (requested !== undefined) headers[PROVIDER_RETRIES_HEADER] = String(requested);
+
+    await expect(generateText({
+      model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES, headers,
+    })).rejects.toThrow('rate-limiting this account');
+
+    expect(harness.calls()).toBe(retries + 1);
+    expect(harness.waits).toHaveLength(retries);
+  });
+
   test('stops provider waits only when the caller cancels', async () => {
     const controller = new AbortController();
     const reason = new Error('cancelled by user');

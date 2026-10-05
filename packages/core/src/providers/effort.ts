@@ -1,6 +1,6 @@
 // Adaptive reasoning-effort budgets per inference stage.
 //
-// Chat Completions SDKs read `reasoningEffort` under their provider's name (workers-ai, opencode-go)
+// Chat Completions SDKs read `reasoningEffort` under their provider's name in camelCase (workersAi, opencodeGo)
 // and serialize reasoning_effort, overwriting a wire-spelled option.
 
 import type { streamText } from 'ai';
@@ -12,6 +12,12 @@ export {
 } from './reasoning-effort';
 
 export type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
+
+/** The key an OpenAI-compatible adapter reads a provider's options under: its name in camelCase. ai 7 reads the kebab
+ *  spelling too, but warns on every request. */
+export function compatOptionsKey(name: string): string {
+  return name.replace(/[_-]([a-z])/gu, (_match, letter: string) => letter.toUpperCase());
+}
 
 export type InferenceStage =
   | 'chat'
@@ -35,7 +41,7 @@ export function workersAIEffortOption(
 ) {
   if (!effort) return {};
 
-  return { providerOptions: { 'workers-ai': { reasoningEffort: effort } } };
+  return { providerOptions: { [compatOptionsKey('workers-ai')]: { reasoningEffort: effort } } };
 }
 
 /** Levels Anthropic's `effort` accepts; others leave the model on its default rather than being refused. */
@@ -58,7 +64,7 @@ export function reasoningEffortOptions(
       return { openai: { reasoningEffort: effort } };
     case 'opencode':
     case 'opencode-go':
-      return { openai: { reasoningEffort: effort }, [family]: { reasoningEffort: effort } };
+      return { openai: { reasoningEffort: effort }, [compatOptionsKey(family)]: { reasoningEffort: effort } };
     case 'openrouter':
       return { openrouter: { reasoningEffort: effort } };
     case 'anthropic':

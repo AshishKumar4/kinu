@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { admitCraftedSource, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, WORKSPACE_ROOT, type ToolOutcome, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createCodeTool } from '@cloudflare/codemode/ai';
-import { generateText, stepCountIs, tool, jsonSchema } from 'ai';
+import { generateText, isStepCount, tool, jsonSchema } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { KinuSandboxExecutor, codemodeLauncher, renderToolsPrelude } from '../../src/codemode-sandbox';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
@@ -57,7 +57,7 @@ function toolsProvider(crafted: Array<{ name: string; code: string; description:
       ...Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute])),
       file: async (...args: unknown[]) => ({ echoed: decodeJsonValue({ value: args[0] }) }),
     },
-    prelude: renderToolsPrelude(crafted, { workspace: 'probe' }),
+    prelude: renderToolsPrelude(crafted, { cwd: WORKSPACE_ROOT, workspace: 'probe' }),
   };
 }
 
@@ -100,8 +100,8 @@ describe('the eval sandbox under workerd', () => {
           outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
       }) });
 
-      return generateText({ model, prompt: 'Run the program', tools: { program }, stopWhen: stepCountIs(2),
-        experimental_onToolCallFinish: (event) => { outcomes.push(event.success ? { success: true } : failedToolOutcome({ cause: event.error })); },
+      return generateText({ model, prompt: 'Run the program', tools: { program }, stopWhen: isStepCount(2),
+        onToolExecutionEnd: ({ toolOutput }) => { outcomes.push(toolOutput.type === 'tool-result' ? { success: true } : failedToolOutcome({ cause: toolOutput.error })); },
       });
     };
 
@@ -109,8 +109,8 @@ describe('the eval sandbox under workerd', () => {
     await invoke('const refusal = await workspace.exec("blocked"); return refusal.reason;');
     const failed = await invoke('console.log("before failure"); throw new Error("denied is just diagnostic text");');
     expect(outcomes).toEqual([{ success: true }, { success: true }, { success: false, reason: null }]);
-    expect(JSON.stringify(failed.response.messages)).toContain('before failure');
-    expect(JSON.stringify(failed.response.messages)).toContain('denied is just diagnostic text');
+    expect(JSON.stringify(failed.responseMessages)).toContain('before failure');
+    expect(JSON.stringify(failed.responseMessages)).toContain('denied is just diagnostic text');
   });
 
   test('require("fs/promises") and require("path") work over the workspace, and console output comes back', async () => {
@@ -248,7 +248,7 @@ describe('the eval sandbox under workerd', () => {
     const native = nativeToolFunctions({ file: tool({
       inputSchema: jsonSchema<{ action: string }>({ type: 'object' }),
       execute: async (): Promise<string> => { throw new KinuError('unavailable', 'file plane offline'); },
-    }) });
+    }) }, undefined);
 
     const providers = [{ name: 'tools', fns: Object.fromEntries(Object.entries(native).map(([name, entry]) => [name, entry.execute])) }];
     const run = (code: string) => withCodemodeProgram(() => executor.execute(code, providers));

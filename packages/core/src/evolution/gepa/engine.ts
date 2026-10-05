@@ -4,7 +4,7 @@
  * Every metric call counts against `budget.maxMetricCalls`.
  */
 
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { nanoid } from '../../utils/nanoid';
 import { nowMs } from '../../utils/date';
@@ -20,9 +20,9 @@ import {
 } from './types';
 import { diagnostics, renderThrownChain, settle, toKinuError } from '../../obs/index';
 
-type ProposalOutcome =
-  | { ok: true; source: string; operator: 'mutate' | 'merge'; parentSource?: string }
-  | { ok: false; reason: string };
+interface Proposed { source: string; operator: 'mutate' | 'merge'; parentSource?: string }
+
+type ProposalOutcome = Result.Result<Proposed, string>;
 
 
 export function runGepa<I = unknown, E = unknown>(
@@ -78,7 +78,7 @@ export function runGepa<I = unknown, E = unknown>(
       return yield* proposal(() => proposeMutation(
         { parent, minibatch, rollout, reflectionLm: config.reflectionLm },
         config.artifactDescription ?? 'scaffold source',
-      ), (m): ProposalOutcome => ({ ok: true, source: m.source, operator: 'mutate', parentSource: parent.source }), 'mutate_failed');
+      ), (m): Proposed => ({ source: m.source, operator: 'mutate', parentSource: parent.source }), 'mutate_failed');
     });
 
     /** Falls back to mutate when there is no complementary pair. */
@@ -90,11 +90,11 @@ export function runGepa<I = unknown, E = unknown>(
       return proposal(() => proposeMerge({
         pair, evalSet: config.evalSet, reflectionLm: config.reflectionLm,
         artifactDescription: config.artifactDescription ?? 'scaffold source',
-      }), (merged): ProposalOutcome => {
+      }), (merged): Proposed => {
         mergeInvocations++;
 
         // Merge has no rollout cost.
-        return { ok: true, source: merged, operator: 'merge' };
+        return { source: merged, operator: 'merge' };
       }, 'merge_failed');
     };
 
@@ -124,13 +124,15 @@ export function runGepa<I = unknown, E = unknown>(
         iter > 0 &&
         iter % budget.mergeEveryN === 0;
 
-      const proposed = yield* (tryMerge ? proposeViaMerge() : proposeViaMutate());
+      const outcome = yield* (tryMerge ? proposeViaMerge() : proposeViaMutate());
 
-      if (!proposed.ok) {
-        if (yield* recordRejection(iter, proposed.reason)) { stopReason = 'no_improvement_possible'; break; }
+      if (Result.isFailure(outcome)) {
+        if (yield* recordRejection(iter, outcome.failure)) { stopReason = 'no_improvement_possible'; break; }
 
         continue;
       }
+
+      const proposed = outcome.success;
 
       if (proposed.operator === 'mutate' && proposed.source === proposed.parentSource) {
         if (yield* recordRejection(iter, 'no_change')) { stopReason = 'no_improvement_possible'; break; }
@@ -271,9 +273,9 @@ function emitIteration(
   })));
 }
 
-function proposal<A>(run: () => Promise<A>, accepted: (value: A) => ProposalOutcome, label: string): Effect.Effect<ProposalOutcome> {
+function proposal<A>(run: () => Promise<A>, accepted: (value: A) => Proposed, label: string): Effect.Effect<ProposalOutcome> {
   return Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) }).pipe(Effect.match({
-    onSuccess: accepted,
-    onFailure: (failed): ProposalOutcome => ({ ok: false, reason: `${label}: ${renderThrownChain(failed)}` }),
+    onSuccess: (value): ProposalOutcome => Result.succeed(accepted(value)),
+    onFailure: (failed): ProposalOutcome => Result.fail(`${label}: ${renderThrownChain(failed)}`),
   }));
 }

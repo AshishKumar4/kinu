@@ -56,7 +56,7 @@ function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport &
 
       if (method === 'exec') return { stdout: `ran on ${opts?.deviceId ?? 'unnamed'}`, stderr: '', exitCode: 0 };
 
-      if (method === 'listFiles') return [{ name: `entry-of-${opts?.deviceId}`, type: 'file' }];
+      if (method === 'listFiles') return { entries: [{ name: `entry-of-${opts?.deviceId}`, type: 'file' }], next: null };
 
       if (method === 'exists') return true;
 
@@ -465,8 +465,8 @@ describe('the workspace shell on a machine confined to one directory', () => {
         if (method === 'listFiles') {
           const prefix = path === '/' ? '/' : `${path}/`;
 
-          return [...TREE.keys()].filter((p) => p !== path && p.startsWith(prefix) && !p.slice(prefix.length).includes('/'))
-            .map((p) => ({ name: p.slice(prefix.length), type: TREE.get(p) === null ? 'directory' : 'file' }));
+          return { entries: [...TREE.keys()].filter((p) => p !== path && p.startsWith(prefix) && !p.slice(prefix.length).includes('/'))
+            .map((p) => ({ name: p.slice(prefix.length), type: TREE.get(p) === null ? 'directory' : 'file' })), next: null };
         }
 
         if (method === 'readRange') {

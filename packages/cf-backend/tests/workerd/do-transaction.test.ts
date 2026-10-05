@@ -38,6 +38,16 @@ describe('DurableObjectStorage.transactionSync', () => {
     expect(await subject.admitted()).toEqual({ events: 1, rosterStatus: 'idle' });
   });
 
+  it('a fence effect refusing after the first write leaves neither write behind', async () => {
+    const failed = open('fenced-fail');
+    await expect(() => failed.admitFenced('ev-1', true)).rejects.toThrow(/mid-revert/);
+    expect(await failed.admitted()).toEqual({ events: 0, rosterStatus: 'working' });
+
+    const passed = open('fenced-ok');
+    await passed.admitFenced('ev-1', false);
+    expect(await passed.admitted()).toEqual({ events: 1, rosterStatus: 'idle' });
+  });
+
   it('an outer rollback also undoes a committed nested transaction', async () => {
     const failed = open('nested-fail');
     await expect(() => failed.admitNested('ev-1', true)).rejects.toThrow(/outer transaction failed/);

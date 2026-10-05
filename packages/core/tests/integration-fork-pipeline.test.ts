@@ -44,12 +44,8 @@ describe('fork pipeline (end-to-end)', () => {
     expect(await readSoul(tgt.vfs)).toBe('help with testing');
 
     const chain = await readChain(tgt);
-    // m3 is not an ancestor of m2, so it did not cross; the marker is the
-    // fork's own leaf.
-    expect(chain.ids.slice(0, 2)).toEqual(['m1', 'm2']);
-    expect(chain.ids).toHaveLength(3);
-    expect(chain.ids[2]?.startsWith('fork-marker-')).toBe(true);
-    expect(chain.text.slice(0, 2)).toEqual(['hello', 'hi there']);
+    expect(chain.ids).toEqual(['m1', 'm2']);
+    expect(chain.text).toEqual(['hello', 'hi there']);
 
     expect((await readWorkingContext(tgt, TARGET_ARTIFACTS)).entryIds).toEqual(['m1', 'm2']);
 
@@ -68,25 +64,6 @@ describe('fork pipeline (end-to-end)', () => {
 
     expect(config.get('model')).toBe('@cf/moonshotai/kimi-k2.6');
     expect(config.get('display_name')).toBe('my-fork');
-  });
-
-  test('the marker the round trip lands follows the cut and names the source', async () => {
-    const src = fresh();
-    const tgt = fresh();
-    await seedForkTarget(tgt, { workspaceId: 'FORK-DO-ID' });
-    await seedSource(src);
-
-    const landed = await streamFork(src, tgt, TARGET, { untilMessageId: 'm2' });
-
-    const marker = tgt.sql<{ id: string; position: number; recorded_at: number }>`
-      SELECT id, position, recorded_at FROM conversation_entries WHERE role = 'system'`;
-
-    expect(marker).toHaveLength(1);
-    expect(marker[0]?.position).toBe(2);
-    expect(marker[0]?.recorded_at).toBe(landed.forkPointMs + 1);
-    const chain = await readChain(tgt);
-    expect(chain.text[chain.text.length - 1]).toContain('forked from workspace');
-    expect(chain.text[chain.text.length - 1]).toContain('source-agent');
   });
 
   test('a source with no crafted tools and no memory forks safely', async () => {
@@ -157,9 +134,9 @@ describe('fork pipeline (end-to-end)', () => {
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM fork_lineage`[0]?.c).toBe(1);
     expect(readForkLineage(tgt.sql)?.forkedAt).toBe(99999);
     // A redelivery replaces what the last attempt staged rather than duplicating the conversation.
-    expect((await readChain(tgt)).ids.slice(0, 2)).toEqual(['m1', 'm2']);
-    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries`[0]?.c).toBe(3);
-    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM session_messages`[0]?.c).toBe(3);
+    expect((await readChain(tgt)).ids).toEqual(['m1', 'm2']);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries`[0]?.c).toBe(2);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM session_messages`[0]?.c).toBe(2);
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM context_memberships`[0]?.c).toBe(2);
   });
 });

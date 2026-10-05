@@ -14,7 +14,7 @@ const CallJobOptionsSchema = v.object({
   [CALL_JOB_OPTION]: v.optional(v.object({ id: v.string(), detached: v.instance(AbortSignal), output: OutputSinkSchema })),
 });
 
-export function readCallJob(options: ToolExecutionOptions | undefined): CallJob | undefined {
+export function readCallJob(options: ToolExecutionOptions<unknown> | undefined): CallJob | undefined {
   const parsed = v.safeParse(CallJobOptionsSchema, options);
 
   return parsed.success ? parsed.output[CALL_JOB_OPTION] : undefined;

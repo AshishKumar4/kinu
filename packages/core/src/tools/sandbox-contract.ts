@@ -14,6 +14,7 @@ import { KinuError, settle, settleSync } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 import { parsesAsExpression } from '../craft/source';
 import type { CraftedToolSource } from './crafted-executor';
+import { toolDescription } from '../utils/tool-description';
 
 export {
   CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
@@ -85,7 +86,7 @@ export function externalToolDeclarations(
       && workModeRefusal(profile.workMode, hasPlanPermission(entry), name) === null)
     .map(([name, entry]) => {
       const schema = v.safeParse(JsonObjectSchema, asSchema(entry.inputSchema).jsonSchema);
-      const description = (entry.description ?? name).replace(/\s+/gu, ' ').trim().replace(/\.$/u, '');
+      const description = (toolDescription(entry) ?? name).replace(/\s+/gu, ' ').trim().replace(/\.$/u, '');
 
       return schema.success ? { name, description, inputSchema: JSON.stringify(schema.output) } : { name, description };
     });
@@ -119,7 +120,8 @@ export function codemodeText(argument: { readonly value: unknown; readonly param
   return text.output;
 }
 
-export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
+/** `signal` is the calling program's: a tool it reaches here is stopped with the eval that called it. */
+export function nativeToolFunctions(tools: ToolSet, signal: AbortSignal | undefined): CodemodeProvider['tools'] {
   const out: Record<string, CodemodeProvider['tools'][string]> = {};
 
   for (const [name, tool] of Object.entries(tools)) {
@@ -127,7 +129,7 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
 
     if (name === SANDBOX_TOOL || execute === undefined) continue;
     out[name] = {
-      description: tool.description ?? name,
+      description: toolDescription(tool) ?? name,
       planAllowed: hasPlanPermission(tool),
       execute: async (...args: unknown[]) => {
         const input = v.safeParse(JsonObjectSchema, args[0] === undefined ? {} : args[0]);
@@ -138,7 +140,8 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
           }
 
           const output = input.output;
-          const result = yield* Effect.promise(() => Promise.resolve(execute(output, { toolCallId: 'codemode-' + nanoid(), messages: [] })));
+          const options = { toolCallId: 'codemode-' + nanoid(), messages: [], context: undefined, ...(signal !== undefined && { abortSignal: signal }) };
+          const result = yield* Effect.promise(() => Promise.resolve(execute(output, options)));
 
           return result === undefined ? undefined : decodeJsonValue({ value: result });
         })));

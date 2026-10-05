@@ -263,10 +263,10 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
           ? new Uint8Array(Buffer.from(content, 'base64'))
           : new TextEncoder().encode(content));
 
-        return 'ok';
+        return { success: true };
       }
 
-      if (method === 'listFiles') return fs.list(p).map((name) => ({ name }));
+      if (method === 'listFiles') return { entries: fs.list(p).map((name) => ({ name })), next: null };
 
       if (method === 'exists') return fs.exists(p);
 

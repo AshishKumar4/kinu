@@ -44,6 +44,8 @@
 // allow-list instead, so a full-screen program is told the truth.
 'use strict';
 
+const FRAMES = require('./device-protocol.json').frames;
+
 /** What the child is looking at, and the terminal the browser half renders
  *  with. One name on both sides, or a full-screen program draws for a terminal
  *  nobody has. */
@@ -199,7 +201,7 @@ function createSessions(options = {}) {
 
     if (!(send instanceof Function)) throw new Error('a terminal needs a socket to report to');
 
-    const record = { name, pid: 0, discardedBytes: 0, exited: false, terminal: undefined };
+    const record = { name, pid: 0, discardedBytes: 0, exited: false, terminal: undefined, ended: null };
 
     let child;
 
@@ -216,7 +218,7 @@ function createSessions(options = {}) {
             // A terminal's newest bytes ARE its picture, so a congested socket
             // discards rather than queues: the count is logged when the
             // session ends, and the next full repaint restores the display.
-            if (!send({ type: 'PTY_OUT', session: name, data: Buffer.from(bytes).toString('base64') })) {
+            if (!send({ type: FRAMES.ptyOutput, session: name, data: Buffer.from(bytes).toString('base64') })) {
               record.discardedBytes += bytes.length;
             }
           },
@@ -248,6 +250,7 @@ function createSessions(options = {}) {
 
     record.terminal = terminal;
     record.pid = child.pid;
+    record.ended = child.exited;
     sessions.set(name, record);
 
     /** @param {number} status */
@@ -258,7 +261,7 @@ function createSessions(options = {}) {
       terminal.close();
 
       if (record.discardedBytes > 0) log('device.terminal_output_discarded', name, record.discardedBytes);
-      send({ type: 'PTY_EXIT', session: name, exitCode: status });
+      send({ type: FRAMES.ptyExit, session: name, exitCode: status });
     }
 
     /** @param {unknown} error */
@@ -301,29 +304,14 @@ function createSessions(options = {}) {
     return { cols: width, rows: height };
   }
 
-  /**
-   * Close one terminal, and leave nothing running behind it.
-   *
-   * Closing the pty is what a person closing a terminal does, and the kernel
-   * hangs up the terminal's FOREGROUND process group for us. That is not the
-   * whole shell, and the difference is exactly what job control bought: a
-   * background job gets a process group of its OWN, so one group signal
-   * reaches the shell and not the `sleep` it started. A shell that hangs up
-   * its own jobs is a shell option (`huponexit`) that is off by default, so it
-   * cannot be relied on either.
-   *
-   * What every one of them shares is the SESSION, and the shell leads it. So
-   * the close signals each process group in that session. A terminal on the
-   * owner's machine must not leave work nothing can reach, which is the same
-   * position `execCancel` takes for a command.
-   */
+  /** Job control gives each job its own group, so a stop must end the whole session. */
   function close(name) {
     const record = held(name);
     record.terminal.close();
 
     for (const group of sessionGroups(record.pid)) {
       try {
-        process.kill(-group, 'SIGHUP');
+        process.kill(-group, 'SIGKILL');
       } catch (err) {
         // Gone between the sweep and this signal: this function's own goal,
         // reached without it. Anything else is a fault to surface.
@@ -331,7 +319,7 @@ function createSessions(options = {}) {
       }
     }
 
-    return { session: record.name };
+    return { session: record.name, ended: record.ended };
   }
 
   /** Every terminal, because the socket that was watching them is gone. */

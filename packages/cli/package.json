@@ -13,7 +13,7 @@
     "@opentui/react": "^0.5.11",
     "web-tree-sitter": "0.25.10",
     "agents": "^0.24.0",
-    "ai": "6.0.214",
+    "ai": "7.0.127",
     "chalk": "^5.6.2",
     "commander": "^14.0.3",
     "effect": "4.0.0-rc.117",
@@ -21,9 +21,9 @@
     "valibot": "^1.4.1"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "3.0.12",
+    "@ai-sdk/provider": "4.0.21",
     "@kinu.run/test-utils": "workspace:*",
-    "@nimbus-sh/core": "0.14.0",
+    "@nimbus-sh/core": "0.15.0",
     "@types/react": "^19.2.14"
   },
   "scripts": {

@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import type { JsonValue, LLM, TemporaryAgentPort, TemporaryRunRequest } from '@kinu.run/core';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
@@ -52,26 +54,29 @@ export function createJSONLLM(payload: JsonValue): LLM {
 
 /** The `execute` of a built tool, typed for a direct call; throws if not callable. */
 interface ExecutableTool<Args, Result> {
-  execute?: (args: Args, options: ToolExecutionOptions) => PromiseLike<Result> | Result;
+  execute?: (args: Args, options: ToolExecutionOptions<unknown>) => PromiseLike<Result> | Result;
 }
 
-const DEFAULT_TOOL_OPTIONS: ToolExecutionOptions = {
+const DEFAULT_TOOL_OPTIONS: ToolExecutionOptions<unknown> = {
   toolCallId: 'test-tool-call',
   messages: [],
+  context: undefined,
 };
 
 export function toolExecute<Args, Result>(
   entry: ExecutableTool<Args, Result>,
-): (args: Args, options?: ToolExecutionOptions) => Promise<Result> {
-  const execute = entry.execute;
+): (args: Args, options?: ToolExecutionOptions<unknown>) => Promise<Result> {
+  return settleSync(Effect.gen(function* () {
+    const execute = entry.execute;
 
-  if (!execute) {
-    throw new Error('toolExecute: the tool has no execute (was it built with a different name?)');
-  }
+    if (!execute) {
+      return yield* Effect.die(new Error('toolExecute: the tool has no execute (was it built with a different name?)'));
+    }
 
-  return async (args, options = DEFAULT_TOOL_OPTIONS) => {
-    return await execute(args, options);
-  };
+    return async (args, options = DEFAULT_TOOL_OPTIONS) => {
+      return await execute(args, options);
+    };
+  }));
 }
 
 /** A hire port whose advisors answer when the test says so, as the ingress stores a helper's answer. */

@@ -540,7 +540,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('device.***');
     expect(prompt).not.toMatch(/separate machines/i);
     expect(prompt).toContain('the machine the CLI runs on');
-    expect(prompt).toContain('rooted in the directory the session was started in');
+    expect(prompt).toContain("starting in this workspace's folder");
   });
 
   test('omits executor section when no executors registered', () => {
@@ -563,7 +563,7 @@ describe('buildSystemPromptSync', () => {
     });
 
     expect(prompt).toContain('/home/main');
-    expect(prompt).toContain('the same bytes the `file` tool and `workspace.*` file ops read');
+    expect(prompt).toContain('serving the bytes the `file` tool and `workspace.*` read');
     expect(prompt).toContain('`sandbox.*`');
     expect(prompt).not.toContain('`nimbus.*`');
     expect(prompt).toContain('`device.*`');

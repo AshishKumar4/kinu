@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * S4: scaffold promotion is pointer-first. The `.vN` file is canonical and the `current` row the single
@@ -218,7 +219,7 @@ describe('promotion boundary — one current pointer, executed source follows it
     expect(promo.action).toBe('promote');
 
     const rb = await rollbackScaffold(rt, 0);
-    expect(rb.ok).toBe(true);
+    expect(Result.isSuccess(rb)).toBe(true);
 
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
     expect((rt.storage.sql<{ status: string }>`

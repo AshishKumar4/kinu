@@ -5,7 +5,9 @@
  */
 import { seekPage, type Page, type PageRequest } from '../session/page';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/index';
+import { settleSync } from '../obs/effect';
 import type { ControlPlaneSql, ControlPlaneSqlValue } from './sql';
 import {
   FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS,
@@ -201,16 +203,14 @@ function anchor(at: number, ...tiebreak: string[]): string {
 /** Thrown rather than restarting the walk, which would silently repeat rows. */
 const MALFORMED_CURSOR = 'That control-plane cursor is not one this read issued.';
 
-function readAnchor(cursor: PageRequest['cursor'], parts: number): ControlPlaneSqlValue[] | null {
-  if (cursor === undefined) return null;
+function readAnchor(cursor: PageRequest['cursor'], parts: number): Effect.Effect<ControlPlaneSqlValue[] | null, KinuError> {
+  if (cursor === undefined) return Effect.succeed(null);
   const pieces = cursor.after.split('\u0000');
-
-  if (pieces.length !== parts) throw new KinuError('bad_input', MALFORMED_CURSOR);
   const at = Number(pieces[0]);
 
-  if (!Number.isFinite(at)) throw new KinuError('bad_input', MALFORMED_CURSOR);
+  if (pieces.length !== parts || !Number.isFinite(at)) return Effect.fail(new KinuError('bad_input', MALFORMED_CURSOR));
 
-  return [at, ...pieces.slice(1)];
+  return Effect.succeed([at, ...pieces.slice(1)]);
 }
 
 function clampText(value: string, max: number): string {
@@ -347,23 +347,25 @@ function seekNewest<SqlRow, Row>(sql: ControlPlaneSql, request: PageRequest, que
   readonly id: string;
   readonly project: (row: SqlRow) => Row;
   readonly key: (row: Row) => readonly [number, string];
-}): Page<Row> {
-  const limit = clampPage(request.limit);
-  const after = readAnchor(request.cursor, 2);
+}): Effect.Effect<Page<Row>, KinuError> {
+  return Effect.gen(function* () {
+    const limit = clampPage(request.limit);
+    const after = yield* readAnchor(request.cursor, 2);
 
-  const found = select(sql, query.schema,
-    `SELECT ${query.columns}
+    const found = select(sql, query.schema,
+      `SELECT ${query.columns}
        FROM ${query.from}
       ${after ? `WHERE (${query.at} < ?) OR (${query.at} = ? AND ${query.id} > ?)` : ''}
       ORDER BY ${query.at} DESC, ${query.id} ASC
       LIMIT ?`,
-    ...(after ? [after[0], after[0], after[1]] : []), limit + 1);
+      ...(after ? [after[0], after[0], after[1]] : []), limit + 1);
 
-  return seekPage(found.map(query.project), limit, (row) => anchor(...query.key(row)));
+    return seekPage(found.map(query.project), limit, (row) => anchor(...query.key(row)));
+  });
 }
 
 export function listUsers(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlUserRow> {
-  return seekNewest(sql, request, {
+  return settleSync(seekNewest(sql, request, {
     schema: UserSqlRowSchema,
     columns: `u.user_id, u.email, u.display_name, u.first_seen_at, u.last_seen_at,
             (SELECT COUNT(*) FROM cp_workspaces w
@@ -373,7 +375,7 @@ export function listUsers(sql: ControlPlaneSql, request: PageRequest = {}): Page
     id: 'u.user_id',
     project: projectUser,
     key: (row) => [row.lastSeenAt, row.userId],
-  });
+  }));
 }
 
 export function getUser(sql: ControlPlaneSql, userId: string): ControlUserRow | null {
@@ -396,38 +398,40 @@ export function listWorkspaces(
   request: PageRequest = {},
   filter: WorkspaceFilter = {},
 ): Page<ControlWorkspaceRow> {
-  const limit = clampPage(request.limit);
-  const from = readAnchor(request.cursor, 3);
-  const where: string[] = [];
-  const bindings: ControlPlaneSqlValue[] = [];
+  return settleSync(Effect.gen(function* () {
+    const limit = clampPage(request.limit);
+    const from = yield* readAnchor(request.cursor, 3);
+    const where: string[] = [];
+    const bindings: ControlPlaneSqlValue[] = [];
 
-  if (filter.userId !== undefined) { where.push(`w.user_id = ?`); bindings.push(filter.userId); }
+    if (filter.userId !== undefined) { where.push(`w.user_id = ?`); bindings.push(filter.userId); }
 
-  if (filter.includeRemoved !== true) where.push(`w.removed_at IS NULL`);
+    if (filter.includeRemoved !== true) where.push(`w.removed_at IS NULL`);
 
-  if (from) {
-    where.push(
-      `((w.last_seen_at < ?) OR (w.last_seen_at = ? AND (w.user_id > ? OR (w.user_id = ? AND w.name > ?))))`,
-    );
-    bindings.push(from[0], from[0], from[1], from[1], from[2]);
-  }
+    if (from) {
+      where.push(
+        `((w.last_seen_at < ?) OR (w.last_seen_at = ? AND (w.user_id > ? OR (w.user_id = ? AND w.name > ?))))`,
+      );
+      bindings.push(from[0], from[0], from[1], from[1], from[2]);
+    }
 
-  const found = select(sql, WorkspaceSqlRowSchema,
-    `SELECT w.user_id, u.email, w.name, w.display_name, w.created_at, w.last_seen_at, w.removed_at
+    const found = select(sql, WorkspaceSqlRowSchema,
+      `SELECT w.user_id, u.email, w.name, w.display_name, w.created_at, w.last_seen_at, w.removed_at
        FROM cp_workspaces w LEFT JOIN cp_users u ON u.user_id = w.user_id
       ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY w.last_seen_at DESC, w.user_id ASC, w.name ASC
       LIMIT ?`,
-    ...bindings, limit + 1);
+      ...bindings, limit + 1);
 
-  return seekPage(
-    found.map(projectWorkspace), limit,
-    (row) => anchor(row.lastSeenAt, row.userId, row.name),
-  );
+    return seekPage(
+      found.map(projectWorkspace), limit,
+      (row) => anchor(row.lastSeenAt, row.userId, row.name),
+    );
+  }));
 }
 
 export function listAudit(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlAuditRow> {
-  return seekNewest(sql, request, {
+  return settleSync(seekNewest(sql, request, {
     schema: AuditSqlRowSchema,
     columns: 'id, at, actor_email, actor_user, operation, target_kind, target, outcome, detail',
     from: 'cp_audit',
@@ -435,7 +439,7 @@ export function listAudit(sql: ControlPlaneSql, request: PageRequest = {}): Page
     id: 'id',
     project: projectAudit,
     key: (row) => [row.at, row.id],
-  });
+  }));
 }
 
 export interface AuditDraft {
@@ -576,7 +580,7 @@ export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): Feedb
 }
 
 export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlFeedbackRow> {
-  return seekNewest(sql, request, {
+  return settleSync(seekNewest(sql, request, {
     schema: FeedbackSqlRowSchema,
     columns: 'id, created_at, user_id, email, note, route, workspace, object_key, bytes',
     from: 'cp_feedback',
@@ -584,7 +588,7 @@ export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): P
     id: 'id',
     project: projectFeedback,
     key: (row) => [row.createdAt, row.id],
-  });
+  }));
 }
 
 function projectFeedback(row: FeedbackSqlRow): ControlFeedbackRow {

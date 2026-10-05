@@ -1,6 +1,8 @@
 // One DNS label `<port base36>-<handle>-<token>-<workspace>`, parsed positionally; fixed-width fields
 // leave `WORKSPACE_ADDRESS_MAX` for the name so no workspace address is ever truncated.
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { workspaceAddressRefusal } from '../identity/naming';
 
 const PORT_RE = /^[0-9a-z]{1,4}$/;
@@ -60,18 +62,20 @@ export function buildWorkspacePreviewHost(parts: {
   token: string;
   suffix: string;
 }): string | null {
-  const { port, workspace, handle, token, suffix } = parts;
+  return settleSync(Effect.gen(function* () {
+    const { port, workspace, handle, token, suffix } = parts;
 
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error(`Invalid workspace preview port: ${port}`);
-  }
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      return yield* Effect.die(new Error(`Invalid workspace preview port: ${port}`));
+    }
 
-  if (!HANDLE_RE.test(handle)) throw new Error('Invalid workspace preview capability handle');
+    if (!HANDLE_RE.test(handle)) return yield* Effect.die(new Error('Invalid workspace preview capability handle'));
 
-  if (!TOKEN_RE.test(token)) throw new Error('Invalid workspace preview token');
+    if (!TOKEN_RE.test(token)) return yield* Effect.die(new Error('Invalid workspace preview token'));
 
-  if (workspaceAddressRefusal(workspace) !== null) return null;
-  const label = `${port.toString(36)}-${handle}-${token}-${workspace}`;
+    if (workspaceAddressRefusal(workspace) !== null) return null;
+    const label = `${port.toString(36)}-${handle}-${token}-${workspace}`;
 
-  return label.length > 63 ? null : `${label}.${suffix}`;
+    return label.length > 63 ? null : `${label}.${suffix}`;
+  }));
 }

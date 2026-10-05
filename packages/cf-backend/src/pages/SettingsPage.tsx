@@ -1,3 +1,4 @@
+import { Effect, Cause } from 'effect';
 import { startTransition, useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
@@ -23,7 +24,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import type { Rpc } from '@kinu.run/core';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { showing, detach, settle } from '@kinu.run/core/obs';
 
 const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(ArchiveCursorSchema) });
 
@@ -141,25 +142,24 @@ export default function SettingsPage() {
 
   // A failed field is recorded in place rather than given a value Save could write over the stored setting.
   const loadRpcFields = useCallback((): void => {
-    startTransition(async () => {
-      try {
-        const [mode, evolution] = await Promise.allSettled([
-          rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
-          rpc<EvolutionConfigView>("getEvolutionConfig", []),
-        ]);
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      const [mode, evolution] = yield* Effect.promise(async () => Promise.allSettled([
+        rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
+        rpc<EvolutionConfigView>("getEvolutionConfig", []),
+      ]));
 
-        if (mode.status === "rejected") failApproval({ cause: mode.reason });
-        else hydrateApproval(mode.value?.mode ?? "strict");
+      if (mode.status === "rejected") failApproval({ cause: mode.reason });
+      else hydrateApproval(mode.value?.mode ?? "strict");
 
-        if (evolution.status === "rejected") failAdvisor({ cause: evolution.reason });
-        else hydrateAdvisor({
-          advisorEnabled: evolution.value?.advisorEnabled ?? false,
-          advisorMinSeverity: evolution.value?.advisorMinSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
-        });
-      } catch (cause) {
-        failApproval({ cause }); failAdvisor({ cause });
-      }
-    });
+      if (evolution.status === "rejected") failAdvisor({ cause: evolution.reason });
+      else hydrateAdvisor({
+        advisorEnabled: evolution.value?.advisorEnabled ?? false,
+        advisorMinSeverity: evolution.value?.advisorMinSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
+      });
+    }), (failed) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
+      failApproval({ cause }); failAdvisor({ cause });
+    }))));
   }, [
     rpc, hydrateApproval, failApproval,
     hydrateAdvisor, failAdvisor,
@@ -174,7 +174,7 @@ export default function SettingsPage() {
 
   const dirty = displayName.dirty || soul.dirty || approval.dirty || advisor.dirty;
 
-  const save = useCallback(async () => {
+  const save = useCallback(() => detach(Effect.gen(function* () {
     // Only edited fields are written; the form has no authority over fields still loading or failed.
     const writes: Array<Promise<JsonValue | undefined | void>> = [];
     const commits: Array<() => void> = [];
@@ -197,18 +197,16 @@ export default function SettingsPage() {
     setSaving(true);
     setErr(null);
 
-    try {
-      await Promise.all(writes);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => Promise.all(writes));
 
       for (const commit of commits) commit();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
+    }), showing(setErr)), Effect.sync(() => {
       setSaving(false);
-    }
-  }, [rpc, displayName, soul, approval, advisor]);
+    }));
+  })), [rpc, displayName, soul, approval, advisor]);
 
   if (connectionStatus !== "connected") {
     return (
@@ -365,19 +363,17 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
   const { resource, reload } = useAsyncResource(load);
   const grants = lastValue(resource);
 
-  const revoke = async (grant: ApprovalGrant) => {
+  const revoke = (grant: ApprovalGrant) => Effect.gen(function* () {
     setBusy(`${grant.rule}@${grant.executor}`);
     setErr(null);
 
-    try {
-      await rpc("revokeShellApprovalGrants", [[grant]]);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => rpc("revokeShellApprovalGrants", [[grant]]));
       reload();
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
+    }), showing(setErr)), Effect.sync(() => {
       setBusy(null);
-    }
-  };
+    }));
+  });
 
   if (resource.status !== "error" && grants !== null && grants.length === 0) return null;
 
@@ -400,7 +396,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
               <span className="p-text-2">{executorLabel(grant.executor)}</span>
               <button
                 type="button"
-                onClick={async () => { await revoke(grant); }}
+                onClick={() => detach(revoke(grant))}
                 disabled={busy !== null}
                 className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50"
                 title={`Ask again next time a command trips ${grant.rule} on ${grant.executor}`}
@@ -438,7 +434,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   const page = lastValue(resource);
 
   // Opening a row reads that file only; the listing carries no bytes.
-  const read = async (row: InstructionSourceRow) => {
+  const read = (row: InstructionSourceRow) => Effect.gen(function* () {
     if (open?.path === row.path) {
       setOpen(null);
 
@@ -448,25 +444,23 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
     setBusy(row.path);
     setErr(null);
 
-    try {
-      setOpen(await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]));
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      setOpen(yield* Effect.promise(async () => rpc<InstructionSourceView | null>("readInstructionApproval", [row.path])));
+    }), showing(setErr)), Effect.sync(() => {
       setBusy(null);
-    }
-  };
+    }));
+  });
 
-  const decide = async (row: InstructionSourceRow, action: "approve" | "revoke") => {
+  const decide = (row: InstructionSourceRow, action: "approve" | "revoke") => Effect.gen(function* () {
     setBusy(row.path);
     setErr(null);
 
-    try {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       if (action === "approve") {
         // Approval binds the digest the owner was just shown; if the file moved on, nothing is granted.
         const opened = open?.path === row.path
           ? open
-          : await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]);
+          : (yield* Effect.promise(async () => rpc<InstructionSourceView | null>("readInstructionApproval", [row.path])));
 
         if (!opened) {
           setErr("Kinu could not read that file, so nothing was approved. Try again.");
@@ -474,19 +468,17 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
           return;
         }
 
-        await rpc("approveInstruction", [row.path, opened.digest]);
+        yield* Effect.promise(async () => rpc("approveInstruction", [row.path, opened.digest]));
       } else {
-        await rpc("revokeInstruction", [row.path]);
+        yield* Effect.promise(async () => rpc("revokeInstruction", [row.path]));
       }
 
       setOpen(null);
       reload();
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
+    }), showing(setErr)), Effect.sync(() => {
       setBusy(null);
-    }
-  };
+    }));
+  });
 
   const rows = page?.items ?? null;
 
@@ -521,7 +513,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {row.reason === undefined && (
                     <button
                       type="button"
-                      onClick={async () => { await read(row); }}
+                      onClick={() => detach(read(row))}
                       disabled={busy !== null}
                       className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0"
                     >{busy === row.path ? "…" : readWord}</button>
@@ -529,7 +521,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {followed && (
                     <button
                       type="button"
-                      onClick={async () => { await decide(row, "revoke"); }}
+                      onClick={() => detach(decide(row, "revoke"))}
                       disabled={busy !== null}
                       className={`${row.reason === undefined ? "" : "ml-auto "}px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0`}
                       title="Stop following this file as instructions"
@@ -538,7 +530,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {!followed && row.reason === undefined && (
                     <button
                       type="button"
-                      onClick={async () => { await decide(row, "approve"); }}
+                      onClick={() => detach(decide(row, "approve"))}
                       disabled={busy !== null}
                       className="px-2 py-0.5 rounded-sm p-card-hover p-text-2 hover:p-text disabled:opacity-50 shrink-0"
                       title="Follow these exact contents as instructions"
@@ -585,18 +577,18 @@ function WorkspaceBackupCard({
   const [status, setStatus] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const download = useCallback(async () => {
+  const download = useCallback(() => detach(Effect.gen(function* () {
     setBusy(true);
     setErr(null);
     setStatus("Exporting…");
 
-    try {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       const parts: string[] = [];
       let cursor: ArchiveCursor | null = null;
       let records = 0;
 
       do {
-        const page: ArchivePage = v.parse(ArchivePageSchema, await rpc("exportWorkspaceArchive", [cursor]));
+        const page: ArchivePage = v.parse(ArchivePageSchema, yield* Effect.promise(async () => rpc("exportWorkspaceArchive", [cursor])));
         parts.push(page.lines.map((line) => `${line}\n`).join(""));
         records += page.lines.length;
         cursor = page.next;
@@ -605,23 +597,23 @@ function WorkspaceBackupCard({
 
       const url = URL.createObjectURL(new Blob(parts, { type: "application/x-ndjson" }));
 
-      try {
+      yield* Effect.ensuring(Effect.sync(() => {
         const link = document.createElement("a");
         link.href = url;
         link.download = `${workspace}${WORKSPACE_ARCHIVE_EXTENSION}`;
         link.click();
-      } finally {
+      }), Effect.sync(() => {
         URL.revokeObjectURL(url);
-      }
+      }));
 
       setStatus(`Downloaded ${records} records.`);
-    } catch (e) {
+    }), showing((chain) => {
       setStatus(null);
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
+      setErr(chain);
+    })), Effect.sync(() => {
       setBusy(false);
-    }
-  }, [rpc, workspace]);
+    }));
+  })), [rpc, workspace]);
 
   return (
     <Card title="Backup" icon={DownloadSimpleIcon}>
@@ -632,7 +624,7 @@ function WorkspaceBackupCard({
       </p>
       <button
         type="button"
-        onClick={async () => { await download(); }}
+        onClick={() => detach(Effect.promise(async () => { await download(); }))}
         disabled={busy || !workspace}
         className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
       >{busy ? "Exporting…" : "Download archive"}</button>
@@ -663,24 +655,24 @@ function GepaOptimizationCard({
   const { resource, reload } = useAsyncResource(load);
   const runs = lastValue(resource) ?? [];
 
-  const run = useCallback(async () => {
+  const run = useCallback(() => detach(Effect.gen(function* () {
     setRunning(true);
     setMsg('Searching for a better agent loop. This can take a few minutes.');
 
-    try {
-      const r = v.parse(ProposerOutcomeSchema, await rpc('runOptimization', []));
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const r = v.parse(ProposerOutcomeSchema, yield* Effect.promise(() => rpc('runOptimization', [])));
 
       if (r.kind === 'idle') setMsg('No low-rated turns in the last 14 days to learn from.');
       else if (r.version !== null) setMsg(`Proposed scaffold v${r.version} (${r.detail}). Promote it under Agent → Evolution.`);
       else setMsg(`No edit passed: ${r.detail}.`);
 
       reload();
-    } catch (e) {
-      setMsg(`Optimisation failed: ${renderThrownChain({ cause: e })}`);
-    } finally {
+    }), showing((chain) => {
+      setMsg(`Optimisation failed: ${chain}`);
+    })), Effect.sync(() => {
       setRunning(false);
-    }
-  }, [rpc, reload]);
+    }));
+  })), [rpc, reload]);
 
   return (
     <Card title="Scaffold self-tuning" icon={SparkleIcon}>
@@ -726,28 +718,23 @@ function AlwaysActiveSkillsCard({
 
   // React owns the async transition so a malformed response reaches this card's visible error.
   const refresh = useCallback((): void => {
-    startTransition(async () => {
-      try {
-        const raw = await rpc('getAlwaysActiveSkills', []);
-        setNames(v.parse(SkillNamesSchema, raw).names);
-      } catch (cause) {
-        setErr(renderThrownChain({ cause }));
-      }
-    });
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      const raw = yield* Effect.promise(async () => rpc('getAlwaysActiveSkills', []));
+      setNames(v.parse(SkillNamesSchema, raw).names);
+    }), showing(setErr))));
   }, [rpc]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const save = useCallback(async (next: string[]) => {
+  const save = useCallback((next: string[]) => detach(Effect.gen(function* () {
     setBusy(true);
     setErr(null);
 
-    try {
-      const r = v.parse(SkillNamesSchema, await rpc('setAlwaysActiveSkills', [next]));
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const r = v.parse(SkillNamesSchema, yield* Effect.promise(async () => rpc('setAlwaysActiveSkills', [next])));
       setNames(r.names);
-    } catch (e) { setErr(renderThrownChain({ cause: e })); }
-    finally { setBusy(false); }
-  }, [rpc]);
+    }), showing(setErr)), Effect.sync(() => { setBusy(false); }));
+  })), [rpc]);
 
   const add = useCallback(async () => {
     const n = input.trim();
@@ -780,7 +767,7 @@ function AlwaysActiveSkillsCard({
           : names.map(n => (
             <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm p-card p-meta font-mono">
               {n}
-              <button type="button" onClick={async () => { await remove(n); }} aria-label={`Unpin ${n}`} className="p-text-3 hover:p-text">×</button>
+              <button type="button" onClick={() => detach(Effect.promise(async () => { await remove(n); }))} aria-label={`Unpin ${n}`} className="p-text-3 hover:p-text">×</button>
             </span>
           ))}
       </div>
@@ -790,12 +777,12 @@ function AlwaysActiveSkillsCard({
           value={input}
           placeholder="skill-name"
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={async (e) => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }}
+          onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))}
           className={inputCls + " text-xs"}
         />
         <button
           type="button"
-          onClick={async () => { await add(); }}
+          onClick={() => detach(Effect.promise(async () => { await add(); }))}
           disabled={busy || !input.trim()}
           className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50 shrink-0"
         >Pin</button>

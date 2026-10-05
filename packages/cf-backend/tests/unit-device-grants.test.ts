@@ -18,7 +18,7 @@ import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import {
   DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
-  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, JsonValueSchema, nextDeviceRequestId,
+  DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, JsonValueSchema, nextDeviceRequestId,
   NO_DEVICE_CONNECTED, type JsonValue,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
@@ -186,12 +186,12 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     expect(harness.deviceFrames).toEqual([]);
 
     await harness.userDO.deviceRpc(
-      harness.workspace, DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL],
+      harness.workspace, DEVICE_CANCEL_METHOD, [requestId],
       { agentName: WORKSPACE },
     );
 
     expect(harness.deviceFrames.map((frame) => ({ method: frame.method, params: frame.params })))
-      .toEqual([{ method: DEVICE_CANCEL_METHOD, params: [requestId, DEVICE_CANCEL_PROTOCOL] }]);
+      .toEqual([{ method: DEVICE_CANCEL_METHOD, params: [requestId] }]);
     expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['exec']);
     await harness.closeDeviceHarness();
   });
@@ -626,7 +626,7 @@ describe('durable device request ownership', () => {
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
 
-    await harness.userDO.deviceRpc(harness.workspace, DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL], {
+    await harness.userDO.deviceRpc(harness.workspace, DEVICE_CANCEL_METHOD, [requestId], {
       agentName: WORKSPACE,
     });
 
@@ -791,13 +791,14 @@ describe('device revocation admission', () => {
     hub = hubCandidate;
     harness.attachDevice(null);
     hub.accept(harness.deviceId, socket);
+    hub.hello(harness.deviceId, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
     const revocation = harness.userDO.revokeDevice(await testOwner(), harness.deviceId);
     const cancellation = await cancellationSent.promise;
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['true'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
-    expect(cancellation.params).toEqual([requestId, DEVICE_CANCEL_PROTOCOL]);
+    expect(cancellation.params).toEqual([requestId]);
 
     hub.handleMessage(harness.deviceId, JSON.stringify({
       id: cancellation.id,

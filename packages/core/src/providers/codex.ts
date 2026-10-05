@@ -10,6 +10,7 @@ import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
+
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { classify, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
@@ -135,8 +136,8 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
       });
 
-      const customFetch = asFetchFunction(async (input, init) => {
-        // A dead login (401 after the forced renewal) gets the remedy on a 401 the SDK carries.
+      const customFetch = asFetchFunction((input, init) => settle(Effect.gen(function* () {
+        // A refused renewal keeps the SDK's 401 remedy.
         const refusedLoginResponse = (): Response => {
           diagnostics.failure(
             'provider.codex_dead_login',
@@ -144,15 +145,14 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
             { model: modelId },
           );
 
-          return new Response(
-            JSON.stringify({ error: { message: CODEX_DEAD_LOGIN } }),
-            { status: 401, headers: { 'Content-Type': 'application/json' } },
-          );
+          return new Response(JSON.stringify({ error: { message: CODEX_DEAD_LOGIN } }), {
+            status: 401, headers: { 'Content-Type': 'application/json' },
+          });
         };
 
         const requestInit = normalizeCodexResponsesRequest(init);
 
-        const send = async (auth: AuthResolution) => {
+        const send = (auth: AuthResolution): Promise<Response> => {
           const merged = copyHeaders(init?.headers);
 
           for (const [name, value] of Object.entries(auth.headers)) merged.set(name, value);
@@ -160,7 +160,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           return retrying(auth.credentialKey ?? CODEX_CRED_KEY)(input, { ...requestInit, headers: merged });
         };
 
-        const answer = await authenticatedSend({ key: CODEX_CRED_KEY, getAuth: deps.getAuth, send });
+        const answer = yield* Effect.promise(() => authenticatedSend({ key: CODEX_CRED_KEY, getAuth: deps.getAuth, send }));
 
         if (answer.kind === 'refused') return refusedLoginResponse();
 
@@ -171,10 +171,9 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
             { model: modelId },
           );
 
-          return new Response(
-            JSON.stringify({ error: { message: 'ChatGPT credentials are not configured for this account.' } }),
-            { status: 401, headers: { 'Content-Type': 'application/json' } },
-          );
+          return new Response(JSON.stringify({ error: { message: 'ChatGPT credentials are not configured for this account.' } }), {
+            status: 401, headers: { 'Content-Type': 'application/json' },
+          });
         }
 
         const res = answer.response;
@@ -184,7 +183,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
           diagnostics.failure('provider.codex_network_refused', refused, { model: modelId });
 
-          throw new APICallError({
+          const failure = new APICallError({
             message: `Codex is unreachable from here: ${NETWORK_REFUSED}. Pick another model, or run Codex from the Kinu CLI.`,
             url: input instanceof Request ? input.url : input.toString(),
             requestBodyValues: undefined,
@@ -192,10 +191,12 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
             isRetryable: false,
             cause: refused,
           });
+
+          return yield* Effect.die(failure);
         }
 
         return withCallAccount(res, 'codex', answer.auth.credentialKey ?? CODEX_CRED_KEY);
-      });
+      })));
 
       const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });
 

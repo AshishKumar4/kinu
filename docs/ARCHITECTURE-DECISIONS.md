@@ -1422,6 +1422,35 @@ output cap supplied, three incomplete cases, the provider's words),
 the rotated token before it exits; the first read of a sign-in raises the
 revision), `unit-chatgpt-plan-route` and `providers-command`.
 
+P2. A Claude model on Anthropic's server-side compaction list (Opus and Sonnet
+from 4.6, Fable and Mythos from 5, Mythos Preview; platform.claude.com/docs/en/
+build-with-claude/compaction-threshold, read 2026-10-04), on `anthropic` or
+`claude`, is asked to compact at Kinu's one trigger, 85 % of its window
+(`compact_20260112`, never under the API's 50,000 tokens;
+`core/src/providers/server-compaction.ts`). Its `compaction` block replaces
+better-compact's summaries: the ladder bypasses them for that model and still
+prunes and moves attachments, and a request opens at the ask before the latest
+block. The block is persisted with @ai-sdk/anthropic's mark and replayed as one.
+It stays out of the answer, the stream and the transcript. `/compact`, and an
+overflow's armed recovery, ask the next request to compact just under its own
+input (never under 50,000; `/compact` says a shorter conversation has nothing to
+fold). The next turn's pressure is the prompt the last sampling answered from,
+not the billed sum of both. Proven against
+fixtures built from the documented shapes and the SDK's mapping
+(`core/tests/contract-server-compaction.test.ts`); live acceptance on either
+route is unmeasured.
+
+P3. On ai 7 a GPT-5 model on the direct `openai` route (Responses API) compacts
+the same way: `context_management` with `compact_threshold` at the same trigger
+and floor (developers.openai.com/api/docs/guides/compaction lists no models, so
+the GPT-5 family it documents). @ai-sdk/openai 4 returns the encrypted item as a
+`custom` part with its mark; it is persisted, replayed (by reference, since the
+route stores), kept out of the answer, the stream and the transcript, and the
+request opens at the ask before it. Codex, ChatGPT and OpenCode routes are not
+asked: their acceptance is unknown. Proven against a fixture of the documented
+item and the SDK's mapping (`contract-server-compaction.test.ts`,
+`unit-extension.test.ts`); live acceptance is unmeasured.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn

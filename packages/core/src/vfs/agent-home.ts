@@ -4,6 +4,8 @@
  * merge-back; tmp is 0o700. Both planes act as the agent's credential, or its own tool writes get `EACCES`.
  */
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
@@ -14,7 +16,7 @@ import { ownerSoulDb, SOUL_PATH, UNVERIFIED_SOUL_PATH } from '../identity/soul';
 import { parseActorKey } from '../identity/actor-key';
 import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
 import { diagnostics, toKinuError } from '../obs/index';
-import { NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
+import { SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
 export const MAIN_AGENT = 'main';
@@ -47,9 +49,8 @@ const AGENT_NAME_RE = /^[a-z0-9][A-Za-z0-9_-]{0,95}$/;
 /** Where this agent's own writes belong. */
 export function agentHome(agentName: string): string {
   if (agentName === MAIN_AGENT) return WORKSPACE_ROOT;
-  assertAgentName(agentName);
 
-  return `/home/${agentName}`;
+  return settleSync(Effect.map(validAgentName(agentName), (name) => `/home/${name}`));
 }
 
 /** Durable payloads belong to this actor, not the publicly traversable home. */
@@ -59,25 +60,17 @@ export function agentArtifactDirectory(home: string): string {
 
 /** Logical `/tmp/<agent>` path; the confinement registry gets the storage key instead. */
 export function agentTmpRoot(agentName: string): string {
-  assertAgentName(agentName);
-
-  return `/tmp/${agentName}`;
+  return settleSync(Effect.map(validAgentName(agentName), (name) => `/tmp/${name}`));
 }
 
 /** Revalidated here: the roster's rule and this one are checked by different callers. */
-function subordinateAgentName(subordinateName: string): string {
-  const agentName = `sub-${subordinateName}`;
-  assertAgentName(agentName);
-
-  return agentName;
+function subordinateAgentName(subordinateName: string): Effect.Effect<string> {
+  return validAgentName(`sub-${subordinateName}`);
 }
 
 /** Unsafe ids are refused, not escaped: grader and merge-back must derive the same home. */
-function headAgentName(headId: string): string {
-  const agentName = `head-${headId}`;
-  assertAgentName(agentName);
-
-  return agentName;
+function headAgentName(headId: string): Effect.Effect<string> {
+  return validAgentName(`head-${headId}`);
 }
 
 /**
@@ -88,23 +81,21 @@ export function actorHomeName(record: Pick<WorkspaceActor, 'origin' | 'storageKe
   if (record.origin === 'system') return MAIN_AGENT;
   const { id } = parseActorKey(record.storageKey);
 
-  return isSubordinateOrigin(record.origin) ? subordinateAgentName(id) : headAgentName(id);
+  return settleSync(isSubordinateOrigin(record.origin) ? subordinateAgentName(id) : headAgentName(id));
 }
 
 /** Storage key; only the confinement boundary uses it. */
-function agentTmpStorageRoot(agentName: string): string {
-  assertAgentName(agentName);
-
-  return `tmp/${agentName}`;
+function agentTmpStorageRoot(agentName: string): Effect.Effect<string> {
+  return Effect.map(validAgentName(agentName), (name) => `tmp/${name}`);
 }
 
-function assertAgentName(agentName: string): void {
-  if (!AGENT_NAME_RE.test(agentName)) {
-    throw new Error(
+function validAgentName(agentName: string): Effect.Effect<string> {
+  return AGENT_NAME_RE.test(agentName)
+    ? Effect.succeed(agentName)
+    : Effect.die(new Error(
       `'${agentName}' is not a usable agent name: a home is a directory under /home, so a name is `
       + 'lowercase alphanumeric with - and _, at most 96 characters, and never a path.',
-    );
-  }
+    ));
 }
 
 /** `gid` equals `uid`, so group membership never grants a sibling's home. */
@@ -135,24 +126,26 @@ function ensureIdentityTable(sql: SqlDatabase): void {
  * Durable uid, allocated once; UNIQUE `uid` makes concurrent inserts converge.
  */
 export function agentIdentity(sql: SqlDatabase, agentName: string): AgentIdentity {
-  if (agentName === MAIN_AGENT) return { uid: SESSION_UID, gid: SESSION_UID };
-  assertAgentName(agentName);
-  ensureIdentityTable(sql);
-  // `WHERE true` is required: SQLite cannot parse an INSERT..SELECT upsert without it.
-  sql.exec(
-    `INSERT INTO ${IDENTITY_TABLE} (agent_name, uid)
-     SELECT ?, next.uid
-       FROM (SELECT COALESCE(MAX(uid), ?) + 1 AS uid FROM ${IDENTITY_TABLE}) AS next
-      WHERE true
-     ON CONFLICT(agent_name) DO NOTHING`,
-    agentName,
-    AGENT_UID_FLOOR - 1,
-  );
-  const identity = allocatedAgentIdentity(sql, agentName);
+  return settleSync(Effect.gen(function* () {
+    if (agentName === MAIN_AGENT) return { uid: SESSION_UID, gid: SESSION_UID };
+    yield* validAgentName(agentName);
+    ensureIdentityTable(sql);
+    // `WHERE true` is required: SQLite cannot parse an INSERT..SELECT upsert without it.
+    sql.exec(
+      `INSERT INTO ${IDENTITY_TABLE} (agent_name, uid)
+       SELECT ?, next.uid
+         FROM (SELECT COALESCE(MAX(uid), ?) + 1 AS uid FROM ${IDENTITY_TABLE}) AS next
+        WHERE true
+       ON CONFLICT(agent_name) DO NOTHING`,
+      agentName,
+      AGENT_UID_FLOOR - 1,
+    );
+    const identity = allocatedAgentIdentity(sql, agentName);
 
-  if (!identity) throw new Error(`agent identity for '${agentName}' did not persist`);
+    if (!identity) return yield* Effect.die(new Error(`agent identity for '${agentName}' did not persist`));
 
-  return identity;
+    return identity;
+  }));
 }
 
 /** Reads only; never allocates. */
@@ -210,27 +203,22 @@ export function provisionAgentHome(root: HomeRootVfs, agentName: string, identit
 }
 
 export type RootMoveVfs = Pick<CredentialedVfs,
-  'exists' | 'isDirectory' | 'isSymlink' | 'readlink' | 'readdir' | 'rename' | 'removeRecursive' | 'symlink' | 'unlink'
+  'exists' | 'isDirectory' | 'isSymlink' | 'readlink' | 'readdir' | 'rename' | 'removeRecursive' | 'unlink'
   | 'stat' | 'chown' | 'chmod'>;
 
-const NIMBUS_HOME_TARGET = vfsBasename(WORKSPACE_ROOT);
+/** Nimbus before 0.15 seeded it, and Kinu linked it to {@link WORKSPACE_ROOT}; its HOME is now the only home. */
+const LEGACY_HOME = '/home/user';
 
 export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
-  const home = NIMBUS_WORKSPACE_ROOT;
-
-  if (!kernel.isSymlink(home) || kernel.readlink(home) !== NIMBUS_HOME_TARGET) {
-    if (kernel.isDirectory(home)) {
-      if (kernel.exists(WORKSPACE_ROOT)) {
-        moveMissing(kernel, home, WORKSPACE_ROOT);
-        kernel.removeRecursive(home);
-      } else {
-        kernel.rename(normalizeVfsPath(home), normalizeVfsPath(WORKSPACE_ROOT));
-      }
-    } else if (kernel.exists(home)) {
-      kernel.unlink(home);
+  if (kernel.isSymlink(LEGACY_HOME)) {
+    if ([vfsBasename(WORKSPACE_ROOT), WORKSPACE_ROOT].includes(kernel.readlink(LEGACY_HOME))) kernel.unlink(LEGACY_HOME);
+  } else if (kernel.isDirectory(LEGACY_HOME)) {
+    if (kernel.exists(WORKSPACE_ROOT)) {
+      moveMissing(kernel, LEGACY_HOME, WORKSPACE_ROOT);
+      kernel.removeRecursive(LEGACY_HOME);
+    } else {
+      kernel.rename(normalizeVfsPath(LEGACY_HOME), normalizeVfsPath(WORKSPACE_ROOT));
     }
-
-    kernel.symlink(NIMBUS_HOME_TARGET, home);
   }
 
   const homes = kernel.stat('/home');
@@ -273,57 +261,58 @@ function kernelHeldSoul(kernel: SoulVfs): string | null {
 
 /** SOUL.md as the row's view; written only on a mismatch. */
 export function resealWorkspaceSoul(kernel: SoulVfs, sql: SqlDatabase): string | null {
-  const owned = ownerSoulDb(sql, kernelHeldSoul(kernel));
+  return settleSync(Effect.gen(function* () {
+    const owned = ownerSoulDb(sql, kernelHeldSoul(kernel));
 
-  if (owned === null) return null;
+    if (owned === null) return null;
 
-  const { soul, seeded } = owned;
+    const { soul, seeded } = owned;
 
-  const intact = sealedSoul(kernel)
-    && (kernel.lstat(SOUL_FILE).mode & 0o7777) === 0o444
-    && new TextDecoder().decode(kernel.readFile(SOUL_FILE)) === soul;
+    const intact = sealedSoul(kernel)
+      && (kernel.lstat(SOUL_FILE).mode & 0o7777) === 0o444
+      && new TextDecoder().decode(kernel.readFile(SOUL_FILE)) === soul;
 
-  if (intact) return soul;
+    if (intact) return soul;
 
-  if (soulPresent(kernel) && !sealedSoul(kernel)) {
-    const forged = kernel.lstat(SOUL_FILE).type;
+    if (soulPresent(kernel) && !sealedSoul(kernel)) {
+      const forged = kernel.lstat(SOUL_FILE).type;
 
-    if (forged === 'directory') kernel.removeRecursive(SOUL_FILE);
-    else if (forged === 'symlink') kernel.unlink(SOUL_FILE);
-    else if (seeded) {
-      const stale = `${WORKSPACE_ROOT}/${UNVERIFIED_SOUL_PATH}`;
+      if (forged === 'directory') kernel.removeRecursive(SOUL_FILE);
+      else if (forged === 'symlink') kernel.unlink(SOUL_FILE);
+      else if (seeded) {
+        const stale = `${WORKSPACE_ROOT}/${UNVERIFIED_SOUL_PATH}`;
 
-      if (soulPresentName(kernel, UNVERIFIED_SOUL_PATH)) kernel.unlink(stale);
-      kernel.rename(SOUL_FILE, stale);
-      writeUnverifiedNote(sql);
-    } else {
-      kernel.unlink(SOUL_FILE);
-      diagnostics.event('soul.forge_discarded', { kind: forged });
+        if (soulPresentName(kernel, UNVERIFIED_SOUL_PATH)) kernel.unlink(stale);
+        kernel.rename(SOUL_FILE, stale);
+        yield* unverifiedNote(sql);
+      } else {
+        kernel.unlink(SOUL_FILE);
+        diagnostics.event('soul.forge_discarded', { kind: forged });
+      }
     }
-  }
 
-  sealWorkspaceSoul(kernel, soul);
+    sealWorkspaceSoul(kernel, soul);
 
-  return soul;
+    return soul;
+  }));
 }
 
 function soulPresentName(kernel: SoulVfs, name: string): boolean {
   return kernel.readdir(WORKSPACE_ROOT).some((entry) => entry.name === name);
 }
 
-function writeUnverifiedNote(sql: SqlDatabase): void {
-  try {
-    const [id] = [...sql.exec(`SELECT id FROM workspace_identity LIMIT 1`)];
-    const workspace = v.parse(v.object({ id: v.string() }), id).id;
-    sql.exec(
-      `INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at) VALUES (?, 'soul.unverified_moved', 'An older SOUL.md was moved to SOUL.md.unverified and is no longer read; set SOUL.md to adopt it.', 0, ?)`,
-      workspace, Date.now(),
-    );
-  } catch (cause) {
-    diagnostics.failure('soul.unverified_note_failed', toKinuError({
-      doing: 'recording that an older SOUL.md was set aside', cause, otherwise: 'io',
-    }));
-  }
+function unverifiedNote(sql: SqlDatabase): Effect.Effect<void> {
+  return Effect.try({
+    try: () => {
+      const [id] = [...sql.exec(`SELECT id FROM workspace_identity LIMIT 1`)];
+      const workspace = v.parse(v.object({ id: v.string() }), id).id;
+      sql.exec(
+        `INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at) VALUES (?, 'soul.unverified_moved', 'An older SOUL.md was moved to SOUL.md.unverified and is no longer read; set SOUL.md to adopt it.', 0, ?)`,
+        workspace, Date.now(),
+      );
+    },
+    catch: (cause) => toKinuError({ doing: 'recording that an older SOUL.md was set aside', cause, otherwise: 'io' }),
+  }).pipe(Effect.catch((failure) => Effect.sync(() => diagnostics.failure('soul.unverified_note_failed', failure))));
 }
 
 export type SlatesMoveVfs = RootMoveVfs & Pick<CredentialedVfs, 'mkdir' | 'lstat' | 'getDefaultAcl' | 'setDefaultAcl'>;
@@ -403,10 +392,12 @@ export function confineAgentTmp(
   agentName: string,
   identity: AgentIdentity,
 ): string {
-  const tmpRoot = agentTmpRoot(agentName);
-  confiner.confinePrincipal(identity.uid, agentTmpStorageRoot(agentName));
+  return settleSync(Effect.gen(function* () {
+    const tmpRoot = agentTmpRoot(agentName);
+    confiner.confinePrincipal(identity.uid, yield* agentTmpStorageRoot(agentName));
 
-  return tmpRoot;
+    return tmpRoot;
+  }));
 }
 
 /**
@@ -419,15 +410,17 @@ export function releaseAgentHome(
   sql: SqlDatabase,
   agentName: string,
 ): void {
-  if (agentName === MAIN_AGENT) throw new Error('the workspace agent has no home to release');
+  return settleSync(Effect.gen(function* () {
+    if (agentName === MAIN_AGENT) return yield* Effect.die(new Error('the workspace agent has no home to release'));
 
-  for (const path of [agentHome(agentName), agentTmpRoot(agentName)]) {
-    if (root.exists(path)) root.removeRecursive(path);
-  }
+    for (const path of [agentHome(agentName), agentTmpRoot(agentName)]) {
+      if (root.exists(path)) root.removeRecursive(path);
+    }
 
-  const identity = allocatedAgentIdentity(sql, agentName);
+    const identity = allocatedAgentIdentity(sql, agentName);
 
-  if (identity) confiner.releasePrincipal(identity.uid);
+    if (identity) confiner.releasePrincipal(identity.uid);
+  }));
 }
 
 /**
@@ -439,17 +432,19 @@ export function restoreAgentTmpConfinements(
   root: Pick<HomeRootVfs, 'exists'>,
   confiner: TmpConfiner,
 ): number {
-  ensureIdentityTable(sql);
-  let restored = 0;
+  return settleSync(Effect.gen(function* () {
+    ensureIdentityTable(sql);
+    let restored = 0;
 
-  for (const row of sql.exec(`SELECT agent_name, uid FROM ${IDENTITY_TABLE}`)) {
-    // This module is the column's only writer; anything else is refused, not guessed.
-    const agentName = v.parse(v.string(), row.agent_name);
+    for (const row of sql.exec(`SELECT agent_name, uid FROM ${IDENTITY_TABLE}`)) {
+      // This module is the column's only writer; anything else is refused, not guessed.
+      const agentName = v.parse(v.string(), row.agent_name);
 
-    if (!root.exists(agentTmpRoot(agentName))) continue;
-    confiner.confinePrincipal(Number(row.uid), agentTmpStorageRoot(agentName));
-    restored += 1;
-  }
+      if (!root.exists(agentTmpRoot(agentName))) continue;
+      confiner.confinePrincipal(Number(row.uid), yield* agentTmpStorageRoot(agentName));
+      restored += 1;
+    }
 
-  return restored;
+    return restored;
+  }));
 }

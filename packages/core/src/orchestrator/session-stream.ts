@@ -1,12 +1,14 @@
 import type { ModelMessage, ProviderMetadata, TextStreamPart, ToolSet } from 'ai';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import type { ChatEvent, StepRecord } from '../chat';
 import { SessionHistory } from '../session/history';
 import type { ClaimFence, MessageReference, StoredPart, StreamPartInput, PreparedContent } from '../session/messages';
 import type { SessionPayload } from '../session/payload';
 import { isParsedJsonObject, jsonObjectElements, projectJsonValue, type JsonObject } from '../utils/json';
 import { encodeModelMessage } from '../session/message-codec';
-import { diagnostics, renderThrownChain, KinuError } from '../obs/index';
+import { diagnostics, KinuError } from '../obs/index';
+import { toolErrorOutput } from '../tools/outcome';
 import { serialQueue } from '@kinu.run/agent-utils';
 import { flushSignal, partialFlushCadence, type PartialFlushSignal } from './flush-cadence';
 
@@ -77,11 +79,15 @@ type LifecyclePart = Extract<TextStreamPart<ToolSet>, { type:
   | 'tool-input-delta'
   | 'tool-input-end'
   | 'tool-output-denied'
+  | 'tool-approval-response'
+  | 'reasoning-file'
+  | 'custom'
 }>;
 
 const LIFECYCLE_PARTS: ReadonlySet<string> = new Set<LifecyclePart['type']>([
   'start', 'finish-step', 'finish', 'abort', 'error', 'raw',
   'tool-input-start', 'tool-input-delta', 'tool-input-end', 'tool-output-denied',
+  'tool-approval-response', 'reasoning-file', 'custom',
 ]);
 
 function isLifecyclePart(part: TextStreamPart<ToolSet>): part is LifecyclePart {
@@ -281,7 +287,7 @@ export class SessionStream {
       case 'tool-result':
       case 'tool-error': {
         const output = part.type === 'tool-error'
-          ? { type: 'error-text', value: renderThrownChain({ cause: part.error }) }
+          ? toolErrorOutput({ cause: part.error })
           : toolOutput({ value: part.output });
 
         await this.publish({ container: part.providerExecuted ? this.assistant : this.tool, key: `result:${part.toolCallId}`,
@@ -346,7 +352,7 @@ export class SessionStream {
       await this.publish({ container: this.assistant, key: `call:${event.toolCallId}`, descriptor: { type: 'tool-call', toolCallId: event.toolCallId, toolName: event.toolName, input: event.args }, delta: null });
       this.tick('content');
     } else if (event.type === 'tool-result') {
-      const output = event.success ? { type: 'text', value: event.result } : { type: 'error-text', value: event.error ?? event.result };
+      const output = event.success ? { type: 'text', value: event.result } : toolErrorOutput({ cause: event.error ?? event.result }, event);
       await this.publish({ container: this.tool, key: `result:${event.toolCallId}`, descriptor: { type: 'tool-result', toolCallId: event.toolCallId, toolName: event.toolName, output }, delta: null });
       this.tick('settled');
     } else if (event.type === 'step-finish') {
@@ -494,7 +500,7 @@ export class SessionStream {
     const selected = this.history.context.selected();
 
     if (selected === null) throw new KinuError('missing', 'stream has no selected context');
-    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => this.history.assertEpoch(this.turnId, this.epoch), mutate: entries => {
+    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => Effect.sync(() => this.history.assertEpoch(this.turnId, this.epoch)), mutate: entries => {
       this.history.messages.seal(container.id, content, envelope);
 
       if (entries.some(entry => entry.messageId === container.id)) return entries;

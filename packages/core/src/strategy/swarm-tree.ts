@@ -1,3 +1,4 @@
+import { Cause, Effect } from 'effect';
 import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Tree mechanics shared by expansion, fan-in and scoring; orchestration lives in `swarm-run.ts`. */
 import * as v from 'valibot';
@@ -5,6 +6,7 @@ import type { ModelMessage } from 'ai';
 import type { Usage } from '../usage';
 import { toKinuError, type KinuError } from '../obs/error';
 import type { Logger } from '../obs/index';
+import { settle } from '../obs/effect';
 import type { FrontierPolicy } from '../mcts/frontier';
 import type { HeadReport } from '../heads/types';
 import type { BranchDecision, BranchGrant, SwarmBudget } from './swarm-budget';
@@ -111,22 +113,19 @@ export interface LevelAnswer {
 }
 
 /** Every member answers or fails; nothing here bounds a member's time. */
-export async function awaitLevel(members: readonly LevelMember[]): Promise<readonly LevelAnswer[]> {
-  return Promise.all(members.map(async (member): Promise<LevelAnswer> => {
-    try {
-      return { id: member.id, answer: { kind: 'expanded', expansion: await member.node } };
-    } catch (cause) {
-      return {
-        id: member.id,
-        answer: {
-          kind: 'failed',
-          error: toKinuError({
-            doing: `expand node ${member.id} of this level`, cause, otherwise: 'unavailable',
-          }),
-        },
-      };
-    }
-  }));
+export function awaitLevel(members: readonly LevelMember[]): Promise<readonly LevelAnswer[]> {
+  return settle(Effect.forEach(members, (member) => Effect.catchCause(
+    Effect.map(Effect.promise(() => member.node), (expansion): LevelAnswer => ({ id: member.id, answer: { kind: 'expanded', expansion } })),
+    (failed) => Effect.succeed<LevelAnswer>({
+      id: member.id,
+      answer: {
+        kind: 'failed',
+        error: toKinuError({
+          doing: `expand node ${member.id} of this level`, cause: Cause.squash(failed), otherwise: 'unavailable',
+        }),
+      },
+    }),
+  ), { concurrency: 'unbounded' }));
 }
 
 export function frontierPolicyOf(advance: SwarmAdvance): FrontierPolicy | 'pareto' | null {

@@ -1,6 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
+import { localFileLinks, type FileLinks, type PathPlanes } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type ProposerOutcome } from '@kinu.run/core';
@@ -26,6 +27,7 @@ import {
   loadConfigFile,
   readProviderRevision,
   resolveCloudSession,
+  resolveLocalAgent,
   resolveMcpServers,
   resolveProviderCredentials,
 } from './config';
@@ -68,16 +70,15 @@ import type {
   PlanReviewSurface,
 } from './agent-client';
 
+
 interface LocalAgentClientOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
-  /** `--no-auto-evolve`: turns this agent's learning setting off before the session opens. */
-  noAutoEvolve?: boolean;
   oneShot?: boolean;
   transcript?: CliSessionOptions;
   surface?: InvocationSurface;
-  /** The ref's recorded placement, shared by peers. Absent leaves the runtime on its in-database plane. */
+  /** The folder it works in; absent, the ref's recorded one. */
   cwd?: string;
 }
 
@@ -99,12 +100,10 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     llm: llmConfig, providerCredentials, oauthStore,
     ...(cloud !== null && { cloud }),
     checkpointKeep: loadConfigFile().checkpointKeep,
-    cwd: opts.cwd,
+    cwd: opts.cwd ?? resolveLocalAgent(name).cwd,
   };
 
   const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);
-
-  if (opts.noAutoEvolve === true) rt.actor.config.setLearning(false);
 
   const client = new LocalAgentClient({
     agentName: name,
@@ -129,7 +128,7 @@ export function cancelLocalJob(name: string, id: string, daemonPid: number | nul
       return yield* Effect.fail(new KinuError('unavailable', `${id} may be running in the local daemon (pid ${String(daemonPid)}); \`kinu daemon stop\` ends it`));
     }
 
-    const client = yield* Effect.promise(() => openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true }));
+    const client = yield* Effect.promise(() => openLocalAgentClient(name, { surface: 'one-shot' }));
 
     return yield* attempt({ doing: `cancelling job ${id}`, otherwise: 'unavailable' }, async () => {
       await client.connect();
@@ -191,6 +190,8 @@ export class LocalAgentClient implements AgentClient {
   readonly plans: PlanReviewSurface;
   private readonly deps: LocalAgentClientDeps;
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
+  readonly planes: PathPlanes;
+  readonly fileLinks: FileLinks;
   readonly rename = async (displayName: string) => renameLocalAgent(this.agentName, displayName);
 
   /** Outlives the session, so a walk-back fork does not invalidate it. */
@@ -215,6 +216,8 @@ export class LocalAgentClient implements AgentClient {
   constructor(deps: LocalAgentClientDeps) {
     this.deps = deps;
     this.agentName = deps.agentName;
+    this.planes = deps.rt.planes;
+    this.fileLinks = localFileLinks(deps.rt.planes);
     initAgentConfigTable(deps.rt.storage.execRaw);
     this.config = deps.rt.actor.config;
     this.canonicalConversation = canonicalConversationId(this.config);

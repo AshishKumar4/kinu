@@ -8,7 +8,7 @@ import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
  * Failures are values: the DO's RPC boundary carries no error class, so
  * {@link driveFailure} folds errors into a closed `code`.
  */
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { classifyErrorCode, KinuError, renderThrownChain, type ErrorCode } from '../obs/error';
 import { settle, settleSync } from '../obs/effect';
@@ -155,9 +155,9 @@ async function skillFolderProblem(drive: MossaicVfs, folder: string, name = vfsB
   const text = await readText(drive, file);
   const parsed = parseSkillFile(text, 'shared', name);
 
-  if (!parsed.ok) return parsed.error;
+  if (Result.isFailure(parsed)) return parsed.failure.error;
 
-  if (parsed.skill.name !== name) return `folder "${name}" does not match front-matter name "${parsed.skill.name}"`;
+  if (parsed.success.name !== name) return `folder "${name}" does not match front-matter name "${parsed.success.name}"`;
 
   return null;
 }
@@ -379,8 +379,8 @@ function skillAdded(drive: MossaicVfs, files: readonly ZipEntry[], fallbackName:
     const root = skillFile.path.slice(0, skillFile.path.length - SKILL_FOLDER_FILE.length);
     const parsed = parseSkillFile(new TextDecoder().decode(skillFile.bytes), 'shared', fallbackName ?? undefined);
 
-    if (!parsed.ok) return yield* new KinuError('bad_input', `${SKILL_FOLDER_FILE}: ${parsed.error}`);
-    const name = parsed.skill.name;
+    if (Result.isFailure(parsed)) return yield* new KinuError('bad_input', `${SKILL_FOLDER_FILE}: ${parsed.failure.error}`);
+    const name = parsed.success.name;
     const folder = `${DRIVE_SKILLS_DIR}/${name}`;
 
     if (yield* Effect.promise(() => exists(drive, folder))) return yield* skillTaken(name, folder);

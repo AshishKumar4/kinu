@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import { TOOLCHAIN_PROBE_BINARIES, toolchainCapabilities } from '@kinu.run/core';
 
 interface WhichFrame {
-  id: number;
+  id: string;
   method: 'which';
   params: [string[]];
 }
@@ -46,7 +46,7 @@ function daemonResolves(PATH: string, names: readonly string[]): string[] {
 
   try {
     dispatch(
-      { id: 1, method: 'which', params: [[...names]] },
+      { id: 'which-probe', method: 'which', params: [[...names]] },
       { send: (data: string) => frames.push(JSON.parse(data)) },
       {},
     );

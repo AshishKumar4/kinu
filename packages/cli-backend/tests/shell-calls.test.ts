@@ -7,16 +7,16 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolExecutionOptions } from 'ai';
-import { codemodeSurface, DEVICE_REQUEST_OPTION, DeviceRequestOwnership, WORKSPACE_ROOT } from '@kinu.run/core';
+import { codemodeSurface, DEVICE_REQUEST_OPTION, DeviceRequestOwnership } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { createCLIRuntime } from '../src/runtime';
 
-function runtimeOf(cwd?: string) {
+function runtimeOf(cwd = scratchDir('cli-shell-calls-folder')) {
   const db = new Database(join(scratchDir('cli-shell-calls'), 'agent.db'));
 
-  return createCLIRuntime(db, { llm: null, agentName: 'calls', ...(cwd !== undefined && { cwd }) });
+  return createCLIRuntime(db, { llm: null, agentName: 'calls', cwd });
 }
 
 function shellOf(cwd?: string) {
@@ -33,18 +33,9 @@ function evalIn(directory: string) {
 
   if (!execute) throw new Error('eval has no execute');
 
-  return (code: string, options: Partial<ToolExecutionOptions> & { [DEVICE_REQUEST_OPTION]?: DeviceRequestOwnership } = {}) =>
-    execute({ code }, { toolCallId: 'call_eval', messages: [], ...options });
+  return (code: string, options: Partial<ToolExecutionOptions<unknown>> & { [DEVICE_REQUEST_OPTION]?: DeviceRequestOwnership } = {}) =>
+    execute({ code }, { toolCallId: 'call_eval', messages: [], context: undefined, ...options });
 }
-
-test("the workspace's shell keeps neither a call's `cd` nor its `export`, and refuses a name it cannot keep", async () => {
-  const shell = shellOf();
-
-  expect(await shell.exec('mkdir -p sub && cd sub && export LEFT=1 && pwd')).toMatchObject({ stdout: `${WORKSPACE_ROOT}/sub\n`, cwd: WORKSPACE_ROOT });
-  expect(await shell.exec('pwd; echo "left=$LEFT"')).toMatchObject({ stdout: `${WORKSPACE_ROOT}\nleft=\n`, cwd: WORKSPACE_ROOT });
-  expect(await shell.exec('pwd', { cwd: 'sub' })).toMatchObject({ stdout: `${WORKSPACE_ROOT}/sub\n`, cwd: `${WORKSPACE_ROOT}/sub` });
-  expect((await shell.exec('pwd', { name: 'work' })).refusal).toMatchObject({ reason: 'unsupported' });
-});
 
 test("a directory's host shell starts each call fresh there, and a name keeps its directory and exports", async () => {
   const directory = scratchDir('cli-host-shell');

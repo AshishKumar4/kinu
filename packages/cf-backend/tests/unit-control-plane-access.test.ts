@@ -4,6 +4,7 @@
  * `unit-worker-routes.test.ts`.
  */
 import { beforeAll, afterAll, describe, expect, test } from 'bun:test';
+import { Result } from 'effect';
 import { SignJWT, exportJWK, generateKeyPair, type JWK } from 'jose';
 import type { AuthIdentity } from '../src/auth/session';
 import {
@@ -142,10 +143,10 @@ const ADMIN_ENV = { CREDENTIAL_ENCRYPTION_KEY: SECRET, CONTROL_PLANE_ADMINS: OPE
 describe('the assertion is verified, never trusted', () => {
   test('a valid assertion yields the email and sub the identity provider verified', async () => {
     const answer = await verifyControlPlaneAccess(assertedRequest(await token(ours)), ENV);
-    expect(answer.ok).toBe(true);
+    expect(Result.isSuccess(answer)).toBe(true);
 
-    if (!answer.ok) throw new Error('unreachable');
-    expect(answer.access).toEqual({ email: OPERATOR, sub: 'access-uuid-1' });
+    if (Result.isFailure(answer)) throw new Error('unreachable');
+    expect(answer.success).toEqual({ email: OPERATOR, sub: 'access-uuid-1' });
   });
 
   test('an email claim is normalized the way the allowlist is', async () => {
@@ -154,28 +155,28 @@ describe('the assertion is verified, never trusted', () => {
       assertedRequest(await token(ours, { email: '  OPS@Kinu.RUN ' })), ENV,
     );
 
-    expect(answer.ok).toBe(true);
+    expect(Result.isSuccess(answer)).toBe(true);
 
-    if (!answer.ok) throw new Error('unreachable');
-    expect(answer.access.email).toBe(OPERATOR);
+    if (Result.isFailure(answer)) throw new Error('unreachable');
+    expect(answer.success.email).toBe(OPERATOR);
   });
 
   test('no assertion header at all is refused as missing, not as invalid', async () => {
     // `access_missing` in volume means requests are reaching this origin around Access.
     const answer = await verifyControlPlaneAccess(assertedRequest(null), ENV);
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_missing');
-    expect(adminDenialAnswer(answer.denial)).toEqual({ status: 404, message: 'Not found' });
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_missing');
+    expect(adminDenialAnswer(answer.failure)).toEqual({ status: 404, message: 'Not found' });
   });
 
   test('an empty assertion header is missing rather than invalid', async () => {
     const answer = await verifyControlPlaneAccess(assertedRequest('   '), ENV);
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_missing');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_missing');
   });
 
   test('the Access cookie is not a substitute for the assertion header', async () => {
@@ -185,20 +186,20 @@ describe('the assertion is verified, never trusted', () => {
     });
 
     const answer = await verifyControlPlaneAccess(request, ENV);
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_missing');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_missing');
   });
 
   test('a token signed by another Zero Trust organization is refused', async () => {
     // Anyone can mint a valid Access token for their own account, so a signature alone decides nothing.
     const foreign = await token(theirs, { issuer: OTHER_TEAM });
     const answer = await verifyControlPlaneAccess(assertedRequest(foreign), ENV);
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_invalid');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('a token whose issuer is not the pinned team domain is refused', async () => {
@@ -206,10 +207,10 @@ describe('the assertion is verified, never trusted', () => {
       assertedRequest(await token(ours, { issuer: OTHER_TEAM })), ENV,
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_invalid');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('a token for another application in our own organization is refused', async () => {
@@ -218,10 +219,10 @@ describe('the assertion is verified, never trusted', () => {
       assertedRequest(await token(ours, { audience: OTHER_AUD })), ENV,
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_invalid');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('a token signed by a key the JWKS does not publish is refused', async () => {
@@ -229,18 +230,18 @@ describe('the assertion is verified, never trusted', () => {
       assertedRequest(await token(unpublished)), ENV,
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_invalid');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('a token whose kid names a published key it was not signed with is refused', async () => {
     const answer = await verifyControlPlaneAccess(assertedRequest(await token(rotated)), ENV);
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_invalid');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('an unsigned or HS256-forged token is refused by the algorithm pin', async () => {
@@ -259,10 +260,10 @@ describe('the assertion is verified, never trusted', () => {
       .sign(hmacKey);
 
     const answer = await verifyControlPlaneAccess(assertedRequest(forged), ENV);
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_invalid');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('an expired assertion is refused', async () => {
@@ -270,10 +271,10 @@ describe('the assertion is verified, never trusted', () => {
       assertedRequest(await token(ours, { expiresIn: -60 })), ENV,
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_invalid');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('an assertion that is not yet valid is refused', async () => {
@@ -281,10 +282,10 @@ describe('the assertion is verified, never trusted', () => {
       assertedRequest(await token(ours, { notBefore: 600 })), ENV,
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_invalid');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('an assertion carrying no exp is refused rather than treated as eternal', async () => {
@@ -292,10 +293,10 @@ describe('the assertion is verified, never trusted', () => {
       assertedRequest(await token(ours, { omitExp: true })), ENV,
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_invalid');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('an assertion carrying no nbf is refused', async () => {
@@ -303,10 +304,10 @@ describe('the assertion is verified, never trusted', () => {
       assertedRequest(await token(ours, { omitNbf: true })), ENV,
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_invalid');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('a service-token assertion is refused: no human, no operator', async () => {
@@ -315,11 +316,11 @@ describe('the assertion is verified, never trusted', () => {
       assertedRequest(await token(ours, { email: null, sub: '' })), ENV,
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
     // Refused for the missing claim, not the signature: "revoke a service token", not "forgery".
-    expect(answer.denial).toBe('access_invalid');
+    expect(answer.failure).toBe('access_invalid');
   });
 
   test('a verified token with an empty sub is refused', async () => {
@@ -327,10 +328,10 @@ describe('the assertion is verified, never trusted', () => {
       assertedRequest(await token(ours, { sub: '' })), ENV,
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_no_email');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_no_email');
   });
 });
 
@@ -341,10 +342,10 @@ describe('an unconfigured deployment has no admin plane', () => {
       { CONTROL_PLANE_ACCESS_AUD: AUD },
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_unconfigured');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_unconfigured');
   });
 
   test('no audience is unconfigured, because an unpinned aud is a weaker check', async () => {
@@ -353,10 +354,10 @@ describe('an unconfigured deployment has no admin plane', () => {
       { CONTROL_PLANE_ACCESS_TEAM_DOMAIN: TEAM },
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_unconfigured');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_unconfigured');
   });
 
   test('an empty or blank var is unconfigured, not a wildcard', async () => {
@@ -366,10 +367,10 @@ describe('an unconfigured deployment has no admin plane', () => {
       {},
     ]) {
       const answer = await verifyControlPlaneAccess(assertedRequest(await token(ours)), env);
-      expect(answer.ok).toBe(false);
+      expect(Result.isFailure(answer)).toBe(true);
 
-      if (answer.ok) throw new Error('unreachable');
-      expect(answer.denial).toBe('access_unconfigured');
+      if (Result.isSuccess(answer)) throw new Error('unreachable');
+      expect(answer.failure).toBe('access_unconfigured');
     }
   });
 
@@ -390,10 +391,10 @@ describe('an unconfigured deployment has no admin plane', () => {
         { CONTROL_PLANE_ACCESS_TEAM_DOMAIN: raw, CONTROL_PLANE_ACCESS_AUD: AUD },
       );
 
-      expect(answer.ok).toBe(true);
+      expect(Result.isSuccess(answer)).toBe(true);
 
-      if (!answer.ok) throw new Error(`unreachable for ${raw}`);
-      expect(answer.access.email).toBe(OPERATOR);
+      if (Result.isFailure(answer)) throw new Error(`unreachable for ${raw}`);
+      expect(answer.success.email).toBe(OPERATOR);
     }
   });
 
@@ -413,10 +414,10 @@ describe('an unconfigured deployment has no admin plane', () => {
         { CONTROL_PLANE_ACCESS_TEAM_DOMAIN: raw, CONTROL_PLANE_ACCESS_AUD: AUD },
       );
 
-      expect(answer.ok).toBe(false);
+      expect(Result.isFailure(answer)).toBe(true);
 
-      if (answer.ok) throw new Error(`unreachable for ${raw}`);
-      expect(answer.denial).toBe('access_unconfigured');
+      if (Result.isSuccess(answer)) throw new Error(`unreachable for ${raw}`);
+      expect(answer.failure).toBe('access_unconfigured');
     }
   });
 });
@@ -425,14 +426,14 @@ describe('the two gates are joined by the email, and both still apply', () => {
   test('a verified Access identity plus an allowlisted session authorizes, and carries both', async () => {
     const verified = await verifyControlPlaneAccess(assertedRequest(await token(ours)), ENV);
 
-    if (!verified.ok) throw new Error('the fixture assertion should verify');
-    const answer = authorizeAdmin(ADMIN_ENV, identity(), verified.access, { mutating: true });
-    expect(answer.ok).toBe(true);
+    if (Result.isFailure(verified)) throw new Error('the fixture assertion should verify');
+    const answer = authorizeAdmin(ADMIN_ENV, identity(), verified.success, { mutating: true });
+    expect(Result.isSuccess(answer)).toBe(true);
 
-    if (!answer.ok) throw new Error('unreachable');
-    expect(answer.admin.email).toBe(OPERATOR);
-    expect(answer.admin.fresh).toBe(true);
-    expect(answer.admin.access).toEqual({ email: OPERATOR, sub: 'access-uuid-1' });
+    if (Result.isFailure(answer)) throw new Error('unreachable');
+    expect(answer.success.email).toBe(OPERATOR);
+    expect(answer.success.fresh).toBe(true);
+    expect(answer.success.access).toEqual({ email: OPERATOR, sub: 'access-uuid-1' });
   });
 
   test('an Access identity that is not the session identity is refused', async () => {
@@ -440,14 +441,14 @@ describe('the two gates are joined by the email, and both still apply', () => {
       assertedRequest(await token(ours, { email: 'someone-else@kinu.run' })), ENV,
     );
 
-    if (!verified.ok) throw new Error('the fixture assertion should verify');
-    const answer = authorizeAdmin(ADMIN_ENV, identity(), verified.access, { mutating: false });
-    expect(answer.ok).toBe(false);
+    if (Result.isFailure(verified)) throw new Error('the fixture assertion should verify');
+    const answer = authorizeAdmin(ADMIN_ENV, identity(), verified.success, { mutating: false });
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_mismatch');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_mismatch');
     // 404 like every admin-existence refusal: confirming the path teaches a non-operator.
-    expect(adminDenialAnswer(answer.denial).status).toBe(404);
+    expect(adminDenialAnswer(answer.failure).status).toBe(404);
   });
 
   test('the mismatch is decided before the step-up window, so a mismatch never reads as 403', async () => {
@@ -456,50 +457,50 @@ describe('the two gates are joined by the email, and both still apply', () => {
       assertedRequest(await token(ours, { email: 'someone-else@kinu.run' })), ENV,
     );
 
-    if (!verified.ok) throw new Error('the fixture assertion should verify');
+    if (Result.isFailure(verified)) throw new Error('the fixture assertion should verify');
 
     const answer = authorizeAdmin(
-      ADMIN_ENV, identity({ authTime: Date.now() - 6 * 60 * 1000 }), verified.access,
+      ADMIN_ENV, identity({ authTime: Date.now() - 6 * 60 * 1000 }), verified.success,
       { mutating: true },
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('access_mismatch');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('access_mismatch');
   });
 
   test('a deployment with no operators admits nobody even with a valid assertion', async () => {
     // No operators means unreachable whatever the outer gate says.
     const verified = await verifyControlPlaneAccess(assertedRequest(await token(ours)), ENV);
 
-    if (!verified.ok) throw new Error('the fixture assertion should verify');
+    if (Result.isFailure(verified)) throw new Error('the fixture assertion should verify');
 
     const answer = authorizeAdmin(
       { CREDENTIAL_ENCRYPTION_KEY: SECRET, CONTROL_PLANE_ADMINS: '' },
-      identity(), verified.access, { mutating: false },
+      identity(), verified.success, { mutating: false },
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('no_admins_configured');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('no_admins_configured');
   });
 
   test('a dev identity is refused even when Access verified the same address', async () => {
     // `DEV_USER_EMAIL` synthesizes a permanently-fresh identity; an allowlist match there would be unauthenticated authority.
     const verified = await verifyControlPlaneAccess(assertedRequest(await token(ours)), ENV);
 
-    if (!verified.ok) throw new Error('the fixture assertion should verify');
+    if (Result.isFailure(verified)) throw new Error('the fixture assertion should verify');
 
     const answer = authorizeAdmin(
-      ADMIN_ENV, identity({ provider: 'dev' }), verified.access, { mutating: false },
+      ADMIN_ENV, identity({ provider: 'dev' }), verified.success, { mutating: false },
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('dev_identity');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('dev_identity');
   });
 
   test('the nav flag reads the allowlist and cannot be an authorization', () => {

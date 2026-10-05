@@ -161,7 +161,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
 
     const call = async (): Promise<string> => {
       try {
-        return JSON.stringify(await execute({ code: 'return await tools.double(21);' }, { toolCallId: 'crafted-node', messages: [] }));
+        return JSON.stringify(await execute({ code: 'return await tools.double(21);' }, { toolCallId: 'crafted-node', messages: [], context: undefined }));
       } catch (error) {
         return error instanceof Error ? error.message : String(error);
       }

@@ -59,6 +59,11 @@ export interface LocalTarget {
   teardown(): void;
 }
 
+/** The episode's own folder, beside its database under the scratch dir: never the repo. */
+export function localTargetFolder(dir: string): string {
+  return join(dir, 'work');
+}
+
 /**
  * Open a local workspace and hand back the target over it.
  *
@@ -73,10 +78,12 @@ export async function provisionLocalTarget(opts: LocalTargetOptions): Promise<Lo
 
   await createWorkspace(db, { name: opts.workspace, purpose: opts.purpose, llm: opts.llm });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: opts.llm });
+  const folder = localTargetFolder(opts.dir);
+  mkdirSync(folder, { recursive: true });
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: opts.llm, cwd: folder });
 
   requireExecutorSurface(opts.workspace, rt);
-  requireSandboxedExecutors(opts.workspace, rt);
+  requireSandboxedExecutors(opts.workspace, rt, folder);
   installPreTurnProfile(rt, opts.llm);
 
   return {

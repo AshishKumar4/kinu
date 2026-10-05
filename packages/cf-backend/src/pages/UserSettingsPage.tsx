@@ -1,4 +1,5 @@
 /** Sections live in the URL hash (`/user/settings#devices`); each section owns its own reads. */
+import { Effect } from 'effect';
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -24,7 +25,7 @@ import { DevicesCard } from "@/components/devices/DevicesCard";
 import { AccountUsageCard } from "@/components/account/AccountUsageCard";
 import { SandboxSizeSettings } from "@/components/SandboxSize";
 import { BetaSettings } from "@/components/BetaSettings";
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { showing, detach } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
   profile: { email: string; displayName: string | null } | null;
@@ -36,14 +37,12 @@ function ProfileNameEditor({ profile, onSaved }: {
   const stored = profile?.displayName ?? '';
   const changed = name.trim() !== stored.trim();
 
-  const save = async () => {
+  const save = () => Effect.gen(function* () {
     setSaving(true);
     setError(null);
 
-    try { await setDisplayName(name); onSaved(); }
-    catch (cause) { setError(renderThrownChain({ cause })); }
-    finally { setSaving(false); }
-  };
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => setDisplayName(name)); onSaved(); }), showing(setError)), Effect.sync(() => { setSaving(false); }));
+  });
 
   return (
     <div className="space-y-2">
@@ -51,7 +50,7 @@ function ProfileNameEditor({ profile, onSaved }: {
         <div className="flex-1">
           <DisplayNameField value={name} onChange={setName} saving={saving} />
         </div>
-        <Button variant="secondary" size="sm" disabled={!changed || saving} onClick={save}>
+        <Button variant="secondary" size="sm" disabled={!changed || saving} onClick={() => detach(save())}>
           {saving ? <Loader size="sm" /> : null} Save
         </Button>
       </div>

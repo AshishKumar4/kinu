@@ -2,7 +2,7 @@
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
-import { relayedAnswer, remoteContextTree } from '@kinu.run/core';
+import { decodeModelMessageValues, relayedAnswer, remoteContextTree } from '@kinu.run/core';
 import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
@@ -81,7 +81,7 @@ export class AgentStoreBroker {
   async admitted(id: string) { return await (await this.calls()).admitted(this.snapshot(), id); }
   async inspect(request: AgentOwnInspection) { return await (await this.calls()).inspect(this.snapshot(), request); }
   async inheritedContext() { return await (await this.calls()).inheritedContext(this.snapshot()); }
-  async workingContext() { return await (await this.calls()).workingContext(this.snapshot()); }
+  async workingContext() { return decodeModelMessageValues(await (await this.calls()).workingContext(this.snapshot())); }
   async turnRequests(turnId: string) { return await (await this.calls()).turnRequests(this.snapshot(), turnId); }
   async turnRequest(at: TurnRequestAt) { return await (await this.calls()).turnRequest(this.snapshot(), at); }
   async archivePage(cursor: ArchiveSqlCursor | null, maxBytes: number) { return await (await this.calls()).archivePage(this.snapshot(), cursor, maxBytes); }

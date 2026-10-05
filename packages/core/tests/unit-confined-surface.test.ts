@@ -2,7 +2,7 @@
 // runs after the `allowedTools` filter; a node's proposal tool merges after the finish.
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import type { LanguageModelV3Content } from '@ai-sdk/provider';
+import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { handClock, scriptedTurnModel, toolExecute, unobservedSpend } from '@kinu.run/test-utils';
 import { actorJobsFor, createTestRuntime, conversationsFor } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -25,7 +25,7 @@ interface SurfaceStep {
   proposed: boolean;
 }
 
-function contentFor(step: SurfaceStep): LanguageModelV3Content[] {
+function contentFor(step: SurfaceStep): LanguageModelV4Content[] {
   if (step.reported) return [{ type: 'text', text: 'Done.' }];
 
   if (step.granted) {

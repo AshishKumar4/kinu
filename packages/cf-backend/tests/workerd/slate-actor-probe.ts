@@ -2,6 +2,7 @@
  * Hosted Plan/eval probe: crafted-tool declarations are re-read, not cached,
  * and `plan` mode is refused at the seam `build` is admitted at.
  */
+import { Effect } from 'effect';
 import { Agent } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { CodemodeSurface, CraftedTool } from '@kinu.run/core';
@@ -55,13 +56,13 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), reach: slateToolReach(narrowToolSurface(undefined)),
       browserSessions: NO_BROWSERS,
       rt: {
-        actor: bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => {}),
+        actor: bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => Effect.void),
         storage: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT },
       },
     });
 
     // The store holds `crafted`, read fresh per program as a runtime's surface reads it.
-    const surface: CodemodeSurface = { native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), providers: [] };
+    const surface: CodemodeSurface = { cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), providers: [] };
 
     const host = new SlateHost({
       ctx: this.ctx, workspace: 'binding-probe',
@@ -122,7 +123,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
         actor: bindActorHandle(sql, {
           actorId: 'mode-probe', workspaceId: 'mode-probe', parentActorId: null,
           name: 'mode-probe', storageKey: 'mode-probe',
-        }, () => {}),
+        }, () => Effect.void),
         executionRouter: { getProviders: () => [{
           name: 'workspace', positionalArgs: true,
           tools: {
@@ -137,11 +138,11 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       },
     });
 
-    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] }) }).eval;
+    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] }) }).eval;
     const execute = tool?.execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');
-    const answer = await execute({ code }, { toolCallId: 'mode-probe', messages: [] });
+    const answer = await execute({ code }, { toolCallId: 'mode-probe', messages: [], context: undefined });
 
     return { answer: JSON.stringify(answer ?? null), file: files.readFileString('/home/main/plan-data.txt') };
   }

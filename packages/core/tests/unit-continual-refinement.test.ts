@@ -148,7 +148,7 @@ function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => str
 
         return outcome;
       },
-      release: async () => {},
+      release: () => {},
       reclaim: (): EvolutionHelperAnswer | null => {
         const asked = requests.at(-1);
 
@@ -191,7 +191,7 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
 
         return outcome;
       },
-      release: async () => {},
+      release: () => {},
       reclaim: (): EvolutionHelperAnswer | null => answered === null
         ? null
         : { state: 'answered', name: 'refiner-1', status: 'completed', answer: proposalText(answered) },
@@ -211,7 +211,7 @@ function answeringPort(answer: () => string): TemporaryAgentPort {
 
       return { status: 'working', agent: 'refiner', lifetime: 'task', role: 'task', answer: 'working', transcript: 'kept' };
     },
-    release: async () => {},
+    release: () => {},
     reclaim: () => stored === null ? null : { state: 'answered', name: 'refiner', status: 'completed', answer: stored },
     answered: () => [],
     forget: () => {},
@@ -589,7 +589,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
       ...fx.deps(scriptedRefiner('{}').port),
       refiner: {
         start: async () => ({ reason: 'unavailable', error: 'no roster substrate here' }),
-        release: async () => {},
+        release: () => {},
         reclaim: () => null,
         answered: () => [],
         forget: () => {},

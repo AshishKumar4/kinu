@@ -174,7 +174,7 @@ export function buildAgentHubEntries(input: {
   const currentRow = items.find((item) => item.name === current.name && item.mode === current.mode);
   const groupKey = currentRow ? agentWorkspaceKey(currentRow, projectRoot) : null;
 
-  const sameProject = current.mode === 'local' && currentRow !== undefined && groupKey !== null && groupKey !== 'unplaced';
+  const sameProject = current.mode === 'local' && currentRow !== undefined && groupKey !== null;
   const alone = currentRow === undefined ? [] : [currentRow];
 
   const members = sameProject

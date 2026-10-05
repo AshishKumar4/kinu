@@ -410,6 +410,7 @@ describe('the ladder measures something', () => {
     // joining: this is the set the wave runs one at a time.
     expect(plan.filter((row) => row.shared === 'browser').map((row) => row.label).sort()).toEqual([
       'Chat infinite scroll',
+      'Cloudflare backend and conformance suite',
       'Gate self-tests: secrets, corpus, preflight',
       'Live and first-run suites, credential-free',
       'Live app in a browser: a long chat and its plans',

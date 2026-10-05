@@ -2,6 +2,7 @@
  * Atomic replacement of `$KINU_HOME/cli`: `current` runs, `prev` is kept one launch for rollback, `next-<stamp>` is
  * staged and verified before two renames swap it in. Never touches `bin/kinu`, which belongs to `kinu update`.
  */
+import { Cause, Effect } from 'effect';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,7 +14,7 @@ import {
   RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema, verifyRelease, type SignedRelease,
 } from '@kinu.run/core';
 import * as v from 'valibot';
-import { KinuError, toKinuError, tolerate } from '@kinu.run/core/obs';
+import { KinuError, toKinuError, tolerate, settleSync, settle } from '@kinu.run/core/obs';
 import { AGENT_HOME } from './config';
 
 const CLI_ROOT = join(AGENT_HOME, 'cli');
@@ -39,30 +40,34 @@ function stagedDirFor(served: string): string {
 }
 
 /** Same platform words as the daemon's HELLO. */
-function platformArtifactPath(): string {
-  const artifact = cliArtifactPath(process.platform, process.arch);
+function platformArtifactPath(): Effect.Effect<string, KinuError> {
+  return Effect.gen(function* () {
+    const artifact = cliArtifactPath(process.platform, process.arch);
 
-  if (artifact === null) throw new KinuError('unsupported', `no Kinu CLI build is published for ${process.platform}-${process.arch}`);
+    if (artifact === null) return yield* new KinuError('unsupported', `no Kinu CLI build is published for ${process.platform}-${process.arch}`);
 
-  return artifact;
+    return artifact;
+  });
 }
 
 /** An incomplete deploy serves the SPA shell at download paths. */
 /** Refused unless signed, valid, and covering the artifact (SECURITY-devices C1). */
-async function signedRelease(origin: string, served: string, fetchImpl: FetchLike): Promise<SignedRelease> {
-  const res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, { cache: 'no-store' });
+function signedRelease(origin: string, served: string, fetchImpl: FetchLike): Effect.Effect<SignedRelease, KinuError> {
+  return Effect.gen(function* () {
+    const res = yield* Effect.promise(async () => fetchImpl(`${origin}${CLI_VERSION_PATH}`, { cache: 'no-store' }));
 
-  if (!res.ok) throw new KinuError('unavailable', `could not download the release manifest: HTTP ${res.status}`);
-  const parsed = v.safeParse(SignedReleaseSchema, await res.json());
+    if (!res.ok) return yield* new KinuError('unavailable', `could not download the release manifest: HTTP ${res.status}`);
+    const parsed = v.safeParse(SignedReleaseSchema, yield* Effect.promise(async () => res.json()));
 
-  if (!parsed.success) throw new KinuError('denied', 'the release manifest carries no signature; nothing is downloaded');
+    if (!parsed.success) return yield* new KinuError('denied', 'the release manifest carries no signature; nothing is downloaded');
 
-  if (!isSameBuild(parsed.output.version, served)) throw new KinuError('io', `the release manifest names ${parsed.output.version}, not the served ${served}`);
-  const publicKey = process.env[RELEASE_SIGNING_PUBLIC_KEY_ENV] ?? RELEASE_SIGNING_PUBLIC_KEY;
+    if (!isSameBuild(parsed.output.version, served)) return yield* new KinuError('io', `the release manifest names ${parsed.output.version}, not the served ${served}`);
+    const publicKey = process.env[RELEASE_SIGNING_PUBLIC_KEY_ENV] ?? RELEASE_SIGNING_PUBLIC_KEY;
 
-  if (!await verifyRelease(parsed.output, publicKey)) throw new KinuError('denied', 'the release signature does not verify against the pinned key; nothing is downloaded');
+    if (!(yield* Effect.promise(async () => verifyRelease(parsed.output, publicKey)))) return yield* new KinuError('denied', 'the release signature does not verify against the pinned key; nothing is downloaded');
 
-  return parsed.output;
+    return parsed.output;
+  });
 }
 
 /** Verified against the signed manifest's checksum, never the origin's `.sha256`. */
@@ -74,18 +79,20 @@ interface VerifiedDownload {
   readonly fetchImpl: FetchLike;
 }
 
-async function fetchVerified({ origin, pathname, into, release, fetchImpl }: VerifiedDownload): Promise<void> {
-  const expected = release.checksums[pathname];
+function fetchVerified({ origin, pathname, into, release, fetchImpl }: VerifiedDownload): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    const expected = release.checksums[pathname];
 
-  if (expected === undefined) throw new KinuError('denied', `the signed release names no ${pathname}; nothing is downloaded`);
-  const res = await fetchImpl(`${origin}${pathname}`, { cache: 'no-store' });
+    if (expected === undefined) return yield* new KinuError('denied', `the signed release names no ${pathname}; nothing is downloaded`);
+    const res = yield* Effect.promise(async () => fetchImpl(`${origin}${pathname}`, { cache: 'no-store' }));
 
-  if (!res.ok) throw new KinuError('unavailable', `could not download ${pathname}: HTTP ${res.status}`);
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  const actual = createHash('sha256').update(bytes).digest('hex');
+    if (!res.ok) return yield* new KinuError('unavailable', `could not download ${pathname}: HTTP ${res.status}`);
+    const bytes = new Uint8Array(yield* Effect.promise(async () => res.arrayBuffer()));
+    const actual = createHash('sha256').update(bytes).digest('hex');
 
-  if (actual !== expected.toLowerCase()) throw new KinuError('io', `checksum mismatch for ${pathname}`);
-  writeFileSync(into, bytes);
+    if (actual !== expected.toLowerCase()) return yield* new KinuError('io', `checksum mismatch for ${pathname}`);
+    writeFileSync(into, bytes);
+  });
 }
 
 function runToCompletion(doing: string, command: string, args: string[], cwd?: string): Promise<string> {
@@ -107,38 +114,41 @@ function stagedVersion(tree: string): Promise<string> {
 }
 
 /** Failure leaves `current` untouched. */
-async function stageServedBuild(origin: string, served: string, seams: RefreshSeams): Promise<string> {
-  const fetchImpl = seams.fetchImpl ?? fetch;
-  const next = stagedDirFor(served);
-  const work = `${next}.download`;
-  rmSync(next, { recursive: true, force: true });
-  rmSync(work, { recursive: true, force: true });
-  mkdirSync(work, { recursive: true });
-
-  try {
-    // Verify the signed manifest before any download.
-    const release = await signedRelease(origin, served, fetchImpl);
-    await fetchVerified({ origin, pathname: platformArtifactPath(), into: join(work, 'cli.tar.gz'), release, fetchImpl });
-    await fetchVerified({ origin, pathname: CLI_RUNTIME_PATH, into: join(work, 'runtime.tar.gz'), release, fetchImpl });
-    mkdirSync(join(work, 'extract'));
-    await extractTarball(join(work, 'cli.tar.gz'), join(work, 'extract'));
-    await extractTarball(join(work, 'runtime.tar.gz'), join(work, 'extract'));
-
-    if (!existsSync(join(work, 'extract', 'kinu', 'cli.js'))) throw new KinuError('io', 'the Kinu build archive carries no cli.js');
-    renameSync(join(work, 'extract', 'kinu'), next);
-    const reported = await stagedVersion(next);
-
-    if (!isSameBuild(reported, served)) {
-      throw new KinuError('io', `the staged Kinu build reports ${reported}, not the served ${served}`);
-    }
-
-    return next;
-  } catch (cause) {
+function stageServedBuild(origin: string, served: string, seams: RefreshSeams): Effect.Effect<string, KinuError> {
+  return Effect.gen(function* () {
+    const fetchImpl = seams.fetchImpl ?? fetch;
+    const next = stagedDirFor(served);
+    const work = `${next}.download`;
     rmSync(next, { recursive: true, force: true });
-    throw cause;
-  } finally {
     rmSync(work, { recursive: true, force: true });
-  }
+    mkdirSync(work, { recursive: true });
+
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      // Verify the signed manifest before any download.
+      const release = yield* signedRelease(origin, served, fetchImpl);
+      yield* fetchVerified({ origin, pathname: yield* platformArtifactPath(), into: join(work, 'cli.tar.gz'), release, fetchImpl });
+      yield* fetchVerified({ origin, pathname: CLI_RUNTIME_PATH, into: join(work, 'runtime.tar.gz'), release, fetchImpl });
+      mkdirSync(join(work, 'extract'));
+      yield* Effect.promise(async () => extractTarball(join(work, 'cli.tar.gz'), join(work, 'extract')));
+      yield* Effect.promise(async () => extractTarball(join(work, 'runtime.tar.gz'), join(work, 'extract')));
+
+      if (!existsSync(join(work, 'extract', 'kinu', 'cli.js'))) return yield* new KinuError('io', 'the Kinu build archive carries no cli.js');
+      renameSync(join(work, 'extract', 'kinu'), next);
+      const reported = yield* Effect.promise(async () => stagedVersion(next));
+
+      if (!isSameBuild(reported, served)) {
+        return yield* new KinuError('io', `the staged Kinu build reports ${reported}, not the served ${served}`);
+      }
+
+      return next;
+    }), (failed) => Effect.gen(function* () {
+      rmSync(next, { recursive: true, force: true });
+
+      return yield* Effect.failCause(failed);
+    })), Effect.sync(() => {
+      rmSync(work, { recursive: true, force: true });
+    }));
+  });
 }
 
 /**
@@ -159,15 +169,20 @@ function adoptStagedBuild(next: string): void {
 }
 
 /** Re-checked under the lock so a second child adopts nothing over the first. */
-async function installedBuild(): Promise<string | null> {
-  if (!existsSync(join(CLI_CURRENT, 'cli.js'))) return null;
+function installedBuild(): Effect.Effect<string | null, KinuError> {
+  return Effect.gen(function* () {
+    if (!existsSync(join(CLI_CURRENT, 'cli.js'))) return null;
 
-  try {
-    return await stagedVersion(CLI_CURRENT);
-  } catch (cause) {
-    if (cause instanceof KinuError) return null;
-    throw cause;
-  }
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      return yield* Effect.promise(async () => stagedVersion(CLI_CURRENT));
+    }), (failed) => Effect.gen(function* () {
+      const cause = Cause.squash(failed);
+
+      if (cause instanceof KinuError) return null;
+
+      return yield* Effect.failCause(failed);
+    }));
+  });
 }
 
 function takeCliLock(): (() => void) | null {
@@ -212,20 +227,23 @@ function processAlive(pid: number): boolean {
   }, 'esrch') === true;
 }
 
-async function verifiedStagedBuild(served: string): Promise<string | null> {
-  const next = stagedDirFor(served);
+function verifiedStagedBuild(served: string): Effect.Effect<string | null> {
+  return Effect.gen(function* () {
+    const next = stagedDirFor(served);
 
-  if (!existsSync(join(next, 'cli.js'))) return null;
+    if (!existsSync(join(next, 'cli.js'))) return null;
 
-  try {
-    if (isSameBuild(await stagedVersion(next), served)) return next;
-  } catch (cause) {
-    if (!(cause instanceof KinuError)) throw cause;
-  }
+    // A staged build that cannot report its version is discarded like a stale one.
+    const same = yield* Effect.catchCause(
+      Effect.map(Effect.promise(() => stagedVersion(next)), (version) => isSameBuild(version, served)),
+      (failed) => (Cause.squash(failed) instanceof KinuError ? Effect.succeed(false) : Effect.failCause(failed)),
+    );
 
-  rmSync(next, { recursive: true, force: true });
+    if (same) return next;
+    rmSync(next, { recursive: true, force: true });
 
-  return null;
+    return null;
+  });
 }
 
 function sweepStagedBuilds(keep: string | null): void {
@@ -239,36 +257,40 @@ function sweepStagedBuilds(keep: string | null): void {
 }
 
 /** The running process keeps its bundle; the next launch runs the new one. */
-export async function refreshCliTree(origin: string, served: string, seams: RefreshSeams = {}): Promise<void> {
-  mkdirSync(CLI_ROOT, { recursive: true });
-  const release = takeCliLock();
+export function refreshCliTree(origin: string, served: string, seams: RefreshSeams = {}): Promise<void> {
+  return settle(Effect.gen(function* () {
+    mkdirSync(CLI_ROOT, { recursive: true });
+    const release = takeCliLock();
 
-  // Another live refresh holds `cli/` and lands the same or a newer build.
-  if (release === null) return;
+    // Another live refresh holds `cli/` and lands the same or a newer build.
+    if (release === null) return;
 
-  try {
-    const installed = await installedBuild();
+    return yield* Effect.ensuring(Effect.gen(function* () {
+      const installed = yield* installedBuild();
 
-    if (installed !== null && isSameBuild(installed, served)) return;
-    const staged = await verifiedStagedBuild(served);
-    sweepStagedBuilds(staged);
-    adoptStagedBuild(staged ?? await stageServedBuild(origin, served, seams));
-  } finally {
-    release();
-  }
+      if (installed !== null && isSameBuild(installed, served)) return;
+      const staged = yield* verifiedStagedBuild(served);
+      sweepStagedBuilds(staged);
+      adoptStagedBuild(staged ?? (yield* stageServedBuild(origin, served, seams)));
+    }), Effect.sync(() => {
+      release();
+    }));
+  }));
 }
 
 /** Detached, so a command exits without waiting for a download. */
 export function spawnBackgroundRefresh(): void {
-  const entry = process.argv[1];
+  return settleSync(Effect.gen(function* () {
+    const entry = process.argv[1];
 
-  if (entry === undefined) throw new KinuError('unsupported', 'the CLI entry file is unknown, so no background refresh can start');
+    if (entry === undefined) return yield* new KinuError('unsupported', 'the CLI entry file is unknown, so no background refresh can start');
 
-  const child = spawnKinuScript(entry, ['update', '--background'], {
-    detached: true,
-    stdio: 'ignore',
-    env: { ...process.env, KINU_HOME: AGENT_HOME },
-  });
+    const child = spawnKinuScript(entry, ['update', '--background'], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, KINU_HOME: AGENT_HOME },
+    });
 
-  child.unref();
+    child.unref();
+  }));
 }

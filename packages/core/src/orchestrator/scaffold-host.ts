@@ -92,9 +92,9 @@ async function* streamScaffoldChat(
         outputs.set(part.toolCallId, { type: 'tool-output-available', toolCallId: part.toolCallId,
           output: part.output, preliminary: part.preliminary });
       },
-      onStep: async (step, record) => {
+      onStep: async (step, messages) => {
         modelId = step.response.modelId;
-        await opts.streamOptions?.onStep?.(step, record);
+        await opts.streamOptions?.onStep?.(step, messages);
       },
     })) {
       if (event.type === 'step-finish' && event.usage) usage = addUsage(usage, event.usage);
@@ -155,6 +155,8 @@ function renderMessage(message: ModelMessage): string {
 
       case 'file':
       case 'image':
+      case 'custom':
+      case 'reasoning-file':
       case 'tool-approval-request':
       case 'tool-approval-response':
       default:
@@ -239,6 +241,7 @@ export function createScaffoldCallTool(
 
     const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
       messages: [],
+      context: undefined,
       toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
     };
 

@@ -27,7 +27,8 @@ import { FAILURE_SURFACES, failureSurface } from '../tools/oxlint/anti-slop/rule
 import { assertMeasured, finding, refuseLock, shrinkOnly, type LockRefusal, type LockedNumber } from './gate-ratchet';
 import { readSources } from './sources';
 import {
-  declaredName, functionOwner, isFunctionLike, literalString, memberCalleeName, parse, superClassName, walk, type SyntaxNode,
+  declaredName, functionOwner, identifierCalleeName, isFunctionLike, literalString, memberCalleeName, parse, superClassName, walk,
+  type SyntaxNode,
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -41,13 +42,137 @@ export type Mechanism = (typeof MECHANISMS)[number];
 interface Declaration {
   readonly mechanisms: readonly Mechanism[];
   readonly reason: string;
+  /** Only sites inside these named functions, methods, types or interfaces; absent, the whole file. */
+  readonly within?: readonly string[];
 }
 
+/** The declarations by file; a file may hold several, each for its own mechanisms and names. */
+function byFile(entries: readonly (readonly [string, Declaration])[]): ReadonlyMap<string, readonly Declaration[]> {
+  const files = new Map<string, Declaration[]>();
+
+  for (const [file, declaration] of entries) files.set(file, [...files.get(file) ?? [], declaration]);
+
+  return files;
+}
+
+const OUTSIDE_PROVIDER = 'a hook read outside its provider: a render-time programming error, thrown as React\'s own hooks throw so the nearest error boundary catches it';
+
 /** Files whose mechanisms are the target model's boundary, not a legacy site. */
-export const DECLARED = new Map<string, Declaration>([
+export const DECLARED = byFile([
   ...Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, {
     mechanisms: MECHANISMS, reason: `${surface.type}'s one runner rethrows its typed failure or a defect`,
   }] as const),
+  ...['packages/core/src/obs/tracer.ts', 'packages/core/src/obs/agent-tracing.ts', 'packages/cf-backend/src/obs/cf-tracer.ts'].map(file => [file, {
+    mechanisms: ['promise-rejection'],
+    reason: 'a span hands its caller\'s promise back unchanged, so a pipelined RPC stub keeps pipelining; '
+      + '`then(close, close)` observes it settle without deriving an unhandled rejection',
+  }] as const),
+  ['packages/core/src/execution/fiber.ts', {
+    mechanisms: ['promise-rejection'],
+    within: ['heldFiber'],
+    reason: 'a held fiber\'s start: nothing awaits a detached fiber, so the host\'s rejection is observed here and handed to `onStartFailed`',
+  }],
+  ['packages/cf-backend/src/workspace-host.ts', {
+    mechanisms: ['catch', 'throw'],
+    within: ['compose'],
+    reason: 'the hosted runtime\'s start gate, observed as state: its forwarders stay promise chains (settle\'s hops would move '
+      + 'readiness), and a failed composition is forgotten so the next operation composes again',
+  }],
+  ['packages/cf-backend/src/hooks/use-account.tsx', {
+    mechanisms: ['throw'],
+    within: ['useAccount'],
+    reason: OUTSIDE_PROVIDER,
+  }],
+  ['packages/cf-backend/src/hooks/use-workspace-roster.tsx', {
+    mechanisms: ['throw'],
+    within: ['useWorkspaceRoster'],
+    reason: OUTSIDE_PROVIDER,
+  }],
+  ['packages/cli/src/tui/tui-shell.tsx', {
+    mechanisms: ['throw'],
+    within: ['useTuiProduct'],
+    reason: OUTSIDE_PROVIDER,
+  }],
+  ['packages/cf-backend/src/gallery.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
+  ['packages/core/src/obs/log.ts', {
+    mechanisms: ['promise-rejection'],
+    within: ['detach'],
+    reason: 'the React edge\'s runner: nothing awaits it, so its one rejection observer turns a defect into a diagnostic',
+  }],
+  ['packages/core/src/orchestrator/agent-orchestrator.ts', {
+    mechanisms: ['catch'],
+    within: ['detach'],
+    reason: 'the turn lane\'s holder for detached post-turn work: nothing awaits what it is handed, so its one catch reports '
+      + 'the failure, and the lane drains what it holds at close',
+  }],
+  ['packages/core/src/orchestrator/chat-session.ts', {
+    mechanisms: ['catch'],
+    within: ['emit'],
+    reason: 'session events reach the frontend listener in order, synchronously when it answers synchronously; a promise '
+      + 'chain keeps that order (settle\'s hops would reorder events), and a listener\'s failure is reported, never the loop\'s end',
+  }],
+  ...['packages/agent-utils/src/core/utils.ts', 'packages/agent-utils/src/memory/store.ts', 'packages/agent-utils/src/vfs/addressing.ts'].map(file => [file, {
+    mechanisms: ['throw', 'catch'],
+    reason: 'agent-utils sits below core and holds no runner: a leaf utility throws and catches as plain async code, '
+      + 'and core brings each failure in with `attempt`',
+  }] as const),
+  ['packages/compaction/src/codec.ts', {
+    mechanisms: ['throw', 'catch'],
+    reason: 'the `Codec` @better-compact/core calls: an invalid handle is thrown, the library\'s codec contract, and a value '
+      + 'that will not stringify degrades to its rendered failure, as the library measures every turn',
+  }],
+  ['packages/compaction/src/extension.ts', {
+    mechanisms: ['throw', 'catch'],
+    within: ['complete'],
+    reason: 'the `Summarizer` @better-compact/core calls: a failed summary answers null, as the library\'s contract asks, and '
+      + 'only a cancelled turn\'s abort is rethrown',
+  }],
+  ['packages/cf-backend/src/egress/codex-egress-route.ts', {
+    mechanisms: ['throw'],
+    within: ['codexContainerFetch'],
+    reason: 'a `fetch` the AI SDK calls: its caller learns an abort or a refused route as the fetch\'s rejection, the fetch protocol',
+  }],
+  ['packages/core/src/orchestrator/scaffold-host.ts', {
+    mechanisms: ['throw', 'catch'],
+    within: ['streamScaffoldChat'],
+    reason: 'an async generator: its consumer receives the stream\'s failure from next(), the iterator protocol, after the '
+      + 'operation records it',
+  }],
+  ['packages/cli/src/commands/export-import.ts', {
+    mechanisms: ['throw'],
+    within: ['localArchivePages'],
+    reason: 'an async generator: the archive writer learns an unreadable page from next(), the iterator protocol',
+  }],
+  ['packages/core/src/deploy/artifact.ts', {
+    mechanisms: ['throw'],
+    within: ['chunks', 'members', 'octal'],
+    reason: 'the release artifact\'s async iterators: a reader learns a truncated or refused tar from next(), the iterator protocol',
+  }],
+  ['packages/cf-backend/src/obs/cf-tracer.ts', {
+    mechanisms: ['catch', 'throw'],
+    within: ['createWorkersTracer'],
+    reason: 'a span wraps its caller\'s synchronous call: a throw is recorded on the span and rethrown unchanged, so the '
+      + 'caller sees its own failure',
+  }],
+  ['packages/core/src/layergate/layers.ts', {
+    mechanisms: ['throw', 'catch'],
+    reason: 'the Layergate\'s literal fixtures stand in for collaborators: each throws or rejects as that collaborator does, '
+      + 'so a layer\'s answer to it is observed byte for byte',
+  }],
+  ['packages/cf-backend/src/gallery-drive.tsx', {
+    mechanisms: ['throw', 'catch'],
+    reason: 'the gallery\'s drive stub over mock data: it refuses as the drive route does, so a frame can photograph that state',
+  }],
+  ['packages/test-utils/src/mossaic.ts', {
+    mechanisms: ['throw'],
+    within: ['fakeMossaic'],
+    reason: 'a stand-in for the Mossaic client: it rejects with the errno codes that client rejects with, so the tests '
+      + 'exercise the adapter that maps them',
+  }],
   ['packages/core/src/slates/content.ts', {
     mechanisms: ['throw'],
     reason: 'a vendored `ContentStore`: its failures are the vendored package\'s `AgentCoreError` codes, its contract',
@@ -55,6 +180,214 @@ export const DECLARED = new Map<string, Declaration>([
   ['packages/core/src/slates/store.ts', {
     mechanisms: ['throw'],
     reason: 'a vendored `SlateStore`: its failures are the vendored package\'s `AgentCoreError` codes, its contract',
+  }],
+  ['packages/core/src/providers/model-test.ts', {
+    mechanisms: ['result-literal', 'result-type'],
+    within: ['ModelTestResult', 'ModelTestResultSchema', 'testModel', 'failed'],
+    reason: '`ModelTestResult`, the model picker\'s test verdict over HTTP and the CLI; `ok` is its wire field',
+  }],
+  ['packages/core/src/chat.ts', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    within: ['runChat', 'settleModelOperation', 'suppressDeferredRejections'],
+    reason: '`runChat` is an async generator: its consumer receives a failure from next(), the iterator protocol; '
+      + 'the AI SDK\'s deferred accessors are observed detached, so a rejection there is never unhandled',
+  }],
+  ['packages/core/src/providers/model-invocation.ts', {
+    mechanisms: ['throw', 'catch'],
+    within: ['streamTextReported'],
+    reason: 'an async generator: its consumer receives the stream\'s failure from next(), the iterator protocol',
+  }],
+  ['packages/core/src/identity/fork-transfer.ts', {
+    mechanisms: ['throw'],
+    within: ['forkTransferFrames', 'carriedPayloads'],
+    reason: 'the fork-frame stream is an async generator: its receiver learns a refused frame from next()',
+  }],
+  ['packages/core/src/tools/file-tool.ts', {
+    mechanisms: ['result-literal'],
+    within: ['createFileDispatcher'],
+    reason: 'the `file` tool\'s JSON answer, read by the model and by codemode\'s `workspace.writeFile`; `ok` is its field',
+  }],
+  ['packages/core/src/tools/inline-executor.ts', {
+    mechanisms: ['result-literal'],
+    within: ['createTool', 'slateRefusal'],
+    reason: 'codemode\'s `workspace.createTool` and `workspace.slates` answers, read by the program the model wrote',
+  }],
+  ...([
+    ['packages/cf-backend/src/cli/auth-store.ts', ['RateLimitError', 'CliAuthCodeError']],
+    ['packages/core/src/mission-budget.ts', ['MissionBudgetExhausted']],
+    ['packages/core/src/providers/util.ts', ['StaleModelList']],
+    ['packages/core/src/state/store-reset.ts', ['StoragePredatesResetError']],
+    ['packages/core/src/tools/db-codemode.ts', ['AppBatchError']],
+    ['packages/core/src/types/file-edits.ts', ['FileRefusalError']],
+
+  ] as const).map(([file, classes]) => [file, {
+    mechanisms: ['error-class'],
+    within: classes,
+    reason: 'a KinuError refinement: it fails on Effect\'s channel and crosses as a KinuError (code, wire), and callers also read it by class for its extra field',
+  }] as const),
+  ['packages/core/src/read-models/change-notes.ts', {
+    mechanisms: ['result-literal', 'result-type'],
+    within: ['ChangeNotesResult', 'saveChangeNotes', 'sendChangeNotes'],
+    reason: '`ChangeNotesResult`, the change-set notes\' RPC answer: the Changes surface and the CLI read `ok` and `error` off it',
+  }],
+  // Wire shapes: each `ok`/`success` here is read by a caller that does not share this process (RPC, HTTP, a
+  // model or the program it wrote, stdout) or mirrors one in a fixture; changing it changes that contract.
+  ...([
+    ['packages/cf-backend/src/actor-agent.ts', ['installWorkspaceCapability', 'recordSubordinateTitle', 'onModelSettingsChanged', 'cancelCurrentWork', 'installClientMessageGate', 'refuseRevokedSocketAuthority'],
+      'DO RPC answers (capability install, subordinate title, model-settings fan-out, cancel) and the Agents SDK\'s `{ success: false }` socket denial, read across the isolate'],
+    ['packages/cf-backend/src/cli/routes.ts', ['body'],
+      'the CLI routes\' HTTP JSON bodies, read by the CLI\'s fetch'],
+    ['packages/cf-backend/src/cli/rpc-gate.ts', ['rejectOutOfScopeRpc'],
+      'the Agents SDK\'s `{ success: false }` RPC denial sent over the socket'],
+    ['packages/cf-backend/src/components/landing/landing-fixtures.ts', ['rpc', 'planRpc', 'superviseRpc'],
+      'landing-page fixtures that mirror workspace RPC answers'],
+    ['packages/cf-backend/src/components/surfaces/ChangesSurface.tsx', ['Restored'],
+      '`Restored`, the restoreWorkspaceBaseline RPC answer the surface reads'],
+    ['packages/cf-backend/src/components/surfaces/FilesSurface.tsx', ['WriteResult'],
+      '`WriteResult`, the executor file write RPC answer'],
+    ['packages/cf-backend/src/components/surfaces/changelog-entries.tsx', ['StagedSkillResult'],
+      '`StagedSkillResult`, the showRefinement RPC answer'],
+    ['packages/cf-backend/src/drive/routes.ts', ['answered'],
+      'the Drive routes\' HTTP JSON body for a void answer'],
+    ['packages/cf-backend/src/gallery-diff-design.tsx', ['load', 'save', 'send'],
+      'gallery fixtures that mirror the change-notes RPC answers'],
+    ['packages/cf-backend/src/gallery-drive.tsx', ['serveDrive'],
+      'gallery fixtures that mirror the Drive HTTP bodies'],
+    ['packages/cf-backend/src/gallery-preview-tabs.tsx', ['rpc', 'workerRpc'],
+      'gallery fixtures that mirror workspace RPC answers'],
+    ['packages/cf-backend/src/gallery-slate-fallback.tsx', ['frameRpc'],
+      'a gallery fixture that mirrors SlateHost.preview\'s answer'],
+    ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'previewSlate', 'galleryPlanRpc', 'galleryRosterRpc', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
+      'gallery fixtures that mirror RPC, HTTP and model-test answers'],
+    ['packages/cf-backend/src/hooks/use-kinu.ts', ['dismissSubordinate'],
+      'the dismissSubordinate RPC answer as the hook passes it on'],
+    ['packages/cf-backend/src/mcp-server.ts', ['McpAgentClient'],
+      'the saveNoteFromMcp RPC answer the MCP save_note tool returns'],
+    ['packages/cf-backend/src/orchestrator.ts', ['resolveHostedActorRoute', 'announceDeviceUnavailable', 'announceDeviceAvailable', 'setTurnFeedback', 'restoreWorkspaceBaseline', 'recordHeadStep', 'destroyAgent', 'saveNoteFromMcp', 'liveShareBundle', 'renameSubordinateAgent', 'dismissSubordinate', 'prepareTerminal', 'setCurriculumTaskStatus', 'rawCopyFromFork'],
+      'workspace DO RPC answers (callable methods and DO-to-DO calls) read by the UI, the CLI and other objects'],
+    ['packages/cf-backend/src/slates/host.ts', ['blueprintAnswer', 'readLiveShareRecord', 'unshare', 'operation', 'preview', 'releaseInvocation', 'bindingCall', 'run', 'call', 'remove'],
+      '`SlateAnswer`, the slate host\'s refusal-as-value over DO RPC, and the share ledger\'s recorded `ok`'],
+    ['packages/cf-backend/src/terminal-route.ts', ['deviceTerminal', 'workspaceTerminal', 'sandboxCommand'],
+      'the terminal routes\' HTTP JSON bodies'],
+    ['packages/cf-backend/src/user/routes.ts', ['body'],
+      'the user routes\' HTTP JSON bodies, read by the browser'],
+    ['packages/cf-backend/src/user/user-do.ts', ['verifyCliToken', 'revokeCliTokenHash', 'verifyAccessToken', 'revokeAccessToken', 'issueCliAgentConnectTicket', 'verifyCliAgentConnectTicket', 'renameDevice', 'verifyDeviceToken', 'issueDeviceConnectTicket', 'verifyDeviceConnectTicket', 'setDeviceTier', 'revokeDeviceConsent', 'acknowledgeUnstoppedDevice', 'ProfileCatalogWriteResult', 'putProfileCatalog', 'DriveAnswer', 'driveOp', 'drive_writeChunk', 'sweepAndRevokeDevice', 'deleteAccount', 'userMcp_handleOAuthCallback'],
+      'UserDO RPC answers (token, ticket, device, catalog, Drive and MCP verdicts) read across the isolate'],
+    ['packages/cf-backend/src/user/workspace-fork.ts', ['ForkFrameAck'],
+      '`ForkFrameAck`, the rawCopyFromFork DO RPC answer'],
+    ['packages/cli/src/cloud-turn-stream.ts', ['outcome'],
+      'a tool outcome the CLI prints as `tool_result` JSON on stdout'],
+    ['packages/cli/src/commands/inspect.ts', ['stopCommand'],
+      '`--json` stdout, read by scripts'],
+    ['packages/cli/src/commands/run.ts', ['respondToRpcCommand', 'runRpc'],
+      'the `kinu run --rpc` stdout response protocol, read by the parent process'],
+    ['packages/core/src/cli/access-tokens.ts', ['AccessTokenMint', 'AccessTokenVerification', 'normalizeAccessTokenScopes', 'mintAccessToken', 'verifyAccessToken', 'AccessTokenRevocation', 'revokeAccessToken'],
+      'access-token verdicts that cross UserDO RPC and map to HTTP statuses'],
+    ['packages/core/src/craft/source.ts', ['CraftedSourceAdmission', 'refused', 'admitCraftedSource'],
+      'the crafted-source verdict, answered to the model\'s program as codemode\'s createTool result'],
+    ['packages/core/src/delegation/agents-codemode.ts', ['execute'],
+      '`agents.*` codemode answers, read by the program the model wrote'],
+    ['packages/core/src/delegation/agents-tool.ts', ['rename', 'recordTitle', 'assign', 'message', 'dismiss'],
+      'the agents tool\'s answers to the model and the TeamToolDeps RPC contract'],
+    ['packages/core/src/events/ingress/peer.ts', ['reply'],
+      'a peer reply, the msg tool\'s answer to the model'],
+    ['packages/core/src/events/ingress/triggers.ts', ['cancelTrigger'],
+      'cancelTrigger\'s answer over RPC, HTTP and the CLI schema'],
+    ['packages/core/src/evolution/changelog.ts', ['revertScaffoldVersion', 'revertArtifactVersion', 'executeChangelogRevert', 'changelogRevert', 'revertChangelogEntryById'],
+      'the changelog revert answer over RPC to the UI and the CLI'],
+    ['packages/core/src/evolution/control.ts', ['applyScaffoldDecision', 'ScaffoldDecisionResult', 'gepaPass', 'output'],
+      'scaffold decision and GEPA run answers over RPC to the UI and the CLI'],
+    ['packages/core/src/evolution/refinement-skill.ts', ['showRefinementRoute', 'StagedSkillResult', 'decideRefinementRoute', 'patch', 'RefinementDecisionResult'],
+      'refinement show/decide answers over RPC to the UI and the CLI'],
+    ['packages/core/src/orchestrator/agent-self-host.ts', ['setCurriculumTaskStatus'],
+      'agent.acceptCurriculumTask\'s answer to the model'],
+    ['packages/core/src/plans/review.ts', ['written', 'submit', 'saveAnnotations', 'decide', 'dismiss', 'markHandoffAccepted', 'decideAndHandOff'],
+      '`PlanReviewResult`, the plan tool\'s answer to the model and the plan RPC answers to the UI and the CLI'],
+    ['packages/core/src/read-models/background-jobs.ts', ['onSuccess', 'onFailure', 'retryBackgroundJob', 'cancelCurrentWork', 'CancelWorkOutcome'],
+      'background-job command answers over RPC to the UI and the CLI'],
+    ['packages/core/src/read-models/config-plane.ts', ['setModel', 'setReasoningEffort', 'ReasoningEffortWrite', 'setShellApprovalMode', 'revokeShellApprovalGrants', 'setAlwaysActiveSkills'],
+      'config write answers over RPC to the UI'],
+    ['packages/core/src/read-models/evolution-views.ts', ['markChangelogSeen'],
+      'markChangelogSeen\'s RPC answer'],
+    ['packages/core/src/read-models/files.ts', ['ExecutorFileUpload', 'ExecutorWriteResult', 'writeExecutorFileOp', 'onSuccess', 'renameExecutorPathOp', 'deleteExecutorPathOp'],
+      '`ExecutorWriteResult`, the executor file write answer over RPC and HTTP'],
+    ['packages/core/src/read-models/instruction-desk.ts', ['approve'],
+      'approveInstruction\'s RPC answer to the CLI and the settings page'],
+    ['packages/core/src/read-models/workspace-diff.ts', ['result', 'WorkspaceReviewResult', 'restoreWorkspaceBaseline'],
+      'baseline reset and restore answers over RPC'],
+    ['packages/core/src/safety/instruction-trust.ts', ['AdmittedInstructionDecision', 'admitInstructionDecision'],
+      '`AdmittedInstructionDecision`, the instruction decision answered over DO RPC to the CLI'],
+    ['packages/core/src/scaffold/executor.ts', ['runScaffold', 'outcome'],
+      'a scaffold run\'s result and tool outcomes, reported over MCP'],
+    ['packages/core/src/scaffold/modify.ts', ['modifyScaffold'],
+      'modifyScaffold\'s verdict, the proposeScaffold tool\'s answer to the model'],
+    ['packages/core/src/skills/drive.ts', ['DriveUploadOutcome', 'received'],
+      '`DriveUploadOutcome`, the Drive upload answer over RPC and HTTP'],
+    ['packages/core/src/slates/rpc.ts', ['SlateAnswer'],
+      '`SlateAnswer`, the slate RPC refusal-as-value'],
+    ['packages/core/src/subordinates/support.ts', ['rename', 'recordTitle', 'assign', 'message', 'dismiss'],
+      'the TeamToolDeps implementations\' answers, over RPC and to the model'],
+    ['packages/core/src/tools/builtins.ts', ['execute'],
+      'submit_plan\'s answer to the model'],
+    ['packages/core/src/tools/db-codemode.ts', ['execute'],
+      '`db.dropTable`\'s codemode answer to the model\'s program'],
+    ['packages/core/src/tools/memory-tool.ts', ['runFactAction'],
+      'the memory tool\'s answer to the model and the `memory.*` codemode namespace'],
+    ['packages/core/src/tools/state-codemode.ts', ['createStateCodemodeProvider'],
+      'the `state.*` codemode answers declared in STATE_TYPES'],
+    ['packages/core/src/types/peers.ts', ['PeerReplyOutcome'],
+      '`PeerReplyOutcome`, the msg tool\'s answer to the model'],
+    ['packages/core/src/types/plans.ts', ['PlanReviewResult', 'PlanDecisionOutcome'],
+      '`PlanReviewResult` and `PlanDecisionOutcome`, plan answers over DO RPC'],
+    ['packages/devbox/src/sync.ts', ['SyncReply', 'serveSync'],
+      '`SyncReply`, the container sync\'s HTTP answer the in-container client parses'],
+    ['packages/cli/src/local-inspection.ts', ['cancelLocalJob'],
+      'the local job cancel, printed as `kinu control job cancel --json` the way the cloud cancel answers'],
+    ['packages/cli-backend/src/local-session.ts', ['decidePlanReview'],
+      '`PlanDecisionOutcome`, which the local session answers through the same AgentClient the cloud RPC does'],
+    ['packages/cf-backend/src/components/surfaces/ChangesSurface.tsx', ['answered', 'load', 'send', 'undoReviewed'],
+      'stand-ins for the change-notes and restore RPC answers, built where a call fails so one renderer reads both'],
+    ['packages/cf-backend/src/components/surfaces/changelog-entries.tsx', ['revert', 'decide'],
+      'stand-ins for the revert and refinement-decision RPC answers, built where a call fails'],
+    ['packages/cf-backend/src/components/landing/landing-movie-timeline.ts', ['messagesAt'],
+      'a scripted tool output in the landing film, shaped as the tool answers the model'],
+  ] as const).map(([file, owners, reason]) => [file, {
+    mechanisms: ['result-literal', 'result-type'],
+    within: owners,
+    reason,
+  }] as const),
+  // Records and displays, not failure channels: `ok` here is a fact the value carries (a probe passed, a tool
+  // call succeeded, which glyph to show), stored or rendered as data rather than branched on as an error.
+  ...([
+    ['packages/core/src/http/synthetic-probes.ts', ['probe'],
+      'a synthetic probe\'s verdict, recorded per run by the monitor as whether the probe passed'],
+    ['packages/core/src/control-plane/fleet-alerts.ts', ['settleFleet'],
+      'a probe verdict the fleet monitor records per run'],
+    ['packages/core/src/orchestrator/actor-session.ts', ['recordToolResult'],
+      'the tool ledger\'s stored success flag for one call'],
+    ['packages/core/src/heads/head-inference.ts', ['execute'],
+      'a head tool call\'s stored outcome record'],
+    ['packages/core/src/layergate/layers.ts', ['probes', 'observe', 'small'],
+      'layer-gate fixtures: tool answers and stored records the probes observe and hash'],
+    ['packages/core/src/bench/split.ts', ['validateWithRetries'],
+      'a seeded task\'s validation report: whether its oracle passed, and on which attempt'],
+    ['packages/core/src/vfs/context-plane.ts', ['write'],
+      '`VfsCasResult`, the vendored Nimbus VFS\'s revision-checked write answer; its shape is that package\'s contract'],
+    ['packages/cli/src/device-connect.ts', ['describeConnectOutcome'],
+      'which glyph the connect message shows; both branches are printed, neither fails'],
+    ['packages/cli/src/tui/overlays.tsx', ['ModelListOverlay'],
+      'which glyph the model-list overlay shows'],
+    ['packages/cli/src/tui/use-device-connect.ts', ['useDeviceConnectPrompt'],
+      'which glyph the connect prompt shows'],
+  ] as const).map(([file, owners, reason]) => [file, {
+    mechanisms: ['result-literal', 'result-type'],
+    within: owners,
+    reason,
+  }] as const),
+  ['packages/devbox/src/devbox.ts', {
+    mechanisms: ['result-literal'],
+    within: ['devboxSync'],
+    reason: 'the container sync\'s HTTP answer body: the in-container sync client reads `ok` off the wire',
   }],
   ['packages/core/src/tools/outcome.ts', {
     mechanisms: ['result-literal', 'result-type'],
@@ -64,10 +397,28 @@ export const DECLARED = new Map<string, Declaration>([
 
 /** Where an effect is run for a host that owns the call, permanently: not a bridge. */
 export const HOST_BOUNDARIES = new Map<string, string>([
+  ['packages/core/src/scaffold/executor.ts', 'a scaffold\'s `host.*` functions answer the sandbox that calls them: a platform-owned call'],
   ['packages/core/src/execution/parent.ts', '`answerParentRpc` answers a fork over DO RPC and in the CLI: a platform-owned call'],
 ]);
 
-const RUNNERS: readonly string[] = ['settle', 'settleSync', 'observe'];
+const RUNNERS: readonly string[] = ['settle', 'settleSync', 'observe', 'detach'];
+
+const DETACH_DROPS_PENDING = 'detach in a transition or action returns nothing React can track, so its pending state is dropped; return settle(…)';
+
+const DETACH_ONLY_AT_REACT = 'detach runs only where its caller never awaits: a timer, a listener, or a function a component hands out';
+
+/** A Hono app's registrations: each takes its handlers after the path. */
+const ROUTE_METHODS: readonly string[] = ['get', 'post', 'put', 'delete', 'patch', 'options', 'all', 'use', 'on'];
+
+/**
+ * The one sanctioned mid-body runner: a surface adapter's `flight(run, { key, keep })` runs `run` once per
+ * key and replays its exit to every joiner. Built once and held, its runs are shared; called where it is
+ * built, or keyed by a fresh value, it is a runner in disguise.
+ */
+const FLIGHT = 'flight';
+
+/** Calls that mint a value no other call shares. */
+const FRESH_KEYS: readonly string[] = ['nanoid', 'randomUUID', 'random', 'now'];
 
 /** The selected library's runner, imported through its boundary or public barrel. */
 function isFailureModule(file: string, specifier: string): boolean {
@@ -87,12 +438,24 @@ function isFailureModule(file: string, specifier: string): boolean {
  */
 export interface BridgeCensus {
   readonly bridges: string[];
+  /** Each `flight` built and held: the sanctioned mid-body runner. */
+  readonly flights: string[];
+  /** Each runner a Hono route handler returns: the handler is the edge, Hono owns the call. */
+  readonly routes: string[];
+  /** Each detached root handed straight to a platform holder, which owns its lifetime. */
+  readonly held: string[];
+  /** Each runner where a component hands out a function: a detach React calls, or a settle its own caller awaits. */
+  readonly react: string[];
   /** A runner returned from a private helper or a local function: not a bridge, a mistake. */
   readonly findings: string[];
 }
 
 export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus {
   const bridges: string[] = [];
+  const flights: string[] = [];
+  const routes: string[] = [];
+  const held: string[] = [];
+  const react: string[] = [];
   const findings: string[] = [];
 
   for (const [file, text] of sources) {
@@ -100,6 +463,8 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     const parsed = parse(file, text);
     const runners = new Set<string>();
     const syncRunners = new Set<string>();
+    const flightNames = new Set<string>();
+    const detachNames = new Set<string>();
 
     walk(parsed.root, (node) => {
       const { raw } = node;
@@ -107,21 +472,76 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
       if (raw.type !== 'ImportDeclaration' || !isFailureModule(file, raw.source.value)) return;
 
       for (const specifier of raw.specifiers) {
+        if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && specifier.imported.name === FLIGHT) {
+          flightNames.add(specifier.local.name);
+        }
+
         if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && RUNNERS.includes(specifier.imported.name)) {
           runners.add(specifier.local.name);
 
           if (specifier.imported.name === 'settleSync') syncRunners.add(specifier.local.name);
+
+          if (specifier.imported.name === 'detach') detachNames.add(specifier.local.name);
         }
       }
     });
 
-    if (runners.size === 0) continue;
+    if (runners.size === 0 && flightNames.size === 0) continue;
+    const apps = honoApps(parsed.root);
 
     walk(parsed.root, (node) => {
       const { raw } = node;
 
-      if (raw.type !== 'CallExpression' || raw.callee.type !== 'Identifier' || !runners.has(raw.callee.name)) return;
+      if (raw.type !== 'CallExpression' || raw.callee.type !== 'Identifier') return;
       const site = `${file}:${String(parsed.lineAt(node.start))}`;
+
+      if (flightNames.has(raw.callee.name)) {
+        const disguised = disguisedRunner(node, parsed.root);
+
+        if (disguised === undefined) flights.push(site);
+        else findings.push(`${site}: ${disguised}`);
+
+        return;
+      }
+
+      if (!runners.has(raw.callee.name)) return;
+
+      if (heldBy(node)) {
+        held.push(site);
+
+        return;
+      }
+
+      const caller = edgeCaller(node, file.endsWith('.tsx'));
+
+      if (detachNames.has(raw.callee.name)) {
+        if (caller === 'tracked') findings.push(`${site}: ${DETACH_DROPS_PENDING}`);
+        else if (caller !== null) react.push(site);
+        else findings.push(`${site}: ${DETACH_ONLY_AT_REACT}`);
+
+        return;
+      }
+
+      // devbox's observe hands its exit to observers and returns no promise, so nothing floats.
+      if (caller === 'react' && raw.callee.name === 'observe') {
+        react.push(site);
+
+        return;
+      }
+
+      if (caller === 'react') {
+        findings.push(`${site}: a settle whose caller never awaits it (React, a timer or a listener), so a rejection would float; run the answered effect with detach`);
+
+        return;
+      }
+
+      // A component's own surface, or React tracking the returned promise: its caller awaits what it returns.
+      if (caller === 'component' || caller === 'tracked') {
+        react.push(site);
+
+        return;
+      }
+
       // `return settle(…)`, `return await settle(…)`, or an arrow whose whole body is the call: the edge, spelled short.
       const awaited = node.parent?.raw.type === 'AwaitExpression' ? node.parent : node;
       const holder = awaited.parent;
@@ -129,6 +549,12 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
 
       if (!returned) {
         findings.push(`${site}: a runner called mid-body; the effect is run once, at the edge, as its return`);
+
+        return;
+      }
+
+      if (isRouteHandler(holder.raw.type === 'ReturnStatement' ? holder : { parent: holder }, apps)) {
+        routes.push(site);
 
         return;
       }
@@ -146,7 +572,239 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     });
   }
 
-  return { bridges: bridges.sort(), findings: findings.sort() };
+  return { bridges: bridges.sort(), flights: flights.sort(), routes: routes.sort(), held: held.sort(), react: react.sort(), findings: findings.sort() };
+}
+
+/**
+ * Holders that keep a detached run alive: `waitUntil` takes its promise, `keepAliveWhile` and the durable
+ * fiber host take a callback. Nothing awaits such a run, so its own body must answer every failure.
+ */
+const HOLDERS: readonly string[] = ['waitUntil', 'keepAliveWhile', 'fiber', 'runFiber'];
+
+/** React calls these and never awaits them. */
+const REACT_CALLED: readonly string[] = ['useEffect', 'useLayoutEffect', 'useKeyboard'];
+
+/** React tracks the promise these callbacks return (an async transition or action): its pending state holds until it settles. */
+const REACT_TRACKED: readonly string[] = ['startTransition', 'useActionState'];
+
+/** An intrinsic element's attributes whose returned promise React tracks: a form action. */
+const TRACKED_ATTRIBUTES: readonly string[] = ['action', 'formAction'];
+
+/** Callers that call and never await: a timer's or a frame's callback, and a listener (addEventListener, on, once, subscribe). */
+const NEVER_AWAITED: ReadonlyMap<string, number> = new Map([
+  ['setTimeout', 0], ['setInterval', 0], ['queueMicrotask', 0], ['requestAnimationFrame', 0], ['addEventListener', 1], ['on', 1], ['once', 1], ['subscribe', 0],
+]);
+
+/** Where a listener is handed back to be removed: the removal's listener argument. */
+const REMOVALS: ReadonlyMap<string, number> = new Map([['removeEventListener', 1], ['off', 1], ['removeListener', 1]]);
+
+/** Whether `node` is the argument a never-awaiting caller (or, with `removals`, a removal) takes its function at. */
+function handedTo(node: SyntaxNode, removals: boolean): boolean {
+  const call = node.parent;
+
+  if (call?.raw.type !== 'CallExpression') return false;
+  const name = identifierCalleeName(call) ?? memberCalleeName(call) ?? '';
+  const at = NEVER_AWAITED.get(name) ?? (removals ? REMOVALS.get(name) : undefined);
+
+  return at !== undefined && call.raw.arguments[at] === node.raw;
+}
+
+/**
+ * Whether a function is handed to a caller that calls it and never awaits it, in any file: directly, or as a
+ * `const` listener whose every use is such a caller or the removal that hands it back.
+ */
+function neverAwaited(fn: SyntaxNode | undefined): boolean {
+  if (fn === undefined || !isFunctionLike(fn)) return false;
+
+  if (handedTo(fn, false)) return true;
+  const declarator = fn.parent?.raw;
+
+  if (declarator?.type !== 'VariableDeclarator' || declarator.id.type !== 'Identifier') return false;
+  const { id } = declarator;
+  const scope = fn.parent?.parent?.parent;
+  let added = false;
+  let elsewhere = false;
+
+  if (scope !== undefined) {
+    walk(scope, (node) => {
+      if (node.raw.type !== 'Identifier' || node.raw.name !== id.name || node.raw === id) return;
+
+      if (handedTo(node, false)) added = true;
+      else if (!handedTo(node, true)) elsewhere = true;
+    });
+  }
+
+  return added && !elsewhere;
+}
+
+/**
+ * Who calls a function a component hands out: `react` for an intrinsic element's handler or an effect's argument,
+ * which React calls and never awaits; `tracked` for a transition's, useActionState's or a form action's, whose
+ * returned promise React tracks; `component` for another component's attribute or useCallback's or useMemo's
+ * argument, which the receiving code calls and may await or read; null for anything else.
+ */
+function reactCaller(fn: SyntaxNode | undefined): EdgeCaller | null {
+  if (fn === undefined || !isFunctionLike(fn)) return null;
+  const attribute = fn.parent?.raw.type === 'JSXExpressionContainer' ? fn.parent.parent : undefined;
+
+  if (attribute?.raw.type === 'JSXAttribute') {
+    const element = attribute.parent?.raw;
+    const name = element?.type === 'JSXOpeningElement' && element.name.type === 'JSXIdentifier' ? element.name.name : '';
+
+    if (!/^[a-z]/.test(name)) return 'component';
+    const attributeName = attribute.raw.name.type === 'JSXIdentifier' ? attribute.raw.name.name : '';
+
+    return TRACKED_ATTRIBUTES.includes(attributeName) ? 'tracked' : 'react';
+  }
+
+  const call = fn.parent;
+
+  if (call?.raw.type !== 'CallExpression' || call.raw.arguments[0] !== fn.raw) return null;
+  const hook = identifierCalleeName(call) ?? memberCalleeName(call) ?? '';
+
+  if (REACT_CALLED.includes(hook)) return 'react';
+
+  if (REACT_TRACKED.includes(hook)) return 'tracked';
+
+  return hook === 'useCallback' || hook === 'useMemo' ? 'component' : null;
+}
+
+/** The function a runner is the expression body of, or a return or statement directly in the block of. */
+function heldIn(runner: SyntaxNode): SyntaxNode | undefined {
+  const holder = runner.parent;
+
+  if (holder !== undefined && arrowBody(holder.raw) === runner.raw) return holder;
+  const statement = holder?.raw.type === 'ReturnStatement' || holder?.raw.type === 'ExpressionStatement' ? holder : undefined;
+  const block = statement?.parent;
+
+  if (block?.raw.type !== 'BlockStatement') return undefined;
+  const fn = block.parent;
+
+  return fn !== undefined && 'body' in fn.raw && fn.raw.body === block.raw ? fn : undefined;
+}
+
+type EdgeCaller = 'react' | 'tracked' | 'component';
+
+/**
+ * Who calls the function a runner sits in: `react` for a caller that never awaits (a timer, a listener, or React's
+ * positions in `.tsx`), `tracked` for React tracking the returned promise, `component` for a component's own surface
+ * (`.tsx`), or null.
+ */
+function edgeCaller(runner: SyntaxNode, tsx: boolean): EdgeCaller | null {
+  const fn = heldIn(runner);
+
+  if (neverAwaited(fn)) return 'react';
+
+  return tsx ? reactCaller(fn) : null;
+}
+
+/** Whether a runner is a holder's whole argument, or the whole body of a callback that is one. */
+function heldBy(runner: SyntaxNode): boolean {
+  const callback = runner.parent !== undefined && arrowBody(runner.parent.raw) === runner.raw ? runner.parent : undefined;
+  const argument = callback ?? runner;
+  const holder = argument.parent;
+
+  if (holder?.raw.type !== 'CallExpression' || !holder.raw.arguments.some((given) => given === argument.raw)) return false;
+
+  return HOLDERS.includes(identifierCalleeName(holder) ?? memberCalleeName(holder) ?? '');
+}
+
+/** Whether an expression is, or chains off, `new Hono(…)`. */
+function isHonoBuilt(raw: SyntaxNode['raw'] | null | undefined): boolean {
+  if (raw?.type === 'NewExpression') return raw.callee.type === 'Identifier' && raw.callee.name === 'Hono';
+
+  if (raw?.type === 'CallExpression' && raw.callee.type === 'MemberExpression') return isHonoBuilt(raw.callee.object);
+
+  return false;
+}
+
+/** Names bound to a Hono app in this file: `const app = new Hono()`, a `new Hono()` class field, or one assigned to it. */
+function honoApps(tree: SyntaxNode): ReadonlySet<string> {
+  const apps = new Set<string>();
+
+  walk(tree, (node) => {
+    const { raw } = node;
+
+    if (raw.type === 'VariableDeclarator' && raw.id.type === 'Identifier' && isHonoBuilt(raw.init)) apps.add(raw.id.name);
+
+    if (raw.type === 'PropertyDefinition' && raw.key.type === 'Identifier' && isHonoBuilt(raw.value)) apps.add(raw.key.name);
+
+    if (raw.type === 'AssignmentExpression' && raw.left.type === 'MemberExpression' && raw.left.property.type === 'Identifier' && isHonoBuilt(raw.right)) {
+      apps.add(raw.left.property.name);
+    }
+  });
+
+  return apps;
+}
+
+/** Whether a registration's receiver is a Hono app: a bound name, `this.<name>`, `new Hono()`, or a chain off one. */
+function isHonoReceiver(raw: SyntaxNode['raw'], apps: ReadonlySet<string>): boolean {
+  if (raw.type === 'Identifier') return apps.has(raw.name);
+
+  if (raw.type === 'MemberExpression' && raw.object.type === 'ThisExpression' && raw.property.type === 'Identifier') return apps.has(raw.property.name);
+
+  if (raw.type === 'CallExpression' && raw.callee.type === 'MemberExpression' && raw.callee.property.type === 'Identifier'
+    && ROUTE_METHODS.includes(raw.callee.property.name)) return isHonoReceiver(raw.callee.object, apps);
+
+  if (raw.type === 'AssignmentExpression') return isHonoBuilt(raw.right);
+
+  return isHonoBuilt(raw);
+}
+
+/** Whether the return belongs directly to a handler a Hono app registers: an argument after the path. */
+function isRouteHandler(statement: Pick<SyntaxNode, 'parent'>, apps: ReadonlySet<string>): boolean {
+  let node: SyntaxNode | undefined = statement.parent;
+
+  while (node !== undefined && !isFunctionLike(node)) node = node.parent;
+  const call = node?.parent;
+
+  if (node === undefined || call?.raw.type !== 'CallExpression' || call.raw.callee.type !== 'MemberExpression') return false;
+  const { callee } = call.raw;
+
+  if (callee.property.type !== 'Identifier' || !ROUTE_METHODS.includes(callee.property.name) || !isHonoReceiver(callee.object, apps)) return false;
+  const handler = node.raw;
+  const at = call.raw.arguments.findIndex((argument) => argument === handler);
+
+  // `use(handler)` takes no path; every other registration takes one first.
+  return at > 0 || (at === 0 && callee.property.name === 'use');
+}
+
+const enclosingFunction = (node: SyntaxNode): SyntaxNode | undefined => {
+  let up = node.parent;
+
+  while (up !== undefined && !isFunctionLike(up)) up = up.parent;
+
+  return up;
+};
+
+/** Why a `flight(…)` call shares no run, or undefined when it is built once and held. */
+function disguisedRunner(built: SyntaxNode, tree: SyntaxNode): string | undefined {
+  const calledWhereBuilt = 'a flight called where it is built runs once per call; build it once and hold it';
+  const holder = built.parent;
+
+  if (holder?.raw.type === 'CallExpression' && holder.raw.callee === built.raw) return calledWhereBuilt;
+  const options = built.children.find((child) => child.raw.type === 'ObjectExpression');
+  const key = options?.children.find((property) => property.raw.type === 'Property' && property.raw.key.type === 'Identifier' && property.raw.key.name === 'key');
+  let fresh = false;
+
+  if (key !== undefined) {
+    walk(key, (node) => {
+      if (node.raw.type === 'UpdateExpression' || FRESH_KEYS.includes(identifierCalleeName(node) ?? memberCalleeName(node) ?? '')) fresh = true;
+    });
+  }
+
+  if (fresh) return 'a flight keyed by a fresh value never joins a run; key it by what its callers share';
+  const scope = enclosingFunction(built);
+
+  if (holder?.raw.type !== 'VariableDeclarator' || holder.raw.id.type !== 'Identifier' || scope === undefined) return undefined;
+  const name = holder.raw.id.name;
+  let calledInScope = false;
+
+  walk(tree, (node) => {
+    if (identifierCalleeName(node) === name && enclosingFunction(node) === scope) calledInScope = true;
+  });
+
+  return calledInScope ? calledWhereBuilt : undefined;
 }
 
 /**
@@ -252,13 +910,29 @@ function mechanismOf(node: SyntaxNode): Mechanism | undefined {
   return undefined;
 }
 
+function isDeclared(file: string, mechanism: Mechanism, node: SyntaxNode): boolean {
+  return (DECLARED.get(file) ?? []).some((declaration) => {
+    if (!declaration.mechanisms.includes(mechanism)) return false;
+
+    if (declaration.within === undefined) return true;
+
+    for (let up: SyntaxNode | undefined = node; up !== undefined; up = up.parent) {
+      const name = declaredName(up);
+
+      if (name !== undefined && declaration.within.includes(name)) return true;
+    }
+
+    return false;
+  });
+}
+
 /** Sites per `path#mechanism`, declared boundary mechanisms left out. */
 export function measure(sources: ReadonlyMap<string, string>): LockedNumber[] {
   const counts = new Map<string, number>();
-  const classes: { readonly file: string; readonly name: string | undefined; readonly base: string }[] = [];
+  const classes: { readonly file: string; readonly name: string | undefined; readonly base: string; readonly node: SyntaxNode }[] = [];
 
-  const count = (file: string, mechanism: Mechanism): void => {
-    if (DECLARED.get(file)?.mechanisms.includes(mechanism) === true) return;
+  const count = (file: string, mechanism: Mechanism, node: SyntaxNode): void => {
+    if (isDeclared(file, mechanism, node)) return;
     const key = `${file}#${mechanism}`;
 
     counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -268,10 +942,10 @@ export function measure(sources: ReadonlyMap<string, string>): LockedNumber[] {
     walk(parse(file, text).root, (node) => {
       const base = superClassName(node);
 
-      if (base !== undefined) classes.push({ file, name: declaredName(node), base });
+      if (base !== undefined) classes.push({ file, name: declaredName(node), base, node });
       const mechanism = mechanismOf(node);
 
-      if (mechanism !== undefined) count(file, mechanism);
+      if (mechanism !== undefined) count(file, mechanism, node);
     });
   }
 
@@ -287,7 +961,7 @@ export function measure(sources: ReadonlyMap<string, string>): LockedNumber[] {
     }
   }
 
-  for (const { file, base } of classes) if (errorish.has(base)) count(file, 'error-class');
+  for (const { file, base, node } of classes) if (errorish.has(base)) count(file, 'error-class', node);
 
   return [...counts].map(([key, value]) => ({ key, value })).sort((a, b) => a.key.localeCompare(b.key));
 }
@@ -347,7 +1021,7 @@ export const BLIND_SPOTS: readonly string[] = [
   + 'real domain states, so a union discriminated by a word is left to review.',
   'A RETURNED `{ error }` WITH NO `ok` FIELD — NOT COUNTED. It is a failure value by convention only.',
   'TESTS, SCRIPTS AND TOOLS — OUT OF SCOPE. The corpus is product source (`readSources`).',
-  'A MECHANISM MOVED INTO A DECLARED FILE — NOT DETECTED. `DECLARED` is read by review, one reason per file.',
+  'A MECHANISM MOVED INTO A DECLARED FILE — NOT DETECTED. `DECLARED` is read by review, one reason per declaration.',
   'A BRIDGE SPELLED ANOTHER WAY — NOT COUNTED. A runner result stored and returned later, or a runner '
   + 'called outside a `return`, is not the bridge shape; review keeps bridges to the one spelling.',
   'A DELETED LOCK — REFUSED. With no lock on disk the gate is red; the first lock is written with '
@@ -430,7 +1104,7 @@ if (import.meta.main) {
       console.error(finding({
         at: site,
         invariant: 'an effect is run only at an exported function or public member, the bridge its callers see',
-        found: 'a runner returned from a private helper or a local function',
+        found: site.includes(': a flight') ? 'a flight that shares no run' : 'a runner returned from a private helper or a local function',
         silently: 'the helper reads as migrated while its callers still get a thrown failure, and the bridge count '
           + 'names a site no caller wave will remove',
         fix: 'return the Effect from the helper and run it once at the exported edge',
@@ -453,15 +1127,27 @@ if (import.meta.main) {
     console.log(`  stale: ${key} locked at ${String(was)}, now ${String(now)}; \`bun scripts/error-model.ts --lock\` lowers it`);
   }
 
-  for (const [file, { mechanisms, reason }] of DECLARED) {
-    console.log(`  declared: ${file} (${mechanisms.join(', ')}): ${reason}`);
+  for (const [file, { mechanisms, reason, within }] of [...DECLARED].flatMap(([path, all]) => all.map((one) => [path, one] as const))) {
+    console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}): ${reason}`);
   }
 
-  const { bridges, findings } = bridgeSites(sources);
+  const { bridges, flights, routes, held, react, findings } = bridgeSites(sources);
 
   console.log(`  bridges: ${String(bridges.length)} (the migration ends at zero)`);
 
   for (const site of bridges) console.log(`    ${site}`);
+  console.log(`  flights: ${String(flights.length)} (\`flight\`, the sanctioned mid-body runner)`);
+
+  for (const site of flights) console.log(`    ${site}`);
+  console.log(`  routes: ${String(routes.length)} (a Hono route handler's runner: Hono owns the call)`);
+
+  for (const site of routes) console.log(`    ${site}`);
+  console.log(`  held: ${String(held.length)} (a detached root a platform holder keeps alive: ${HOLDERS.join(', ')})`);
+
+  for (const site of held) console.log(`    ${site}`);
+  console.log(`  react: ${String(react.length)} (a detach React calls, or a settle a component attribute or useCallback hands its awaiting caller)`);
+
+  for (const site of react) console.log(`    ${site}`);
 
   for (const wrong of findings) console.log(`  finding: ${wrong}`);
 

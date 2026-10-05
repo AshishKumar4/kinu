@@ -5,16 +5,22 @@ import { attempt, KinuError, settle } from '../obs/index';
 import { CODEX_CLIENT_ID } from './codex-oauth';
 import { CODEX_CRED_KEY } from './codex';
 import { CLOUDFLARE_OAUTH_CRED_KEY, cloudflareClientAuth, type CloudflareOAuthEnv } from './cloudflare-oauth';
+import { CHATGPT_CRED_KEY } from './chatgpt';
+import { CHATGPT_REVOKE_URL, chatgptRegistrationOf } from './chatgpt-sign-in';
 
 export interface RevocationEndpoint {
   readonly url: string;
   readonly client: { readonly fields: Readonly<Record<string, string>>; readonly headers: Readonly<Record<string, string>> };
+  /** The client is the one the login was issued to (Sign in with ChatGPT's dynamic registration). */
+  readonly issuedClient?: true;
 }
 
 export function revocationEndpointFor(key: string, env: CloudflareOAuthEnv): RevocationEndpoint | null {
   if (key === CODEX_CRED_KEY) {
     return { url: 'https://auth.openai.com/api/accounts/oauth/revoke', client: { fields: { client_id: CODEX_CLIENT_ID }, headers: {} } };
   }
+
+  if (key === CHATGPT_CRED_KEY) return { url: CHATGPT_REVOKE_URL, client: { fields: {}, headers: {} }, issuedClient: true };
 
   if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
     const client = cloudflareClientAuth(env);
@@ -50,7 +56,8 @@ export async function revokeOAuthGrant(input: {
 
 function revokeOne(input: Parameters<typeof revokeOAuthGrant>[0], token: string, hint: string): Effect.Effect<KinuError | null> {
   const { endpoint } = input;
-  const body = new URLSearchParams({ token, token_type_hint: hint, ...endpoint.client.fields });
+  const issued = endpoint.issuedClient === true ? chatgptRegistrationOf(input.credential)?.clientId : undefined;
+  const body = new URLSearchParams({ token, token_type_hint: hint, ...endpoint.client.fields, ...(issued !== undefined && { client_id: issued }) });
   const headers = { 'content-type': 'application/x-www-form-urlencoded', ...endpoint.client.headers };
 
   return Effect.match(attempt({ doing: `revoking the ${hint} at the provider`, otherwise: 'unavailable' },

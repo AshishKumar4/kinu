@@ -8,8 +8,8 @@ import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
 import type { TriggerRegistry } from '../hub/triggers';
 import { spillEventContent } from '../hub/content-spill';
-import { Effect } from 'effect';
-import { settleSync } from '../../obs/index';
+import { Effect, Result } from 'effect';
+import { settle, settleSync } from '../../obs/index';
 import { safeJsonParse } from '../../utils/json';
 import type { SqlExec } from '../../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
@@ -135,152 +135,151 @@ export async function registerDurableWebhook(
   ));
 }
 
+interface WebhookRefusal { readonly reason: string }
+
+interface WebhookAuth {
+  readonly ingress: 'webhook_hmac' | 'webhook_bearer' | 'webhook_mtls';
+  readonly claim?: { key: string; expiresAt: number };
+}
+
+const refused = (reason: string): Effect.Effect<never, WebhookRefusal> => Effect.fail({ reason });
+
 /** Only HMAC yields a `claim` (the signed artifact), making the signature single-use. */
-async function verifyWebhookAuth(
+function verifyWebhookAuth(
   deps: WebhookIngressDeps,
   spec: Partial<WebhookTriggerSpec>,
   opts: WebhookDelivery,
-): Promise<
-  | {
-      ok: true;
-      ingress: 'webhook_hmac' | 'webhook_bearer' | 'webhook_mtls';
-      claim?: { key: string; expiresAt: number };
-    }
-  | { ok: false; reason: string }
-> {
-  if (spec.auth_mode === 'hmac') {
-    if (!spec.secret_id) return { ok: false, reason: 'no hmac secret configured' };
-    const secret = await deps.secrets.get(spec.secret_id);
+): Effect.Effect<WebhookAuth, WebhookRefusal> {
+  return Effect.gen(function* () {
+    if (spec.auth_mode === 'hmac') {
+      const secretId = spec.secret_id;
 
-    if (!secret) return { ok: false, reason: 'secret revoked' };
+      if (!secretId) return yield* refused('no hmac secret configured');
+      const secret = yield* Effect.promise(() => deps.secrets.get(secretId));
 
-    if (!opts.hmac_signature || !opts.hmac_timestamp) {
-      return { ok: false, reason: 'missing hmac headers' };
-    }
+      if (!secret) return yield* refused('secret revoked');
 
-    const ts = parseInt(opts.hmac_timestamp, 10);
+      if (!opts.hmac_signature || !opts.hmac_timestamp) return yield* refused('missing hmac headers');
 
-    if (!Number.isFinite(ts) || Math.abs(opts.now - ts) > HMAC_TIMESTAMP_WINDOW_MS) {
-      return { ok: false, reason: 'timestamp out of window' };
-    }
+      const ts = parseInt(opts.hmac_timestamp, 10);
 
-    const expected = await hmacSha256Hex(secret, `${ts}.${opts.body_text}`);
+      if (!Number.isFinite(ts) || Math.abs(opts.now - ts) > HMAC_TIMESTAMP_WINDOW_MS) return yield* refused('timestamp out of window');
 
-    if (!timingSafeEqual(expected, opts.hmac_signature)) {
-      return { ok: false, reason: 'signature mismatch' };
-    }
+      const signature = opts.hmac_signature;
+      const expected = yield* Effect.promise(() => hmacSha256Hex(secret, `${ts}.${opts.body_text}`));
 
-    return {
-      ok: true,
-      ingress: 'webhook_hmac',
-      claim: {
-        key: `hmac:${sha256Hex(`${String(ts)}.${opts.hmac_signature}`, 32)}`,
-        expiresAt: ts + HMAC_TIMESTAMP_WINDOW_MS,
-      },
-    };
-  }
+      if (!timingSafeEqual(expected, signature)) return yield* refused('signature mismatch');
 
-  if (spec.auth_mode === 'bearer') {
-    if (!spec.secret_id) return { ok: false, reason: 'no bearer secret' };
-    const stored = await deps.secrets.get(spec.secret_id);
-
-    if (!stored) return { ok: false, reason: 'secret revoked' };
-
-    if (!opts.bearer_header || !opts.bearer_header.startsWith('Bearer ')) {
-      return { ok: false, reason: 'missing bearer' };
+      return {
+        ingress: 'webhook_hmac',
+        claim: {
+          key: `hmac:${sha256Hex(`${String(ts)}.${signature}`, 32)}`,
+          expiresAt: ts + HMAC_TIMESTAMP_WINDOW_MS,
+        },
+      };
     }
 
-    const presented = opts.bearer_header.slice('Bearer '.length).trim();
+    if (spec.auth_mode === 'bearer') {
+      const secretId = spec.secret_id;
 
-    if (!timingSafeEqual(stored, presented)) {
-      return { ok: false, reason: 'bearer mismatch' };
+      if (!secretId) return yield* refused('no bearer secret');
+      const stored = yield* Effect.promise(() => deps.secrets.get(secretId));
+
+      if (!stored) return yield* refused('secret revoked');
+
+      if (!opts.bearer_header || !opts.bearer_header.startsWith('Bearer ')) return yield* refused('missing bearer');
+
+      const presented = opts.bearer_header.slice('Bearer '.length).trim();
+
+      if (!timingSafeEqual(stored, presented)) return yield* refused('bearer mismatch');
+
+      return { ingress: 'webhook_bearer' };
     }
 
-    return { ok: true, ingress: 'webhook_bearer' };
-  }
+    if (!opts.cf_mtls_verified) return yield* refused('client cert not verified');
 
-  if (!opts.cf_mtls_verified) {
-    return { ok: false, reason: 'client cert not verified' };
-  }
-
-  return { ok: true, ingress: 'webhook_mtls' };
+    return { ingress: 'webhook_mtls' };
+  });
 }
 
-export async function acceptWebhookDelivery(
+export function acceptWebhookDelivery(
   deps: WebhookIngressDeps,
   opts: WebhookDelivery,
 ): Promise<WebhookDeliveryResult> {
-  const trigger = deps.triggers.get(opts.trigger_id);
+  return settle(Effect.gen(function* () {
+    const trigger = deps.triggers.get(opts.trigger_id);
 
-  if (!trigger) return { status: 'rejected', http_status: 404, reason: 'trigger not found' };
+    if (!trigger) return { status: 'rejected', http_status: 404, reason: 'trigger not found' };
 
-  if (trigger.state !== 'active') {
-    return { status: 'rejected', http_status: 503, reason: `trigger ${trigger.state}` };
-  }
+    if (trigger.state !== 'active') {
+      return { status: 'rejected', http_status: 503, reason: `trigger ${trigger.state}` };
+    }
 
-  if (trigger.kind !== 'webhook_durable' && trigger.kind !== 'webhook_ephemeral') {
-    return { status: 'rejected', http_status: 400, reason: 'not a webhook trigger' };
-  }
+    if (trigger.kind !== 'webhook_durable' && trigger.kind !== 'webhook_ephemeral') {
+      return { status: 'rejected', http_status: 400, reason: 'not a webhook trigger' };
+    }
 
-  const spec: Partial<WebhookTriggerSpec> = trigger.spec;
+    const spec: Partial<WebhookTriggerSpec> = trigger.spec;
 
-  const receivedCT = opts.content_type?.split(';')[0].trim() ?? '';
+    const receivedCT = opts.content_type?.split(';')[0].trim() ?? '';
 
-  if (spec.accepted_content_type && spec.accepted_content_type !== receivedCT) {
-    return { status: 'rejected', http_status: 415, reason: `expected ${spec.accepted_content_type}` };
-  }
+    if (spec.accepted_content_type && spec.accepted_content_type !== receivedCT) {
+      return { status: 'rejected', http_status: 415, reason: `expected ${spec.accepted_content_type}` };
+    }
 
-  const auth = await verifyWebhookAuth(deps, spec, opts);
+    const verified = yield* Effect.result(verifyWebhookAuth(deps, spec, opts));
 
-  if (!auth.ok) return { status: 'rejected', http_status: 401, reason: auth.reason };
+    if (Result.isFailure(verified)) return { status: 'rejected', http_status: 401, reason: verified.failure.reason };
+    const auth = verified.success;
 
-  const rate = tryConsumeWebhookRateLimit(deps.sql, opts.trigger_id, trigger.rate_limit_per_min, opts.now);
+    const rate = tryConsumeWebhookRateLimit(deps.sql, opts.trigger_id, trigger.rate_limit_per_min, opts.now);
 
-  if (!rate.allowed) {
-    return { status: 'rejected', http_status: 429, reason: `rate limit exceeded (${rate.limit}/min)` };
-  }
+    if (!rate.allowed) {
+      return { status: 'rejected', http_status: 429, reason: `rate limit exceeded (${rate.limit}/min)` };
+    }
 
-  // Unparseable JSON is kept as raw text; other failures propagate.
-  const parsedBody: unknown = receivedCT.includes('json') ? safeJsonParse(opts.body_text) : opts.body_text;
+    // Unparseable JSON is kept as raw text; other failures propagate.
+    const parsedBody: unknown = receivedCT.includes('json') ? safeJsonParse(opts.body_text) : opts.body_text;
 
-  // Spend the claim before anything durable: freshness alone admits a replay across a dedupe
-  // bucket boundary. A held claim answers as a duplicate, never a rejection.
-  const held = auth.claim ? claimSignedDelivery(deps.sql, opts.trigger_id, auth.claim, opts.now) : null;
+    // Spend the claim before anything durable: freshness alone admits a replay across a dedupe
+    // bucket boundary. A held claim answers as a duplicate, never a rejection.
+    const held = auth.claim ? claimSignedDelivery(deps.sql, opts.trigger_id, auth.claim, opts.now) : null;
 
-  if (held !== null) {
-    return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
-  }
+    if (held !== null) {
+      return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
+    }
 
-  const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
+    const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
 
-  // Spill after the auth and rate gates so a rejected delivery never writes a file.
-  const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);
-  const spilled = await spillEventContent(deps.vfs, bodySerialized);
+    // Spill after the auth and rate gates so a rejected delivery never writes a file.
+    const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);
+    const spilled = yield* Effect.promise(() => spillEventContent(deps.vfs, bodySerialized));
 
-  const { id, admitted } = deps.log.publish({
-    descriptor: {
-      ingress: auth.ingress,
-      variant: 'webhook',
-      payload: {
+    const { id, admitted } = deps.log.publish({
+      descriptor: {
+        ingress: auth.ingress,
+        variant: 'webhook',
+        payload: {
+          webhook_id: opts.trigger_id,
+          http_method: opts.method,
+          http_headers: opts.headers,
+          body: parsedBody,
+          delivery_id,
+          body_path: spilled?.path,
+          body_unsaved: spilled?.unsaved,
+        },
+        auth_outcome: 'verified',
         webhook_id: opts.trigger_id,
-        http_method: opts.method,
-        http_headers: opts.headers,
-        body: parsedBody,
-        delivery_id,
-        body_path: spilled?.path,
-        body_unsaved: spilled?.unsaved,
       },
-      auth_outcome: 'verified',
-      webhook_id: opts.trigger_id,
-    },
-    now: opts.now,
-  });
+      now: opts.now,
+    });
 
-  if (auth.claim) bindClaimedDelivery(deps.sql, opts.trigger_id, auth.claim.key, id);
+    if (auth.claim) bindClaimedDelivery(deps.sql, opts.trigger_id, auth.claim.key, id);
 
-  if (admitted) deps.onAdmitted();
+    if (admitted) deps.onAdmitted();
 
-  return { status: 'admitted', event_id: id, admitted };
+    return { status: 'admitted', event_id: id, admitted };
+  }));
 }
 
 const ClaimRowSchema = v.object({ event_id: v.nullable(v.string()) });

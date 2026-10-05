@@ -4,16 +4,18 @@
  */
 
 import type {
-  AssistantModelMessage, DataContent, ToolResultPart, UserModelMessage,
+  AssistantModelMessage, FilePart, ImagePart, ToolResultPart, UserModelMessage,
 } from 'ai';
 import { asSchema, convertToBase64 } from '@ai-sdk/provider-utils';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { settle } from '../obs/effect';
 import type { CountableRequest, InputTokenCount } from './input-tokens';
 import type { ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { untagged } from '../utils/file-data';
+import { toolDescription } from '../utils/tool-description';
 
 /** The AI SDK Anthropic package's wire version, so raw POSTs (count, warm) share its API contract. */
 export const ANTHROPIC_VERSION = '2023-06-01';
@@ -42,8 +44,11 @@ interface CountBody {
   tools?: Array<{ name: string; description?: string; input_schema: unknown }>;
 }
 
-/** A converted piece of the count body, or why no exact count exists. */
-type Converted<T> = { ok: true; value: T } | { ok: false; reason: string };
+interface Unrepresentable { readonly reason: string }
+
+type Converted<T> = Effect.Effect<T, Unrepresentable>;
+
+const unrepresentable = (reason: string): Converted<never> => Effect.fail({ reason });
 
 const CountResponseSchema = v.looseObject({ input_tokens: v.number() });
 
@@ -54,8 +59,14 @@ const ReasoningMetadataSchema = v.looseObject({
   }),
 });
 
-/** A count-body source, or null when not exactly representable (Anthropic needs a media type beside base64). */
-function countSource(data: DataContent | URL, mediaType: string | undefined): Base64Source | UrlSource | null {
+/** A count-body source, or null when not exactly representable (Anthropic needs a full media type beside base64; ai 7
+ *  also takes a top-level one, `image`, and leaves the rest to the adapter). */
+function countSource(tagged: FilePart['data'] | ImagePart['image'], spelled: string | undefined): Base64Source | UrlSource | null {
+  const data = untagged(tagged);
+  const mediaType = spelled?.includes('/') === true ? spelled : undefined;
+
+  if (data === null) return null;
+
   if (data instanceof URL) return { type: 'url', url: data.toString() };
 
   if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
@@ -87,35 +98,32 @@ function toolResultBlock(part: ToolResultPart): Converted<CountBlock> {
   switch (output.type) {
     case 'text':
     case 'error-text':
-      return { ok: true, value: { type: 'tool_result', tool_use_id: part.toolCallId, content: output.value } };
+      return Effect.succeed({ type: 'tool_result', tool_use_id: part.toolCallId, content: output.value });
     case 'content': {
       const blocks: CountBlock[] = [];
 
       for (const item of output.value) {
-        if (item.type !== 'text') return { ok: false, reason: `a tool result content part of type "${item.type}"` };
+        if (item.type !== 'text') return unrepresentable(`a tool result content part of type "${item.type}"`);
         blocks.push({ type: 'text', text: item.text });
       }
 
-      return { ok: true, value: { type: 'tool_result', tool_use_id: part.toolCallId, content: blocks } };
+      return Effect.succeed({ type: 'tool_result', tool_use_id: part.toolCallId, content: blocks });
     }
 
     // No default: a part type the SDK adds later must fail the build, not be miscounted.
     case 'json':
     case 'error-json':
     case 'execution-denied':
-      return {
-        ok: true,
-        value: {
-          type: 'tool_result',
-          tool_use_id: part.toolCallId,
-          content: JSON.stringify('value' in output ? output.value : output) ?? '',
-        },
-      };
+      return Effect.succeed({
+        type: 'tool_result',
+        tool_use_id: part.toolCallId,
+        content: JSON.stringify('value' in output ? output.value : output) ?? '',
+      });
   }
 }
 
 function userBlocks(content: UserModelMessage['content']): Converted<CountBlock[]> {
-  if (!Array.isArray(content)) return { ok: true, value: [{ type: 'text', text: content }] };
+  if (!Array.isArray(content)) return Effect.succeed([{ type: 'text', text: content }]);
   const blocks: CountBlock[] = [];
 
   for (const part of content) {
@@ -123,157 +131,149 @@ function userBlocks(content: UserModelMessage['content']): Converted<CountBlock[
       case 'text':
         blocks.push({ type: 'text', text: part.text });
         break;
-      case 'image': {
-        const source = countSource(part.image, part.mediaType);
-
-        if (!source) return { ok: false, reason: 'an image part this count body cannot represent exactly' };
-        blocks.push({ type: 'image', source });
-        break;
-      }
-
+      case 'image':
       case 'file': {
-        const source = countSource(part.data, part.mediaType);
+        // ai 7 spells an image as a file of an image media type, and the Anthropic adapter sends it as one.
+        const image = part.type === 'image' || part.mediaType.split('/')[0] === 'image';
+        const source = countSource(part.type === 'image' ? part.image : part.data, part.mediaType);
 
-        if (!source) return { ok: false, reason: 'a file part this count body cannot represent exactly' };
-        blocks.push({ type: 'document', source });
+        if (!source) return unrepresentable(`${image ? 'an image' : 'a file'} part this count body cannot represent exactly`);
+        blocks.push({ type: image ? 'image' : 'document', source });
         break;
       }
       // No default: a new SDK part type must fail the build rather than count as zero.
     }
   }
 
-  return { ok: true, value: blocks };
+  return Effect.succeed(blocks);
 }
 
 function assistantBlocks(content: AssistantModelMessage['content']): Converted<CountBlock[]> {
-  if (!Array.isArray(content)) return { ok: true, value: [{ type: 'text', text: content }] };
-  const blocks: CountBlock[] = [];
+  return Effect.gen(function* () {
+    if (!Array.isArray(content)) return [{ type: 'text', text: content }];
+    const blocks: CountBlock[] = [];
 
-  for (const part of content) {
-    switch (part.type) {
-      case 'text':
-        blocks.push({ type: 'text', text: part.text });
-        break;
-      case 'reasoning': {
-        const parsed = v.safeParse(ReasoningMetadataSchema, part.providerOptions);
-        const meta = parsed.success ? parsed.output.anthropic : undefined;
+    for (const part of content) {
+      switch (part.type) {
+        case 'text':
+          blocks.push({ type: 'text', text: part.text });
+          break;
+        case 'reasoning': {
+          const parsed = v.safeParse(ReasoningMetadataSchema, part.providerOptions);
+          const meta = parsed.success ? parsed.output.anthropic : undefined;
 
-        if (meta?.signature !== undefined) {
-          blocks.push({ type: 'thinking', thinking: part.text, signature: meta.signature });
-        } else if (meta?.redactedData !== undefined) {
-          blocks.push({ type: 'redacted_thinking', data: meta.redactedData });
+          if (meta?.signature !== undefined) {
+            blocks.push({ type: 'thinking', thinking: part.text, signature: meta.signature });
+          } else if (meta?.redactedData !== undefined) {
+            blocks.push({ type: 'redacted_thinking', data: meta.redactedData });
+          }
+
+          break;
         }
 
-        break;
+        case 'tool-call': {
+          const parsed = v.safeParse(JsonValueSchema, part.input);
+          blocks.push({
+            type: 'tool_use',
+            id: part.toolCallId,
+            name: part.toolName,
+            input: parsed.success ? parsed.output : null,
+          });
+          break;
+        }
+
+        case 'tool-result': {
+          blocks.push(yield* toolResultBlock(part));
+          break;
+        }
+
+        case 'file': {
+          const source = countSource(part.data, part.mediaType);
+
+          if (!source) return yield* unrepresentable('an assistant file part this count body cannot represent exactly');
+          blocks.push({ type: 'document', source });
+          break;
+        }
+
+        // A pending approval, or a part with no count block, is refused so the caller falls back rather than count a
+        // body it did not send.
+        case 'tool-approval-request':
+        case 'custom':
+        case 'reasoning-file':
+          return yield* unrepresentable(`an assistant content part of type "${part.type}"`);
       }
-
-      case 'tool-call': {
-        const parsed = v.safeParse(JsonValueSchema, part.input);
-        blocks.push({
-          type: 'tool_use',
-          id: part.toolCallId,
-          name: part.toolName,
-          input: parsed.success ? parsed.output : null,
-        });
-        break;
-      }
-
-      case 'tool-result': {
-        const block = toolResultBlock(part);
-
-        if (!block.ok) return block;
-        blocks.push(block.value);
-        break;
-      }
-
-      case 'file': {
-        const source = countSource(part.data, part.mediaType);
-
-        if (!source) return { ok: false, reason: 'an assistant file part this count body cannot represent exactly' };
-        blocks.push({ type: 'document', source });
-        break;
-      }
-
-      // A pending approval is refused so the caller falls back rather than count a body it did not send.
-      case 'tool-approval-request':
-        return { ok: false, reason: `an assistant content part of type "${part.type}"` };
     }
-  }
 
-  return { ok: true, value: blocks };
+    return blocks;
+  });
 }
 
-async function toCountBody(modelId: string, request: CountableRequest): Promise<Converted<CountBody>> {
-  const messages: CountMessage[] = [];
-  const systemParts = request.system ? [request.system] : [];
+function toCountBody(modelId: string, request: CountableRequest): Converted<CountBody> {
+  return Effect.gen(function* () {
+    const messages: CountMessage[] = [];
+    const systemParts = request.system ? [request.system] : [];
 
-  for (const message of request.messages) {
-    switch (message.role) {
-      case 'system': {
-        // Anthropic accepts only leading system messages; a later one is reported, not counted.
-        if (messages.length > 0) return { ok: false, reason: 'a system message after a conversation message' };
-        systemParts.push(message.content);
-        break;
-      }
-
-      case 'user': {
-        const blocks = userBlocks(message.content);
-
-        if (!blocks.ok) return blocks;
-        messages.push({ role: 'user', content: blocks.value });
-        break;
-      }
-
-      case 'assistant': {
-        const blocks = assistantBlocks(message.content);
-
-        if (!blocks.ok) return blocks;
-        messages.push({ role: 'assistant', content: blocks.value });
-        break;
-      }
-
-      case 'tool': {
-        const blocks: CountBlock[] = [];
-
-        for (const part of message.content) {
-          if (part.type !== 'tool-result') continue;
-          const block = toolResultBlock(part);
-
-          if (!block.ok) return block;
-          blocks.push(block.value);
+    for (const message of request.messages) {
+      switch (message.role) {
+        case 'system': {
+          // Anthropic accepts only leading system messages; a later one is reported, not counted.
+          if (messages.length > 0) return yield* unrepresentable('a system message after a conversation message');
+          systemParts.push(message.content);
+          break;
         }
 
-        messages.push({ role: 'user', content: blocks });
-        break;
+        case 'user': {
+          messages.push({ role: 'user', content: yield* userBlocks(message.content) });
+          break;
+        }
+
+        case 'assistant': {
+          messages.push({ role: 'assistant', content: yield* assistantBlocks(message.content) });
+          break;
+        }
+
+        case 'tool': {
+          const blocks: CountBlock[] = [];
+
+          for (const part of message.content) {
+            if (part.type !== 'tool-result') continue;
+            blocks.push(yield* toolResultBlock(part));
+          }
+
+          messages.push({ role: 'user', content: blocks });
+          break;
+        }
       }
     }
-  }
 
-  const body: CountBody = { model: modelId, messages };
+    const body: CountBody = { model: modelId, messages };
 
-  if (systemParts.length > 0) body.system = systemParts.join('\n\n');
+    if (systemParts.length > 0) body.system = systemParts.join('\n\n');
 
-  const tools: NonNullable<CountBody['tools']> = [];
+    const tools: NonNullable<CountBody['tools']> = [];
 
-  for (const [name, tool] of Object.entries(request.tools ?? {})) {
-    if (tool === undefined) continue;
+    for (const [name, tool] of Object.entries(request.tools ?? {})) {
+      if (tool === undefined) continue;
 
-    if (tool.type === 'provider') {
-      return { ok: false, reason: `a provider-defined tool ("${name}") whose definition the count body cannot carry` };
+      if (tool.type === 'provider') {
+        return yield* unrepresentable(`a provider-defined tool ("${name}") whose definition the count body cannot carry`);
+      }
+
+      const entry: NonNullable<CountBody['tools']>[number] = {
+        name,
+        input_schema: yield* Effect.promise(async () => asSchema(tool.inputSchema).jsonSchema),
+      };
+
+      const description = toolDescription(tool);
+
+      if (description !== undefined) entry.description = description;
+      tools.push(entry);
     }
 
-    const entry: NonNullable<CountBody['tools']>[number] = {
-      name,
-      input_schema: await asSchema(tool.inputSchema).jsonSchema,
-    };
+    if (tools.length > 0) body.tools = tools;
 
-    if (tool.description !== undefined) entry.description = tool.description;
-    tools.push(entry);
-  }
-
-  if (tools.length > 0) body.tools = tools;
-
-  return { ok: true, value: body };
+    return body;
+  });
 }
 
 /**
@@ -290,13 +290,13 @@ export async function countAnthropicInputTokens(input: {
   missingCredentialError: string;
 }): Promise<InputTokenCount> {
   return settle(Effect.gen(function* () {
-    const converted = yield* Effect.promise(() => toCountBody(input.modelId, input.request));
+    const converted = yield* Effect.result(toCountBody(input.modelId, input.request));
 
-    if (!converted.ok) {
+    if (Result.isFailure(converted)) {
       return {
         kind: 'unsupported',
         provider: input.providerId,
-        reason: `the request carries ${converted.reason}, which the count endpoint's body cannot represent exactly`,
+        reason: `the request carries ${converted.failure.reason}, which the count endpoint's body cannot represent exactly`,
       };
     }
 
@@ -310,7 +310,7 @@ export async function countAnthropicInputTokens(input: {
     const response = yield* Effect.promise(() => authedFetch(`${input.baseURL}/messages/count_tokens`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'anthropic-version': ANTHROPIC_VERSION },
-      body: JSON.stringify(converted.value),
+      body: JSON.stringify(converted.success),
     }));
 
     if (!response.ok) {

@@ -13,7 +13,7 @@ import {
   agentCred, agentIdentity, mossaicVfs, provisionAgentHome, renderSoulMarkdown, settledWorkspaceSoul, sharedDriveMount, withMountTable,
   initWorkspaceActorTable, WORKSPACE_IDENTITY_DDL, writeWorkspaceSoul, type JsonValue,
 } from '@kinu.run/core';
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { RouteableFacetTarget, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, HELD_NIMBUS_TASKS, SCRIPT_EXPORTS } from './helpers/programmatic-host';
@@ -797,13 +797,14 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
   });
 
   test('a launch a hibernation interrupted is re-driven through the slate host on the next wake', async () => {
-    // Vendor-format coupling: the seeded journal row copies worker 0.7's `resident-launch:<n>` recipe shape;
-    // update here when the vendor changes it.
+    // Vendor-format coupling: the seeded journal row copies worker 0.13's `resident-launch:<n>` shape, which records
+    // the credential it ran as (a row without one is refused, not re-driven); update here when the vendor changes it.
     const actor = actorObject();
     const kv = new Map<string, JsonValue>();
     Object.assign(actor.ctx.storage, durableStorage(kv));
     kv.set('resident-launch:41', {
       pid: 41, command: 'slate keeper', attempt: 0, phase: 'starting', owner: 'keeper', restart: 'never', port: 20000,
+      cred: { uid: CRED_SESSION_USER.uid, gid: CRED_SESSION_USER.gid, groups: [...CRED_SESSION_USER.groups], umask: CRED_SESSION_USER.umask },
       recipe: {
         kind: 'worker', owner: 'keeper', port: 20000, cwd: '/slates/keeper', mainModule: 'runner.js',
         image: { runner: 'a'.repeat(64), application: 'b'.repeat(64) }, ...workerCompatibility,

@@ -7,6 +7,7 @@ import type { AgentRuntime, CraftStore, RequestShellApproval } from './types/age
 import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';
 import type { TurnFileLedger } from './vfs/file-ledger';
+import type { PathPlanes } from './vfs/resolve';
 import { createScaffoldSurface } from './scaffold/surface';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import type { ActorHandle } from './identity/actor-handle';
@@ -28,7 +29,7 @@ export interface RuntimeComponents {
   /** This agent's own state when `vfs` is a shared plane. */
   agentStateVfs?: VFS;
   toolFiles: VFS;
-  workspaceIsMachine: boolean;
+  planes: PathPlanes;
   llm: LLM;
   executor: Executor;
   schedule: Schedule;
@@ -41,7 +42,6 @@ export interface RuntimeComponents {
   executionRouter?: ExecutionRouter;
   /** Required by the `shell` tool's workspace fast path and the `eval` new-Function fallback. */
   shell?: Shell;
-  nodeIsolated?: boolean;
   /** Host backends only. */
   checkpoints?: FileCheckpoints;
   /** Only a backend with a live interactive surface (the CLI's ACP channel) supplies this. */
@@ -82,7 +82,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     storage: { vfs, home: components.home ?? WORKSPACE_ROOT, sql, execRaw, transactionSync: components.transactionSync },
     agentStateVfs,
     toolFiles: components.toolFiles,
-    workspaceIsMachine: components.workspaceIsMachine,
+    planes: components.planes,
     memory,
     executor,
     llm,
@@ -96,7 +96,6 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     ...(components.decide !== undefined && { decide: components.decide }),
     executionRouter: components.executionRouter,
     shell: components.shell,
-    nodeIsolated: components.nodeIsolated,
     checkpoints: components.checkpoints,
     setShellApprovalChannel: components.setShellApprovalChannel,
     setTurnFileLedgerProvider: components.setTurnFileLedgerProvider,

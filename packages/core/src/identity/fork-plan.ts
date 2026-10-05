@@ -3,6 +3,8 @@
  * and the readers both the in-process snapshot and the wire use.
  */
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
@@ -50,42 +52,41 @@ interface ForkChainEntryRow {
   context_revision: number | null;
 }
 
-function assertArtifactSegments(relative: string, path: string, root: string): void {
+function artifactSegments(relative: string, path: string, root: string): Effect.Effect<string> {
   const traversal = relative.split('/').some((segment) => segment === '' || segment === '.' || segment === '..');
 
-  if (relative.startsWith('/') || traversal) {
-    throw new Error(
+  return relative.startsWith('/') || traversal
+    ? Effect.die(new Error(
       `fork cannot carry payload ${JSON.stringify(path)}: it does not name a file inside the artifact `
       + `directory ${JSON.stringify(root)}`,
-    );
-  }
+    ))
+    : Effect.succeed(relative);
 }
 
 /** One payload path relative to its owning artifact directory. A path outside it is refused:
  *  carrying another workspace's absolute path would re-root or escape into a directory the fork does not own. */
-function forkArtifactRelativePath(stored: string, artifactDirectory: string): string {
+function forkArtifactRelativePath(stored: string, artifactDirectory: string): Effect.Effect<string> {
   const root = workspacePath(artifactDirectory, WORKSPACE_ROOT);
   const prefix = `${root}/`;
+
   // Refuse raw segments before normalization can erase traversal.
-  assertArtifactSegments(stored.startsWith('/') ? stored.slice(1) : stored, stored, root);
-  const path = workspacePath(stored, WORKSPACE_ROOT);
+  return Effect.flatMap(artifactSegments(stored.startsWith('/') ? stored.slice(1) : stored, stored, root), () => {
+    const path = workspacePath(stored, WORKSPACE_ROOT);
 
-  if (!stored.startsWith('/') || !path.startsWith(prefix)) {
-    throw new Error(
-      `fork cannot carry payload ${JSON.stringify(path)}: it is outside the artifact directory `
-      + `${JSON.stringify(root)}`,
-    );
-  }
-
-  return path.slice(prefix.length);
+    return stored.startsWith('/') && path.startsWith(prefix)
+      ? Effect.succeed(path.slice(prefix.length))
+      : Effect.die(new Error(
+        `fork cannot carry payload ${JSON.stringify(path)}: it is outside the artifact directory `
+        + `${JSON.stringify(root)}`,
+      ));
+  });
 }
 
 /** Absolute payload path for a carried relative path under one artifact directory. */
 export function forkArtifactPath(relative: string, artifactDirectory: string): string {
   const root = workspacePath(artifactDirectory, WORKSPACE_ROOT);
-  assertArtifactSegments(relative, relative, root);
 
-  return `${root}/${relative}`;
+  return settleSync(Effect.map(artifactSegments(relative, relative, root), () => `${root}/${relative}`));
 }
 
 /** Which rows the cut at `untilMessageId` selects. Throws if the id is not an entry
@@ -96,148 +97,152 @@ export function planForkConversation(input: {
   readonly untilMessageId: string;
   readonly artifactDirectory: string;
 }): ForkConversationPlan {
-  const { sql, actorId, untilMessageId } = input;
+  return settleSync(Effect.gen(function* () {
+    const { sql, actorId, untilMessageId } = input;
 
-  const cut = sql<{ position: number }>`
-    SELECT position FROM conversation_entries WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${untilMessageId}
-  `[0];
-
-  if (cut === undefined) {
-    throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
-  }
-
-  if (cut.position >= FORK_CHAIN_MAX_DEPTH) {
-    throw new Error(`fork chain for entry ${JSON.stringify(untilMessageId)} is deeper than ${FORK_CHAIN_MAX_DEPTH} entries`);
-  }
-
-  // Keyed on the actor: entry ids are per actor, so an unkeyed read could reach a sibling's chat.
-  const chain = sql<ForkChainEntryRow>`
-    SELECT id, position, recorded_at, metadata_path, context_id, context_revision
-    FROM conversation_entries
-    WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND position <= ${cut.position}
-    ORDER BY position
-  `;
-
-  const cutEntry = chain[chain.length - 1];
-
-  if (cutEntry === undefined) {
-    throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
-  }
-
-  const context = [...chain].reverse().find((entry) => entry.context_id !== null && entry.context_revision !== null);
-
-  // Membership at that revision, not live: an entry pruned after the cut was still in its context.
-  const members = context === undefined || context.context_id === null || context.context_revision === null
-    ? []
-    : sql<ForkContextMemberRow>`
-        SELECT entry_id, position, message_id FROM context_memberships
-        WHERE actor_id = ${actorId} AND context_id = ${context.context_id}
-          AND from_revision <= ${context.context_revision}
-          AND (to_revision IS NULL OR to_revision > ${context.context_revision})
-        ORDER BY position
-      `.map((row) => v.parse(ForkContextMemberRowSchema, row));
-
-  const referenced = new Set<string>();
-
-  for (const entry of chain) {
-    for (const part of forkConversationEntryPartRows(sql, actorId, entry.id)) referenced.add(part.message_id);
-  }
-
-  for (const member of members) referenced.add(member.message_id);
-
-  const ordered = [...referenced].map((messageId) => {
-    const row = sql<{ seek: number; sealed_at: number | null }>`
-      SELECT rowid AS seek, sealed_at FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
+    const cut = sql<{ position: number }>`
+      SELECT position FROM conversation_entries WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${untilMessageId}
     `[0];
 
-    if (row === undefined) {
-      throw new Error(`fork carries a reference to message ${JSON.stringify(messageId)}, which the source does not have`);
+    if (cut === undefined) {
+      return yield* Effect.die(new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`));
     }
 
-    if (row.sealed_at === null) {
-      throw new Error(`fork cannot carry message ${JSON.stringify(messageId)}: it is still open in the source`);
+    if (cut.position >= FORK_CHAIN_MAX_DEPTH) {
+      return yield* Effect.die(new Error(`fork chain for entry ${JSON.stringify(untilMessageId)} is deeper than ${FORK_CHAIN_MAX_DEPTH} entries`));
     }
 
-    return { messageId, seek: row.seek };
-  }).sort((left, right) => left.seek - right.seek)
-    .map(({ messageId }) => messageId);
+    // Keyed on the actor: entry ids are per actor, so an unkeyed read could reach a sibling's chat.
+    const chain = sql<ForkChainEntryRow>`
+      SELECT id, position, recorded_at, metadata_path, context_id, context_revision
+      FROM conversation_entries
+      WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND position <= ${cut.position}
+      ORDER BY position
+    `;
 
-  const artifacts: string[] = [];
-  const carried = new Set<string>();
+    const cutEntry = chain[chain.length - 1];
 
-  const carry = (path: string | null): void => {
-    if (path === null) return;
-    const relative = forkArtifactRelativePath(path, input.artifactDirectory);
+    if (cutEntry === undefined) {
+      return yield* Effect.die(new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`));
+    }
 
-    if (carried.has(relative)) return;
-    carried.add(relative);
-    artifacts.push(relative);
-  };
+    const context = [...chain].reverse().find((entry) => entry.context_id !== null && entry.context_revision !== null);
 
-  for (const entry of chain) carry(entry.metadata_path);
+    // Membership at that revision, not live: an entry pruned after the cut was still in its context.
+    const members = context === undefined || context.context_id === null || context.context_revision === null
+      ? []
+      : sql<ForkContextMemberRow>`
+          SELECT entry_id, position, message_id FROM context_memberships
+          WHERE actor_id = ${actorId} AND context_id = ${context.context_id}
+            AND from_revision <= ${context.context_revision}
+            AND (to_revision IS NULL OR to_revision > ${context.context_revision})
+          ORDER BY position
+        `.map((row) => v.parse(ForkContextMemberRowSchema, row));
 
-  for (const messageId of ordered) {
-    carry(sql<{ content_path: string | null }>`
-      SELECT content_path FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
-    `[0]?.content_path ?? null);
-  }
+    const referenced = new Set<string>();
 
-  return {
-    cut: { entryId: cutEntry.id, recordedAt: cutEntry.recorded_at },
-    entryIds: chain.map((entry) => entry.id),
-    messageIds: ordered,
-    members,
-    artifacts,
-  };
+    for (const entry of chain) {
+      for (const part of forkConversationEntryPartRows(sql, actorId, entry.id)) referenced.add(part.message_id);
+    }
+
+    for (const member of members) referenced.add(member.message_id);
+
+    const seeks: { messageId: string; seek: number }[] = [];
+
+    for (const messageId of referenced) {
+      const row = sql<{ seek: number; sealed_at: number | null }>`
+        SELECT rowid AS seek, sealed_at FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
+      `[0];
+
+      if (row === undefined) {
+        return yield* Effect.die(new Error(`fork carries a reference to message ${JSON.stringify(messageId)}, which the source does not have`));
+      }
+
+      if (row.sealed_at === null) {
+        return yield* Effect.die(new Error(`fork cannot carry message ${JSON.stringify(messageId)}: it is still open in the source`));
+      }
+
+      seeks.push({ messageId, seek: row.seek });
+    }
+
+    const ordered = seeks.sort((left, right) => left.seek - right.seek).map(({ messageId }) => messageId);
+
+    const paths = [
+      ...chain.map((entry) => entry.metadata_path),
+      ...ordered.map((messageId) => sql<{ content_path: string | null }>`
+        SELECT content_path FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
+      `[0]?.content_path ?? null),
+    ];
+
+    const carried = new Set<string>();
+
+    for (const path of paths) {
+      if (path !== null) carried.add(yield* forkArtifactRelativePath(path, input.artifactDirectory));
+    }
+
+    const artifacts = [...carried];
+
+    return {
+      cut: { entryId: cutEntry.id, recordedAt: cutEntry.recorded_at },
+      entryIds: chain.map((entry) => entry.id),
+      messageIds: ordered,
+      members,
+      artifacts,
+    };
+  }));
 }
 
 /** One carried message with its content path made relative. */
 export function forkSessionMessageRow(
   sql: SqlExecutor, actorId: string, messageId: string, artifactDirectory: string,
 ): ForkSessionMessageRow {
-  const row = sql<{
-    message_id: string; role: string; native_content_kind: string; origin: string;
-    envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null;
-  }>`
-    SELECT message_id, role, native_content_kind, origin, envelope_json, sealed_at, content_json, content_path, content_digest
-    FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
-  `[0];
+  return settleSync(Effect.gen(function* () {
+    const row = sql<{
+      message_id: string; role: string; native_content_kind: string; origin: string;
+      envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null;
+    }>`
+      SELECT message_id, role, native_content_kind, origin, envelope_json, sealed_at, content_json, content_path, content_digest
+      FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
+    `[0];
 
-  if (row === undefined) {
-    throw new Error(`fork carries a reference to message ${JSON.stringify(messageId)}, which the source does not have`);
-  }
+    if (row === undefined) {
+      return yield* Effect.die(new Error(`fork carries a reference to message ${JSON.stringify(messageId)}, which the source does not have`));
+    }
 
-  if (row.sealed_at === null) {
-    throw new Error(`fork cannot carry message ${JSON.stringify(messageId)}: it is still open in the source`);
-  }
+    if (row.sealed_at === null) {
+      return yield* Effect.die(new Error(`fork cannot carry message ${JSON.stringify(messageId)}: it is still open in the source`));
+    }
 
-  return v.parse(ForkSessionMessageRowSchema, {
-    ...row,
-    sealed_at: row.sealed_at,
-    content_path: row.content_path === null ? null : forkArtifactRelativePath(row.content_path, artifactDirectory),
-  });
+    return v.parse(ForkSessionMessageRowSchema, {
+      ...row,
+      sealed_at: row.sealed_at,
+      content_path: row.content_path === null ? null : yield* forkArtifactRelativePath(row.content_path, artifactDirectory),
+    });
+  }));
 }
 
 export function forkConversationEntryRow(
   sql: SqlExecutor, actorId: string, entryId: string, artifactDirectory: string,
 ): ForkConversationEntryRow {
-  const row = sql<{
-    id: string; position: number; role: string; turn_id: string | null; run_id: string | null;
-    metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null; recorded_at: number;
-  }>`
-    SELECT id, position, role, turn_id, run_id, metadata_json, metadata_path, metadata_digest, recorded_at
-    FROM conversation_entries
-    WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${entryId}
-  `[0];
+  return settleSync(Effect.gen(function* () {
+    const row = sql<{
+      id: string; position: number; role: string; turn_id: string | null; run_id: string | null;
+      metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null; recorded_at: number;
+    }>`
+      SELECT id, position, role, turn_id, run_id, metadata_json, metadata_path, metadata_digest, recorded_at
+      FROM conversation_entries
+      WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${entryId}
+    `[0];
 
-  if (row === undefined) {
-    throw new Error(`fork carries entry ${JSON.stringify(entryId)}, which the source does not have`);
-  }
+    if (row === undefined) {
+      return yield* Effect.die(new Error(`fork carries entry ${JSON.stringify(entryId)}, which the source does not have`));
+    }
 
-  return v.parse(ForkConversationEntryRowSchema, {
-    ...row,
-    metadata_path: row.metadata_path === null ? null : forkArtifactRelativePath(row.metadata_path, artifactDirectory),
-  });
+    return v.parse(ForkConversationEntryRowSchema, {
+      ...row,
+      metadata_path: row.metadata_path === null ? null : yield* forkArtifactRelativePath(row.metadata_path, artifactDirectory),
+    });
+  }));
 }
 
 export function forkConversationEntryPartRows(

@@ -1,3 +1,5 @@
+import { settleSync } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
@@ -53,7 +55,7 @@ export function createFileTuiPreferenceStore(path = join(AGENT_HOME, 'tui.json')
     read() {
       if (!existsSync(path)) return DEFAULT_TUI_PREFERENCES;
 
-      return parseTuiPreferences(readFileSync(path, 'utf8'), path);
+      return settleSync(parseTuiPreferences(readFileSync(path, 'utf8'), path));
     },
     write(preferences) {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -89,45 +91,38 @@ const TuiPreferencesSchema = v.strictObject({
   promptHistory: v.optional(v.record(v.string(), v.pipe(v.array(v.string()), v.transform((entries) => entries.slice(-500))))),
 });
 
-function parseTuiPreferences(json: string, source: string): TuiPreferences {
-  let raw: unknown;
+function parseTuiPreferences(json: string, source: string): Effect.Effect<TuiPreferences> {
+  return Effect.gen(function* () {
+    const raw: unknown = yield* Effect.try({ try: () => JSON.parse(json), catch: (error) => new Error(`${source}: invalid JSON`, { cause: error }) }).pipe(Effect.orDie);
 
-  try {
-    raw = JSON.parse(json);
-  } catch (error) {
-    throw new Error(`${source}: invalid JSON`, { cause: error });
-  }
+    const parsed = yield* Effect.try({
+      try: () => v.parse(TuiPreferencesSchema, raw),
+      catch: (error) => new Error(`${source} is not a valid Kinu TUI preference file.`, { cause: error }),
+    }).pipe(Effect.orDie);
 
-  let parsed: v.InferOutput<typeof TuiPreferencesSchema>;
+    const overrideEntries: Array<readonly [TuiActionId, readonly string[]]> = [];
 
-  try {
-    parsed = v.parse(TuiPreferencesSchema, raw);
-  } catch (error) {
-    throw new Error(`${source} is not a valid Kinu TUI preference file.`, { cause: error });
-  }
+    for (const [actionId, bindings] of Object.entries(parsed.keyOverrides)) {
+      if (!isTuiActionId(actionId)) {
+        return yield* Effect.die(new Error(`${source}.keyOverrides.${actionId} is not a known TUI action.`));
+      }
 
-  const overrideEntries: Array<readonly [TuiActionId, readonly string[]]> = [];
-
-  for (const [actionId, bindings] of Object.entries(parsed.keyOverrides)) {
-    if (!isTuiActionId(actionId)) {
-      throw new Error(`${source}.keyOverrides.${actionId} is not a known TUI action.`);
+      overrideEntries.push([actionId, Object.freeze(bindings)]);
     }
 
-    overrideEntries.push([actionId, Object.freeze(bindings)]);
-  }
+    const keyOverrides: KeymapOverrides = Object.fromEntries(overrideEntries);
 
-  const keyOverrides: KeymapOverrides = Object.fromEntries(overrideEntries);
+    const common = {
+      theme: Object.freeze(parsed.theme),
+      keymapPreset: parsed.keymapPreset,
+      keyOverrides: Object.freeze(keyOverrides),
+      wideSidebarOpen: parsed.wideSidebarOpen,
+      skippedOnboardingSteps: Object.freeze([...new Set(parsed.skippedOnboardingSteps)]),
+      promptHistory: parsed.promptHistory,
+    };
 
-  const common = {
-    theme: Object.freeze(parsed.theme),
-    keymapPreset: parsed.keymapPreset,
-    keyOverrides: Object.freeze(keyOverrides),
-    wideSidebarOpen: parsed.wideSidebarOpen,
-    skippedOnboardingSteps: Object.freeze([...new Set(parsed.skippedOnboardingSteps)]),
-    promptHistory: parsed.promptHistory,
-  };
-
-  return Object.freeze(parsed.onboardingLocation === undefined
-    ? common
-    : { ...common, onboardingLocation: parsed.onboardingLocation });
+    return Object.freeze(parsed.onboardingLocation === undefined
+      ? common
+      : { ...common, onboardingLocation: parsed.onboardingLocation });
+  });
 }

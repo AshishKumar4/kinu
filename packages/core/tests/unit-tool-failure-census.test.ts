@@ -13,6 +13,7 @@ import {
   createDeviceTunnelExecutor, createInlineExecutor, createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell,
   createParentExecutor, createSandboxExecutor,
   DefaultExecutionRouter,
+  DEVICE_ERRORS, deviceFailure,
   type ExecutorProvider, type NimbusSandboxHandle, type SandboxHandle, type ToolFailureCensus, ToolOutcomeSchema, failedToolOutcome,
   WORKSPACE_ROOT,
 } from '../src/index';
@@ -588,7 +589,7 @@ describe('each executor tool files its own failure in the right part', () => {
 
   test('device: no device attached is a platform gap, not a successful call', async () => {
     const payload = await escalate(createDeviceTunnelExecutor({
-      rpc: async () => { throw new Error('no device connected'); },
+      rpc: async () => { throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected'); },
       status: () => ({ connected: false, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: false, registered: true, toolchain: null }),
     }));

@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 
@@ -15,21 +17,23 @@ export interface ToolPairingGaps {
 }
 
 export function toolPairingGaps(messages: readonly PairingMessage[]): ToolPairingGaps {
-  const calls = new Set<string>();
-  const results = new Set<string>();
+  return settleSync(Effect.gen(function* () {
+    const calls = new Set<string>();
+    const results = new Set<string>();
 
-  for (const message of messages) {
-    if ((message.role !== 'assistant' && message.role !== 'tool') || v.is(Text, message.content)) continue;
+    for (const message of messages) {
+      if ((message.role !== 'assistant' && message.role !== 'tool') || v.is(Text, message.content)) continue;
 
-    for (const part of message.content) {
-      if (part.type !== 'tool-call' && part.type !== 'tool-result') continue;
+      for (const part of message.content) {
+        if (part.type !== 'tool-call' && part.type !== 'tool-result') continue;
 
-      if (part.toolCallId === undefined) throw new KinuError('bad_input', 'tool history part has no call identity');
+        if (part.toolCallId === undefined) return yield* new KinuError('bad_input', 'tool history part has no call identity');
 
-      if (part.type === 'tool-call') calls.add(part.toolCallId);
-      else if (!calls.delete(part.toolCallId)) results.add(part.toolCallId);
+        if (part.type === 'tool-call') calls.add(part.toolCallId);
+        else if (!calls.delete(part.toolCallId)) results.add(part.toolCallId);
+      }
     }
-  }
 
-  return { calls, results };
+    return { calls, results };
+  }));
 }

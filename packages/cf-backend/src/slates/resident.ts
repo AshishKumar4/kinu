@@ -1,3 +1,4 @@
+import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
 import type { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
@@ -6,7 +7,7 @@ import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import { SLATE_METHOD_NAME_SOURCE, type SlateProcess, type SlateProject } from '@kinu.run/core';
-import { diagnostics, KinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import slateVendor, { workerCompatibility } from 'virtual:kinu-slate-vendor';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
@@ -325,15 +326,18 @@ function slateShell(input: { readonly title: string; readonly assets: readonly {
   ].filter((line) => line !== '').join('\n');
 }
 
-async function compileSlate(bundler: EsbuildService, entry: string, options: Parameters<EsbuildService['build']>[1]) {
-  try { return await bundler.build([entry], options); }
-  catch (cause) {
-    if (cause instanceof Error && 'errors' in cause && Array.isArray(cause.errors)) {
-      throw new KinuError('bad_input', 'Slate compilation failed', { cause });
-    }
+function compileSlate(bundler: EsbuildService, entry: string, options: Parameters<EsbuildService['build']>[1]) {
+  return Effect.gen(function* () {
+    return yield* Effect.catchCause(Effect.gen(function* () { return yield* Effect.promise(async () => bundler.build([entry], options)); }), (failed) => Effect.gen(function* () {
+      const cause = Cause.squash(failed);
 
-    throw cause;
-  }
+      if (cause instanceof Error && 'errors' in cause && Array.isArray(cause.errors)) {
+        return yield* new KinuError('bad_input', 'Slate compilation failed', { cause });
+      }
+
+      return yield* Effect.failCause(failed);
+    }));
+  });
 }
 
 /** Module-map keys must end `.js`, so kept bare specifiers are rewritten onto these paths. */
@@ -382,178 +386,181 @@ export class ResidentSlateProcesses {
 
   constructor(private readonly deps: ResidentSlateDeps) {}
 
-  async start(input: ResidentSlateBoot): Promise<ResidentSlateProcess> {
-    const session = await this.deps.session();
-    const main = input.project.main;
-    const browser = input.project.browser;
+  start(input: ResidentSlateBoot): Promise<ResidentSlateProcess> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const session = yield* Effect.promise(async () => this.deps.session());
+      const main = input.project.main;
+      const browser = input.project.browser;
 
-    if (main === undefined) {
-      throw new KinuError('bad_input', 'package.json main must name the module that exports class Slate extends SlateObject from kinu:slate');
-    }
-
-    const authored = session.vfs.as(input.cred);
-
-    for (const [field, entry] of [['main', main], ['browser', browser]] as const) {
-      if (entry !== undefined && !authored.exists(`${input.root}/${entry}`)) {
-        throw new KinuError('bad_input', `package.json "${field}" names ${entry}, which is not a file in ${input.root}`);
+      if (main === undefined) {
+        return yield* new KinuError('bad_input', 'package.json main must name the module that exports class Slate extends SlateObject from kinu:slate');
       }
-    }
 
-    const bundlerKey = slateCredentialKey(input.cred);
-    let bundler = this.bundlers.get(bundlerKey);
+      const authored = session.vfs.as(input.cred);
 
-    if (bundler === undefined) {
-      bundler = this.deps.bundler(session.filesystem.namespaceFs(input.cred));
-      this.bundlers.set(bundlerKey, bundler);
-    }
-
-    this.provisionRuntimeFiles(session);
-
-    // Generated entries live under the runtime dir, never the slate root, where they would surface in listings,
-    // snapshots and revision bumps.
-    const slateId = input.root.slice(input.root.lastIndexOf('/') + 1);
-    const entriesDir = `${RUNTIME_DIR}/entries/${slateId}`;
-    const kernelVfs = session.vfs.as(CRED_KERNEL);
-
-    const provision = (name: string, contents: string) => {
-      kernelVfs.mkdir(entriesDir, { recursive: true, mode: 0o755 });
-
-      const path = `${entriesDir}/${name}`;
-
-      if (!(kernelVfs.exists(path) && kernelVfs.readFileString(path) === contents)) {
-        kernelVfs.writeFile(path, contents, { mode: 0o644 });
+      for (const [field, entry] of [['main', main], ['browser', browser]] as const) {
+        if (entry !== undefined && !authored.exists(`${input.root}/${entry}`)) {
+          return yield* new KinuError('bad_input', `package.json "${field}" names ${entry}, which is not a file in ${input.root}`);
+        }
       }
-    };
 
-    let serverEntry = `${input.root}/${main}`;
+      const bundlerKey = slateCredentialKey(input.cred);
+      let bundler = this.bundlers.get(bundlerKey);
 
-    if (browser === main) {
-      // Re-export only the class so the file's client half never reaches the server bundle.
-      serverEntry = `${entriesDir}/server.js`;
-      provision('server.js', `export { Slate } from "${input.root}/${main}";\n`);
-    }
+      if (bundler === undefined) {
+        bundler = this.deps.bundler(session.filesystem.namespaceFs(input.cred));
+        this.bundlers.set(bundlerKey, bundler);
+      }
 
-    let clientEntry: string | undefined;
+      this.provisionRuntimeFiles(session);
 
-    if (browser !== undefined) {
-      clientEntry = `${entriesDir}/client.js`;
-      provision('client.js', `import App from "${input.root}/${browser}";\nimport { mount } from "kinu:slate";\nmount(App);\nexport default App;\n`);
-    }
+      // Generated entries live under the runtime dir, never the slate root, where they would surface in listings,
+      // snapshots and revision bumps.
+      const slateId = input.root.slice(input.root.lastIndexOf('/') + 1);
+      const entriesDir = `${RUNTIME_DIR}/entries/${slateId}`;
+      const kernelVfs = session.vfs.as(CRED_KERNEL);
 
-    const server = await compileSlate(bundler, serverEntry, {
-      bundle: true, format: 'esm', platform: 'neutral', outfile: '/application.js',
-      // Not `alias`: the nimbus-vfs resolver sees a specifier before esbuild applies it.
-      external: ['cloudflare:*', 'node:*', 'capnweb', 'kinu:slate', 'react', 'react-dom/client', 'react/jsx-runtime'],
-      tsconfigRaw: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } }),
-    });
+      const provision = (name: string, contents: string) => {
+        kernelVfs.mkdir(entriesDir, { recursive: true, mode: 0o755 });
 
-    if (server.errors.length !== 0) throw new KinuError('bad_input', server.errors.map((error) => error.text).join('\n'));
-    const application = server.outputFiles.find((file) => file.path === '/application.js');
+        const path = `${entriesDir}/${name}`;
 
-    if (application === undefined) throw new KinuError('io', 'Slate compiler did not produce the server module');
-    let assets: typeof server.outputFiles = [];
-    let shell: string | undefined;
+        if (!(kernelVfs.exists(path) && kernelVfs.readFileString(path) === contents)) {
+          kernelVfs.writeFile(path, contents, { mode: 0o644 });
+        }
+      };
 
-    if (clientEntry !== undefined) {
-      const client = await compileSlate(bundler, clientEntry, {
-        bundle: true, format: 'esm', platform: 'browser', outfile: '/__kinu/client.js',
-        external: ['react', 'react-dom/client', 'react/jsx-runtime', 'capnweb', 'kinu:slate'],
+      let serverEntry = `${input.root}/${main}`;
+
+      if (browser === main) {
+        // Re-export only the class so the file's client half never reaches the server bundle.
+        serverEntry = `${entriesDir}/server.js`;
+        provision('server.js', `export { Slate } from "${input.root}/${main}";\n`);
+      }
+
+      let clientEntry: string | undefined;
+
+      if (browser !== undefined) {
+        clientEntry = `${entriesDir}/client.js`;
+        provision('client.js', `import App from "${input.root}/${browser}";\nimport { mount } from "kinu:slate";\nmount(App);\nexport default App;\n`);
+      }
+
+      const server = yield* compileSlate(bundler, serverEntry, {
+        bundle: true, format: 'esm', platform: 'neutral', outfile: '/application.js',
+        // Not `alias`: the nimbus-vfs resolver sees a specifier before esbuild applies it.
+        external: ['cloudflare:*', 'node:*', 'capnweb', 'kinu:slate', 'react', 'react-dom/client', 'react/jsx-runtime'],
         tsconfigRaw: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } }),
       });
 
-      if (client.errors.length !== 0) throw new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
-      assets = client.outputFiles;
-      shell = slateShell({ title: input.project.slate.title ?? input.project.name ?? 'slate', assets });
-    }
+      if (server.errors.length !== 0) return yield* new KinuError('bad_input', server.errors.map((error) => error.text).join('\n'));
+      const application = server.outputFiles.find((file) => file.path === '/application.js');
 
-    const modules = {
-      [MAIN_MODULE]: slateRunnerSource(assets, shell),
-      [APPLICATION_MODULE]: rewriteModuleSpecifiers(application.contents),
-      'capnweb.js': slateVendor.capnwebWorkers,
-      'server.js': SLATE_SERVER_MODULE,
-      'react-stub.js': slateVendor.reactStub,
-      'vendor.js': `export const react = ${JSON.stringify(slateVendor.react)};\nexport const capnweb = ${JSON.stringify(slateVendor.capnweb)};\nexport const slateClient = ${JSON.stringify(SLATE_CLIENT_MODULE)};\n`,
-    };
+      if (application === undefined) return yield* new KinuError('io', 'Slate compiler did not produce the server module');
+      let assets: typeof server.outputFiles = [];
+      let shell: string | undefined;
 
-    // Non-main modules travel by content-addressed VFS path; the loader verifies bytes against the digest.
-    const images: Record<string, string> = {};
-    const textModules: Record<string, string> = {};
-    kernelVfs.mkdir(`/${FACET_IMAGE_DIR}`, { recursive: true, mode: 0o755 });
+      if (clientEntry !== undefined) {
+        const client = yield* compileSlate(bundler, clientEntry, {
+          bundle: true, format: 'esm', platform: 'browser', outfile: '/__kinu/client.js',
+          external: ['react', 'react-dom/client', 'react/jsx-runtime', 'capnweb', 'kinu:slate'],
+          tsconfigRaw: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } }),
+        });
 
-    for (const [name, contents] of Object.entries(modules)) {
-      const digest = await facetImageDigest(contents);
-      const path = facetImagePath(digest);
+        if (client.errors.length !== 0) return yield* new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
+        assets = client.outputFiles;
+        shell = slateShell({ title: input.project.slate.title ?? input.project.name ?? 'slate', assets });
+      }
 
-      if (!kernelVfs.exists(path)) kernelVfs.writeFile(path, contents, { mode: 0o644 });
-      images[name] = digest;
+      const modules = {
+        [MAIN_MODULE]: slateRunnerSource(assets, shell),
+        [APPLICATION_MODULE]: rewriteModuleSpecifiers(application.contents),
+        'capnweb.js': slateVendor.capnwebWorkers,
+        'server.js': SLATE_SERVER_MODULE,
+        'react-stub.js': slateVendor.reactStub,
+        'vendor.js': `export const react = ${JSON.stringify(slateVendor.react)};\nexport const capnweb = ${JSON.stringify(slateVendor.capnweb)};\nexport const slateClient = ${JSON.stringify(SLATE_CLIENT_MODULE)};\n`,
+      };
 
-      if (name !== MAIN_MODULE) textModules[name] = path;
-    }
+      // Non-main modules travel by content-addressed VFS path; the loader verifies bytes against the digest.
+      const images: Record<string, string> = {};
+      const textModules: Record<string, string> = {};
+      kernelVfs.mkdir(`/${FACET_IMAGE_DIR}`, { recursive: true, mode: 0o755 });
 
-    const manager = (await this.deps.facetManager()).manager;
+      for (const [name, contents] of Object.entries(modules)) {
+        const digest = yield* Effect.promise(async () => facetImageDigest(contents));
+        const path = facetImagePath(digest);
 
-    const launch: LongRunningWorkerSpawnOptions = {
-      mainModule: MAIN_MODULE,
-      ...workerCompatibility,
-      vfsTextModules: textModules,
-      env: input.bindings,
-      globalOutbound: input.globalOutbound,
-    };
+        if (!kernelVfs.exists(path)) kernelVfs.writeFile(path, contents, { mode: 0o644 });
+        images[name] = digest;
 
-    if (input.app !== null) {
-      const runner = images[MAIN_MODULE];
-      const applicationImage = images[APPLICATION_MODULE];
+        if (name !== MAIN_MODULE) textModules[name] = path;
+      }
 
-      if (runner === undefined) throw new KinuError('io', `Slate boot produced no ${MAIN_MODULE} image`);
+      const manager = (yield* Effect.promise(async () => this.deps.facetManager())).manager;
 
-      if (applicationImage === undefined) throw new KinuError('io', `Slate boot produced no ${APPLICATION_MODULE} image`);
-      launch.port = input.app.port;
-      launch.durable = { owner: input.owner, image: { runner, application: applicationImage } };
-    }
+      const launch: LongRunningWorkerSpawnOptions = {
+        mainModule: MAIN_MODULE,
+        ...workerCompatibility,
+        vfsTextModules: textModules,
+        env: input.bindings,
+        globalOutbound: input.globalOutbound,
+      };
 
-    const spawned = await manager.spawnWorker(modules[MAIN_MODULE], `slate ${slateId}`, input.root, launch);
+      if (input.app !== null) {
+        const runner = images[MAIN_MODULE];
+        const applicationImage = images[APPLICATION_MODULE];
 
-    const pid = spawned.pid;
-    const refusal = v.safeParse(StartedResult, spawned.boot);
-    const surface = v.safeParse(StartedSurface, spawned.boot);
+        if (runner === undefined) return yield* new KinuError('io', `Slate boot produced no ${MAIN_MODULE} image`);
 
-    if (!surface.success) {
-      manager.kill(pid);
+        if (applicationImage === undefined) return yield* new KinuError('io', `Slate boot produced no ${APPLICATION_MODULE} image`);
+        launch.port = input.app.port;
+        launch.durable = { owner: input.owner, image: { runner, application: applicationImage } };
+      }
 
-      if (refusal.success) throw new KinuError('bad_input', refusal.output.error);
-      throw new KinuError('io', 'Slate runner returned a boot result without a method list');
-    }
+      const spawned = yield* Effect.promise(async () => manager.spawnWorker(modules[MAIN_MODULE], `slate ${slateId}`, input.root, launch));
 
-    const methods = surface.output.methods;
+      const pid = spawned.pid;
+      const refusal = v.safeParse(StartedResult, spawned.boot);
+      const surface = v.safeParse(StartedSurface, spawned.boot);
 
-    session.processes.setTerminator(pid, () => {
-      // Every resident exit passes here; the stack records who ended the pid.
-      diagnostics.event('slate.resident.terminated', {
-        pid, owner: input.owner, port: input.app?.port ?? 0,
-        state: session.processes.get(pid)?.state ?? 'absent',
-        by: new Error('resident terminated').stack?.split('\n').slice(2, 8).map((line) => line.trim()).join(' < ') ?? '',
+      if (!surface.success) {
+        manager.kill(pid);
+
+        if (refusal.success) return yield* new KinuError('bad_input', refusal.output.error);
+
+        return yield* new KinuError('io', 'Slate runner returned a boot result without a method list');
+      }
+
+      const methods = surface.output.methods;
+
+      session.processes.setTerminator(pid, () => {
+        // Every resident exit passes here; the stack records who ended the pid.
+        diagnostics.event('slate.resident.terminated', {
+          pid, owner: input.owner, port: input.app?.port ?? 0,
+          state: session.processes.get(pid)?.state ?? 'absent',
+          by: new Error('resident terminated').stack?.split('\n').slice(2, 8).map((line) => line.trim()).join(' < ') ?? '',
+        });
       });
-    });
 
-    const artifacts: SlateBootArtifacts = { application: modules[APPLICATION_MODULE] };
-    const clientBundle = assets.find((asset) => asset.path === '/__kinu/client.js');
+      const artifacts: SlateBootArtifacts = { application: modules[APPLICATION_MODULE] };
+      const clientBundle = assets.find((asset) => asset.path === '/__kinu/client.js');
 
-    if (shell !== undefined && clientBundle !== undefined) {
-      artifacts.client = clientBundle.contents;
-      artifacts.shell = shell;
-    }
+      if (shell !== undefined && clientBundle !== undefined) {
+        artifacts.client = clientBundle.contents;
+        artifacts.shell = shell;
+      }
 
-    // Nothing else sweeps these images (fabric sweeps only its own), and every source edit writes a new one.
-    this.imagesInUse.set(pid, new Set(Object.values(images)));
-    this.sweepFacetImages(kernelVfs);
+      // Nothing else sweeps these images (fabric sweeps only its own), and every source edit writes a new one.
+      this.imagesInUse.set(pid, new Set(Object.values(images)));
+      this.sweepFacetImages(kernelVfs);
 
-    return {
-      id: String(pid), port: input.app?.port ?? null, methods, artifacts,
-      request: (request) => spawned.facet.fetch(request),
-      connect: (request) => spawned.facet.connect(request),
-      isRunning: async () => session.processes.get(pid)?.state === 'running',
-      stop: async () => { manager.kill(pid); this.imagesInUse.delete(pid); },
-    };
+      return {
+        id: String(pid), port: input.app?.port ?? null, methods, artifacts,
+        request: (request) => spawned.facet.fetch(request),
+        connect: (request) => spawned.facet.connect(request),
+        isRunning: async () => session.processes.get(pid)?.state === 'running',
+        stop: async () => { manager.kill(pid); this.imagesInUse.delete(pid); },
+      };
+    }));
   }
 
   private sweepFacetImages(kernelVfs: ReturnType<WorkspaceSession['vfs']['as']>): void {

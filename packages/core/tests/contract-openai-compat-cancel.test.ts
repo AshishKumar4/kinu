@@ -76,8 +76,9 @@ describe('openai-compat cancellation', () => {
       model,
       prompt: 'hello',
       abortSignal: controller.signal,
-      onChunk: () => {
-        firstChunk.resolve();
+      // ai 7 also reports the stream's start, before any request leaves.
+      onChunk: ({ chunk }) => {
+        if (chunk.type === 'text-delta') firstChunk.resolve();
       },
     });
 

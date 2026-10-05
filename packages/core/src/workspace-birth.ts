@@ -20,6 +20,8 @@ import { buildRuntime } from './runtime-builder';
 import { createSqlFiber } from './execution/fiber';
 import type { WorkspaceBundle } from './vfs/nimbus-workspace';
 import { writeWorkspaceSoul } from './vfs/workspace-planes';
+import { cloudPlanes } from './vfs/resolve';
+import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import type { ActorHandle } from './identity/actor-handle';
 import { initWorkspaceActorTable, WorkspaceActorDirectory } from './identity/workspace-actors';
 import { SCHEMA_GENESIS_STAMP } from './identity/schema-stamp';
@@ -64,7 +66,7 @@ function buildComponents(components: WorkspaceComponents) {
 
   return buildRuntime({
     actor,
-    workspaceIsMachine: false,
+    planes: cloudPlanes(WORKSPACE_ROOT),
     // Birth runs no agent tool.
     sql, execRaw, transactionSync, vfs, toolFiles: vfs, llm, executor, schedule, shell: workspace.shell,
     memory, craftStore,

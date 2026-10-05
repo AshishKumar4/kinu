@@ -125,6 +125,7 @@ cp "$ROOT/packages/pc-agent/src/sandbox.js" "$stage/pc-agent/sandbox.js"
 cp "$ROOT/packages/pc-agent/src/pty.js" "$stage/pc-agent/pty.js"
 cp "$ROOT/packages/pc-agent/src/update.js" "$stage/pc-agent/update.js"
 cp "$ROOT/packages/pc-agent/src/chatgpt.js" "$stage/pc-agent/chatgpt.js"
+cp "$ROOT/packages/core/src/execution/device-protocol.json" "$stage/pc-agent/device-protocol.json"
 printf '%s\n' "$version" > "$stage/pc-agent/pc-agent.version"
 daemon_stamp="$(KINU_HOME="$stage/pc-agent" "$BUN" "$stage/pc-agent/pc-agent.js" --selftest 2>&1)" || {
   echo "build-cli-dist: the shipped daemon failed its selftest: $daemon_stamp" >&2

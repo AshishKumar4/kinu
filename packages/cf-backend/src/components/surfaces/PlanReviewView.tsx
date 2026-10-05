@@ -11,6 +11,7 @@ import {
   type ReviewAnnotation,
   type PlanReviewResult,
 } from "@kinu.run/core";
+import { Effect, Cause, Result } from "effect";
 import { Viewer } from "@/components/plan-review/Viewer";
 import { AnnotationPanel } from "@/components/plan-review/AnnotationPanel";
 import type { Annotation, Block, EditorMode } from "@plannotator/ui/types";
@@ -19,7 +20,7 @@ import {
 } from "@plannotator/ui/utils/parser";
 import type { Rpc } from "@kinu.run/core";
 import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { annotationType } from "./annotation-type";
 import { copyLabel, useCopy, type CopyStatus } from "@/hooks/use-copy";
@@ -34,9 +35,9 @@ const COPY_ICON = {
 function parsePlanAnnotations(values: readonly ReviewAnnotation[]): Annotation[] {
   const admission = admitReviewAnnotations({ value: values });
 
-  if (!admission.ok) return [];
+  if (Result.isFailure(admission)) return [];
 
-  return admission.annotations.map((annotation) => ({
+  return admission.success.map((annotation) => ({
     ...annotation,
     type: annotationType(annotation.type),
     author: annotation.author ?? "Owner",
@@ -169,23 +170,21 @@ function DismissPlan({ plan, rpc, readOnly, deciding, saving, onError }: {
 
   if (readOnly || !planReviewAwaitingDecision(plan)) return null;
 
-  const dismiss = async () => {
+  const dismiss = () => Effect.gen(function* () {
     setBusy(true);
     onError(null);
 
-    try {
-      const result = await rpc<PlanReviewResult>("dismissPlanReview", [plan.id, plan.revision]);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const result = yield* Effect.promise(async () => rpc<PlanReviewResult>("dismissPlanReview", [plan.id, plan.revision]));
 
       if (!result.ok) onError(result.error);
-    } catch (cause) {
-      onError(renderThrownChain({ cause }));
-    } finally {
+    }), showing(onError)), Effect.sync(() => {
       setBusy(false);
-    }
-  };
+    }));
+  });
 
   return (
-    <Button type="button" size="sm" variant="ghost" onClick={dismiss} disabled={deciding !== null || saving || busy}>
+    <Button type="button" size="sm" variant="ghost" onClick={() => detach(dismiss())} disabled={deciding !== null || saving || busy}>
       {busy ? <Loader size="sm" /> : "Dismiss"}
     </Button>
   );
@@ -222,7 +221,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
       return true;
     } catch (cause) {
       if (activePlanKey.current === planKey) {
-        setError(renderThrownChain({ cause: cause }));
+        setError(renderThrownChain({ cause }));
       }
 
       return false;
@@ -296,23 +295,24 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     onError: setError,
   });
 
-  const changeAnnotations = useCallback(async (next: Annotation[]) => {
+  const changeAnnotations = useCallback((next: Annotation[]) => detach(Effect.gen(function* () {
     if (decisionInFlight()) return;
     // Decided after the handler so a superseded revision does not read as a failed save.
     let thrown: { readonly cause: unknown } | undefined;
 
-    try {
-      await save(next);
-    } catch (cause) {
+    yield* Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => save(next));
+    }), (failed) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
       thrown = { cause };
-    }
+    }));
 
     if (thrown !== undefined && activePlanKey.current === planKey) {
       setError(renderThrownChain({ cause: thrown.cause }));
 
       if (annotationSaves.pending() === 0) setSaving(false);
     }
-  }, [annotationSaves, decisionInFlight, planKey, save]);
+  })), [annotationSaves, decisionInFlight, planKey, save]);
 
   const addAnnotation = useCallback((annotation: Annotation) => {
     if (decisionInFlight()) return;
@@ -502,14 +502,14 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
                 type="button"
                 size="sm"
                 variant="secondary"
-                onClick={() => decide("request_changes")}
+                onClick={() => detach(Effect.promise(async () => decide("request_changes")))}
                 disabled={decisionBusy !== null || saving || annotations.length === 0}
               >
                 {decisionBusy === "request" ? <Loader size="sm" /> : "Request changes"}
               </Button>
               <FilledButton
                 className="w-full sm:w-auto"
-                onClick={() => decide("approve")}
+                onClick={() => detach(Effect.promise(async () => decide("approve")))}
                 disabled={decisionBusy !== null || saving || annotations.length > 0}
               >
                 {decisionBusy === "approve" ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
@@ -518,7 +518,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
           )}
           {handoffPending && (
             <FilledButton
-              onClick={() => decide(plan.status === "approved" ? "approve" : "request_changes")}
+              onClick={() => detach(Effect.promise(async () => decide(plan.status === "approved" ? "approve" : "request_changes")))}
               disabled={decisionBusy !== null || saving}
             >
               {decisionBusy ? <Loader size="sm" /> : retryLabel}

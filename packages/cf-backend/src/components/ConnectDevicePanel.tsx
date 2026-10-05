@@ -1,8 +1,9 @@
+import { Effect } from "effect";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { DesktopTowerIcon, PlugIcon, WarningIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { DEVICE_CONNECT_DISCLOSURE } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { registerDevice, type UserDevice } from "@/lib/user-api";
 import { Modal } from "@/components/ui/Modal";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -168,7 +169,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
         />
         <FilledButton
           data-connect-start
-          onClick={start}
+          onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))}
           disabled={state.kind === "registering"}
           className="shrink-0"
         >

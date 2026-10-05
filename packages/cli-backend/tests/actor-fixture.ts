@@ -3,13 +3,13 @@ import {
   ActorSession, EventLog, EvolutionEngine, WorkspaceActorDirectory,
   BUILTIN_PROFILE_CATALOG, actorReferenceOf, createAgentStores, profileCatalogDigest,
   collectDynamicContext, createActorHost, defaultLoopOrigin, explorationActorKey,
-  facetHomeReleaser, resolveAgentTurnProfile,
+  resolveAgentTurnProfile,
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedNodeSeat,
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs,
   type SqlExec, type SqlValue, type WriteObserver,
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
-import { ConversationSearchStore, bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '@kinu.run/core';
-import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
+import { ConversationSearchStore, bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
+import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import { resolveModelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
 
 /** A head's runtime over its parent's database; a head has no store of its own. */
@@ -109,7 +109,7 @@ export function headSeatFactory(
         stores: actor.stores,
         profile,
         tools,
-        runtime: { backend: 'cli-vfs', model: { id: profile.tier.model }, date: '2026-01-01' },
+        runtime: { backend: 'cli-local', model: { id: profile.tier.model }, date: '2026-01-01' },
         memoryTail: undefined,
         missingCapabilities: [],
         subordinateDelegates: () => [],
@@ -122,8 +122,7 @@ export function headSeatFactory(
         host.release(binding.reference);
         writes?.delete(binding.reference.actorId);
         await retireLocalActor(parent.actor, binding.name, binding.reference, async () => {
-          if (parent.cwd) cleanupFacetCwdScratch(parent.cwd, agentName);
-          else if (parent.nodeHome) await facetHomeReleaser(parent.nodeHome())(agentName);
+          cleanupFacetScratch(parent.space, agentName);
         });
       },
     };
@@ -207,7 +206,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
       stores,
       profile,
       tools,
-      runtime: { backend: 'cli-vfs', model: { id: profile.tier.model }, date: '2026-01-01' },
+      runtime: { backend: 'cli-local', model: { id: profile.tier.model }, date: '2026-01-01' },
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => [],
@@ -225,7 +224,8 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
 /** Per-node seat factory: each call registers its own node actor, so wave children never share a claim ledger. */
 export function nodeSeatFactory(rt: CLIRuntime, runId = 'fixture-run'): (node: NodeIdentity) => Promise<HostedNodeSeat> {
   return async (node) => {
-    const handle = registerLocalNode(rt.actor, node);
+    const binding = registerLocalActor(rt.actor, { name: explorationActorKey(node.nodeId), creationId: node.nodeId, origin: 'swarm', lifetime: 'task' });
+    const handle = bindLocalActor(rt.storage.sql, binding);
     // The host requires the runtime and binding to share one handle. Swarm mode keeps the node off the branching-head runtime.
     const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, undefined, true);
     const seams = headLoopSeams(rt, runId, handle, runtime);

@@ -10,6 +10,8 @@ import { EXPANDED_RESULT_LINES, FileDiffCard, fileEditDiffView } from './diff-ca
 import { StatusView } from './help-view';
 import { useTuiTheme, type TuiThemeColors } from './theme';
 import { useSceneWidth } from './tui-shell';
+import { linkFileReferences, type FileLinks } from '@kinu.run/core';
+
 
 export interface DisplayMessage {
   id: string;
@@ -408,9 +410,11 @@ function groupTranscript(messages: readonly DisplayMessage[]): TranscriptBlock[]
   return blocks;
 }
 
-export function MessageList({ messages, toolDetailsExpanded = false }: {
+export function MessageList({ messages, toolDetailsExpanded = false, fileLinks = null }: {
   readonly messages: DisplayMessage[];
   readonly toolDetailsExpanded?: boolean;
+  /** Where the workspace's files open; null leaves a reference as text. */
+  readonly fileLinks?: FileLinks | null;
 }) {
   const width = useSceneWidth();
   const callPreviewWidth = Math.max(8, Math.min(80, width - 24));
@@ -441,7 +445,7 @@ export function MessageList({ messages, toolDetailsExpanded = false }: {
           case 'user':
             return <UserMessage key={message.id} content={content} attachments={message.attachments} steered={message.steered} branched={message.branched} />;
           case 'assistant':
-            return <AssistantMessage key={message.id} content={content} live={message.live} />;
+            return <AssistantMessage key={message.id} content={fileLinks === null ? content : linkFileReferences(content, fileLinks)} live={message.live} />;
           case 'thinking':
             return <ThinkingMessage key={message.id} content={content} live={message.live} expanded={toolDetailsExpanded} />;
           case 'evolution':

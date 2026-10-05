@@ -8,6 +8,7 @@ import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { DEFAULT_CACHE_RETENTION, type CacheRetention } from '../providers/types';
 import { ANTHROPIC_MAX_BREAKPOINTS } from '../providers/anthropic';
+import { compatOptionsKey } from '../providers/effort';
 
 /** The AI SDK's provider-options bag (not re-exported by `ai` itself). */
 type ProviderOptions = NonNullable<ModelMessage['providerOptions']>;
@@ -327,7 +328,7 @@ export function promptCacheOptions(strategy: PromptCacheStrategy, sessionKey: st
       }
 
     case 'openai-compat':
-      return { [strategy.bodyNamespace]: { prompt_cache_key: sessionKey } };
+      return { [compatOptionsKey(strategy.bodyNamespace)]: { prompt_cache_key: sessionKey } };
     case 'anthropic':
     case 'none':
       return undefined;

@@ -3,6 +3,7 @@ import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/executi
 import type { DeviceStatus } from '../src/execution/device-status';
 import type { JsonValue } from '../src/utils/json';
 import type { ApprovalGrant } from '../src/safety/approval-gate';
+import { DEVICE_ERRORS, deviceFailure } from '../src/execution/device-protocol';
 
 function staticTransport(status: DeviceStatus, rpc: DeviceTransport['rpc']): DeviceTransport {
   return { status: () => status, refreshStatus: async () => status, rpc };
@@ -181,10 +182,10 @@ describe('createDeviceTunnelExecutor', () => {
       workspaceGranted: true,
     }, async () => undefined);
 
-    // The connected machine names the row, not whichever registered first.
+    // The connected machine names the row, not whichever registered first; only a live machine's segment is linkable.
     expect(createDeviceTunnelExecutor(named).getStatus?.()).toEqual({
       configured: true, available: true, active: true, status: 'active',
-      label: 'ashish@studio', granted: true,
+      label: 'ashish@studio', granted: true, mounts: ['ashish@studio'],
     });
 
     // Offline but registered: still named, still ungranted.
@@ -212,7 +213,7 @@ describe('createDeviceTunnelExecutor', () => {
 
       if (method === 'writeFile') return { success: true };
 
-      if (method === 'listFiles') return [{ name: 'a.txt', type: 'file' }];
+      if (method === 'listFiles') return { entries: [{ name: 'a.txt', type: 'file' }], next: null };
 
       if (method === 'statPath') return { size: 5, mtimeMs: 0, isDir: false };
       throw new Error(`unexpected method ${method}`);
@@ -324,11 +325,11 @@ describe('createDeviceTunnelExecutor', () => {
 
   test('hub/tunnel disconnect errors surface the connect guidance', async () => {
     const hubRejects = staticTransport({ connected: false, registered: true, toolchain: null }, async () => {
-      throw new Error('no device connected');
+      throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected');
     });
 
     const tunnelDropped = staticTransport({ connected: true, registered: true, toolchain: null }, async () => {
-      throw new Error('device tunnel not connected');
+      throw deviceFailure(DEVICE_ERRORS.disconnected, 'device tunnel not connected');
     });
 
     const fromHub = await createDeviceTunnelExecutor(hubRejects).tools.exec.execute('ls');

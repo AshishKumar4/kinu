@@ -34,8 +34,24 @@ fabric and worker, which is why nothing here pins it.
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`.
 
-No Nimbus patch remains. Core 0.12.0 and worker 0.10.0 carry what the patches
-held: the read-only-open guards in core's `src/vfs/sqlite-vfs.ts` (D21, D22),
+One Nimbus fix is patched in, across two packages. Core 0.15.0's rolldown
+build refuses any `tsconfigRaw` and compiles JSX to `React.createElement`
+whatever it is given, so a slate client, whose JSX needs the automatic runtime,
+does not compile; 0.14 bundled it to `react/jsx-runtime` imports (NIMBUS-ASKS
+#19, 2026-10-05). `patches/@nimbus-sh%2Fcore@0.15.0.patch` maps
+`tsconfigRaw.compilerOptions` onto rolldown's JSX transform in
+`runtime/rolldown-build`, in `src/` (Bun) and `dist/` (workerd): `react-jsx` and
+`react-jsxdev` to the automatic runtime from `jsxImportSource`, `react` to the
+classic one with its factories, and it still refuses any other option. The
+build facet runs a prebuilt copy of that file, a content-addressed asset of
+`@nimbus-sh/worker`, so `patches/@nimbus-sh%2Fworker@0.13.1.patch` carries the
+same change there and re-pins the asset's path, build id and SHA-256. Both go
+when core 0.15.1 ships the fix with a worker built from it; the browser-surface
+case in `packages/cf-backend/tests/workerd/slate-process.test.ts` holds the
+behaviour.
+
+Core 0.12.0 and worker 0.10.0 carry what the earlier patches held: the
+read-only-open guards in core's `src/vfs/sqlite-vfs.ts` (D21, D22),
 `NPM_REGISTRY` passed from the command's environment to the installer
 (`dist/hosted/commands.js`), `facets()` on `composeHostedRuntime`'s return,
 and the `LongRunningWorkerSpawnOptions` re-export from `workspace-host`.

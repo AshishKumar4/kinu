@@ -13,6 +13,8 @@ import type { FileToolInput } from '../src/tools/file-tool';
 import type { JsonValue } from '../src/utils/json';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { createTestRuntime, conversationsFor } from './helpers';
+import { cloudPlanes } from '../src/vfs/resolve';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 const STUDIO: DeviceFleetEntry = { id: 'dev-studio', name: 'ashish@studio', os: 'darwin', hostname: 'studio', connected: true };
 
@@ -66,7 +68,7 @@ function fileToolOverTheFleet(written: JsonValue = { success: true }, gated = fa
   const plane = withMountTable(rt.storage.vfs, standardMounts((name) => router.getProvider(name)));
 
   const toolFiles = gated
-    ? withApprovalGatedFiles(plane, 'workspace', { userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, OWNER_ALLOWS)
+    ? withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, OWNER_ALLOWS)
     : plane;
 
   const tools = buildBuiltinTools({

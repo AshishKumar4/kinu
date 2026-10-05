@@ -1,8 +1,8 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
-  CHAT_SESSION_ID, HeadCapture, agentAffinityKey, decodeJsonValue, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
-  type AuthRequest, type AuthResolution, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
+  CHAT_SESSION_ID, HeadCapture, agentAffinityKey, decodeJsonValue, decodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
+  type AuthRequest, type AuthResolution, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type ObservedCall, type ProviderEnv, type WorkMode,
   type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
 } from '@kinu.run/core';
 import { attempt, diagnostics, renderCauseChain, settle } from '@kinu.run/core/obs';
@@ -20,7 +20,8 @@ export interface AgentWorkspace {
   program(turnId: string, ...args: Parameters<Executor['execute']>): ReturnType<Executor['execute']>;
   traceTurn(turnId: string, event: AgentTrace): Promise<void>;
   traceStream(turnId: string, lines: ReadableStream<Uint8Array>): Promise<void>;
-  resume(turnId: string): Promise<readonly ModelMessage[] | null>;
+  /** In the session codec's durable form: a ModelMessage's type is too deep for an RPC signature. */
+  resume(turnId: string): Promise<readonly JsonValue[] | null>;
   guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>): ReturnType<MissionBudgetPort['guard']>;
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>): Promise<void>;
   prepareTurn(turnId: string): Promise<PreparedAgentTurn>;
@@ -242,13 +243,23 @@ async function runTurn(
   const trace = prepared.trace ? new HeadTrace(workspace, task.sequenceId) : null;
   let produced: readonly ModelMessage[] | undefined;
 
-  if (prepared.birthContext !== undefined) inference.delegation = { assignmentId: task.sequenceId, birthContext: prepared.birthContext };
+  if (prepared.birthContext !== undefined) {
+    inference.delegation = { assignmentId: task.sequenceId, birthContext: decodeModelMessageValues(prepared.birthContext) };
+  }
 
-  if (prepared.framing !== undefined) inference.framing = prepared.framing;
+  if (prepared.framing !== undefined) {
+    inference.framing = { system: prepared.framing.system, messages: decodeModelMessageValues(prepared.framing.messages) };
+  }
 
   if (prepared.reportMessages) inference.reportMessages = (messages) => { produced = messages; };
 
-  if (prepared.resume) inference.resume = () => workspace.resume(task.sequenceId);
+  if (prepared.resume) {
+    inference.resume = async () => {
+      const resumed = await workspace.resume(task.sequenceId);
+
+      return resumed === null ? null : decodeModelMessageValues(resumed);
+    };
+  }
 
   if (prepared.missionLabels !== undefined) inference.mission = {
     labels: prepared.missionLabels,
@@ -269,7 +280,13 @@ async function runTurn(
   });
 
   // Every end closes the stream; an open one holds the relay.
-  const report = await runHeadInference(prepared.input, inference).finally(() => trace?.flush());
+  let report: Awaited<ReturnType<typeof runHeadInference>>;
+
+  try {
+    report = await runHeadInference(prepared.input, inference);
+  } finally {
+    await trace?.flush();
+  }
 
   closeTurnRun(actor.stores.eventRecorder, runId, {
     turnIndex: actor.session.orchestrator.sessionTurnIndex,

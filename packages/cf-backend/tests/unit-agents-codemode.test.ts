@@ -8,6 +8,7 @@ import { asSchema, jsonSchema, tool } from 'ai';
 import {
   decodeJsonValue,
   BUILTIN_TOOL_DESCRIPTIONS, CODEMODE_CODE_DESCRIPTION,
+  cloudPlanes,
   codemodeSurface,
   createAgentsCodemodeProvider,
   parseJsonValue,
@@ -17,7 +18,7 @@ import {
   type WebSearchProvider,
   type BrowserSessions,
 } from '@kinu.run/core';
-import { narrowToolSurface } from '@kinu.run/core';
+import { narrowToolSurface, toolDescription } from '@kinu.run/core';
 import { ROOT_DELEGATION_BUDGET } from '@kinu.run/core';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import * as v from 'valibot';
@@ -27,7 +28,7 @@ const codemodeHandoff: SubordinateHandoff = {
   phase: { busy: false, lastActivityAt: null, workingOn: null },
 };
 
-import { createTestRuntime, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedTurnModel, toolExecute, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { hostedSeatsOver } from '../../core/tests/helpers-actor-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -98,11 +99,11 @@ function buildCodemode(agents?: () => AgentsToolDeps) {
 }
 
 function codemodeDescription(agents?: () => AgentsToolDeps): string {
-  const built = buildCodemode(agents);
+  const description = toolDescription(buildCodemode(agents));
 
-  if (!built.description) throw new Error('eval description is missing');
+  if (!description) throw new Error('eval description is missing');
 
-  return built.description;
+  return description;
 }
 
 /** 5 in + 3 out per expansion, so a run's total is arithmetic over expansion count. */
@@ -227,6 +228,32 @@ describe('the eval docstring the model receives', () => {
 
     expect(schema.properties.code.description).toBe(CODEMODE_CODE_DESCRIPTION);
     expect(schema.required).toEqual(['code']);
+  });
+});
+
+describe("a program's working directory", () => {
+  // Release review, 2026-10-04: every program's `process` started in the workspace root, so a hosted actor's
+  // relative paths missed its own home.
+  test("a hosted actor's program starts in that actor's home", async () => {
+    const { rt, testSql } = createTestRuntime();
+    initCraftedToolsTables(testSql.sql);
+    const hosted = { ...rt, storage: { ...rt.storage, home: '/home/sub-hosted' }, planes: cloudPlanes('/home/sub-hosted') };
+    const preludes: string[] = [];
+
+    const launch = (): ProgramLaunch => ({
+      run: async (_source, providers) => {
+        preludes.push(...providers.flatMap((provider) => provider.prelude ?? []));
+
+        return { result: null };
+      },
+    });
+
+    const codemode = createCodemodeToolFactory({
+      launch, rt: hosted, workspace: 'test-workspace', webSearch: webSearchProvider(), browserSessions: noBrowsers, reach: narrowToolSurface(undefined),
+    }).toolFor(codemodeSurface(hosted, {}));
+
+    await toolExecute(codemode)({ code: 'return 1' });
+    expect(preludes.join('\n')).toContain('__kinu.createProcess("/home/sub-hosted")');
   });
 });
 

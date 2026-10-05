@@ -3,14 +3,15 @@
  * Both sockets are hibernatable, so live terminals are found from socket attachments; memory holds only
  * the open-to-attach window. Authorization happens earlier, in `deviceRpc`.
  */
-import { tolerate } from '../obs/expected-failure';
+import { Effect } from 'effect';
+import { tolerate, settleSync } from '../obs/effect';
 import { diagnostics } from '../obs/log';
 import { KinuError } from '../obs/error';
 import * as v from 'valibot';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
 import { WS_OPEN } from './device-hub';
 import {
-  DEVICE_PTY_CLOSE, DEVICE_PTY_INPUT, DEVICE_PTY_MAX_AXIS, DEVICE_PTY_RESIZE,
+  DEVICE_PTY_INPUT, DEVICE_PTY_MAX_AXIS, DEVICE_PTY_RESIZE,
 } from './device-tunnel';
 
 const TERMINAL_WS_TAG_PREFIX = 'terminal:';
@@ -90,16 +91,18 @@ export class DeviceTerminalHub {
 
   /** Refuses an unknown name and a second attach: two panes would race for one program's input. */
   attach(session: string, server: DeviceSocket): TerminalHolder {
-    const pending = this.unattached.get(session);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const pending = this.unattached.get(session);
 
-    if (!pending) throw new KinuError('missing', TERMINAL_SESSION_UNKNOWN);
+      if (!pending) return yield* new KinuError('missing', TERMINAL_SESSION_UNKNOWN);
 
-    if (this.paneSocket(session)) throw new KinuError('denied', TERMINAL_ALREADY_ATTACHED);
-    this.unattached.delete(session);
-    this.ctx.acceptWebSocket(server, [terminalTag(session)]);
-    server.serializeAttachment({ terminal: session, device: pending.device, workspace: pending.workspace });
+      if (this.paneSocket(session)) return yield* new KinuError('denied', TERMINAL_ALREADY_ATTACHED);
+      this.unattached.delete(session);
+      this.ctx.acceptWebSocket(server, [terminalTag(session)]);
+      server.serializeAttachment({ terminal: session, device: pending.device, workspace: pending.workspace });
 
-    return { device: pending.device, workspace: pending.workspace };
+      return { device: pending.device, workspace: pending.workspace };
+    }));
   }
 
   paneSocket(session: string): DeviceSocket | null {
@@ -150,7 +153,12 @@ export class DeviceTerminalHub {
   toPane(session: string, bytes: Uint8Array): void {
     const pane = this.paneSocket(session);
 
-    if (!pane) return;
+    if (!pane) {
+      diagnostics.event('device.terminal_output_unclaimed', { reason: 'terminal_pane_missing', workspace: session });
+
+      return;
+    }
+
     pane.send(bytes);
   }
 
@@ -171,11 +179,11 @@ export class DeviceTerminalHub {
   }
 
   /** The pane's socket closed, so the shell is closed too. */
-  paneClosed(session: string, device: string): void {
+  async paneClosed(session: string, device: string): Promise<void> {
     const tunnel = this.devices.tunnel(device);
 
     if (!tunnel) return;
-    tunnel.notify({ type: DEVICE_PTY_CLOSE, session });
+    await tunnel.cancel(session);
   }
 
   panesForDevice(device: string): string[] {

@@ -3,12 +3,13 @@
  * is the liveness truth and tunnels are a rebuilt cache. The toolchain probe lives on the socket attachment,
  * not SQL, so it never outlives the connection it describes.
  */
-import { KinuError, toKinuError } from '../obs/error';
+import { KinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
 import { attempt, settle } from '../obs/effect';
 import { Effect } from 'effect';
 import type { JsonValue } from '../utils/json';
-import { DeviceTunnel, NO_DEVICE_CONNECTED, isDeviceUnknownMethodError, type TunnelSocket } from './device-tunnel';
+import { DeviceTunnel, NO_DEVICE_CONNECTED, type TunnelSocket } from './device-tunnel';
+import { DEVICE_ERRORS, DEVICE_FRAMES, DEVICE_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED, deviceFailure } from './device-protocol';
 import { DEVICE_CHATGPT, DEVICE_RELAY, DeviceRelays, parseDeviceRelayFrame, type DeviceChatGptMethod, type DeviceRelayRequest } from './device-relay';
 import { REAL_CLOCK } from '../types/clock';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
@@ -19,11 +20,10 @@ import * as v from 'valibot';
 /** WebSocket.OPEN; shared with the terminal hub. */
 export const WS_OPEN = 1;
 
-/** The daemon's keepalive words, verbatim (packages/pc-agent keeps its own literals). Not a hibernation
- *  auto-response: that answers every socket, including terminal panes. */
-export const DEVICE_KEEPALIVE_PING = 'ping';
+/** Not a platform auto-response: that would also consume a terminal's pasted text. */
+export const DEVICE_KEEPALIVE_PING = DEVICE_FRAMES.ping;
 
-export const DEVICE_KEEPALIVE_PONG = 'pong';
+export const DEVICE_KEEPALIVE_PONG = DEVICE_FRAMES.pong;
 
 const DEVICE_WS_TAG_PREFIX = 'device:';
 
@@ -50,20 +50,13 @@ const DeviceToolchainSchema = v.object({
   probedAt: v.number(),
 });
 
-/** The daemon has no `which` method; distinct from an answer of "nothing found". */
-const PROBE_UNANSWERABLE = 'unanswerable';
-
-const DeviceProbeSchema = v.union([DeviceToolchainSchema, v.literal(PROBE_UNANSWERABLE)]);
-
-const RELAY_UNANSWERABLE = 'unanswerable';
-
 const DeviceAttachmentSchema = v.object({
   device: v.string(),
-  probe: v.optional(DeviceProbeSchema),
-  relay: v.optional(v.literal(RELAY_UNANSWERABLE)),
+  protocolVersion: v.optional(v.number()),
+  features: v.optional(v.array(v.string())),
+  probe: v.optional(DeviceToolchainSchema),
+  relays: v.optional(v.array(v.string())),
 });
-
-type DeviceProbe = DeviceToolchain | typeof PROBE_UNANSWERABLE;
 
 export interface DeviceSocketCtx {
   acceptWebSocket(ws: DeviceSocket, tags: string[]): void;
@@ -84,6 +77,7 @@ export function deviceIdFromSocket(ws: DeviceSocket): string | null {
 interface TunnelEntry {
   tunnel: DeviceTunnel;
   ws: DeviceSocket;
+  recovery: Promise<void> | null;
 }
 
 export class DeviceSocketHub {
@@ -107,6 +101,20 @@ export class DeviceSocketHub {
     server.serializeAttachment({ device: deviceId });
   }
 
+  hello(deviceId: string, version: number | undefined, features: readonly string[] | undefined): boolean {
+    if (version === undefined || version < DEVICE_PROTOCOL_VERSION || DEVICE_FEATURES.some((method) => !features?.includes(method))) {
+      diagnostics.event('device.protocol_refused', { device: deviceId, reason: DEVICE_UPDATE_REQUIRED });
+      this.dropTunnel(deviceId);
+      this.liveSocket(deviceId)?.close(DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED);
+
+      return false;
+    }
+
+    this.annotate(deviceId, { protocolVersion: version, features: [...features ?? []] });
+
+    return true;
+  }
+
   liveSocket(deviceId: string): DeviceSocket | null {
     for (const ws of this.ctx.getWebSockets(deviceTag(deviceId))) {
       if (ws.readyState === WS_OPEN) return ws;
@@ -119,7 +127,7 @@ export class DeviceSocketHub {
   toolchain(deviceId: string, now: number): DeviceToolchain | null {
     const probe = this.probeRecord(deviceId);
 
-    if (probe === null || probe === PROBE_UNANSWERABLE) return null;
+    if (probe === null) return null;
 
     return freshDeviceToolchain(probe, now);
   }
@@ -128,45 +136,34 @@ export class DeviceSocketHub {
  * Ask the machine which probe binaries it has and record the answer. Consent is not consulted: the query is
  * a fixed list of bare binary names and grants no reach beyond the capability row.
  */
-  async probeToolchain(deviceId: string, now: number): Promise<DeviceToolchain | null> {
+  probeToolchain(deviceId: string, now: number): Promise<DeviceToolchain | null> {
     const existing = this.probeRecord(deviceId);
-
-    if (existing === PROBE_UNANSWERABLE) return null;
     const fresh = existing === null ? null : freshDeviceToolchain(existing, now);
 
-    if (fresh) return fresh;
-
+    if (fresh) return Promise.resolve(fresh);
     const tunnel = this.tunnel(deviceId);
 
-    if (!tunnel) return null;
-    let present: readonly string[];
+    if (!tunnel) return Promise.resolve(null);
 
-    try {
-      const answered = await tunnel.rpc('which', [[...TOOLCHAIN_PROBE_BINARIES]], {
-        timeoutMs: PROBE_TIMEOUT_MS,
-      });
+    return settle(attempt({ doing: 'probe the device toolchain', otherwise: 'io' }, () => tunnel.rpc(
+      DEVICE_METHOD.which, [[...TOOLCHAIN_PROBE_BINARIES]], { timeoutMs: PROBE_TIMEOUT_MS },
+    )).pipe(
+      Effect.flatMap((answered) => {
+        const parsed = v.safeParse(WhichResultSchema, answered);
 
-      const parsed = v.safeParse(WhichResultSchema, answered);
+        return parsed.success ? Effect.succeed(deviceToolchainAnswer(parsed.output.present, now))
+          : Effect.fail(new KinuError('io', 'device answered which with an unreadable payload'));
+      }),
+      Effect.tap((answer) => Effect.sync(() => this.recordProbe(deviceId, answer))),
+      Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('device.toolchain_probe_failed', failure, { device: deviceId });
 
-      if (!parsed.success) throw new KinuError('io', 'device answered `which` with an unreadable payload');
-      present = parsed.output.present;
-    } catch (err) {
-      // A method-missing error is durable for this connection; other failures are transient and re-asked next turn.
-      const failure = toKinuError({ doing: 'probe the device toolchain', cause: err, otherwise: 'io' });
-
-      if (isDeviceUnknownMethodError({ cause: err })) this.recordProbe(deviceId, PROBE_UNANSWERABLE);
-      diagnostics.failure('device.toolchain_probe_failed', failure, { device: deviceId });
-
-      return null;
-    }
-
-    const answer = deviceToolchainAnswer(present, now);
-    this.recordProbe(deviceId, answer);
-
-    return answer;
+        return null;
+      })),
+    ));
   }
 
-  private probeRecord(deviceId: string): DeviceProbe | null {
+  private probeRecord(deviceId: string): DeviceToolchain | null {
     const ws = this.liveSocket(deviceId);
 
     if (!ws) return null;
@@ -175,28 +172,17 @@ export class DeviceSocketHub {
     return attachment.success ? attachment.output.probe ?? null : null;
   }
 
-  private recordProbe(deviceId: string, probe: DeviceProbe): void {
-    // Field by field: this wire shape outlives its writer and is read back only by `DeviceAttachmentSchema`.
-    const stored: JsonValue = probe === PROBE_UNANSWERABLE
-      ? probe
-      : { present: [...probe.present], asked: [...probe.asked], probedAt: probe.probedAt };
-
-    this.annotate(deviceId, { probe: stored });
+  private recordProbe(deviceId: string, probe: DeviceToolchain): void {
+    this.annotate(deviceId, { probe: { present: [...probe.present], asked: [...probe.asked], probedAt: probe.probedAt } });
   }
 
-  private annotate(deviceId: string, patch: { probe?: JsonValue; relay?: typeof RELAY_UNANSWERABLE }): void {
+  private annotate(deviceId: string, patch: { probe?: JsonValue; protocolVersion?: number; features?: string[]; relays?: string[] }): void {
     const ws = this.liveSocket(deviceId);
 
     if (!ws) return;
     const held = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
-    const { probe, relay } = held.success ? held.output : {};
-
-    ws.serializeAttachment({
-      device: deviceId,
-      ...(probe !== undefined && { probe }),
-      ...(relay !== undefined && { relay }),
-      ...patch,
-    });
+    const attachment: JsonValue = held.success ? { ...held.output, ...patch } : { device: deviceId, ...patch };
+    ws.serializeAttachment(attachment);
   }
 
   relayDevice(): string | null {
@@ -205,27 +191,34 @@ export class DeviceSocketHub {
       const ws = this.liveSocket(id);
       const attachment = v.safeParse(DeviceAttachmentSchema, ws?.deserializeAttachment());
 
-      if (attachment.success && attachment.output.relay === undefined) return id;
+      if (attachment.success && attachment.output.features?.includes(DEVICE_METHOD.codexRelay)) return id;
     }
 
     return null;
   }
 
-  /** Resolves at the answer's head. A daemon without the method is not picked again on this connection. */
-  relay(deviceId: string, id: string, request: DeviceRelayRequest): Promise<Response> {
+  /** Resolves at the answer's head; active ids survive on the socket to stop orphaned relays after eviction. */
+  async relay(deviceId: string, id: string, request: DeviceRelayRequest): Promise<Response> {
     const tunnel = this.tunnel(deviceId);
 
-    if (!tunnel) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
+    if (!tunnel) return settle(Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED)));
+    const recovery = this.tunnels.get(deviceId)?.recovery;
+
+    if (recovery) await recovery;
 
     const params: JsonValue = { method: request.method, url: request.url, headers: request.headers.map(([name, value]) => [name, value]), body: request.body };
 
+    const attachment = v.safeParse(DeviceAttachmentSchema, this.liveSocket(deviceId)?.deserializeAttachment());
+    this.annotate(deviceId, { relays: [...(attachment.success ? attachment.output.relays ?? [] : []), id] });
+
     return this.relays.open({
       id, deviceId,
-      cancel: () => { if (tunnel.isConnected()) tunnel.notify({ type: DEVICE_RELAY.cancel, relay: id }); },
+      cancel: () => tunnel.cancel(id),
       answered: async () => {
         const [outcome] = await Promise.allSettled([tunnel.rpc(DEVICE_RELAY.method, [params], { requestId: id, timeoutMs: 0, extra: { deviceId } })]);
 
-        if (outcome.status === 'rejected' && isDeviceUnknownMethodError({ cause: outcome.reason })) this.annotate(deviceId, { relay: RELAY_UNANSWERABLE });
+        const remaining = v.safeParse(DeviceAttachmentSchema, this.liveSocket(deviceId)?.deserializeAttachment());
+        this.annotate(deviceId, { relays: (remaining.success ? remaining.output.relays ?? [] : []).filter((active) => active !== id) });
 
         return outcome;
       },
@@ -235,15 +228,13 @@ export class DeviceSocketHub {
   chatgpt(deviceId: string, method: DeviceChatGptMethod): Promise<JsonValue | null> {
     const tunnel = this.tunnel(deviceId);
 
-    if (!tunnel) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
+    if (!tunnel) return settle(Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED)));
     const status = method === DEVICE_CHATGPT.status;
     const asked = attempt({ doing: 'asking the machine about its ChatGPT sign-in', otherwise: 'unavailable' }, () => tunnel.rpc(method, [], { timeoutMs: 0 }));
 
     return settle(asked.pipe(
       Effect.map((answer) => answer ?? null),
       Effect.catch((failure) => {
-        if (isDeviceUnknownMethodError({ cause: failure })) return Effect.succeed(null);
-
         if (!status) return Effect.fail(failure);
 
         return Effect.sync(() => {
@@ -288,17 +279,37 @@ export class DeviceSocketHub {
     const ws = this.liveSocket(deviceId);
 
     if (!ws) return null;
+    const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
+
+    if (!attachment.success || attachment.output.protocolVersion === undefined) return null;
     const tunnel = new DeviceTunnel(ws, undefined, undefined, REAL_CLOCK);
-    this.tunnels.set(deviceId, { tunnel, ws });
+    const interrupted = attachment.output.relays ?? [];
+
+    const recovery = interrupted.length === 0 ? null : Promise.all(interrupted.map(async (id) => {
+      diagnostics.event('device.relay_interrupted', { device: deviceId, reason: 'hub_restarted' });
+      await tunnel.cancel(id);
+    })).then(() => undefined);
+
+    this.tunnels.set(deviceId, { tunnel, ws, recovery });
+
+    if (attachment.output.relays?.length) this.annotate(deviceId, { relays: [] });
 
     return tunnel;
   }
 
-  cancelRelay(id: string): void {
-    this.relays.cancel(id);
+  cancelRelay(id: string): Promise<void> {
+    return this.relays.cancel(id);
   }
 
   handleMessage(deviceId: string, data: string): void {
+    const tunnel = this.tunnel(deviceId);
+
+    if (!tunnel) {
+      diagnostics.event('device.pre_hello_frame_dropped', { device: deviceId, reason: 'before_hello' });
+
+      return;
+    }
+
     const relayFrame = parseDeviceRelayFrame(data);
 
     if (relayFrame !== null) {
@@ -307,7 +318,7 @@ export class DeviceSocketHub {
       return;
     }
 
-    this.tunnel(deviceId)?.handleMessage(data);
+    tunnel.handleMessage(data);
   }
 
   /** A device socket closed. Rejects in-flight calls only when it is the tunnel's own socket, not a replaced one. */

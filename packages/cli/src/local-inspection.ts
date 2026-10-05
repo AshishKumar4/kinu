@@ -86,11 +86,11 @@ import {
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { classify, tolerateAsync } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
+  agentStateFiles, makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
   openWorkspaceCLI, resolverModelPlane,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
-import { agentDbPath, resolveAgentRef } from './config';
+import { agentDbPath, resolveLocalAgent } from './config';
 import { createConfiguredLocalModelResolver, type LocalModelResolverOptions } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
 import { KinuError } from '@kinu.run/core/obs';
@@ -241,7 +241,7 @@ export async function readLocalNextTurnTier(name: string, opts: LocalModelResolv
 /** The file itself, through the read-only plane; `memory_chunks` is the search index and can lag an edit. */
 export function readLocalMemory(name: string): Promise<string> {
   return withLocalDbAsync(name, async (db) =>
-    await tolerateAsync(() => readText(inspectionFiles(db, null), `${WORKSPACE_ROOT}/${MEMORY_PATH}`), 'enoent') ?? '');
+    await tolerateAsync(() => readText(agentStateFiles(db), `${WORKSPACE_ROOT}/${MEMORY_PATH}`), 'enoent') ?? '');
 }
 
 /** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */
@@ -441,7 +441,7 @@ export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
 export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
   return withLocalDbAsync(name, async (db) => {
     const sql = makeSql(db);
-    const files = inspectionFiles(db, resolveAgentRef(name)?.cwd ?? null);
+    const files = inspectionFiles(db, resolveLocalAgent(name).cwd);
     const transcript = readSessionTranscript(sql, openWorkspaceMainActor(sql), CHAT_SESSION_ID, () => Promise.resolve(files));
 
     return [...(await getChatHistoryPage(transcript, { limit })).items];
@@ -457,7 +457,7 @@ export function inspectLocalSubordinate(name: string, request: SubordinateInspec
 
     if (directory === null) return missingSubordinateHistory(input.path);
     const sql = makeSql(db);
-    const files = inspectionFiles(db, resolveAgentRef(name)?.cwd ?? null);
+    const files = inspectionFiles(db, resolveLocalAgent(name).cwd);
 
     const raw = makeSqlExec(db);
     const transcriptFor = (actor: ActorHandle) => readSessionTranscript(sql, actor, CHAT_SESSION_ID, () => Promise.resolve(files));
@@ -621,7 +621,7 @@ export async function executeLocalExecutor(name: string, executorId: string, com
   const db = new Database(dbPath);
 
   try {
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: null, cwd: resolveAgentRef(name)?.cwd ?? null });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: null, cwd: resolveLocalAgent(name).cwd });
 
     const run = rt.executionRouter
       ? await runOnExecutor(rt.executionRouter, executorId, command)

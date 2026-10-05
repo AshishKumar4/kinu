@@ -1,8 +1,8 @@
 /** One node run through `runNodeAgent`, asserted on what a caller sees. */
 import { describe, expect, test } from 'bun:test';
-import type { MockLanguageModelV3 } from 'ai/test';
+import type { MockLanguageModelV4 } from 'ai/test';
 import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
-import type { LanguageModelV3Content } from '@ai-sdk/provider';
+import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
@@ -36,7 +36,7 @@ function grant(): BranchDecision {
 }
 
 /** `offered` is the only place a tool's build-time absence is visible. */
-function scriptedReporter(answer: string, offered?: Set<string>): MockLanguageModelV3 {
+function scriptedReporter(answer: string, offered?: Set<string>): MockLanguageModelV4 {
   let call = 0;
 
   return scriptedTurnModel({
@@ -45,7 +45,7 @@ function scriptedReporter(answer: string, offered?: Set<string>): MockLanguageMo
     doGenerate: async ({ tools }) => {
       for (const tool of tools ?? []) offered?.add(tool.name);
       call += 1;
-      const content: LanguageModelV3Content[] = [];
+      const content: LanguageModelV4Content[] = [];
       let finish: 'stop' | 'tool-calls' = 'tool-calls';
 
       if (call === 1) {
@@ -74,7 +74,7 @@ function scriptedReporter(answer: string, offered?: Set<string>): MockLanguageMo
   });
 }
 
-function doubleProposer(): MockLanguageModelV3 {
+function doubleProposer(): MockLanguageModelV4 {
   let call = 0;
 
   const proposal = (suffix: string) => ({
@@ -91,7 +91,7 @@ function doubleProposer(): MockLanguageModelV3 {
     doGenerate: async () => {
       call += 1;
 
-      const turn = (): LanguageModelV3Content[] => {
+      const turn = (): LanguageModelV4Content[] => {
         if (call === 1) {
           return [
             {
@@ -144,7 +144,7 @@ async function fixture(opts?: {
   readonly offered?: Set<string>;
   readonly mission?: MissionScope;
   readonly settle?: SwarmSettle;
-  readonly model?: MockLanguageModelV3;
+  readonly model?: MockLanguageModelV4;
 }): Promise<Fixture> {
   const { rt, db } = createTestRuntime();
   const seats = hostedSeatsOver({ rt, db });
@@ -190,7 +190,7 @@ describe('one node, run as an agent', () => {
       doGenerate: async () => {
         step++;
 
-        const turn = (): LanguageModelV3Content[] => {
+        const turn = (): LanguageModelV4Content[] => {
           if (step === 1) return [{ type: 'tool-call', toolCallId: 'run-owned', toolName: 'shell', input: JSON.stringify({ command: 'echo owned-seat' }) }];
 
           if (step === 2) return [{ type: 'tool-call', toolCallId: 'report-owned', toolName: 'report', input: JSON.stringify({ status: 'completed', content: 'The owned runtime answered.' }) }];

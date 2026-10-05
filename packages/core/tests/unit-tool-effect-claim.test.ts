@@ -14,8 +14,8 @@ import { lostToolCall } from '../src/tools/effect-claim';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 /** `ToolSet`'s index type erases the registry's input type, so the call shape is restated once here. */
-function mcpCall(tools: ToolSet, name: string): (args: JsonObject, options: ToolExecutionOptions) => Promise<string> {
-  const entry: { execute?: (args: JsonObject, options: ToolExecutionOptions) => PromiseLike<string> }
+function mcpCall(tools: ToolSet, name: string): (args: JsonObject, options: ToolExecutionOptions<unknown>) => Promise<string> {
+  const entry: { execute?: (args: JsonObject, options: ToolExecutionOptions<unknown>) => PromiseLike<string> }
     = present(tools[name], `the ${name} tool`);
 
   return async (args, options) => await toolExecute(entry)(args, options);
@@ -59,7 +59,7 @@ function countingTool() {
   return { calls, tools: { run: entry } };
 }
 
-const OPTIONS = { toolCallId: 'call-a1', messages: [] };
+const OPTIONS = { toolCallId: 'call-a1', messages: [], context: undefined };
 
 describe('tool effect claims', () => {
   test('a claimed tool runs once and its replay returns the stored result', async () => {
@@ -104,9 +104,9 @@ describe('tool effect claims', () => {
     const durable = Promise.withResolvers<void>();
     const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, { ...deps, durable: () => durable.promise }).run);
 
-    const modelCall = execute({ to: 'model@example.test' }, { toolCallId: 'call-m1', messages: [{ role: 'user', content: 'send it' }] });
+    const modelCall = execute({ to: 'model@example.test' }, { toolCallId: 'call-m1', messages: [{ role: 'user', content: 'send it' }], context: undefined });
 
-    await execute({ to: 'program@example.test' }, { toolCallId: 'program-1', messages: [] });
+    await execute({ to: 'program@example.test' }, { toolCallId: 'program-1', messages: [], context: undefined });
     expect(calls).toEqual(['program@example.test']);
 
     durable.resolve();
@@ -174,7 +174,7 @@ describe('tool effect claims', () => {
     const { tools } = countingTool();
     const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
 
-    await execute({ to: 'ops@example.test' }, { toolCallId: 'call-from-provider', messages: [] });
+    await execute({ to: 'ops@example.test' }, { toolCallId: 'call-from-provider', messages: [], context: undefined });
 
     expect(sql`SELECT turn_id, normalized_call_id FROM tool_effect_claims`)
       .toEqual([{ turn_id: 'turn-7', normalized_call_id: 'call-from-provider' }]);
@@ -294,9 +294,9 @@ describe('tool effect claims', () => {
 
       const call = mcpCall(tools, 'mcp__srv__charge');
 
-      expect(await call({ amount: 5 }, { toolCallId: 'call-1', messages: [] })).toBe('charged-5');
+      expect(await call({ amount: 5 }, { toolCallId: 'call-1', messages: [], context: undefined })).toBe('charged-5');
 
-      expect(await call({ amount: 5 }, { toolCallId: 'call-1', messages: [] })).toBe('charged-5');
+      expect(await call({ amount: 5 }, { toolCallId: 'call-1', messages: [], context: undefined })).toBe('charged-5');
       expect(dispatched).toBe(1);
     });
 
@@ -317,7 +317,7 @@ describe('tool effect claims', () => {
       );
 
       // SAFETY: the adapter always carries execute.
-      expect(await mcpCall(tools, 'mcp__srv__quiet')({}, { toolCallId: 'c1', messages: [] })).toBe('ok');
+      expect(await mcpCall(tools, 'mcp__srv__quiet')({}, { toolCallId: 'c1', messages: [], context: undefined })).toBe('ok');
       expect(sql<{ n: number }>`SELECT count(*) AS n FROM tool_effect_claims`[0].n).toBe(1);
     });
 
@@ -345,8 +345,8 @@ describe('tool effect claims', () => {
       // SAFETY: the adapter always carries execute.
       const call = mcpCall(tools, 'mcp__srv__lookup');
 
-      expect(await call({}, { toolCallId: 'c1', messages: [] })).toBe('lookup-1');
-      expect(await call({}, { toolCallId: 'c1', messages: [] })).toBe('lookup-2');
+      expect(await call({}, { toolCallId: 'c1', messages: [], context: undefined })).toBe('lookup-1');
+      expect(await call({}, { toolCallId: 'c1', messages: [], context: undefined })).toBe('lookup-2');
       expect(sql<{ n: number }>`SELECT count(*) AS n FROM tool_effect_claims`[0].n).toBe(0);
     });
   });

@@ -1,7 +1,8 @@
 /** Tri-state fetch: a failed fetch must never render as an empty answer or an endless spinner. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as v from "valibot";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { Cause, Effect, type Exit } from "effect";
+import { hold } from "@kinu.run/core/obs";
 
 export type AsyncResource<T> =
   | { status: "loading" }
@@ -55,11 +56,6 @@ export function describeError({ cause }: { cause: unknown }): string {
   return "request failed";
 }
 
-/** Shows the thrown chain while `live()` holds. */
-export function showRejection(show: (message: string) => void, live: () => boolean = () => true): (...rejection: [unknown]) => void {
-  return (...rejection) => { if (live()) show(renderThrownChain({ cause: rejection[0] })); };
-}
-
 /** Reload delay after a load, or null once nothing is left to watch. */
 export type Revalidate<T> = (value: T | null) => number | null;
 
@@ -88,7 +84,7 @@ export function useAsyncResource<T>(
   // Only the newest run may write; a slow failing load must not overwrite its retry.
   const runId = useRef(0);
   // Reloads overlap; every task is retained until it settles, and the run id decides which publishes.
-  const activeRuns = useRef(new Map<number, Promise<void>>());
+  const activeRuns = useRef(new Map<number, Promise<Exit.Exit<void>>>());
 
   // A task that settles after unmount must not publish into a retired resource.
   useEffect(() => () => {
@@ -101,28 +97,26 @@ export function useAsyncResource<T>(
       identity,
       resource: beginLoad(previous.identity === identity ? previous.resource : { status: "loading" }),
     }));
-    let task: Promise<void> | null = null;
-    task = (async () => {
-      // Held until the newest-run check below, so a superseded load publishes nothing.
-      let thrown: { cause: unknown } | null = null;
 
-      try {
-        const value = await load();
+    const task = hold(Effect.gen(function* () {
+      // Held until the newest-run check below, so a superseded load publishes nothing.
+      const thrown = yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+        const value = yield* Effect.promise(load);
 
         if (id === runId.current) setState({ identity, resource: loadSucceeded(value) });
-      } catch (error) {
-        thrown = { cause: error };
-      } finally {
+
+        return null;
+      }), (failed) => Effect.succeed({ cause: Cause.squash(failed) })), Effect.sync(() => {
         activeRuns.current.delete(id);
-      }
+      }));
 
       if (thrown === null || id !== runId.current) return;
-      const failure = thrown;
       setState((previous) => ({
         identity,
-        resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, failure),
+        resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, thrown),
       }));
-    })();
+    }));
+
     activeRuns.current.set(id, task);
   }, [identity, load]);
 

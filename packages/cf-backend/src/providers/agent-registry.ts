@@ -107,12 +107,12 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     workersAi: createWorkersAIProvider(deploymentBinding),
     myGateway: createMyGatewayProvider(),
     aiGateway: createAIGatewayProvider(),
-    // The ChatGPT plan's token never leaves the machine that signed in, so the web reaches it only through that machine.
+    // An account's own ChatGPT login wins; without one, the machine that signed in carries the call.
     chatgpt: relayed === null ? undefined : createChatGptProvider({
       device: {
         fetch: deviceRouteFetch({ ...relayed, provider: 'chatgpt' }),
         unavailableReason: async () => (await relayed.hub.relayDevice(await relayed.caller(), 'chatgpt') === null
-          ? 'Continue with ChatGPT on a connected machine to use your ChatGPT plan.'
+          ? 'Sign in with ChatGPT to use your ChatGPT plan.'
           : undefined),
       },
     }),

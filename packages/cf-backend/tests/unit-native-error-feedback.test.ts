@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import type { MockLanguageModelV3 } from 'ai/test';
+import type { MockLanguageModelV4 } from 'ai/test';
 import * as v from 'valibot';
 import { chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask } from './helpers/actor-harness';
 import { requestOf, scriptedGateway } from './helpers/platform-gateway';
@@ -21,7 +21,7 @@ function modelCallingFile() {
   } });
 }
 
-function assertNativeFeedback(model: MockLanguageModelV3) {
+function assertNativeFeedback(model: MockLanguageModelV4) {
   const next = model.doStreamCalls.find(call => call.prompt.some(message => message.role === 'tool'));
   const outputs = next?.prompt.flatMap(message => message.role === 'tool' ? message.content : []);
 

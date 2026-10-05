@@ -6,9 +6,34 @@ import { ActorClaimStore, initActorClaimTables } from '../src/orchestrator/actor
 import { SessionStream } from '../src/orchestrator/session-stream';
 import type { ActorProgramIdentity } from '../src/orchestrator/actor-claims';
 import { KinuError } from '../src/obs/error';
+import { McpToolError } from '../src/tools/mcp-error';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test' };
+
+const remoteFailure = { isError: true, content: [{ type: 'text', text: 'remote failed' }], structuredContent: { reason: 'remote-code' } };
+
+test.each([
+  { name: 'shell', error: new KinuError('io', 'command exited 7', { execution: { exitCode: 7 } }),
+    output: { type: 'error-json', value: { reason: 'io', error: 'command exited 7', execution: { exitCode: 7 } } } },
+  { name: 'eval', error: new McpToolError(remoteFailure), output: { type: 'error-json', value: remoteFailure } },
+])('a cut $name failure keeps its machine-readable evidence in the resumed context', async ({ name, error, output }) => {
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('failed');
+    await stream.nativePart({ type: 'tool-call', toolCallId: 'failed-call', toolName: name, input: {} });
+    await stream.nativePart({ type: 'tool-error', toolCallId: 'failed-call', toolName: name, input: {}, error });
+    await stream.settle();
+
+    const reopened = new SessionHistory({ sql: s.rt.storage.sql, actor: s.rt.actor,
+      transactionSync: write => s.rt.storage.transactionSync(write), files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }) });
+
+    const messages = (await reopened.materialize()).messages.filter(message => message.role === 'tool');
+
+    expect(messages).toEqual([{ role: 'tool', content: [{ type: 'tool-result', toolCallId: 'failed-call', toolName: name, output }] }]);
+  } finally { s.testSql.close(); }
+});
 
 function setup() {
   const { rt, testSql } = createTestRuntime();
@@ -30,6 +55,26 @@ function setup() {
 
   return { rt, testSql, history, claims, selected, open, rows, turn };
 }
+
+test('an interrupted authored loop retains its producer-owned command failure metadata', async () => {
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('authored-failure');
+    await stream.observe({ type: 'tool-call', toolCallId: 'command', toolName: 'shell', args: {}, source: 'scaffold' });
+    await stream.observe({ type: 'tool-result', toolCallId: 'command', toolName: 'shell',
+      result: 'command exited 7', error: 'command exited 7', success: false, reason: 'io', execution: { exitCode: 7 }, source: 'scaffold' });
+    await stream.settle();
+
+    const reopened = new SessionHistory({ sql: s.rt.storage.sql, actor: s.rt.actor,
+      transactionSync: write => s.rt.storage.transactionSync(write), files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }) });
+
+    expect((await reopened.materialize()).messages.filter(message => message.role === 'tool')).toEqual([
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'command', toolName: 'shell',
+        output: { type: 'error-json', value: { reason: 'io', error: 'command exited 7', execution: { exitCode: 7 } } } }] },
+    ]);
+  } finally { s.testSql.close(); }
+});
 
 test('a step cancelled while reasoning seals what it streamed, buffered tail included', async () => {
   const s = setup();
@@ -65,6 +110,22 @@ test('a streamed answer joins the working context only when it seals', async () 
     const after = s.selected();
     expect(after.revision).toBe(before.revision + 1);
     expect(s.open()).toEqual([]);
+    expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
+  } finally { s.testSql.close(); }
+});
+
+test('the provider\'s compaction summary is kept with its mark, so the next request replays it as one', async () => {
+  const s = setup();
+  const mark = { anthropic: { type: 'compaction' } };
+
+  try {
+    const { stream } = await s.turn('t1');
+    await stream.nativePart({ type: 'text-start', id: '0', providerMetadata: mark });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'Summary so far.' });
+    await stream.nativePart({ type: 'text-end', id: '0' });
+    const final: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'Summary so far.', providerOptions: mark }] };
+    await stream.nativeStep({ messages: [final], toolResults: [] });
+
     expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
   } finally { s.testSql.close(); }
 });

@@ -21,7 +21,7 @@ const {
   PTY_OPEN_METHOD,
   PTY_INPUT_FRAME,
   PTY_RESIZE_FRAME,
-  PTY_CLOSE_FRAME,
+  CANCEL_METHOD,
   PTY_OUTPUT_FRAME,
   PTY_EXIT_FRAME,
   SESSION_COMMAND,
@@ -90,33 +90,52 @@ afterEach(() => {
 });
 
 describe('opening a terminal is a call, and the rest is a stream', () => {
+  test('cancel acknowledges a terminal only after it stops, even when its program ignores hangup', async () => {
+    const { ctx, sessions } = context();
+    const ws = fakeWs();
+    const session = 'rpc-ptyforce00-1';
+    handle({ id: session, method: PTY_OPEN_METHOD, sandbox: RAW, params: [80, 24] }, ws, ctx);
+    const opened = await ws.response(session);
+    const pid = opened.result.pid;
+
+    try {
+      handle({ type: PTY_INPUT_FRAME, session, data: Buffer.from("trap '' HUP; echo $((11 + 12)); exec sleep 600\r").toString('base64') }, ws, ctx);
+      await ws.until(() => /(^|[^)+\s])23\b/m.test(ws.output()));
+      handle({ id: 'cancel-force-pty', method: CANCEL_METHOD, params: [session] }, ws, ctx);
+      expect((await ws.response('cancel-force-pty')).result).toEqual({ requestId: session, cancelled: 'terminated' });
+      expect(sessions.has(session)).toBe(false);
+    } finally {
+      if (sessions.has(session)) process.kill(pid, 'SIGKILL');
+    }
+  });
+
   test('an open answers with the session, and its bytes arrive as output frames', async () => {
     const { ctx } = context();
     const ws = fakeWs();
-    handle({ id: 'rpc-abcdefghij-1', method: PTY_OPEN_METHOD, sandbox: RAW, params: ['pane-a', 90, 30] }, ws, ctx);
+    handle({ id: 'rpc-abcdefghij-1', method: PTY_OPEN_METHOD, sandbox: RAW, params: [90, 30] }, ws, ctx);
     const reply = await ws.response('rpc-abcdefghij-1');
     expect(reply.error).toBeUndefined();
-    expect(reply.result.session).toBe('pane-a');
+    expect(reply.result.session).toBe('rpc-abcdefghij-1');
     expect(reply.result.cols).toBe(90);
     expect(reply.result.rows).toBe(30);
     expect(reply.result.pid).toBeGreaterThan(0);
 
     // A keystroke frame carries no id: it is not a question.
-    handle({ type: PTY_INPUT_FRAME, session: 'pane-a', data: Buffer.from('echo $((3 + 4))\r').toString('base64') }, ws, ctx);
+    handle({ type: PTY_INPUT_FRAME, session: 'rpc-abcdefghij-1', data: Buffer.from('echo $((3 + 4))\r').toString('base64') }, ws, ctx);
     await ws.until(() => /(^|[^)+\s])7\b/m.test(ws.output()));
 
-    handle({ type: PTY_RESIZE_FRAME, session: 'pane-a', cols: 120, rows: 40 }, ws, ctx);
-    handle({ type: PTY_INPUT_FRAME, session: 'pane-a', data: Buffer.from('stty size\r').toString('base64') }, ws, ctx);
+    handle({ type: PTY_RESIZE_FRAME, session: 'rpc-abcdefghij-1', cols: 120, rows: 40 }, ws, ctx);
+    handle({ type: PTY_INPUT_FRAME, session: 'rpc-abcdefghij-1', data: Buffer.from('stty size\r').toString('base64') }, ws, ctx);
     await ws.until(() => /\b40 120\b/.test(ws.output()));
 
-    handle({ type: PTY_CLOSE_FRAME, session: 'pane-a' }, ws, ctx);
+    handle({ id: 'cancel-pane-a', method: CANCEL_METHOD, params: ['rpc-abcdefghij-1'] }, ws, ctx);
     await ws.until(() => ws.frames.some((f) => f.type === PTY_EXIT_FRAME));
   });
 
   test('a session runs the plan a command runs, with the terminal named in it', async () => {
     const { ctx, plans } = context();
     const ws = fakeWs();
-    handle({ id: 'rpc-abcdefghij-2', method: PTY_OPEN_METHOD, sandbox: RAW, params: ['pane-b', 80, 24] }, ws, ctx);
+    handle({ id: 'rpc-abcdefghij-2', method: PTY_OPEN_METHOD, sandbox: RAW, params: [80, 24] }, ws, ctx);
     await ws.response('rpc-abcdefghij-2');
 
     // The raw tier's own argv, from sandbox.plan: a shell running one command,
@@ -136,23 +155,22 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
     // race is ordinary: the program exited and its exit frame is in flight.
     handle({ type: PTY_INPUT_FRAME, session: 'pane-gone', data: '' }, ws, ctx);
     handle({ type: PTY_RESIZE_FRAME, session: 'pane-gone', cols: 80, rows: 24 }, ws, ctx);
-    handle({ type: PTY_CLOSE_FRAME, session: 'pane-gone' }, ws, ctx);
     expect(ws.frames).toEqual([]);
   });
 
   test('a daemon with no terminals answers the open rather than throwing', async () => {
     const ws = fakeWs();
-    handle({ id: 'rpc-abcdefghij-3', method: PTY_OPEN_METHOD, params: ['pane-c', 80, 24] }, ws, { checkpoints: null });
+    handle({ id: 'rpc-abcdefghij-3', method: PTY_OPEN_METHOD, params: [80, 24] }, ws, { checkpoints: null });
     const reply = await ws.response('rpc-abcdefghij-3');
-    expect(reply.error).toContain('without terminal support');
+    expect(reply.error?.message).toContain('without terminal support');
   });
 
   test('a window the kernel cannot carry is refused on the reply', async () => {
     const { ctx } = context();
     const ws = fakeWs();
-    handle({ id: 'rpc-abcdefghij-4', method: PTY_OPEN_METHOD, sandbox: RAW, params: ['pane-d', 0, 24] }, ws, ctx);
+    handle({ id: 'rpc-abcdefghij-4', method: PTY_OPEN_METHOD, sandbox: RAW, params: [0, 24] }, ws, ctx);
     const reply = await ws.response('rpc-abcdefghij-4');
-    expect(reply.error).toContain('width must be a whole number from 1 to 1000');
+    expect(reply.error?.message).toContain('width must be a whole number from 1 to 1000');
   });
 
   test('a congested socket drops output, and still says the shell ended', async () => {
@@ -161,10 +179,10 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
     // not droppable — a hub that never hears it holds a terminal that no
     // longer exists, and no later frame would correct that.
     const ws = fakeWs(4 * 1024 * 1024);
-    handle({ id: 'rpc-abcdefghij-5', method: PTY_OPEN_METHOD, sandbox: RAW, params: ['pane-e', 80, 24] }, ws, ctx);
+    handle({ id: 'rpc-abcdefghij-5', method: PTY_OPEN_METHOD, sandbox: RAW, params: [80, 24] }, ws, ctx);
     const reply = await ws.response('rpc-abcdefghij-5');
     expect(reply.result.pid).toBeGreaterThan(0);
-    handle({ type: PTY_INPUT_FRAME, session: 'pane-e', data: Buffer.from('exit 0\r').toString('base64') }, ws, ctx);
+    handle({ type: PTY_INPUT_FRAME, session: 'rpc-abcdefghij-5', data: Buffer.from('exit 0\r').toString('base64') }, ws, ctx);
     await ws.until(() => ws.frames.some((f) => f.type === PTY_EXIT_FRAME));
     expect(ws.frames.some((f) => f.type === PTY_OUTPUT_FRAME)).toBe(false);
   });
@@ -186,7 +204,7 @@ describe('a terminal is confined exactly as a command is', () => {
       sandbox: { tier: 'sandboxed', agentHome: `${require('node:os').homedir()}/.kinu/agents/w1/home`, roots: [] },
     }, ws, ctx);
     const reply = await ws.response('rpc-abcdefghij-6');
-    expect(reply.error).toContain('sandbox_unavailable');
+    expect(reply.error?.message).toContain('sandbox_unavailable');
     expect(ctx.sessions.size()).toBe(0);
   });
 
@@ -204,7 +222,7 @@ describe('a terminal is confined exactly as a command is', () => {
     const execReply = await ws.response('rpc-abcdefghij-7');
     handle({ ...frame, method: PTY_OPEN_METHOD, params: ['pane-g', 80, 24], id: 'rpc-abcdefghij-8' }, ws, ctx);
     const ptyReply = await ws.response('rpc-abcdefghij-8');
-    expect(execReply.error).toBe(ptyReply.error);
+    expect(execReply.error).toEqual(ptyReply.error);
   });
 
   test('a sandboxed frame naming a home outside the agent root is refused', async () => {
@@ -219,7 +237,7 @@ describe('a terminal is confined exactly as a command is', () => {
     const reply = await ws.response('rpc-abcdefghij-9');
     // Refused either way: by the capability on a machine that cannot sandbox,
     // and by the agent-home rule on one that can.
-    expect(reply.error).toMatch(/agent home must be|sandbox_unavailable/);
+    expect(reply.error?.message).toMatch(/agent home must be|sandbox_unavailable/);
     expect(ctx.sessions.size()).toBe(0);
   });
 
@@ -231,8 +249,8 @@ describe('a terminal is confined exactly as a command is', () => {
     const ptyReply = await ws.response('rpc-abcdefghij-10');
     // A shell on the owner's machine with no tier is a shell with none of the
     // confinement they chose, so the absence is a refusal on both paths.
-    expect(ptyReply.error).toContain('names no sandbox tier');
-    expect((await ws.response('rpc-abcdefghij-11')).error).toBe(ptyReply.error);
+    expect(ptyReply.error?.message).toContain('names no sandbox tier');
+    expect((await ws.response('rpc-abcdefghij-11')).error).toEqual(ptyReply.error);
     expect(ctx.sessions.size()).toBe(0);
   });
 });

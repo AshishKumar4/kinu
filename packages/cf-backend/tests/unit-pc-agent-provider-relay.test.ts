@@ -26,7 +26,6 @@ const RelayModuleSchema = v.object({
   RELAY_METHOD: v.string(),
   RELAY_HEAD_FRAME: v.string(),
   RELAY_BODY_FRAME: v.string(),
-  RELAY_CANCEL_FRAME: v.string(),
   RELAY_ROUTES: v.record(v.string(), v.array(v.string())),
   CHATGPT_METHODS: v.object({ status: v.string(), signIn: v.string(), signOut: v.string() }),
   CHATGPT_SIGNED_OUT: v.string(),
@@ -206,11 +205,17 @@ function startHubBridge(harness: TestUserDO) {
     websocket: {
       open(ws) {
         ws.data.accepted.forward((data) => { ws.send(data); });
-        nth(opened).resolve(ws.data.accepted);
-        opened += 1;
       },
       async message(ws, message) {
         await harness.userDO.webSocketMessage(ws.data.accepted.ws, String(message));
+
+        if (String(message) === 'ping') return;
+        const hello = v.safeParse(v.object({ type: v.literal('HELLO') }), JSON.parse(String(message)));
+
+        if (hello.success) {
+          nth(opened).resolve(ws.data.accepted);
+          opened += 1;
+        }
       },
     },
   });
@@ -261,7 +266,10 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     };
 
     daemon = startDaemon(logPath);
-    await hub.connected(0);
+    await Promise.race([
+      hub.connected(0),
+      daemon.exited.then((code) => { throw new Error(`daemon exited ${String(code)} before connecting: ${readFileSync(logPath, 'utf8').slice(-2000)}`); }),
+    ]);
   });
 
   afterAll(async () => {
@@ -335,6 +343,8 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     expect(await harness.userDO.chatgptPlan(owner)).toEqual({
       device: { id: deviceId, label: 'studio' },
       status: { signedIn: true, email: 'owner@example.com', planEnabled: true, planDeclined: false, pending: false, lastFailure: null, firstSignIn: false },
+      account: null,
+      machineSignIn: null,
       changed: true,
     });
     expect(await harness.userDO.getCredentialsRevision(owner)).toBe(before + 1);
@@ -445,8 +455,8 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
 
 describe('the daemon carries only what core allows', () => {
   test('its frame and method names are core\'s', () => {
-    expect([pcAgent.RELAY_METHOD, pcAgent.RELAY_HEAD_FRAME, pcAgent.RELAY_BODY_FRAME, pcAgent.RELAY_CANCEL_FRAME])
-      .toEqual([DEVICE_RELAY.method, DEVICE_RELAY.head, DEVICE_RELAY.body, DEVICE_RELAY.cancel]);
+    expect([pcAgent.RELAY_METHOD, pcAgent.RELAY_HEAD_FRAME, pcAgent.RELAY_BODY_FRAME])
+      .toEqual([DEVICE_RELAY.method, DEVICE_RELAY.head, DEVICE_RELAY.body]);
     expect(pcAgent.CHATGPT_METHODS).toEqual(DEVICE_CHATGPT);
     // Core keeps its copy unexported; its contract test reads this code as a missing sign-in.
     expect(pcAgent.CHATGPT_SIGNED_OUT).toBe('chatgpt_signed_out');

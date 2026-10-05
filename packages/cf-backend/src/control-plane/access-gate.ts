@@ -8,7 +8,8 @@
  */
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
 import * as v from 'valibot';
-import { diagnostics } from '@kinu.run/core/obs';
+import { Effect, Result } from 'effect';
+import { diagnostics, settle } from '@kinu.run/core/obs';
 
 /** Module-private; the unit test spells the wire name independently so a rename cannot pass both sides. */
 const ACCESS_ASSERTION_HEADER = 'cf-access-jwt-assertion';
@@ -35,9 +36,9 @@ export type AccessDenial =
   | 'access_invalid'
   | 'access_no_email';
 
-export type AccessVerification =
-  | { readonly ok: true; readonly access: AccessIdentity }
-  | { readonly ok: false; readonly denial: AccessDenial };
+export type AccessVerification = Result.Result<AccessIdentity, AccessDenial>;
+
+const denied = (denial: AccessDenial): AccessVerification => Result.fail(denial);
 
 /** Hono patterns (each matches its bare prefix too) the Access application must cover (`scripts/deploy.test.ts`). */
 export const CONTROL_PLANE_UI_ROUTE = '/control/*';
@@ -53,15 +54,9 @@ function accessTeamOrigin(raw: string | undefined): string | null {
 
   if (trimmed.length === 0) return null;
   const candidate = /^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
-  let url: URL;
 
-  try {
-    url = new URL(candidate);
-  } catch (cause) {
-    if (!(cause instanceof TypeError)) throw cause;
-
-    return null;
-  }
+  if (!URL.canParse(candidate)) return null;
+  const url = new URL(candidate);
 
   if (url.protocol !== 'https:') return null;
 
@@ -95,45 +90,41 @@ const AccessClaimsSchema = v.object({
 });
 
 /** Fails closed in every arm, with no bypass. Only `jwtVerify` touches the token. */
-export async function verifyControlPlaneAccess(
+export function verifyControlPlaneAccess(
   request: Request,
   env: ControlPlaneAccessEnv,
 ): Promise<AccessVerification> {
   const teamOrigin = accessTeamOrigin(env.CONTROL_PLANE_ACCESS_TEAM_DOMAIN);
   const audience = (env.CONTROL_PLANE_ACCESS_AUD ?? '').trim();
 
-  if (teamOrigin === null || audience.length === 0) {
-    return { ok: false, denial: 'access_unconfigured' };
-  }
-
+  if (teamOrigin === null || audience.length === 0) return Promise.resolve(denied('access_unconfigured'));
   const token = request.headers.get(ACCESS_ASSERTION_HEADER)?.trim() ?? '';
 
-  if (token.length === 0) return { ok: false, denial: 'access_missing' };
+  if (token.length === 0) return Promise.resolve(denied('access_missing'));
 
-  let claims: v.InferOutput<typeof AccessClaimsSchema>;
-
-  try {
-    const verified = await jwtVerify(token, accessKeySet(teamOrigin), {
+  return settle(Effect.tryPromise({
+    try: () => jwtVerify(token, accessKeySet(teamOrigin), {
       algorithms: ['RS256'],
       issuer: teamOrigin,
       audience,
       // Required, not validated-when-present: a token omitting one would turn off half the window.
       requiredClaims: ['exp', 'nbf', 'email'],
       clockTolerance: 0,
-    });
+    }),
+    catch: (caught) => ({ caught }),
+  }).pipe(
+    Effect.map((verified): AccessVerification => {
+      const parsed = v.safeParse(AccessClaimsSchema, verified.payload);
 
-    const parsed = v.safeParse(AccessClaimsSchema, verified.payload);
+      return parsed.success ? Result.succeed({ email: parsed.output.email, sub: parsed.output.sub }) : denied('access_no_email');
+    }),
+    Effect.catch((rejected) => Effect.sync(() => {
+      // jose messages can embed attacker-supplied claim values: record only the rejection class.
+      diagnostics.event('control_plane.access_assertion_rejected', {
+        failure: rejected.caught instanceof Error ? rejected.caught.name : 'non_error_rejection',
+      });
 
-    if (!parsed.success) return { ok: false, denial: 'access_no_email' };
-    claims = parsed.output;
-  } catch (caught) {
-    // jose messages can embed attacker-supplied claim values: record only the rejection class.
-    diagnostics.event('control_plane.access_assertion_rejected', {
-      failure: caught instanceof Error ? caught.name : 'non_error_rejection',
-    });
-
-    return { ok: false, denial: 'access_invalid' };
-  }
-
-  return { ok: true, access: { email: claims.email, sub: claims.sub } };
+      return denied('access_invalid');
+    })),
+  ));
 }

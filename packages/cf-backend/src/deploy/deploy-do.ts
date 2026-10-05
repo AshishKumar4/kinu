@@ -31,6 +31,7 @@
  * authorization: 192 bits minted at creation, presented on every call and on
  * the socket upgrade, compared against its digest. Storage holds the digest.
  */
+import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import {
   ACCESS_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY, DEPLOY_SOCKET_PROTOCOL,
@@ -43,7 +44,7 @@ import {
   type DeployStepRow, type DeployStepSeed, type DeploymentRecord,
 } from '@kinu.run/core/deploy';
 import { randomToken } from '@kinu.run/core';
-import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 interface StepRecord extends Record<string, SqlStorageValue> {
@@ -224,12 +225,12 @@ export class DeployRunDO extends DurableObject<Env> {
   }
 
   /** Read with the run's own token and never stored. */
-  async accounts(): Promise<readonly DeployChoice[]> {
-    return this.choices('/accounts?per_page=50');
+  accounts(): Promise<readonly DeployChoice[]> {
+    return settle(this.choices('/accounts?per_page=50'));
   }
 
-  async zones(): Promise<readonly DeployChoice[]> {
-    return this.choices('/zones?per_page=50');
+  zones(): Promise<readonly DeployChoice[]> {
+    return settle(this.choices('/zones?per_page=50'));
   }
 
   async snapshot(): Promise<DeploySnapshot> {
@@ -245,8 +246,12 @@ export class DeployRunDO extends DurableObject<Env> {
     };
   }
 
-  private async choices(path: string): Promise<readonly DeployChoice[]> {
-    return cloudflareResult(bearerTransport(await this.accessToken()), { method: 'GET', path }, ChoicesSchema);
+  private choices(path: string): Effect.Effect<readonly DeployChoice[], KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const transport = bearerTransport(yield* this.accessToken());
+
+      return yield* Effect.promise(() => cloudflareResult(transport, { method: 'GET', path }, ChoicesSchema));
+    });
   }
 
   /**
@@ -321,30 +326,32 @@ export class DeployRunDO extends DurableObject<Env> {
 
   /** Runs the stored intent (redelivered if unfinished, so runs resume); with no intent, it is the
    *  vault expiry. */
-  override async alarm(): Promise<void> {
-    const intent = await this.ctx.storage.get<string>(INTENT_KEY);
+  override alarm(): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const intent = yield* Effect.promise(async () => this.ctx.storage.get<string>(INTENT_KEY));
 
-    if (intent === undefined) {
-      await this.expire();
+      if (intent === undefined) {
+        yield* Effect.promise(async () => this.expire());
 
-      return;
-    }
+        return;
+      }
 
-    const held = v.parse(IntentSchema, JSON.parse(intent));
-    const record = await this.ctx.storage.get<string>(RECORD_KEY);
-    const inputs = await this.ctx.storage.get<string>(INPUTS_KEY);
+      const held = v.parse(IntentSchema, JSON.parse(intent));
+      const record = yield* Effect.promise(async () => this.ctx.storage.get<string>(RECORD_KEY));
+      const inputs = yield* Effect.promise(async () => this.ctx.storage.get<string>(INPUTS_KEY));
 
-    if (inputs === undefined) {
-      await this.ctx.storage.delete(INTENT_KEY);
+      if (inputs === undefined) {
+        yield* Effect.promise(async () => this.ctx.storage.delete(INTENT_KEY));
 
-      return;
-    }
+        return;
+      }
 
-    await this.drive(v.parse(DeployInputsSchema, JSON.parse(inputs)), held.channelOrigin, record !== undefined);
+      yield* this.drive(v.parse(DeployInputsSchema, JSON.parse(inputs)), held.channelOrigin, record !== undefined);
 
-    // Only after the plan settled: a stored intent is a plan the next alarm must carry on with.
-    await this.ctx.storage.delete(INTENT_KEY);
-    await this.armExpiry();
+      // Only after the plan settled: a stored intent is a plan the next alarm must carry on with.
+      yield* Effect.promise(async () => this.ctx.storage.delete(INTENT_KEY));
+      yield* Effect.promise(async () => this.armExpiry());
+    }));
   }
 
   /** The stored intent rather than a field: an in-memory flag is lost by the eviction that makes
@@ -407,59 +414,63 @@ export class DeployRunDO extends DurableObject<Env> {
    * rather than a step that fails with 401. The rotated pair lands the moment
    * it exists, as in `selfUpdate`.
    */
-  private async accessToken(): Promise<string> {
-    const held = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`);
+  private accessToken(): Effect.Effect<string, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const held = yield* Effect.promise(async () => this.ctx.storage.get<string>(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`));
 
-    if (held === undefined) throw new KinuError('denied', 'this run holds no Cloudflare authorization');
-    const expiresAt = await this.ctx.storage.get<number>(TOKEN_EXPIRES_KEY) ?? 0;
+      if (held === undefined) return yield* new KinuError('denied', 'this run holds no Cloudflare authorization');
+      const expiresAt = (yield* Effect.promise(async () => this.ctx.storage.get<number>(TOKEN_EXPIRES_KEY))) ?? 0;
 
-    if (expiresAt === 0 || expiresAt > Date.now() + TOKEN_FLOOR_MS) return held;
+      if (expiresAt === 0 || expiresAt > Date.now() + TOKEN_FLOOR_MS) return held;
 
-    const clientId = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${DEPLOY_CLIENT_ID_KEY}`);
-    const refreshToken = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`);
+      const clientId = yield* Effect.promise(async () => this.ctx.storage.get<string>(`${SECRET_PREFIX}${DEPLOY_CLIENT_ID_KEY}`));
+      const refreshToken = yield* Effect.promise(async () => this.ctx.storage.get<string>(`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`));
 
-    if (clientId === undefined || refreshToken === undefined) return held;
-    const minted = await refreshDeployToken({ clientId, refreshToken });
+      if (clientId === undefined || refreshToken === undefined) return held;
+      const minted = yield* Effect.promise(async () => refreshDeployToken({ clientId, refreshToken }));
 
-    await this.landToken(clientId, minted.accessToken, minted.refreshToken, minted.expiresInSeconds);
+      yield* Effect.promise(async () => this.landToken(clientId, minted.accessToken, minted.refreshToken, minted.expiresInSeconds));
 
-    return minted.accessToken;
+      return minted.accessToken;
+    });
   }
 
-  private async drive(inputs: DeployInputs, channelOrigin: string, update: boolean): Promise<void> {
-    const token = await this.accessToken();
-    const run = await this.runId();
+  private drive(inputs: DeployInputs, channelOrigin: string, update: boolean): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const token = yield* this.accessToken();
+      const run = yield* Effect.promise(async () => this.runId());
 
-    const manifest = await fetchReleaseManifest(channelOrigin);
-    const artifact = await fetchReleaseArtifact(manifest, channelOrigin);
-    const ran = await this.ctx.storage.get<string>(VERSION_KEY) ?? '';
+      const manifest = yield* Effect.promise(async () => fetchReleaseManifest(channelOrigin));
+      const artifact = yield* Effect.promise(async () => fetchReleaseArtifact(manifest, channelOrigin));
+      const ran = (yield* Effect.promise(async () => this.ctx.storage.get<string>(VERSION_KEY))) ?? '';
 
-    // A ledger belongs to one release: the self-update object has a fixed id, so a new version must
-    // reset rows or `runDeployPlan` would skip everything as done. A resume keeps them.
-    if (ran !== '' && ran !== manifest.version) this.sql.exec(`DELETE FROM deploy_step`);
+      // A ledger belongs to one release: the self-update object has a fixed id, so a new version must
+      // reset rows or `runDeployPlan` would skip everything as done. A resume keeps them.
+      if (ran !== '' && ran !== manifest.version) this.sql.exec(`DELETE FROM deploy_step`);
 
-    await this.ctx.storage.put(VERSION_KEY, manifest.version);
-    await this.ctx.storage.put(RUN_STATE_KEY, 'running');
+      yield* Effect.promise(async () => this.ctx.storage.put(VERSION_KEY, manifest.version));
+      yield* Effect.promise(async () => this.ctx.storage.put(RUN_STATE_KEY, 'running'));
 
-    const outcome = await runDeployPlan(
-      deployPlan(manifest, inputs),
-      {
-        manifest,
-        inputs,
-        transport: bearerTransport(token),
-        artifact,
-        vault: this.vault(),
-        update,
-        facts: factsFrom(this.rows()),
-        http: (url, headers) => fetch(url, { headers }),
-        note: () => undefined,
-      },
-      this.ledger(),
-      (progress) => this.deliver(run, { type: 'deploy.progress', progress }),
-    );
+      const outcome = yield* Effect.promise(async () => runDeployPlan(
+        deployPlan(manifest, inputs),
+        {
+          manifest,
+          inputs,
+          transport: bearerTransport(token),
+          artifact,
+          vault: this.vault(),
+          update,
+          facts: factsFrom(this.rows()),
+          http: (url, headers) => fetch(url, { headers }),
+          note: () => undefined,
+        },
+        this.ledger(),
+        (progress) => this.deliver(run, { type: 'deploy.progress', progress }),
+      ));
 
-    await this.ctx.storage.put(RUN_STATE_KEY, outcome.state);
-    await this.broadcast();
+      yield* Effect.promise(async () => this.ctx.storage.put(RUN_STATE_KEY, outcome.state));
+      yield* Effect.promise(async () => this.broadcast());
+    });
   }
 
   /** The record's channel for a self-update: a deployment's own origin publishes no channel. */

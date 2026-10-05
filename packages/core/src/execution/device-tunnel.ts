@@ -1,11 +1,13 @@
-// DeviceTunnel: JSON-RPC over one reverse-WebSocket to a user's device daemon,
-// owned by the UserDO; agents reach it via a DO RPC forward.
-
+// JSON-RPC over the device's one reverse WebSocket.
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { renderThrownChain, tolerate } from '../obs/index';
+import { KinuError, toKinuError } from '../obs/error';
+import { detach, diagnostics } from '../obs/log';
+import { settle, settleSync, tolerate } from '../obs/effect';
 import { nanoid } from '../utils/nanoid';
 import { every, REAL_CLOCK, type Clock } from '../types/clock';
+import { DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, deviceFailure, isDeviceFailure } from './device-protocol';
 
 export interface TunnelSocket {
   send(data: string): void;
@@ -14,48 +16,33 @@ export interface TunnelSocket {
 
 const WS_OPEN = 1;
 
-/** Deadline for control round-trips only; deadline-free work rides {@link LIVENESS_PROBE_MS}. */
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 
-/** Heartbeat for deadline-free calls; covers half-open sockets that never close. */
 const LIVENESS_PROBE_MS = 30_000;
 
-/** The daemon answers any unknown method with an error frame, so any reply proves life. */
-const LIVENESS_METHOD = 'ping';
-
-/** Rejection for a deadline-free call whose device went silent on an open socket. */
-export const DEVICE_UNRESPONSIVE = 'device stopped responding';
-
 export interface DeviceRpcOptions {
-  /** Extra fields on the frame beside id/method/params (e.g. `checkpoint`). */
   extra?: JsonObject;
-  /** Pass 0 for arbitrary-length work: bounded only by device liveness. */
+  /** Zero: no work deadline; device silence still ends the call. */
   timeoutMs?: number;
-  /** Pass when the caller may need to cancel; the daemon keys the process group on it. */
   requestId?: string;
-  /** Called only on a device-sent terminal frame; not on timeout/socket loss/liveness failure. */
   onTerminal?: () => void;
   onOutput?: (output: DeviceExecOutput) => void;
 }
 
 interface Pending {
-  resolve: (value: JsonValue | undefined) => void;
-  reject: (err: Error) => void;
+  complete: (answer: Effect.Effect<JsonValue | undefined, KinuError>) => void;
   stop: () => void;
   onTerminal?: () => void;
   onOutput?: (output: DeviceExecOutput) => void;
 }
 
-const RpcResponseSchema = v.object({
-  id: v.optional(v.string()),
-  result: v.optional(JsonValueSchema),
-  error: v.optional(v.string()),
-});
-
-const DEVICE_EXEC_OUTPUT = 'EXEC_OUT';
+const RpcResponseSchema = v.union([
+  v.strictObject({ id: v.string(), result: JsonValueSchema }),
+  v.strictObject({ id: v.string(), error: v.object({ code: v.string(), message: v.string() }) }),
+]);
 
 const ExecOutputFrameSchema = v.object({
-  type: v.literal(DEVICE_EXEC_OUTPUT),
+  type: v.literal(DEVICE_FRAMES.execOutput),
   request: v.string(),
   chunks: v.array(v.object({ stream: v.picklist(['stdout', 'stderr']), data: v.string(), omitted: v.optional(v.number()) })),
   dropped: v.number(),
@@ -67,80 +54,56 @@ export const TUNNEL_DISCONNECTED = 'device tunnel not connected';
 
 export const NO_DEVICE_CONNECTED = 'no device connected';
 
-/** Unclaimed workspace: no hub to ask. Classified as not-connected, but reworded
- *  because "connect a device" is the wrong remedy. */
-export const WORKSPACE_HAS_NO_OWNER =
-  'this workspace has no owner account yet, so it can reach no machine';
+export const WORKSPACE_HAS_NO_OWNER = 'this workspace has no owner account yet, so it can reach no machine';
 
-/** Several devices live and the call named none; the throw site appends their names. */
 export const SEVERAL_DEVICES_CONNECTED = 'several devices are connected and the call named none';
 
-/** Hub → daemon frame `{ type: 'ROTATE', token }` carrying the device's next token. */
-export const DEVICE_TOKEN_ROTATION = 'ROTATE';
+const DEVICE_UNRESPONSIVE = 'device stopped responding';
 
-/** Daemon ack once the rotated token is on disk; the hub drops the superseded hash on it. */
-export const DEVICE_TOKEN_ROTATION_ACK = 'ROTATE_ACK';
+export const DEVICE_TOKEN_ROTATION = DEVICE_FRAMES.rotate;
+
+export const DEVICE_TOKEN_ROTATION_ACK = DEVICE_FRAMES.rotated;
+
+export const SANDBOX_UNAVAILABLE = DEVICE_ERRORS.sandboxUnavailable;
+
+export const DEVICE_UNKNOWN_METHOD = DEVICE_ERRORS.unknownMethod;
+
+export const DEVICE_CANCEL_METHOD = DEVICE_METHOD.cancel;
+
+export const DEVICE_EXEC_ACK_METHOD = DEVICE_METHOD.execAck;
+
+export const DEVICE_PTY_OPEN_METHOD = DEVICE_METHOD.ptyOpen;
+
+export const DEVICE_PTY_INPUT = DEVICE_FRAMES.ptyInput;
+
+export const DEVICE_PTY_RESIZE = DEVICE_FRAMES.ptyResize;
+
+export const DEVICE_PTY_OUTPUT = DEVICE_FRAMES.ptyOutput;
+
+export const DEVICE_PTY_EXIT = DEVICE_FRAMES.ptyExit;
+
+export const DEVICE_PTY_MAX_AXIS = 1000;
+
+export const DEVICE_CANCEL_MISPAIRED = 'device answered a cancellation for another command';
+
+export const DEVICE_DUPLICATE_REQUEST = 'device RPC id is already in flight';
 
 export function isDeviceNotConnectedError(input: { cause: unknown }): boolean {
-  const message = renderThrownChain(input);
-
-  return message.includes(NO_DEVICE_CONNECTED)
-    || message.includes(TUNNEL_DISCONNECTED)
-    || message.includes(WORKSPACE_HAS_NO_OWNER);
+  return isDeviceFailure(input, DEVICE_ERRORS.disconnected, DEVICE_ERRORS.noOwner);
 }
 
 export function isWorkspaceUnattachedError(input: { cause: unknown }): boolean {
-  return renderThrownChain(input).includes(WORKSPACE_HAS_NO_OWNER);
+  return isDeviceFailure(input, DEVICE_ERRORS.noOwner);
 }
 
 export function isDeviceAmbiguityError(input: { cause: unknown }): boolean {
-  return renderThrownChain(input).includes(SEVERAL_DEVICES_CONNECTED);
+  return isDeviceFailure(input, DEVICE_ERRORS.ambiguous);
 }
-
-/** Either end refusing to run a command at its tier; never downgraded to unconfined. */
-export const SANDBOX_UNAVAILABLE = 'sandbox_unavailable';
 
 export function isSandboxUnavailableError(input: { cause: unknown }): boolean {
-  return renderThrownChain(input).includes(SANDBOX_UNAVAILABLE);
+  return isDeviceFailure(input, DEVICE_ERRORS.sandboxUnavailable);
 }
 
-/** Daemon prefix for unimplemented methods (`packages/pc-agent/src/index.js`). */
-export const DEVICE_UNKNOWN_METHOD = 'unknown method';
-
-export function isDeviceUnknownMethodError(input: { cause: unknown }): boolean {
-  return renderThrownChain(input).includes(DEVICE_UNKNOWN_METHOD);
-}
-
-/** Kills one in-flight command's process group by request id. Pinned against `packages/pc-agent/src/index.js`. */
-export const DEVICE_CANCEL_METHOD = 'execCancel';
-
-/** The daemon retains supervisor state until this ack arrives. */
-export const DEVICE_EXEC_ACK_METHOD = 'execAck';
-
-/** Opens a device terminal; the hub composes the same `sandbox` block as for `exec`. */
-export const DEVICE_PTY_OPEN_METHOD = 'ptyOpen';
-
-/** Uncorrelated session frames; `PTY_IN`/`PTY_OUT` carry base64. */
-export const DEVICE_PTY_INPUT = 'PTY_IN';
-
-export const DEVICE_PTY_RESIZE = 'PTY_RESIZE';
-
-export const DEVICE_PTY_CLOSE = 'PTY_CLOSE';
-
-export const DEVICE_PTY_OUTPUT = 'PTY_OUT';
-
-export const DEVICE_PTY_EXIT = 'PTY_EXIT';
-
-/** Mirrored as `MAX_AXIS` in `packages/pc-agent/src/pty.js`; `packages/pc-agent/tests/pty.test.js` asserts they agree. */
-export const DEVICE_PTY_MAX_AXIS = 1000;
-
-/** Sent with every cancel; a mismatched daemon refuses rather than guessing. */
-export const DEVICE_CANCEL_PROTOCOL = 1;
-
-/** Pinned against the daemon's wording. */
-export const DEVICE_CANCEL_VERSION_REFUSAL = 'unsupported cancellation protocol';
-
-/** `terminated`: the kernel confirmed the process group died. `unknown`: no active entry. */
 export const DeviceCancelResultSchema = v.object({
   requestId: v.string(),
   cancelled: v.picklist(['terminated', 'unknown']),
@@ -148,32 +111,26 @@ export const DeviceCancelResultSchema = v.object({
 
 export type DeviceCancelResult = v.InferOutput<typeof DeviceCancelResultSchema>;
 
-export const DEVICE_CANCEL_MISPAIRED = 'device answered a cancellation for another command';
+export function parseDeviceCancelAnswer(requestId: string, answer: JsonValue | undefined): DeviceCancelResult {
+  return settleSync(Effect.gen(function* () {
+    const parsed = yield* Effect.try({
+      try: () => v.parse(DeviceCancelResultSchema, answer),
+      catch: (cause) => new KinuError('io', 'device returned an unreadable cancellation answer', { cause }),
+    });
 
-/** A `terminated` naming another request id says nothing about this one; every caller reads through here. */
-export function parseDeviceCancelAnswer(
-  requestId: string, answer: JsonValue | undefined,
-): DeviceCancelResult {
-  const parsed = v.parse(DeviceCancelResultSchema, answer);
+    if (parsed.requestId !== requestId) {
+      return yield* Effect.fail(new KinuError('io', `${DEVICE_CANCEL_MISPAIRED}: asked about ${requestId}, answered for ${parsed.requestId}`));
+    }
 
-  if (parsed.requestId !== requestId) {
-    throw new Error(
-      `${DEVICE_CANCEL_MISPAIRED}: asked about ${requestId}, answered for ${parsed.requestId}`,
-    );
-  }
-
-  return parsed;
+    return parsed;
+  }));
 }
 
-export const DEVICE_DUPLICATE_REQUEST = 'device RPC id is already in flight';
-
-// Epoch guards against a rebuilt counter pairing a late answer with a new call.
 // Minted lazily: Workers reject CSPRNG calls during module evaluation.
 let requestEpoch: string | null = null;
 
 let requestSeq = 0;
 
-/** `rpc-<epoch>-<n>`; also the cancellation handle the daemon keys on. */
 export function nextDeviceRequestId(): string {
   requestEpoch ??= nanoid(10);
   requestSeq += 1;
@@ -181,18 +138,26 @@ export function nextDeviceRequestId(): string {
   return `rpc-${requestEpoch}-${requestSeq}`;
 }
 
+function sendFrame(socket: TunnelSocket, frame: JsonObject): Effect.Effect<void, KinuError> {
+  if (socket.readyState !== WS_OPEN) return Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED));
+
+  return Effect.try({
+    try: () => socket.send(JSON.stringify(frame)),
+    catch: (cause) => deviceFailure(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED, { cause }),
+  });
+}
+
 export class DeviceTunnel {
   private readonly pending = new Map<string, Pending>();
   private readonly openEnded = new Set<string>();
   private heartbeat: (() => void) | null = null;
-  private lastFrameAt = 0;
-  private probeSentAt = 0;
+  private lastAnswerAt = 0;
+  private probe: { id: string; sentAt: number } | null = null;
 
   constructor(
     private readonly socket: TunnelSocket,
     private readonly timeoutMs: number = DEFAULT_RPC_TIMEOUT_MS,
     private readonly probeMs: number = LIVENESS_PROBE_MS,
-    // D19: tests advance the clock.
     private readonly clock: Clock = REAL_CLOCK,
   ) {}
 
@@ -200,160 +165,184 @@ export class DeviceTunnel {
     return this.socket.readyState === WS_OPEN;
   }
 
-  /** A deadline-free call (`timeoutMs: 0`) is bounded only by device liveness. Duplicate in-flight ids are refused. */
   rpc(method: string, params: JsonValue[], opts?: DeviceRpcOptions): Promise<JsonValue | undefined> {
-    return new Promise((resolve, reject) => {
-      if (!this.isConnected()) {
-        reject(new Error(TUNNEL_DISCONNECTED));
-
-        return;
-      }
-
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!this.isConnected()) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED));
       const id = opts?.requestId ?? nextDeviceRequestId();
 
-      if (this.pending.has(id)) {
-        reject(new Error(`${DEVICE_DUPLICATE_REQUEST}: ${id}`));
-
-        return;
-      }
-
+      if (this.pending.has(id)) return yield* Effect.fail(new KinuError('bad_input', `${DEVICE_DUPLICATE_REQUEST}: ${id}`));
+      const answer = Promise.withResolvers<Effect.Effect<JsonValue | undefined, KinuError>>();
       const deadline = opts?.timeoutMs ?? this.timeoutMs;
 
-      const settle = (err: Error) => {
-        const p = this.pending.get(id);
+      const stop = deadline > 0
+        ? this.clock.after(deadline, () => {
+          this.finish(id, Effect.fail(new KinuError('timeout', `device RPC timeout after ${deadline}ms: ${method}: the call may still be running on the device`)));
+        })
+        : () => { this.openEnded.delete(id); this.disarmIdleHeartbeat(); };
 
-        if (!p) return;
-        this.pending.delete(id);
-        p.stop();
-        reject(err);
-      };
+      this.pending.set(id, { complete: answer.resolve, stop, onTerminal: opts?.onTerminal, onOutput: opts?.onOutput });
 
-      let stop: () => void;
-
-      if (deadline > 0) {
-        stop = this.clock.after(deadline, () => settle(new Error(
-          `device RPC timeout after ${deadline}ms: ${method}: the call may still be running on the device`,
-        )));
-      } else {
+      if (deadline === 0) {
         this.openEnded.add(id);
         this.armHeartbeat();
-        stop = () => { this.openEnded.delete(id); this.disarmIdleHeartbeat(); };
       }
 
-      this.pending.set(id, { resolve, reject, stop, onTerminal: opts?.onTerminal, onOutput: opts?.onOutput });
+      return yield* Effect.gen({ self: this }, function* () {
+        yield* sendFrame(this.socket, {
+          ...opts?.extra, ...(opts?.onOutput !== undefined && { output: true }), id, method, params,
+        });
+        const ended = yield* Effect.promise(() => answer.promise);
 
-      try {
-        this.socket.send(JSON.stringify({ ...opts?.extra, ...(opts?.onOutput !== undefined && { output: true }), id, method, params }));
-      } catch (err) {
-        this.pending.delete(id);
+        return yield* ended;
+      }).pipe(Effect.ensuring(Effect.sync(() => {
+        if (this.pending.get(id)?.complete === answer.resolve) this.pending.delete(id);
         stop();
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
-    });
+      })));
+    }));
+  }
+
+  cancel(requestId: string): Promise<DeviceCancelResult | null> {
+    return settle(Effect.flatMap(
+      Effect.tryPromise({
+        try: () => this.rpc(DEVICE_METHOD.cancel, [requestId]),
+        catch: (cause) => toKinuError({ doing: 'cancel device work', cause, otherwise: 'unavailable' }),
+      }),
+      (answer) => Effect.try({
+        try: () => parseDeviceCancelAnswer(requestId, answer),
+        catch: (cause) => toKinuError({ doing: 'read device cancellation', cause, otherwise: 'io' }),
+      }),
+    ).pipe(Effect.match({
+      onSuccess: (answer) => {
+        diagnostics.event('device.work_cancelled', { outcome: answer.cancelled });
+
+        return answer;
+      },
+      onFailure: (failure) => {
+        diagnostics.failure('device.work_cancel_failed', failure);
+
+        return null;
+      },
+    })));
   }
 
   notify(frame: JsonObject): void {
-    if (!this.isConnected()) throw new Error(TUNNEL_DISCONNECTED);
-    this.socket.send(JSON.stringify(frame));
+    return settleSync(sendFrame(this.socket, frame));
   }
 
   handleMessage(raw: string): void {
     const decoded = tolerate(() => parseJsonValue(raw), 'malformed-input');
 
-    if (decoded === undefined) return;
-    const parsed = v.safeParse(RpcResponseSchema, decoded);
-
-    if (!parsed.success) return;
-    const msg = parsed.output;
-    this.lastFrameAt = this.clock.now();
+    if (decoded === undefined) return this.dropped('malformed');
     const output = v.safeParse(ExecOutputFrameSchema, decoded);
 
     if (output.success) {
       const { request, chunks, dropped } = output.output;
-      this.pending.get(request)?.onOutput?.({ chunks, dropped });
+      const pending = this.pending.get(request);
+
+      if (!pending?.onOutput) return this.dropped('unclaimed_output');
+      this.lastAnswerAt = this.clock.now();
+      pending.onOutput({ chunks, dropped });
 
       return;
     }
 
-    if (msg.id === undefined) return;
-    const p = this.pending.get(msg.id);
+    const parsed = v.safeParse(RpcResponseSchema, decoded);
 
-    if (!p) return;
-    this.pending.delete(msg.id);
-    p.stop();
+    if (!parsed.success) return this.dropped('invalid_response');
+    const msg = parsed.output;
 
-    try {
-      p.onTerminal?.();
-    } finally {
-      if (msg.error) p.reject(new Error(msg.error));
-      else p.resolve(msg.result);
+    if (msg.id === this.probe?.id) {
+      if ('error' in msg || msg.result !== DEVICE_FRAMES.pong) return this.dropped('invalid_ping_answer');
+      this.lastAnswerAt = this.clock.now();
+      this.probe = null;
+
+      return;
     }
+
+    const pending = this.pending.get(msg.id);
+
+    if (!pending) return this.dropped('unknown_request');
+    this.lastAnswerAt = this.clock.now();
+
+    const result = 'error' in msg
+      ? Effect.fail(deviceFailure(msg.error.code, msg.error.message))
+      : Effect.succeed(msg.result);
+
+    return settleSync(Effect.try({
+      try: () => pending.onTerminal?.(),
+      catch: (cause) => toKinuError({ doing: 'record device completion', cause, otherwise: 'io' }),
+    }).pipe(Effect.ensuring(Effect.sync(() => this.finish(msg.id, result)))));
   }
 
   dispose(reason = TUNNEL_DISCONNECTED): void {
-    for (const [, p] of this.pending) {
-      p.stop();
-      p.reject(new Error(reason));
-    }
-
-    this.pending.clear();
-    this.openEnded.clear();
+    for (const id of this.pending.keys()) this.finish(id, Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, reason)));
     this.disarmIdleHeartbeat();
+  }
+
+  private finish(id: string, answer: Effect.Effect<JsonValue | undefined, KinuError>): void {
+    const pending = this.pending.get(id);
+
+    if (!pending) return;
+    this.pending.delete(id);
+    pending.stop();
+    pending.complete(answer);
+  }
+
+  private dropped(reason: string): void {
+    diagnostics.event('device.rpc_frame_dropped', { reason });
   }
 
   private armHeartbeat(): void {
     if (this.heartbeat) return;
-    this.probeSentAt = 0;
-    this.heartbeat = every(this.clock, this.probeMs, () => this.probeLiveness());
+    this.probe = null;
+    this.heartbeat = every(this.clock, this.probeMs, () => detach(this.heartbeatTick()));
   }
 
   private disarmIdleHeartbeat(): void {
     if (this.openEnded.size > 0 || !this.heartbeat) return;
     this.heartbeat();
     this.heartbeat = null;
-    this.probeSentAt = 0;
+    this.probe = null;
   }
 
-  /** Fails deadline-free calls when a probe got no frame of any kind before the next tick. */
-  private probeLiveness(): void {
-    if (this.openEnded.size === 0) {
+  private heartbeatTick(): Effect.Effect<void> {
+    if (this.openEnded.size === 0) return Effect.sync(() => this.disarmIdleHeartbeat());
+
+    if (!this.isConnected()) return this.failOpenEnded(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED);
+
+    if (this.probe !== null && this.lastAnswerAt < this.probe.sentAt) {
+      return this.failOpenEnded(DEVICE_ERRORS.unresponsive, DEVICE_UNRESPONSIVE);
+    }
+
+    this.probe = { id: nextDeviceRequestId(), sentAt: this.clock.now() };
+    const frame = { id: this.probe.id, method: DEVICE_METHOD.ping, params: [] };
+
+    return sendFrame(this.socket, frame).pipe(Effect.catch((failure) =>
+      this.failOpenEnded(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED, { cause: failure.cause })));
+  }
+
+  private failOpenEnded(code: string, message: string, input?: { cause: unknown }): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      const ending: Effect.Effect<void>[] = [];
+
+      for (const id of this.openEnded) {
+        const pending = this.pending.get(id);
+
+        if (!pending) continue;
+        this.pending.delete(id);
+        pending.stop();
+
+        const failed = (answer: DeviceCancelResult | null) => pending.complete(Effect.fail(deviceFailure(code,
+          answer?.cancelled === 'terminated' ? `${message}: the device confirmed its work stopped`
+            : `${message}: the call may still be running on the device; its stop was not confirmed`, input)));
+
+        if (this.isConnected()) ending.push(Effect.map(Effect.promise(() => this.cancel(id)), failed));
+        else failed(null);
+      }
+
       this.disarmIdleHeartbeat();
 
-      return;
-    }
-
-    if (!this.isConnected()) {
-      this.failOpenEnded(TUNNEL_DISCONNECTED);
-
-      return;
-    }
-
-    if (this.probeSentAt > 0 && this.lastFrameAt < this.probeSentAt) {
-      this.failOpenEnded(DEVICE_UNRESPONSIVE);
-
-      return;
-    }
-
-    this.probeSentAt = this.clock.now();
-
-    try {
-      this.notify({ id: nextDeviceRequestId(), method: LIVENESS_METHOD, params: [] });
-    } catch (cause) {
-      this.failOpenEnded(TUNNEL_DISCONNECTED, { cause });
-    }
-  }
-
-  private failOpenEnded(reason: string, options?: ErrorOptions): void {
-    for (const id of this.openEnded) {
-      const p = this.pending.get(id);
-
-      if (!p) { this.openEnded.delete(id); continue; }
-
-      this.pending.delete(id);
-      p.stop();
-      p.reject(new Error(`${reason}: the call was abandoned, and may still be running on the device`, options));
-    }
-
-    this.disarmIdleHeartbeat();
+      return Effect.asVoid(Effect.all(ending, { concurrency: 'unbounded' }));
+    });
   }
 }

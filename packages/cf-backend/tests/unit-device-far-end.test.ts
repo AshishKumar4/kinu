@@ -9,7 +9,7 @@ import {
   WORKSPACE, daemon, deviceHarness, type DeviceHarness, type DeviceResponder,
 } from './helpers/device-harness';
 import {
-  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_MISPAIRED, DEVICE_CANCEL_PROTOCOL,
+  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_MISPAIRED,
   DEVICE_CONSENT_DENIED, DEVICE_EXEC_ACK_METHOD,
   TUNNEL_DISCONNECTED, nextDeviceRequestId, type JsonValue,
 } from '@kinu.run/core';
@@ -115,7 +115,7 @@ describe('a device that answers a cancellation for another command', () => {
     ).run(requestId, harness.deviceId, WORKSPACE, TURN);
 
     await expect(harness.userDO.deviceRpc(
-      harness.workspace, DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL],
+      harness.workspace, DEVICE_CANCEL_METHOD, [requestId],
       { agentName: WORKSPACE },
     )).rejects.toThrow(DEVICE_CANCEL_MISPAIRED);
     expect(requestRow(harness, requestId)?.cancel_outcome).toBeNull();

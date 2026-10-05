@@ -4,6 +4,8 @@
 
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { EventLog } from '../events/hub/log';
+import { Cause, Effect } from 'effect';
+import { settle } from '../obs/effect';
 import { renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
@@ -164,7 +166,7 @@ export function createTemporaryAgentPort(deps: {
   afterTurn(child: ActorReference, work: () => Promise<void>): void;
 }): TemporaryAgentPort {
   return {
-    start: async (request) => {
+    start: (request) => settle(Effect.gen(function* () {
       const task = request.task.trim();
 
       if (!task) return { reason: 'bad_input', error: 'hire requires a non-empty mission' };
@@ -199,16 +201,14 @@ export function createTemporaryAgentPort(deps: {
         dismissedAt: null, taskEventId: null,
       });
 
-      try {
-        await finishSubordinateBirth(deps.roster, deps.runtime, name);
-      } catch (cause) {
-        const error = toKinuError({ doing: 'completing an admitted temporary actor birth', cause, otherwise: 'unavailable' });
+      const failure = yield* Effect.catchCause(Effect.as(Effect.promise(() => finishSubordinateBirth(deps.roster, deps.runtime, name)), null), (failed) => Effect.succeed(
+        toKinuError({ doing: 'completing an admitted temporary actor birth', cause: Cause.squash(failed), otherwise: 'unavailable' }),
+      ));
 
-        return outcome('failed', renderCauseChain(error), 'kept', error.code);
-      }
+      if (failure !== null) return outcome('failed', renderCauseChain(failure), 'kept', failure.code);
 
       return outcome('working', TEMPORARY_ANSWER_ARRIVES, 'kept');
-    },
+    })),
 
     release: (name) => {
       const actor = deps.roster.get(name)?.actorReference;

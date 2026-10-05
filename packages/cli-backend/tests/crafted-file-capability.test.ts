@@ -6,8 +6,8 @@ import { Database } from 'bun:sqlite';
 import {
   createInlineExecutor, initWorkspaceSchema, selectInjectableCraftedTools, type JsonValue, type LLMProviderConfig,
 } from '@kinu.run/core';
-import { narrowToolSurface } from '@kinu.run/core';
-import { scratchPath, toolExecute } from '@kinu.run/test-utils';
+import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
+import { scratchPath, toolExecute, scratchDir } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { RECORDED_ATTEMPTS } from '../../core/tests/fixtures/crafted-file-attempts';
@@ -35,7 +35,7 @@ const DUMMY_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:
 function programs() {
   const db = new Database(scratchPath('crafted-file-capability', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
   const workspace = createInlineExecutor({
     vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql, actor: rt.actor,
@@ -43,6 +43,7 @@ function programs() {
   });
 
   const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [workspace] })({
+    cwd: WORKSPACE_ROOT,
     native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql), providers: [],
   });
 

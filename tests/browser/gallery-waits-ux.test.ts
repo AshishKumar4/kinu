@@ -5,6 +5,8 @@
  * welcome frame, which renders it unconditionally, and the log said only "ended while waiting for h1".
  */
 import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { Effect } from 'effect';
+import { detach } from '@kinu.run/core/obs';
 import { appendFileSync, chmodSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
@@ -196,10 +198,10 @@ test('a wait on a page whose app script never ran ends at once by the request th
 
     await page.setRequestInterception(true);
     // Every module but the entry fails, so the entry never runs; a lazy chunk's failure alone fails only its import.
-    page.on('request', async (request) => {
+    page.on('request', (request) => detach(Effect.promise(async () => {
       if (request.resourceType() === 'script' && request.url() !== entry) await request.abort('connectionreset');
       else await request.continue();
-    });
+    })));
     await page.reload({ waitUntil: 'networkidle0' });
     const waiting = page.waitForSelector(NEVER);
 
@@ -247,10 +249,10 @@ test('a frame whose page chunk fails to load shows the failure, not a blank root
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
     await page.setRequestInterception(true);
-    page.on('request', async (request) => {
+    page.on('request', (request) => detach(Effect.promise(async () => {
       if (/\/WelcomePage-[^/]+\.js$/u.test(request.url())) await request.abort();
       else await request.continue();
-    });
+    })));
     await page.goto(`${origin}/gallery.html?frame=welcome&step=0`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('#root [data-failure]');
 

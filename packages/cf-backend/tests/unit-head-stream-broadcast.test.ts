@@ -99,6 +99,6 @@ test("a node's streamed words cost the workspace no call each", async () => {
   const words = ANSWER.split(/(?<= )/u);
   const few = await liveCalls(words);
 
-  // Ten times the words: the calls a step costs stay those of its record and its stream.
-  expect(await liveCalls(Array.from({ length: 10 }, () => words).flat())).toEqual(few);
+  // Ten times the words: the calls a step costs stay those of its record and its stream, in whatever order they land.
+  expect([...await liveCalls(Array.from({ length: 10 }, () => words).flat())].sort()).toEqual([...few].sort());
 });

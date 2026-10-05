@@ -147,7 +147,7 @@
   "//dependencies:@ai-sdk": "The AI SDK v6 packages are pinned EXACTLY in every workspace that declares one (the root declares only what its own scripts and fixtures import), because upstream pins them to each other exactly: `ai@6.0.214` requires `@ai-sdk/provider-utils@4.0.33` and `@ai-sdk/gateway@3.0.139` by exact version, and each provider does the same. A caret on any one of them therefore does not age it independently — it floats that package ahead of the rest and bun answers with a SECOND copy of the SDK nested under whichever parent disagreed, which is how `@ai-sdk/provider` came to be installed twice while both manifests named one version. So the cohort moves as one edit. This one is GHSA-866g-f22w-33x8 (CVE-2026-8769, uncontrolled resource consumption in provider-utils' response handlers), whose first patched release on the v6 line is provider-utils 4.0.33; these are the earliest same-major releases that pin it. Later v6 releases exist and are also patched, but from `@ai-sdk/openai-compatible@2.0.70` the provider throws its own \"Response stream ended without a finish reason\" before a finish-step lands, which pre-empts the dead-stream detector in packages/core/src/chat.ts and the two contracts unit-chat-stream-integrity.test.ts holds over it. Moving past that boundary is a stream-integrity decision, not a dependency refresh.",
   "//dependencies:effect": "`effect` is pinned EXACTLY to 4.0.0-rc.117 wherever a workspace declares it (core; cf-backend for its workerd probe; the root for the red half of `gate:effect-diagnostics`), by owner decision on 2026-09-23: the error model runs on Effect 4's typed failure channel, and 4.0.0 is a release candidate (npm `rc` tag; `latest` is 3.22.2). A caret on an RC floats to the next RC, and RCs move API, so a bump is one deliberate edit in every manifest at once. `@effect/tsgo` is pinned exactly for the same reason: 0.45.0 lists TypeScript 7.0.2, the version this tree pins, and `gate:effect-diagnostics` fails when its planted floating effect stops being reported, so a bump cannot switch the check off in silence.",
   "dependencies": {
-    "ai": "6.0.214",
+    "ai": "7.0.127",
     "valibot": "^1.4.1",
     "zod": "^4.3.6"
   },
@@ -155,7 +155,7 @@
     "@earendil-works/pi-ai": "0.87.1",
     "@earendil-works/pi-coding-agent": "0.87.1",
     "@effect/tsgo": "0.45.0",
-    "@nimbus-sh/core": "0.14.0",
+    "@nimbus-sh/core": "0.15.0",
     "@nimbus-sh/runtime-bash": "5.2.37-3",
     "@nimbus-sh/runtime-cpython": "3.13.14",
     "@opentui/core": "^0.5.11",
@@ -188,7 +188,9 @@
   "patchedDependencies": {
     "@plannotator/ui@0.46.1": "patches/@plannotator%2Fui@0.46.1.patch",
     "agents@0.24.0": "patches/agents@0.24.0.patch",
-    "@cloudflare/codemode@0.5.2": "patches/@cloudflare%2Fcodemode@0.5.2.patch"
+    "@cloudflare/codemode@0.5.2": "patches/@cloudflare%2Fcodemode@0.5.2.patch",
+    "@nimbus-sh/core@0.15.0": "patches/@nimbus-sh%2Fcore@0.15.0.patch",
+    "@nimbus-sh/worker@0.13.1": "patches/@nimbus-sh%2Fworker@0.13.1.patch"
   },
   "//overrides:hono": "hono is pinned here because the resolve lands 4.12.23 under `@modelcontextprotocol/sdk@1.29.0` (which declares `^4.11.4`), below 4.13.5: GHSA-gqvv-2mrq-wpjv, GHSA-g6gw-c38x-mqfc and GHSA-crvj-82cr-hjcx — a `toSSG()` write outside the output directory, unbounded dot-notation nesting in `parseBody()`, and a query parser that reads past the URL fragment — are all fixed in 4.13.5. 4.13.7 satisfies the declared range. Delete it once the MCP SDK's range resolves to 4.13.5 or later without it.",
   "//overrides:miniflare": "Direct Miniflare pins stay at 5.20260926.0-alpha until the routing smoke in kinu-logs/miniflare-upstream/ISSUE-2026-09-30.md passes on Bun: 5.20260930.0-alpha bypasses dispatchFetch's dispatcher there. The held release pins vulnerable undici 7.29.0, so its subtree stays on 7.29.1; the latest Cloudflare plugins' nested Miniflare already pins 7.29.1. Lift this hold on the first Miniflare release that passes that smoke.",

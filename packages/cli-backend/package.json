@@ -7,18 +7,16 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ai-sdk/openai": "3.0.77",
-    "@ai-sdk/openai-compatible": "2.0.54",
-    "@ai-sdk/provider": "3.0.12",
+    "@ai-sdk/openai": "4.0.83",
+    "@ai-sdk/openai-compatible": "3.0.62",
+    "@ai-sdk/provider": "4.0.21",
     "@cloudflare/codemode": "0.5.2",
     "@kinu.run/agent-utils": "workspace:*",
     "@kinu.run/compaction": "workspace:*",
     "@kinu.run/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@nimbus-sh/core": "0.14.0",
-    "@nimbus-sh/runtime-bash": "5.2.37-3",
-    "@nimbus-sh/runtime-cpython": "3.13.14",
-    "ai": "6.0.214",
+    "@nimbus-sh/core": "0.15.0",
+    "ai": "7.0.127",
     "effect": "4.0.0-rc.117",
     "valibot": "^1.4.1"
   },

@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
-import type { LanguageModelV3CallOptions } from '@ai-sdk/provider';
+import type { LanguageModelV4CallOptions } from '@ai-sdk/provider';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { DYNAMIC_CONTEXT_OPEN_TAG } from '@kinu.run/core';
 import {
@@ -14,7 +14,7 @@ import {
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
 
-type Prompt = LanguageModelV3CallOptions['prompt'];
+type Prompt = LanguageModelV4CallOptions['prompt'];
 
 const MINUTE_MS = 60_000;
 

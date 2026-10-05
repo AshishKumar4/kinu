@@ -1,0 +1,141 @@
+diff --git a/dist/runtime/rolldown-build.js b/dist/runtime/rolldown-build.js
+index 6596a5ef206b7b3404e850b1167f13cfc6bd71e6..8331d43bf59e37e8e0d4ce8bff4803a73a1f87ad 100644
+--- a/dist/runtime/rolldown-build.js
++++ b/dist/runtime/rolldown-build.js
+@@ -409,6 +409,45 @@ function refuse(text) {
+ /** The build failed with imports that did not resolve: they are placed once its bundle is closed. */
+ class UnresolvedImports extends Error {
+ }
++/** The compiler options of a tsconfigRaw that esbuild reads for JSX; a build refuses any other. */
++const JSX_OPTIONS = new Set(['jsx', 'jsxFactory', 'jsxFragmentFactory', 'jsxImportSource', 'jsxDev']);
++/**
++ * Rolldown's JSX transform for esbuild's tsconfigRaw, as esbuild reads it:
++ * `react-jsx`/`react-jsxdev` the automatic runtime from `jsxImportSource`
++ * (default `react`), `react` the classic one with its factories. No `jsx`
++ * keeps esbuild's default, React.createElement. (Kinu patch: Nimbus ask #19.)
++ */
++function jsxOf(tsconfigRaw) {
++    let raw = tsconfigRaw ?? {};
++    if (typeof raw === 'string') {
++        try {
++            raw = raw === '' ? {} : JSON.parse(raw);
++        }
++        catch {
++            refuse('Nimbus\'s bundler could not parse tsconfigRaw as JSON');
++        }
++    }
++    const tsconfig = raw !== null && typeof raw === 'object' ? raw : {};
++    const extra = Object.keys(tsconfig).filter((key) => key !== 'compilerOptions');
++    if (extra.length > 0)
++        refuse(`Nimbus's bundler does not support tsconfigRaw "${extra[0]}"`);
++    const compilerOptions = (tsconfig.compilerOptions ?? {});
++    const unsupported = Object.keys(compilerOptions).filter((key) => !JSX_OPTIONS.has(key));
++    if (unsupported.length > 0)
++        refuse(`Nimbus's bundler does not support tsconfigRaw compilerOptions "${unsupported[0]}"`);
++    const { jsx, jsxFactory, jsxFragmentFactory, jsxImportSource } = compilerOptions;
++    if (jsx === 'react-jsx' || jsx === 'react-jsxdev') {
++        return { runtime: 'automatic', importSource: typeof jsxImportSource === 'string' ? jsxImportSource : 'react', development: jsx === 'react-jsxdev' };
++    }
++    if (jsx === undefined || jsx === 'react') {
++        return {
++            runtime: 'classic',
++            pragma: typeof jsxFactory === 'string' ? jsxFactory : 'React.createElement',
++            pragmaFrag: typeof jsxFragmentFactory === 'string' ? jsxFragmentFactory : 'React.Fragment',
++        };
++    }
++    refuse(`Nimbus's bundler does not support tsconfigRaw jsx "${String(jsx)}"`);
++}
+ /**
+  * The input options a build and its placement pass give rolldown alike:
+  * everything that decides which imports a module has (platform, target,
+@@ -422,8 +461,7 @@ function inputOptionsOf(options) {
+         transform: {
+             target: typeof options.target === 'string' ? options.target : 'esnext',
+             define: options.define,
+-            // esbuild's default for JSX without a tsconfig: React.createElement.
+-            jsx: { runtime: 'classic', pragma: 'React.createElement', pragmaFrag: 'React.Fragment' },
++            jsx: jsxOf(options.tsconfigRaw),
+         },
+         checks: { pluginTimings: false },
+         // esbuild keeps an imported constant a reference: inlining its value
+@@ -525,9 +563,7 @@ async function build(api, options, plugin, { raised, unresolved, loaded }) {
+     }
+     if (options.bundle === false)
+         refuse('Nimbus\'s bundler only bundles (bundle: false is not supported)');
+-    if (options.tsconfigRaw !== undefined && options.tsconfigRaw !== '' && JSON.stringify(options.tsconfigRaw) !== '{}') {
+-        refuse('Nimbus\'s bundler does not support tsconfigRaw');
+-    }
++    jsxOf(options.tsconfigRaw);
+     const entryPoints = Array.isArray(options.entryPoints) ? options.entryPoints : null;
+     if (!entryPoints || entryPoints.some((e) => typeof e !== 'string'))
+         refuse('Nimbus\'s bundler takes entryPoints as a list of paths');
+diff --git a/src/runtime/rolldown-build.ts b/src/runtime/rolldown-build.ts
+index 88a06305c4e73ca2f1509f6a4b779baf6aa874bc..0619a9f7544b8f790b4b7d6aa9cd02afd0eb8913 100644
+--- a/src/runtime/rolldown-build.ts
++++ b/src/runtime/rolldown-build.ts
+@@ -449,6 +449,44 @@ function refuse(text: string): never {
+ /** The build failed with imports that did not resolve: they are placed once its bundle is closed. */
+ class UnresolvedImports extends Error {}
+ 
++/** The compiler options of a tsconfigRaw that esbuild reads for JSX; a build refuses any other. */
++const JSX_OPTIONS = new Set(['jsx', 'jsxFactory', 'jsxFragmentFactory', 'jsxImportSource', 'jsxDev']);
++
++/**
++ * Rolldown's JSX transform for esbuild's tsconfigRaw, as esbuild reads it:
++ * `react-jsx`/`react-jsxdev` the automatic runtime from `jsxImportSource`
++ * (default `react`), `react` the classic one with its factories. No `jsx`
++ * keeps esbuild's default, React.createElement. (Kinu patch: Nimbus ask #19.)
++ */
++function jsxOf(tsconfigRaw: EsbuildHostBuildOptions['tsconfigRaw']): Record<string, unknown> {
++  let raw: unknown = tsconfigRaw ?? {};
++  if (typeof raw === 'string') {
++    try {
++      raw = raw === '' ? {} : JSON.parse(raw);
++    } catch {
++      refuse('Nimbus\'s bundler could not parse tsconfigRaw as JSON');
++    }
++  }
++  const tsconfig = raw !== null && typeof raw === 'object' ? raw as Record<string, unknown> : {};
++  const extra = Object.keys(tsconfig).filter((key) => key !== 'compilerOptions');
++  if (extra.length > 0) refuse(`Nimbus's bundler does not support tsconfigRaw "${extra[0]}"`);
++  const compilerOptions = (tsconfig.compilerOptions ?? {}) as Record<string, unknown>;
++  const unsupported = Object.keys(compilerOptions).filter((key) => !JSX_OPTIONS.has(key));
++  if (unsupported.length > 0) refuse(`Nimbus's bundler does not support tsconfigRaw compilerOptions "${unsupported[0]}"`);
++  const { jsx, jsxFactory, jsxFragmentFactory, jsxImportSource } = compilerOptions;
++  if (jsx === 'react-jsx' || jsx === 'react-jsxdev') {
++    return { runtime: 'automatic', importSource: typeof jsxImportSource === 'string' ? jsxImportSource : 'react', development: jsx === 'react-jsxdev' };
++  }
++  if (jsx === undefined || jsx === 'react') {
++    return {
++      runtime: 'classic',
++      pragma: typeof jsxFactory === 'string' ? jsxFactory : 'React.createElement',
++      pragmaFrag: typeof jsxFragmentFactory === 'string' ? jsxFragmentFactory : 'React.Fragment',
++    };
++  }
++  refuse(`Nimbus's bundler does not support tsconfigRaw jsx "${String(jsx)}"`);
++}
++
+ /**
+  * The input options a build and its placement pass give rolldown alike:
+  * everything that decides which imports a module has (platform, target,
+@@ -462,8 +500,7 @@ function inputOptionsOf(options: EsbuildHostBuildOptions): Record<string, unknow
+     transform: {
+       target: typeof options.target === 'string' ? options.target : 'esnext',
+       define: options.define,
+-      // esbuild's default for JSX without a tsconfig: React.createElement.
+-      jsx: { runtime: 'classic', pragma: 'React.createElement', pragmaFrag: 'React.Fragment' },
++      jsx: jsxOf(options.tsconfigRaw),
+     },
+     checks: { pluginTimings: false },
+     // esbuild keeps an imported constant a reference: inlining its value
+@@ -582,9 +619,7 @@ async function build(
+     if (value !== undefined && !SUPPORTED.has(key)) refuse(`Nimbus's bundler does not support the esbuild option "${key}"`);
+   }
+   if (options.bundle === false) refuse('Nimbus\'s bundler only bundles (bundle: false is not supported)');
+-  if (options.tsconfigRaw !== undefined && options.tsconfigRaw !== '' && JSON.stringify(options.tsconfigRaw) !== '{}') {
+-    refuse('Nimbus\'s bundler does not support tsconfigRaw');
+-  }
++  jsxOf(options.tsconfigRaw);
+   const entryPoints = Array.isArray(options.entryPoints) ? options.entryPoints : null;
+   if (!entryPoints || entryPoints.some((e) => typeof e !== 'string')) refuse('Nimbus\'s bundler takes entryPoints as a list of paths');
+   if (options.outfile && entryPoints.length !== 1) refuse('outfile needs exactly one entry point');

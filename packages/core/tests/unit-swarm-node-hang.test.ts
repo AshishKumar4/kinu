@@ -4,9 +4,9 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  * candidate with its reason. Elapsed silence is not a failure: the turn loop has no watchdog.
  */
 import { describe, expect, test } from 'bun:test';
-import type { MockLanguageModelV3 } from 'ai/test';
+import type { MockLanguageModelV4 } from 'ai/test';
 import { handClock, scriptedTurnModel, type HandClock, unobservedSpend } from '@kinu.run/test-utils';
-import type { LanguageModelV3Content } from '@ai-sdk/provider';
+import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
@@ -21,7 +21,7 @@ import type { Objective } from '../src/strategy/objective';
 import type { HeadJournalRow } from '../src/heads/journal';
 import type { SearchNode } from '../src/types/mcts';
 
-function contentFor({ reported, read }: { reported: boolean; read: boolean }): LanguageModelV3Content[] {
+function contentFor({ reported, read }: { reported: boolean; read: boolean }): LanguageModelV4Content[] {
   if (reported) return [{ type: 'text', text: 'Reported: a single linear scan.' }];
 
   if (read) {
@@ -166,7 +166,7 @@ const RAISING_MODEL = scriptedTurnModel({
 });
 
 /** One node answers, siblings get the auth error; chosen by seed, not a call counter, since siblings run concurrently. */
-function oneAnsweringProvider(): MockLanguageModelV3 {
+function oneAnsweringProvider(): MockLanguageModelV4 {
   let chosen: string | null = null;
 
   return scriptedTurnModel({
@@ -184,7 +184,7 @@ function oneAnsweringProvider(): MockLanguageModelV3 {
       if (seed !== chosen) return Promise.reject(new Error(UPSTREAM));
       const reported = prompt.some((message) => message.role === 'tool');
 
-      const content: LanguageModelV3Content[] = reported
+      const content: LanguageModelV4Content[] = reported
         ? [{ type: 'text', text: 'Reported: a single linear scan.' }]
         : [{
           type: 'tool-call',
@@ -218,7 +218,7 @@ const STEPS_PER_NODE = 3;
  * A multi-step active provider: no default elapsed envelope may cut work that keeps progressing
  * (`no-elapsed-work-deadline`); each step advances the swarm's clock (D19).
  */
-function steppingProvider(clock: HandClock): MockLanguageModelV3 {
+function steppingProvider(clock: HandClock): MockLanguageModelV4 {
   return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-stepping',
@@ -227,7 +227,7 @@ function steppingProvider(clock: HandClock): MockLanguageModelV3 {
       const read = prompt.some((message) => message.role === 'tool');
       const reported = prompt.filter((message) => message.role === 'tool').length > 1;
 
-      const content: LanguageModelV3Content[] = contentFor({ reported, read });
+      const content: LanguageModelV4Content[] = contentFor({ reported, read });
 
       return {
         content,
@@ -335,7 +335,7 @@ interface SwarmRunResult {
 }
 
 async function runWith(
-  model: MockLanguageModelV3,
+  model: MockLanguageModelV4,
   call: ResolvedSwarm = resolved(),
   clock: HandClock = handClock(),
 ): Promise<SwarmRunResult> {

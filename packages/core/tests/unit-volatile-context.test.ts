@@ -2,7 +2,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // System prompt stays byte-stable; live state rides the DynamicContextLedger as blocks frozen at
 // their birth index; turn-local state renders as a per-turn tail.
 import { describe, test, expect } from 'bun:test';
-import { stepCountIs, tool, type ModelMessage } from 'ai';
+import { isStepCount, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import * as v from 'valibot';
@@ -1678,7 +1678,7 @@ describe('the ledger and its instruction copies through real runChat turns', () 
         history,
         dynamicContext: { ledger, snapshot: () => ({ factsBlock: '- k = v' }), instructions },
         tools: {},
-        stopWhen: stepCountIs(1),
+        stopWhen: isStepCount(1),
       })) {
         if (ev.type === 'done') for (const m of ev.responseMessages) history.push(m);
       }
@@ -1713,7 +1713,7 @@ describe('the ledger and its instruction copies through real runChat turns', () 
         history,
         dynamicContext: { ledger, snapshot: () => ({ factsBlock }) },
         tools: {},
-        stopWhen: stepCountIs(1),
+        stopWhen: isStepCount(1),
       })) {
         if (ev.type === 'done') for (const m of ev.responseMessages) history.push(m);
       }
@@ -1748,7 +1748,7 @@ describe('the ledger and its instruction copies through real runChat turns', () 
         snapshot: () => ({ factsBlock: '- k = v' }),
       },
       tools: {},
-      stopWhen: stepCountIs(1),
+      stopWhen: isStepCount(1),
     })) { /* drain */ }
 
     const texts = promptTexts(prompts[0]);
@@ -1810,7 +1810,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
       history: [{ role: 'user', content: 'go' }],
       dynamicContext: { ledger, snapshot: () => ({ factsBlock: '- k = v' }) },
       tools: PING,
-      stopWhen: stepCountIs(5),
+      stopWhen: isStepCount(5),
     })) { /* drain */ }
 
     expect(prompts).toHaveLength(3);
@@ -1842,7 +1842,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
       },
       tools: PING,
       cache: { providerId: 'anthropic', sessionKey: 'sess' },
-      stopWhen: stepCountIs(5),
+      stopWhen: isStepCount(5),
     })) { /* drain */ }
 
     expect(prompts).toHaveLength(3);
@@ -1876,7 +1876,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
       dynamicContext: { ledger, snapshot: () => ({ factsBlock: `- step = ${step++}` }) },
       tools: PING,
       cache: { providerId: 'anthropic', sessionKey: 'sess' },
-      stopWhen: stepCountIs(5),
+      stopWhen: isStepCount(5),
     })) { /* drain */ }
 
     const [first, ...later] = prompts.map(promptTexts);

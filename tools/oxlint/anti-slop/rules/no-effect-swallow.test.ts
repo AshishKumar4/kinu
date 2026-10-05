@@ -9,6 +9,8 @@ const drops = { messageId: "dropsEveryFailure" };
 const handler = { messageId: "handlerDropsFailure" };
 
 const head = "import { Effect } from 'effect'; declare const load: Effect.Effect<string, KinuError>; declare const log: { failure(e: unknown): void };";
+// A detached root a holder keeps alive must answer every failure itself; the holder is no excuse to drop one.
+const held = `${head} declare const ctx: { waitUntil(p: Promise<unknown>): void }; declare function settle<A>(e: Effect.Effect<A>): Promise<A>;`;
 
 tester.run("anti-slop/no-effect-swallow", noEffectSwallowRule, {
   valid: [
@@ -23,6 +25,7 @@ tester.run("anti-slop/no-effect-swallow", noEffectSwallowRule, {
     `${head} declare const recover: (e: KinuError) => Effect.Effect<string>; export const p = load.pipe(Effect.catch(recover));`,
     // Keeping the failure as data is not dropping it.
     `${head} export const p = Effect.exit(load); export const q = Effect.result(load);`,
+    `${held} ctx.waitUntil(settle(load.pipe(Effect.catch((error) => Effect.sync(() => log.failure(error))))));`,
   ],
   invalid: [
     { name: "ignore", code: `${head} export const p = Effect.ignore(load);`, errors: [drops] },
@@ -33,5 +36,7 @@ tester.run("anti-slop/no-effect-swallow", noEffectSwallowRule, {
     { name: "a catch-all with no parameter", code: `${head} export const p = load.pipe(Effect.catch(() => Effect.succeed('')));`, errors: [handler] },
     { name: "a catch-all that binds and drops", code: `${head} export const p = Effect.catch(load, (error) => Effect.succeed(''));`, errors: [handler] },
     { name: "a defect handler that drops the defect", code: `${head} export const p = load.pipe(Effect.catchDefect(() => Effect.succeed('')));`, errors: [handler] },
+    { name: "a held root whose never-failing body drops the failure", code: `${held} ctx.waitUntil(settle(load.pipe(Effect.catch(() => Effect.void))));`, errors: [handler] },
+    { name: "a held root that ignores its failure", code: `${held} ctx.waitUntil(settle(Effect.ignore(load)));`, errors: [drops] },
   ],
 });

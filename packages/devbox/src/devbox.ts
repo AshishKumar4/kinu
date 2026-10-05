@@ -9,13 +9,14 @@ import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, diskChain, re
 import { STORE_MOUNT, chainStoreRoot, storeObjectUrl } from './store-gateway';
 import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
 import {
-  GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeObject, refreshTools,
+  GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeParts, refreshTools,
   type GoldenAnswer, type GoldenPorts,
 } from './golden';
 import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import { bridgeSockets } from './socket-bridge';
+import { DESKTOP_PORT, DESKTOP_START } from './desktop';
 import { Deferred, Effect, Result } from 'effect';
 
 import {
@@ -229,6 +230,8 @@ const GOLDEN_REFRESH_CALLBACK = 'golden-refresh';
 
 const GOLDEN_KEY = 'devbox:golden';
 
+const AWAITING_GOLDEN_KEY = 'devbox:awaiting-golden';
+
 type StartSource = { readonly kind: 'image' } | { readonly kind: 'own' | 'golden'; readonly id: string };
 
 /** A classified recovery obligation; executed outside the restore block. */
@@ -276,6 +279,8 @@ function unawaited(work: Promise<unknown>, lost: string): void {
   });
 }
 
+const DESKTOP_PORT_REFUSED = Effect.fail(new DevboxError('invalid-input', `port ${String(DESKTOP_PORT)} is the desktop's, and is never a preview`));
+
 function fileFault(failure: DevboxError): DevboxError {
   const error = failure.cause;
 
@@ -314,7 +319,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #storage: DevboxStorage | undefined;
 
   #started: StartSource = { kind: 'image' };
-  #awaitingGolden: string | undefined;
   #sweeping: Promise<void> | undefined;
   #gateRestore: Flight | undefined;
   /** Fences every write below: an abandoned startup continuation keeps running, and must
@@ -472,11 +476,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #refreshTools(): Effect.Effect<void, DevboxError> {
     if (this.peers === undefined) return Effect.void;
 
-    return refreshTools({ pin: this.toolsPin, exec: (command) => this.#rawExec(command, DEVBOX_RUNTIME_DIR), pipe: (key, path) => this.#pipeObject(key, path) });
+    return refreshTools({ pin: this.toolsPin, exec: (command) => this.#rawExec(command, DEVBOX_RUNTIME_DIR), pipe: (key, path) => this.#pipeParts(key, path) });
   }
 
-  #pipeObject(key: string, path: string): Effect.Effect<void, DevboxError> {
-    return pipeObject({ get: async (wanted) => await this.store?.bucket.get(wanted) ?? null, container: this.#container() }, key, path);
+  #pipeParts(key: string, path: string): Effect.Effect<void, DevboxError> {
+    return pipeParts({ get: async (wanted) => await this.store?.bucket.get(wanted) ?? null, container: this.#container() }, key, path);
   }
 
   #goldenPorts(): GoldenPorts {
@@ -497,7 +501,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         await firstExec(container(), AbortSignal.timeout(120_000));
       },
       exec: async (command) => decoded(await (await container().exec(['/bin/bash', '-c', command])).output()),
-      pipe: (key, path) => this.#pipeObject(key, path),
+      pipe: (key, path) => this.#pipeParts(key, path),
       snapshot: async (name) => (await container().snapshotContainer({ name })).id,
       destroy: () => this.#destroyGoldenContainer(),
       build: () => this.armAlarm(GOLDEN_BUILD_CALLBACK, 0),
@@ -509,6 +513,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #destroyGoldenContainer(): Promise<void> {
     if (this.#container().running) await this.#container().destroy();
     await this.#awaitContainerStopped();
+  }
+
+  get #awaitingGolden(): string | undefined {
+    const held = v.safeParse(v.string(), this.ctx.storage.kv.get(AWAITING_GOLDEN_KEY));
+
+    return held.success ? held.output : undefined;
+  }
+
+  set #awaitingGolden(reason: string | undefined) {
+    if (reason === undefined) this.ctx.storage.kv.delete(AWAITING_GOLDEN_KEY);
+    else this.ctx.storage.kv.put(AWAITING_GOLDEN_KEY, reason);
   }
 
   async goldenReady(answer: GoldenAnswer): Promise<void> {
@@ -2166,6 +2181,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       for (const admission of admissions) admission.abort();
       await Promise.allSettled(admissions.map((admission) => admission.settled));
+      this.#awaitingGolden = undefined;
 
       for (const callback of CONTAINER_CALLBACKS) this.#deleteSchedule(callback);
       await this.#destroyContainer();
@@ -2295,7 +2311,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Must be asked before the first exposure: restarts re-expose each port with its stored
    *  token, so the first exposure must use the same token for the preview URL to survive. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }> {
-    return settle(attempt('io', async () => {
+    return settle(port === DESKTOP_PORT ? DESKTOP_PORT_REFUSED : attempt('io', async () => {
       return await this.#resources.run(portScope(port), () => this.#portToken(port, name));
     }));
   }
@@ -2467,7 +2483,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     port: number,
     options: { name?: string; hostname: string; token?: string },
   ) {
-    return await settle(this.#claimed(portScope(port), attempt("file", () => this.#expose(port, options))).pipe(Effect.mapError(fileFault)));
+    return await settle(port === DESKTOP_PORT
+      ? DESKTOP_PORT_REFUSED
+      : this.#claimed(portScope(port), attempt("file", () => this.#expose(port, options))).pipe(Effect.mapError(fileFault)));
   }
 
   /** Revocation touches only this object's preview rows, never the container, so it skips
@@ -2915,7 +2933,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async #portSpecs(): Promise<readonly PortExposureSpec[]> {
-    return [...(await this.ctx.storage.list<PortExposureSpec>({ prefix: PORT_SPEC_PREFIX })).values()];
+    return [...(await this.ctx.storage.list<PortExposureSpec>({ prefix: PORT_SPEC_PREFIX })).values()].filter((spec) => spec.port !== DESKTOP_PORT);
   }
 
   #routeClient: ContainerRoutes | undefined;
@@ -2954,7 +2972,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return Effect.gen({ self: this }, function* () {
       const spec = yield* attempt('io', () => this.ctx.storage.get<PortExposureSpec>(`${PORT_SPEC_PREFIX}${port}`));
 
-      if (spec === undefined || !sameToken(spec.token, token)) return new Response('Preview not exposed', { status: 404 });
+      if (port === DESKTOP_PORT || spec === undefined || !sameToken(spec.token, token)) return new Response('Preview not exposed', { status: 404 });
 
       return yield* this.#withActiveCaller(attempt('io', async () => {
         await this.ensureReady();
@@ -2967,6 +2985,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         return answer.webSocket ? this.#bridge(answer.webSocket, answer.headers) : answer;
       }));
     });
+  }
+
+  #desktop(request: Request): Effect.Effect<Response, DevboxError> {
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return Effect.succeed(new Response('WebSocket required', { status: 426 }));
+
+    return this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
+      const started = yield* attempt('io', async () => await (await container.exec(['/bin/bash', '-c', DESKTOP_START, 'devbox-desktop'], { env: CONTAINER_TRUST_ENV })).output());
+
+      if (started.exitCode !== 0) {
+        return yield* Effect.fail(new DevboxError('io', `the desktop did not start: ${new TextDecoder().decode(started.stderr).trim()}`));
+      }
+
+      const server = `http://127.0.0.1:${String(DESKTOP_PORT)}`;
+      const headers = new Headers(request.headers);
+      headers.set('origin', server);
+      const answer = yield* attempt('io', () => container.getTcpPort(DESKTOP_PORT).fetch(new Request(`${server}/websockify`, { headers })));
+
+      return answer.webSocket ? this.#bridge(answer.webSocket, answer.headers) : answer;
+    }));
   }
 
   /** The SDK's `bridge()`: an open preview socket is the box's use. */
@@ -3031,6 +3069,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         return yield* this.#preview(forwarded, Number(preview[1]), token);
       }
+
+      if (url.pathname === '/_devbox/desktop') return yield* this.#desktop(request);
 
       if (url.pathname !== '/_devbox/terminal') return new Response('Not found', { status: 404 });
 

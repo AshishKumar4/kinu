@@ -21,12 +21,12 @@ import { requireSchemaGenesis, stampSchemaGenesis } from '@kinu.run/cli-backend'
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { workspaceArchiveTarget } from '@kinu.run/core';
 import {
-  adoptUnplacedLocalAgent, agentDbPath, agentDir, ensureAgentHome,
-  requireStoredAuthConfig, resolveAgentRef, resolveLocalAgent,
+  agentDbPath, agentDir, canonicalProjectRoot, defaultVirtualWorkspaceId, ensureAgentHome,
+  placeLocalWorkspace, requireStoredAuthConfig, resolveAgentRef, resolveLocalAgent,
 } from '../config';
 import { resolveAgentTarget } from '../agent-target';
 import { cloudArchivePage } from '../cloud-api';
-import { formatBytes, printError, OK, WARN, ACCENT, DIM } from '../display';
+import { formatBytes, printError, OK, ACCENT, DIM } from '../display';
 import * as v from 'valibot';
 
 interface RestoredArchiveCounts {
@@ -97,6 +97,12 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     process.exit(1);
   }
 
+  // One config key holds one ref: a name a cloud workspace answers to cannot also name this copy.
+  if (resolveAgentRef(name)?.mode === 'cloud') {
+    printError(`"${name}" already names a cloud workspace here.`, 'Use --name to choose a different name');
+    process.exit(1);
+  }
+
   mkdirSync(agentDir(name), { recursive: true });
 
   // Restore to a partial file and rename on success, so a damaged archive leaves no half-populated workspace.
@@ -135,18 +141,11 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     + ` ${DIM(`(${restored.tables} tables, ${restored.rows} records)`)}`,
   );
 
-  // One config key holds one ref: a name a cloud workspace already answers to cannot also name this copy.
-  const claimed = resolveAgentRef(name);
-
-  if (claimed && claimed.mode !== 'local') {
-    console.log(`  ${WARN('!')} "${name}" already names a cloud workspace here, so the restored copy has no local name.`);
-    console.log(`  ${DIM('Re-run with --name to give it one.')}\n`);
-
-    return;
-  }
-
-  const placed = await adoptUnplacedLocalAgent(name);
-  console.log(`  ${DIM('workspace:')} ${placed.workspaceId} ${DIM('in')} ${placed.cwd}\n`);
+  // Like `kinu create`, the copy works in the folder it was restored from.
+  const cwd = canonicalProjectRoot();
+  const workspaceId = defaultVirtualWorkspaceId(cwd);
+  await placeLocalWorkspace({ name, cwd, workspaceId });
+  console.log(`  ${DIM('workspace:')} ${workspaceId} ${DIM('in')} ${cwd}\n`);
 }
 
 async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage | 'snapshot-ended'> {
@@ -165,13 +164,10 @@ async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage | 's
 }
 
 async function* localArchivePages(name: string, output: string): AsyncGenerator<ArchivePage> {
-  const ref = resolveAgentRef(name);
-
-  if (ref?.cwd && !existsSync(ref.cwd)) throw new Error(`Cannot export workspace files: ${ref.cwd} is missing.`);
-  const local = await resolveLocalAgent(name, { adopt: false });
+  const local = resolveLocalAgent(name);
   const outputPath = resolve(output);
 
-  const files = local.placement === 'unplaced' ? null : archiveFileTree({
+  const files = archiveFileTree({
     readdir: async (path) => (await fs.readdir(resolve(local.cwd, path), { withFileTypes: true }))
       .filter((entry) => resolve(local.cwd, path, entry.name) !== outputPath)
       .map((entry) => ({

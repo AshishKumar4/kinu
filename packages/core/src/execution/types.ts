@@ -100,6 +100,8 @@ export interface ExecutorStatus {
   sandbox?: DeviceSandboxStatus;
   /** The sizes `sandbox.resize` offers; absent for every other environment. */
   sizes?: SandboxSizes;
+  /** Each live machine's segment under `/pc`, the name its `<name>://` references take; the device fleet only. */
+  mounts?: string[];
 }
 
 /** An executor registered as a named codemode provider; matches @cloudflare/codemode's ToolProvider shape. */
@@ -210,6 +212,7 @@ export interface ExecutorInfo {
   granted?: boolean;
   sandbox?: DeviceSandboxStatus;
   sizes?: SandboxSizes;
+  mounts?: string[];
 }
 
 /** Manages the provider set passed to createExecuteTool; codemode does the namespace routing. */

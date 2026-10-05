@@ -9,12 +9,13 @@
  * cloudflare-os in-pool session harness); it is deliberately NOT here.
  */
 
+import { Effect } from 'effect';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { TurnClaimFrameSchema } from '@kinu.run/core';
-import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
+import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
@@ -1301,7 +1302,7 @@ const STREAM_ERROR_TEXT = `[...document.querySelectorAll('[data-chat-error]')].m
 const ReportBodySchema = v.looseObject({ event: v.string() });
 
 function recordReports(page: Page, into: { status: number; event: string; refusal: string }[]): void {
-  page.on('response', async (response) => {
+  page.on('response', (response) => detach(Effect.promise(async () => {
     const request = response.request();
 
     if (request.method() !== 'POST' || !request.url().endsWith('/api/client-errors')) return;
@@ -1309,7 +1310,7 @@ function recordReports(page: Page, into: { status: number; event: string; refusa
     const refusal = response.status() < 300 ? '' : (await response.text()).slice(0, 200);
 
     into.push({ status: response.status(), event: body.success ? body.output.event : '?', refusal });
-  });
+  })));
 }
 
 /** Owner report 2026-09-26: "Received reasoning-delta for missing reasoning part". A page whose socket drops while the

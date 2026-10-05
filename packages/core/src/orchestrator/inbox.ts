@@ -5,6 +5,8 @@
  * turn; an event's splice is ephemeral, its durable record its own row.
  */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { PrepareStepContext } from '../extension';
@@ -330,54 +332,57 @@ export class Inbox implements AgentInbox {
    * this step's `steering` as one non-durable message. `steering` is never buffered. The drain's persistence
    * is awaited before any card moves, so the model never sees a steer whose durable half is missing.
    */
-  async prepareStep(
+  prepareStep(
     ctx: PrepareStepContext,
     steering: readonly AgentSignal[] = [],
   ): Promise<ModelMessage[] | undefined> {
-    const drained = this.pending.splice(0);
-    const users = drained.filter(isUserSignal);
-    const events = drained.filter((signal) => !isUserSignal(signal));
-    let landedMessage: ModelMessage | undefined;
+    return settle(Effect.gen({ self: this }, function* () {
+      const drained = this.pending.splice(0);
+      const users = drained.filter(isUserSignal);
+      const events = drained.filter((signal) => !isUserSignal(signal));
+      let landedMessage: ModelMessage | undefined;
 
-    if (users.length > 0) {
-      try {
-        const landed = await this.steers.onDrain?.(users.map(toUserSteer), ctx.stepNumber);
+      if (users.length > 0) {
+        yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
+          const landed = yield* Effect.promise(async () => this.steers.onDrain?.(users.map(toUserSteer), ctx.stepNumber));
 
-        if (landed !== undefined) landedMessage = landed;
-      } catch (cause) {
-        // Signals may arrive during the await; the failed prefix goes back ahead of them.
-        this.pending = [...drained, ...this.pending];
-        throw cause;
+          if (landed !== undefined) landedMessage = landed;
+        }), (failed) => Effect.gen({ self: this }, function* () {
+          // Signals may arrive during the await; the failed prefix goes back ahead of them.
+          this.pending = [...drained, ...this.pending];
+
+          return yield* Effect.failCause(failed);
+        }));
       }
-    }
 
-    this.absorbed.push(...drained);
+      this.absorbed.push(...drained);
 
-    for (const event of events) this.moveCard(event.cardId, 'shown');
+      for (const event of events) this.moveCard(event.cardId, 'shown');
 
-    for (const user of users) {
-      this.host.broadcast({
-        type: 'steer_status', status: 'landed',
-        steerId: user.user.id, text: user.text, atStep: ctx.stepNumber,
-      });
-    }
+      for (const user of users) {
+        this.host.broadcast({
+          type: 'steer_status', status: 'landed',
+          steerId: user.user.id, text: user.text, atStep: ctx.stepNumber,
+        });
+      }
 
-    const entries: Array<{ readonly message: ModelMessage; readonly durable: boolean }> = [];
+      const entries: Array<{ readonly message: ModelMessage; readonly durable: boolean }> = [];
 
-    if (users.length > 0) {
-      entries.push({ message: landedMessage ?? steerUserMessage(users.map(toUserSteer)), durable: true });
-    }
+      if (users.length > 0) {
+        entries.push({ message: landedMessage ?? steerUserMessage(users.map(toUserSteer)), durable: true });
+      }
 
-    const bodies = [...events, ...steering].map(stepBody);
-    const activated = users.length > 0 ? await this.steers.skills?.(users.map((user) => user.text).join('\n\n')) : null;
+      const bodies = [...events, ...steering].map(stepBody);
+      const activated = users.length > 0 ? (yield* Effect.promise(async () => this.steers.skills?.(users.map((user) => user.text).join('\n\n')))) : null;
 
-    if (activated !== null && activated !== undefined) bodies.unshift(activated);
+      if (activated !== null && activated !== undefined) bodies.unshift(activated);
 
-    if (bodies.length > 0) {
-      entries.push({ message: { role: 'user', content: bodies.join('\n\n') }, durable: false });
-    }
+      if (bodies.length > 0) {
+        entries.push({ message: { role: 'user', content: bodies.join('\n\n') }, durable: false });
+      }
 
-    return this.injections.drain(ctx, entries);
+      return this.injections.drain(ctx, entries);
+    }));
   }
 
   /**

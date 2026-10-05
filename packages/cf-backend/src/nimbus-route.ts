@@ -4,6 +4,8 @@
  * Guest code on a separate origin: the Kinu session and `x-kinu-*` headers are stripped; never add a path that restores them.
  */
 
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { workspaceAddressRefusal } from '@kinu.run/core';
 import { previewHostSuffix, previewPortSuffix } from '@kinu.run/core';
 import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from '@kinu.run/core';
@@ -37,37 +39,39 @@ function previewMessage(workspace: string, port: number, handle: string): string
 }
 
 /** A reason rather than a throw: without a preview host, or with a name a hostname label cannot carry, the port still works. */
-export async function nimbusPreviewUrl(
+export function nimbusPreviewUrl(
   env: PreviewSuffixEnv & PreviewPortEnv & LabelSignerEnv,
   workspaceName: string,
   port: number,
   capability: string,
 ): Promise<WorkspacePreviewUrl> {
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    return { unavailable: `${String(port)} is not a TCP port` };
-  }
+  return settle(Effect.gen(function* () {
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      return { unavailable: `${String(port)} is not a TCP port` };
+    }
 
-  if (!/^[a-f0-9]{24}$/.test(capability)) {
-    return { unavailable: 'the port registry handed out a capability this deployment cannot sign' };
-  }
+    if (!/^[a-f0-9]{24}$/.test(capability)) {
+      return { unavailable: 'the port registry handed out a capability this deployment cannot sign' };
+    }
 
-  const suffix = previewHostSuffix(env);
+    const suffix = previewHostSuffix(env);
 
-  if (!suffix) return { unavailable: 'this deployment has no preview host (PREVIEW_HOST_SUFFIX is not set)' };
-  const secret = previewSigner.secrets(env)[0];
+    if (!suffix) return { unavailable: 'this deployment has no preview host (PREVIEW_HOST_SUFFIX is not set)' };
+    const secret = previewSigner.secrets(env)[0];
 
-  if (!secret) return { unavailable: 'this deployment has no preview signing secret (CREDENTIAL_ENCRYPTION_KEY is not set)' };
-  const refusal = workspaceAddressRefusal(workspaceName);
+    if (!secret) return { unavailable: 'this deployment has no preview signing secret (CREDENTIAL_ENCRYPTION_KEY is not set)' };
+    const refusal = workspaceAddressRefusal(workspaceName);
 
-  if (refusal !== null) return { unavailable: refusal };
-  const handle = capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH);
-  const token = await previewSigner.token(secret, previewMessage(workspaceName, port, handle));
-  const host = buildWorkspacePreviewHost({ port, workspace: workspaceName, handle, token, suffix });
+    if (refusal !== null) return { unavailable: refusal };
+    const handle = capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH);
+    const token = yield* Effect.promise(async () => previewSigner.token(secret, previewMessage(workspaceName, port, handle)));
+    const host = buildWorkspacePreviewHost({ port, workspace: workspaceName, handle, token, suffix });
 
-  // The name passed the label grammar, so null is a fault.
-  if (host === null) throw new Error(`the preview label for "${workspaceName}" did not fit a hostname`);
+    // The name passed the label grammar, so null is a fault.
+    if (host === null) return yield* Effect.die(new Error(`the preview label for "${workspaceName}" did not fit a hostname`));
 
-  return { url: `https://${host}${previewPortSuffix(env)}/` };
+    return { url: `https://${host}${previewPortSuffix(env)}/` };
+  }));
 }
 
 /** Runs before app authentication; `null` hands the request to the container-preview router. */

@@ -187,7 +187,7 @@ describe('the tier model behind background memory compression', () => {
 
       const llm: LLM = {
         async *stream(options) {
-          yield* streamText({ model, system: options.system, messages: options.messages, tools: options.tools }).textStream;
+          yield* streamText({ model, instructions: options.system, messages: options.messages, tools: options.tools }).textStream;
         },
         async complete(prompt) {
           return (await generateText({ model, prompt, maxRetries: 0 })).text;

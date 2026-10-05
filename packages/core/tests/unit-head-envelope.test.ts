@@ -7,7 +7,7 @@ import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
-import type { LanguageModelV3Content } from '@ai-sdk/provider';
+import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { deriveChildBudget, type HeadBudget, type HeadInput } from '../src/heads/types';
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import { usageTotal } from '../src/usage';
@@ -42,7 +42,7 @@ function loopingHeadModel(perStep: {
     doGenerate: async () => {
       const finishes = perStep.stopAfterSteps !== undefined && step >= perStep.stopAfterSteps;
       step++;
-      const content: LanguageModelV3Content[] = [];
+      const content: LanguageModelV4Content[] = [];
 
       if (perStep.text) content.push({ type: 'text', text: perStep.text });
 
