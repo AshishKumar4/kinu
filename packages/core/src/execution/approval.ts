@@ -91,7 +91,8 @@ export interface FileReach {
   /** Every path is resolved here first, so the gate and the plane see the one the agent named. */
   readonly planes: PathPlanes;
   readonly userRoots: () => readonly string[];
-  readonly locate: ((path: string) => { readonly hostPath: string; readonly outside: boolean }) | null;
+  /** Where `op` on `path` lands on the machine, and whether that is past the agent's own files. */
+  readonly locate: ((path: string, op: FileAccess['op']) => { readonly hostPath: string; readonly outside: boolean }) | null;
   /** An unanswered overwrite of the user's file parks on its bytes; false refuses it. */
   readonly parksWrites: boolean;
 }
@@ -104,7 +105,7 @@ export function withApprovalGatedFiles(
 ): VFS & CheckpointFiles {
   const approve: Approve = (op, path, bytes) => Effect.gen(function* () {
     const onUser = onUserRoots(path, reach.userRoots());
-    const at = onUser ? undefined : reach.locate?.(path);
+    const at = onUser ? undefined : reach.locate?.(path, op);
     const hostPath = at?.hostPath ?? path;
     const replaces = onUser && op === 'write' && (yield* Effect.promise(async () => nimbusExists(vfs, path)));
     let reaches: FileAccess['reaches'] = at?.outside === true ? 'outside-directory' : 'own';

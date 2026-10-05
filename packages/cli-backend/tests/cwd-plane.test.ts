@@ -3,7 +3,7 @@ import { exists, readText as nimbusReadText, type Awaitable, writeText } from '@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import * as v from 'valibot';
@@ -298,6 +298,32 @@ describe('addressing the bound directory', () => {
     expect(readFileSync(created, 'utf8')).toBe('approved');
     expect(await file({ action: 'write', path: join(project, 'inside.txt'), content: 'own' })).toMatchObject({ ok: true });
     expect(asked).toHaveLength(4);
+  });
+
+  // Release review, 2026-10-05: a link in the folder or the own space to a directory outside let a write through it land
+  // outside unasked, because the reach judged the path as written and node:fs followed the link.
+  test('a write through a link in the folder or the own space lands where the link points, and is asked there', async () => {
+    const { state, project } = roots('cwd-plane-link');
+    const outside = join(dirname(project), 'outside');
+    mkdirSync(outside);
+    const rt = agentRuntime(state, 'solo', project);
+    symlinkSync(outside, join(project, 'linked'));
+    symlinkSync(outside, join(state, 'solo', 'linked'));
+    symlinkSync(join(outside, 'dangling.txt'), join(project, 'dangling'));
+    const { file, asked } = agentTools(rt, () => 'deny');
+    const landed = realpathSync(outside);
+
+    for (const path of ['local://linked/new.txt', 'vfs://linked/own.txt', 'local://dangling']) {
+      await expect(file({ action: 'write', path, content: 'escaped' })).rejects.toMatchObject({ code: 'denied' });
+    }
+
+    expect(asked).toEqual([`file write ${join(landed, 'new.txt')}`, `file write ${join(landed, 'own.txt')}`, `file write ${join(landed, 'dangling.txt')}`]);
+    expect(readdirSync(outside)).toEqual([]);
+
+    // Removing a link changes only the folder: it is not followed, so it is not asked.
+    await rt.toolFiles.unlink('local://linked');
+    expect([existsSync(join(project, 'linked')), existsSync(outside)]).toEqual([false, true]);
+    expect(asked).toHaveLength(3);
   });
 
   test('with nobody to ask, the agent\'s change outside the directory is refused, never parked, while a shell command parks', async () => {
