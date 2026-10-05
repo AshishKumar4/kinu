@@ -5,7 +5,6 @@
 
 import * as readline from 'node:readline';
 import { renderChangelogText } from '@kinu.run/core/tui';
-import { EMPTY_MODEL_MENU } from '@kinu.run/core';
 import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client';
 import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderPlanReview, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments';
@@ -522,7 +521,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'model-picker': {
       const current = await client.getModelSpec();
       console.log(`\n${DIM('Model:')} ${ACCENT(current ?? '(default)')}`);
-      const menu = await client.listModels().catch(() => EMPTY_MODEL_MENU);
+      const menu = await client.listModels();
 
       if (menu.models.length > 0) {
         console.log(DIM('Available (set with /model <spec>):'));
