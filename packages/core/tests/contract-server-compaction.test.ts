@@ -2,10 +2,11 @@
 // compaction-threshold): asked for on a Claude model that supports it, at Kinu's compaction trigger. The summary is
 // for the model, not the owner: it stays out of the answer and the stream, and opens the replayed conversation.
 import { describe, expect, test } from 'bun:test';
-import type { ModelMessage, UIMessageChunk } from 'ai';
+import { tool, type ModelMessage, type UIMessageChunk } from 'ai';
+import { z } from 'zod';
 import * as v from 'valibot';
 import {
-  runChat, createAnthropicProvider, createOpenAIProvider, decodeModelMessageValues, drawnStep, encodeModelMessageValues, TurnAccumulator,
+  runChat, createAnthropicProvider, createOpenAIProvider, createFallbackCooldowns, decodeModelMessageValues, drawnStep, encodeModelMessageValues, TurnAccumulator,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, parseJsonObject,
   type ChatEvent, type ChatOptions, type JsonObject, type ModelCallDeps,
 } from '../src/index';
@@ -123,6 +124,73 @@ describe('Anthropic server-side compaction', () => {
     const replayed = JSON.stringify(body(next.mock).messages);
 
     expect(replayed).toContain(JSON.stringify({ type: 'compaction', content: SUMMARY }).slice(0, -1));
+  });
+
+  // Anthropic numbers a response's blocks from 0, so the answer after a tool call reuses the summary's id.
+  test('the answer after a compaction and a tool call streams, though it reuses the summary\'s block id', async () => {
+    const compactedThenTool = sse([
+      ['message_start', { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } }],
+      ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'compaction', content: '' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'compaction_delta', content: SUMMARY } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+      ['content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'look', input: {} } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{}' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 1 }],
+      ['message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 5 } }],
+      ['message_stop', { type: 'message_stop' }],
+    ]);
+
+    const answered = sse([
+      ['message_start', { type: 'message_start', message: { id: 'msg_2', type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } }],
+      ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'after tool' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+      ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }],
+      ['message_stop', { type: 'message_stop' }],
+    ]);
+
+    const mock = createMockFetch([{ match: 'api.anthropic.com', respond: (_request, index) => ({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: index === 0 ? compactedThenTool : answered }) }]);
+    const events: ChatEvent[] = [];
+    const shown: UIMessageChunk[] = [];
+
+    for await (const event of runChat({
+      model: createAnthropicProvider().createModel('claude-opus-4-7', deps(mock.fetch)),
+      modelSpec: 'anthropic/claude-opus-4-7', modelContext: { id: 'anthropic/claude-opus-4-7', contextWindow: 200_000 },
+      system: 'You are Kinu.', history: [{ role: 'user', content: 'rename the parser' }],
+      tools: { look: tool({ inputSchema: z.object({}), execute: async () => 'looked' }) },
+      observeStream: async (stream) => {
+        for await (const chunk of stream) shown.push(chunk);
+      },
+    })) events.push(event);
+
+    const streamed = events.flatMap((event) => (event.type === 'text-delta' ? [event.delta] : [])).join('');
+    const drawn = shown.flatMap((chunk) => (chunk.type === 'text-delta' ? [chunk.delta] : [])).join('');
+
+    expect({ streamed, drawn }).toEqual({ streamed: 'after tool', drawn: 'after tool' });
+  });
+
+  // GrimCatfish, 2026-10-05: an armed request whose Opus attempt fails falls back to a Claude that compacts too.
+  test('a fallback Claude is asked to compact as the turn asked, at its own window', async () => {
+    const mock = createMockFetch([{ match: 'api.anthropic.com', respond: (request) => {
+      const model = v.parse(v.object({ model: v.string() }), parseJsonObject(v.parse(v.string(), request.body))).model;
+
+      return model === 'claude-opus-4-7'
+        ? { status: 503, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }) }
+        : { status: 200, headers: { 'content-type': 'text/event-stream' }, body: COMPACTED };
+    } }]);
+
+    for await (const _ of runChat({
+      model: createAnthropicProvider().createModel('claude-opus-4-7', deps(mock.fetch)),
+      modelSpec: 'anthropic/claude-opus-4-7', modelContext: { id: 'anthropic/claude-opus-4-7', contextWindow: 200_000 },
+      fallbacks: [{ spec: 'anthropic/claude-sonnet-4-6', accepts: new Set(), bind: () => ({ model: createAnthropicProvider().createModel('claude-sonnet-4-6', deps(mock.fetch)), provider: 'anthropic' }) }],
+      cooldowns: createFallbackCooldowns(),
+      system: 'You are Kinu.', history: [{ role: 'user', content: 'rename the parser' }], tools: {},
+      transformTrigger: 'force', countInputTokens: async () => ({ kind: 'counted' as const, tokens: 120_000 }),
+    })) { /* drain */ }
+
+    const sonnet = mock.requests.map((request) => parseJsonObject(v.parse(v.string(), request.body))).find((sent) => sent.model === 'claude-sonnet-4-6');
+
+    expect(sonnet?.context_management).toEqual({ edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 108_000 } }] });
   });
 });
 

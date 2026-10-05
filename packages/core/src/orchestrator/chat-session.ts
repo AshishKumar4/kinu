@@ -26,7 +26,7 @@ import { runOperationProfile } from '../profiles/operation';
 import type { ResolvedTurnProfile } from '../profiles';
 import type { CacheWarmingLane } from '../providers/cache-warming';
 import { DEFAULT_CACHE_RETENTION } from '../providers/types';
-import { compactsServerSide, SERVER_COMPACTION_MIN_TOKENS } from '../providers/server-compaction';
+import { serverCompactor, SERVER_COMPACTION_MIN_TOKENS } from '../providers/server-compaction';
 import type { ToolOutcome } from '../tools/outcome';
 import { OVERFLOW_RETRY_EVENT } from '../turn-failure';
 import type {
@@ -681,7 +681,7 @@ export class ChatSession {
         async (): Promise<CompactOutcome> => {
           const { measured, chat, sessionKey } = await this.measureNextRequest({ counted: true, trigger: 'user' });
 
-          if (!compactsServerSide(chat.modelSpec ?? chat.modelContext?.id)) return 'folded';
+          if (serverCompactor(chat.modelSpec ?? chat.modelContext?.id) === null) return 'folded';
 
           if (measured === null || measured.tokens < SERVER_COMPACTION_MIN_TOKENS) return 'nothing';
           this.compactionState.armCompaction(sessionKey);

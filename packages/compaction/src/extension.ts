@@ -4,10 +4,10 @@
  */
 
 import type { AssistantModelMessage, ModelMessage, TextPart } from 'ai';
-import type { KinuExtension, TransformContext } from '@kinu.run/core';
+import type { KinuExtension, ServerCompactor, TransformContext } from '@kinu.run/core';
 import {
   buildCompactionSummaryPrompt,
-  compactsServerSide,
+  serverCompactor,
   isServerCompaction,
   stripCheckpointPreamble,
   wrapCompactionSummary,
@@ -94,7 +94,6 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   const profile = deps.profile ?? { ...COMPACTION_PRESETS.light, triggerPercent: COMPACTION_TRIGGER_PERCENT };
   const { attachments, model } = deps;
   const spec: LadderSpec = attachments === undefined || model === undefined ? kinuSpec : { ...kinuSpec, attachments: kinuAttachments(attachments, model) };
-  const serverSide = (): boolean => compactsServerSide(model?.());
   const codec = attachmentCodec(kinuCodec, spec.attachments);
   const engine = createEngine(spec, deps.ports);
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
@@ -133,7 +132,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   // /compact: target 0; a trigger past the largest turn keeps the last exchanges.
   const buildInputs = (ctx: TransformContext, reportedTokens: number, turns: readonly Turn[]): BuildPlanInputs => ({
     // A bypass drops a plan's summary; a server-compacting model keeps its own in history.
-    bypassSummaries: serverSide(),
+    bypassSummaries: serverCompactor(ctx.model) !== null,
     sessionKey: ctx.sessionKey,
     contextLimit: ctx.contextWindow,
     triggerRatio: ctx.trigger === 'user'
@@ -282,7 +281,8 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       ctx.abortSignal?.throwIfAborted();
 
       if (ctx.messages.length === 0 || ctx.contextWindow <= 0) return undefined;
-      const messages = serverSide() ? sinceServerSummary(ctx.messages) : [...ctx.messages];
+      const compactor = serverCompactor(ctx.model);
+      const messages = compactor === null ? [...ctx.messages] : sinceServerSummary(ctx.messages, compactor);
       const turns = kinuCodec.encode(messages);
 
       // Loaded before process (which may replace it) so the upgrade can thread the prior summary.
@@ -312,7 +312,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
         ctx.trigger !== 'auto'
           ? await forceRebuild({ turns, ctx, prior, reportedTokens, summarize })
           : await engine.process({
-              bypassSummaries: serverSide(),
+              bypassSummaries: compactor !== null,
               sessionKey: ctx.sessionKey,
               turns,
               contextLimit: ctx.contextWindow,
@@ -452,10 +452,10 @@ function compactedTurnsForPlan(turns: Turn[], plan: BoundaryContextPlan): Turn[]
   ];
 }
 
-function sinceServerSummary(messages: readonly ModelMessage[]): ModelMessage[] {
+function sinceServerSummary(messages: readonly ModelMessage[], by: ServerCompactor): ModelMessage[] {
   let summary = messages.length - 1;
 
-  while (summary >= 0 && !carriesServerSummary(messages[summary])) summary--;
+  while (summary >= 0 && !carriesServerSummary(messages[summary], by)) summary--;
 
   if (summary < 0) return [...messages];
   let ask = summary - 1;
@@ -465,9 +465,9 @@ function sinceServerSummary(messages: readonly ModelMessage[]): ModelMessage[] {
   return messages.slice(ask < 0 ? summary : ask);
 }
 
-function carriesServerSummary(message: ModelMessage | undefined): boolean {
+function carriesServerSummary(message: ModelMessage | undefined, by: ServerCompactor): boolean {
   return message?.role === 'assistant' && Array.isArray(message.content)
-    && message.content.some((part: Exclude<AssistantModelMessage['content'], string>[number]) => (part.type === 'text' || part.type === 'custom') && isServerCompaction(part.providerOptions));
+    && message.content.some((part: Exclude<AssistantModelMessage['content'], string>[number]) => (part.type === 'text' || part.type === 'custom') && isServerCompaction(part.providerOptions, by));
 }
 
 /** Latest real user request across the full history, so "Active Task verbatim" is mechanical. */

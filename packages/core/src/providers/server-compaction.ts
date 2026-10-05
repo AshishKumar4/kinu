@@ -24,7 +24,11 @@ const COMPACTING = /^claude-(?:(opus|sonnet)-(\d+)(?:-(\d{1,2}))?(?!\d)|(fable|m
 /** OpenAI's guide lists no models; Kinu asks the GPT-5 family on the direct Responses API route. */
 const OPENAI_COMPACTING = /^gpt-5/u;
 
-function compactor(spec: string | undefined): 'anthropic' | 'openai' | null {
+/** Whose summary a model reads and writes: only that provider's adapters carry it. */
+export type ServerCompactor = 'anthropic' | 'openai';
+
+/** The provider a model compacts with, or null for a model compacted the local way. */
+export function serverCompactor(spec: string | undefined): ServerCompactor | null {
   const match = /^(anthropic|claude|openai)(?:@[^/]*)?\/(?:.*\/)?([^/]+)$/u.exec(spec ?? '');
 
   if (match?.[1] === 'openai') return OPENAI_COMPACTING.test(match[2] ?? '') ? 'openai' : null;
@@ -37,10 +41,6 @@ function compactor(spec: string | undefined): 'anthropic' | 'openai' | null {
   return model[4] === undefined || Number(model[5]) >= 5 ? 'anthropic' : null;
 }
 
-export function compactsServerSide(spec: string | undefined): boolean {
-  return compactor(spec) !== null;
-}
-
 /**
  * The request option asking for it, or undefined where the model does not compact server-side. A forced compaction
  * (`/compact`, an overflow's recovery) passes the request's own input, so this request compacts.
@@ -49,7 +49,7 @@ export function serverCompactionOptions(
   spec: string | undefined, contextWindow: number | undefined, forcedInput?: number,
 ): ProviderOptions | undefined {
   const threshold = Math.floor(((contextWindow ?? 0) * COMPACTION_TRIGGER_PERCENT) / 100);
-  const vendor = compactor(spec);
+  const vendor = serverCompactor(spec);
 
   if (vendor === null || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
 
@@ -62,13 +62,10 @@ export function serverCompactionOptions(
     : { anthropic: { contextManagement: { edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value } }] } } };
 }
 
-const CompactionMarkSchema = v.union([
-  v.object({ anthropic: v.looseObject({ type: v.literal('compaction') }) }),
-  v.object({ openai: v.looseObject({ type: v.literal('compaction') }) }),
-]);
+const CompactionMark = v.looseObject({ type: v.literal('compaction') });
 
-/** A part, chunk or stored part carrying the provider's summary, by the mark its SDK adapter gives it: Anthropic's on a
- *  text part, OpenAI's on a `custom` one. */
-export function isServerCompaction(metadata: ProviderMetadata | JsonValue | undefined): boolean {
-  return v.is(CompactionMarkSchema, metadata);
+/** A part, chunk or stored part carrying a provider's summary (`by` that one only), by the mark its SDK adapter gives
+ *  it: Anthropic's on a text part, OpenAI's on a `custom` one. */
+export function isServerCompaction(metadata: ProviderMetadata | JsonValue | undefined, by?: ServerCompactor): boolean {
+  return (['anthropic', 'openai'] as const).some((vendor) => (by ?? vendor) === vendor && v.is(v.object({ [vendor]: CompactionMark }), metadata));
 }
