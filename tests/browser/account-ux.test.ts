@@ -261,7 +261,26 @@ describe('account panels', () => {
         await page.waitForSelector('[data-chatgpt-way="here"] input');
         await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
         await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish');
+        // Signed in: the row says so at once, before anything else is touched, and the welcome says what it means.
+        await page.waitForFunction(() => document.querySelector('[data-provider="ChatGPT"]')?.textContent?.includes('Connected') === true
+          && document.querySelector('[data-chatgpt-connect]') === null);
         await page.waitForFunction(() => document.body.textContent?.includes("You're using your ChatGPT plan") === true);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('a model listing that fails hides no provider, and says so with a retry', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'setupmodal&panel=providers&models=fail', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('[role="dialog"]');
+        await settleAccountFixture(page);
+        await page.waitForSelector('[data-provider="Cloudflare AI"]');
+        await page.waitForSelector('[data-settings-resource="your connected models"][data-resource-state="error"]');
+        expect(await page.$('[data-provider="ChatGPT"]')).not.toBeNull();
       } finally {
         await page.close();
       }
@@ -366,6 +385,27 @@ describe('account panels', () => {
       }
 
       
+    });
+  });
+
+  test('an account with no name starts blank, wears its email\'s letter, and moves on without saving an empty name', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'welcome&step=0&noname=1', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('[aria-label="Your name"]');
+        expect(await page.$eval('[aria-label="Your name"]', (el) => (el instanceof HTMLInputElement ? el.value : null))).toBe('');
+        expect(await page.$eval('[data-welcome-step="profile"] [data-avatar]', (el) => el.textContent?.trim())).toBe('N');
+
+        // Typed and cleared again: Next moves on, and no empty name reaches the account.
+        await page.type('[aria-label="Your name"]', 'x');
+        await page.keyboard.press('Backspace');
+        await clickByText(page, 'button', 'Next');
+        await page.waitForFunction(() => document.querySelector('[data-welcome-step="profile"]')?.getAttribute('aria-hidden') === 'true');
+        expect(await page.evaluate(() => document.documentElement.dataset.galleryProfilePatches ?? '0')).toBe('0');
+      } finally {
+        await page.close();
+      }
     });
   });
 

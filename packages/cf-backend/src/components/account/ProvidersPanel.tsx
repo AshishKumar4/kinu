@@ -24,8 +24,8 @@ import { Card, Choice, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
-import { ChatGptConnect, ChatGptPlanUsage } from "@/components/account/ChatGptConnect";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { ChatGptConnect, ChatGptPlanUsage, ChatGptWelcome } from "@/components/account/ChatGptConnect";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { showing, detach } from '@kinu.run/core/obs';
 import {
   CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
@@ -81,6 +81,8 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
   const accounts = useAsyncResource(listCloudflareAccounts);
   const unrevoked = useAsyncResource(listUnrevokedGrants);
 
+  const [chatgptWelcome, setChatgptWelcome] = useState(false);
+
   const reads = [creds, codex, chatgpt, models, catalog, gateways, accounts, unrevoked];
   // Retry re-reads the whole account: mutators invalidate more than their own row.
   const reloadAll = () => { for (const read of reads) read.reload(); };
@@ -90,6 +92,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
       <CardSlot resource={unrevoked.resource} what="your disconnected logins" onRetry={reloadAll}>
         {(grants) => <UnrevokedGrants grants={grants} onChanged={reloadAll} />}
       </CardSlot>
+      {chatgptWelcome && <ChatGptWelcome onClose={() => setChatgptWelcome(false)} />}
       <Card title="Connect a provider" icon={PlugIcon}>
         <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
           {(credentials) => {
@@ -99,23 +102,22 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
             return (
               <div className="space-y-5">
                 <div className="p-group">
-                  <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
-                    {(menu) => (
-                      <ProviderEntry provider="workers-ai" name="Cloudflare AI" method="Cloudflare sign-in"
-                        connected={menu.models.some((model) => model.provider === 'workers-ai')}
-                        disconnect={held.has(CLOUDFLARE_OAUTH_CRED_KEY) ? forget(CLOUDFLARE_OAUTH_CRED_KEY) : undefined}
-                        onChanged={reloadAll}
-                        connect={<CloudflareAIConnectNotice returnTo={returnTo} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />}>
-                        {/* Asked first: the account decides which gateway is reachable. */}
-                        <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
-                          {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
-                        </CardSlot>
-                        <CardSlot resource={gateways.resource} what="your AI gateways" onRetry={reloadAll}>
-                          {(status) => <CloudflareGatewaySection status={status} returnTo={returnTo} onChanged={reloadAll} />}
-                        </CardSlot>
-                      </ProviderEntry>
-                    )}
-                  </CardSlot>
+                  {models.resource.status === "error" && (
+                    <CardSlot resource={models.resource} what="your connected models" onRetry={models.reload}>{() => null}</CardSlot>
+                  )}
+                  <ProviderEntry provider="workers-ai" name="Cloudflare AI" method="Cloudflare sign-in"
+                    connected={held.has(CLOUDFLARE_OAUTH_CRED_KEY) || (lastValue(models.resource)?.models.some((model) => model.provider === 'workers-ai') ?? false)}
+                    disconnect={held.has(CLOUDFLARE_OAUTH_CRED_KEY) ? forget(CLOUDFLARE_OAUTH_CRED_KEY) : undefined}
+                    onChanged={reloadAll}
+                    connect={<CloudflareAIConnectNotice returnTo={returnTo} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />}>
+                    {/* Asked first: the account decides which gateway is reachable. */}
+                    <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
+                      {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
+                    </CardSlot>
+                    <CardSlot resource={gateways.resource} what="your AI gateways" onRetry={reloadAll}>
+                      {(status) => <CloudflareGatewaySection status={status} returnTo={returnTo} onChanged={reloadAll} />}
+                    </CardSlot>
+                  </ProviderEntry>
                   <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
                     {(status) => (
                       <CardSlot resource={chatgpt.resource} what="your ChatGPT plan" onRetry={reloadAll}>
@@ -142,7 +144,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
                                 if (unconfirmed !== null) alert(`OpenAI did not confirm it revoked the sign-in (${unconfirmed}). Disconnect Kinu under Apps in ChatGPT settings to be sure.`);
                               }}
                               onChanged={reloadAll}
-                              connect={<ChatGptConnect plan={plan} onChanged={reloadAll} />}>
+                              connect={<ChatGptConnect plan={plan} onSignedIn={(first) => { reloadAll(); setChatgptWelcome(first); }} />}>
                               {planSignedIn && <ChatGptPlanUsage />}
                             </ProviderEntry>
                           );

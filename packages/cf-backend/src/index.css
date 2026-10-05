@@ -516,6 +516,18 @@ body { background: var(--c-bg); color: var(--c-text); }
   h1 { font-size: 1.375rem; } h2 { font-size: 1.1875rem; } h3 { font-size: 1.0625rem; }
 }
 
+.prose-thinking {
+  font-size: 0.8125rem; line-height: 1.55; color: var(--c-text-3);
+  p { margin: 0.35em 0; }
+  p:first-child { margin-top: 0; }
+  p:last-child { margin-bottom: 0; }
+  strong { font-weight: 600; color: var(--c-text-2); }
+  ul, ol { margin: 0.35em 0; padding-left: 1.1rem; }
+  ul { list-style: disc; } ol { list-style: decimal; }
+  h1, h2, h3 { font-size: 1em; font-weight: 600; margin: 0.5em 0 0.2em; color: var(--c-text-2); }
+  &[data-folded] { max-height: 3lh; overflow: hidden; mask-image: linear-gradient(to bottom, #000 45%, transparent); }
+}
+
 /* ── Type roles — the scale lives here, not in per-component literals ─ */
 /* One name per role, in rem at a 16px root; the comment carries the pixel
    a default root renders. A `text-[…]` literal beside one of these is an

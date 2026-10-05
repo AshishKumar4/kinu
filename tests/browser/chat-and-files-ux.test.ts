@@ -796,6 +796,26 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
   });
 });
 
+describe('thinking in a settled turn', () => {
+  // 2026-10-05, production: thinking showed its markdown raw ("**Planning…**") and two thoughts in a row drew two blocks.
+  test('reads as markdown, and thoughts in a row are one block in order', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-chat-row="a1"] [data-reasoning]');
+      await page.click('[data-chat-row="a1"] [data-reasoning] button[aria-expanded="false"]');
+
+      const thinking = await page.$$eval('[data-chat-row="a1"] [data-reasoning]', (blocks) => blocks.map((block) => ({
+        strong: [...block.querySelectorAll('strong')].map((node) => node.textContent),
+        raw: block.textContent?.includes('**') ?? true,
+      })));
+
+      expect(thinking).toEqual([{ strong: ['Reproducing the failure', 'Bisecting'], raw: false }]);
+      await page.close();
+    });
+  });
+});
+
 describe('feedback on a settled turn', () => {
   test('the buttons appear when the message is hovered, and a click records one vote', async () => {
     // Hidden at rest, revealed by hovering the MESSAGE (not the footer row):

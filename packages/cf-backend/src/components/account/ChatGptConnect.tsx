@@ -36,19 +36,28 @@ const PASTE_OUTCOME = {
   plan_declined: "You signed in without allowing ChatGPT plan usage. Open the link again and allow it.",
 } as const;
 
-export function ChatGptConnect({ plan, onChanged }: { plan: ChatGptPlan; onChanged: () => void }) {
+export function ChatGptWelcome({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal title="You're using your ChatGPT plan" icon={<BrandMark brand="openai" size={16} bare />} onClose={onClose}
+      footer={<FilledButton onClick={onClose}>Got it</FilledButton>}>
+      <p className="text-sm p-text-2">
+        Eligible requests in Kinu now use your ChatGPT plan. You can review and limit that usage in{" "}
+        <a href={CHATGPT_USAGE_URL} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">ChatGPT settings</a>.
+      </p>
+    </Modal>
+  );
+}
+
+export function ChatGptConnect({ plan, onSignedIn }: { plan: ChatGptPlan; onSignedIn: (first: boolean) => void }) {
   const [way, setWay] = useState<Way | null>(null);
-  const [welcome, setWelcome] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const shown = useCallback((failure: { readonly cause?: unknown }) => Effect.sync(() => { setError(renderThrownChain({ cause: failure.cause ?? failure })); }), []);
 
   const finished = useCallback((first: boolean) => {
     setWay(null);
-
-    if (first) setWelcome(true);
-    else onChanged();
-  }, [onChanged]);
+    onSignedIn(first);
+  }, [onSignedIn]);
 
   const cancel = useCallback(() => detach(attempt({ doing: "cancelling the ChatGPT sign-in", otherwise: "io" }, cancelChatGptSignIn).pipe(
     Effect.map(() => { setWay(null); setError(null); }),
@@ -59,11 +68,6 @@ export function ChatGptConnect({ plan, onChanged }: { plan: ChatGptPlan; onChang
     setWay(null);
     setError(reason);
   }, []);
-
-  const dismiss = () => {
-    setWelcome(false);
-    onChanged();
-  };
 
   return (
     <div className="space-y-3" data-chatgpt-connect>
@@ -87,15 +91,6 @@ export function ChatGptConnect({ plan, onChanged }: { plan: ChatGptPlan; onChang
         <button type="button" onClick={cancel} className="p-meta p-text-3 underline-offset-2 hover:p-text hover:underline">Cancel</button>
       )}
       {error && <p role="alert" className="text-xs p-danger">{error}</p>}
-      {welcome && (
-        <Modal title="You're using your ChatGPT plan" icon={<BrandMark brand="openai" size={16} bare />} onClose={dismiss}
-          footer={<FilledButton onClick={dismiss}>Got it</FilledButton>}>
-          <p className="text-sm p-text-2">
-            Eligible requests in Kinu now use your ChatGPT plan. You can review and limit that usage in{" "}
-            <a href={CHATGPT_USAGE_URL} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">ChatGPT settings</a>.
-          </p>
-        </Modal>
-      )}
     </div>
   );
 }

@@ -278,6 +278,8 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
   }
 
   if (path === "/api/user/profile" && method === "PATCH") {
+    const root = document.documentElement;
+    root.dataset.galleryProfilePatches = String(Number(root.dataset.galleryProfilePatches ?? "0") + 1);
     const patch = v.safeParse(v.object({ displayName: v.string() }), JSON.parse(v.parse(v.string(), body)));
     const displayName = patch.success ? patch.output.displayName : "Owner";
 
@@ -292,7 +294,7 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
     // The wizard's profile step renders only without a display name: `&noname=1` answers that account.
     if (frame === "welcome" && new URLSearchParams(location.search).get("noname") === "1") {
       return fixtureJson({
-        email: "new@example.com", displayName: "", createdAt: NOW, lastSeenAt: NOW,
+        email: "new@example.com", displayName: null, createdAt: NOW, lastSeenAt: NOW,
         onboardedAt: null, workspaceCount: 0,
       });
     }
@@ -307,6 +309,8 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
 }
 
 const CHATGPT_DEVICE = new URLSearchParams(location.search).get("chatgpt") === "device";
+
+const MODELS_FAIL = new URLSearchParams(location.search).get("models") === "fail";
 
 const GALLERY_DEVICE = { id: "dev-1", label: "Owner's laptop" };
 
@@ -414,6 +418,8 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
   const chatgpt = chatgptFixture(path, method);
 
   if (chatgpt !== null) return chatgpt;
+
+  if (path === "/api/user/models" && MODELS_FAIL) return fixtureJson({ error: "Failed to fetch" }, 503);
 
   if (path === "/api/user/models") {
     // Different effort lists per model: the tier levels are the model's, never a fixed three.
@@ -1268,7 +1274,8 @@ const MESSAGES: UIMessage[] = [
   msg({
     id: "a1", role: "assistant", createdAt: NOW - 5 * 60e3,
     parts: [
-      { type: "reasoning", text: "The coupon path goes through /api/cart/apply. I should reproduce first, then bisect: the handler, the pricing service, then the migration that landed Tuesday. The 500 with SAVE20 but not SAVE10 suggests a percentage-vs-fixed branch." },
+      { type: "reasoning", text: "**Reproducing the failure**\n\nThe coupon path goes through `/api/cart/apply`. I should reproduce first, then bisect." },
+      { type: "reasoning", text: "**Bisecting**\n\nThe handler, the pricing service, then the migration that landed Tuesday. The 500 with SAVE20 but not SAVE10 suggests a percentage-vs-fixed branch." },
       { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "sandbox", command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'percent')\"}" },
       { type: "tool-eval", toolCallId: "t2", state: "output-available", input: { code: "// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
       { type: "text", text: "Found it. Tuesday's migration backfilled `kind` for fixed coupons only — percentage coupons have `kind: null`, and `applyCoupon` dereferences `rules[kind].percent`.\n\n```ts\nconst rule = rules[coupon.kind ?? inferKind(coupon)];\n```\n\nI'll patch the migration, add a regression test, and run the suite." },

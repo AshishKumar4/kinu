@@ -124,7 +124,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const next = useCallback(() => settle(Effect.gen(function* () {
     setError(null);
 
-    if (step === 0 && name !== null && name !== profile?.displayName) {
+    if (step === 0 && name !== null && name.trim() !== "" && name !== profile?.displayName) {
       setBusy(true);
 
       const failure = yield* Effect.matchCause(Effect.promise(() => setDisplayName(name)), {
@@ -182,7 +182,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
                 {s.id === 'profile' && (
                   <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                    <div className="size-16 rounded-full bg-[#2A2018] text-[22px] font-semibold text-[var(--c-accent)] flex items-center justify-center">
+                    <div data-avatar className="size-16 rounded-full bg-[#2A2018] text-[22px] font-semibold text-[var(--c-accent)] flex items-center justify-center">
                       {letter}
                     </div>
                     <div className="w-full flex-1">

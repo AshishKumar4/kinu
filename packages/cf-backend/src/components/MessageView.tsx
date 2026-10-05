@@ -78,8 +78,7 @@ const BLOCK_GAP = {
   section: "mt-4 first:mt-0",
 } as const;
 
-// A pause and a reasoning block share one "Thinking" label so the indicator keeps its shape
-// across transitions; reasoning text lands under the same line.
+// A pause and a reasoning block share one "Thinking" label, so the indicator keeps its shape.
 function ThinkingLabel({ live }: { live: boolean }) {
   return (
     <span className="flex items-center gap-2">
@@ -101,9 +100,21 @@ export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
   );
 }
 
+/** Cut between lines, so no markdown span is left open. */
+function openingLines(text: string): string {
+  const lines = text.split("\n");
+  let taken = 0;
+
+  for (let length = 0; taken < lines.length && taken < 4 && length < 160; taken += 1) length += lines[taken].length;
+
+  return lines.slice(0, taken).join("\n");
+}
+
 function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const viewport = useRef<HTMLDivElement>(null);
+  const opening = openingLines(text);
+  const long = opening !== text;
 
   useEffect(() => {
     if (!live) return;
@@ -113,22 +124,19 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
   }, [live, text]);
 
   return (
-    <div className="py-0.5 p-row-text p-text-4">
+    <div className="py-0.5 p-row-text p-text-4" data-reasoning>
       {live ? (
         <>
           <span data-live-indicator="reasoning"><ThinkingLabel live /></span>
-          <div ref={viewport} data-reasoning-viewport className="mt-1 ml-3.5 max-h-[4lh] overflow-y-auto scroll-auto whitespace-pre-wrap">{text}</div>
+          <div ref={viewport} data-reasoning-viewport className="prose-thinking mt-1 ml-3.5 max-h-[4lh] overflow-y-auto scroll-auto"><MarkdownContent content={text} /></div>
         </>
       ) : (
         <>
-          <button onClick={() => setExpanded(!expanded)} className="group/reason w-full text-left cursor-pointer" aria-expanded={expanded}>
+          <button onClick={() => setExpanded(!expanded)} disabled={!long} className="group/reason flex items-center text-left enabled:cursor-pointer" aria-expanded={long ? expanded : undefined}>
             <ThinkingLabel live={false} />
-            {!expanded && <span className="ml-3.5 block opacity-80">{text.slice(0, 120)}</span>}
-            {text.length > 120 && (
-              <span className="ml-3.5 font-medium p-accent">{expanded ? "collapse" : "expand"}</span>
-            )}
+            {long && <span className="ml-2 font-medium p-accent">{expanded ? "collapse" : "expand"}</span>}
           </button>
-          {expanded && <div className="mt-1 ml-3.5 whitespace-pre-wrap">{text}</div>}
+          <div className="prose-thinking mt-1 ml-3.5" data-folded={long && !expanded ? "" : undefined}><MarkdownContent content={expanded ? text : opening} /></div>
         </>
       )}
     </div>
@@ -764,12 +772,6 @@ export const MessageView = memo(function MessageView({
 
     const isTailPart = (tail?.kind === "text" || tail?.kind === "reasoning") && tail.part === part;
 
-    if (part.type === "reasoning") {
-      const t = drawnText(part);
-
-      return t === null ? null : <ReasoningBlock key={key} text={t} live={isTailPart} />;
-    }
-
     if (part.type === "file") {
       return <div key={key} className="my-1.5"><FilePartView part={part} /></div>;
     }
@@ -815,6 +817,13 @@ export const MessageView = memo(function MessageView({
               {groupMessageParts(segment.parts).map((block, i) => {
                 if (block.kind === "fold") {
                   return <ToolCallFold key={block.parts[0]?.toolCallId ?? i} parts={block.parts} expandedCalls={callToggles} onToggleCall={toggleCall} />;
+                }
+
+                if (block.kind === "reasoning") {
+                  const thought = block.parts.flatMap((part) => drawnText(part) ?? []).join("\n\n");
+                  const live = tail?.kind === "reasoning" && block.parts.some((part) => part === tail.part);
+
+                  return thought === "" ? null : <div key={i} className={BLOCK_GAP.section}><ReasoningBlock text={thought} live={live} /></div>;
                 }
 
                 const part = block.part;
