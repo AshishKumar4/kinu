@@ -572,9 +572,16 @@ export class FakeSandbox {
     if (command.includes(`> ${TOOLS_STAMP}`)) {
       this.sequence.push('exec:tools-install');
       const archive = /tar -C \/ -xzf '([^']+)'/.exec(command)?.[1] ?? '';
+      const pin = /printf %s '([^']+)' > /.exec(command)?.[1] ?? '';
+      const bytes = this.binaryFiles.get(archive);
 
-      if (!this.binaryFiles.has(archive)) return { stdout: 'no archive', stderr: '', exitCode: 2 };
-      this.files.set(TOOLS_STAMP, /printf %s '([^']+)' > /.exec(command)?.[1] ?? '');
+      if (bytes === undefined) return { stdout: 'no archive', stderr: '', exitCode: 2 };
+
+      if (command.includes('sha256sum <') && createHash('sha256').update(bytes).digest('hex') !== pin) {
+        return { stdout: `${archive} is not the pinned tools ${pin}`, stderr: '', exitCode: 1 };
+      }
+
+      this.files.set(TOOLS_STAMP, pin);
 
       return { stdout: 'installMs=1 changed=1', stderr: '', exitCode: 0 };
     }
@@ -918,8 +925,8 @@ export class FakeSandbox {
 
     // `cat > <path>` fed on stdin: the bytes land in the file once the writer closes.
     if (options.stdin === 'pipe' && args[0] === '/bin/sh') {
-      const target = /^cat > '([^']+)'$/.exec(args[2] ?? '')?.[1] ?? '';
-      const chunks: Uint8Array[] = [];
+      const [, append = '', target = ''] = /^cat (>>?) '([^']+)'$/.exec(args[2] ?? '') ?? [];
+      const chunks: Uint8Array[] = append === '>>' ? [this.binaryFiles.get(target) ?? new Uint8Array()] : [];
       const closed = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
 
       const stdin = new WritableStream<Uint8Array>({

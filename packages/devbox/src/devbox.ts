@@ -9,7 +9,7 @@ import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, diskChain, re
 import { STORE_MOUNT, chainStoreRoot, storeObjectUrl } from './store-gateway';
 import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
 import {
-  GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeObject, refreshTools,
+  GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeParts, refreshTools,
   type GoldenAnswer, type GoldenPorts,
 } from './golden';
 import artifact from '../block-lower/upstream.json';
@@ -476,11 +476,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #refreshTools(): Effect.Effect<void, DevboxError> {
     if (this.peers === undefined) return Effect.void;
 
-    return refreshTools({ pin: this.toolsPin, exec: (command) => this.#rawExec(command, DEVBOX_RUNTIME_DIR), pipe: (key, path) => this.#pipeObject(key, path) });
+    return refreshTools({ pin: this.toolsPin, exec: (command) => this.#rawExec(command, DEVBOX_RUNTIME_DIR), pipe: (key, path) => this.#pipeParts(key, path) });
   }
 
-  #pipeObject(key: string, path: string): Effect.Effect<void, DevboxError> {
-    return pipeObject({ get: async (wanted) => await this.store?.bucket.get(wanted) ?? null, container: this.#container() }, key, path);
+  #pipeParts(key: string, path: string): Effect.Effect<void, DevboxError> {
+    return pipeParts({ get: async (wanted) => await this.store?.bucket.get(wanted) ?? null, container: this.#container() }, key, path);
   }
 
   #goldenPorts(): GoldenPorts {
@@ -501,7 +501,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         await firstExec(container(), AbortSignal.timeout(120_000));
       },
       exec: async (command) => decoded(await (await container().exec(['/bin/bash', '-c', command])).output()),
-      pipe: (key, path) => this.#pipeObject(key, path),
+      pipe: (key, path) => this.#pipeParts(key, path),
       snapshot: async (name) => (await container().snapshotContainer({ name })).id,
       destroy: () => this.#destroyGoldenContainer(),
       build: () => this.armAlarm(GOLDEN_BUILD_CALLBACK, 0),

@@ -3656,6 +3656,10 @@ the 15 Debian packages a box needs, taken from snapshot.debian.org on
 Two builds with no cache made the same tarball (`75164f17…`, 100.8 MB). The
 deploy refuses a store bucket that lacks it, by name; the developer who
 re-pins runs `devbox-tools.ts publish <bucket>` for each environment.
+Since 2026-10-05 a store holds the tarball in parts of at most 256 MiB
+(`devbox-tools/<sha256>.tgz.0`, `.1`, …), which the box joins in order and
+checks against the pinned sha256 before it extracts anything: the desktop
+(D70) made the tarball 320 MiB, and `wrangler r2 object put` takes 300.
 
 The golden object, one object of the box's class (`devbox-golden`), starts
 the base, pipes the tarball in from the store, installs it with apt over the

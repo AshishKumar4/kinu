@@ -62,6 +62,15 @@ test('the tarball installs with no network, every tool runs, FUSE mounts through
   }).toEqual({ tools: '', fuse: 'fuse-ok', stamp: hash, again: 0, changedAgain: '0' });
 });
 
+test('an archive missing a part is refused before anything is extracted, and the installed tools stay', () => {
+  // Paths in the container's root home: the container goes with the suite.
+  spawnSync('docker', ['cp', join(scratch, 'tools.tgz'), `${name}:/root/whole.tgz`]);
+  const refused = sh(`head -c 268435456 /root/whole.tgz > /root/part0.tgz && rm /root/whole.tgz && ${toolsInstallCommand('/root/part0.tgz', hash)}`);
+
+  expect({ status: refused.status, stdout: refused.stdout, stamp: sh(`cat ${TOOLS_STAMP}`).stdout, extracted: sh('ls /usr/local/lib/devbox/debs 2>&1').status })
+    .toEqual({ status: 1, stdout: `/root/part0.tgz is not the pinned tools ${hash}`, stamp: hash, extracted: 2 });
+});
+
 test('the desktop starts once however often it is opened, speaks RFB on its port, and the menu\'s browser opens as root', () => {
   const open = () => spawnSync('docker', ['exec', name, '/bin/bash', '-c', DESKTOP_START, 'devbox-desktop'], { encoding: 'utf8' }).status;
   const opens = [open(), open()];
