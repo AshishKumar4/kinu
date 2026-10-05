@@ -38,6 +38,12 @@ export * from './codex';
 
 export * from './chatgpt';
 
+export {
+  chatgptLoginIssuer, CHATGPT_PASTE_REDIRECT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId,
+  chatgptRegistrationOf, finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome, type ChatGptPasteSignIn,
+  type ChatGptRegistration,
+} from './chatgpt-sign-in';
+
 export * from './model-test';
 
 export { EGRESS_REFUSAL_HEADER, EgressCalls, refusalError } from './egress-calls';

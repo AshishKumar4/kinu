@@ -217,6 +217,8 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'subscription_auth', name: 'getCodexStatus', run: (u, c) => u.getCodexStatus(c) },
   { capability: 'subscription_auth', name: 'startClaudeSignIn', run: (u, c) => u.startClaudeSignIn(c) },
   { capability: 'subscription_auth', name: 'finishClaudeSignIn', run: (u, c) => u.finishClaudeSignIn(c, 'code#state') },
+  { capability: 'subscription_auth', name: 'startChatGptPasteSignIn', run: (u, c) => u.startChatGptPasteSignIn(c) },
+  { capability: 'subscription_auth', name: 'finishChatGptPasteSignIn', run: (u, c) => u.finishChatGptPasteSignIn(c, 'http://127.0.0.1:1455/auth/callback?code=c&state=s') },
 ];
 
 interface OwnerOnlyCall {
@@ -263,6 +265,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'device.manage', name: 'recordDeviceUpdateRefusal', run: (u, c) => u.recordDeviceUpdateRefusal(c, 'pdt_x', { version: '0.3.0+served', runtime: 'Bun 1.4.0', reason: 'install failed' }) },
   { capability: 'device.manage', name: 'startChatGptSignIn', run: (u, c) => u.startChatGptSignIn(c) },
   { capability: 'device.manage', name: 'signOutChatGpt', run: (u, c) => u.signOutChatGpt(c) },
+  { capability: 'device.manage', name: 'cancelChatGptSignIn', run: (u, c) => u.cancelChatGptSignIn(c) },
 
   {
     capability: 'shares',

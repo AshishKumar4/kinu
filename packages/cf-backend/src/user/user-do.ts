@@ -37,6 +37,8 @@ import {
   type DeviceExecOutput,
   NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED,
   codexEgressAllowed, chatgptEgressAllowed, DEVICE_CHATGPT, DeviceChatGptStatusSchema,
+  CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId, chatgptRegistrationOf,
+  finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome,
   type DeviceChatGptStatus, type RelayedProvider,
   isWorkspaceName,
   ORCHESTRATOR_AGENT_SLUG,
@@ -85,6 +87,7 @@ import {
   authoredRefusal,
   diagnostics,
   KinuError,
+  logged,
   renderThrownChain,
   settle,
   settleLogged,
@@ -579,10 +582,32 @@ export interface CodexStatus {
 
 const CHATGPT_SIGNED_OUT_MARK = 'signed out';
 
-/** The machine that holds, or would hold, the ChatGPT sign-in, and what it says. */
+const CHATGPT_MACHINE_SIGN_IN_KEY = 'chatgpt.machine-sign-in';
+
+const CHATGPT_PASTE_SIGN_IN_KEY = 'chatgpt.paste-sign-in';
+
+/** The account's issued ChatGPT client, kept across sign-outs; `planDeclined` asks for consent again. */
+const CHATGPT_REGISTRATION_KEY = 'chatgpt.registration';
+
+const ChatGptKnownRegistrationSchema = v.object({ registration: ChatGptRegistrationSchema, planDeclined: v.boolean() });
+
+const ChatGptPasteHeldSchema = v.object({ ...ChatGptPasteSignInSchema.entries, revision: v.number() });
+
+const ChatGptMachineSignInSchema = v.variant('state', [
+  v.object({ state: v.literal('waiting_for_machine') }),
+  v.object({ state: v.literal('open'), authorizeUrl: v.string(), device: v.object({ id: v.string(), label: v.string() }) }),
+]);
+
+/** A sign-in through a machine the web started and no machine has finished. */
+export type ChatGptMachineSignIn = v.InferOutput<typeof ChatGptMachineSignInSchema>;
+
+/** The ChatGPT plan as this account holds it: through a machine, by its own sign-in, or both. */
 export interface ChatGptPlanStatus {
   readonly device: { readonly id: string; readonly label: string } | null;
   readonly status: DeviceChatGptStatus | null;
+  /** The account's own sign-in (paste-back), held in its credential vault. */
+  readonly account: { readonly email: string | null } | null;
+  readonly machineSignIn: ChatGptMachineSignIn | null;
   readonly changed: boolean;
 }
 
@@ -2233,9 +2258,11 @@ export class UserDO extends Agent<Env> {
       if (frame !== null) {
         diagnostics.event('device.update_pushed', { device: deviceId, from: hello.output.version ?? '', to: frame.version });
         ws.send(JSON.stringify(frame));
+
+        return;
       }
 
-      return;
+      return settle(this.continueChatGptSignIn(deviceId));
     }
 
     const acknowledged = v.safeParse(DeviceRotationAckSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
@@ -2831,12 +2858,18 @@ export class UserDO extends Agent<Env> {
     return machines.find((machine) => machine.status.signedIn) ?? machines[0] ?? null;
   }
 
-  async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
+async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     await this.requireTier(caller, 'credentials.model');
     const machine = await this.chatgptMachine();
     const device = machine === null ? null : { id: machine.id, label: machine.label };
+    const status = machine?.status ?? null;
 
-    return { device, status: machine?.status ?? null, changed: this.noteChatGptSignIn(device, machine?.status ?? null) };
+    if (status?.signedIn === true) this.ctx.storage.kv.delete(CHATGPT_MACHINE_SIGN_IN_KEY);
+    const signingIn = v.safeParse(ChatGptMachineSignInSchema, this.ctx.storage.kv.get(CHATGPT_MACHINE_SIGN_IN_KEY));
+    const held = await this.readCredential(CHATGPT_CRED_KEY);
+    const account = held?.kind === 'oauth' ? { email: chatgptRegistrationOf(held)?.email ?? null } : null;
+
+    return { device, status, account, machineSignIn: signingIn.success ? signingIn.output : null, changed: this.noteChatGptSignIn(device, status) };
   }
 
   /** The first read to see a sign-in start or end raises the credential revision (ADR P1). */
@@ -2851,22 +2884,119 @@ export class UserDO extends Agent<Env> {
     return true;
   }
 
-  /** Starts Sign in with ChatGPT on the owner's machine; the browser that opens the URL must run there. */
-  async startChatGptSignIn(caller: UserCaller): Promise<{ readonly authorizeUrl: string; readonly device: { readonly id: string; readonly label: string } }> {
+  /**
+   * Starts Sign in with ChatGPT on the owner's machine; the browser that opens the URL must run there. With no
+   * machine connected it waits, and the next machine to connect opens it (`continueChatGptSignIn`).
+   */
+  async startChatGptSignIn(caller: UserCaller): Promise<ChatGptMachineSignIn> {
     await this.requireTier(caller, 'device.manage');
     const machine = await this.chatgptMachine();
 
-    if (machine === null) return settle(Effect.fail(new KinuError('unavailable', 'No connected machine can sign in with ChatGPT; its daemon needs this Kinu release')));
-    const started = v.safeParse(v.object({ authorizeUrl: v.string() }), await this._devices.chatgpt(machine.id, DEVICE_CHATGPT.signIn));
+    if (machine !== null) return settle(this.openChatGptSignIn(machine));
+    const waiting = { state: 'waiting_for_machine' } as const;
 
-    if (!started.success) return settle(Effect.fail(new KinuError('io', `${machine.label} answered the ChatGPT sign-in without a URL`)));
+    this.ctx.storage.kv.put(CHATGPT_MACHINE_SIGN_IN_KEY, waiting);
 
-    return { authorizeUrl: started.output.authorizeUrl, device: { id: machine.id, label: machine.label } };
+    return waiting;
   }
 
-  /** Signs the machine out: OpenAI revokes the session, the machine forgets the tokens and keeps the registration. */
+  private openChatGptSignIn(machine: { readonly id: string; readonly label: string }): Effect.Effect<ChatGptMachineSignIn, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const answer = yield* attemptInItsWords('unavailable', () => this._devices.chatgpt(machine.id, DEVICE_CHATGPT.signIn));
+      const started = v.safeParse(v.object({ authorizeUrl: v.string() }), answer);
+
+      if (!started.success) return yield* Effect.fail(new KinuError('io', `${machine.label} answered the ChatGPT sign-in without a URL`));
+      const open = { state: 'open', authorizeUrl: started.output.authorizeUrl, device: { id: machine.id, label: machine.label } } as const;
+
+      this.ctx.storage.kv.put(CHATGPT_MACHINE_SIGN_IN_KEY, open);
+
+      return open;
+    });
+  }
+
+  /** A sign-in the web started while no machine was connected opens on the first that says HELLO. */
+  private continueChatGptSignIn(deviceId: string): Effect.Effect<void> {
+    const waiting = v.safeParse(ChatGptMachineSignInSchema, this.ctx.storage.kv.get(CHATGPT_MACHINE_SIGN_IN_KEY));
+
+    if (!waiting.success || waiting.output.state !== 'waiting_for_machine') return Effect.void;
+
+    return logged('user.chatgpt_sign_in_unopened', { doing: 'opening the ChatGPT sign-in on the machine that connected', otherwise: 'unavailable' },
+      Effect.asVoid(this.openChatGptSignIn({ id: deviceId, label: this.deviceLabel(deviceId) })), { device: deviceId });
+  }
+
+  /** Forgets a sign-in the owner started and did not finish, on a machine or by paste-back. */
+  async cancelChatGptSignIn(caller: UserCaller): Promise<void> {
+    await this.requireTier(caller, 'device.manage');
+    this.ctx.storage.kv.delete(CHATGPT_MACHINE_SIGN_IN_KEY);
+    this.ctx.storage.kv.delete(CHATGPT_PASTE_SIGN_IN_KEY);
+  }
+
+  /** Paste-back sign-in: the account itself holds the login, so no machine is needed. The PKCE verifier stays here. */
+  async startChatGptPasteSignIn(caller: UserCaller): Promise<{ readonly authorizeUrl: string; readonly redirectUri: string }> {
+    await this.requireTier(caller, 'subscription_auth');
+    const known = v.safeParse(ChatGptKnownRegistrationSchema, this.ctx.storage.kv.get(CHATGPT_REGISTRATION_KEY));
+
+    const { url, held } = await startChatGptPasteSignIn({
+      hostId: await chatgptHostId((this.env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim()),
+      registration: known.success ? known.output.registration : null,
+      consent: known.success && known.output.planDeclined,
+    });
+
+    this.ctx.storage.kv.put(CHATGPT_PASTE_SIGN_IN_KEY, { ...held, revision: this.credentialRevision(CHATGPT_CRED_KEY) });
+
+    return { authorizeUrl: url, redirectUri: CHATGPT_PASTE_REDIRECT };
+  }
+
+  /**
+   * `returned` is the 127.0.0.1 address the sign-in ended on. An address that is not this sign-in's is refused and
+   * the sign-in stays open; a decline or a sign-in without plan usage closes it with nothing stored.
+   */
+  async finishChatGptPasteSignIn(caller: UserCaller, returned: string): Promise<{ readonly outcome: ChatGptPasteOutcome['outcome']; readonly email: string | null }> {
+    await this.requireTier(caller, 'subscription_auth');
+
+    return settle(Effect.gen({ self: this }, function* () {
+      const pending = v.safeParse(ChatGptPasteHeldSchema, this.ctx.storage.kv.get(CHATGPT_PASTE_SIGN_IN_KEY));
+
+      if (!pending.success) return yield* Effect.fail(new KinuError('missing', 'No ChatGPT sign-in is in progress: start it again.'));
+      const held = pending.output;
+      const finished = yield* attemptInItsWords('denied', () => finishChatGptPasteSignIn(held, returned));
+
+      if (finished.outcome === 'declined') {
+        this.ctx.storage.kv.delete(CHATGPT_PASTE_SIGN_IN_KEY);
+
+        return { outcome: finished.outcome, email: null };
+      }
+
+      const { registration } = finished;
+
+      if (finished.outcome === 'signed_in') {
+        const sealed = yield* attempt({ doing: 'sealing the ChatGPT credential', otherwise: 'io' }, () => this.sealCredential(CHATGPT_CRED_KEY, finished.credential));
+        const current = v.safeParse(ChatGptPasteHeldSchema, this.ctx.storage.kv.get(CHATGPT_PASTE_SIGN_IN_KEY));
+
+        if (!current.success || current.output.state !== held.state
+          || !this.commitCredential({ key: CHATGPT_CRED_KEY, kind: finished.credential.kind, sealed, expectRevision: held.revision })) {
+          return yield* Effect.fail(new KinuError('unavailable', 'That ChatGPT sign-in was superseded before it completed: start it again.'));
+        }
+      }
+
+      this.ctx.storage.kv.put(CHATGPT_REGISTRATION_KEY, { registration, planDeclined: finished.outcome === 'plan_declined' });
+      this.ctx.storage.kv.delete(CHATGPT_PASTE_SIGN_IN_KEY);
+
+      return { outcome: finished.outcome, email: registration.email };
+    }));
+  }
+
+  /**
+   * Signs ChatGPT out everywhere this account holds it: OpenAI revokes the machine's session and the account's own,
+   * each forgets its tokens, and each keeps its registration for the next sign-in.
+   */
   async signOutChatGpt(caller: UserCaller): Promise<{ readonly unconfirmed: string | null }> {
     await this.requireTier(caller, 'device.manage');
+    await this.requireTier(caller, 'subscription_auth');
+    this.ctx.storage.kv.delete(CHATGPT_MACHINE_SIGN_IN_KEY);
+    this.ctx.storage.kv.delete(CHATGPT_PASTE_SIGN_IN_KEY);
+
+    if ((await this.readCredential(CHATGPT_CRED_KEY)) !== null) await this.disconnectCredential(CHATGPT_CRED_KEY);
     const machine = await this.chatgptMachine();
 
     if (machine === null) return { unconfirmed: null };

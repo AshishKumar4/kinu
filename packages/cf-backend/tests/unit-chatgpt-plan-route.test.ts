@@ -14,6 +14,8 @@ const IDENTITY: AuthIdentity = { userId: '0123456789abcdef0123456789abcdef', ema
 const SIGNED_IN: ChatGptPlanStatus = {
   device: { id: 'dev-1', label: 'studio' },
   status: { signedIn: true, email: 'owner@example.com', planEnabled: true, planDeclined: false, pending: false, lastFailure: null, firstSignIn: true },
+  account: null,
+  machineSignIn: null,
   changed: true,
 };
 
