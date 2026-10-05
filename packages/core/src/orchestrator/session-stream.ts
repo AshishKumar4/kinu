@@ -1,5 +1,6 @@
 import type { ModelMessage, ProviderMetadata, TextStreamPart, ToolSet } from 'ai';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import type { ChatEvent, StepRecord } from '../chat';
 import { SessionHistory } from '../session/history';
 import type { ClaimFence, MessageReference, StoredPart, StreamPartInput, PreparedContent } from '../session/messages';
@@ -499,7 +500,7 @@ export class SessionStream {
     const selected = this.history.context.selected();
 
     if (selected === null) throw new KinuError('missing', 'stream has no selected context');
-    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => this.history.assertEpoch(this.turnId, this.epoch), mutate: entries => {
+    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => Effect.sync(() => this.history.assertEpoch(this.turnId, this.epoch)), mutate: entries => {
       this.history.messages.seal(container.id, content, envelope);
 
       if (entries.some(entry => entry.messageId === container.id)) return entries;

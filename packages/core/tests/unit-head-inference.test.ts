@@ -1,6 +1,7 @@
 // runHeadInference: the backend-agnostic head loop, driven through the real generateText loop.
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
+import { Effect } from 'effect';
 import { seedTranscriptEntry, createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from '../src/types/agent-runtime';
@@ -385,7 +386,7 @@ describe('durable delegated turn opening', () => {
       expect(chat.entries().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
       expect(session.dynamic.size).toBe(1);
 
-      await session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => {});
+      await session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => Effect.void);
       expect(chat.entries().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1']);
       expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered']);
       expect((await stores.history.materialize()).messages.map((message) => message.content)).toEqual(['one', 'one answered']);
