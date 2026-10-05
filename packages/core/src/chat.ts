@@ -275,6 +275,8 @@ function withoutServerSummaries(stream: ReadableStream<UIMessageChunk>): Readabl
       if (chunk.type === 'text-start' && isServerCompaction(chunk.providerMetadata)) summaries.add(chunk.id);
 
       if ((chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end') && summaries.has(chunk.id)) return;
+
+      if (chunk.type === 'custom' && isServerCompaction(chunk.providerMetadata)) return;
       controller.enqueue(chunk);
     },
   }));

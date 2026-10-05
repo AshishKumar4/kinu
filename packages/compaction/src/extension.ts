@@ -467,7 +467,7 @@ function sinceServerSummary(messages: readonly ModelMessage[]): ModelMessage[] {
 
 function carriesServerSummary(message: ModelMessage | undefined): boolean {
   return message?.role === 'assistant' && Array.isArray(message.content)
-    && message.content.some((part: Exclude<AssistantModelMessage['content'], string>[number]) => part.type === 'text' && isServerCompaction(part.providerOptions));
+    && message.content.some((part: Exclude<AssistantModelMessage['content'], string>[number]) => (part.type === 'text' || part.type === 'custom') && isServerCompaction(part.providerOptions));
 }
 
 /** Latest real user request across the full history, so "Active Task verbatim" is mechanical. */

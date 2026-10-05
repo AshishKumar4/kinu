@@ -364,10 +364,12 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
 
     await session.send('think hard', { id: crypto.randomUUID() });
+    // A GPT-5 model on the direct route also asks for server-side compaction, in the same namespace.
     expect(providerOptions).toEqual({
       openai: {
         promptCacheKey: expect.any(String),
         reasoningEffort: 'high',
+        contextManagement: [{ type: 'compaction', compactThreshold: expect.any(Number) }],
       },
     });
     expect(session.getReasoningEffort()).toEqual({ effort: null });

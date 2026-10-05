@@ -619,6 +619,32 @@ describe('summaries', () => {
       .toEqual({ own: true, server: [], sent: compacted.slice(2) });
   });
 
+  // OpenAI's server-side compaction (developers.openai.com/api/docs/guides/compaction) leaves an encrypted item, which
+  // @ai-sdk/openai keeps as a `custom` part; the request opens at the ask before it, as for Claude's summary.
+  test('a GPT-5 model on OpenAI gets no better-compact summary, and the request opens at its compaction item', async () => {
+    const server = rig({ model: () => 'openai/gpt-5.5' });
+    const messages: ModelMessage[] = [];
+
+    for (let i = 0; i < 8; i++) {
+      messages.push(user(`requirement ${i}: ${'detail '.repeat(1_000)}`));
+      messages.push(assistant([{ type: 'text', text: `noted ${i}` }]));
+    }
+
+    await server.transform(messages);
+
+    const compacted: ModelMessage[] = [
+      user('older ask'), assistant([{ type: 'text', text: 'older answer' }]),
+      user('the ask the provider compacted at'),
+      assistant([
+        { type: 'custom', kind: 'openai.compaction', providerOptions: { openai: { type: 'compaction', itemId: 'cmp_1', encryptedContent: 'ENCRYPTED' } } },
+        { type: 'text', text: 'Continuing.' },
+      ]),
+      user('next ask'),
+    ];
+
+    expect({ server: server.prompts, sent: await server.transform(compacted) }).toEqual({ server: [], sent: compacted.slice(2) });
+  });
+
   test('a split first turn upgrades the exact compacted fragment', async () => {
     const { ports, prompts, transform } = rig();
 
