@@ -1,6 +1,6 @@
 /**
  * Images a tool hands the model. A tool output `{ output, images }`, an eval's with its `failures` beside them,
- * reaches the model as its text and one image part per image (AI SDK v6 `image-data`), which Anthropic Messages and
+ * reaches the model as its text and one `file` part per image, which Anthropic Messages and
  * OpenAI Responses carry inside a tool result; `providers/tool-result-images.ts` carries them on Chat Completions.
  */
 import type { ToolResultOutput } from '@ai-sdk/provider-utils';
@@ -72,7 +72,7 @@ export function imageModelOutput({ output }: { readonly output: unknown }): Tool
     type: 'content',
     value: [
       { type: 'text', text },
-      ...carrier.output.images.map((image) => ({ type: 'image-data' as const, data: image.data, mediaType: image.mediaType })),
+      ...carrier.output.images.map((image) => ({ type: 'file' as const, data: { type: 'data' as const, data: image.data }, mediaType: image.mediaType })),
     ],
   };
 }

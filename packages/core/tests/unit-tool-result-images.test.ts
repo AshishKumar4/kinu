@@ -9,10 +9,7 @@ import type { LanguageModelV4CallOptions, LanguageModelV4Message } from '@ai-sdk
 import { createProviderRegistry, type ModelInputModality, type ModelCallDeps } from '../src/index';
 import { withToolResultImages } from '../src/providers/tool-result-images';
 
-const IMAGE = { type: 'image-data' as const, data: 'iVBORw0KGgo=', mediaType: 'image/png' };
-
-/** `IMAGE` as a provider receives it. */
-const SENT_IMAGE = { type: 'file', data: { type: 'data', data: IMAGE.data }, mediaType: 'image/png' };
+const IMAGE = { type: 'file' as const, data: { type: 'data' as const, data: 'iVBORw0KGgo=' }, mediaType: 'image/png' };
 
 const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'screenshot example.com' },
@@ -58,7 +55,7 @@ describe('a tool result image', () => {
   test.each(['anthropic.messages', 'openai.responses'])('reaches a %s model inside the tool result', async (provider) => {
     const prompt = await sentPrompt(provider, new Set(['image']));
 
-    expect(toolPart(prompt)).toMatchObject({ output: { type: 'content', value: [{ type: 'text' }, SENT_IMAGE] } });
+    expect(toolPart(prompt)).toMatchObject({ output: { type: 'content', value: [{ type: 'text' }, IMAGE] } });
   });
 
   test('reaches a Chat Completions model that takes images in a user message right after the tool results', async () => {
@@ -66,7 +63,7 @@ describe('a tool result image', () => {
 
     expect(prompt.map((message) => message.role)).toEqual(['user', 'assistant', 'tool', 'user']);
     expect(toolPart(prompt)).toMatchObject({ output: { type: 'text', value: expect.stringContaining('Screenshot of https://example.com/') } });
-    expect(prompt.at(-1)).toMatchObject({ role: 'user', content: [{ type: 'text' }, SENT_IMAGE] });
+    expect(prompt.at(-1)).toMatchObject({ role: 'user', content: [{ type: 'text' }, IMAGE] });
   });
 
   test.each([
@@ -78,6 +75,6 @@ describe('a tool result image', () => {
 
     expect(prompt.map((message) => message.role)).toEqual(['user', 'assistant', 'tool']);
     expect(JSON.stringify(toolPart(prompt))).toContain('image omitted');
-    expect(JSON.stringify(prompt)).not.toContain(IMAGE.data);
+    expect(JSON.stringify(prompt)).not.toContain(IMAGE.data.data);
   });
 });
