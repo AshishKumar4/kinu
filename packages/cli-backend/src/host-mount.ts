@@ -9,7 +9,7 @@ import * as fs from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Effect } from 'effect';
 import type { FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsMount } from '@kinu.run/core';
-import { SLATES_ROOT, WORKSPACE_ROOT, withMountTable, workspacePath } from '@kinu.run/core';
+import { FOLDER_SUBTREE, SLATES_ROOT, WORKSPACE_ROOT, withMountTable, workspacePath } from '@kinu.run/core';
 import { syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { settle, tolerate, tolerateAsync } from '@kinu.run/core/obs';
 
@@ -137,7 +137,14 @@ export interface LocalFilePlane {
 /** Every real path of the machine, the own space served as the cloud serves its own. Only the folder is snapshotted. */
 export function localFilePlane(input: LocalFilePlane): MountedVfs {
   const machine = withMountTable(createHostMountVFS(input.folder, input.checkpoints), []);
-  const own = withMountTable(rootedFiles(input.space, createHostMountVFS(input.space, undefined)), input.views);
+  const folderFiles = rootedFiles(input.folder, createHostMountVFS(input.folder, input.checkpoints));
+
+  // The own space lists the folder where the resolver names it, `vfs://local`, so listing and reading agree.
+  const folder: VfsMount = {
+    name: FOLDER_SUBTREE.slice(1), files: () => folderFiles, absentReason: () => 'the folder is always mounted', filesOwner: 'agent',
+  };
+
+  const own = withMountTable(rootedFiles(input.space, createHostMountVFS(input.space, undefined)), [...input.views, folder]);
   const paths = localPaths(input.folder, input.space, input.views.map((view) => view.name));
 
   const route = (path: string): { readonly files: MountedVfs; readonly path: string } => {

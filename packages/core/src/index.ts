@@ -217,7 +217,7 @@ export {
 } from './read-models/file-links';
 
 export {
-  cloudPlanes, findPlaneReferences, formatPath, isWholeReference, localPlanes, machinePath, referencedPath, referencePrefixes, resolvePath, RESERVED_ROOTS,
+  cloudPlanes, findPlaneReferences, FOLDER_SUBTREE, formatPath, isWholeReference, localPlanes, machinePath, referencedPath, referencePrefixes, resolvePath, RESERVED_ROOTS,
   type PathPlanes, type ResolvedPath,
 } from './vfs/resolve';
 

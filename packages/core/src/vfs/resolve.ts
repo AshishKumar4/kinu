@@ -45,7 +45,7 @@ export const VFS_PREFIX = 'vfs';
 export const DEVICE_PREFIX = '<device>';
 
 /** Where a local workspace's folder sits in its VFS. */
-const FOLDER_SUBTREE = '/local';
+export const FOLDER_SUBTREE = '/local';
 
 /**
  * Every prefix on each backend, each an alias for a subtree of `vfs://`; a backend without a row has no such prefix.

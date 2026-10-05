@@ -6,12 +6,12 @@ import { join } from 'node:path';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
 import {
-  AGENT_STATE_PATHS, SLATES_ROOT, archiveFileTree, isAgentStatePath,
+  AGENT_STATE_PATHS, FOLDER_SUBTREE, SLATES_ROOT, archiveFileTree, isAgentStatePath,
   type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,
 } from '@kinu.run/core';
 import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
 
-const FOLDER = 'local';
+const FOLDER = FOLDER_SUBTREE.slice(1);
 
 /** Its sidecars (`-wal`, `-shm`) start with it. */
 const DATABASE = 'agent.db';

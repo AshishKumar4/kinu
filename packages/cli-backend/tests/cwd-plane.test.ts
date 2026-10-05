@@ -302,6 +302,21 @@ describe('addressing the bound directory', () => {
 
   // Release review, 2026-10-05: a link in the folder or the own space to a directory outside let a write through it land
   // outside unasked, because the reach judged the path as written and node:fs followed the link.
+  // Release review, 2026-10-05: listing vfs:// left out local, though vfs://local/x read the folder.
+  test('the own space lists the folder as local, and every name for a folder file reads it', async () => {
+    const { state, project } = roots('cwd-plane-local');
+    writeFileSync(join(project, 'same.txt'), 'one copy');
+    const rt = agentRuntime(state, 'solo', project);
+    const { file } = agentTools(rt, () => 'deny');
+
+    expect(await file({ action: 'list', path: 'vfs://' })).toMatchObject({ entries: expect.arrayContaining(['local']) });
+    expect(await file({ action: 'list', path: 'vfs://local' })).toMatchObject({ entries: expect.arrayContaining(['same.txt']) });
+
+    for (const path of ['local://same.txt', 'vfs://local/same.txt', join(state, 'solo', 'local', 'same.txt')]) {
+      expect(await file({ action: 'read', path })).toEqual(expect.stringContaining('one copy'));
+    }
+  });
+
   test('a write through a link in the folder or the own space lands where the link points, and is asked there', async () => {
     const { state, project } = roots('cwd-plane-link');
     const outside = join(dirname(project), 'outside');
