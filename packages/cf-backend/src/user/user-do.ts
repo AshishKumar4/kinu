@@ -2260,7 +2260,12 @@ export class UserDO extends Agent<Env> {
     const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
 
     if (hello.success) {
-      if (!this._devices.hello(deviceId, hello.output.protocolVersion, hello.output.features)) return;
+      if (!this._devices.hello(deviceId, hello.output.protocolVersion, hello.output.features)) {
+        this.sqlx(`INSERT OR IGNORE INTO user_device_protocol_refusals (device_id) VALUES (?)`, deviceId);
+
+        return;
+      }
+
       this.recordDeviceHello(deviceId, hello.output);
       await this.devicesMoved();
       const frame = await this.deviceUpdateFrame(deviceId, hello.output);
@@ -2399,6 +2404,8 @@ export class UserDO extends Agent<Env> {
     if (hello.runtime !== undefined) {
       this.sqlx(`DELETE FROM user_device_update_refusals WHERE device_id = ? AND runtime <> ?`, deviceId, hello.runtime);
     }
+
+    this.sqlx(`DELETE FROM user_device_protocol_refusals WHERE device_id = ?`, deviceId);
   }
 
   /** Null when the deploy published no stamp or names no public origin. Read per HELLO: the stamp
@@ -3409,22 +3416,26 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
       replaced_at: number | null;
       revoked_at: number | null; unstopped_at: number | null; reuse_detected_at: number | null;
       tier: string | null; version: string | null; update_check: number | null; consented_root: string | null;
-      refused_version: string | null; refusal_reason: string | null;
+      refused_version: string | null; refusal_reason: string | null; protocol_refused: string | null;
     }>(`SELECT d.id, d.label, d.os, d.hostname, d.created_at, d.last_seen_at, d.expires_at,
                d.replaced_at, d.revoked_at, d.unstopped_at, x.reuse_detected_at,
                d.consented_root,
                d.tier, d.sandbox_capability, d.sandbox_reason, d.sandbox_detail, d.sandbox_gpu,
-               b.version, b.update_check, f.version AS refused_version, f.reason AS refusal_reason
+               b.version, b.update_check, f.version AS refused_version, f.reason AS refusal_reason,
+               p.device_id AS protocol_refused
           FROM user_devices d
           LEFT JOIN user_device_builds b ON b.device_id = d.id
           LEFT JOIN user_device_update_refusals f ON f.device_id = d.id
+          LEFT JOIN user_device_protocol_refusals p ON p.device_id = d.id
           LEFT JOIN (SELECT device_id, MAX(reuse_detected_at) AS reuse_detected_at
                        FROM user_device_retired_tokens WHERE reuse_detected_at IS NOT NULL
                       GROUP BY device_id) x ON x.device_id = d.id
          WHERE d.revoked_at IS NULL OR d.unstopped_at IS NOT NULL OR x.reuse_detected_at IS NOT NULL
          ORDER BY d.created_at DESC`)
       .map((r) => {
-        const update = deviceUpdateState({ version: r.version, updateCheck: r.update_check !== 0, refusedVersion: r.refused_version }, served);
+        const update = deviceUpdateState({
+          version: r.version, updateCheck: r.update_check !== 0, refusedVersion: r.refused_version, protocolRefused: r.protocol_refused !== null,
+        }, served);
 
         return {
           id: r.id, label: r.label, os: r.os, hostname: r.hostname,

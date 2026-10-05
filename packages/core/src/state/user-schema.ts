@@ -282,6 +282,13 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
+  // A device whose last HELLO the hub refused for its protocol: its daemon must be updated by hand.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_device_protocol_refusals (
+      device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE
+    )
+  `);
+
   // Superseded device secrets, kept for the token lifetime: one presented again revokes the device.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_device_retired_tokens (

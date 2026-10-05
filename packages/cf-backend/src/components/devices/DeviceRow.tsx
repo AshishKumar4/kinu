@@ -176,7 +176,9 @@ export function DeviceRow({
           />
         )}
         {device.hostname && <span className="p-annotation p-text-3">{device.hostname}{device.os ? ` · ${device.os}` : ""}</span>}
-        <span className={`ml-auto px-2 py-0.5 ${device.connected ? "p-badge-success" : "p-badge-neutral"}`}>{device.connected ? "connected" : "offline"}</span>
+        {device.update === "required"
+          ? <span role="status" data-device-update="required" className="ml-auto px-2 py-0.5 p-badge-warning">{DEVICE_UPDATE_COPY.required}</span>
+          : <span className={`ml-auto px-2 py-0.5 ${device.connected ? "p-badge-success" : "p-badge-neutral"}`}>{device.connected ? "connected" : "offline"}</span>}
         <UpdateBadge device={device} />
         <button onClick={onRevoke} title="Revoke device" className="ml-1 border-l p-border pl-3 p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
       </div>

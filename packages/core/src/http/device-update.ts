@@ -35,14 +35,17 @@ export function cliArtifactPath(os: string | undefined, arch: string | undefined
  * `off` (owner's `updateCheck: false`) wins over `behind`. `unstamped`: no build
  * metadata, i.e. a source install; nothing is pushed over it, nor a `refused` build.
  */
-export type DeviceUpdateState = 'current' | 'behind' | 'off' | 'unreported' | 'unstamped' | 'refused';
+export type DeviceUpdateState = 'required' | 'current' | 'behind' | 'off' | 'unreported' | 'unstamped' | 'refused';
 
-export const DEVICE_UPDATE_STATES = ['current', 'behind', 'off', 'unreported', 'unstamped', 'refused'] as const;
+export const DEVICE_UPDATE_STATES = ['required', 'current', 'behind', 'off', 'unreported', 'unstamped', 'refused'] as const;
 
 export function deviceUpdateState(
-  reported: { version: string | null; updateCheck: boolean; refusedVersion?: string | null },
+  reported: { version: string | null; updateCheck: boolean; refusedVersion?: string | null; protocolRefused?: boolean },
   served: string | null,
 ): DeviceUpdateState {
+  // The hub refuses this daemon's protocol, so no UPDATE frame can reach it.
+  if (reported.protocolRefused === true) return 'required';
+
   if (reported.version === null) return 'unreported';
 
   if (!reported.updateCheck) return 'off';
