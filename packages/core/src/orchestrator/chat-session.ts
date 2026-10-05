@@ -627,9 +627,7 @@ export class ChatSession {
 
   /** Resolves once the emptied request is measured, with why not if the measure failed; the clear itself stands. */
   async clear(): Promise<KinuError | null> {
-    await this.actorSession.clearConversation(this.sessionId, () => {
-      if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
-    });
+    await this.actorSession.clearConversation(this.sessionId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE)) : Effect.void);
 
     return this.measureCleared();
   }

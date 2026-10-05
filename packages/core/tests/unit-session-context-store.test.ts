@@ -1,5 +1,6 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, setSystemTime, test } from 'bun:test';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
@@ -220,7 +221,7 @@ test('a past revision reads back as it was after a transform and a clear, by a r
       cause: 'context_transform', turnId: null, assertEpoch: () => undefined,
       mutate: current => current.slice(-1).map(entry => ({ ...entry, position: 0 })),
     });
-    writer.clearConversation(CHAT_SESSION_ID, () => undefined);
+    writer.clearConversation(CHAT_SESSION_ID, () => Effect.void);
 
     const reader = history();
 

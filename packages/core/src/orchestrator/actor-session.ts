@@ -454,11 +454,8 @@ export class ActorSession {
     await this.restoreWorkingHistory();
   }
 
-  async clearConversation(sessionId: string, assertIdle: () => void): Promise<void> {
-    this.canonical.clearConversation(sessionId, () => {
-      if (this.inFlight) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
-      assertIdle();
-    });
+  async clearConversation(sessionId: string, assertIdle: () => Effect.Effect<void, KinuError>): Promise<void> {
+    this.canonical.clearConversation(sessionId, () => this.inFlight ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE)) : assertIdle());
     this.dynamic.unload();
     await this.restoreWorkingHistory();
   }

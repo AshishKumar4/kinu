@@ -1,4 +1,5 @@
 import type { ModelMessage } from 'ai';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
@@ -8,6 +9,7 @@ import { SessionContext, type ContextSelection, type ContextEntry } from './cont
 import { SessionProposals, type ContextProposal } from './proposals';
 import { SessionRequests } from './requests';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import { diagnostics } from '../obs/log';
 import { SessionTranscript } from './transcript';
 import { toolPairingGaps } from './tool-pairing';
@@ -151,18 +153,18 @@ export class SessionHistory {
       atomic: this.dependencies.transactionSync, selection: () => this.context.selected() });
   }
 
-  clearConversation(sessionId: string, assertIdle: () => void): ContextSelection {
-    return this.dependencies.transactionSync(() => {
+  clearConversation(sessionId: string, assertIdle: () => Effect.Effect<void, KinuError>): ContextSelection {
+    return this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.dependencies.actor.assertCurrent();
-      assertIdle();
+      yield* assertIdle();
       const selected = this.context.selected() ?? this.context.initialize();
 
       for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
-      const cleared = this.context.commit(selected, { cause: 'edit', turnId: null, mutate: () => [], assertEpoch: assertIdle });
+      const cleared = this.context.commit(selected, { cause: 'edit', turnId: null, mutate: () => [], assertEpoch: () => settleSync(assertIdle()) });
       this.transcript(sessionId).clear();
 
       return cleared;
-    });
+    })));
   }
 
   /** Continue from before `entryId`: the context of the nearest earlier entry that recorded one branches, and
