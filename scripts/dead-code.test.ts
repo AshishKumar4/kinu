@@ -32,7 +32,7 @@ import {
   compileReach, DEPENDENCY_REASONS, dependencyKeyOf, dependencyReason, manifestCommands, readInstalled,
   referencesPackage, servedBy, typedRuntime, unusedDependencies,
 } from './dead-code';
-import { isManifest, readRepositoryFile, trackedFiles } from './sources';
+import { isManifest, isVendoredSource, readRepositoryFile, trackedFiles } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -222,7 +222,7 @@ describe('the census', () => {
 
 const tracked = trackedFiles();
 
-const manifests = tracked.filter(isManifest);
+const manifests = tracked.filter((file) => isManifest(file) && !isVendoredSource(file));
 
 const installed = readInstalled(read('bun.lock'));
 
