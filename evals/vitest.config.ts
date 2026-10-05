@@ -19,6 +19,7 @@ export default defineConfig({
     root: fileURLToPath(new URL('..', import.meta.url)),
     // `bun run evals:reactive` runs §8's reactive-user run over the same tasks instead.
     include: process.env.KINU_REACTIVE === '1' ? ['evals/reactive/*.run.ts'] : ['evals/tasks/**/*.eval.ts'],
+    outputFile: { json: `${process.env.BENCH_ARTIFACTS ?? 'bench-artifacts/evals'}/results.json` },
     environment: 'node',
     // Bun already gives an external module its own exports, a CommonJS one included, and vitest's default-export
     // interop misreads them there: a Bun module namespace answers `'__esModule' in ns`, so a package whose default

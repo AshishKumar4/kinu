@@ -140,6 +140,8 @@ export interface AgentConfigStore {
   countIsolateGeneration(): number;
   getEmailNotificationsEnabled(): boolean;
   setEmailNotificationsEnabled(enabled: boolean): void;
+  getChatTitle(): string | null;
+  setChatTitle(title: string): void;
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -380,6 +382,12 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     setEmailNotificationsEnabled(enabled) {
       set(AGENT_CONFIG_KEYS.emailNotifications, enabled ? 'true' : 'false');
+    },
+    getChatTitle() {
+      return get(AGENT_CONFIG_KEYS.chatTitle);
+    },
+    setChatTitle(title) {
+      set(AGENT_CONFIG_KEYS.chatTitle, title);
     },
   };
 }

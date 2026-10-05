@@ -190,7 +190,9 @@ export class TerminalTransitions {
     }
 
     // Disposition first, release second.
-    settleToolEffect(this.deps.sql, this.deps.actor, this.key(transition), TERMINAL_TRANSITION_SETTLED);
+    if (settleToolEffect(this.deps.sql, this.deps.actor, this.key(transition), TERMINAL_TRANSITION_SETTLED)) {
+      diagnostics.event('turn.terminal_effects_settled', { sequence: sequenceId });
+    }
 
     // Tool claims are released only when no response of this turn can still be settling; open terminal rows
     // are the witness.

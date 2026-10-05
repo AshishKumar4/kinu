@@ -60,7 +60,7 @@ export type AgentProfile = {
   runs: number;
   meanModelTurns: number;
   meanInputTokens: number | null;
-  meanOutputTokens: number;
+  meanOutputTokens: number | null;
   meanWallTimeMs: number;
   meanCostUsd: number | null;
   cacheHitRate: number | null;
@@ -122,13 +122,14 @@ function profile(assertions: readonly Assertion[]): AgentProfile {
   const runs = assertions.map((assertion) => assertion.meta.harness.run);
   const calls = runs.flatMap((run) => run.session.events.flatMap((event) => event.type === 'tool_call' ? [event.name] : []));
   const inputs = runs.flatMap((run) => run.usage.inputTokens === undefined ? [] : [run.usage.inputTokens]);
+  const outputs = runs.flatMap((run) => run.usage.outputTokens === undefined ? [] : [run.usage.outputTokens]);
   const cost = totalCostUsd(runs);
 
   return {
     runs: runs.length,
     meanModelTurns: mean(runs.map((run) => run.output.metrics.modelTurns)),
     meanInputTokens: inputs.length === runs.length ? mean(inputs) : null,
-    meanOutputTokens: mean(runs.map((run) => run.usage.outputTokens)),
+    meanOutputTokens: outputs.length === runs.length ? mean(outputs) : null,
     meanWallTimeMs: mean(assertions.map((assertion) => assertion.duration)),
     meanCostUsd: cost === null ? null : cost / runs.length,
     cacheHitRate: cacheHitRate(assertions),
@@ -685,7 +686,7 @@ function profileTable(profiled: EvalComparison['profiles']): string[] {
     const share = (side: AgentProfile) => side.evalCallShare === null ? '\u2014' : `${(side.evalCallShare * 100).toFixed(0)}%`;
 
     lines.push(`| ${[model, String(after.runs), cell((side) => side.meanModelTurns.toFixed(1)),
-      cell((side) => side.meanInputTokens === null ? '—' : tokens(side.meanInputTokens)), cell((side) => tokens(side.meanOutputTokens)),
+      cell((side) => side.meanInputTokens === null ? '—' : tokens(side.meanInputTokens)), cell((side) => side.meanOutputTokens === null ? '—' : tokens(side.meanOutputTokens)),
       cell((side) => rate(side.cacheHitRate)), cell((side) => seconds(side.meanWallTimeMs)), cell((side) => usd(side.meanCostUsd)), cell(share)].join(' | ')} |`);
   }
 

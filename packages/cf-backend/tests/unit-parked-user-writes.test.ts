@@ -38,7 +38,7 @@ function daemon(files: Map<string, string>) {
       case 'readRange': {
         const [, offset, length] = v.parse(RangeParamsSchema, frame.params.slice(0, 3));
 
-        if (body === undefined) throw new Error(`ENOENT: no such file or directory, open '${path}'`);
+        if (body === undefined) throw Object.assign(new Error(`ENOENT: no such file or directory, open '${path}'`), { code: 'ENOENT' });
 
         return { encoding: 'base64', content: Buffer.from(body).subarray(offset, offset + length).toString('base64') };
       }

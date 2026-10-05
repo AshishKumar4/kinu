@@ -1,5 +1,5 @@
 {
-  "measured": "363006c40: 1358 test files, 1161 runnable suites, 13379 tests, 50 runners, 1682 non-public product members, 9352 product function bodies",
+  "measured": "f4e310827: 1379 test files, 1179 runnable suites, 13474 tests, 50 runners, 1699 non-public product members, 10223 product function bodies",
   "entries": [
     {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: only a resolved write reads as copied :: expected side computed by the code under test",

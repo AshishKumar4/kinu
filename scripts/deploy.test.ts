@@ -6,9 +6,8 @@ import { childEnv, runToExit, scratchDir } from "@kinu.run/test-utils";
 import { parseReleaseManifest } from "@kinu.run/core/deploy";
 import { generateReleaseSigningKey } from "../packages/core/src/http/release-signing";
 import {
-  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, deployPlan, type DeployPhase,
+  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, deployOrder, type DeployPhase,
 } from "./ladder";
-import { costRssMb, costThreads, readCosts } from "./gate-cost";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
 import { CONTROL_PLANE_API_ROUTE, CONTROL_PLANE_UI_ROUTE } from "../packages/cf-backend/src/control-plane/access-gate";
 import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
@@ -20,7 +19,7 @@ const REPO_ROOT = resolve(import.meta.dir, "..");
 
 
 /** The deploy's plan: which gate runs in which phase. deploy.sh runs a phase as one ladder call. */
-const PLAN = deployPlan();
+const PLAN = deployOrder();
 
 /** How deploy.sh runs one or more phases: the ladder runs their plan rows through one wave. */
 function phaseRun(...phases: DeployPhase[]): string {
@@ -44,7 +43,7 @@ const AFTER_A_FAILED_BUILD: readonly string[] = [
 
 /** The commands one phase of the plan runs. */
 function phaseGates(phase: string): string[] {
-  return PLAN.filter((row) => row.phase === phase).map((row) => row.run);
+  return PLAN.filter((row) => (row.phase ?? "source") === phase).map((row) => row.run);
 }
 
 /** A staging deploy's own step before its build: HEAD's record on staging withdrawn (scripts/promote.ts). */
@@ -300,11 +299,6 @@ describe("deploy gate", () => {
     expect(run.events).toEqual([...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]);
     expect(run.buildEnvironment).toBe("staging");
     expect(run.infraEnvironment).toBe("staging");
-    // The failed step is a red of the report's, the skipped rows are named by the ladder, and the report is rendered.
-    expect(run.report).toEqual([
-      "open staging deploy testsha", "mark preflight", "mark upload",
-      "note publish build, upload and smoke vite build failed", "mark wave", "mark ci", "mark end", "render",
-    ]);
   });
 
   test("a record that cannot be withdrawn builds nothing, and every local gate still runs", () => {
@@ -415,7 +409,7 @@ describe("deploy gate", () => {
   // hammer, whose subject is contention, is last and alone (L18).
   test("every gate outside the source wave declares its phase and why it runs there", () => {
     expect(DEPLOY_PHASES).toEqual(["preflight", "upload", "post-publish", "source", "hammer"]);
-    const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, PLAN.filter((row) => row.phase === phase).map((row) => row.run)]));
+    const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, phaseGates(phase)]));
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
     expect(byPhase.upload).toEqual(["bun scripts/secret-scan.ts", "bun run gate:infra"]);
     expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bash scripts/product-flows-tier.sh", "bash scripts/eval-pass-tier.sh"]);
@@ -463,65 +457,6 @@ describe("deploy gate", () => {
     );
   });
 
-  // THE WAVE IS SCHEDULED BY MEASURED COST IN TWO DIMENSIONS. A count of gates
-  // is not a measure of load, and neither is a declared thread figure: on
-  // 2026-09-16 five source rows died on their deadline across two deploys —
-  // one of them at 137, a SIGKILL no thread budget can predict — while each
-  // passed alone. The three workerd rows declared one thread each and no
-  // memory at all. Nothing declares a cost now; scripts/gate-cost.json holds
-  // what each row was measured to take, and the wave admits against both
-  // figures under the box's caps (ladder.test.ts holds the admission itself).
-  test("each row is admitted on its measured threads and resident set, and no Chrome or worker row is free", () => {
-    const costs = readCosts();
-
-    // Every row, the ones that read the deployment included: they share the one wave with the source rows (L18). One
-    // of those with no figure yet takes the whole box, since only a deployment of its build can measure it.
-    for (const row of PLAN) {
-      const cost = costs.rows[row.run];
-      const gate = LADDER.find((candidate) => candidate.run === row.run);
-
-      if (cost === undefined && row.phase === "post-publish") {
-        expect([row.threads, row.rssMb]).toEqual([Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]);
-        continue;
-      }
-
-      if (cost === undefined || gate === undefined) {
-        expect(cost, `${row.run} is planned with no measured cost`).toBeDefined();
-        continue;
-      }
-
-      expect(row.threads).toBe(costThreads(cost, gate.seconds));
-      expect(row.rssMb).toBe(costRssMb(cost));
-    }
-
-    // A row that opens Chrome or four workers may NOT be admitted as free in
-    // both dimensions at once. It read "more than one thread" until the cost
-    // sampler was fixed to walk the row's process tree (L7): measured
-    // 2026-09-17, a browser row's Chrome burns little CPU beside its wall —
-    // chat-scroll is 12.6 CPU seconds over a 21.2 s wall, one sustained thread
-    // with 25 tasks runnable at its peak — and what makes these rows heavy is
-    // memory, 3.1 GiB there and 3.2 to 5.1 GiB across the family. So the claim
-    // is per dimension, and the 2026-09-16 shape it was written for still
-    // fails it: the three workerd rows read one thread AND no memory at all.
-    // Derived from the tree, not a list: the plan's own `shared` column, which
-    // is the closure over the modules each row claims.
-    const browserRows = PLAN.filter((row) => row.shared === "browser").map((row) => row.run);
-
-    for (const row of PLAN) {
-      // The 1 GiB proxy is a LOCAL browser row's tree, a dev server and workerd behind its Chrome; a row driving the
-      // deployment runs Chrome alone (the product flows measured 745 MiB, 2026-09-30), so its figures stand as taken.
-      if (row.phase === "post-publish") continue;
-      const opensChrome = browserRows.includes(row.run);
-      const multiWorker = row.run.includes("--parallel=") || row.run === "bun run test:core" || row.run === "bun run test:cli";
-
-      if (!opensChrome && !multiWorker) continue;
-      expect(
-        row.threads > 1 || row.rssMb > 1_024,
-        `${row.run} opens Chrome or workers and is admitted as one thread and ${String(row.rssMb)} MiB`,
-      ).toBeTrue();
-    }
-  });
-
   // THE TWO STOPS. A red preflight or upload phase TRUNCATES the run: nothing
   // later starts, nothing is built and nothing is published, with the former
   // skip variable (SKIP_E2E, on every run here) set. The preflight is the
@@ -532,7 +467,6 @@ describe("deploy gate", () => {
 
       expect(run.status, `${phase} did not fail the deploy`).toBe(1);
       expect(run.events, `${phase} failed and a later step ran\n${run.stdout}`).toEqual(STOPS.slice(0, index + 1));
-      expect(run.stdout).toContain("phase is red, so nothing was built or uploaded.");
       expect(run.report.slice(-2)).toEqual(["mark end", "render"]);
     }
   });

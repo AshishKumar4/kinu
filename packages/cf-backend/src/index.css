@@ -1770,12 +1770,13 @@ body > .annotation-toolbar {
    reveal the agents; back reverses it. */
 .p-slide {
   display: grid;
-  grid-template-columns: 100% 100%;
+  grid-template-columns: 1fr 1fr;
+  width: 200%;
   height: 100%;
   transition: transform 280ms var(--ease-glide);
 }
 .p-slide > * { min-width: 0; transition: opacity 280ms var(--ease-glide); }
-.p-slide[data-drilled] { transform: translateX(-100%); }
+.p-slide[data-drilled] { transform: translateX(-50%); }
 .p-slide[data-drilled] > :first-child, .p-slide:not([data-drilled]) > :last-child { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   .p-slide { transition: none; }

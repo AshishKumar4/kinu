@@ -258,6 +258,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.countClosedTurnWindow(),
     (c) => c.countIsolateGeneration(),
     (c) => c.setEmailNotificationsEnabled(false),
+    (c) => c.setChatTitle('Coupon fix'),
     (c) => { canonicalConversationId(c); },
   ];
 

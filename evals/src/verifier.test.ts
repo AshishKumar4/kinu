@@ -134,7 +134,7 @@ describe('EvalVerifier', () => {
  * live children only, and a released helper is reached by its actor.
  */
 function inspecting(): VerifierSession {
-  const runs = (status: string, userMessage: string) => ({ view: 'runs' as const, page: { status: 'end' as const, items: [{ startedAt: 10, status, userMessage }] } });
+  const runs = (status: string, userMessage: string) => ({ view: 'runs' as const, page: { status: 'end' as const, items: [{ runId: 'inspection-run', startedAt: 10, status, userMessage }] } });
   const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
 
   return {
@@ -164,7 +164,7 @@ describe("a helper's runs", () => {
   test('a released helper is read by its actor, a live one by its name', async () => {
     const work = await new EvalVerifier(inspecting(), [], 0).helperWork();
 
-    expect(work).toEqual([
+    expect(work).toMatchObject([
       { name: 'ask-task-live', status: 'working', runs: [{ startedAt: 10, status: 'running', userMessage: 'Write the ratings' }] },
       { name: 'ask-task-done', status: 'dismissed', runs: [{ startedAt: 10, status: 'completed', userMessage: 'Write the totals' }] },
     ]);
@@ -196,7 +196,7 @@ describe("a helper's runs", () => {
       ...inspecting(),
       inspect: (request: Parameters<VerifierSession['inspect']>[0]) => request.view === 'runs'
         ? Promise.resolve({ view: 'runs' as const, page: { status: 'end' as const, items: [
-          { startedAt: 90, status: 'completed', userMessage: 'Build src/maybe.ts' },
+          { runId: 'old-inspection-run', startedAt: 90, status: 'completed', userMessage: 'Build src/maybe.ts' },
         ] } })
         : inspecting().inspect(request),
     };

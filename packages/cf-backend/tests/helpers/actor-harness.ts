@@ -27,7 +27,7 @@ import { present, sqlOver } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
-import type { UserDO } from '../../src/user/user-do';
+import type { McpToolCall, UserDO, UserProfile } from '../../src/user/user-do';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
   actorReferenceOf,
@@ -45,7 +45,7 @@ import {
   type WorkMode, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown, WORKSPACE_SOUL_DDL,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
-  type EgressSecretBinding,
+  type EgressSecretSummary,
 } from '@kinu.run/core';
 import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, holdHarnessFiber, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
@@ -1754,15 +1754,19 @@ export function makeEnv(
             throw userPlane?.failDescriptors
               ?? new Error('harness UserDO: userMcp_toolDescriptors is not reachable under bun');
           },
-          userMcp_callTool: async (_caller: UserCaller, _server: string, tool: string, args: JsonValue): Promise<string> => {
+          userMcp_callTool: async (_caller: UserCaller, call: McpToolCall): Promise<string> => {
             if (userPlane?.mcp === undefined) throw new Error('harness UserDO: no MCP tools are served');
-            userPlane.mcp.calls.push({ tool, args });
+            userPlane.mcp.calls.push({ tool: call.name, args: call.args });
 
             return JSON.stringify(userPlane.mcp.answer);
           },
-          getProfile: async (): Promise<{ email: string } | null> => userPlane?.profile ?? null,
+          getProfile: async (): Promise<UserProfile | null> => {
+            const profile = userPlane?.profile ?? null;
+
+            return profile === null ? null : { displayName: null, createdAt: 0, lastSeenAt: 0, onboardedAt: null, workspaceCount: 1, ...profile };
+          },
           // No stored egress secrets; `failVault` drives an unreadable vault.
-          listEgressSecrets: async (): Promise<readonly EgressSecretBinding[]> => {
+          listEgressSecrets: async (): Promise<EgressSecretSummary[]> => {
             if (userPlane?.failVault) throw userPlane.failVault;
 
             return [];
@@ -1783,7 +1787,7 @@ export function makeEnv(
               return [];
             },
           }),
-        };
+        } satisfies Partial<UserDO>;
 
         const owned = (prop: string | symbol): prop is keyof typeof ownerPlane => prop in ownerPlane;
 

@@ -11,7 +11,7 @@ import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-kinu";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
-import { ModeToggle } from "./theme-toggle";
+import { ModeToggle, ThemeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
 import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, type PanelAgent } from "@kinu.run/core";
 import { renderCauseChain, detach } from "@kinu.run/core/obs";
@@ -273,10 +273,10 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
       </div>
       </div>
 
-      <div className="border-t p-border px-4 py-3.5 relative" ref={userMenuRef}>
+      <div className="border-t p-border flex items-center gap-1 py-3.5 pl-4 pr-2.5 relative" ref={userMenuRef}>
         <button
           onClick={() => setShowUserMenu((shown) => !shown)}
-          className="flex w-full min-w-0 items-center gap-2.5 text-left"
+          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
         >
           <div className="flex size-[26px] shrink-0 items-center justify-center rounded-full bg-[#2A2018] text-[12px] font-semibold text-[var(--c-accent)]">
             {profile?.email?.[0]?.toUpperCase() ?? '?'}
@@ -286,6 +286,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           </span>
           <GearIcon size={14} className="shrink-0 p-text-4 transition-colors hover:p-accent" />
         </button>
+        <ThemeToggle />
         {showUserMenu && (
           <div className="absolute bottom-full left-2 right-2 mb-1 p-card p-1.5 p-shadow-menu border p-border z-10">
             <Link to="/user/settings" onClick={() => setShowUserMenu(false)}

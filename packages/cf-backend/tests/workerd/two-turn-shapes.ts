@@ -101,6 +101,7 @@ export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
 export const QueuedConversationSchema = v.object({
   http: v.array(HttpCallSchema),
   task: v.nullable(TurnSchema),
+  answers: v.array(v.string()),
 });
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;

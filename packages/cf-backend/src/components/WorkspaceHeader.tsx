@@ -227,7 +227,8 @@ function useTabOutline(strip: RefObject<HTMLUListElement | null>, active: string
     if (shownKey.current !== null && active !== null && shownKey.current !== active) setGlide(true);
     shownKey.current = active;
     place();
-    tab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+
+    if (tab !== null) list.scrollLeft = Math.min(tab.offsetLeft, Math.max(list.scrollLeft, tab.offsetLeft + tab.offsetWidth - list.clientWidth));
 
     const observer = new ResizeObserver(place);
     const scrolled = () => setOverflow(overflowOf(list));

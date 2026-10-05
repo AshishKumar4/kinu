@@ -268,8 +268,7 @@ const TelemetryEvent = v.looseObject({
     event: v.optional(v.string(), ''),
     code: v.optional(v.string(), ''),
     cause: v.optional(v.string(), ''),
-    // Only boolean fields are read (`wake.unfinished_arms`); any other value reads false.
-    fields: v.fallback(v.record(v.string(), v.fallback(v.boolean(), false)), {}),
+    fields: v.fallback(v.looseObject({ sequence: v.optional(v.string()), owed: v.optional(v.string()) }), {}),
   }), { event: '', code: '', cause: '', fields: {} }),
   $workers: v.optional(v.looseObject({
     durableObjectId: v.optional(v.string()),
@@ -440,7 +439,7 @@ class Telemetry {
   }
 
   /** `from` narrows the window: a sampled events view drops rows, and gaps between kept rows are fiction. */
-  async events(filters: readonly Filter[], limit: number, from = this.args.from): Promise<TelemetryEvent[]> {
+  async events(filters: readonly Filter[], limit: number, from = this.args.from): Promise<{ events: TelemetryEvent[]; sampling: number }> {
     const result = await this.result({
       view: 'events',
       limit,
@@ -448,7 +447,7 @@ class Telemetry {
       parameters: { datasets: ['cloudflare-workers'], filters: this.filters(filters) },
     });
 
-    return [...result.events.events].sort((a, b) => a.timestamp - b.timestamp);
+    return { events: result.events.events.sort((a, b) => a.timestamp - b.timestamp), sampling: result.statistics.abr_level };
   }
 }
 
@@ -579,7 +578,7 @@ async function timeline(t: Telemetry, args: Args): Promise<void> {
   const outcomes = await t.count({ filters: [...scope, eq('$metadata.type', 'cf-worker-event')], groupBy: ['$workers.eventType', '$workers.outcome'] });
   const events = await t.count({ filters: scope, groupBy: ['event'], limit: 15 });
   const failures = await t.count({ filters: [...scope, HAS_CODE], groupBy: ['event', 'code'], limit: 20 });
-  const failureSamples = await t.events([...scope, HAS_CODE], 200);
+  const { events: failureSamples } = await t.events([...scope, HAS_CODE], 200);
 
   const causes = failures.map((f) => {
     const sample = failureSamples.filter((e) => e.source.event === f.groups[0] && e.source.code === f.groups[1]).at(-1);
@@ -591,7 +590,7 @@ async function timeline(t: Telemetry, args: Args): Promise<void> {
   const startupEvents: number[] = [];
 
   for (const marker of STARTUP_MARKERS) {
-    const seen = await t.events([...scope, eq('event', marker.event)], EVENT_CAP, cadenceFrom);
+    const { events: seen } = await t.events([...scope, eq('event', marker.event)], EVENT_CAP, cadenceFrom);
 
     if (seen.length > 0) {
       startupEvents.push(...seen.map((e) => e.timestamp));
@@ -599,8 +598,8 @@ async function timeline(t: Telemetry, args: Args): Promise<void> {
     }
   }
 
-  const alarms = await t.events([...scope, eq('$workers.eventType', 'alarm'), eq('$metadata.type', 'cf-worker-event')], EVENT_CAP, cadenceFrom);
-  const arms = await t.events([...scope, eq('event', 'wake.unfinished_arms')], 50);
+  const { events: alarms } = await t.events([...scope, eq('$workers.eventType', 'alarm'), eq('$metadata.type', 'cf-worker-event')], EVENT_CAP, cadenceFrom);
+  const { events: arms } = await t.events([...scope, eq('event', 'wake.unfinished_arms')], 50);
 
   const report = {
     object: target.id,
@@ -618,7 +617,7 @@ async function timeline(t: Telemetry, args: Args): Promise<void> {
       alarms: gapStats(alarms.map((e) => e.timestamp)),
       alarmsCapped: alarms.length >= EVENT_CAP,
     },
-    unfinishedArms: arms.map((e) => ({ at: iso(e.timestamp), arms: Object.entries(e.source.fields).filter(([, on]) => on).map(([arm]) => arm) })),
+    unfinishedArms: arms.map((e) => ({ at: iso(e.timestamp), arms: Object.entries(e.source.fields).filter(([, on]) => on === true).map(([arm]) => arm) })),
     sampling: t.sampling,
   };
 
@@ -757,6 +756,60 @@ export interface EffectSample {
   readonly detail: string;
 }
 
+export interface TerminalEffectStates {
+  readonly observations: number;
+  readonly settled: readonly EffectSample[];
+  readonly owed: readonly EffectSample[];
+}
+
+/** Summarizes the version's terminal-effect observations for its deploy report. */
+export function terminalEffectStates(events: readonly Pick<TelemetryEvent, 'timestamp' | 'source' | '$workers'>[]): TerminalEffectStates {
+  const states = new Map<string, Map<string, { latest: (typeof events)[number]; observed: boolean }>>();
+  let observations = 0;
+
+  for (const event of events) {
+    const isOwed = event.source.event === 'turn.terminal_effects_owed';
+    const isSettled = event.source.event === 'turn.terminal_effects_settled';
+    const sequence = event.source.fields.sequence;
+
+    if ((!isOwed && !isSettled) || sequence === undefined) continue;
+
+    if (isOwed) observations += 1;
+
+    const object = event.$workers.durableObjectId ?? '';
+    let sequences = states.get(object);
+
+    if (sequences === undefined) {
+      sequences = new Map();
+      states.set(object, sequences);
+    }
+
+    const state = sequences.get(sequence);
+
+    if (state === undefined) sequences.set(sequence, { latest: event, observed: isOwed });
+    else {
+      state.observed ||= isOwed;
+
+      if (event.timestamp > state.latest.timestamp || (event.timestamp === state.latest.timestamp && isSettled)) state.latest = event;
+    }
+  }
+
+  const settled: EffectSample[] = [];
+  const owed: EffectSample[] = [];
+
+  for (const [object, sequences] of states) {
+    for (const [sequence, { latest, observed }] of sequences) {
+      if (!observed) continue;
+      const isSettled = latest.source.event === 'turn.terminal_effects_settled';
+      const sample = { object, sequence, detail: isSettled ? 'settled after owing' : `owed ${latest.source.fields.owed ?? ''}` };
+
+      (isSettled ? settled : owed).push(sample);
+    }
+  }
+
+  return { observations, settled, owed };
+}
+
 /** What one version did, as `version` reads it. */
 export interface VersionRead {
   /** Its invocations that did not end `ok`, by outcome and entrypoint. */
@@ -766,8 +819,9 @@ export interface VersionRead {
   /** Its invocations a deploy rolled over: the runtime ended each with {@link CODE_UPDATE_RESET}, by entrypoint. */
   readonly deployResets: readonly { readonly entrypoint: string; readonly count: number }[];
   readonly effects: {
-    readonly failed: number; readonly failedTurns: number; readonly owed: number;
-    readonly failedSample?: EffectSample; readonly owedSample?: EffectSample;
+    readonly failed: number; readonly failedTurns: number;
+    readonly failedSample?: EffectSample;
+    readonly terminal: TerminalEffectStates;
   };
   readonly startups: readonly StartupHour[];
   readonly alarms: readonly { readonly object: string; readonly hour: number; readonly count: number }[];
@@ -822,8 +876,8 @@ export function versionFindings(read: VersionRead): VersionFinding[] {
     });
   }
 
-  if (read.effects.owed > 0) {
-    findings.push({ what: 'owed terminal effects', finding: `${String(read.effects.owed)} turn(s) ended with terminal effects still owed${effectText(read.effects.owedSample)}` });
+  if (read.effects.terminal.owed.length > 0) {
+    findings.push({ what: 'owed terminal effects', finding: `${String(read.effects.terminal.owed.length)} terminal sequence(s) still owed at the window's end${effectText(read.effects.terminal.owed[0])}` });
   }
 
   for (const loop of findWakeLoops(read.startups)) {
@@ -895,7 +949,12 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
   });
 
   const failed = await t.count({ filters: [...scope, eq('event', 'turn.terminal_effect_failed')], groupBy: ['fields.sequence'], limit: 500 });
-  const owed = await t.count({ filters: [...scope, eq('event', 'turn.terminal_effects_owed')], groupBy: ['fields.sequence'], limit: 500 });
+  const { events: terminal, sampling: terminalSampling } = await t.events([...scope, { key: 'event', operation: 'includes', value: 'turn.terminal_effects_', type: 'string' }], EVENT_CAP);
+
+  if (terminal.length === EVENT_CAP || terminalSampling > 1) {
+    throw new Error('terminal-effect history is capped or sampled; narrow the window before classifying its sequences');
+  }
+
   const alarms = await t.hourly({ filters: [...invocations, eq('$workers.eventType', 'alarm')], groupBy: [DO_ID], limit: 500 });
   const total = (rows: readonly { readonly count: number }[]): number => rows.reduce((sum, row) => sum + row.count, 0);
 
@@ -911,9 +970,9 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
     ...read,
     thrown: threw.size === 0 ? [] : await exceptionSamples(t, scope, threw),
     effects: {
-      failed: total(failed), failedTurns: failed.length, owed: total(owed),
+      failed: total(failed), failedTurns: failed.length,
       failedSample: failed.length === 0 ? undefined : await effectSample(t, scope, 'turn.terminal_effect_failed'),
-      owedSample: owed.length === 0 ? undefined : await effectSample(t, scope, 'turn.terminal_effects_owed'),
+      terminal: terminalEffectStates(terminal),
     },
     startups: await startupHours(t, scope),
     alarms: alarms.map((row) => ({ object: row.groups[0] ?? '', hour: row.hour, count: row.count })),
@@ -926,11 +985,15 @@ async function versionCommand(args: Args): Promise<number> {
   const subject = args.target ?? '';
   let findings: VersionFinding[];
   let sampling = 1;
+  let terminal: TerminalEffectStates | undefined;
 
   try {
     const t = new Telemetry(await readToken(), args);
 
-    findings = versionFindings(await versionRead(t, subject));
+    const read = await versionRead(t, subject);
+
+    terminal = read.effects.terminal;
+    findings = versionFindings(read);
     sampling = t.sampling;
   } catch (cause) {
     findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} could not be read: ${cause instanceof Error ? cause.message : String(cause)}` }];
@@ -943,8 +1006,9 @@ async function versionCommand(args: Args): Promise<number> {
   const window = { from: iso(args.from), to: iso(args.to) };
 
   console.log(args.json
-    ? JSON.stringify({ window, version: subject, worker: args.worker, findings, sampling }, null, 1)
+    ? JSON.stringify({ window, version: subject, worker: args.worker, findings, terminalEffects: terminal, sampling }, null, 1)
     : [`${args.worker} version ${subject}, ${window.from} .. ${window.to}:`, ...findings.length === 0 ? ['  nothing to report'] : findings.map((found) => `  ${found.finding}`),
+      ...terminal === undefined ? [] : [`terminal effects: ${String(terminal.observations)} owed observation(s), ${String(terminal.settled.length + terminal.owed.length)} sequence(s): ${String(terminal.settled.length)} settled after owing, ${String(terminal.owed.length)} still owed at the window's end`],
       ...sampling > 1 ? [`note: the API sampled this window (level ${String(sampling)}); counts are estimates.`] : []].join('\n'));
 
   return findings.length === 0 ? 0 : 1;

@@ -13,7 +13,6 @@ import { explorationActorKey } from '../identity/actor-key';
 import { usageTotal } from '../usage';
 import { NO_FIGURES, type AgentFigures } from './agent-figures';
 import { EventLog } from '../events/hub/log';
-import { AGENT_CONFIG_KEYS } from '../config/store';
 
 export type AgentCategory = 'main' | 'user' | 'hired' | 'swarm' | 'background';
 
@@ -220,7 +219,7 @@ export async function readWorkspaceAgents(input: {
   const swarms = tableExists(sql, 'head_journal') ? swarmAgents(walk) : [];
 
   const main: PanelAgent = {
-    key: 'main', label: root.config.get(AGENT_CONFIG_KEYS.chatTitle) ?? 'Main', category: 'main', parent: null,
+    key: 'main', label: root.config.getChatTitle() ?? 'Main', category: 'main', parent: null,
     activity: chatActivity(sql, root.actorId, turnOpen(sql, root.actorId) || input.queued || turnOwed(walk, root)),
     open: { kind: 'chat', path: null }, tab: true, input: true, actorId: root.actorId, figures: NO_FIGURES,
   };

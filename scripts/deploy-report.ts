@@ -20,6 +20,7 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
+import { parseResults, summarizePromptUsage, trials, type Assertion, type UsageMetadata } from '../evals/src/results';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -42,6 +43,7 @@ const EntrySchema = v.variant('kind', [
   v.object({ kind: v.literal('skipped'), phase: v.string(), what: v.string(), why: v.string() }),
   v.object({ kind: v.literal('dispatched'), what: v.string(), url: v.string() }),
   v.object({ kind: v.literal('mark'), mark: v.string(), seconds: v.number() }),
+  v.object({ kind: v.literal('timing'), phase: v.string(), what: v.string(), command: v.string(), seconds: v.number(), silence: v.optional(v.number()) }),
 ]);
 
 export type ReportEntry = v.InferOutput<typeof EntrySchema>;
@@ -123,6 +125,11 @@ export function recordNotice(dir: string, notice: { readonly phase: string; read
   append(dir, { kind: 'notice', phase: notice.phase, what: notice.what, notice: notice.notice });
 }
 
+/** A row's measured wall, green or red; hosted rows have no local silence measurement. */
+export function recordTiming(dir: string, timing: Omit<Extract<ReportEntry, { kind: 'timing' }>, 'kind'>): void {
+  append(dir, { kind: 'timing', ...timing });
+}
+
 /** A plan row the deploy did not run, and why. */
 export function recordSkipped(dir: string, skipped: { readonly phase: string; readonly command: string; readonly why: string }): void {
   append(dir, { kind: 'skipped', phase: skipped.phase, what: skipped.command, why: skipped.why });
@@ -165,8 +172,114 @@ export interface ReportInput {
   readonly dir: string;
   readonly meta: v.InferOutput<typeof MetaSchema>;
   readonly entries: readonly ReportEntry[];
+  readonly evals?: readonly Assertion[];
   /** The previous report of the environment, and the merges since its commit. */
-  readonly previous?: { readonly summary: ReportSummary; readonly merges: Merges };
+  readonly previous?: { readonly summary: ReportSummary; readonly merges: Merges; readonly evals?: readonly Assertion[] };
+}
+
+function trialName(trial: Assertion): string {
+  const run = trial.meta.harness.run;
+  const { taskId, arm, trial: index } = run.session.metadata;
+
+  return `${taskId} / ${run.usage.model} / ${arm} / trial ${String(index)}`;
+}
+
+function longestTrial(evals: readonly Assertion[] = []): Assertion | undefined {
+  return evals.reduce<Assertion | undefined>((longest, trial) => longest === undefined || trial.duration > longest.duration ? trial : longest, undefined);
+}
+
+/** Report-only: work finishes normally. The model's critical trial is named beside the wall we own. */
+function budgetRed(seconds: number | undefined, longest: Assertion | undefined): ReportEntry | undefined {
+  if (seconds === undefined) return undefined;
+
+  const critical = (longest?.duration ?? 0) / 1000;
+  const owned = seconds - critical;
+
+  return owned <= 1200 ? undefined : {
+    kind: 'step', phase: 'budget', what: 'owned deployment wall',
+    finding: `The deploy took ${seconds.toFixed(1)} s; excluding ${longest === undefined ? 'no eval trial' : `${trialName(longest)} (${critical.toFixed(1)} s)`}, `
+      + `the owned wall was ${owned.toFixed(1)} s, over the 1200 s budget. No work was cancelled or omitted.`,
+  };
+}
+
+function count(value: number | null | undefined): string {
+  return value === undefined || value === null ? '—' : String(value);
+}
+
+function rate(value: number | null | undefined): string {
+  return value === undefined || value === null ? '—' : `${(value * 100).toFixed(2)}%`;
+}
+
+function cacheLines(evals: readonly Assertion[] | undefined, previous: ReportInput['previous']): string[] {
+  if (evals === undefined) return [];
+
+  const row = (leg: string, name: string, usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cache?: UsageMetadata['cache'] }, requests: number): string =>
+    `| ${leg} | ${name} | ${count(usage.inputTokens)} | ${count(usage.cacheReadTokens)} | ${count(usage.outputTokens)} | ${rate(usage.cache?.hitShare)} | ${rate(usage.cache?.ema)} `
+      + `| ${rate(usage.cache?.p95)} | ${rate(usage.cache?.p99)} | ${count(usage.cache?.samples)}/${String(requests)} |`;
+
+  const aggregate = (leg: string, measured: readonly Assertion[]): string => {
+    const all = measured.flatMap((trial) => trial.meta.harness.run.usage.metadata.steps);
+
+    all.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.actor.localeCompare(b.actor) || a.runId.localeCompare(b.runId) || a.stepIndex - b.stepIndex);
+
+    return row(leg, 'Deployment', summarizePromptUsage(all), all.length);
+  };
+
+  const trialRow = (leg: string, trial: Assertion): string => {
+    const { inputTokens, outputTokens, metadata } = trial.meta.harness.run.usage;
+
+    return row(leg, trialName(trial), { inputTokens, outputTokens, ...metadata }, metadata.steps.length);
+  };
+
+  const earlier = new Map(previous?.evals?.map((trial) => [trialName(trial), trial]));
+
+  return [
+    'Input includes cache-read tokens. Hit share is token-weighted; EMA (alpha 0.2), p95 and p99 use Activity’s per-request rates. Unknown counts remain unknown. Samples names the rates reported out of all recorded requests.',
+    ...previous === undefined ? [] : [`Previous deployment: ${previous.summary.sha.slice(0, 12)}. `
+      + (previous.evals === undefined ? `Its request-level cache measurements are unavailable (${join(previous.summary.dir, 'evals', 'results.json')}); none are backfilled.`
+        : 'Previous trial rows match task, model, arm and trial number; a new trial has no previous row.')],
+    '', '| leg | trial | input | cache read | output | hit share | EMA | p95 | p99 | samples/requests |', '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    aggregate('current', evals), ...previous?.evals === undefined ? [] : [aggregate('previous', previous.evals)],
+    ...evals.flatMap((trial) => {
+      const before = earlier.get(trialName(trial));
+
+      return [trialRow('current', trial), ...before === undefined ? [] : [trialRow('previous', before)]];
+    }),
+  ];
+}
+
+function readReport(dir: string): ReportInput {
+  const meta = v.parse(MetaSchema, JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')));
+  const entries = entriesOf(dir);
+  const file = join(dir, 'evals', 'results.json');
+  let evals: Assertion[] | undefined;
+
+  if (existsSync(file)) {
+    try {
+      evals = trials(parseResults('deploy', readFileSync(file, 'utf8')));
+    } catch (error) {
+      entries.push({ kind: 'step', phase: 'post-publish', what: 'eval report', finding: String(error) });
+    }
+  }
+
+  return { dir, meta, entries, evals };
+}
+
+function readPreviousEvals(previous: ReportSummary | undefined, notices: ReportEntry[]): Assertion[] | undefined {
+  if (previous === undefined) return undefined;
+
+  const file = join(previous.dir, 'evals', 'results.json');
+
+  if (!existsSync(file)) return undefined;
+
+  try {
+    return trials(parseResults('previous deploy', readFileSync(file, 'utf8')));
+  } catch (error) {
+    notices.push({ kind: 'notice', phase: 'cache', what: `Previous deployment ${previous.sha.slice(0, 12)}`,
+      notice: `Request measurements cannot be read from ${file}: ${String(error).slice(0, 300)}. No counts are backfilled.` });
+
+    return undefined;
+  }
 }
 
 /** The report's text, and the summary the next deploy's differential reads. */
@@ -231,15 +344,24 @@ function redSections(reds: readonly ReportEntry[], isNew: (entry: ReportEntry) =
 }
 
 export function renderReport(input: ReportInput): RenderedReport {
-  const { dir, meta, entries, previous } = input;
-  const reds = entries.filter((entry) => identity(entry) !== undefined);
+  const { dir, meta, entries, previous, evals } = input;
+  const marks = new Map(entries.flatMap((entry) => (entry.kind === 'mark' ? [[entry.mark, entry.seconds] as const] : [])));
+  const longest = longestTrial(evals);
+  const budget = meta.mode === 'gates-only' ? undefined : budgetRed(marks.get('end'), longest);
+  const reds = [...entries.filter((entry) => identity(entry) !== undefined), ...budget === undefined ? [] : [budget]];
   const carried = new Set(previous?.summary.reds ?? []);
   const isNew = (entry: ReportEntry): boolean => !carried.has(identity(entry) ?? '');
-  const marks = new Map(entries.flatMap((entry) => (entry.kind === 'mark' ? [[entry.mark, entry.seconds] as const] : [])));
   const skipped = entries.flatMap((entry) => (entry.kind === 'skipped' ? [`- ${entry.phase}: \`${entry.what}\`, because ${entry.why}`] : []));
   const notices = entries.flatMap((entry) => (entry.kind === 'notice' ? [`- ${entry.phase}: ${entry.what}: ${entry.notice}`] : []));
   const dispatched = entries.flatMap((entry) => (entry.kind === 'dispatched' ? [`- ${entry.what}: ${entry.url}`] : []));
   const timings = [...marks].map(([name, seconds]) => `| ${name} | ${String(seconds)} |`);
+  const rows = new Map(entries.flatMap((entry) => entry.kind === 'timing' ? [[`${entry.phase}: ${entry.command}`, entry] as const] : []));
+
+  const rowTimes = [...rows.values()].sort((a, b) => b.seconds - a.seconds).map((entry) =>
+    `| ${entry.phase}: ${entry.what} | ${entry.seconds.toFixed(1)} | ${entry.silence === undefined ? '—' : entry.silence.toFixed(1)} | \`${entry.command}\` |`);
+
+  const ended = marks.get('end');
+  const critical = (longest?.duration ?? 0) / 1000;
 
   const lines = [
     ...headerLines(input, marks, { reds: reds.length, fresh: reds.filter(isNew).length, skipped: skipped.length }),
@@ -247,6 +369,12 @@ export function renderReport(input: ReportInput): RenderedReport {
     ...section('Not run', skipped),
     ...section('Notices, not reds', notices),
     ...section('Started, not awaited', dispatched),
+    ...section('Deployment budget', ended === undefined || meta.mode === 'gates-only' ? [] : [
+      `Whole deploy: ${ended.toFixed(1)} s. Longest eval trial: ${longest === undefined ? 'none' : trialName(longest)} (${critical.toFixed(1)} s). `
+        + `Owned wall: ${(ended - critical).toFixed(1)} s / 1200 s — ${budget === undefined ? 'within budget' : 'RED'}. This budget never cancels work or cuts coverage.`,
+    ]),
+    ...section('Rows, longest first', rowTimes.length === 0 ? [] : ['| row | seconds | longest silence (seconds) | command |', '| --- | ---: | ---: | --- |', ...rowTimes]),
+    ...section('Eval cache usage', cacheLines(evals, previous)),
     ...section('When', timings.length === 0 ? [] : ['| mark | seconds from the start |', '| --- | --- |', ...timings]),
   ];
 
@@ -283,14 +411,26 @@ if (import.meta.main) {
     process.exit(0);
   }
 
+  if (command === 'budget' && rest.length === 1) {
+    const input = readReport(first);
+    const red = input.meta.mode === 'gates-only' ? undefined : budgetRed(Number(rest[0]), longestTrial(input.evals));
+
+    if (red?.kind === 'step') console.error(red.finding);
+    process.exit(red === undefined && input.entries.every((entry) => identity(entry) === undefined) ? 0 : 1);
+  }
+
   if (command === 'render' && rest.length === 0) {
-    const meta = v.parse(MetaSchema, JSON.parse(readFileSync(join(first, 'meta.json'), 'utf8')));
+    const input = readReport(first);
+    const { meta } = input;
     const index = join(REPORTS, meta.environment, 'index.jsonl');
     const previous = previousSummary(index, first);
+    const previousNotices: ReportEntry[] = [];
+    const previousEvals = readPreviousEvals(previous, previousNotices);
 
     const { text, summary } = renderReport({
-      dir: first, meta, entries: entriesOf(first),
-      previous: previous === undefined ? undefined : { summary: previous, merges: mergesBetween(previous.sha, meta.sha) },
+      ...input,
+      entries: [...input.entries, ...previousNotices],
+      previous: previous === undefined ? undefined : { summary: previous, merges: mergesBetween(previous.sha, meta.sha), evals: previousEvals },
     });
 
     writeFileSync(join(first, 'report.md'), text);
@@ -300,6 +440,6 @@ if (import.meta.main) {
     process.exit(summary.reds.length === 0 ? 0 : 1);
   }
 
-  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|mark|render …');
+  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|mark|budget|render …');
   process.exit(2);
 }
