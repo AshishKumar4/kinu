@@ -4,7 +4,7 @@
  */
 
 import type {
-  AssistantModelMessage, DataContent, ToolResultPart, UserModelMessage,
+  AssistantModelMessage, FilePart, ImagePart, ToolResultPart, UserModelMessage,
 } from 'ai';
 import { asSchema, convertToBase64 } from '@ai-sdk/provider-utils';
 import { Effect } from 'effect';
@@ -14,6 +14,8 @@ import type { CountableRequest, InputTokenCount } from './input-tokens';
 import type { ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { untagged } from '../utils/file-data';
+import { toolDescription } from '../utils/tool-description';
 
 /** The AI SDK Anthropic package's wire version, so raw POSTs (count, warm) share its API contract. */
 export const ANTHROPIC_VERSION = '2023-06-01';
@@ -54,8 +56,14 @@ const ReasoningMetadataSchema = v.looseObject({
   }),
 });
 
-/** A count-body source, or null when not exactly representable (Anthropic needs a media type beside base64). */
-function countSource(data: DataContent | URL, mediaType: string | undefined): Base64Source | UrlSource | null {
+/** A count-body source, or null when not exactly representable (Anthropic needs a full media type beside base64; ai 7
+ *  also takes a top-level one, `image`, and leaves the rest to the adapter). */
+function countSource(tagged: FilePart['data'] | ImagePart['image'], spelled: string | undefined): Base64Source | UrlSource | null {
+  const data = untagged(tagged);
+  const mediaType = spelled?.includes('/') === true ? spelled : undefined;
+
+  if (data === null) return null;
+
   if (data instanceof URL) return { type: 'url', url: data.toString() };
 
   if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
@@ -123,19 +131,14 @@ function userBlocks(content: UserModelMessage['content']): Converted<CountBlock[
       case 'text':
         blocks.push({ type: 'text', text: part.text });
         break;
-      case 'image': {
-        const source = countSource(part.image, part.mediaType);
-
-        if (!source) return { ok: false, reason: 'an image part this count body cannot represent exactly' };
-        blocks.push({ type: 'image', source });
-        break;
-      }
-
+      case 'image':
       case 'file': {
-        const source = countSource(part.data, part.mediaType);
+        // ai 7 spells an image as a file of an image media type, and the Anthropic adapter sends it as one.
+        const image = part.type === 'image' || part.mediaType.split('/')[0] === 'image';
+        const source = countSource(part.type === 'image' ? part.image : part.data, part.mediaType);
 
-        if (!source) return { ok: false, reason: 'a file part this count body cannot represent exactly' };
-        blocks.push({ type: 'document', source });
+        if (!source) return { ok: false, reason: `${image ? 'an image' : 'a file'} part this count body cannot represent exactly` };
+        blocks.push({ type: image ? 'image' : 'document', source });
         break;
       }
       // No default: a new SDK part type must fail the build rather than count as zero.
@@ -194,8 +197,11 @@ function assistantBlocks(content: AssistantModelMessage['content']): Converted<C
         break;
       }
 
-      // A pending approval is refused so the caller falls back rather than count a body it did not send.
+      // A pending approval, or a part with no count block, is refused so the caller falls back rather than count a
+      // body it did not send.
       case 'tool-approval-request':
+      case 'custom':
+      case 'reasoning-file':
         return { ok: false, reason: `an assistant content part of type "${part.type}"` };
     }
   }
@@ -267,7 +273,9 @@ async function toCountBody(modelId: string, request: CountableRequest): Promise<
       input_schema: await asSchema(tool.inputSchema).jsonSchema,
     };
 
-    if (tool.description !== undefined) entry.description = tool.description;
+    const description = toolDescription(tool);
+
+    if (description !== undefined) entry.description = description;
     tools.push(entry);
   }
 

@@ -11,7 +11,7 @@ import { Database } from 'bun:sqlite';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
+import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 import * as v from 'valibot';
 
 import {
@@ -114,15 +114,15 @@ async function chatTurn(
 
   const result = await generateText({
     model,
-    system: [
+    instructions: [
       soul,
       `\nKnowledge:\n${knowledge}`,
       `\nAfter using any tools, always provide a text summary of what you did and the results.`,
     ].join(''),
     messages: [{ role: 'user' as const, content: userMessage }],
     tools,
-    stopWhen: stepCountIs(500),
-    onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
+    stopWhen: isStepCount(500),
+    onStepEnd: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
   });
 
   recordLiveModelSpend(result.usage);

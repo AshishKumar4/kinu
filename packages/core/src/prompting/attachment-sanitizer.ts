@@ -5,7 +5,8 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
  * never changes, so index-anchored consumers stay valid.
  */
 
-import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
+import type { AssistantModelMessage, DataContent, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
+import { untagged } from '../utils/file-data';
 
 import type { ModelInputModality } from '../providers/types';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
@@ -136,23 +137,29 @@ async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Pro
     return sanitizeFilePart({ type: 'file', data: part.image, mediaType: part.mediaType }, policy);
   }
 
-  if (policy.accepts.has('image')) return null;
+  const data = untagged(part.image);
 
-  return replaceMedia(part.image, part.mediaType ?? 'image', undefined, policy);
+  if (data === null || policy.accepts.has('image')) return null;
+
+  return replaceMedia(data, part.mediaType ?? 'image', undefined, policy);
 }
 
 async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promise<TextPart | null> {
+  const data = untagged(part.data);
+
+  // The provider's own handle to a file it already holds: nothing here to read or store.
+  if (data === null) return null;
   const modality = mediaModalityFor(part.mediaType);
 
   if (modality !== null && policy.accepts.has(modality)) {
-    return modality !== 'image' && oversizeForInlineDocument(part.data)
-      ? replaceMedia(part.data, part.mediaType, part.filename, policy)
+    return modality !== 'image' && oversizeForInlineDocument(data)
+      ? replaceMedia(data, part.mediaType, part.filename, policy)
       : null;
   }
 
-  if (isTextMediaType(part.mediaType)) return inlineOrStoreText(part, policy);
+  if (isTextMediaType(part.mediaType)) return inlineOrStoreText(data, part, policy);
 
-  return replaceMedia(part.data, part.mediaType, part.filename, policy);
+  return replaceMedia(data, part.mediaType, part.filename, policy);
 }
 
 async function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Promise<TextPart | null> {
@@ -177,13 +184,13 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
 }
 
 /** Sized without decoding: base64 is ~4/3 of the bytes; remote URLs have no local payload. */
-function oversizeForInlineDocument(data: FilePart['data']): boolean {
+function oversizeForInlineDocument(data: DataContent | URL): boolean {
   const bytes = estimatePayloadBytes(data);
 
   return bytes !== null && bytes > OVERSIZE_ACCEPTED_DOC_MAX_BYTES;
 }
 
-function estimatePayloadBytes(data: FilePart['data']): number | null {
+function estimatePayloadBytes(data: DataContent | URL): number | null {
   if (data instanceof URL) return null;
 
   if (data instanceof Uint8Array) return data.byteLength;
@@ -216,8 +223,8 @@ function isTextMediaType(mediaType: string): boolean {
   return mediaType.startsWith('text/') || mediaType === 'image/svg+xml';
 }
 
-async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
-  const payload = decodePayload(file.data);
+async function inlineOrStoreText(data: DataContent | URL, file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
+  const payload = decodePayload(data);
 
   if (payload.kind === 'remote') return remoteReference(payload.url, file.mediaType, file.filename);
 
@@ -235,7 +242,7 @@ async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Prom
 }
 
 async function replaceMedia(
-  data: FilePart['data'],
+  data: DataContent | URL,
   mediaType: string,
   filename: string | undefined,
   policy: AttachmentPolicy,
@@ -318,13 +325,14 @@ type DecodedPayload =
   | { kind: 'remote'; url: string };
 
 /** A part's payload as bytes; null for a remote URL, which has none here. */
-export function attachmentBytes(data: FilePart['data']): Uint8Array | null {
-  const payload = decodePayload(data);
+export function attachmentBytes(tagged: FilePart['data']): Uint8Array | null {
+  const data = untagged(tagged);
+  const payload = data === null ? null : decodePayload(data);
 
-  return payload.kind === 'bytes' ? payload.bytes : null;
+  return payload?.kind === 'bytes' ? payload.bytes : null;
 }
 
-function decodePayload(data: FilePart['data']): DecodedPayload {
+function decodePayload(data: DataContent | URL): DecodedPayload {
   if (data instanceof URL) return { kind: 'remote', url: data.toString() };
 
   if (data instanceof Uint8Array) return { kind: 'bytes', bytes: data };

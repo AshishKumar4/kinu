@@ -3,6 +3,7 @@
 import { withToolResultImages } from './providers/tool-result-images';
 import {
   APICallError,
+  InvalidResponseDataError,
   NoOutputGeneratedError,
   streamText,
   type ModelMessage,
@@ -189,7 +190,7 @@ export const INTERRUPTED_TURN = 'The turn was interrupted before it finished.';
 /** One call's frame, closed whichever way it left; never awaited, so the end row lands before `turn_end`. */
 function settleModelOperation(
   operation: ModelOperation,
-  stream: { totalUsage: PromiseLike<LanguageModelUsage>; response: PromiseLike<{ modelId: string }> },
+  stream: { usage: PromiseLike<LanguageModelUsage>; response: PromiseLike<{ modelId: string }> },
   cut: boolean,
 ): void {
   if (cut) {
@@ -198,9 +199,9 @@ function settleModelOperation(
     return;
   }
 
-  void Promise.all([stream.totalUsage, stream.response]).then(
-    ([totalUsage, response]) => operation.completed({
-      usage: normalizeUsage(totalUsage),
+  void Promise.all([stream.usage, stream.response]).then(
+    ([usage, response]) => operation.completed({
+      usage: normalizeUsage(usage),
       modelId: response.modelId,
     }),
     operationRejected(operation),
@@ -313,12 +314,12 @@ class ProviderCall {
 
   constructor(private readonly fallback: string | undefined) {}
 
-  requestStarting(messages: ModelMessage[]): void {
+  /** Each step's request starts from the call's input and the seal's answers: ai 7 would carry the last step's
+   *  rewrite (markers, weave) and its raw tool outputs into the next one. */
+  requestStarting(initial: readonly ModelMessage[]): ModelMessage[] {
     this.stepSentAt = Date.now();
-    let at = messages.length - this.responseSoFar.length;
 
-    // The SDK reconstructs tool outputs for its next request; reuse the seal's one projection.
-    for (const message of this.responseSoFar) messages[at++] = message;
+    return [...initial, ...this.responseSoFar];
   }
 
   dispatched(toolCall: { toolCallId: string; toolName: string; input: unknown }): void {
@@ -337,7 +338,6 @@ class ProviderCall {
 
   /** SDK getters are read before stream consumers can lag the seal. */
   stepRecord(step: StepResult<ToolSet>, stepIndex: number, context: ContextComposition | undefined, prefix: readonly ModelMessage[]): StepRecord {
-    const messages = modelStepMessages(step, this.responseSoFar);
     const usage = normalizeUsage(step.usage);
     const promptTokens = answeredPromptTokens(step.usage);
     const account = callAccountOf(step.response);
@@ -356,7 +356,7 @@ class ProviderCall {
       return [record];
     });
 
-    return { messages: prefix.length === 0 ? messages : [...prefix, ...messages], toolResults, step: {
+    return { messages: [...prefix, ...this.responseSoFar, ...modelStepMessages(step)], toolResults, step: {
       stepIndex,
       finishReason: step.finishReason, text: step.text,
       toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
@@ -418,17 +418,10 @@ class ProviderCall {
         return this.prose(chunk);
 
       case 'reasoning-delta':
-        return chunk.text ? { type: 'reasoning-delta', delta: chunk.text } : null;
+        return this.reasoning(chunk.text);
 
-      case 'tool-call': {
-        this.stepHadOutput = true;
-        this.stepContent.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input });
-        const refusal = invalidToolCallRefusal(chunk);
-
-        if (refusal !== undefined) this.refusedCalls.set(chunk.toolCallId, refusal);
-
-        return { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: parseToolArgs(chunk.input) };
-      }
+      case 'tool-call':
+        return this.toolCall(chunk);
 
       case 'tool-result':
         return this.toolResult(chunk, undefined);
@@ -440,15 +433,10 @@ class ProviderCall {
         return this.toolResult(chunk, refusal);
       }
 
-      case 'finish-step': {
-        // No finish reason and no output (reasoning-only included): the provider stream died.
-        this.lastFinishReason = chunk.finishReason;
-        this.deadFinalStep = !this.stepHadOutput && chunk.finishReason === 'other';
-        this.stepHadOutput = false;
-        this.stepContent = [];
+      case 'finish-step':
+        this.stepEnded(chunk.finishReason);
 
         return null;
-      }
 
       case 'error':
         this.failed({ cause: chunk.error });
@@ -456,16 +444,19 @@ class ProviderCall {
         return null;
 
       case 'abort':
+      case 'custom':
       case 'file':
       case 'finish':
       case 'raw':
       case 'reasoning-end':
+      case 'reasoning-file':
       case 'reasoning-start':
       case 'source':
       case 'start':
       case 'start-step':
       case 'text-end':
       case 'tool-approval-request':
+      case 'tool-approval-response':
       case 'tool-input-delta':
       case 'tool-input-end':
       case 'tool-input-start':
@@ -476,6 +467,28 @@ class ProviderCall {
       default:
         return null;
     }
+  }
+
+  private reasoning(text: string): ChatEvent | null {
+    return text ? { type: 'reasoning-delta', delta: text } : null;
+  }
+
+  private toolCall(chunk: Extract<TextStreamPart<ToolSet>, { type: 'tool-call' }>): ChatEvent {
+    this.stepHadOutput = true;
+    this.stepContent.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input });
+    const refusal = invalidToolCallRefusal(chunk);
+
+    if (refusal !== undefined) this.refusedCalls.set(chunk.toolCallId, refusal);
+
+    return { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: parseToolArgs(chunk.input) };
+  }
+
+  /** No finish reason and no output (reasoning-only included): the provider stream died. */
+  private stepEnded(finishReason: string): void {
+    this.lastFinishReason = finishReason;
+    this.deadFinalStep = !this.stepHadOutput && finishReason === 'other';
+    this.stepHadOutput = false;
+    this.stepContent = [];
   }
 
   private prose(chunk: Extract<TextStreamPart<ToolSet>, { type: 'text-start' | 'text-delta' }>): ChatEvent | null {
@@ -528,14 +541,19 @@ class ProviderCall {
   failure(provider: string | undefined): CallFailure | null {
     if (this.interrupted) return null;
 
+    // The OpenAI-compatible adapter reports a stream that closed without a finish reason itself; others finish it as
+    // `other`, which the step's finish reads.
+    const reported = InvalidResponseDataError.isInstance(this.streamError) && this.streamError.data === undefined;
+    const dead = this.streamError === undefined ? this.deadFinalStep : reported && !this.streamedBeforeError;
+
+    if (dead) return { cause: new Error('model stream ended without output'), error: new Error(DEAD_STREAM), streamed: false };
+
     if (this.streamError !== undefined) {
       return {
         cause: this.streamError, streamed: this.streamedBeforeError,
         error: toProviderError({ doing: 'calling the model', cause: this.streamError, provider }),
       };
     }
-
-    if (this.deadFinalStep) return { cause: new Error('model stream ended without output'), error: new Error(DEAD_STREAM), streamed: false };
 
     return null;
   }
@@ -558,7 +576,7 @@ class ProviderCall {
 /** A call that finishes no step rejects the SDK's deferred accessors, unhandled if unread: tolerated for zero steps
  *  and cuts, anything else recorded as a defect. */
 function suppressDeferredRejections(
-  result: { steps: PromiseLike<unknown>; finishReason: PromiseLike<unknown>; rawFinishReason: PromiseLike<unknown>; totalUsage: PromiseLike<unknown> },
+  result: { steps: PromiseLike<unknown>; finishReason: PromiseLike<unknown>; rawFinishReason: PromiseLike<unknown>; usage: PromiseLike<unknown> },
   tolerated: () => boolean,
 ): void {
   const ignore = (error: Error): void => {
@@ -570,7 +588,7 @@ function suppressDeferredRejections(
     );
   };
 
-  for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.totalUsage]) deferred.then(undefined, ignore);
+  for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.usage]) deferred.then(undefined, ignore);
 }
 
 /** Provider prompt-cache plan; marker strategies re-roll tail breakpoints each step. Pass-through without opts.cache. */
@@ -812,7 +830,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const result = streamText({
       model: current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts),
-      system: cache.system,
+      instructions: cache.system,
       maxRetries: route.callRetries,
       messages: await narrowedFor(request),
       tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(current))),
@@ -822,20 +840,22 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       experimental_repairToolCall: repairToolCall(),
       abortSignal: signal,
       headers: { [PROVIDER_RETRIES_HEADER]: String(route.callRetries) },
+      // A cache warm replays a step's request body, which ai 7 leaves out unless asked.
+      include: { requestBody: true },
       // The SDK default console.error dumped raw provider payloads; the rethrow below is the one place failures read.
       onError: ({ error }) => { call.streamError = error; },
-      experimental_onToolCallStart: ({ toolCall }) => { call.dispatched(toolCall); },
-      experimental_onToolCallFinish: ({ toolCall, durationMs }) => { call.settled(toolCall.toolCallId, durationMs); },
+      onToolExecutionStart: ({ toolCall }) => { call.dispatched(toolCall); },
+      onToolExecutionEnd: ({ toolCall, toolExecutionMs }) => { call.settled(toolCall.toolCallId, toolExecutionMs); },
       // The only terminal handover: an aborted run never settles `result.steps`.
       onAbort: ({ steps }) => { call.aborted(steps); },
       providerOptions: current.providerOptions,
       // Shared step pipeline, as Think's beforeStep composes it. Also stamps the request start
       // (`ProviderCall.requestStarting`).
-      prepareStep: ({ stepNumber, messages, steps }) => {
-        call.requestStarting(messages);
+      prepareStep: ({ stepNumber, initialMessages, steps }) => {
+        const messages = call.requestStarting(initialMessages);
         stepSpans.start(stepOffset + stepNumber);
 
-        return composePrepareStep({
+        const prepared = composePrepareStep({
           extensions,
           abortSignal: signal,
           cache: rollTail ? { strategy: cache.strategy } : null,
@@ -847,6 +867,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           context: stepContextPlane,
           turnStart,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
+
+        return prepared instanceof Promise ? prepared.then((done) => done ?? { messages }) : prepared ?? { messages };
       },
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
         async transform(part, controller) {
@@ -855,7 +877,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           controller.enqueue(part);
         },
       }),
-      onStepFinish: async (step) => {
+      onStepEnd: async (step) => {
         stepSpans.finish(step);
         let own: readonly ModelMessage[] | null = null;
 
@@ -885,7 +907,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     let drained = false;
 
     try {
-      for await (const chunk of result.fullStream) {
+      for await (const chunk of result.stream) {
         const event = call.consume(chunk);
 
         if (event !== null) {

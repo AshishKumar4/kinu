@@ -96,7 +96,7 @@ function countingModel(modelId: string): CountingModel {
 }
 
 interface Harness {
-  readonly execute: (input: AgentsToolInput, options?: ToolExecutionOptions) => Promise<JsonObject>;
+  readonly execute: (input: AgentsToolInput, options?: ToolExecutionOptions<unknown>) => Promise<JsonObject>;
   readonly rt: AgentRuntime;
   readonly resolvedSpecs: string[];
   readonly callerCalls: () => number;
@@ -162,7 +162,7 @@ function unreachable(): never {
 }
 
 /** The re-drive marker is a property of the call: the input is the stored row. */
-const REDRIVE = { toolCallId: 'tc-redrive', messages: [], [RESUME_REDRIVE_OPTION]: true };
+const REDRIVE = { toolCallId: 'tc-redrive', messages: [], context: undefined, [RESUME_REDRIVE_OPTION]: true };
 
 const RoutedResultSchema = v.object({
   preset: v.string(),

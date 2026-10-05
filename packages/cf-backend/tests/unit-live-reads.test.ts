@@ -136,7 +136,7 @@ test("the agent's own plan names the plan and the needs-you queue", async () => 
   endTick(agent);
   named();
 
-  await tools.submit_plan?.execute?.({ edits: [{ start: 1, content: '# Plan' }] }, { toolCallId: 'p', messages: [] });
+  await tools.submit_plan?.execute?.({ edits: [{ start: 1, content: '# Plan' }] }, { toolCallId: 'p', messages: [], context: undefined });
   endTick(agent);
 
   expect([...named()]).toEqual(expect.arrayContaining(['getActivePlanReview', 'listPendingActions']));
@@ -183,7 +183,7 @@ test('a crafted tool and the changelog seen mark each name what they move', asyn
   named();
 
   const code = "await workspace.createTool('tally', 'count', 'async () => 1')";
-  await tools.eval?.execute?.({ code }, { toolCallId: 'c', messages: [] });
+  await tools.eval?.execute?.({ code }, { toolCallId: 'c', messages: [], context: undefined });
   endTick(agent);
   expect(named()).toContain('getToolDescriptions');
 
@@ -326,7 +326,7 @@ test('an agent handed a message reads working from the handoff, before its drain
   named();
   expect((await activities(agent)).Scribe).toBe('idle');
 
-  await tools.agents?.execute?.({ action: 'msg', agent: name, message: 'Count the files.' }, { toolCallId: 'm', messages: [] });
+  await tools.agents?.execute?.({ action: 'msg', agent: name, message: 'Count the files.' }, { toolCallId: 'm', messages: [], context: undefined });
   endTick(agent);
 
   expect(named()).toContain('listWorkspaceAgents');

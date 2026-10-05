@@ -373,7 +373,7 @@ export interface McpToolBuild {
   readonly call: (
     descriptor: SerializableToolDescriptor,
     args: JsonObject,
-    options: ToolExecutionOptions,
+    options: ToolExecutionOptions<unknown>,
   ) => Promise<JsonValue>;
   readonly effectClaims: EffectClaimDeps;
   readonly clamp: ClampToolResultOptions;

@@ -1,7 +1,7 @@
 // Prompt-cache markers on the wire: runChat through each real provider with a mocked fetch, asserting
 // the HTTP body carries that provider's cache addressing.
 import { describe, test, expect } from 'bun:test';
-import { stepCountIs, tool, type ToolSet } from 'ai';
+import { isStepCount, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
@@ -112,6 +112,7 @@ const ANTHROPIC_TOOL_USE_SSE = [
   'event: message_stop',
   `data: ${JSON.stringify({ type: 'message_stop' })}`,
   '',
+  '',
 ].join('\n');
 
 const ANTHROPIC_TEXT_SSE = [
@@ -132,6 +133,7 @@ const ANTHROPIC_TEXT_SSE = [
   '',
   'event: message_stop',
   `data: ${JSON.stringify({ type: 'message_stop' })}`,
+  '',
   '',
 ].join('\n');
 
@@ -156,7 +158,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
       system: 'You are Kinu.',
       history: [...HISTORY],
       tools: chatTools(retention),
-      stopWhen: stepCountIs(3),
+      stopWhen: isStepCount(3),
       cache: {
         providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-test',
         retention,

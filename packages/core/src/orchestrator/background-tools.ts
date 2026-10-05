@@ -62,8 +62,8 @@ export async function resumeBackgroundJob(drive: BackgroundResumeRequest): Promi
   if (!exec) throw new JobNotResumable(kind);
 
   // Typed as a variable: the SDK options type is closed, so an extra key in a literal fails overload resolution.
-  const execOptions: ToolExecutionOptions & { [RESUME_REDRIVE_OPTION]: true } = {
-    abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
+  const execOptions: ToolExecutionOptions<unknown> & { [RESUME_REDRIVE_OPTION]: true } = {
+    abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [], context: undefined,
     [RESUME_REDRIVE_OPTION]: true,
   };
 

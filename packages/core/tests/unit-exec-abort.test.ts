@@ -78,7 +78,7 @@ describe('run tool — workspace shell abort', () => {
 
     const pending = run(
       { command: 'cat big.txt && cat big2.txt' },
-      { toolCallId: 'abort-test', messages: [], abortSignal: controller.signal },
+      { toolCallId: 'abort-test', messages: [], context: undefined, abortSignal: controller.signal },
     );
 
     await expect(pending).rejects.toMatchObject({ code: 'io', execution: { exitCode: 130 }, message: expect.stringContaining('exit 130') });

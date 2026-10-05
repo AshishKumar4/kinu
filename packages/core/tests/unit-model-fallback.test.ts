@@ -147,7 +147,7 @@ function whatModelSaw(served: readonly Served[], model: string) {
 
 /** A picture the owner attached to the turn's question. */
 const WITH_ATTACHED_PICTURE: ModelMessage[] = [
-  { role: 'user', content: [{ type: 'text', text: 'what does this show?' }, { type: 'image', image: SCREENSHOT, mediaType: 'image/png' }] },
+  { role: 'user', content: [{ type: 'text', text: 'what does this show?' }, { type: 'file', data: SCREENSHOT, mediaType: 'image/png' }] },
 ];
 
 describe('an image follows the model each attempt calls', () => {

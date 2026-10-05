@@ -129,7 +129,7 @@ async function turn(provider: ReturnType<typeof createClaudeProvider>, providerD
 
   const result = streamText({
     model: provider.createModel('claude-opus-4-7', providerDeps),
-    system: cacheableSystem('You are Kinu.', resolvePromptCacheStrategy('claude')),
+    instructions: cacheableSystem('You are Kinu.', resolvePromptCacheStrategy('claude')),
     messages: HISTORY,
     tools: { read: READ },
     maxOutputTokens: 100_000,
@@ -269,7 +269,7 @@ describe('the Claude subscription wire', () => {
 
     const result = streamText({
       model: createClaudeProvider().createModel('claude-opus-4-7', deps(fetchFn, [login('t')])),
-      system: cacheableSystem('You are Kinu.', resolvePromptCacheStrategy('claude')),
+      instructions: cacheableSystem('You are Kinu.', resolvePromptCacheStrategy('claude')),
       messages: [
         { role: 'user', content: 'Please refactor the parser module into two files.', providerOptions: marked },
         { role: 'assistant', content: 'Reading it first.' },

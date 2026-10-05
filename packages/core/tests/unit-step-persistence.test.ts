@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { stepCountIs, tool, type ModelMessage, type ToolSet } from 'ai';
+import { isStepCount, tool, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { runChat, type ChatEvent, type StepRecord } from '../src/chat';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -17,6 +17,9 @@ test('a consumer throwing after a tool result still records the completed native
     start(controller) {
       controller.enqueue({ type: 'stream-start', warnings: [] });
       controller.enqueue({ type: 'tool-call', toolCallId: 'kept', toolName: 'save', input: '{"note":"retained"}' });
+      // ai 7 runs a step's tools once its model call finishes; the stream itself stays open until the cut.
+      controller.enqueue({ type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } } });
       abortSignal?.addEventListener('abort', () => controller.close(), { once: true });
     },
   }) }) });
@@ -103,7 +106,7 @@ describe('a native step seals before its hook and ends on a recording failure', 
 
     try {
       for await (const event of runChat({
-        model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools, stopWhen: stepCountIs(20),
+        model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools, stopWhen: isStepCount(20),
         persistStep: async () => { throw new Error('SQLITE_FULL: database or disk is full'); },
       })) events.push(event);
     } catch (error) {
@@ -128,7 +131,7 @@ describe('a native step seals before its hook and ends on a recording failure', 
 
     try {
       for await (const _ of runChat({
-        model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools, stopWhen: stepCountIs(20),
+        model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools, stopWhen: isStepCount(20),
         persistStep: async (record) => { persisted.push(record.messages.length); },
         onStep: async () => { throw thrown; },
       }));
@@ -184,7 +187,7 @@ test('each streamed step retains the breakdown of its own request', async () => 
   try {
     for await (const event of runChat({
       model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
-      tools, stopWhen: stepCountIs(20), measureContext: true,
+      tools, stopWhen: isStepCount(20), measureContext: true,
       observeStream: async (stream) => { for await (const part of stream) void part; },
     })) {
       if (event.type === 'step-finish') measured.push(event.context?.measuredChars);
@@ -193,5 +196,27 @@ test('each streamed step retains the breakdown of its own request', async () => 
     expect(measured).toHaveLength(2);
     expect(measured.every((chars) => chars !== undefined)).toBe(true);
     expect(measured[1]).toBeGreaterThan(measured[0] ?? Infinity);
+  } finally { await provider.stop(); }
+});
+
+test('each step record keeps the body its request sent, which a cache warm replays', async () => {
+  const provider = scriptedProvider([
+    () => toolStep('call_a', 'git status'),
+    () => textStep('all clean'),
+  ]);
+
+  const records: StepRecord[] = [];
+
+  try {
+    for await (const _ of runChat({
+      model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
+      tools, stopWhen: isStepCount(20), persistStep: async (record) => { records.push(record); },
+    })) { /* drain */ }
+
+    const bodies = records.flatMap((record) => (record.step === undefined ? [] : [JSON.stringify(record.step.request?.body)]));
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toContain('test-model');
+    expect(bodies[1]).toContain('git status');
   } finally { await provider.stop(); }
 });

@@ -146,7 +146,7 @@ describe('sanitizeAttachmentsForModel', () => {
       role: 'user',
       content: [
         { type: 'file', data: PNG_DATA_URL, mediaType: 'image/png', filename: 'chart.png' },
-        { type: 'image', image: PNG_DATA_URL, mediaType: 'image/png' },
+        { type: 'file', data: PNG_DATA_URL, mediaType: 'image/png' },
       ],
     };
 
@@ -169,7 +169,7 @@ describe('sanitizeAttachmentsForModel', () => {
       role: 'user',
       content: [
         { type: 'file', data: url, mediaType: 'image/svg+xml', filename: 'logo.svg' },
-        { type: 'image', image: url, mediaType: 'image/svg+xml' },
+        { type: 'file', data: url, mediaType: 'image/svg+xml' },
       ],
     };
 
@@ -368,7 +368,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
 
     const bigImage: ModelMessage = {
       role: 'user',
-      content: [{ type: 'image', image: new Uint8Array(4 * 1024 * 1024), mediaType: 'image/png' }],
+      content: [{ type: 'file', data: new Uint8Array(4 * 1024 * 1024), mediaType: 'image/png' }],
     };
 
     const out = await sanitizeAttachmentsForModel([bigImage], { accepts: accepts('image', 'pdf'), vfs });

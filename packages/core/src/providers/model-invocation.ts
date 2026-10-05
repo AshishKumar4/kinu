@@ -55,8 +55,7 @@ export async function generateReported(
     throw cause;
   }
 
-  // `totalUsage`, not `usage`: `usage` is the last step's only.
-  const usage = normalizeUsage(result.totalUsage);
+  const usage = normalizeUsage(result.usage);
   operation.completed({ usage, modelId: result.response.modelId });
   call.spend.report(reportOf(call, usage, result.response));
 
@@ -78,7 +77,7 @@ export async function* streamTextReported(
     if (onPart === undefined) {
       for await (const chunk of result.textStream) yield chunk;
     } else {
-      for await (const part of result.fullStream) {
+      for await (const part of result.stream) {
         // Like textStream
         if (part.type === 'error') throw part.error;
         onPart(part);
@@ -91,7 +90,7 @@ export async function* streamTextReported(
     throw cause;
   }
 
-  const usage = normalizeUsage(await result.totalUsage);
+  const usage = normalizeUsage(await result.usage);
   const response = await result.response;
   operation.completed({ usage, modelId: response.modelId });
   call.spend.report(reportOf(call, usage, response));

@@ -1,7 +1,7 @@
 import type { ToolExecutionOptions, ToolSet } from 'ai';
 import type { ScopedSpan, TurnTrace, TurnUnitTimer } from './obs/index';
 
-export type TracedToolOptions = ToolExecutionOptions & { readonly trace?: TurnTrace };
+export type TracedToolOptions = ToolExecutionOptions<unknown> & { readonly trace?: TurnTrace };
 
 type ToolInput = Parameters<NonNullable<ToolSet[string]['execute']>>[0];
 
@@ -36,7 +36,7 @@ export function traceTools(trace: TurnTrace | undefined, tools: ToolSet): ToolSe
 
     return [name, {
       ...entry,
-      execute: (input: ToolInput, options: ToolExecutionOptions) => {
+      execute: (input: ToolInput, options: ToolExecutionOptions<unknown>) => {
         const timer = trace.begin('turn.tool_call');
 
         const stamp = (span: ScopedSpan): void => {

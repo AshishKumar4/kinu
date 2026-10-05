@@ -260,7 +260,7 @@ describe('promptCacheOptions', () => {
     expect(promptCacheOptions({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true }, 'k'))
       .toEqual({ openrouter: { prompt_cache_key: 'k' } });
     expect(promptCacheOptions({ kind: 'openai-compat', bodyNamespace: 'openai-compat:groq', markers: false }, 'k'))
-      .toEqual({ 'openai-compat:groq': { prompt_cache_key: 'k' } });
+      .toEqual({ 'openaiCompat:groq': { prompt_cache_key: 'k' } });
   });
 
   test('anthropic + none: undefined (breakpoints/affinity do the routing)', () => {

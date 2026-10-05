@@ -2,11 +2,11 @@ import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** One non-main agent in its own loader isolate (D9). */
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
-import type { ModelMessage, UIMessage } from 'ai';
+import type { UIMessage } from 'ai';
 import {
-  jsonResultOrVoid, readAgentArchivePage,
+  encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
   type AgentFigures,
-  type AgentOwnInspection, type AnsweredEvolutionHelper, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
+  type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
 } from '@kinu.run/core';
@@ -69,7 +69,8 @@ export interface AgentFacetCalls {
   messageCount(snapshot: AgentSnapshot): Promise<number>;
   inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
   inheritedContext(snapshot: AgentSnapshot): Promise<SerializedMessage[]>;
-  workingContext(snapshot: AgentSnapshot): Promise<readonly ModelMessage[]>;
+  /** In the session codec's durable form, as `AgentWorkspace.resume`. */
+  workingContext(snapshot: AgentSnapshot): Promise<readonly JsonValue[]>;
   turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex>;
   turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage>;
   spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger>;
@@ -159,8 +160,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await this.open(snapshot).inheritedContext();
   }
 
-  async workingContext(snapshot: AgentSnapshot): Promise<readonly ModelMessage[]> {
-    return await this.open(snapshot).workingContext();
+  async workingContext(snapshot: AgentSnapshot): Promise<readonly JsonValue[]> {
+    return encodeModelMessageValues(await this.open(snapshot).workingContext());
   }
 
   async turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex> {

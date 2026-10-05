@@ -7,7 +7,7 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
+import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 
 import {
@@ -111,7 +111,7 @@ describe('Exploration evals — the agent reaches for exploration', () => {
     }) }));
 
     const { system, messages } = await surface.request([{ role: 'user', content: EXPLORATION_TASK }]);
-    await generateText({ model: recorder.model, system, messages, tools: surface.tools });
+    await generateText({ model: recorder.model, instructions: system, messages, tools: surface.tools });
 
     expect(recorder.evidence().runtimeFacts).toBe(true);
     expect(JSON.stringify(messages)).toContain(`- Model: ${LLM_CONFIG.model}`);
@@ -129,11 +129,11 @@ describe('Exploration evals — the agent reaches for exploration', () => {
 
     const result = await generateText({
       model: recorder.model,
-      system,
+      instructions: system,
       messages,
       tools: surface.tools,
-      stopWhen: stepCountIs(12),
-      onStepFinish: (step: StepResult<ToolSet>) => {
+      stopWhen: isStepCount(12),
+      onStepEnd: (step: StepResult<ToolSet>) => {
         for (const call of step.toolCalls ?? []) calls.push(call.toolName);
       },
     });

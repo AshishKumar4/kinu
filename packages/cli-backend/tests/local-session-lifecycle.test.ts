@@ -454,7 +454,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(JSON.stringify(requests[1]?.input)).not.toContain('item_reference');
     expect(requests[1]?.input).toEqual(expect.arrayContaining([
       { type: 'reasoning', encrypted_content: 'ENCRYPTED-1', summary: [] },
-      { role: 'assistant', content: [{ type: 'output_text', text: said }] },
+      { role: 'assistant', content: said },
     ]));
   });
 

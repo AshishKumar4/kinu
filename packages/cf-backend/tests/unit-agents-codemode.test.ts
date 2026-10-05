@@ -18,7 +18,7 @@ import {
   type WebSearchProvider,
   type BrowserSessions,
 } from '@kinu.run/core';
-import { narrowToolSurface } from '@kinu.run/core';
+import { narrowToolSurface, toolDescription } from '@kinu.run/core';
 import { ROOT_DELEGATION_BUDGET } from '@kinu.run/core';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import * as v from 'valibot';
@@ -99,11 +99,11 @@ function buildCodemode(agents?: () => AgentsToolDeps) {
 }
 
 function codemodeDescription(agents?: () => AgentsToolDeps): string {
-  const built = buildCodemode(agents);
+  const description = toolDescription(buildCodemode(agents));
 
-  if (!built.description) throw new Error('eval description is missing');
+  if (!description) throw new Error('eval description is missing');
 
-  return built.description;
+  return description;
 }
 
 /** 5 in + 3 out per expansion, so a run's total is arithmetic over expansion count. */

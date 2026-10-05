@@ -160,7 +160,7 @@ describe('connectMcpServers', () => {
 
       await Promise.allSettled([run(
         { code: 'const held = tools.held({}); await tools.stop({}); return await held;' },
-        { toolCallId: 'eval-held', messages: [], abortSignal: stop.signal },
+        { toolCallId: 'eval-held', messages: [], context: undefined, abortSignal: stop.signal },
       )]);
       expect(calls).toHaveLength(1);
       await expect(calls[0]).rejects.toBeInstanceOf(Error);

@@ -9,27 +9,28 @@
  *   and so does a Chat Completions model whose media the caller does not know.
  */
 import { wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
-import type { LanguageModelV3Message, LanguageModelV3ToolResultOutput } from '@ai-sdk/provider';
+import type { LanguageModelV4Message, LanguageModelV4ToolResultOutput } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import type { ModelInputModality } from './types';
 
-/** `LanguageModelV3.provider` ends with the wire API: `anthropic.messages`, `openai.responses`, `<name>.chat`. */
+/** `LanguageModelV4.provider` ends with the wire API: `anthropic.messages`, `openai.responses`, `<name>.chat`. */
 const IMAGE_CARRYING_APIS = ['.messages', '.responses'];
 
 const OMITTED = '[image omitted: this model takes no image input]';
 
 const ATTACHED = '(image attached in the next message)';
 
-type ContentItem = Extract<LanguageModelV3ToolResultOutput, { type: 'content' }>['value'][number];
+type ContentItem = Extract<LanguageModelV4ToolResultOutput, { type: 'content' }>['value'][number];
 
-type ImageItem = Extract<ContentItem, { type: 'image-data' }>;
+type ImageItem = Extract<ContentItem, { type: 'file' }>;
 
+/** A file entry whose media type names an image, in full (`image/png`) or as its top-level segment (`image`). */
 function isImage(item: ContentItem): item is ImageItem {
-  return item.type === 'image-data';
+  return item.type === 'file' && (item.mediaType === 'image' || item.mediaType.startsWith('image/'));
 }
 
 /** Each image a note: the model cannot see it on any API. */
-function withoutImages(message: LanguageModelV3Message): LanguageModelV3Message {
+function withoutImages(message: LanguageModelV4Message): LanguageModelV4Message {
   if (message.role !== 'tool') return message;
 
   return {
@@ -44,8 +45,8 @@ function withoutImages(message: LanguageModelV3Message): LanguageModelV3Message 
  * Chat Completions: each tool message as text, and, where the model takes images, its images in one user message
  * after the batch; otherwise a note in each image's place.
  */
-function chatToolResults(prompt: readonly LanguageModelV3Message[], moveImages: boolean): LanguageModelV3Message[] {
-  const out: LanguageModelV3Message[] = [];
+function chatToolResults(prompt: readonly LanguageModelV4Message[], moveImages: boolean): LanguageModelV4Message[] {
+  const out: LanguageModelV4Message[] = [];
   let pending: ImageItem[] = [];
 
   const flush = (): void => {
@@ -92,7 +93,7 @@ function chatToolResults(prompt: readonly LanguageModelV3Message[], moveImages: 
 /** `accepts` undefined: the caller does not know the model's media, so only an image-carrying API sends one. */
 function toolImages(accepts: ReadonlySet<ModelInputModality> | undefined): LanguageModelMiddleware {
   return {
-    specificationVersion: 'v3',
+    specificationVersion: 'v4',
     transformParams: async ({ params, model }) => {
       const carries = IMAGE_CARRYING_APIS.some((api) => model.provider.endsWith(api));
 
@@ -108,7 +109,7 @@ function toolImages(accepts: ReadonlySet<ModelInputModality> | undefined): Langu
  * that knows them (`AttachmentPolicy.accepts`) wraps it again outside, and that wrapper decides first.
  */
 export function withToolResultImages(model: LanguageModel, accepts?: ReadonlySet<ModelInputModality>): LanguageModel {
-  if (v.is(v.string(), model) || model.specificationVersion !== 'v3') return model;
+  if (v.is(v.string(), model) || model.specificationVersion === 'v2') return model;
 
   return wrapLanguageModel({ model, middleware: toolImages(accepts) });
 }

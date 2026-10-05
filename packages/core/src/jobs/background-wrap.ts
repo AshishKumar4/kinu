@@ -64,7 +64,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: ActorJobs): ToolSet {
             run = withSpawnDetach(
               key,
               (spawnStarted) => {
-                const execOptions: ToolExecutionOptions & {
+                const execOptions: ToolExecutionOptions<unknown> & {
                   [SPAWN_STARTED_OPTION]: () => void;
                   [DEVICE_REQUEST_OPTION]: DeviceRequestOwnership;
                   [CALL_JOB_OPTION]: CallJob;
@@ -81,7 +81,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: ActorJobs): ToolSet {
             );
           }
         } else {
-          const execOptions: ToolExecutionOptions & {
+          const execOptions: ToolExecutionOptions<unknown> & {
             [DEVICE_REQUEST_OPTION]: DeviceRequestOwnership;
             [CALL_JOB_OPTION]: CallJob;
           } = {

@@ -94,7 +94,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
         const result = v.parse(v.object({ result: v.optional(JsonValueSchema) }), await execute({
           code: `return await tools[${JSON.stringify(name)}](${JSON.stringify(input)});`,
-        }, { toolCallId: `slate-${crypto.randomUUID()}`, messages: [] }));
+        }, { toolCallId: `slate-${crypto.randomUUID()}`, messages: [], context: undefined }));
 
         return result.result;
       });

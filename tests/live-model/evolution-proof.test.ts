@@ -18,7 +18,7 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
+import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 import * as v from 'valibot';
 
 import {
@@ -132,11 +132,11 @@ async function chatTurn(turn: ChatTurn): Promise<TurnResult> {
 
   const result = await generateText({
     model: recorder.model,
-    system,
+    instructions: system,
     messages,
     tools: surface.tools,
-    stopWhen: stepCountIs(500),
-    onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
+    stopWhen: isStepCount(500),
+    onStepEnd: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
   });
 
   recordLiveModelSpend(result.usage);

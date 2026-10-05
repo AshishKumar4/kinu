@@ -43,14 +43,16 @@ export interface AgentToolDescriptor {
 export interface PreparedAgentTurn {
   readonly input: HeadInput;
   readonly runId: string;
-  readonly birthContext?: readonly ModelMessage[];
+  /** In the session codec's durable form: a ModelMessage's type is too deep for an RPC signature. */
+  readonly birthContext?: readonly JsonValue[];
   readonly model: string;
   readonly window: HeadInferenceDeps['window'];
   readonly pricing: ModelPricing | null;
   readonly accounts: Readonly<Record<string, string>>;
   readonly scaffold: StoredRow;
   readonly languages: readonly [string, ...string[]];
-  readonly framing?: HeadInferenceDeps['framing'];
+  /** Its messages in the codec's durable form, as `birthContext`. */
+  readonly framing?: { readonly system: string; readonly messages: readonly JsonValue[] };
   readonly workspaceLayout: HeadInferenceDeps['workspaceLayout'];
   readonly tools: readonly AgentToolDescriptor[];
   readonly dynamic: DynamicContext;

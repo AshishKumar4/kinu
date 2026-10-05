@@ -91,7 +91,7 @@ async function usageFromOpenAICompat(usage: OpenAICompatUsage): Promise<Usage> {
 
   const r = await generateText({ model: provider('@cf/deepseek-ai/deepseek-v4-pro-0813'), prompt: 'hi' });
 
-  return normalizeUsage(r.usage);
+  return normalizeUsage(r.finalStep.usage);
 }
 
 async function usageFromAnthropic(usage: AnthropicUsage): Promise<Usage> {
@@ -111,7 +111,7 @@ async function usageFromAnthropic(usage: AnthropicUsage): Promise<Usage> {
 
   const r = await generateText({ model: provider('claude-sonnet-4-5'), prompt: 'hi' });
 
-  return normalizeUsage(r.usage);
+  return normalizeUsage(r.finalStep.usage);
 }
 
 async function usageFromOpenAIResponses(usage: OpenAIResponsesUsage): Promise<Usage> {
@@ -133,7 +133,7 @@ async function usageFromOpenAIResponses(usage: OpenAIResponsesUsage): Promise<Us
 
   const r = await generateText({ model: provider.responses('gpt-5-codex'), prompt: 'hi' });
 
-  return normalizeUsage(r.usage);
+  return normalizeUsage(r.finalStep.usage);
 }
 
 describe('normalizeUsage over the OpenAI-compatible family (Workers AI)', () => {
@@ -162,9 +162,9 @@ describe('normalizeUsage over the OpenAI-compatible family (Workers AI)', () => 
 
     const r = await generateText({ model: provider('m'), prompt: 'hi' });
     // The SDK hands over a 0 the provider never sent.
-    expect(r.usage.outputTokenDetails?.reasoningTokens).toBe(0);
-    expect(r.usage.raw).not.toHaveProperty('completion_tokens_details');
-    const u = normalizeUsage(r.usage);
+    expect(r.finalStep.usage.outputTokenDetails?.reasoningTokens).toBe(0);
+    expect(r.finalStep.usage.raw).not.toHaveProperty('completion_tokens_details');
+    const u = normalizeUsage(r.finalStep.usage);
     expect(u.reasoning).toBeUndefined();
     expect('reasoning' in u).toBe(false);
   });
@@ -252,8 +252,8 @@ describe('normalizeUsage over Anthropic', () => {
 
     const r = await generateText({ model: provider('claude-sonnet-4-5'), prompt: 'hi' });
     // The mirror-image defect: this family fabricates the cache zeros.
-    expect(r.usage.inputTokenDetails?.cacheWriteTokens).toBe(0);
-    const u = normalizeUsage(r.usage);
+    expect(r.finalStep.usage.inputTokenDetails?.cacheWriteTokens).toBe(0);
+    const u = normalizeUsage(r.finalStep.usage);
     expect('cacheWrite' in u).toBe(false);
     expect('cacheRead' in u).toBe(false);
     expect('cacheWrite1h' in u).toBe(false);

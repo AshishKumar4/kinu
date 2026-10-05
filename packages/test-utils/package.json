@@ -23,7 +23,7 @@
     "check": "tsc --noEmit"
   },
   "devDependencies": {
-    "ai": "6.0.214",
+    "ai": "7.0.127",
     "valibot": "^1.4.1"
   }
 }

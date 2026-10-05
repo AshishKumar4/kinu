@@ -456,7 +456,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
       abortSignal: signal,
     }, { spend: { source: 'swarm', report: reportModelCall } });
 
-    const spent = normalizeUsage(result.totalUsage);
+    const spent = normalizeUsage(result.usage);
     // Charged where the call returned, so the level guard reads a current ledger; the
     // spawning caller must not charge this spend again.
     await charge(spent);

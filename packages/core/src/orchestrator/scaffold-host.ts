@@ -155,6 +155,8 @@ function renderMessage(message: ModelMessage): string {
 
       case 'file':
       case 'image':
+      case 'custom':
+      case 'reasoning-file':
       case 'tool-approval-request':
       case 'tool-approval-response':
       default:
@@ -239,6 +241,7 @@ export function createScaffoldCallTool(
 
     const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
       messages: [],
+      context: undefined,
       toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
     };
 

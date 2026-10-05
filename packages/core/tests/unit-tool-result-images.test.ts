@@ -4,12 +4,15 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { generateText, type LanguageModel, type ModelMessage } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
-import type { LanguageModelV3CallOptions, LanguageModelV3Message } from '@ai-sdk/provider';
+import { MockLanguageModelV4 } from 'ai/test';
+import type { LanguageModelV4CallOptions, LanguageModelV4Message } from '@ai-sdk/provider';
 import { createProviderRegistry, type ModelInputModality, type ModelCallDeps } from '../src/index';
 import { withToolResultImages } from '../src/providers/tool-result-images';
 
 const IMAGE = { type: 'image-data' as const, data: 'iVBORw0KGgo=', mediaType: 'image/png' };
+
+/** `IMAGE` as a provider receives it. */
+const SENT_IMAGE = { type: 'file', data: { type: 'data', data: IMAGE.data }, mediaType: 'image/png' };
 
 const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'screenshot example.com' },
@@ -27,10 +30,10 @@ const HISTORY: ModelMessage[] = [
  * The prompt a model resolved through the registry as `provider` receives; `accepts` is the media the turn knows
  * the model takes, as chat.ts passes them, or undefined where it does not know.
  */
-async function sentPrompt(provider: string, accepts?: ReadonlySet<ModelInputModality>): Promise<LanguageModelV3Message[]> {
-  const sent: LanguageModelV3CallOptions[] = [];
+async function sentPrompt(provider: string, accepts?: ReadonlySet<ModelInputModality>): Promise<LanguageModelV4Message[]> {
+  const sent: LanguageModelV4CallOptions[] = [];
 
-  const model = new MockLanguageModelV3({
+  const model = new MockLanguageModelV4({
     provider,
     doGenerate: async (options) => {
       sent.push(options);
@@ -49,13 +52,13 @@ async function sentPrompt(provider: string, accepts?: ReadonlySet<ModelInputModa
   return sent[0]?.prompt ?? [];
 }
 
-const toolPart = (prompt: readonly LanguageModelV3Message[]) => prompt.find((message) => message.role === 'tool')?.content[0];
+const toolPart = (prompt: readonly LanguageModelV4Message[]) => prompt.find((message) => message.role === 'tool')?.content[0];
 
 describe('a tool result image', () => {
   test.each(['anthropic.messages', 'openai.responses'])('reaches a %s model inside the tool result', async (provider) => {
     const prompt = await sentPrompt(provider, new Set(['image']));
 
-    expect(toolPart(prompt)).toMatchObject({ output: { type: 'content', value: [{ type: 'text' }, IMAGE] } });
+    expect(toolPart(prompt)).toMatchObject({ output: { type: 'content', value: [{ type: 'text' }, SENT_IMAGE] } });
   });
 
   test('reaches a Chat Completions model that takes images in a user message right after the tool results', async () => {
@@ -63,7 +66,7 @@ describe('a tool result image', () => {
 
     expect(prompt.map((message) => message.role)).toEqual(['user', 'assistant', 'tool', 'user']);
     expect(toolPart(prompt)).toMatchObject({ output: { type: 'text', value: expect.stringContaining('Screenshot of https://example.com/') } });
-    expect(prompt.at(-1)).toMatchObject({ role: 'user', content: [{ type: 'text' }, { type: 'file', data: IMAGE.data, mediaType: 'image/png' }] });
+    expect(prompt.at(-1)).toMatchObject({ role: 'user', content: [{ type: 'text' }, SENT_IMAGE] });
   });
 
   test.each([

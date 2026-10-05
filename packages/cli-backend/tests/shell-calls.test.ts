@@ -33,8 +33,8 @@ function evalIn(directory: string) {
 
   if (!execute) throw new Error('eval has no execute');
 
-  return (code: string, options: Partial<ToolExecutionOptions> & { [DEVICE_REQUEST_OPTION]?: DeviceRequestOwnership } = {}) =>
-    execute({ code }, { toolCallId: 'call_eval', messages: [], ...options });
+  return (code: string, options: Partial<ToolExecutionOptions<unknown>> & { [DEVICE_REQUEST_OPTION]?: DeviceRequestOwnership } = {}) =>
+    execute({ code }, { toolCallId: 'call_eval', messages: [], context: undefined, ...options });
 }
 
 test("the workspace's shell keeps neither a call's `cd` nor its `export`, and refuses a name it cannot keep", async () => {
