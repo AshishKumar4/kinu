@@ -265,6 +265,44 @@ describe('virtual workspace grouping', () => {
 
 describe('the sidebar roster for one directory', () => {
   // 2026-10-04: a workspace without a recorded folder is refused at open, so no roster lists it (no Unplaced group).
+  // Release review, 2026-10-05: the chat picker re-added every configured local ref, so a workspace whose folder had
+  // moved was offered, though opening it is refused.
+  test('the picker offers this project\'s workspaces, then every other placed one, then the cloud\'s; never one without a folder', async () => {
+    const home = scratchDir('agent-picker');
+    const projectDir = realpathSync(scratchDir('agent-picker-proj'));
+    const otherDir = realpathSync(scratchDir('agent-picker-other'));
+    const stamp = '2026-10-05T00:00:00.000Z';
+
+    const localRef = (name: string, cwd?: string) => ({
+      name, mode: 'local', localName: name, cwd, workspaceId: cwd === undefined ? undefined : 'proj', createdAt: stamp, updatedAt: stamp,
+    });
+
+    for (const name of ['kept', 'faraway', 'lost', 'oldbot']) {
+      mkdirSync(join(home, name));
+      writeFileSync(join(home, name, 'agent.db'), '');
+    }
+
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      agents: {
+        lost: localRef('lost', join(otherDir, 'moved-away')),
+        faraway: localRef('faraway', otherDir),
+        oldbot: localRef('oldbot'),
+        jarvis: { name: 'jarvis', mode: 'cloud', cloudName: 'jarvis', displayName: 'Jarvis', createdAt: stamp, updatedAt: stamp },
+        kept: localRef('kept', projectDir),
+      },
+    }));
+
+    const script = `
+      const { listKnownAgents } = await import(${JSON.stringify(join(repoRoot, 'packages/cli/src/agent-list.ts'))});
+      console.log(JSON.stringify(listKnownAgents().map((agent) => agent.mode + ':' + agent.name)));
+    `;
+
+    const proc = await runToExit([process.execPath, '-e', script], { cwd: projectDir, env: { ...process.env, KINU_HOME: home } });
+
+    expect({ exitCode: proc.exitCode, stderr: proc.stderr }).toEqual({ exitCode: 0, stderr: '' });
+    expect(v.parse(v.array(v.string()), JSON.parse(proc.stdout))).toEqual(['local:kept', 'local:faraway', 'cloud:jarvis']);
+  });
+
   test('lists this project and cloud refs — never another project, never a workspace without a folder, and never merged duplicates', async () => {
     const home = scratchDir('agent-list');
     const projectDir = realpathSync(scratchDir('agent-proj'));

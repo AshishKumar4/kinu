@@ -379,13 +379,14 @@ describe('a file on a machine that is offline', () => {
     return readText(plane, path);
   }
 
+  // "spare box" is no prefix (2026-10-05), so the machine mounts under its id.
   test('is refused naming that machine as offline, beside the ones that are connected', async () => {
-    await expect(reading([STUDIO, SPARE], '/pc/spare box/notes.md'))
-      .rejects.toMatchObject({ code: 'ENXIO', message: expect.stringContaining('"spare box" is offline') });
+    await expect(reading([STUDIO, SPARE], '/pc/dev-spare/notes.md'))
+      .rejects.toMatchObject({ code: 'ENXIO', message: expect.stringContaining('"dev-spare" is offline') });
   });
 
   test('is refused naming it as offline when no machine is connected', async () => {
-    await expect(reading([SPARE], '/pc/spare box/notes.md'))
+    await expect(reading([SPARE], '/pc/dev-spare/notes.md'))
       .rejects.toMatchObject({ code: 'ENXIO', message: expect.stringContaining('"spare box" is offline') });
   });
 });

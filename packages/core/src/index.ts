@@ -217,7 +217,7 @@ export {
 } from './read-models/file-links';
 
 export {
-  cloudPlanes, findPlaneReferences, formatPath, localPlanes, machinePath, referencedPath, referencePrefixes, resolvePath, RESERVED_ROOTS,
+  cloudPlanes, findPlaneReferences, FOLDER_SUBTREE, formatPath, isWholeReference, localPlanes, machinePath, referencedPath, referencePrefixes, resolvePath, RESERVED_ROOTS,
   type PathPlanes, type ResolvedPath,
 } from './vfs/resolve';
 
@@ -1125,7 +1125,7 @@ export {
 // Memory writes
 export { memoryBytes } from './memory/note';
 
-export { agentViewMount } from './vfs/agent-view';
+export { AGENT_STATE_PATHS, agentViewMount, isAgentStatePath } from './vfs/agent-view';
 
 export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
 

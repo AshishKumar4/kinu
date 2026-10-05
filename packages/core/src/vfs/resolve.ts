@@ -45,7 +45,7 @@ export const VFS_PREFIX = 'vfs';
 export const DEVICE_PREFIX = '<device>';
 
 /** Where a local workspace's folder sits in its VFS. */
-const FOLDER_SUBTREE = '/local';
+export const FOLDER_SUBTREE = '/local';
 
 /**
  * Every prefix on each backend, each an alias for a subtree of `vfs://`; a backend without a row has no such prefix.
@@ -96,7 +96,15 @@ export function localPlanes(input: { readonly space: string; readonly folder: st
   };
 }
 
-const REFERENCE = /^([^\s/:]+):\/\/(.*)$/su;
+/** What a prefix's name may hold, as references are read: no whitespace, `/` or `:`. */
+const PREFIX_NAME = String.raw`[^\s/:]+`;
+
+const REFERENCE = new RegExp(String.raw`^(${PREFIX_NAME}):\/\/(.*)$`, 'su');
+
+/** Whether `name` can stand before `://`: a machine's own name is its prefix only when it can. */
+export function isPrefixName(name: string): boolean {
+  return new RegExp(String.raw`^${PREFIX_NAME}$`, 'u').test(name);
+}
 
 export function resolvePath(path: string, planes: PathPlanes): ResolvedPath {
   return settleSync(resolvedPath(path, planes));
@@ -162,6 +170,32 @@ export function referencePrefixes(planes: PathPlanes, machines: readonly string[
 /** A reference's path stops at whitespace, a quote or a bracket; sentence punctuation after it is prose. */
 const REFERENCE_PATH = String.raw`[^\s<>()[\]{}"'\x60]*`;
 
+/** What a reference's path cannot hold raw: what ends it in prose, `%`, and a URL's `#` and `?`. */
+const ESCAPED = /[\s<>()[\]{}"'`%#?]/gu;
+
+/** Sentence punctuation prose drops from a reference's end, so a path ending in it escapes it. */
+const TRAILING = /[.,;:!]+$/u;
+
+const percentEscaped = (text: string): string => [...new TextEncoder().encode(text)]
+  .map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`).join('');
+
+/** A path as a reference writes it: every character prose or a URL would split it at is %-escaped, as a URL escapes it. */
+function referencePath(path: string): string {
+  return path.replace(ESCAPED, percentEscaped).replace(TRAILING, percentEscaped);
+}
+
+/** A reference's path as written: its %-escapes, the formatter's or a URL's, read back to what they name. */
+function writtenPath(path: string): string {
+  return path.replace(/(?:%[\dA-Fa-f]{2})+/gu, (run) => new TextDecoder().decode(Uint8Array.from(run.slice(1).split('%'), (hex) => Number.parseInt(hex, 16))));
+}
+
+/** Whether `text`, whole, is one reference to one of `roots`: a link's target or an inline code span, spaces and all. */
+export function isWholeReference(text: string, roots: readonly string[]): boolean {
+  const reference = REFERENCE.exec(text);
+
+  return reference !== null && !text.includes('\n') && roots.includes(reference[1] ?? '');
+}
+
 /** Every reference to one of `roots` in prose, in order: what a chat surface links. */
 export function findPlaneReferences(text: string, roots: readonly string[]): Array<{ readonly index: number; readonly reference: string }> {
   if (roots.length === 0) return [];
@@ -186,11 +220,11 @@ function shortestReference(absolute: string, planes: PathPlanes): { readonly pre
   const references = planes.prefixes.flatMap((row) => {
     if (!holds(row.subtree, vfs)) return [];
 
-    if (row.prefix !== DEVICE_PREFIX) return [{ prefix: row.prefix, text: `${row.prefix}://${relativeTo(row.subtree, vfs)}` }];
+    if (row.prefix !== DEVICE_PREFIX) return [{ prefix: row.prefix, text: `${row.prefix}://${referencePath(relativeTo(row.subtree, vfs))}` }];
     const [machine = '', ...path] = relativeTo(row.subtree, vfs).split('/');
-    const taken = machine === '' || RESERVED_ROOTS.includes(machine) || planes.prefixes.some((other) => other.prefix === machine);
+    const taken = !isPrefixName(machine) || RESERVED_ROOTS.includes(machine) || planes.prefixes.some((other) => other.prefix === machine);
 
-    return taken ? [] : [{ prefix: machine, text: `${machine}://${path.join('/')}` }];
+    return taken ? [] : [{ prefix: machine, text: `${machine}://${referencePath(path.join('/'))}` }];
   });
 
   return references.reduce<{ readonly prefix: string; readonly text: string } | undefined>(
@@ -211,7 +245,8 @@ function vfsPath(name: string, rest: string, planes: PathPlanes, written: string
 
   const segments: string[] = [];
 
-  for (const segment of rest.split('/')) {
+  // Read back before the walk, so an escaped `/` or `..` climbs no further than a written one.
+  for (const segment of writtenPath(rest).split('/')) {
     if (segment === '' || segment === '.') continue;
 
     if (segment !== '..') {

@@ -2,6 +2,7 @@ import {
   agentDbPath,
   listAgentDirs,
   listConfiguredAgentRefs,
+  listLocalRefsAllProjects,
   readWorkspaceDisplayName,
   requireAuthConfig,
   updateConfigFile,
@@ -170,27 +171,24 @@ export function reconcileAgentRefs(
   return [...local, ...cloud];
 }
 
+/** This project's workspaces, then every other placed one, then the cloud's; one without a folder is refused at open, so never offered. */
 export function listKnownAgents(): ListedAgent[] {
-  const localAgents = new Set(listLocalAgentNames());
   const refs = listConfiguredAgentRefs();
   const byDirName = localRefsByDirName(refs);
+  const placed = new Set([...listLocalAgentNames(), ...listLocalRefsAllProjects().map((ref) => ref.name)]);
 
   return [
-    ...[...localAgents].map((name) => localRow(byDirName.get(name), name)),
-    ...refs
-      .filter((agent) => agent.mode === 'cloud' || !localAgents.has(agent.localName ?? agent.name))
-      // The label comes from the workspace database, where renames and auto-titles land, not the `config.json` mirror.
-      .map((agent) => (agent.mode === 'local'
-        ? localRow(agent, agent.localName ?? agent.name)
-        : {
-          name: agent.name,
-          label: workspaceDisplayTitle({ name: agent.name, displayName: agent.displayName }),
-          mode: agent.mode,
-          localName: agent.localName,
-          cloudName: agent.cloudName,
-          cwd: agent.cwd,
-          workspaceId: agent.workspaceId,
-        })),
+    // The label comes from the workspace database, where renames and auto-titles land, not the `config.json` mirror.
+    ...[...placed].map((name) => localRow(byDirName.get(name), name)),
+    ...refs.filter((agent) => agent.mode === 'cloud').map((agent) => ({
+      name: agent.name,
+      label: workspaceDisplayTitle({ name: agent.name, displayName: agent.displayName }),
+      mode: agent.mode,
+      localName: agent.localName,
+      cloudName: agent.cloudName,
+      cwd: agent.cwd,
+      workspaceId: agent.workspaceId,
+    })),
   ];
 }
 

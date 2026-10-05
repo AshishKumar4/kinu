@@ -20,6 +20,8 @@ export { openWorkspaceCLI, type WorkspaceInfo } from './open';
 
 export { requireSchemaGenesis, schemaGenesisOf, stampSchemaGenesis } from './schema-genesis';
 
+export { localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFiles } from './local-archive';
+
 export { withConfigLock } from './config-lock';
 
 export { hostToolchainCapabilities } from './host-toolchain';

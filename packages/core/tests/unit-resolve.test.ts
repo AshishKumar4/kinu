@@ -75,6 +75,44 @@ describe('a machine path formats to the reference of the plane that holds it', (
       expect(deviceMountSegment(named, [named])).toBe('dev-9');
     }
   });
+
+  // Release review, 2026-10-05: a machine named "Work Laptop" printed as Work Laptop://x, which reads back as a relative path.
+  test('a machine whose name no prefix can carry is mounted under its id, and every reference to it reads back', () => {
+    for (const name of ['Work Laptop', 'ashish:mac', 'tab\there']) {
+      const named: DeviceFleetEntry = { id: 'dev-9', name, os: 'linux', hostname: 'l', connected: true };
+      expect(deviceMountSegment(named, [named])).toBe('dev-9');
+    }
+
+    const spaced = '/pc/Work Laptop/home/user/report.txt';
+    expect(formatPath(spaced, CF)).toBe('vfs://pc/Work%20Laptop/home/user/report.txt');
+    expect(resolvePath(formatPath(spaced, CF), CF).absolute).toBe(spaced);
+  });
+});
+
+// Release review, 2026-10-05: a reference to "My Report.md" or "report#1.md" broke in prose, in a link and in a file URL.
+describe('a reference escapes what prose or a URL would split it at', () => {
+  test('the file tool prints each such character %-escaped, prose finds the whole reference, and it reads back', () => {
+    const cases: Array<[string, string]> = [
+      ['/home/main/My Report.md', 'vfs://home/main/My%20Report.md'],
+      ['/home/main/report#1.md', 'vfs://home/main/report%231.md'],
+      ['/home/main/what?.md', 'vfs://home/main/what%3F.md'],
+      ['/home/main/100%.md', 'vfs://home/main/100%25.md'],
+      ['/home/main/notes.', 'vfs://home/main/notes%2E'],
+      ['/home/main/café (1).md', 'vfs://home/main/café%20%281%29.md'],
+    ];
+
+    for (const [absolute, reference] of cases) {
+      expect(formatPath(absolute, CF)).toBe(reference);
+      expect(resolvePath(reference, CF).absolute).toBe(absolute);
+      expect(findPlaneReferences(`Wrote ${reference}.`, ['vfs']).map(({ reference: found }) => found)).toEqual([reference]);
+    }
+  });
+
+  test('a written reference reads raw or escaped, and an escaped climb is still a climb', () => {
+    expect(resolvePath('vfs://home/main/My Report.md', CF).absolute).toBe('/home/main/My Report.md');
+    expect(resolvePath('local://My%20Report.md', CLI).absolute).toBe('/home/ana/acme/My Report.md');
+    expect(() => resolvePath('vfs://home%2F..%2F..%2Fetc', CF)).toThrow('climbs above');
+  });
 });
 
 describe('a shell takes its machine\'s paths', () => {
