@@ -7,11 +7,11 @@ import {
   cacheableSystem,
   hasCacheMarkers,
   markCacheTail,
-  markLastToolForAnthropicCache,
   promptCacheOptions,
   promptCacheWarm,
   resolvePromptCacheStrategy,
   type PromptCacheStrategy,
+  type CacheRetention,
   ANTHROPIC_MAX_BREAKPOINTS,
   JsonObjectSchema,
   type JsonObject,
@@ -176,8 +176,7 @@ describe('markCacheTail', () => {
   });
 
   test('total anthropic breakpoints (tool + system + tail) stay within the API limit', () => {
-    const tools: ToolSet = { a: cacheTool('a'), b: cacheTool('b') };
-    markLastToolForAnthropicCache(tools);
+    const { tools } = applyCacheBreakpoints({ providerId: 'anthropic', system: 'sys', messages: [], tools: { a: cacheTool('a'), b: cacheTool('b') }, sessionKey: '' });
 
     const toolMarkers = Object.values(tools)
       .filter((entry) => providerOptions({ value: entry })?.anthropic).length;
@@ -274,7 +273,7 @@ describe('applyCacheBreakpoints', () => {
   test('anthropic plan: system message + tail markers, no request options', () => {
     const plan = applyCacheBreakpoints({
       providerId: 'anthropic', modelId: 'claude-opus-4-7',
-      system: 'sys', messages: history(4), sessionKey: 'kinu-x',
+      system: 'sys', messages: history(4), tools: {}, sessionKey: 'kinu-x',
     });
 
     expect(plan.strategy).toEqual({ kind: 'anthropic' });
@@ -289,7 +288,7 @@ describe('applyCacheBreakpoints', () => {
 
     const plan = applyCacheBreakpoints({
       providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6',
-      system: 'sys', messages, sessionKey: 'kinu-x',
+      system: 'sys', messages, tools: {}, sessionKey: 'kinu-x',
     });
 
     expect(plan.system).toBe('sys');
@@ -299,39 +298,26 @@ describe('applyCacheBreakpoints', () => {
   });
 });
 
-describe('markLastToolForAnthropicCache', () => {
-  test('sets an ephemeral anthropic cache breakpoint on the LAST tool only', () => {
-    const tools: ToolSet = { a: cacheTool('a'), b: cacheTool('b'), c: cacheTool('c') };
-    markLastToolForAnthropicCache(tools);
-    expect(providerOptions({ value: tools.c })).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
-    expect(providerOptions({ value: tools.a })).toBeUndefined();
-  });
+describe('the tool breakpoint', () => {
+  const marked = (providerId: string, retention?: CacheRetention, tools: ToolSet = { a: cacheTool('a'), b: cacheTool('b'), c: cacheTool('c') }) =>
+    applyCacheBreakpoints({ providerId, system: 'sys', messages: [], tools, sessionKey: '', ...(retention !== undefined && { retention }) }).tools;
 
-  test('preserves any existing providerOptions on the last tool', () => {
+  test('only the last tool carries it, at the strategy TTL, beside its other options, without touching the input', () => {
     const last = { ...cacheTool('z'), providerOptions: { openai: { x: 1 } } };
-    const tools: ToolSet = { z: last };
-    markLastToolForAnthropicCache(tools);
-    expect(providerOptions({ value: tools.z })).toEqual({
-      openai: { x: 1 },
-      anthropic: { cacheControl: EPHEMERAL },
-    });
+    const tools: ToolSet = { a: cacheTool('a'), z: last };
+    const plan = marked('claude', 'short', tools);
+
+    expect(providerOptions({ value: plan.z })).toEqual({ openai: { x: 1 }, anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } } });
+    expect(providerOptions({ value: plan.a })).toBeUndefined();
+    expect(providerOptions({ value: tools.z })).toEqual({ openai: { x: 1 } });
   });
 
-  test('empty tool set is a no-op', () => {
-    const tools: ToolSet = {};
-    markLastToolForAnthropicCache(tools);
-    expect(Object.keys(tools)).toEqual([]);
-  });
-
-  test('retention drives the tool-surface breakpoint: long extends it, none omits it', () => {
-    const long: ToolSet = { a: cacheTool('a'), b: cacheTool('b') };
-    markLastToolForAnthropicCache(long, 'long');
-    expect(providerOptions({ value: long.b }))
-      .toEqual({ anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } } });
-
-    const off: ToolSet = { a: cacheTool('a'), b: cacheTool('b') };
-    markLastToolForAnthropicCache(off, 'none');
-    expect(providerOptions({ value: off.b })).toBeUndefined();
+  test('anthropic follows retention, none and non-Anthropic routes leave the tools as they are', () => {
+    expect(providerOptions({ value: marked('anthropic').c })).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+    expect(providerOptions({ value: marked('anthropic', 'long').c })).toEqual({ anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } } });
+    expect(providerOptions({ value: marked('anthropic', 'none').c })).toBeUndefined();
+    expect(providerOptions({ value: marked('openai').c })).toBeUndefined();
+    expect(marked('anthropic', 'short', {})).toEqual({});
   });
 });
 

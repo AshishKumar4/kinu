@@ -205,7 +205,6 @@ import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import type { AgentStoreBroker } from "./agent-facets";
-import { markLastToolForAnthropicCache } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
@@ -3752,11 +3751,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (mode === 'plan' && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
       const toolsets = buildActorTools(builtinDeps);
-
-      // One Anthropic cache breakpoint on the last tool caches the whole tool surface;
-      // inert for non-Anthropic providers.
-      markLastToolForAnthropicCache(toolsets.raw, this.config.getCacheRetention());
-      markLastToolForAnthropicCache(toolsets.turn, this.config.getCacheRetention());
 
       if (claimScope === undefined) {
         this._cachedTools = toolsets;

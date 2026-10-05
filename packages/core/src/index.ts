@@ -794,7 +794,6 @@ export {
   cacheableSystem,
   hasCacheMarkers,
   markCacheTail,
-  markLastToolForAnthropicCache,
   promptCacheOptions,
   promptCacheWarm,
   resolvePromptCacheStrategy,

@@ -11,7 +11,6 @@ import {
   createOpenRouterProvider, createOpenAICompatProvider,
   createWorkersAIProvider,
   DynamicContextLedger, type DynamicContext,
-  markLastToolForAnthropicCache,
   TurnAccumulator, ExtensionHost,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY, CODEX_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
@@ -419,9 +418,6 @@ function chatTools(): ToolSet {
       execute: async ({ x }) => `probed:${x}`,
     }),
   };
-
-  // Both backends mark the tool surface at build time; the same holds here.
-  markLastToolForAnthropicCache(tools);
 
   return tools;
 }
