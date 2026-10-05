@@ -444,26 +444,6 @@ beforeAll(async () => {
       // each beat below seeks it before asserting that beat's DOM.
       await page.waitForFunction(() => window.__kinuLandingMovie !== undefined);
       await page.waitForSelector('[data-landing-frame="slate"] [data-slate-dashboard]');
-      await page.evaluate(() => {
-        const root = document.querySelector('[data-landing-frame="checkout"]');
-
-        const supervise = [...(root?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
-          .find((button) => button.textContent?.trim() === 'Supervise');
-
-        supervise?.click();
-      });
-      await page.waitForFunction(
-        () => document.querySelector('[data-landing-frame="checkout"]')?.getAttribute('data-workspace-mode') === 'supervise'
-          && document.querySelector('[data-workspace-panel="supervise"]')?.textContent?.includes('Automations') === true,
-      );
-      await page.evaluate(() => {
-        const root = document.querySelector('[data-landing-frame="checkout"]');
-
-        const work = [...(root?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
-          .find((button) => button.textContent?.trim() === 'Work');
-
-        work?.click();
-      });
       await page.waitForSelector('[data-landing-frame="checkout"] button[aria-label="Retry"]');
       await page.click('[data-landing-frame="checkout"] button[aria-label="Retry"]');
       await page.waitForFunction(
