@@ -1,6 +1,7 @@
 import { cloudflareTest } from '@cloudflare/vitest-plugin';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { workerCompatibility } from '../cf-backend/vite-agent-bundle';
+import { workerSourceTriggers } from '../../scripts/worker-test-inputs';
 
 export default defineConfig({
   plugins: [
@@ -19,5 +20,5 @@ export default defineConfig({
     }),
   ],
   // `0` disables Vitest's per-test and per-hook clocks; `gate:test-clocks` pins it.
-  test: { include: ['tests/workerd/**/*.test.ts'], testTimeout: 0, hookTimeout: 0 },
+  test: { include: ['tests/workerd/**/*.test.ts'], forceRerunTriggers: workerSourceTriggers() ?? configDefaults.forceRerunTriggers, testTimeout: 0, hookTimeout: 0 },
 });

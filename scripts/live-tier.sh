@@ -157,7 +157,7 @@ echo "────────────────────────�
 set +e
 STARTED=$SECONDS
 export KINU_EVAL_SPEND_FILE="$SPEND"
-bun test --timeout=0 "${TARGETS[@]}" --reporter=junit --reporter-outfile="$JUNIT"
+bun test --timeout=0 --isolate "${TARGETS[@]}" --reporter=junit --reporter-outfile="$JUNIT"
 TEST_STATUS=$?
 SECONDS_SPENT=$((SECONDS - STARTED))
 

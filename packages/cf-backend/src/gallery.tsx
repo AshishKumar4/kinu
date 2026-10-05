@@ -386,13 +386,14 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
 
   // `&chatgpt=device`: a machine that signs in; without, the Codex device code.
   if (path === "/api/user/chatgpt") {
-    return fixtureJson(CHATGPT_DEVICE ? { device: GALLERY_DEVICE, status: galleryChatGptStatus() } : { device: null, status: null });
+    return fixtureJson({ ...(CHATGPT_DEVICE ? { device: GALLERY_DEVICE, status: galleryChatGptStatus() } : { device: null, status: null }),
+      account: null, machineSignIn: null });
   }
 
   if (path === "/api/user/chatgpt/sign-in" && method === "POST") {
     settingsChatGptSignedIn = true;
 
-    return fixtureJson({ authorizeUrl: "about:blank", device: GALLERY_DEVICE });
+    return fixtureJson({ state: "open", authorizeUrl: "about:blank", device: GALLERY_DEVICE });
   }
 
   if (path === "/api/user/models") {

@@ -7,6 +7,8 @@ export const CLI_TEST_ROOT = 'packages/cli/tests';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
+const TEST_FLAGS = process.argv.slice(2);
+
 const ISOLATED = [
   'behavior.test.ts',
   'chat-app.test.tsx',
@@ -27,7 +29,7 @@ const SUBPROCESS_HEAVY = [
 
 function run(files: readonly string[], parallel: number): void {
   const result = Bun.spawnSync(
-    [process.execPath, 'test', '--timeout=0', `--parallel=${String(parallel)}`, ...files],
+    [process.execPath, 'test', '--timeout=0', `--parallel=${String(parallel)}`, ...TEST_FLAGS, ...files],
     { cwd: REPO_ROOT, stdout: 'inherit', stderr: 'inherit' },
   );
 

@@ -31,7 +31,7 @@ import * as v from 'valibot';
 import type { UIMessageChunk } from 'ai';
 
 import {
-  BUILTIN_PROFILE_CATALOG, isAgentRpcMethod, JOB_OUTPUT_EVENT, profileCatalogDigest, READS_CHANGED_EVENT, renderSoulMarkdown,
+  BUILTIN_PROFILE_CATALOG, isAgentRpcMethod, JOB_OUTPUT_EVENT, JsonValueSchema, profileCatalogDigest, READS_CHANGED_EVENT, renderSoulMarkdown,
   type ProfileCatalog, type RunEvent, type JsonValue,
 } from '../../packages/core/src/index';
 import { DeploymentAnswer, EVAL_WEB_IDENTITY_ENV, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
@@ -39,9 +39,11 @@ import {
   decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity,
   type PublicResponseFrame, type PublicTurnRecorder,
-  HeardStreams, KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS,
+  HeardStreams, KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS, type InspectionAnswer,
 } from './session';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
+import { SubordinateInspectionRequestSchema } from '../../packages/core/src/subordinates/inspection';
+import { measurePromptUsage } from './results';
 import {
   BROADCAST_FRAME, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID,
   RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatTerminalFrame, chatTurnFrames, replayCompleteFrame, rpcReplyFrame,
@@ -154,6 +156,71 @@ test("a helper's own jobs are the RPC's actor, and a helper dismissed since the 
     expect(await session.backgroundJobs('gone-helper')).toEqual([]);
     expect(await session.backgroundJobs()).toHaveLength(1);
     expect(asked).toEqual([[50, 'task-helper'], [50, 'gone-helper'], [50]]);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+test('trial usage walks retained descendants and every run and event page without merging actor identities', async () => {
+  const step = (index: number, input: number, cacheRead: number, output: number) => ({
+    type: 'step_finish', runId: 'shared-run-id', eventIndex: index, stepIndex: index,
+    timestamp: `2026-10-02T19:00:0${String(index)}Z`, usage: { input, cacheRead, output },
+  } satisfies Extract<RunEvent, { type: 'step_finish' }>);
+
+  const child = (name: string) => ({ name, status: 'idle', lifetime: 'workspace', actorReference: { actorId: name } });
+  const run = (runId: string) => ({ runId, startedAt: 10, status: 'completed', userMessage: 'work' });
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
+    websocket: { message: answerRpcs((request) => {
+      const query = v.parse(SubordinateInspectionRequestSchema, request.args[0]);
+
+      if (query.view === 'children') {
+        const items = [];
+
+        if (query.path.length === 0) items.push(child('helper'));
+        else if (query.actor === 'helper') items.push(child('nested'));
+
+        return v.parse(JsonValueSchema, { view: 'children', page: { status: 'end', items } });
+      }
+
+      if (query.view === 'runs') {
+        const runId = query.actor === 'helper' ? 'later-run' : 'shared-run-id';
+
+        const page = query.actor === 'helper' && query.page.cursor === undefined
+          ? { status: 'more', items: [run('shared-run-id')], next: { after: 'first-run' } }
+          : { status: 'end', items: [run(runId)] };
+
+        return v.parse(JsonValueSchema, { view: 'runs', page });
+      }
+
+      if (query.view === 'events') {
+        let page: Extract<InspectionAnswer, { view: 'events' }>['page'];
+
+        if (query.actor === 'nested') page = { status: 'end', items: [step(4, 500, 400, 7)] };
+        else if (query.runId === 'later-run') page = { status: 'end', items: [{ ...step(3, 50, 0, 3), runId: 'later-run' }] };
+        else if (query.query.since === 0) page = { status: 'more', items: [step(1, 100, 60, 5)], next: 2 };
+        else page = { status: 'end', items: [step(2, 200, 180, 9)] };
+
+        return v.parse(JsonValueSchema, { view: 'events', page });
+      }
+
+      throw new Error('unexpected inspector view');
+    }) },
+  });
+
+  const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
+    workspace: 'probe', purpose: 'request accounting',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+
+    const usage = measurePromptUsage(await session.actorLedgers([step(0, 100, 20, 10)]));
+
+    expect(usage).toMatchObject({ inputTokens: 950, outputTokens: 34, metadata: { cacheReadTokens: 660 } });
+    expect(usage.metadata.steps.map(({ actor, stepIndex }) => [actor, stepIndex])).toEqual([
+      ['main', 0], ['helper', 1], ['helper', 2], ['helper', 3], ['nested', 4],
+    ]);
+    expect(usage.metadata.cache?.ema).toBeCloseTo(0.41856, 14);
   } finally { await session.teardown(); await server.stop(true); }
 });
 

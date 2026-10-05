@@ -6,7 +6,7 @@ import { platformFact, type EvalAccount, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalNameSlug, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import { gatherEvidence, writeEvidence, type WorkspaceEvidence } from './evidence';
-import { HarnessRunSchema, type StepUsage, type UsageMetadata } from './results';
+import { HarnessRunSchema, measurePromptUsage, type ActorLedger } from './results';
 import type { KinuPublicSession } from './session';
 import { claimTrialAccount, trialTarget } from './slot';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } from './target';
@@ -82,46 +82,6 @@ const MEMORY_RESETS = platformFact('do.isolate.oom_reported').observable.map((ob
 /** Whether a failure the deployment reported is its workspace's isolate reset for memory. */
 function memoryReset(message: string): boolean {
   return MEMORY_RESETS.some((reset) => message.includes(reset));
-}
-
-/** Prompt usage from the public ledger, complete totals only: a partial denominator would overstate cache hits. */
-export function measurePromptUsage(events: readonly RunEvent[]) {
-  const steps: StepUsage[] = [];
-
-  for (const event of events) {
-    if (event.type !== 'step_finish') continue;
-    steps.push({
-      runId: event.runId, stepIndex: event.stepIndex,
-      inputTokens: event.usage?.input ?? null,
-      cacheReadTokens: event.usage?.cacheRead ?? null,
-      cacheWriteTokens: event.usage?.cacheWrite ?? null,
-    });
-  }
-
-  const total = (field: 'inputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'): number | undefined => {
-    if (steps.length === 0) return undefined;
-
-    let tokens = 0;
-
-    for (const step of steps) {
-      const count = step[field];
-
-      if (count === null) return undefined;
-      tokens += count;
-    }
-
-    return tokens;
-  };
-
-  const metadata: UsageMetadata = { steps };
-
-  for (const field of ['cacheReadTokens', 'cacheWriteTokens'] as const) {
-    const tokens = total(field);
-
-    if (tokens !== undefined) metadata[field] = tokens;
-  }
-
-  return { inputTokens: total('inputTokens'), metadata };
 }
 
 /** A turn whose runs the deployment ended in error measured the deployment, not the agent. */
@@ -249,13 +209,15 @@ export async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeli
  * ended: nothing grades it, and the deploy's kill follows its cancel within seconds.
  */
 async function closeWorkspace(session: KinuPublicSession, evidence: EvalTask['evidence'] | null, errors: HarnessError[], timeline: TrialTimeline): Promise<{
-  events: RunEvent[]; costUsd: number | undefined; workspace: WorkspaceEvidence;
+  events: RunEvent[]; ledgers: ActorLedger[]; costUsd: number | undefined; workspace: WorkspaceEvidence;
 }> {
   let events: RunEvent[] = [];
+  let ledgers: ActorLedger[] = [];
   let costUsd: number | undefined;
 
   try {
     events = [...await timeline.span('ledger', () => session.runEvents())];
+    ledgers = await timeline.span('request usage', () => session.actorLedgers(events));
     costUsd = (await timeline.span('spend', () => session.spend())).total.usd;
   } catch (error) {
     errors.push({ name: 'InfraError', message: `the trial's ledger could not be read: ${renderThrownChain({ cause: error })}` });
@@ -273,7 +235,7 @@ async function closeWorkspace(session: KinuPublicSession, evidence: EvalTask['ev
     errors.push({ name: message.includes(INFRA_FAILURE_MARKER) ? 'InfraError' : 'EvalCleanupError', message });
   }
 
-  return { events, costUsd, workspace };
+  return { events, ledgers, costUsd, workspace };
 }
 
 /**
@@ -391,8 +353,8 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
       timeline.mark('close');
 
-      const { events, costUsd, workspace } = session === undefined
-        ? { events: [], costUsd: undefined, workspace: { files: new Map(), slates: null, data: [], unread: ['no workspace was opened'] } }
+      const { events, ledgers, costUsd, workspace } = session === undefined
+        ? { events: [], ledgers: [], costUsd: undefined, workspace: { files: new Map(), slates: null, data: [], unread: ['no workspace was opened'] } }
         : await closeWorkspace(session, stop.aborted ? null : task.evidence, errors, timeline);
 
       try {
@@ -406,7 +368,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       }
 
       const metrics = measure(events);
-      const promptUsage = measurePromptUsage(events);
+      const promptUsage = measurePromptUsage(ledgers);
       const usageMetadata = promptUsage.metadata;
 
       if (costUsd !== undefined) usageMetadata.costUsd = costUsd;
@@ -441,7 +403,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         events: transcript,
         usage: {
           provider: input.model.split('/')[0] ?? 'unknown', model: input.model, toolCalls: metrics.toolCalls,
-          inputTokens: promptUsage.inputTokens, outputTokens: metrics.outputTokens,
+          inputTokens: promptUsage.inputTokens, outputTokens: promptUsage.outputTokens,
           metadata: usageMetadata,
         },
         errors: scrubbed,

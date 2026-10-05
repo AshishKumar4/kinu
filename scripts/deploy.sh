@@ -343,7 +343,7 @@ step_red() {
 }
 finish() {
   mark end
-  report render
+  report render || KINU_REDS=1
   exit "$KINU_REDS"
 }
 
@@ -451,10 +451,18 @@ fi
 # withdrawn. Every other gate's red is recoverable on staging, so it runs after
 # the upload and gates the promotion instead.
 if [ "$KINU_PROMOTE" != "1" ]; then
-  # The secret scan has its own cheap CI part. Its red still holds the upload; other CI parts need not finish.
-  bun "$KINU_ROOT/scripts/ladder.ts" --ci-upload --ci-run="$KINU_CI_RUN" || { KINU_REDS=1; finish; }
+  # CI's upload proof and the local account check are independent; both still hold every upload.
+  run_phase upload &
+  KINU_UPLOAD_PID=$!
+  bun "$KINU_ROOT/scripts/ladder.ts" --ci-upload --ci-run="$KINU_CI_RUN" || KINU_REDS=1
+  wait "$KINU_UPLOAD_PID" || KINU_REDS=1
+  if [ "$KINU_REDS" != "0" ]; then
+    echo -e "${RED}The upload checks are red, so nothing was built or uploaded.${NC}"
+    finish
+  fi
+else
+  stop_phase upload
 fi
-stop_phase upload
 mark upload
 
 if [ "$KINU_GATES_ONLY" = "1" ]; then
@@ -827,22 +835,6 @@ else
 fi
 cd "$KINU_ROOT" || { step_red publish "the checkout" "cannot cd to $KINU_ROOT"; finish; }
 
-# ── Step 4a: eval-service's provider keys ─────────────────────────────────
-#
-# A reset deletes every Durable Object, eval-service's provider credentials
-# with them, and it may have run in another deploy than this one, so the eval
-# pass could find no model. Before the tiers and the evals, on every deploy
-# the deployment serves, scripts/eval-provider-keys.ts asks it which models
-# eval-service can run, stores through the product's own route each key of the
-# operator's ~/.config/kinu/eval-provider-keys.json whose provider it does not
-# list, and checks it then lists every eval model. It prints no key; whatever
-# is missing is a finding in the report, not a stop.
-if [ "$KINU_SERVING" = "1" ]; then
-  echo ""
-  echo -e "${BOLD}Step 4a: eval-service's provider keys${NC}"
-  bun "$KINU_ROOT/scripts/eval-provider-keys.ts" "${KINU_URL%/}" || KINU_REDS=1
-fi
-
 # ── Step 4b: The tiers' scripted model ────────────────────────────────────
 #
 # The product tiers below check the product, not a model's choices: their
@@ -1034,6 +1026,7 @@ fi
 # ON PRODUCTION, THE HISTORY: the build it took, which a later rollback may
 # return to. Its evals ran before it was promoted, against the build production
 # served then.
+report budget "$SECONDS" || KINU_REDS=1
 echo ""
 if [ "$KINU_REDS" != "0" ] && [ "$KINU_ENV" = "staging" ]; then
   echo -e "${RED}❌ This deploy has a red, so no record is written: $KINU_SHA cannot be promoted.${NC}"

@@ -100,8 +100,11 @@ export class HireOrchestrator extends ProductionOrchestrator {
   async rosterRows(): Promise<RosterRow[]> {
     const rows = this.probeState.storage.sql.exec<{
       actor_id: string; name: string; lifetime: string; status: string; task_event_id: string | null;
-    }>(`SELECT actor_id, name, lifetime, status, task_event_id
-        FROM actor_subordinates ORDER BY created_at`).toArray();
+    }>(`SELECT actor_id, name,
+        COALESCE((SELECT lifetime FROM workspace_actors
+          WHERE actor_id = json_extract(actor_subordinates.actor_reference, '$.actorId')),
+          json_extract(birth_request, '$.seed.lifetime')) AS lifetime,
+        status, task_event_id FROM actor_subordinates ORDER BY created_at`).toArray();
 
     return rows.map((row) => ({
       actorId: row.actor_id, name: row.name, lifetime: row.lifetime,

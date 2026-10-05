@@ -301,7 +301,7 @@ function runTargets(): readonly string[] {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-skip-ratchet-'));
 
   const arms: readonly { readonly what: string; readonly argv: readonly string[] }[] = [
-    { what: 'bun test', argv: ['test', '--timeout=0', ...SKIP_RATCHET_TARGETS, '--reporter=junit'] },
+    { what: 'bun test', argv: ['test', '--timeout=0', '--isolate', ...SKIP_RATCHET_TARGETS, '--reporter=junit'] },
   ];
 
   try {

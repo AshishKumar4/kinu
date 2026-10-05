@@ -21,7 +21,7 @@ bun ../scripts/lean-citations.ts
 # The deployed code on those fixtures: exactly the tests lean/traceability.yaml names, run
 # from the repository root as the ladder runs every suite, so the root preload applies.
 mapfile -t refinement_tests < <(node check-traceability.mjs --list-refinement-tests)
-(cd .. && bun test "${refinement_tests[@]}")
+(cd .. && bun test --isolate "${refinement_tests[@]}")
 
 # Devbox's lifecycle corpus uses its own pinned Lean toolchain.
 cd ../packages/devbox/proof

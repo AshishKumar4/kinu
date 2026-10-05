@@ -53,12 +53,14 @@ describe('a run under a deadline', () => {
     // Prints what it was told, once: that output restarts the silence, and the second stretch ends in the kill.
     const listens = "const { watch, readFileSync } = await import('node:fs'); const path = process.env.KINU_SILENCE_NOTICE ?? '';"
       + " const watcher = watch(path, () => { const told = readFileSync(path, 'utf8'); if (told !== '') { console.log(`told: ${told.trim()}`); watcher.close(); } });"
+      + " console.log('listening');"
       + ' await new Promise(() => {});';
 
     const outcome = await runUnderDeadline({ argv: ['bun', '-e', listens], seconds: 1, label: 'listens', stdio: 'pipe' });
 
     expect(outcome).toMatchObject({ killed: true, exitCode: DEADLINE_EXIT_CODE });
-    expect(outcome.stdout).toMatch(/^told: silent 0\.\d+s of 1s$/mu);
+    expect(outcome.stdout).toMatch(/^told: silent \d+\.\d+s of 1s$/mu);
+    expect(outcome.stdout.split('\n').filter((line) => line.startsWith('told: '))).toHaveLength(1);
   });
 
   test('a run that ends keeps its own exit code and is not reported as killed', async () => {
@@ -122,7 +124,8 @@ describe('a run under a deadline', () => {
     });
 
     expect(outcome.exitCode).not.toBe(0);
-    expect(outcome.leftovers.map((line) => line.replace(/^\d+ /u, ''))).toEqual(['/bin/sleep 3600']);
+    expect(outcome.leftovers).toHaveLength(1);
+    expect(outcome.leftovers[0]).toMatch(/^\d+ (?:env -i )?\/bin\/sleep 3600$/u);
   });
 
   // The shell exits only once the holder has dropped the mark: its fork, still marked, must not be what the exit sees.

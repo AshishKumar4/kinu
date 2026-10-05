@@ -96,6 +96,7 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
+import type { ActorLedger } from './results';
 
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, READS_CHANGED_EVENT,
@@ -712,7 +713,11 @@ const InspectionAnswerSchema = v.variant('view', [
   v.object({ view: v.literal('children'), page: pageOf(v.object({
     name: v.string(), status: v.string(), lifetime: v.string(), actorReference: v.nullable(v.object({ actorId: v.string() })),
   })) }),
-  v.object({ view: v.literal('runs'), page: pageOf(v.object({ startedAt: v.number(), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
+  v.object({ view: v.literal('runs'), page: pageOf(v.object({ runId: v.string(), startedAt: v.number(), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
+  v.object({ view: v.literal('events'), page: v.variant('status', [
+    v.object({ status: v.literal('more'), items: v.array(RunEventSchema), next: v.number() }),
+    v.object({ status: v.literal('end'), items: v.array(RunEventSchema) }),
+  ]) }),
   v.object({ view: v.literal('missing'), reason: v.string(), error: v.string() }),
 ]);
 
@@ -2091,6 +2096,75 @@ export class KinuPublicSession {
     events.sort(compareRunEventOrder);
 
     return events;
+  }
+
+  /** Main's already-read ledger and every retained descendant's requests, through the public inspector's pages. */
+  async actorLedgers(rootEvents: readonly RunEvent[]): Promise<ActorLedger[]> {
+    const ledgers: ActorLedger[] = [{ actor: 'main', events: rootEvents }];
+
+    const visit = async (path: string[], actor?: string): Promise<void> => {
+      for (let cursor: { after: string } | undefined; ;) {
+        const request: SubordinateInspectionRequest = { path, view: 'children', page: { limit: RUN_PAGE } };
+
+        if (actor !== undefined) request.actor = actor;
+
+        if (cursor !== undefined) request.page.cursor = cursor;
+
+        const children = await this.inspect(request);
+
+        if (children.view !== 'children') throw new Error(`the public inspector could not list children of ${path.join('/')}`);
+
+        await Promise.all(children.page.items.map(async (child) => {
+          if (child.actorReference === null) return;
+
+          const childPath = [...path, child.name];
+          const childActor = child.actorReference.actorId;
+          const events = await this.actorStepEvents(childPath, childActor);
+
+          ledgers.push({ actor: childActor, events });
+          await visit(childPath, childActor);
+        }));
+
+        if (children.page.status === 'end') return;
+        cursor = children.page.next;
+      }
+    };
+
+    await visit([]);
+
+    return ledgers;
+  }
+
+  private async actorStepEvents(path: string[], actor: string): Promise<RunEvent[]> {
+    const events: RunEvent[] = [];
+
+    for (let cursor: { after: string } | undefined; ;) {
+      const request: SubordinateInspectionRequest = { path, actor, view: 'runs', page: { limit: RUN_PAGE } };
+
+      if (cursor !== undefined) request.page.cursor = cursor;
+
+      const runs = await this.inspect(request);
+
+      if (runs.view !== 'runs') throw new Error(`the public inspector could not read runs of ${path.join('/')}`);
+
+      for (const run of runs.page.items) await this.appendActorSteps(events, path, actor, run.runId);
+
+      if (runs.page.status === 'end') return events;
+      cursor = runs.page.next;
+    }
+  }
+
+  private async appendActorSteps(events: RunEvent[], path: string[], actor: string, runId: string): Promise<void> {
+    for (let since = 0; ;) {
+      const page = await this.inspect({ path, actor, view: 'events', runId, query: { since, limit: EVENT_PAGE } });
+
+      if (page.view !== 'events') throw new Error(`the public inspector could not read requests of ${path.join('/')}/${runId}`);
+
+      for (const event of page.page.items) if (event.type === 'step_finish') events.push(event);
+
+      if (page.page.status === 'end') return;
+      since = page.page.next;
+    }
   }
 
   /**

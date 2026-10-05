@@ -141,7 +141,8 @@ describe('account panels', () => {
             await providers.waitForSelector('[role="dialog"]');
             await settleAccountFixture(providers);
             await providers.waitForFunction(
-              () => document.querySelector('[role="dialog"]')?.textContent?.includes('Connect ChatGPT'),
+              () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
+                .some((button) => button.textContent?.includes('ChatGPT') && !button.disabled && button.checkVisibility()),
             );
 
             const text = await dialogText(providers);

@@ -169,14 +169,14 @@
       "exit": 0
     },
     "bun run gate:skip-ratchet": {
-      "wallSeconds": 42.6,
-      "cpuSeconds": 48.47,
-      "peakRssMb": 3819.76,
-      "peakRunnable": 41,
-      "peakCpuThreads": 4.01,
-      "meanThreads": 1.14,
-      "samples": 163,
-      "loadAtStart": 25.63,
+      "wallSeconds": 26.34,
+      "cpuSeconds": 57.23,
+      "peakRssMb": 4744.12,
+      "peakRunnable": 21,
+      "peakCpuThreads": 14.82,
+      "meanThreads": 2.17,
+      "samples": 139,
+      "loadAtStart": 5.47,
       "exit": 0
     },
     "bun run gate:dead-code": {
@@ -311,28 +311,6 @@
       "loadAtStart": 2.44,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": {
-      "wallSeconds": 0.33,
-      "cpuSeconds": 0.32,
-      "peakRssMb": 80.16,
-      "peakRunnable": 3,
-      "peakCpuThreads": 0,
-      "meanThreads": 0.97,
-      "samples": 5,
-      "loadAtStart": 2.53,
-      "exit": 0
-    },
-    "bun test --timeout=0 scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": {
-      "wallSeconds": 28.1,
-      "cpuSeconds": 30.47,
-      "peakRssMb": 509.44,
-      "peakRunnable": 6,
-      "peakCpuThreads": 1.51,
-      "meanThreads": 1.08,
-      "samples": 149,
-      "loadAtStart": 1.48,
-      "exit": 0
-    },
     "bun test --timeout=0 scripts/gate-set-equality.test.ts": {
       "wallSeconds": 1.44,
       "cpuSeconds": 2.16,
@@ -367,14 +345,14 @@
       "exit": 0
     },
     "bun run test:spine": {
-      "wallSeconds": 1.44,
-      "cpuSeconds": 1.7,
-      "peakRssMb": 385.03,
-      "peakRunnable": 3,
-      "peakCpuThreads": 1.25,
-      "meanThreads": 1.18,
-      "samples": 24,
-      "loadAtStart": 2.36,
+      "wallSeconds": 4.81,
+      "cpuSeconds": 5.72,
+      "peakRssMb": 605.66,
+      "peakRunnable": 4,
+      "peakCpuThreads": 1.99,
+      "meanThreads": 1.19,
+      "samples": 59,
+      "loadAtStart": 5.69,
       "exit": 0
     },
     "bun run gate:python-suites": {
@@ -386,28 +364,6 @@
       "meanThreads": 0.86,
       "samples": 12,
       "loadAtStart": 2.14,
-      "exit": 0
-    },
-    "bun test --timeout=0 packages/devbox/": {
-      "wallSeconds": 31.33,
-      "cpuSeconds": 24.29,
-      "peakRssMb": 7574.31,
-      "peakRunnable": 3,
-      "peakCpuThreads": 2.02,
-      "meanThreads": 0.78,
-      "samples": 154,
-      "loadAtStart": 1.89,
-      "exit": 0
-    },
-    "bun test --timeout=0 packages/test-utils/": {
-      "wallSeconds": 7.13,
-      "cpuSeconds": 3.06,
-      "peakRssMb": 436.66,
-      "peakRunnable": 5,
-      "peakCpuThreads": 1.36,
-      "meanThreads": 0.43,
-      "samples": 68,
-      "loadAtStart": 2.21,
       "exit": 0
     },
     "bun test --timeout=0 --parallel=4 packages/cf-backend/": {
@@ -465,17 +421,6 @@
       "loadAtStart": 2.97,
       "exit": 0
     },
-    "bun test --timeout=0 packages/pc-agent/": {
-      "wallSeconds": 18.77,
-      "cpuSeconds": 2.39,
-      "peakRssMb": 101.87,
-      "peakRunnable": 1,
-      "peakCpuThreads": 0.97,
-      "meanThreads": 0.13,
-      "samples": 114,
-      "loadAtStart": 4.51,
-      "exit": 0
-    },
     "bun scripts/tracing-gate.ts": {
       "wallSeconds": 1.77,
       "cpuSeconds": 2.88,
@@ -485,28 +430,6 @@
       "meanThreads": 1.63,
       "samples": 27,
       "loadAtStart": 5.02,
-      "exit": 0
-    },
-    "bun test --timeout=0 ./tests/live-model/ ./tests/first-run/": {
-      "wallSeconds": 16.57,
-      "cpuSeconds": 44.94,
-      "peakRssMb": 3786.49,
-      "peakRunnable": 46,
-      "peakCpuThreads": 10.92,
-      "meanThreads": 2.71,
-      "samples": 94,
-      "loadAtStart": 6.21,
-      "exit": 0
-    },
-    "bun test --timeout=0 tests/browser/public-pages.test.ts scripts/plan-demo-film.test.ts": {
-      "wallSeconds": 42.06,
-      "cpuSeconds": 38.24,
-      "peakRssMb": 2457.07,
-      "peakRunnable": 24,
-      "peakCpuThreads": 7.13,
-      "meanThreads": 0.91,
-      "samples": 191,
-      "loadAtStart": 2.71,
       "exit": 0
     },
     "bun test --timeout=0 tests/browser/react-runtime-identity.test.ts": {
@@ -597,17 +520,6 @@
       "loadAtStart": 4.45,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/hammer.test.ts scripts/mutation-fences.test.ts": {
-      "wallSeconds": 0.33,
-      "cpuSeconds": 0.25,
-      "peakRssMb": 59.85,
-      "peakRunnable": 1,
-      "peakCpuThreads": 0,
-      "meanThreads": 0.75,
-      "samples": 5,
-      "loadAtStart": 4.67,
-      "exit": 0
-    },
     "bun run gate:mutation-fences": {
       "wallSeconds": 1.56,
       "cpuSeconds": 1.48,
@@ -685,28 +597,6 @@
       "loadAtStart": 3.26,
       "exit": 0
     },
-    "bun test --timeout=0 tests/browser/account-ux.test.ts tests/browser/drive-ux.test.ts tests/browser/slate-preview-ux.test.ts tests/browser/slate-sharing-ux.test.ts": {
-      "wallSeconds": 144.69,
-      "cpuSeconds": 51.17,
-      "peakRssMb": 2524.28,
-      "peakRunnable": 26,
-      "peakCpuThreads": 8.17,
-      "meanThreads": 0.35,
-      "samples": 579,
-      "loadAtStart": 1.98,
-      "exit": 0
-    },
-    "bun test --timeout=0 --path-ignore-patterns=tests/browser/chat-and-files-ux.test.ts --path-ignore-patterns=tests/browser/account-ux.test.ts --path-ignore-patterns=tests/browser/drive-ux.test.ts --path-ignore-patterns=tests/browser/slate-preview-ux.test.ts --path-ignore-patterns=tests/browser/slate-sharing-ux.test.ts tests/browser/*-ux.test.ts tests/browser/computed-style.test.ts": {
-      "wallSeconds": 131.47,
-      "cpuSeconds": 47.64,
-      "peakRssMb": 2835.54,
-      "peakRunnable": 28,
-      "peakCpuThreads": 7.49,
-      "meanThreads": 0.36,
-      "samples": 529,
-      "loadAtStart": 1.88,
-      "exit": 0
-    },
     "bun test --timeout=0 tests/browser/chat-and-files-ux.test.ts": {
       "wallSeconds": 155.64,
       "cpuSeconds": 34.35,
@@ -718,17 +608,6 @@
       "loadAtStart": 0.77,
       "exit": 0
     },
-    "bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts": {
-      "wallSeconds": 0.33,
-      "cpuSeconds": 0.25,
-      "peakRssMb": 64.22,
-      "peakRunnable": 3,
-      "peakCpuThreads": 0,
-      "meanThreads": 0.75,
-      "samples": 5,
-      "loadAtStart": 1.8,
-      "exit": 0
-    },
     "bun run gate:bloat-budget": {
       "wallSeconds": 1,
       "cpuSeconds": 0.44,
@@ -738,28 +617,6 @@
       "meanThreads": 0.44,
       "samples": 13,
       "loadAtStart": 70.66,
-      "exit": 0
-    },
-    "bun test --timeout=0 ./evals/ scripts/deploy-preflight.test.ts": {
-      "wallSeconds": 0.34,
-      "cpuSeconds": 0.39,
-      "peakRssMb": 80.94,
-      "peakRunnable": 6,
-      "peakCpuThreads": 0,
-      "meanThreads": 1.16,
-      "samples": 5,
-      "loadAtStart": 12.41,
-      "exit": 0
-    },
-    "bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts": {
-      "wallSeconds": 13.53,
-      "cpuSeconds": 36.46,
-      "peakRssMb": 3227.32,
-      "peakRunnable": 24,
-      "peakCpuThreads": 11.87,
-      "meanThreads": 2.7,
-      "samples": 91,
-      "loadAtStart": 3.97,
       "exit": 0
     },
     "bun run test:workerd:cf-complexity": {
@@ -938,17 +795,6 @@
       "loadAtStart": 8.38,
       "exit": 0
     },
-    "bun test --timeout=0 tests/browser/chat-scroll.test.ts tests/browser/chat-sparse-pages.test.ts": {
-      "wallSeconds": 50.44,
-      "cpuSeconds": 35.91,
-      "peakRssMb": 2830.21,
-      "peakRunnable": 25,
-      "peakCpuThreads": 6.83,
-      "meanThreads": 0.71,
-      "samples": 226,
-      "loadAtStart": 1.84,
-      "exit": 0
-    },
     "bun run gate:cost-table": {
       "wallSeconds": 1.05,
       "cpuSeconds": 1.81,
@@ -958,28 +804,6 @@
       "meanThreads": 1.72,
       "samples": 18,
       "loadAtStart": 1.06,
-      "exit": 0
-    },
-    "bun test --timeout=0 scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-e2e.test.ts": {
-      "wallSeconds": 10.2,
-      "cpuSeconds": 11.43,
-      "peakRssMb": 401.21,
-      "peakRunnable": 13,
-      "peakCpuThreads": 2.53,
-      "meanThreads": 1.12,
-      "samples": 73,
-      "loadAtStart": 12.19,
-      "exit": 0
-    },
-    "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts": {
-      "wallSeconds": 93.75,
-      "cpuSeconds": 126.09,
-      "peakRssMb": 8265.91,
-      "peakRunnable": 24,
-      "peakCpuThreads": 12.74,
-      "meanThreads": 1.34,
-      "samples": 362,
-      "loadAtStart": 11.55,
       "exit": 0
     },
     "bash scripts/product-flows-tier.sh": {
@@ -993,26 +817,202 @@
       "loadAtStart": 31.51,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts": {
-      "wallSeconds": 37.9,
-      "cpuSeconds": 25.94,
-      "peakRssMb": 920.89,
-      "peakRunnable": 10,
-      "peakCpuThreads": 2.89,
-      "meanThreads": 0.68,
-      "samples": 183,
-      "loadAtStart": 9.43,
+    "bun test --timeout=0 --isolate scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts": {
+      "wallSeconds": 1.01,
+      "cpuSeconds": 1.31,
+      "peakRssMb": 284.86,
+      "peakRunnable": 18,
+      "peakCpuThreads": 1.39,
+      "meanThreads": 1.3,
+      "samples": 17,
+      "loadAtStart": 6.38,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts": {
-      "wallSeconds": 1.64,
-      "cpuSeconds": 1.08,
-      "peakRssMb": 178.5,
-      "peakRunnable": 3,
-      "peakCpuThreads": 1.23,
-      "meanThreads": 0.66,
-      "samples": 28,
-      "loadAtStart": 22.33,
+    "bun test --timeout=0 --isolate packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts": {
+      "wallSeconds": 3.26,
+      "cpuSeconds": 3.17,
+      "peakRssMb": 265.25,
+      "peakRunnable": 4,
+      "peakCpuThreads": 1.93,
+      "meanThreads": 0.97,
+      "samples": 51,
+      "loadAtStart": 33.16,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts": {
+      "wallSeconds": 86.6,
+      "cpuSeconds": 113.5,
+      "peakRssMb": 5862.76,
+      "peakRunnable": 24,
+      "peakCpuThreads": 6.93,
+      "meanThreads": 1.31,
+      "samples": 344,
+      "loadAtStart": 33.95,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": {
+      "wallSeconds": 3.58,
+      "cpuSeconds": 3.74,
+      "peakRssMb": 260.92,
+      "peakRunnable": 7,
+      "peakCpuThreads": 2.06,
+      "meanThreads": 1.05,
+      "samples": 51,
+      "loadAtStart": 26.56,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": {
+      "wallSeconds": 85.97,
+      "cpuSeconds": 85.5,
+      "peakRssMb": 2640.48,
+      "peakRunnable": 15,
+      "peakCpuThreads": 10.35,
+      "meanThreads": 0.99,
+      "samples": 349,
+      "loadAtStart": 23.82,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate packages/test-utils/": {
+      "wallSeconds": 15.91,
+      "cpuSeconds": 7.93,
+      "peakRssMb": 530.85,
+      "peakRunnable": 7,
+      "peakCpuThreads": 1.7,
+      "meanThreads": 0.5,
+      "samples": 102,
+      "loadAtStart": 9.2,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate packages/pc-agent/": {
+      "wallSeconds": 34.41,
+      "cpuSeconds": 9.04,
+      "peakRssMb": 340.77,
+      "peakRunnable": 4,
+      "peakCpuThreads": 2.02,
+      "meanThreads": 0.26,
+      "samples": 173,
+      "loadAtStart": 8.71,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate ./tests/live-model/ ./tests/first-run/": {
+      "wallSeconds": 27.98,
+      "cpuSeconds": 62.13,
+      "peakRssMb": 4883.04,
+      "peakRunnable": 13,
+      "peakCpuThreads": 14.43,
+      "meanThreads": 2.22,
+      "samples": 143,
+      "loadAtStart": 7.35,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate ./evals/ scripts/deploy-preflight.test.ts": {
+      "wallSeconds": 14.8,
+      "cpuSeconds": 34.78,
+      "peakRssMb": 3012.21,
+      "peakRunnable": 16,
+      "peakCpuThreads": 10.62,
+      "meanThreads": 2.35,
+      "samples": 95,
+      "loadAtStart": 6.9,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-e2e.test.ts": {
+      "wallSeconds": 9.27,
+      "cpuSeconds": 10.39,
+      "peakRssMb": 509.33,
+      "peakRunnable": 11,
+      "peakCpuThreads": 2.69,
+      "meanThreads": 1.12,
+      "samples": 76,
+      "loadAtStart": 6.56,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate tests/browser/account-ux.test.ts tests/browser/drive-ux.test.ts tests/browser/slate-preview-ux.test.ts tests/browser/slate-sharing-ux.test.ts": {
+      "wallSeconds": 112.03,
+      "cpuSeconds": 80.39,
+      "peakRssMb": 3643.89,
+      "peakRunnable": 28,
+      "peakCpuThreads": 9.58,
+      "meanThreads": 0.72,
+      "samples": 430,
+      "loadAtStart": 6.09,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate tests/browser/public-pages.test.ts scripts/plan-demo-film.test.ts": {
+      "wallSeconds": 49.28,
+      "cpuSeconds": 53.11,
+      "peakRssMb": 3009.32,
+      "peakRunnable": 23,
+      "peakCpuThreads": 7,
+      "meanThreads": 1.08,
+      "samples": 220,
+      "loadAtStart": 16.62,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate tests/browser/chat-scroll.test.ts tests/browser/chat-sparse-pages.test.ts": {
+      "wallSeconds": 52.43,
+      "cpuSeconds": 36.86,
+      "peakRssMb": 3527.95,
+      "peakRunnable": 26,
+      "peakCpuThreads": 8.59,
+      "meanThreads": 0.7,
+      "samples": 233,
+      "loadAtStart": 11.32,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts": {
+      "wallSeconds": 5.34,
+      "cpuSeconds": 2.38,
+      "peakRssMb": 297.78,
+      "peakRunnable": 4,
+      "peakCpuThreads": 1.78,
+      "meanThreads": 0.45,
+      "samples": 60,
+      "loadAtStart": 6.19,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts": {
+      "wallSeconds": 42.79,
+      "cpuSeconds": 24.41,
+      "peakRssMb": 1367.9,
+      "peakRunnable": 20,
+      "peakCpuThreads": 2.54,
+      "meanThreads": 0.57,
+      "samples": 199,
+      "loadAtStart": 26.51,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts": {
+      "wallSeconds": 51.24,
+      "cpuSeconds": 27.61,
+      "peakRssMb": 588.62,
+      "peakRunnable": 13,
+      "peakCpuThreads": 2.37,
+      "meanThreads": 0.54,
+      "samples": 230,
+      "loadAtStart": 23.98,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate packages/devbox/": {
+      "wallSeconds": 119.65,
+      "cpuSeconds": 107.01,
+      "peakRssMb": 4960.57,
+      "peakRunnable": 25,
+      "peakCpuThreads": 22.47,
+      "meanThreads": 0.89,
+      "samples": 485,
+      "loadAtStart": 20.18,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate --path-ignore-patterns=tests/browser/chat-and-files-ux.test.ts --path-ignore-patterns=tests/browser/account-ux.test.ts --path-ignore-patterns=tests/browser/drive-ux.test.ts --path-ignore-patterns=tests/browser/slate-preview-ux.test.ts --path-ignore-patterns=tests/browser/slate-sharing-ux.test.ts tests/browser/*-ux.test.ts tests/browser/computed-style.test.ts": {
+      "wallSeconds": 217.09,
+      "cpuSeconds": 202.4,
+      "peakRssMb": 6312.31,
+      "peakRunnable": 29,
+      "peakCpuThreads": 11.03,
+      "meanThreads": 0.93,
+      "samples": 765,
+      "loadAtStart": 8.56,
       "exit": 0
     }
   }
