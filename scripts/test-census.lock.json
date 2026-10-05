@@ -88,8 +88,8 @@
           "file": "packages/core/src/bench/longhorizon.ts",
           "edits": [
             [
-              "  const entries = generateLongHorizonEntries(spec);\n  const component = pick(COMPONENTS, unitHash(`${spec.seed}:question:component`));",
-              "  const entries = generateLongHorizonEntries({ ...spec, seed: 0 });\n  const component = pick(COMPONENTS, unitHash('0:question:component'));"
+              "export function buildLongHorizonQuestions(spec: LongHorizonSpec): LongHorizonQuestion[] {",
+              "export function buildLongHorizonQuestions(input: LongHorizonSpec): LongHorizonQuestion[] {\n  const spec = { ...input, seed: 0 };"
             ]
           ]
         }

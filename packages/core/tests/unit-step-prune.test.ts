@@ -5,6 +5,7 @@ import {
   pruneStepToolOutputs,
   composePrepareStep,
   DynamicContextLedger,
+  toolPairingGaps,
   outputReserveTokens,
   stepContextLimit,
   type ModelWindow,
@@ -201,6 +202,9 @@ describe('composePrepareStep with pruning', () => {
     const result = present(await composePrepareStep({ prune: budgetFor(WINDOW) }, { stepNumber: 3, messages, steps: [] }), 'prepared step');
     expect(result.messages.length).toBe(messages.length);
     expect(outputText(resultPart(result.messages[2]))).toContain('...[truncated:');
+    const gaps = toolPairingGaps(result.messages);
+    expect([...gaps.calls]).toEqual([]);
+    expect([...gaps.results]).toEqual([]);
   });
 
   test('under budget with no extensions → no step override at all', async () => {

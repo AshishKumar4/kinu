@@ -2,6 +2,7 @@
  * Local actor identity: one SQLite file, N logical actors, each a `workspace_actors` row.
  * The directory re-validates on every handle touch, so a retired actor stops answering at once.
  */
+import { Effect } from 'effect';
 import { WorkspaceActorDirectory, type CreateWorkspaceActor, type WorkspaceActor } from '../identity/workspace-actors';
 import { bindActorHandle, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
@@ -128,9 +129,11 @@ export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): Ac
 
   if (!scope) throw new KinuError('denied', 'The actor binding was not issued by a local root.');
   scope.directory.validate(binding.reference, scope.path);
-  const validate = () => { scope.directory.validate(binding.reference, scope.path); };
 
-  const actor = bindActorHandle(sql, { ...binding.reference, name: binding.name, storageKey: binding.storageKey }, validate);
+  const actor = bindActorHandle(sql, { ...binding.reference, name: binding.name, storageKey: binding.storageKey }, () => Effect.sync(() => {
+    scope.directory.validate(binding.reference, scope.path);
+  }));
+
   actors.set(actor, scope);
 
   return actor;

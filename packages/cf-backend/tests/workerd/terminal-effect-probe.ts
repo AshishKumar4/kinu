@@ -20,7 +20,7 @@ import {
 
 /** Real `TERMINAL_EFFECT_NAMES`, all inline so a cut leaves an exact suffix (detached effects would make it a scheduling assertion). */
 export const PROBE_SEQUENCE = [
-  'craft_usage', 'event_reply', 'turn_record', 'auto_title', 'auto_gepa',
+  'craft_usage', 'event_reply', 'turn_record', 'auto_title', 'parent_report',
 ] as const satisfies readonly TerminalEffectName[];
 
 /** Reports itself owed on its first execution, as an open reply channel does in production. */
