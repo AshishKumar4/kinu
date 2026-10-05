@@ -1,3 +1,19 @@
+diff --git a/dist/runtime/process-files.js b/dist/runtime/process-files.js
+index 41c32d33cdda8c48dea7e2dbbca785b6aed454e3..8c1a569bd87cf3e81b15e94c7fccc3714e96d7b7 100644
+--- a/dist/runtime/process-files.js
++++ b/dist/runtime/process-files.js
+@@ -1022,7 +1022,10 @@ export async function engineKey(view, engine, path) {
+     }
+ }
+ /** POSIX access(2) modes. */
+-export const F_OK = 0, X_OK = 1, W_OK = 2, R_OK = 4;
++export const F_OK = 0;
++export const X_OK = 1;
++export const W_OK = 2;
++export const R_OK = 4;
+ /**
+  * A process's namespace as a `VFS` over its bound bridge, plus the process
+  * syscalls a `VFS` has no word for (access, realpath, append). Absent is
 diff --git a/dist/runtime/rolldown-build.js b/dist/runtime/rolldown-build.js
 index 6596a5ef206b7b3404e850b1167f13cfc6bd71e6..8331d43bf59e37e8e0d4ce8bff4803a73a1f87ad 100644
 --- a/dist/runtime/rolldown-build.js
@@ -69,6 +85,22 @@ index 6596a5ef206b7b3404e850b1167f13cfc6bd71e6..8331d43bf59e37e8e0d4ce8bff4803a7
      const entryPoints = Array.isArray(options.entryPoints) ? options.entryPoints : null;
      if (!entryPoints || entryPoints.some((e) => typeof e !== 'string'))
          refuse('Nimbus\'s bundler takes entryPoints as a list of paths');
+diff --git a/src/runtime/process-files.ts b/src/runtime/process-files.ts
+index 5553fb0cfb45e0add84acca86b1dd18b18c8d6b2..d5ad5e947bf8553a18b29b0bcef3151c55471398 100644
+--- a/src/runtime/process-files.ts
++++ b/src/runtime/process-files.ts
+@@ -1070,7 +1070,10 @@ export async function engineKey(
+ }
+ 
+ /** POSIX access(2) modes. */
+-export const F_OK = 0, X_OK = 1, W_OK = 2, R_OK = 4;
++export const F_OK = 0;
++export const X_OK = 1;
++export const W_OK = 2;
++export const R_OK = 4;
+ 
+ /**
+  * A process's namespace as a `VFS` over its bound bridge, plus the process
 diff --git a/src/runtime/rolldown-build.ts b/src/runtime/rolldown-build.ts
 index 88a06305c4e73ca2f1509f6a4b779baf6aa874bc..0619a9f7544b8f790b4b7d6aa9cd02afd0eb8913 100644
 --- a/src/runtime/rolldown-build.ts

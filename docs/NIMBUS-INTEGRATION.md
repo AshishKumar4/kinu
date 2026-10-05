@@ -42,8 +42,11 @@ does not compile; 0.14 bundled it to `react/jsx-runtime` imports (NIMBUS-ASKS
 `tsconfigRaw.compilerOptions` onto rolldown's JSX transform in
 `runtime/rolldown-build`, in `src/` (Bun) and `dist/` (workerd): `react-jsx` and
 `react-jsxdev` to the automatic runtime from `jsxImportSource`, `react` to the
-classic one with its factories, and it still refuses any other option. The
-build facet runs a prebuilt copy of that file, a content-addressed asset of
+classic one with its factories, and it still refuses any other option. It also
+splits `runtime/process-files`' `export const F_OK = 0, X_OK = 1, W_OK = 2, R_OK
+= 4;` into four declarations: vite 8's production build kept only the first
+declarator and failed on `X_OK` and `R_OK` (MISSING_EXPORT; NIMBUS-ASKS #21). The
+build facet runs a prebuilt copy of `runtime/rolldown-build`, a content-addressed asset of
 `@nimbus-sh/worker`, so `patches/@nimbus-sh%2Fworker@0.13.1.patch` carries the
 same change there and re-pins the asset's path, build id and SHA-256. Both go
 when core 0.15.1 ships the fix with a worker built from it; the browser-surface
