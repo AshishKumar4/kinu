@@ -51,7 +51,7 @@ case in `packages/cf-backend/tests/workerd/slate-process.test.ts` holds the
 behaviour.
 
 The worker patch also gives each Durable Object its own build-facet isolate
-(NIMBUS-ASKS #20, 2026-10-05). Worker 0.13.1 loads the build facet's code under
+(NIMBUS-ASKS #22, 2026-10-05). Worker 0.13.1 loads the build facet's code under
 one id per isolate, so every workspace in an isolate builds on one rolldown
 binding, whose event-loop pump, started by one workspace's build, ran another's
 plugin calls in the first one's context: "Cannot perform I/O on behalf of a
