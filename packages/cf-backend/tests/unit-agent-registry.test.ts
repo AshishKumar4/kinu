@@ -3,22 +3,20 @@ import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import {
   asFetchFunction,
-  buildSystemPromptSync,
-  DEFAULT_WORKERS_AI_MODEL_ID,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   defaultSpecFor,
   parseModelSpec,
   KINU_USER_AGENT,
   requestUrl,
 } from '@kinu.run/core';
-import { createMockFetch, createTestRuntime, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
-import { createAgentProviderRegistry, type AgentProviderRegistry, type UserCredentialClient } from '../src/providers/agent-registry';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
+import { createAgentProviderRegistry, type UserCredentialClient } from '../src/providers/agent-registry';
 import type { ModelMenuEntry } from '../src/user/available-models';
 import type { CredentialSummary } from '../src/user/user-do';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { serveFamily } from './helpers/api';
 import { unreachableNamespace, workerContext } from './helpers/bindings';
-import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
+import { platformGatewayEnv, stubAiBinding } from './helpers/platform-gateway';
 import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
 
 /** Minimal in-memory UserDO stub satisfying the methods agent-registry calls. */
@@ -96,7 +94,7 @@ describe('AgentProviderRegistry composition', () => {
     // one throws on a bare id and keys a bare `@cf/…` to an unknown provider.
     const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
 
-    for (const raw of ['@cf/moonshotai/kimi-k2.6', 'gpt-5.5', 'codex/gpt-5.5', '']) {
+    for (const raw of ['@cf/moonshotai/kimi-k2.6', 'codex/gpt-5.5']) {
       const keyed = parseModelSpec(reg.normalizeSpecSync(raw));
       expect(reg.registry.get(keyed.provider)).toBeDefined();
       expect(`${keyed.provider}/${keyed.modelId}`).toBe(reg.normalizeSpecSync(raw));
@@ -107,19 +105,17 @@ describe('AgentProviderRegistry composition', () => {
     expect(reg.registry.get('@cf')).toBeUndefined();
   });
 
-  test('normalizeSpecSync — null returns workers-ai default without owner-billed env.AI', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
-    expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
-    expect(reg.normalizeSpecSync('')).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+  test('a spec that names no provider is refused: an unpinned actor runs on its profile\'s tier model', () => {
+    const reg = createAgentProviderRegistry({ env: platformGatewayEnv(), userDO: fakeUserDOStub() });
+
+    expect(() => reg.normalizeSpecSync('')).toThrow(/names its provider/);
+    expect(() => reg.normalizeSpecSync('gpt-5.5')).toThrow(/names its provider/);
   });
 
-  test('normalizeSpecSync — workers-ai remains the sync default even when the platform gateway is configured', () => {
-    const reg = createAgentProviderRegistry({
-      env: platformGatewayEnv(),
-      userDO: fakeUserDOStub(),
-    });
-
-    expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+  test('explicit workers-ai specs still pass through unchanged', () => {
+    const reg = createAgentProviderRegistry({ env: {}, userDO: null });
+    expect(reg.normalizeSpecSync('workers-ai/@cf/moonshotai/kimi-k2.6'))
+      .toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
 
   test('WORKERS_AI_VIA_BINDING runs Workers AI through the direct binding, and nothing else does', async () => {
@@ -181,20 +177,6 @@ describe('AgentProviderRegistry composition', () => {
     expect(() => reg.normalizeSpecSync('Not A Provider/model')).toThrow(/Unknown provider/);
   });
 
-  // One resolver picks the default (native Workers AI); a second one preferring
-  // a stored BYO credential would contradict it.
-  test('an unchosen model is the native default, not whichever BYO credential is stored', () => {
-    const reg = createAgentProviderRegistry({
-      env: {},
-      userDO: fakeUserDOStub({
-        'codex.oauth': { Authorization: 'Bearer codex-token', originator: 'codex_cli_rs' },
-        'openai.bearer': { Authorization: 'Bearer sk-test' },
-      }),
-    });
-
-    expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
-  });
-
   test('an explicit BYO choice still wins over the native default', () => {
     const reg = createAgentProviderRegistry({
       env: {},
@@ -225,86 +207,6 @@ describe('AgentProviderRegistry composition', () => {
     expect(credGated.map((p) => p.id).sort()).toEqual([...gated].sort());
 
     for (const p of credGated) expect(p.available).toBe(false);
-  });
-});
-
-describe('default provider with a null UserDO stub (inline-branch context)', () => {
-  // workers-ai is credential-gated through UserDO; with a null stub the default
-  // must fall back to the env-bound ai-gateway (same native model).
-  test('falls back to ai-gateway when the platform gateway is usable', () => {
-    const reg = createAgentProviderRegistry({
-      env: platformGatewayEnv(),
-      userDO: null,
-    });
-
-    expect(reg.normalizeSpecSync(null))
-      .toBe(`ai-gateway/${DEFAULT_WORKERS_AI_MODEL_SPEC}`);
-  });
-
-  // The sync default and the provider's isAvailable() must agree; each half alone must fail.
-  test('a gateway URL without the AI binding is not a usable default', () => {
-    const reg = createAgentProviderRegistry({
-      env: { AI_GATEWAY_URL: TEST_GATEWAY_URL },
-      userDO: null,
-    });
-
-    expect(() => reg.normalizeSpecSync(null)).toThrow(/Workers AI binding \(env\.AI\) missing/);
-  });
-
-  test('the AI binding without a parseable gateway URL is not a usable default', () => {
-    const reg = createAgentProviderRegistry({
-      env: { AI_GATEWAY_URL: 'https://gw', AI: stubAiBinding().binding },
-      userDO: null,
-    });
-
-    expect(() => reg.normalizeSpecSync(null)).toThrow(/AI_GATEWAY_URL is not an AI Gateway URL/);
-  });
-
-  test('registry default and provider availability answer the same question', async () => {
-    const usable = createAgentProviderRegistry({ env: platformGatewayEnv(), userDO: null });
-    const unusable = createAgentProviderRegistry({ env: { AI_GATEWAY_URL: TEST_GATEWAY_URL }, userDO: null });
-
-    const availability = async (reg: AgentProviderRegistry) =>
-      (await reg.registry.listProviders(reg.deps)).find((p) => p.id === 'ai-gateway')?.available;
-
-    expect(await availability(usable)).toBe(true);
-    expect(usable.normalizeSpecSync(null)).toStartWith('ai-gateway/');
-    expect(await availability(unusable)).toBe(false);
-    expect(() => unusable.normalizeSpecSync(null)).toThrow(/Workers AI binding \(env\.AI\) missing/);
-  });
-
-  test('throws loudly when no usable provider exists', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDO: null });
-    expect(() => reg.normalizeSpecSync(null)).toThrow(/No default provider available/);
-  });
-
-  test('explicit workers-ai specs still pass through unchanged', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDO: null });
-    expect(reg.normalizeSpecSync('workers-ai/@cf/moonshotai/kimi-k2.6'))
-      .toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
-  });
-});
-
-describe('default-agent prompt model context', () => {
-  // Prompt context comes from the resolved spec: the stored model id is null on
-  // a default-configured agent.
-  test('an unset stored model resolves to DeepSeek V4 Pro before prompt construction', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
-    const storedModelId: string | null = null; // default-configured agent
-    const spec = reg.normalizeSpecSync(storedModelId);
-    const { provider, modelId } = parseModelSpec(spec);
-    expect(provider).toBe('workers-ai');
-    expect(modelId).toBe(DEFAULT_WORKERS_AI_MODEL_ID);
-
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      availableTools: ['shell', 'memory'],
-      backend: 'cf',
-      model: { id: modelId, provider },
-    });
-
-    expect(prompt).not.toContain('Kimi K2.6 works best when tool use is concrete and continuous');
   });
 });
 

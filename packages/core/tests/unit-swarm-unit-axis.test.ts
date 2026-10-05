@@ -294,7 +294,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
       reportModelCall: unobservedSpend,
       rt, hostNode: hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true, advisorPort: advisor }).hostNode,
       mode: 'build',
-      model: scriptedTurnModel({ doGenerate: async () => ({
+      model: () => scriptedTurnModel({ doGenerate: async () => ({
         content: [{ type: 'text', text: 'A candidate solution.' }],
         finishReason: { unified: 'stop', raw: undefined },
         usage: {
@@ -321,7 +321,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
       rt,
       // `unit:'answer'` is an agent node: each node acquires a real seat.
       hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
-      model: scriptedTurnModel({
+      model: () => scriptedTurnModel({
         provider: 'fake',
         modelId: 'fake-unit-axis',
         doGenerate: async () => ({

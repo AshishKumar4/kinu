@@ -119,7 +119,7 @@ function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
   const { rt, testSql } = createTestRuntime();
 
   return {
-    rt, model: testModel,
+    rt, model: () => testModel,
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     ...unobservedSearchSeams(),
     ...overrides,

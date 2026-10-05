@@ -94,7 +94,7 @@ describe('OwnedModelServices', () => {
       'workers-ai', 'my-gateway', 'ai-gateway', 'codex', 'claude', 'openai',
       'anthropic', 'openrouter', 'openai-compat',
     ]);
-    const model = resolved(services.resolveModel());
+    const model = resolved(services.resolveModel(`ai-gateway/${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
     expect(model.provider).toBe('ai-gateway.chat');
     expect(model.modelId).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });

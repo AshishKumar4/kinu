@@ -259,7 +259,7 @@ async function run(input: {
   const startedAt = Date.now();
 
   const result = await runSwarm(
-    { reportModelCall: unobservedSpend, rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger, },
+    { reportModelCall: unobservedSpend, rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: () => model, mode: 'build', logger, },
     resolved(input.depth, input.branches),
   );
 
@@ -519,7 +519,7 @@ describe('the mission ledger a search charges', () => {
 
     const deps: AgentsToolDeps = {
       mode: 'build', swarms: true,
-      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, ...unobservedSearchSeams() },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: () => model, ...unobservedSearchSeams() },
       budget: governor,
     };
 

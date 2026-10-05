@@ -918,7 +918,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       contextTree: (actorId, editor) => this.agentStores(actorId).contextTree(editor),
       // Same profile authority an actor chat resolves through, so a role restriction narrows
       // a chat and a head identically; branches under an unresolved profile are unreproducible.
-      resolveProfile: (input) => this.hostedActorProfile(input),
+      resolveProfile: (input) => this.actorProfile(input),
       reportModelCall: (report) => { this.reportModelCall(report); },
       refusals: (actor) => this.refusalNoticesFor(actor),
       liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -978,7 +978,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       vfs: () => this.rt.storage.vfs,
       // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
       // surface are framed from it.
-      profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
+      profile: (input) => this.actorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
       priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       suggestTitle: (mission) => this.suggestTitle(mission),
@@ -1145,7 +1145,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * hire/ask/send/list/dismiss vanish from the enum rather than refusing.
    */
   private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
-    const swarm = this.swarmDeps(turn.runtime, turn.model);
+    const swarm = this.swarmDeps(turn.runtime, () => turn.model);
 
     const deps: AgentsToolDeps = {
       mode: turn.input.mode,
@@ -3415,23 +3415,32 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async getAgentStatus() {
-    const profile = this.resolvedTurnProfile();
+    return settle(Effect.gen({ self: this }, function* () {
+      // A workspace not yet holding its capability cannot read the catalog; it reports only its pins.
+      const profile = yield* attempt({ doing: 'resolving the profile the next turn runs on', otherwise: 'unavailable' }, () => this.currentProfile()).pipe(
+        Effect.catch((failure) => Effect.sync(() => {
+          diagnostics.failure('actor.status_profile_unresolved', failure);
 
-    const status = await getAgentStatus({
-      sql: this.boundSql,
-      actor: this.rt.actor,
-      model: this.effectiveModelSpec(),
-      reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
-      name: this.name,
-      displayName: await this.workspaceTitle() ?? '',
-    });
+          return null;
+        })),
+      );
 
-    return {
-      ...status,
-      roleId: profile?.role.id ?? this.activeRoleLabel(),
-      tierId: profile?.tier.id ?? 'default',
-      context: this.contextFill(),
-    };
+      const status = yield* Effect.promise(async () => getAgentStatus({
+        sql: this.boundSql,
+        actor: this.rt.actor,
+        model: this.effectiveModelSpec(),
+        reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
+        name: this.name,
+        displayName: await this.workspaceTitle() ?? '',
+      }));
+
+      return {
+        ...status,
+        roleId: profile?.role.id ?? this.activeRoleLabel(),
+        tierId: profile?.tier.id ?? 'default',
+        context: this.contextFill(),
+      };
+    }));
   }
 
   private contextFill(): ContextFill | null {
@@ -4188,7 +4197,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const { entry, child } = yield* this.hostedChild(name);
 
       // The effective model: the actor's own pin, else the workspace's, else its tier's, with its source.
-      const { profile } = yield* Effect.promise(async () => this.hostedActorProfile({
+      const { profile } = yield* Effect.promise(async () => this.actorProfile({
         actor: child.handle, availableTools: [], workMode: 'build',
       }));
 

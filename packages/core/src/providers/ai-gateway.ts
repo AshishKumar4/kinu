@@ -16,14 +16,14 @@ import {
   WORKERS_AI_PREFERRED_MODEL_IDS,
 } from './workers-ai-catalog';
 
-export const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
+const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
 
 /** How to reach the platform gateway, or why not: the one predicate every availability check uses. */
 export type PlatformGateway =
   | { target: GatewayTarget; binding: WorkersAIBinding }
   | { reason: string };
 
-export function resolvePlatformGateway(env: ProviderEnv): PlatformGateway {
+function resolvePlatformGateway(env: ProviderEnv): PlatformGateway {
   const target = parseGatewayTarget(env.AI_GATEWAY_URL);
 
   if ('reason' in target) return target;
