@@ -344,6 +344,9 @@ step_red() {
 finish() {
   mark end
   report render || KINU_REDS=1
+  if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_REDS" != "0" ]; then
+    bun "$KINU_ROOT/scripts/promote.ts" forget || KINU_REDS=1
+  fi
   exit "$KINU_REDS"
 }
 
