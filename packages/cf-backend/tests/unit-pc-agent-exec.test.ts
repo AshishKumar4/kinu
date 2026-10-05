@@ -4,6 +4,7 @@
  */
 
 import { present } from '../../test-utils/src/present';
+import { handClock } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
@@ -16,8 +17,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL, DEVICE_EXEC_ACK_METHOD,
-  DEVICE_PTY_CLOSE, DEVICE_PTY_EXIT, DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_OUTPUT, DEVICE_PTY_RESIZE,
+  DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD,
+
   DEVICE_UNKNOWN_METHOD, DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
   type DeviceStatus, type DeviceTransport, type TunnelSocket,
 } from '@kinu.run/core';
@@ -59,13 +60,11 @@ const PcAgentModuleSchema = v.object({
   createInFlight: v.function(),
   INFLIGHT_ROOT: v.string(),
   CANCEL_METHOD: v.string(),
-  CANCEL_PROTOCOL: v.number(),
   EXEC_ACK_METHOD: v.string(),
   EXEC_OUTPUT_FRAME: v.string(),
   PTY_OPEN_METHOD: v.string(),
   PTY_INPUT_FRAME: v.string(),
   PTY_RESIZE_FRAME: v.string(),
-  PTY_CLOSE_FRAME: v.string(),
   PTY_OUTPUT_FRAME: v.string(),
   PTY_EXIT_FRAME: v.string(),
   requestDirectory: v.function(),
@@ -101,7 +100,7 @@ const ExecResultSchema = v.object({ stdout: v.string(), stderr: v.string(), exit
 const ExecReplySchema = v.object({
   id: v.string(),
   result: v.optional(ExecResultSchema),
-  error: v.optional(v.string()),
+  error: v.optional(v.object({ code: v.string(), message: v.string() })),
 });
 
 type ExecReply = v.InferOutput<typeof ExecReplySchema>;
@@ -109,7 +108,7 @@ type ExecReply = v.InferOutput<typeof ExecReplySchema>;
 const DaemonReplySchema = v.object({
   id: v.string(),
   result: v.optional(JsonValueSchema),
-  error: v.optional(v.string()),
+  error: v.optional(v.object({ code: v.string(), message: v.string() })),
 });
 
 type DaemonReply = v.InferOutput<typeof DaemonReplySchema>;
@@ -487,30 +486,19 @@ function commandWithDescendant(dir: string, name: string) {
   };
 }
 
-function cancel(id: string, target: string, socket: ReplySocket, protocol = DEVICE_CANCEL_PROTOCOL): void {
-  handle({ id, method: DEVICE_CANCEL_METHOD, params: [target, protocol] }, socket);
+function cancel(id: string, target: string, socket: ReplySocket): void {
+  handle({ id, method: DEVICE_CANCEL_METHOD, params: [target] }, socket);
 }
 
 function acknowledge(id: string, target: string, socket: ReplySocket): void {
-  handle({ id, method: pcAgent.EXEC_ACK_METHOD, params: [target, DEVICE_CANCEL_PROTOCOL] }, socket);
+  handle({ id, method: pcAgent.EXEC_ACK_METHOD, params: [target] }, socket);
 }
 
 describe('pc-agent command cancellation', () => {
-  test('the daemon and core name the same cancellation protocol', () => {
-    expect(pcAgent.CANCEL_METHOD).toBe(DEVICE_CANCEL_METHOD);
-    expect(pcAgent.CANCEL_PROTOCOL).toBe(DEVICE_CANCEL_PROTOCOL);
-    expect(pcAgent.EXEC_ACK_METHOD).toBe(DEVICE_EXEC_ACK_METHOD);
-  });
+
 
   // The daemon is dependency-free and cannot import these; this test is the only drift check.
-  test('the daemon and core name the same terminal protocol', () => {
-    expect(pcAgent.PTY_OPEN_METHOD).toBe(DEVICE_PTY_OPEN_METHOD);
-    expect(pcAgent.PTY_INPUT_FRAME).toBe(DEVICE_PTY_INPUT);
-    expect(pcAgent.PTY_RESIZE_FRAME).toBe(DEVICE_PTY_RESIZE);
-    expect(pcAgent.PTY_CLOSE_FRAME).toBe(DEVICE_PTY_CLOSE);
-    expect(pcAgent.PTY_OUTPUT_FRAME).toBe(DEVICE_PTY_OUTPUT);
-    expect(pcAgent.PTY_EXIT_FRAME).toBe(DEVICE_PTY_EXIT);
-  });
+
 
   test('cancellation waits for the owned command group to die', async () => {
     const dir = scratchDir('pc-agent-cancel');
@@ -585,40 +573,18 @@ describe('pc-agent command cancellation', () => {
     await settled(() => ws.of(rpcId(224))[0], 'the normal-result ACK');
   });
 
-  test('a cancellation frame from a version this daemon does not speak is refused', async () => {
-    const dir = scratchDir('pc-agent-cancel-version');
-    const { command, pidOf } = commandWithDescendant(dir, 'kept');
-    const ws = recorder();
-    const runId = rpcId(230);
-    handle({ id: runId, method: 'exec', params: [command] }, ws.socket);
-    const descendant = await pidOf(ws.answerTo(runId));
 
-    const refusalId = rpcId(231);
-    cancel(refusalId, runId, ws.socket, DEVICE_CANCEL_PROTOCOL + 1);
-    const refusal = await settled(() => ws.of(refusalId)[0], 'the version refusal');
-    expect(refusal.result).toBeUndefined();
-    expect(refusal.error).toContain(DEVICE_CANCEL_VERSION_REFUSAL);
-    expect(alive(descendant)).toBe(true);
 
-    const cancelId = rpcId(232);
-    cancel(cancelId, runId, ws.socket);
-    await settled(() => ws.of(cancelId)[0], 'the cancellation answer');
-    expect(await gone(descendant)).toBe(true);
-    await settled(() => ws.of(runId)[0], 'the cancelled exec result');
-    acknowledge(rpcId(233), runId, ws.socket);
-    await settled(() => ws.of(rpcId(233))[0], 'the cancellation ACK');
-  });
-
-  test('rejects noncanonical request IDs before selecting a control directory', () => {
+  test('never selects a command directory from a noncanonical request ID', async () => {
     for (const id of ['.', '..', 'rpc-short-1', 'rpc-testepoch0-0', 'rpc-testepoch0-1/child']) {
       expect(() => pcAgent.requestDirectory(pcAgent.INFLIGHT_ROOT, id)).toThrow('request id');
     }
 
     const ws = recorder();
     cancel(rpcId(240), '..', ws.socket);
-    expect(ws.of(rpcId(240))[0].error).toContain('request id');
+    expect((await ws.answerTo(rpcId(240))).result).toEqual({ requestId: '..', cancelled: 'unknown' });
     handle({ id: '..', method: 'exec', params: ['echo must-not-spawn'] }, ws.socket);
-    expect(ws.of('..')[0].error).toContain('request id');
+    expect(ws.of('..')[0].error?.message).toContain('request id');
   });
 
   test('a sweep reaches a command the registry has not registered yet', async () => {
@@ -760,8 +726,8 @@ describe('pc-agent durable supervisor', () => {
     process.kill(pid, 'SIGKILL');
     const reply = await ws.answerTo(id);
 
-    expect(reply.error).toContain(`the supervisor of ${id} (pid ${String(pid)}) exited without recording the command's result`);
-    expect(reply.error).toContain(`process group ${String(group)}`);
+    expect(reply.error?.message).toContain(`the supervisor of ${id} (pid ${String(pid)}) exited without recording the command's result`);
+    expect(reply.error?.message).toContain(`process group ${String(group)}`);
     // The command outlived its supervisor: let it finish, so the run leaves nothing behind.
     release(gate);
   });
@@ -1064,7 +1030,7 @@ describe('pc-agent supervisor guards', () => {
       Object.defineProperty(process, 'platform', { value: 'freebsd', configurable: true });
       const ws = recorder();
       handle({ id, method: 'exec', params: ['echo must-not-spawn'] }, ws.socket);
-      expect(ws.of(id)[0].error).toContain('requires POSIX Linux or macOS');
+      expect(ws.of(id)[0].error?.message).toContain('requires POSIX Linux or macOS');
       expect(existsSync(requestDir)).toBe(false);
     } finally {
       Object.defineProperty(process, 'platform', originalPlatform);
@@ -1074,19 +1040,22 @@ describe('pc-agent supervisor guards', () => {
 
 /** Executor → tunnel → daemon, as the hub wires them. The binding is declared before the socket: the two reference
  *  each other, and nothing reads it before the first frame. */
-function deviceChain() {
+function deviceChain(clock?: ReturnType<typeof handClock>, silent = false) {
   let tunnel: DeviceTunnel;
 
   const socket: TunnelSocket = {
     readyState: 1,
     send: (data: string) => {
-      handle(v.parse(DaemonFrameSchema, JSON.parse(data)), {
+      const frame = v.parse(DaemonFrameSchema, JSON.parse(data));
+
+      if (silent && frame.method === 'ping') return;
+      handle(frame, {
         send: (reply: string) => { tunnel.handleMessage(reply); },
       });
     },
   };
 
-  tunnel = new DeviceTunnel(socket);
+  tunnel = new DeviceTunnel(socket, undefined, undefined, clock);
   const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
 
   const transport: DeviceTransport = {
@@ -1099,10 +1068,24 @@ function deviceChain() {
 }
 
 describe('the daemon answers in the words the hub reads', () => {
+  test('a deadline-free exec that loses liveness kills the actual owned process group before failing', async () => {
+    const clock = handClock();
+    const { tunnel } = deviceChain(clock, true);
+    const command = commandWithDescendant(scratchDir('device-silent-exec'), 'child');
+    const requestId = rpcId(620);
+    const running = tunnel.rpc('exec', [command.command], { requestId, timeoutMs: 0 });
+    const descendant = await command.pidOf(running);
+    expect(alive(descendant)).toBe(true);
+    clock.advance(60_000);
+    await expect(running).rejects.toThrow('the device confirmed its work stopped');
+    expect(alive(descendant)).toBe(false);
+    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId]);
+    tunnel.dispose();
+  });
   test('a method this daemon does not know reaches the hub as unknown, the way a newer frame meets an older daemon', async () => {
     const { tunnel } = deviceChain();
 
-    await expect(tunnel.rpc('methodFromALaterHub', [])).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
+    await expect(tunnel.rpc('methodFromALaterHub', [])).rejects.toMatchObject({ code: 'unsupported', cause: { code: DEVICE_UNKNOWN_METHOD } });
     tunnel.dispose();
   });
 
@@ -1119,7 +1102,7 @@ describe('the daemon answers in the words the hub reads', () => {
 
     expect(heard).toEqual({ stdout: 'first\n', stderr: 'second\n' });
     expect(v.parse(ExecResultSchema, answer)).toEqual({ stdout: 'first\n', stderr: 'second\n', exitCode: 0 });
-    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [id, DEVICE_CANCEL_PROTOCOL]);
+    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [id]);
     tunnel.dispose();
   });
 });
@@ -1139,7 +1122,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({
-      name: 'AbortError',
+      code: 'cancelled',
       message: 'device exec stopped: the device confirmed its owned command process group terminated; separately sessioned processes may still run',
     });
     expect(await gone(descendant)).toBe(true);
@@ -1193,7 +1176,7 @@ describe('pc-agent cancellation racing a command\'s own completion', () => {
     const claim = v.safeParse(DeviceCancelResultSchema, answer.result);
 
     if (claim.success) expect(claim.output).toEqual({ requestId: runId, cancelled: 'unknown' });
-    else expect(answer.error).toContain(`cannot terminate ${runId}`);
+    else expect(answer.error?.message).toContain(`cannot terminate ${runId}`);
 
     const finished = await settled(() => ws.of(runId)[0], 'the exec answer');
     const result = v.parse(ExecResultSchema, finished.result);
@@ -1231,6 +1214,6 @@ describe('pc-agent readRange RPC', () => {
     handle({
       id: 'rpc-invalid-range', method: 'readRange', params: ['/does/not/exist', -1, 0],
     }, ws.socket);
-    expect(ws.of('rpc-invalid-range')[0].error).toContain('positive safe offset and length');
+    expect(ws.of('rpc-invalid-range')[0].error?.message).toContain('positive safe offset and length');
   });
 });

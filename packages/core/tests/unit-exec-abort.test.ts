@@ -6,10 +6,11 @@ import { buildBuiltinTools } from '../src/tools/builtins';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import {
-  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_MISPAIRED, DEVICE_CANCEL_PROTOCOL, DEVICE_UNKNOWN_METHOD,
+  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_MISPAIRED,
   DeviceTunnel, TUNNEL_DISCONNECTED, type TunnelSocket,
 } from '../src/execution/device-tunnel';
 import type { JsonValue } from '../src/utils/json';
+import { DEVICE_ERRORS, deviceFailure } from '../src/execution/device-protocol';
 import { createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
 import {
   nimbusSessionFiles,
@@ -208,7 +209,7 @@ describe('remote executor exec abort', () => {
     const pending = provider.tools.exec.execute('sleep 9999', { signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toMatchObject({
-      name: 'AbortError',
+      code: 'cancelled',
       message: 'device exec stopped: the device confirmed its owned command process group terminated; separately sessioned processes may still run',
     });
 
@@ -217,7 +218,6 @@ describe('remote executor exec abort', () => {
 
     if (execRequestId === undefined) throw new Error('the exec call carried no request identity');
     expect(calls[1].params[0]).toBe(execRequestId);
-    expect(calls[1].params[1]).toBe(DEVICE_CANCEL_PROTOCOL);
   });
 
   test('a command that finished first is reported as gone, not as killed', async () => {
@@ -232,26 +232,12 @@ describe('remote executor exec abort', () => {
     const pending = provider.tools.exec.execute('true', { signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toMatchObject({
-      name: 'AbortError',
+      code: 'cancelled',
       message: 'device exec stopped: no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
     });
   });
 
-  test('a device too old to stop a command says so instead of claiming it stopped', async () => {
-    // Mixed versions: the refusal must name the gap, not read as "terminated".
-    const { transport } = cancellableTransport(() => {
-      throw new Error(`${DEVICE_UNKNOWN_METHOD}: ${DEVICE_CANCEL_METHOD}`);
-    });
 
-    const provider = createDeviceTunnelExecutor(transport);
-    const controller = new AbortController();
-
-    const pending = provider.tools.exec.execute('make', { signal: controller.signal });
-    controller.abort();
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    await expect(pending).rejects.toThrow(/older Kinu daemon that cannot stop a command/);
-    await expect(pending).rejects.toThrow(/may still be running/);
-  });
 
   test('a kill the device refused is reported as a kill failure', async () => {
     const { transport } = cancellableTransport(() => {
@@ -269,7 +255,7 @@ describe('remote executor exec abort', () => {
 
   test('a device that vanished mid-cancellation does not claim a confirmed stop', async () => {
     const { transport } = cancellableTransport(() => {
-      throw new Error(TUNNEL_DISCONNECTED);
+      throw deviceFailure(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED);
     });
 
     const provider = createDeviceTunnelExecutor(transport);
@@ -299,7 +285,7 @@ describe('remote executor exec abort', () => {
     const pending = provider.tools.exec.execute('make -j', { signal: controller.signal });
     controller.abort();
 
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
     await expect(pending).rejects.toThrow(/could not stop the command, which may still be running/);
     await expect(pending).rejects.toThrow(/device RPC timeout/);
     expect(frames.map((frame) => frame.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
@@ -352,7 +338,7 @@ describe('remote executor exec abort', () => {
     const pending = provider.tools.exec.execute('bun test', { signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toMatchObject({
-      name: 'AbortError',
+      code: 'cancelled',
       message: 'device exec stopped: no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
     });
 
@@ -406,7 +392,7 @@ describe('remote executor exec abort', () => {
 
     await expect(provider.tools.exec.execute('ls', { signal: controller.signal }))
       .rejects.toMatchObject({
-        name: 'AbortError',
+        code: 'cancelled',
         message: 'device exec stopped before the command was sent: nothing ran on the device',
       });
     expect(calls).toEqual([]);

@@ -7,7 +7,7 @@ import {
   DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD,
   DEVICE_TOOLCHAIN_TTL_MS, TOOLCHAIN_PROBE_BINARIES,
   DEVICE_RELAY,
-  DEVICE_UNKNOWN_METHOD, TUNNEL_DISCONNECTED, DEVICE_CHATGPT,
+  DEVICE_UNKNOWN_METHOD, TUNNEL_DISCONNECTED, DEVICE_CHATGPT, DEVICE_CANCEL_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION,
   type JsonValue,
 } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -59,11 +59,24 @@ function connected() {
   const hub = new DeviceSocketHub(ctx);
   const ws = fakeSocket();
   hub.accept('dev-a', ws);
+  hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
   return { ctx, hub, ws };
 }
 
 describe('DeviceSocketHub', () => {
+  test('a daemon without the current protocol is refused before it can execute', async () => {
+    const harness = createTestUserDO();
+
+    try {
+      const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'old daemon');
+      harness.attachDaemon(deviceId);
+      await harness.sendDeviceHello({ ...CAPABLE_HELLO, protocolVersion: 0, features: [] }, deviceId);
+      expect((await harness.userDO.deviceRuntimeStatus(await testOwner())).connected).toBe(false);
+    } finally {
+      harness.close();
+    }
+  });
   test('accept marks the socket and reports liveness', () => {
     const ctx = fakeCtx();
     const hub = new DeviceSocketHub(ctx);
@@ -93,6 +106,7 @@ describe('DeviceSocketHub', () => {
     const second = fakeSocket();
     hub.accept('dev-a', first);
     hub.accept('dev-a', second);
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     expect(first.closed).toEqual([{ code: 1000, reason: 'replaced by a new connection' }]);
     expect(hub.liveSocket('dev-a')).toBe(second);
     const tunnel = hub.tunnel('dev-a');
@@ -110,6 +124,7 @@ describe('DeviceSocketHub', () => {
     const ctx = fakeCtx();
     const socket = fakeSocket();
     new DeviceSocketHub(ctx).accept('dev-a', socket);
+    new DeviceSocketHub(ctx).hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
     // Hibernation: in-memory hub state is gone, sockets survive on ctx.
     const woken = new DeviceSocketHub(ctx);
@@ -130,6 +145,7 @@ describe('DeviceSocketHub', () => {
     const hub = new DeviceSocketHub(ctx);
     const ws = fakeSocket();
     hub.accept('dev-a', ws);
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     const tunnel = hub.tunnel('dev-a');
 
     if (!tunnel) throw new Error('expected device tunnel');
@@ -148,6 +164,7 @@ describe('DeviceSocketHub', () => {
     const second = fakeSocket();
     hub.accept('dev-a', first);
     hub.accept('dev-a', second); // closes `first`; its close event arrives later
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     const tunnel = hub.tunnel('dev-a');
 
     if (!tunnel) throw new Error('expected replacement device tunnel');
@@ -210,30 +227,18 @@ describe('DeviceSocketHub toolchain probe', () => {
     expect(ws.sent).toHaveLength(1);
   });
 
-  test('a daemon too old to answer is recorded as unable, never as a machine with nothing', async () => {
-    const { hub, ws } = connected();
 
-    const probing = hub.probeToolchain('dev-a', NOW);
-    answerLast(hub, ws, { error: 'unknown method: which' });
-
-    // An empty answer would strip python from a machine that may well have it.
-    expect(await probing).toBeNull();
-    expect(hub.toolchain('dev-a', NOW)).toBeNull();
-
-    expect(await hub.probeToolchain('dev-a', NOW + 1)).toBeNull();
-    expect(ws.sent).toHaveLength(1);
-  });
 
   test('a transient failure leaves the question open for the next turn', async () => {
     const { hub, ws } = connected();
 
     const probing = hub.probeToolchain('dev-a', NOW);
-    answerLast(hub, ws, { error: 'EIO reading /usr/bin' });
+    answerLast(hub, ws, { error: { code: 'io', message: 'EIO reading /usr/bin' } });
     expect(await probing).toBeNull();
 
     const reprobing = hub.probeToolchain('dev-a', NOW + 1);
     expect(ws.sent).toHaveLength(2);
-    answerLast(hub, ws, { error: 'EIO reading /usr/bin' });
+    answerLast(hub, ws, { error: { code: 'io', message: 'EIO reading /usr/bin' } });
     expect(await reprobing).toBeNull();
   });
 
@@ -323,8 +328,11 @@ describe('DeviceSocketHub Codex relay', () => {
     hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-2', status: 200, headers: [] }));
     const response = await relaying;
 
-    hub.cancelRelay('relay-2');
-    expect(JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null')).toEqual({ type: DEVICE_RELAY.cancel, relay: 'relay-2' });
+    const stopping = hub.cancelRelay('relay-2');
+    expect(JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null')).toEqual({ id: expect.any(String), method: DEVICE_CANCEL_METHOD, params: ['relay-2'] });
+    const cancel = v.parse(v.object({ id: v.string() }), JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null'));
+    hub.handleMessage('dev-a', JSON.stringify({ id: cancel.id, result: { requestId: 'relay-2', cancelled: 'terminated' } }));
+    await stopping;
     await expect(response.text()).rejects.toThrow('the caller stopped the request');
   });
 
@@ -343,23 +351,12 @@ describe('DeviceSocketHub Codex relay', () => {
   test('an error before any answer rejects the call with the machine\'s words', async () => {
     const { hub } = connected();
     const relaying = hub.relay('dev-a', 'relay-4', REQUEST);
-    hub.handleMessage('dev-a', JSON.stringify({ id: 'relay-4', error: 'chatgpt.com unreachable from this machine' }));
+    hub.handleMessage('dev-a', JSON.stringify({ id: 'relay-4', error: { code: 'io', message: 'chatgpt.com unreachable from this machine' } }));
 
     await expect(relaying).rejects.toThrow('chatgpt.com unreachable from this machine');
   });
 
-  test('a daemon too old to relay is not picked again until it reconnects', async () => {
-    const { hub, ws } = connected();
-    expect(hub.relayDevice()).toBe('dev-a');
 
-    const relaying = hub.relay('dev-a', 'relay-5', REQUEST);
-    hub.handleMessage('dev-a', JSON.stringify({ id: relayCall(ws).id, error: `unknown method: ${DEVICE_RELAY.method}` }));
-    await expect(relaying).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
-    expect(hub.relayDevice()).toBeNull();
-
-    hub.accept('dev-a', fakeSocket());
-    expect(hub.relayDevice()).toBe('dev-a');
-  });
 
   test('a reader that stops reading tells the machine to drop the upstream call', async () => {
     const { hub, ws } = connected();
@@ -367,26 +364,18 @@ describe('DeviceSocketHub Codex relay', () => {
     hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-6', status: 200, headers: [] }));
     const response = await relaying;
 
-    await response.body?.cancel(new DOMException('the reader left', 'AbortError'));
-    expect(ws.sent.map((frame) => JSON.parse(frame))).toContainEqual({ type: DEVICE_RELAY.cancel, relay: 'relay-6' });
+    const leaving = response.body?.cancel(new DOMException('the reader left', 'AbortError'));
+    const cancel = v.parse(v.object({ id: v.string() }), JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null'));
+    hub.handleMessage('dev-a', JSON.stringify({ id: cancel.id, result: { requestId: 'relay-6', cancelled: 'terminated' } }));
+    await leaving;
+    expect(ws.sent.map((frame) => JSON.parse(frame))).toContainEqual({ id: expect.any(String), method: DEVICE_CANCEL_METHOD, params: ['relay-6'] });
     // What the machine sent before it heard is dropped, not written into a cancelled body.
     hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.body, relay: 'relay-6', data: 'bGF0ZQ==' }));
     hub.handleMessage('dev-a', JSON.stringify({ id: 'relay-6', result: { bytes: 4 } }));
-    expect(ws.sent.filter((frame) => frame.includes(DEVICE_RELAY.cancel))).toHaveLength(1);
+    expect(ws.sent.filter((frame) => frame.includes(DEVICE_CANCEL_METHOD))).toHaveLength(1);
   });
 
-  test('an open terminal pane does not make a daemon too old to relay look able again', async () => {
-    const { ctx, hub, ws } = connected();
-    const relaying = hub.relay('dev-a', 'relay-7', REQUEST);
-    hub.handleMessage('dev-a', JSON.stringify({ id: relayCall(ws).id, error: `unknown method: ${DEVICE_RELAY.method}` }));
-    await expect(relaying).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
 
-    const pane = fakeSocket();
-    ctx.acceptWebSocket(pane, ['terminal:pty-1']);
-    pane.serializeAttachment({ terminal: 'pty-1', device: 'dev-a', workspace: 'workspace-a' });
-
-    expect(hub.relayDevice()).toBeNull();
-  });
 
   test('no machine online picks none', () => {
     expect(new DeviceSocketHub(fakeCtx()).relayDevice()).toBeNull();
@@ -407,11 +396,11 @@ describe('DeviceSocketHub ChatGPT sign-in calls', () => {
     const { hub, ws } = connected();
 
     const failing = hub.chatgpt('dev-a', DEVICE_CHATGPT.status);
-    expect(answerLast(hub, ws, { error: 'EIO reading pc-agent.chatgpt.json' }).method).toBe('chatgptStatus');
+    expect(answerLast(hub, ws, { error: { code: 'io', message: 'EIO reading pc-agent.chatgpt.json' } }).method).toBe('chatgptStatus');
     expect(await failing).toBeNull();
 
     const older = hub.chatgpt('dev-a', DEVICE_CHATGPT.status);
-    answerLast(hub, ws, { error: `${DEVICE_UNKNOWN_METHOD}: chatgptStatus` });
+    answerLast(hub, ws, { error: { code: DEVICE_UNKNOWN_METHOD, message: 'unknown method: chatgptStatus' } });
     expect(await older).toBeNull();
   });
 
@@ -428,7 +417,7 @@ describe('DeviceSocketHub ChatGPT sign-in calls', () => {
     const { hub, ws } = connected();
 
     const starting = hub.chatgpt('dev-a', DEVICE_CHATGPT.signIn).then(() => '', (...rejection: [unknown]) => renderThrownChain({ cause: rejection[0] }));
-    answerLast(hub, ws, { error: 'EADDRINUSE 127.0.0.1' });
+    answerLast(hub, ws, { error: { code: 'io', message: 'EADDRINUSE 127.0.0.1' } });
 
     expect(await starting).toContain('EADDRINUSE 127.0.0.1');
   });

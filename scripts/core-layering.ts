@@ -109,7 +109,7 @@ export function findViolations(sources: ReadonlyMap<string, string>): Violation[
   for (const [file, text] of sources) {
     // Imported Markdown is still an architectural dependency, but its prose
     // declares no outgoing code edges. Keep it in the resolution universe.
-    if (isDocument(file)) continue;
+    if (isDocument(file) || file.endsWith('.json')) continue;
     const fromLayer = layerOf(file);
 
     for (const edge of edgesOf(parse(file, text))) {
@@ -139,7 +139,7 @@ export const BLIND_SPOTS: readonly string[] = [
 ];
 
 if (import.meta.main) {
-  const sources = readMatching((file) => (isParseable(file) || isDocument(file)) && file.startsWith(CORE) && !isTestFile(file));
+  const sources = readMatching((file) => (isParseable(file) || isDocument(file) || file.endsWith('.json')) && file.startsWith(CORE) && !isTestFile(file));
   const violations = findViolations(sources);
 
   const measured = assertMeasured(GATE, [

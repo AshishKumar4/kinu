@@ -8,7 +8,7 @@ import { present, killAndAwaitExit, recordedIn, scratchDir } from '@kinu.run/tes
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  bunResolutionShell, deviceFiles, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema,
+  bunResolutionShell, deviceFiles, DEVICE_EXEC_ACK_METHOD, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema,
   parseJsonObject, type DeviceStatus, type DeviceTransport, type JsonObject,
 } from '@kinu.run/core';
 import {
@@ -227,25 +227,6 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toHaveLength(2);
   });
 
-  // An older daemon's updater lands only the siblings it knew, so the first build that requires chatgpt.js
-  // arrives without it. It must still run, and say so, so the hub's next UPDATE brings the rest.
-  test('a build landed without a newer sibling runs, reports itself incomplete, and the next UPDATE lands the sibling', async () => {
-    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
-    const home = installedMachine(served.origin, NEW);
-    rmSync(join(home, 'chatgpt.js'));
-    startDaemon(home, await releaseSigningEnv());
-
-    await served.sockets.until((hellos) => hellos[0] !== undefined);
-    const first = present(served.sockets.items[0], 'the HELLO');
-    expect(first.hello).toMatchObject({ version: `${NEW}.incomplete` });
-
-    await served.sockets.until((hellos) => hellos[1] !== undefined);
-    const successor = present(served.sockets.items[1], 'the successor HELLO');
-    expect(successor.hello).toMatchObject({ version: NEW });
-    expect(installed(home, 'chatgpt.js')).toBe(DAEMON_FILES['chatgpt.js']);
-    expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([PLATFORM_ARTIFACT, `${PLATFORM_ARTIFACT}.sha256`]);
-    await successor.settle();
-  });
 
   test('THE TROJAN PROBE: a hub-chosen checksum with no Kinu signature downloads nothing', async () => {
     // SECURITY-devices C1: an unsigned frame naming a trojaned tarball is refused before any byte is fetched.
@@ -389,7 +370,7 @@ const ProvedHelloSchema = v.looseObject({
 
 const ExecResultSchema = v.object({ stdout: v.string(), stderr: v.string(), exitCode: v.number() });
 
-const ReplySchema = v.object({ id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()) });
+const ReplySchema = v.object({ id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.object({ code: v.string(), message: v.string() })) });
 
 type FrameSandbox = NonNullable<Extract<HubPush, { method: string }>['sandbox']>;
 
@@ -406,7 +387,7 @@ function tunnelOver(socket: HubSocket, sandbox: FrameSandbox): DeviceTransport {
       socket.send({ id, method, params, sandbox });
       const reply = v.parse(ReplySchema, await socket.waitForReply(id));
 
-      if (reply.error !== undefined) throw new Error(reply.error);
+      if (reply.error !== undefined) throw new Error(reply.error.message);
 
       return reply.result;
     },
@@ -458,7 +439,7 @@ describe('the daemon answers the hub in core\'s frames', () => {
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout).toContain(`the full stdout is at ${shown}]`);
     expect(await readText(files, shown)).toBe(`${'x'.repeat(600_000)}END`);
-    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]);
+    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId]);
   });
 });
 

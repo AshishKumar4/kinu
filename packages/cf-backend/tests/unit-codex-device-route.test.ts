@@ -203,17 +203,7 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     harness.close();
   });
 
-  test('a machine whose daemon is too old to relay sends the turn to the container, and is not asked again', async () => {
-    const { harness, forwarded, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'ok'));
-    await attachMachine('too-old');
 
-    expect(finished(await step(model, newTurn())).egress).toBe('relay');
-    expect(finished(await step(model, newTurn())).egress).toBe('relay');
-    expect(forwarded).toHaveLength(2);
-    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_RELAY.method)).toHaveLength(1);
-    await harness.joinFibers();
-    harness.close();
-  });
 
   test('a machine lost mid-turn fails that step by name and never switches the turn to the container', async () => {
     const { harness, forwarded, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'ok'));

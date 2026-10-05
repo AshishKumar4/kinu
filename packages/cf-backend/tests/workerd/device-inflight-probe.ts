@@ -6,6 +6,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
   DeviceRequestLedger, initDeviceInflightTable,
+  DeviceSocketHub, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES,
   type DeviceCancelOutcome,
 } from '@kinu.run/core';
 import type { SqlExec, SqlValue } from '@kinu.run/core';
@@ -28,6 +29,29 @@ const WORKSPACE = 'workspace-a';
 const DEVICE = 'dev-probe';
 
 export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
+  private readonly devices = new DeviceSocketHub(this.ctx);
+
+  override fetch(): Response {
+    const { 0: client, 1: server } = new WebSocketPair();
+    this.devices.accept(DEVICE, server);
+    this.devices.hello(DEVICE, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  override webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer): void {
+    const decoded = v.safeParse(v.string(), message);
+    this.devices.handleMessage(DEVICE, decoded.success ? decoded.output : new TextDecoder().decode(v.parse(v.instance(ArrayBuffer), message)));
+  }
+
+  relayFor(callId: string): Promise<Response> {
+    return this.devices.relay(DEVICE, callId, { method: 'POST', url: 'https://chatgpt.com/backend-api/codex/responses', headers: [], body: '{}' });
+  }
+
+  cancelRelayFor(callId: string): Promise<void> {
+    return this.devices.cancelRelay(callId);
+  }
+
   // SAFETY: the positional protocol `UserDO.sqlx` hands the ledger; DO SQLite binds the same values.
   // Runs on `exec` like the platform's: a DDL nobody reads rows from must still execute.
   private readonly sql: SqlExec = {

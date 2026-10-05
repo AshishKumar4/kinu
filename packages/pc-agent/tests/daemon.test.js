@@ -565,7 +565,7 @@ describe('daemon device path confinement', () => {
       for (const [id] of frames) {
         const frame = await ws.response(id);
         expect(frame.result).toBeUndefined();
-        expect(frame.error).toContain('names no sandbox tier');
+        expect(frame.error?.message).toContain('names no sandbox tier');
       }
 
       expect(fs.readFileSync(planted, 'utf8')).toBe('secret');
@@ -598,7 +598,7 @@ describe('daemon device path confinement', () => {
         handle({ id, method, sandbox: scoped([project]), params }, ws, {});
         const frame = await ws.response(id);
         expect(frame.result).toBeUndefined();
-        expect(frame.error).toContain('does not expose');
+        expect(frame.error?.message).toContain('does not expose');
       }
 
       expect(fs.readFileSync(outside, 'utf8')).toBe('secret');
@@ -616,7 +616,7 @@ describe('daemon device path confinement', () => {
       sandbox: scoped([project]),
       params: ['/usr/local/kinu-planted.txt', 'x'],
     }, ws, {});
-    expect((await ws.response('write-system')).error).toContain('read-only in this device');
+    expect((await ws.response('write-system')).error?.message).toContain('read-only in this device');
     expect(fs.existsSync('/usr/local/kinu-planted.txt')).toBe(false);
 
     // And a symlink is judged by where it LANDS: one pointing into Kinu's own
@@ -629,7 +629,7 @@ describe('daemon device path confinement', () => {
     fs.writeFileSync(baited, '{"token":"machine-secret"}', { mode: 0o600 });
     fs.symlinkSync(baited, bait);
     handle({ id: 'kinu-link', method: 'readFile', sandbox: scoped([project]), params: [bait] }, ws, {});
-    expect((await ws.response('kinu-link')).error).toContain("inside Kinu's own directory");
+    expect((await ws.response('kinu-link')).error?.message).toContain("inside Kinu's own directory");
     expect((await ws.response('kinu-link')).result).toBeUndefined();
     expect(fs.readFileSync(baited, 'utf8')).toContain('machine-secret');
     fs.rmSync(baited, { force: true });
@@ -657,7 +657,7 @@ describe('daemon device path confinement', () => {
       }, ws, {});
       const frame = await ws.response(id);
       expect(frame.result).toBeUndefined();
-      expect(frame.error).toContain('agent home must be');
+      expect(frame.error?.message).toContain('agent home must be');
     }
   });
 
@@ -677,7 +677,7 @@ describe('daemon device path confinement', () => {
       expect((await ws.response('rpc-wholemach0-1')).result.stdout).toBe('secret');
       expect((await ws.response('whole-read')).result).toBe('secret');
       // Kinu's own directory is the one thing no tier serves.
-      expect((await ws.response('whole-kinu')).error).toContain("inside Kinu's own directory");
+      expect((await ws.response('whole-kinu')).error?.message).toContain("inside Kinu's own directory");
     } finally {
       fs.rmSync(outside, { force: true });
     }
@@ -920,7 +920,7 @@ describe('daemon checkpoint protocol', () => {
     handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
     expect((await ws.response('l')).result).toEqual([]);
     handle({ id: 'r', method: 'checkpointRestore', sandbox: RAW, params: ['a', work, 'abcdef0'] }, ws, ctx);
-    expect((await ws.response('r')).error).toBe('checkpoints unavailable: git not found');
+    expect((await ws.response('r')).error).toEqual({ code: 'io', message: 'checkpoints unavailable: git not found' });
   });
 
   test('retention prunes to the configured keep', async () => {
@@ -1028,7 +1028,7 @@ describe('daemon checkpoint protocol', () => {
       const [taken] = (await ws.response('l2')).result;
       fs.writeFileSync(path.join(outside, 'kept.txt'), 'owner-edited');
       handle({ id: 'r', method: 'checkpointRestore', sandbox: scoped, params: ['a', outside, taken.id] }, ws, ctx);
-      expect((await ws.response('r')).error).toContain('does not expose');
+      expect((await ws.response('r')).error?.message).toContain('does not expose');
       expect(fs.readFileSync(path.join(outside, 'kept.txt'), 'utf8')).toBe('owner-edited');
     } finally {
       fs.rmSync(outside, { recursive: true, force: true });
@@ -1076,11 +1076,11 @@ describe('daemon toolchain probe', () => {
     const dir = pathWith(['node', 'git']);
 
     const ws = fakeWs();
-    withPath(dir, () => handle({ id: 1, method: 'which', params: [['node', 'bun', 'git', 'python3']] }, ws, {}));
+    withPath(dir, () => handle({ id: 'which-1', method: 'which', params: [['node', 'bun', 'git', 'python3']] }, ws, {}));
 
     // `bun` and `python3` are not there. Reported as absent, which is a
     // measurement — distinct from the hub never getting an answer at all.
-    expect((await ws.response(1)).result).toEqual({ present: ['node', 'git'] });
+    expect((await ws.response('which-1')).result).toEqual({ present: ['node', 'git'] });
   });
 
   test('a non-executable file of the right name is not a binary on PATH', async () => {
@@ -1088,10 +1088,10 @@ describe('daemon toolchain probe', () => {
     fs.writeFileSync(path.join(dir, 'python3'), 'not a program', { mode: 0o644 });
 
     const ws = fakeWs();
-    withPath(dir, () => handle({ id: 1, method: 'which', params: [['python3']] }, ws, {}));
+    withPath(dir, () => handle({ id: 'which-1', method: 'which', params: [['python3']] }, ws, {}));
 
     // The capability reads "Runs Python". A file nobody can execute does not.
-    expect((await ws.response(1)).result).toEqual({ present: [] });
+    expect((await ws.response('which-1')).result).toEqual({ present: [] });
   });
 
   test('refuses to answer for anything but a bare binary name', async () => {
@@ -1102,20 +1102,20 @@ describe('daemon toolchain probe', () => {
     // machine exist. Names carrying a separator are dropped, not resolved —
     // even one that would obviously succeed.
     withPath(dir, () => handle({
-      id: 1,
+      id: 'which-1',
       method: 'which',
       params: [['../etc/passwd', '/bin/sh', 'node/../node', 'node']],
     }, ws, {}));
 
-    expect((await ws.response(1)).result).toEqual({ present: ['node'] });
+    expect((await ws.response('which-1')).result).toEqual({ present: ['node'] });
   });
 
   test('a malformed question is an error frame, never a confident empty answer', async () => {
     const ws = fakeWs();
-    handle({ id: 1, method: 'which', params: ['node'] }, ws, {});
+    handle({ id: 'which-1', method: 'which', params: ['node'] }, ws, {});
 
     // `{present: []}` here would tell the hub this machine has no toolchain.
-    expect((await ws.response(1)).error).toMatch(/array of binary names/);
+    expect((await ws.response('which-1')).error?.message).toMatch(/array of binary names/);
   });
 });
 
@@ -1316,7 +1316,7 @@ describe('daemon process under Bun against a local hub', () => {
         // execCancel: a command that outlives its cancellation window.
         hub.socket().send(JSON.stringify({ id: 'rpc-e2ecancelf-1', method: 'exec', sandbox: RAW, params: ['sleep 30'] }));
         await untilHub(() => fs.existsSync(path.join(root, 'inflight', 'rpc-e2ecancelf-1', 'state')));
-        hub.socket().send(JSON.stringify({ id: 'rpc-e2ecanclX-1', method: 'execCancel', params: ['rpc-e2ecancelf-1', 1] }));
+        hub.socket().send(JSON.stringify({ id: 'rpc-e2ecanclX-1', method: 'cancel', params: ['rpc-e2ecancelf-1', 1] }));
         const cancelResult = await reply('rpc-e2ecanclX-1');
         expect(cancelResult.result).toEqual({ requestId: 'rpc-e2ecancelf-1', cancelled: 'terminated' });
         // A cancelled command's request directory is removed by the cancel
@@ -1429,7 +1429,7 @@ describe('daemon process under Bun against a local hub', () => {
         // Result first: an un-fenced daemon answers with the credential
         // itself, and that is the sentence the failure should print.
         expect(frame.result).toBeUndefined();
-        expect(frame.error).toContain("inside Kinu's own directory");
+        expect(frame.error?.message).toContain("inside Kinu's own directory");
       }
 
       // The credentials are intact and the plant did not land.
@@ -1443,7 +1443,7 @@ describe('daemon process under Bun against a local hub', () => {
 
       try {
         hub.socket().send(JSON.stringify({ id: 'rpc-fence00sy-1', method: 'readFile', sandbox: RAW, params: [bait] }));
-        expect((await reply('rpc-fence00sy-1')).error).toContain("inside Kinu's own directory");
+        expect((await reply('rpc-fence00sy-1')).error?.message).toContain("inside Kinu's own directory");
       } finally {
         fs.rmSync(bait, { force: true });
       }
@@ -1679,7 +1679,7 @@ describe('daemon process under Bun against a local hub', () => {
       }));
       const refused = await reply('rpc-sandboxbad-1');
       expect(refused.result).toBeUndefined();
-      expect(refused.error).toContain('agent home must be');
+      expect(refused.error?.message).toContain('agent home must be');
     });
   });
 
@@ -1800,20 +1800,20 @@ describe('daemon process under Bun against a local hub', () => {
         try {
           const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
           expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
-          hub.socket().send(JSON.stringify({ id: 'rpc-ptysignal0-1', method: 'ptyOpen', sandbox: RAW, params: ['sig', 80, 24] }));
+          hub.socket().send(JSON.stringify({ id: 'rpc-ptysignal0-1', method: 'ptyOpen', sandbox: RAW, params: [80, 24] }));
           const opened = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-ptysignal0-1'));
 
           if (!opened) throw new Error(`no ptyOpen reply: log says ${daemonLog()}`);
           expect(opened.result.pid).toBeGreaterThan(0);
 
           const output = () => hub.frames
-            .filter((f) => f.type === 'PTY_OUT' && f.session === 'sig')
+            .filter((f) => f.type === 'PTY_OUT' && f.session === 'rpc-ptysignal0-1')
             .map((f) => Buffer.from(f.data, 'base64').toString('utf-8'))
             .join('');
 
           hub.socket().send(JSON.stringify({
             type: 'PTY_IN',
-            session: 'sig',
+            session: 'rpc-ptysignal0-1',
             data: Buffer.from('sleep 600 & job=$!; disown $job; echo started $job\r').toString('base64'),
           }));
           const started = await untilHub(() => /started (\d+)/.exec(output()));
@@ -1825,7 +1825,7 @@ describe('daemon process under Bun against a local hub', () => {
           child.kill('SIGTERM');
           await child.exited;
           expect(await until(() => !processAlive(job), 10_000)).toBe(true);
-          expect(daemonLog()).toContain('device.terminals_closed_with_daemon sig');
+          expect(daemonLog()).toContain('device.terminals_closed_with_daemon rpc-ptysignal0-1');
         } finally {
           child.kill('SIGTERM');
           await child.exited;

@@ -4,7 +4,8 @@ import { AwaitedList } from '@kinu.run/test-utils';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManager } from './agents-sdk';
-import { sha256Hex } from '@kinu.run/core';
+import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES } from '@kinu.run/core';
+import { isJsonObject } from '../../../core/src/utils/json';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import type { WorkspaceEntry, WorkspaceRegistration } from '../../src/user/user-do';
 import {
@@ -27,6 +28,12 @@ import type { PictureBucket } from '../../src/slates/pictures';
 mockAgentsSdk();
 
 const { UserDO } = await import('../../src/user/user-do');
+
+function daemonError(input: { cause: unknown }) {
+  const parsed = v.safeParse(v.object({ code: v.string() }), input.cause);
+
+  return { code: parsed.success ? parsed.output.code : 'io', message: input.cause instanceof Error ? input.cause.message : String(input.cause) };
+}
 
 type UserDOInstance = InstanceType<typeof UserDO>;
 
@@ -337,11 +344,12 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const hub: DOHub = { current: null };
 
   let attached = options.connectedDeviceId ?? null;
+  let socketAttachment: JsonValue = { protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES] };
 
   const socketBody = {
     readyState: 1,
-    deserializeAttachment: () => ({ device: attached }),
-    serializeAttachment: () => {},
+    deserializeAttachment: () => isJsonObject(socketAttachment) ? { ...socketAttachment, device: attached } : { device: attached },
+    serializeAttachment: (value: JsonValue) => { socketAttachment = value; },
     send: (data: string) => {
       if (recordPush(data, attached)) return;
       const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
@@ -370,12 +378,12 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           await owner.webSocketMessage(socket, JSON.stringify({ id: call.id, result }));
         } catch (cause) {
           await owner.webSocketMessage(socket, JSON.stringify({
-            id: call.id, error: cause instanceof Error ? cause.message : String(cause),
+            id: call.id, error: daemonError({ cause }),
           }));
         }
       });
     },
-    close: () => {},
+    close: () => { socketBody.readyState = 3; },
   };
 
   // Hibernatable sockets are workerd-only; the double rides the prototype like
@@ -608,14 +616,20 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
       if (!target) throw new Error(`no fake daemon is attached for ${deviceId}`);
 
-      return userDO.webSocketMessage(target, JSON.stringify(hello));
+      const frame = isJsonObject(hello) ? { protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES], ...hello } : hello;
+
+      return userDO.webSocketMessage(target, JSON.stringify(frame));
     },
-    attachDevice: (deviceId) => { attached = deviceId; },
+    attachDevice: (deviceId) => {
+      attached = deviceId;
+      socketBody.readyState = deviceId === null ? 3 : 1;
+      socketAttachment = { protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES] };
+    },
     attachDaemon: (deviceId) => {
       const frames: DeviceFrame[] = [];
       // Bound to one machine via a fixed attachment. A real attachment, because the hub
       // caches the toolchain probe there; a no-op store would re-probe on every status read.
-      let attachment: JsonValue = { device: deviceId };
+      let attachment: JsonValue = { device: deviceId, protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES] };
 
       const body = {
         readyState: 1,
@@ -651,7 +665,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
               await owner.webSocketMessage(ws, JSON.stringify({ id: call.id, result }));
             } catch (cause) {
               await owner.webSocketMessage(ws, JSON.stringify({
-                id: call.id, error: cause instanceof Error ? cause.message : String(cause),
+                id: call.id, error: daemonError({ cause }),
               }));
             }
           });

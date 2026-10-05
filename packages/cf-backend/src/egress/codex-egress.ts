@@ -20,7 +20,7 @@ function probe() {
 probe();`;
 
 // RPC: forward, cancel.
-export class CodexEgress extends DurableObject<Env> {
+export class CodexEgress extends DurableObject<{ CodexEgress: Pick<DurableObjectNamespace, 'idFromName'> }> {
   readonly #calls = new EgressCalls();
 
 

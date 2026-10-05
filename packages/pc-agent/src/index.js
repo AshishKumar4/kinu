@@ -19,24 +19,19 @@ const pty = require('./pty.js');
 
 const update = require('./update.js');
 
-/** May be absent: an older daemon's updater lands only the siblings it knew. A literal specifier, so the
- *  ladder's walker follows it. */
-function loadChatgpt() {
-  try {
-    return require('./chatgpt.js');
-  } catch (err) {
-    if (err?.code === 'MODULE_NOT_FOUND' && String(err.message).includes('chatgpt.js')) return null;
-    throw err;
-  }
-}
+const protocol = require('./device-protocol.json');
 
-const chatgpt = loadChatgpt();
+const METHODS = Object.fromEntries(Object.keys(protocol.methods).map((name) => [name, name]));
+
+const FRAMES = protocol.frames;
+
+const chatgpt = require('./chatgpt.js');
 
 const { runToExit } = update;
 
 /** The names this daemon requires beside itself — the four requires above
  *  — for the updater to land a newer set of. */
-const DAEMON_SIBLINGS = ['sandbox.js', 'pty.js', 'update.js', 'chatgpt.js'];
+const DAEMON_SIBLINGS = ['sandbox.js', 'pty.js', 'update.js', 'chatgpt.js', 'device-protocol.json'];
 
 const HOME_SETTING = process.env.KINU_HOME?.trim() ?? '';
 
@@ -48,9 +43,6 @@ const DEVICE_HOME = path.resolve(HOME_SETTING === '' ? path.join(os.homedir(), '
  *  loaded. */
 const RUNNING_VERSION = update.readVersionStamp(DEVICE_HOME);
 
-/** What HELLO reports. Missing a sibling, this is not quite the stamped build, so the hub's answer is an
- *  UPDATE to it, whose landing brings the sibling (the selftest still prints the stamp). */
-const REPORTED_VERSION = RUNNING_VERSION !== null && chatgpt === null ? `${RUNNING_VERSION}.incomplete` : RUNNING_VERSION;
 
 const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
 
@@ -69,17 +61,14 @@ const PID_PATH = path.join(DEVICE_HOME, 'pc-agent.pid');
  *  one. `packages/cli/tests/device-connect.test.ts` pins the number. */
 const ALREADY_RUNNING_EXIT = 3;
 
-/** The hub's token-rotation frame type, core's DEVICE_TOKEN_ROTATION: this
- *  daemon ships as one dependency-free file and cannot import the constant, so
- *  packages/cli/tests/daemon-update.test.ts drives it with core's frames. */
-const TOKEN_ROTATION = 'ROTATE';
+const TOKEN_ROTATION = FRAMES.rotate;
 
 /** This daemon's answer once the rotated token is on disk, core's
  *  DEVICE_TOKEN_ROTATION_ACK. The hub keeps the superseded token valid until
  *  this frame arrives and drops it then, so the grace covers exactly the
  *  failure it exists for — a rotation lost with its socket — and not the
  *  indefinite window a copy of device.json could spend. */
-const TOKEN_ROTATION_ACK = 'ROTATE_ACK';
+const TOKEN_ROTATION_ACK = FRAMES.rotated;
 
 /** The hub's close code for a token it will not accept again, and the message
  *  the ticket exchange raises for the same refusal over HTTP. Both mean the
@@ -107,9 +96,9 @@ const REJECTED_EXIT = 4;
 /** The hub answers this text frame with `pong` (its socket auto-response), so
  *  a half-open socket — the case a TCP-level close never reports — is found in
  *  40 s rather than at the next command the owner is waiting for. */
-const PING_FRAME = 'ping';
+const PING_FRAME = FRAMES.ping;
 
-const PONG_FRAME = 'pong';
+const PONG_FRAME = FRAMES.pong;
 
 const PING_INTERVAL_MS = 30_000;
 
@@ -125,16 +114,7 @@ const COMMAND_ENV = sandbox.sandboxEnvironment(process.env, {});
 /** What the dotenv files in this daemon's launch directory put into its environment; no command inherits it. */
 const LAUNCH_DOTENV = sandbox.launchDotenv(process.cwd(), process.env.NODE_ENV);
 
-/** The method that terminates one in-flight command's process group, and the
- *  cancellation protocol this daemon speaks. Both mirror core's
- *  DEVICE_CANCEL_METHOD / DEVICE_CANCEL_PROTOCOL (execution/device-tunnel.ts);
- *  cf-backend's pc-agent test pins the pair, since this file cannot import
- *  them. A frame carrying any other version is REFUSED, never guessed at: a
- *  cancellation the daemon misread would report a stopped command that is
- *  still running. */
-const CANCEL_METHOD = 'execCancel';
-
-const CANCEL_PROTOCOL = 1;
+const CANCEL_METHOD = METHODS.cancel;
 
 /** Each exec stream stays far below the Worker WebSocket's documented 32 MiB
  * receive ceiling even after worst-case JSON escaping. The daemon drains bytes
@@ -154,26 +134,20 @@ const READ_CHUNK_BYTES = 1024 * 1024;
  * onto it that it composes onto `exec`. Everything after it is a stream —
  * keystrokes in, bytes and an exit status out — and a stream has nothing to
  * correlate, so those frames carry a session name instead of an id.
- *
- * The names are pinned against core's own constants by cf-backend's pc-agent
- * test, as `execCancel` is: this daemon ships as three dependency-free files
- * and cannot import them.
  */
-const PTY_OPEN_METHOD = 'ptyOpen';
+const PTY_OPEN_METHOD = METHODS.ptyOpen;
 
-const PTY_INPUT_FRAME = 'PTY_IN';
+const PTY_INPUT_FRAME = FRAMES.ptyInput;
 
-const PTY_RESIZE_FRAME = 'PTY_RESIZE';
+const PTY_RESIZE_FRAME = FRAMES.ptyResize;
 
-const PTY_CLOSE_FRAME = 'PTY_CLOSE';
+const PTY_OUTPUT_FRAME = FRAMES.ptyOutput;
 
-const PTY_OUTPUT_FRAME = 'PTY_OUT';
-
-const PTY_EXIT_FRAME = 'PTY_EXIT';
+const PTY_EXIT_FRAME = FRAMES.ptyExit;
 
 /** The frames the hub sends a live session. Each names a session this daemon
  *  already opened, so none of them is a way to start work. */
-const PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, PTY_CLOSE_FRAME]);
+const PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME]);
 
 /**
  * How far behind the socket may fall before live output — a terminal's, or a
@@ -203,13 +177,11 @@ const LIVE_BACKLOG_MAX_BYTES = 256 * 1024;
  * machine's own sign-in (chatgpt.js), attached here and never sent to the hub.
  * Nothing here logs a header or a body.
  */
-const RELAY_METHOD = 'codexRelay';
+const RELAY_METHOD = METHODS.codexRelay;
 
-const RELAY_HEAD_FRAME = 'RELAY_HEAD';
+const RELAY_HEAD_FRAME = FRAMES.relayHead;
 
-const RELAY_BODY_FRAME = 'RELAY_BODY';
-
-const RELAY_CANCEL_FRAME = 'RELAY_CANCEL';
+const RELAY_BODY_FRAME = FRAMES.relayBody;
 
 const CHATGPT_HOST = 'api.openai.com';
 
@@ -219,7 +191,7 @@ const RELAY_ROUTES = Object.freeze({
 });
 
 /** The hub's calls on this machine's ChatGPT sign-in, core's DEVICE_CHATGPT. */
-const CHATGPT_METHODS = Object.freeze({ status: 'chatgptStatus', signIn: 'chatgptSignIn', signOut: 'chatgptSignOut' });
+const CHATGPT_METHODS = Object.freeze({ status: METHODS.chatgptStatus, signIn: METHODS.chatgptSignIn, signOut: METHODS.chatgptSignOut });
 
 /** The error code of the answer a relayed ChatGPT call gets when this machine holds no usable sign-in. */
 const CHATGPT_SIGNED_OUT = 'chatgpt_signed_out';
@@ -231,7 +203,7 @@ function predecessorExited() {
   return update.lifelineClosed(process.stdin).then(() => { log('device.predecessor_exited', `pid ${String(replacedDaemon)}`); });
 }
 
-const chatgptSession = chatgpt?.createDeviceSession({ home: DEVICE_HOME, predecessorExited: replacedDaemon === null ? null : predecessorExited() }) ?? null;
+const chatgptSession = chatgpt.createDeviceSession({ home: DEVICE_HOME, predecessorExited: replacedDaemon === null ? null : predecessorExited() });
 
 let exiting = false;
 
@@ -241,8 +213,6 @@ let exiting = false;
  * that takes. A second call is a forced stop: that call ends there, unanswered, and the exit follows.
  */
 function exitWhenQuiet(code) {
-  if (chatgptSession === null) process.exit(code);
-
   if (exiting) {
     log('device.exit_forced', 'the ChatGPT auth call in flight is abandoned');
     chatgptSession.abort();
@@ -289,8 +259,16 @@ function hintedDir(hint) {
  *  frame's own refusal, so it is proved once rather than per command. */
 let SANDBOX_CAPABILITY = { status: sandbox.SANDBOX_STATUS.PROBE_FAILED, detail: 'the sandbox probe has not run yet' };
 
+function rpcError(cause) {
+  return { code: cause?.code ?? 'io', message: cause instanceof Error ? cause.message : String(cause) };
+}
+
 function rpc(ws, id, result, error) {
-  ws.send(JSON.stringify(error ? { id, error } : { id, result }));
+  try {
+    ws.send(JSON.stringify(error === undefined ? { id, result: result ?? null } : { id, error: rpcError(error) }));
+  } catch (cause) {
+    log('device.frame_dropped', 'rpc_answer', errorDetail(cause));
+  }
 }
 
 // ── Shadow-git checkpoints ─────────────────────────────────────────────
@@ -921,7 +899,7 @@ const INFLIGHT_ROOT = path.resolve(
 
 const REQUEST_ID = /^rpc-[A-Za-z0-9_-]{10}-[1-9]\d*$/;
 
-const EXEC_ACK_METHOD = 'execAck';
+const EXEC_ACK_METHOD = METHODS.execAck;
 
 /**
  * A running command's output, sent only to a hub whose exec frame asked with
@@ -930,7 +908,7 @@ const EXEC_ACK_METHOD = 'execAck';
  * frame. A hub that never asks gets no frame and the command gets no output
  * pipe.
  */
-const EXEC_OUTPUT_FRAME = 'EXEC_OUT';
+const EXEC_OUTPUT_FRAME = FRAMES.execOutput;
 
 /** At most one output frame per request per interval, holding at most the
  *  newest window of bytes: the rate and size core's job feed sends at. */
@@ -2212,7 +2190,7 @@ async function planFromFrame(msg, command, source = process.env) {
 
   if (SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
     const error = new Error(`sandbox_unavailable (${SANDBOX_CAPABILITY.status}): ${SANDBOX_CAPABILITY.detail}`);
-    error.code = 'sandbox_unavailable';
+    error.code = protocol.errors.sandboxUnavailable;
     error.reason = SANDBOX_CAPABILITY.status;
     throw error;
   }
@@ -2437,7 +2415,11 @@ function leaderEnvironment(plan) {
 function sendLiveFrame(ws, frame) {
   const droppable = frame.type === PTY_OUTPUT_FRAME || frame.type === EXEC_OUTPUT_FRAME;
 
-  if (droppable && Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > LIVE_BACKLOG_MAX_BYTES) return false;
+  if (droppable && Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > LIVE_BACKLOG_MAX_BYTES) {
+    log('device.frame_dropped', frame.type, 'socket_backlog');
+
+    return false;
+  }
 
   try {
     ws.send(JSON.stringify(frame));
@@ -2468,7 +2450,6 @@ function handlePtyFrame(msg, ctx) {
   try {
     if (msg.type === PTY_INPUT_FRAME) sessions.write(msg.session, msg.data);
     else if (msg.type === PTY_RESIZE_FRAME) sessions.resize(msg.session, msg.cols, msg.rows);
-    else sessions.close(msg.session);
   } catch (err) {
     log('device.terminal_frame_dropped', msg.type, msg.session, errorDetail(err));
   }
@@ -2480,7 +2461,7 @@ function handlePtyFrame(msg, ctx) {
  *  sandboxed frame. A terminal is device access, so it is confined exactly as
  *  a command is. */
 async function openTerminalSession(msg, ws, ctx) {
-  const { params } = msg;
+  const { id, params } = msg;
 
   assertSupervisionSupported();
   assertCommandShellPresent();
@@ -2489,22 +2470,22 @@ async function openTerminalSession(msg, ws, ctx) {
   const plan = await planFromFrame(msg, SESSION_COMMAND, sessionSource());
 
   const opened = ctx.sessions.open({
-    session: params[0],
-    cols: params[1],
-    rows: params[2],
+    session: id,
+    cols: params[0],
+    rows: params[1],
     argv: plan.argv,
     env: leaderEnvironment(plan),
     send: (frame) => sendLiveFrame(ws, frame),
   });
 
-  return { session: params[0], pid: opened.pid, cols: opened.cols, rows: opened.rows };
+  return { session: id, pid: opened.pid, cols: opened.cols, rows: opened.rows };
 }
 
 /** Answers `id` once `pending` settles: with its value, or with its error's message. */
 function rpcWhenSettled(ws, id, pending) {
   /** @param {unknown} error */
   function replyWithFailure(error) {
-    rpc(ws, id, null, error instanceof Error ? error.message : String(error));
+    rpc(ws, id, null, error);
   }
 
   pending.then((result) => rpc(ws, id, result), replyWithFailure);
@@ -2706,7 +2687,7 @@ function execCommand(msg, ws, ctx) {
       await outputWatches.get(id)?.ended;
       rpc(ws, id, completed.result);
     } catch (err) {
-      rpc(ws, id, null, err instanceof Error ? err.message : String(err));
+      rpc(ws, id, null, err);
     }
   })().catch(reportExecReplyFailure);
 }
@@ -2757,7 +2738,6 @@ async function fetchRelayed(request, target, signal) {
 
   if (target.hostname !== CHATGPT_HOST) return send();
 
-  if (chatgptSession === null) return chatgptSignedOut();
   const token = await chatgptSession.bearer();
 
   if (token === null) return chatgptSignedOut();
@@ -2783,7 +2763,8 @@ async function relayCall(ws, id, request) {
   if (relays.has(id)) throw new Error(`relay ${id} is already in flight`);
   const target = new URL(request.url);
   const abort = new AbortController();
-  relays.set(id, abort);
+  const ended = Promise.withResolvers();
+  relays.set(id, { abort: () => abort.abort(), ended: ended.promise });
 
   try {
     const upstream = await fetchRelayed(request, target, abort.signal);
@@ -2807,20 +2788,8 @@ async function relayCall(ws, id, request) {
     throw new Error(`${target.hostname} could not be reached from this machine: ${errorDetail(err)}`, { cause: err });
   } finally {
     relays.delete(id);
+    ended.resolve();
   }
-}
-
-/** Frames that name a session or a relay rather than a request id: nothing to answer, so no reply. */
-const UNCORRELATED_FRAMES = new Set([...PTY_FRAMES, RELAY_CANCEL_FRAME]);
-
-function handleUncorrelatedFrame(msg, ctx) {
-  if (msg.type === RELAY_CANCEL_FRAME) {
-    relays.get(String(msg.relay))?.abort();
-
-    return;
-  }
-
-  handlePtyFrame(msg, ctx);
 }
 
 /** Methods past the file and command set: the provider relay and this machine's ChatGPT sign-in, else
@@ -2829,46 +2798,81 @@ function answerLaterMethod(msg, ws) {
   const { id, method, params } = msg;
 
   if (method === RELAY_METHOD) rpcWhenSettled(ws, id, relayCall(ws, id, params[0]));
-  else if (chatgptSession !== null && method === CHATGPT_METHODS.status) rpc(ws, id, chatgptSession.status());
-  else if (chatgptSession !== null && method === CHATGPT_METHODS.signIn) rpcWhenSettled(ws, id, chatgptSession.signIn());
-  else if (chatgptSession !== null && method === CHATGPT_METHODS.signOut) rpcWhenSettled(ws, id, chatgptSession.signOut());
-  else rpc(ws, id, null, 'unknown method: ' + method);
+  else if (method === CHATGPT_METHODS.status) rpc(ws, id, chatgptSession.status());
+  else if (method === CHATGPT_METHODS.signIn) rpcWhenSettled(ws, id, chatgptSession.signIn());
+  else if (method === CHATGPT_METHODS.signOut) rpcWhenSettled(ws, id, chatgptSession.signOut());
+  else rpc(ws, id, null, Object.assign(new Error('unknown method: ' + method), { code: protocol.errors.unknownMethod }));
+}
+
+async function cancelWork(requestId, ctx) {
+  await Promise.allSettled([starting.get(requestId)]);
+  const relay = relays.get(requestId);
+
+  if (relay) {
+    relay.abort();
+    await relay.ended;
+
+    return { requestId, cancelled: 'terminated' };
+  }
+
+  if (ctx?.sessions?.has(requestId)) {
+    await ctx.sessions.close(requestId).ended;
+
+    return { requestId, cancelled: 'terminated' };
+  }
+
+  if (!REQUEST_ID.test(requestId)) return { requestId, cancelled: 'unknown' };
+
+  return inFlight.cancel(requestId);
+}
+
+function rpcRequest(msg) {
+  const { id, method, params } = msg;
+
+  if (String(id) !== id || String(method) !== method || !Array.isArray(params)) {
+    log('device.frame_dropped', 'invalid_request');
+
+    return null;
+  }
+
+  return { id, method, params };
 }
 
 function handle(msg, ws, ctx) {
-  const { id, method, params } = msg;
+  if (PTY_FRAMES.has(msg.type)) return handlePtyFrame(msg, ctx);
+  const request = rpcRequest(msg);
+
+  if (request === null) return;
+  const { id, method, params } = request;
   const checkpoints = ctx && ctx.checkpoints;
 
-  // A session frame first: it carries a terminal's name rather than a request
-  // id, so the method dispatch below has nothing to match it on.
-  if (UNCORRELATED_FRAMES.has(msg.type)) return handleUncorrelatedFrame(msg, ctx);
-
   try {
-    if (method === PTY_OPEN_METHOD) {
-      rpcWhenSettled(ws, id, openTerminalSession(msg, ws, ctx));
-    } else if (method === 'exec') {
+    if (method === METHODS.ping) {
+      rpc(ws, id, PONG_FRAME);
+    } else if (method === PTY_OPEN_METHOD) {
+      const opened = openTerminalSession(msg, ws, ctx);
+      starting.set(id, opened);
+      const forget = () => starting.delete(id);
+      opened.then(forget, forget);
+      rpcWhenSettled(ws, id, opened);
+    } else if (method === METHODS.exec) {
       execCommand(msg, ws, ctx);
 
     } else if (method === CANCEL_METHOD || method === EXEC_ACK_METHOD) {
       const requested = params[0];
       const target = String(requested);
-      const protocol = params[1];
-
-      if (protocol !== CANCEL_PROTOCOL) return rpc(ws, id, null,
-        `unsupported cancellation protocol ${JSON.stringify(protocol)}: this daemon speaks ${CANCEL_PROTOCOL}`);
 
       if (target !== requested) return rpc(ws, id, null, `${method} expects the request id to target`);
-      requestDirectory(INFLIGHT_ROOT, target);
       rpcWhenSettled(ws, id, method === CANCEL_METHOD
-        ? Promise.allSettled([starting.get(target)]).then(() => inFlight.cancel(target))
+        ? cancelWork(target, ctx)
         : inFlight.acknowledge(target));
-    } else if (method === 'readFile') {
+    } else if (method === METHODS.readFile) {
       const options = params[1] ?? {};
       const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
 
       if (options.encoding === 'base64') rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
       else rpc(ws, id, fs.readFileSync(confined, 'utf8'));
-    } else if (method === 'readRange') {
+    } else if (method === METHODS.readRange) {
       const offset = params[1], length = params[2];
 
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
@@ -2877,7 +2881,7 @@ function handle(msg, ws, ctx) {
 
       const bytes = readRangeBytes(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read'), offset, length);
       rpc(ws, id, { encoding: 'base64', content: bytes.toString('base64') });
-    } else if (method === 'writeFile') {
+    } else if (method === METHODS.writeFile) {
       const options = params[2] ?? {};
       const view = viewFromFrame(msg);
       const confined = confinedDeviceViewPath(view, params[0], 'write');
@@ -2894,15 +2898,15 @@ function handle(msg, ws, ctx) {
 
         return skipped === null ? { success: true } : { success: true, uncheckpointed: skipped };
       }));
-    } else if (method === 'listFiles') {
+    } else if (method === METHODS.listFiles) {
       rpc(ws, id, listFilesAnswer(msg));
-    } else if (method === 'statPath') {
+    } else if (method === METHODS.statPath) {
       const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
 
       if (!fs.existsSync(confined)) return rpc(ws, id, null);
       const stat = fs.statSync(confined);
       rpc(ws, id, { size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDirectory() });
-    } else if (method === 'unlinkPath') {
+    } else if (method === METHODS.unlinkPath) {
       // The ENTRY, not its target: unlink removes the name the caller gave,
       // and following the link would delete a path they never named.
       const entry = viewFromFrame(msg).resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'write');
@@ -2912,7 +2916,7 @@ function handle(msg, ws, ctx) {
 
         return { success: true };
       }));
-    } else if (method === 'mkdirPath') {
+    } else if (method === METHODS.mkdirPath) {
       const options = params[1] ?? {};
       const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'write');
 
@@ -2921,24 +2925,24 @@ function handle(msg, ws, ctx) {
 
         return { success: true };
       }));
-    } else if (method === 'exists') {
+    } else if (method === METHODS.exists) {
       const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
       rpc(ws, id, fs.existsSync(confined));
-    } else if (method === 'which') {
+    } else if (method === METHODS.which) {
       rpc(ws, id, { present: whichAll(params[0]) });
-    } else if (method === 'checkpointStatus') {
+    } else if (method === METHODS.checkpointStatus) {
       rpcWhenSettled(ws, id, checkpoints.status());
-    } else if (method === 'checkpointList') {
+    } else if (method === METHODS.checkpointList) {
       rpcWhenSettled(ws, id, checkpoints.list(params[0], params[1], params[2]));
-    } else if (method === 'checkpointPlan') {
+    } else if (method === METHODS.checkpointPlan) {
       rpcWhenSettled(ws, id, checkpoints.plan(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
-    } else if (method === 'checkpointRestore') {
+    } else if (method === METHODS.checkpointRestore) {
       rpcWhenSettled(ws, id, checkpoints.restore(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else {
       answerLaterMethod(msg, ws);
     }
   } catch (err) {
-    rpc(ws, id, null, err instanceof Error ? err.message : String(err));
+    rpc(ws, id, null, err);
   }
 }
 
@@ -3223,6 +3227,16 @@ function startConnectLoop(opts) {
       stopKeepalive();
 
       if (stopped) return;
+
+      if (event?.code === protocol.versionRefusalClose) {
+        stopped = true;
+        logger('device.protocol_refused', protocol.updateRequired);
+
+        if (onClose) onClose(event);
+        onRejected();
+
+        return;
+      }
 
       if (event && event.code === CREDENTIALS_REJECTED_CLOSE) {
         if (onClose) onClose(event);
@@ -3607,7 +3621,8 @@ async function main() {
         // under the full tier, sent so the hub never runs a command on this
         // machine to learn a path.
         ws.send(JSON.stringify({
-          type: 'HELLO', user: USER, os: os.platform(), arch: os.arch(), hostname: os.hostname(), pid: process.pid,
+          type: FRAMES.hello, protocolVersion: protocol.version, features: Object.keys(protocol.methods),
+          user: USER, os: os.platform(), arch: os.arch(), hostname: os.hostname(), pid: process.pid,
           root: cfg.root,
           home: os.homedir(),
           // The build this daemon IS: the stamp beside it when this process
@@ -3617,7 +3632,7 @@ async function main() {
           // hub would never push that version again). Absent when no stamp
           // existed at start: the hub then pushes nothing, as it does for
           // every daemon before this field.
-          version: REPORTED_VERSION ?? undefined,
+          version: RUNNING_VERSION ?? undefined,
           updateCheck: !update.updateOptedOut(DEVICE_HOME),
           // A build this daemon refused is not pushed again while it runs here.
           runtime: runtimeName(),
@@ -3632,10 +3647,6 @@ async function main() {
             gpu: sandbox.gpuNodes(),
           },
           agentRoot: AGENT_ROOT,
-          // Terminals are deliberately NOT advertised here. A hub that asks a
-          // daemon too old to hold them gets `unknown method: ptyOpen`, which
-          // is the same answer and cannot go stale — where a recorded
-          // capability outlives the build that proved it.
         }));
       });
       ws.addEventListener('message', (ev) => {
@@ -3651,7 +3662,7 @@ async function main() {
         try {
           msg = JSON.parse(payload);
         } catch (err) {
-          log('Device message parse failed:', err);
+          log('device.frame_dropped', 'malformed', errorDetail(err));
 
           return;
         }
@@ -3782,19 +3793,16 @@ module.exports = {
   handle,
   inFlight,
   CANCEL_METHOD,
-  CANCEL_PROTOCOL,
   EXEC_ACK_METHOD,
   EXEC_OUTPUT_FRAME,
   PTY_OPEN_METHOD,
   PTY_INPUT_FRAME,
   PTY_RESIZE_FRAME,
-  PTY_CLOSE_FRAME,
   PTY_OUTPUT_FRAME,
   PTY_EXIT_FRAME,
   RELAY_METHOD,
   RELAY_HEAD_FRAME,
   RELAY_BODY_FRAME,
-  RELAY_CANCEL_FRAME,
   RELAY_ROUTES,
   relayRefusal,
   CHATGPT_METHODS,

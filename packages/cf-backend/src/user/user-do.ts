@@ -38,7 +38,6 @@ import {
   NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED,
   codexEgressAllowed, chatgptEgressAllowed, DEVICE_CHATGPT, DeviceChatGptStatusSchema,
   type DeviceChatGptStatus, type RelayedProvider,
-  isDeviceUnknownMethodError,
   isWorkspaceName,
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
@@ -82,6 +81,7 @@ import {
 } from '@kinu.run/core';
 import {
   attempt,
+  attemptInItsWords,
   authoredRefusal,
   diagnostics,
   KinuError,
@@ -143,7 +143,8 @@ import {
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, type BuildStamp,
   type DeviceUpdateFrame, type DeviceUpdateState,
-  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId,
+  DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId,
+  DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel,
   DEVICE_TIERS, SANDBOX_UNAVAILABLE,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause,
   summarizeDeviceAction,
@@ -231,25 +232,30 @@ const DEVICE_NAME_MAX_LENGTH = 80;
 const MINTED_DEVICE_TOKEN = /^pdt_[A-Za-z0-9_-]{32,}$/;
 
 
-/** Owner-facing checkpoint reads do not execute or write on the device. Every
- * other workspace call, including restore, crosses the consent chokepoint. */
-const CONSENT_FREE_DEVICE_METHODS = {
-  checkpointStatus: true,
-  checkpointList: true,
-  checkpointPlan: true,
-} as const satisfies Record<string, true>;
 
-const CHECKPOINT_STORE_METHODS = {
-  checkpointList: true, checkpointPlan: true, checkpointRestore: true,
-} as const satisfies Record<string, true>;
+function deviceCallFrame(deviceId: string, workspace: string | null, frameSandbox: JsonObject | null, opts: Parameters<UserDO['deviceRpc']>[3]): NonNullable<Parameters<DeviceTunnel['rpc']>[2]> {
+  const rpcOptions: NonNullable<Parameters<DeviceTunnel['rpc']>[2]> = { extra: { deviceId }, ...watchedOutput(opts) };
 
-/** Frames the daemon refuses without the owner's Sandbox switch. */
-const DEVICE_VIEW_METHODS = {
-  exec: true, [DEVICE_PTY_OPEN_METHOD]: true,
-  readFile: true, readRange: true, writeFile: true, listFiles: true,
-  statPath: true, unlinkPath: true, mkdirPath: true, exists: true,
-  checkpointPlan: true, checkpointRestore: true,
-} as const satisfies Record<string, true>;
+  if (opts?.checkpoint) {
+    rpcOptions.extra = {
+      ...rpcOptions.extra,
+      checkpoint: {
+        agent: workspace ?? opts.checkpoint.agent,
+        turnId: opts.checkpoint.turnId,
+        sessionId: opts.checkpoint.sessionId,
+        dir: opts.checkpoint.dir,
+      },
+    };
+  }
+
+  if (frameSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: frameSandbox };
+
+  if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
+
+  if (opts?.requestId !== undefined) rpcOptions.requestId = opts.requestId;
+
+  return rpcOptions;
+}
 
 /** The agent a device call's consent is keyed on, or undefined when the call is not gated
  *  (stopping work, or an owner read of a consent-free method). */
@@ -333,7 +339,9 @@ const CancelledRequestIdSchema = v.pipe(v.string(), v.minLength(1));
 const HOSTNAME_MAX_LENGTH = 255;
 
 const DeviceHelloSchema = v.object({
-  type: v.literal('HELLO'),
+  type: v.literal(DEVICE_FRAMES.hello),
+  protocolVersion: v.optional(v.number()),
+  features: v.optional(v.array(v.string())),
   os: v.optional(v.string()),
   hostname: v.optional(v.string()),
   /** The directory `kinu connect` ran in, and the machine's home.
@@ -2217,6 +2225,7 @@ export class UserDO extends Agent<Env> {
     const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
 
     if (hello.success) {
+      if (!this._devices.hello(deviceId, hello.output.protocolVersion, hello.output.features)) return;
       this.recordDeviceHello(deviceId, hello.output);
       await this.devicesMoved();
       const frame = await this.deviceUpdateFrame(deviceId, hello.output);
@@ -2255,7 +2264,7 @@ export class UserDO extends Agent<Env> {
 
     if (!frame.success) return false;
 
-    if (frame.output.type === DEVICE_PTY_OUTPUT) {
+    if ('data' in frame.output) {
       this._terminals.toPane(frame.output.session, bytesFromBase64(frame.output.data));
 
       return true;
@@ -2276,47 +2285,37 @@ export class UserDO extends Agent<Env> {
     window: { cols: number; rows: number },
     deviceId?: string,
   ): Promise<{ session: string }> {
-    const bounded = (axis: number, fallback: number): number => (
-      Number.isInteger(axis) && axis >= 1 && axis <= DEVICE_PTY_MAX_AXIS ? axis : fallback
-    );
+    return settle(Effect.gen({ self: this }, function* () {
+      const bounded = (axis: number, fallback: number): number => (
+        Number.isInteger(axis) && axis >= 1 && axis <= DEVICE_PTY_MAX_AXIS ? axis : fallback
+      );
 
-    // Gate first: a refused caller must not learn whether a machine is connected.
-    await this.requireTier(caller, 'device.rpc');
-    const session = `pty-${nanoid(16)}`;
-    // Resolved before minting: several live devices and none named is an error.
-    const target = await this.resolveDeviceForCall(deviceId, undefined);
+      // Gate first: a refused caller must not learn whether a machine is connected.
+      yield* attemptInItsWords('io', () => this.requireTier(caller, 'device.rpc'));
+      const session = `pty-${nanoid(16)}`;
+      // Resolved before minting: several live devices and none named is an error.
+      const target = yield* this.resolveDeviceForCall(deviceId, undefined);
 
-    try {
-      await this.deviceRpc(
+      yield* attemptInItsWords('io', () => this.deviceRpc(
         caller,
         DEVICE_PTY_OPEN_METHOD,
-        [session, bounded(window.cols, TERMINAL_DEFAULT_AXIS.cols), bounded(window.rows, TERMINAL_DEFAULT_AXIS.rows)],
-        { agentName, deviceId: target, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
-      );
-    } catch (cause) {
-      // An install too old for terminals gets an actionable message; other failures pass through.
-      if (isDeviceUnknownMethodError({ cause })) {
-        throw new KinuError('unsupported', `${this.deviceLabel(target)} runs an older Kinu. Run \`kinu update\` on that machine.`, { cause });
-      }
+        [bounded(window.cols, TERMINAL_DEFAULT_AXIS.cols), bounded(window.rows, TERMINAL_DEFAULT_AXIS.rows)],
+        { agentName, deviceId: target, requestId: session, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
+      ));
 
-      throw new KinuError('unavailable', 'Could not open a terminal on this machine; try again.', { cause });
-    }
+      this._terminals.register(session, target, agentName);
 
-    this._terminals.register(session, target, agentName);
+      // Unattached sessions are swept on the next open: this object's one alarm belongs to other work.
+      for (const stale of this._terminals.expired()) yield* this.closeDeviceTerminal(stale.session, stale.device);
 
-    // Unattached sessions are swept on the next open: this object's one alarm belongs to other work.
-    for (const stale of this._terminals.expired()) this.closeDeviceTerminal(stale.session, stale.device);
-
-    return { session };
+      return { session };
+    }));
   }
 
-  private closeDeviceTerminal(session: string, device: string): void {
-    try {
-      this._terminals.paneClosed(session, device);
-    } catch (cause) {
-      // The machine's socket dropped, which already ended every terminal on it.
-      diagnostics.event('device.terminal_close_unsent', { device, error: renderThrownChain({ cause }) });
-    }
+  private closeDeviceTerminal(session: string, device: string): Effect.Effect<void> {
+    return attempt({ doing: 'close the device terminal', otherwise: 'unavailable' }, () => this._terminals.paneClosed(session, device)).pipe(
+      Effect.catch((failure) => Effect.sync(() => diagnostics.failure('device.terminal_close_unsent', failure, { device }))),
+    );
   }
 
   /**
@@ -2415,9 +2414,7 @@ export class UserDO extends Agent<Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
-      this.closeDeviceTerminal(terminal.session, terminal.device);
-
-      return;
+      return settle(this.closeDeviceTerminal(terminal.session, terminal.device));
     }
 
     const deviceId = deviceIdFromSocket(ws);
@@ -2625,17 +2622,19 @@ export class UserDO extends Agent<Env> {
    * Unnamed call resolves to the only live machine; several live is an error naming them.
    * With none live, a workspace op is told the registered machines; `undefined` just reports none.
    */
-  private async resolveDeviceForCall(
+  private resolveDeviceForCall(
     requested: string | undefined,
     consentAgent: string | undefined,
-  ): Promise<string> {
-    const deviceId = this.liveDeviceForCall(requested);
+  ): Effect.Effect<string, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const deviceId = yield* this.liveDeviceForCall(requested);
 
-    if (deviceId) return deviceId;
+      if (deviceId) return deviceId;
 
-    if (consentAgent !== undefined) await this.announceDevicesUnavailable(consentAgent);
+      if (consentAgent !== undefined) yield* attemptInItsWords('io', () => this.announceDevicesUnavailable(consentAgent));
 
-    throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+      return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
+    });
   }
 
   /** Revoked rows are excluded: revoked means gone, not offline. */
@@ -2667,16 +2666,18 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Null when none qualifies; an unnamed call with several live is reported as ambiguous. */
-  private liveDeviceForCall(requested: string | undefined): string | null {
-    const deviceId = this._devices.connectedDeviceId(requested);
+  private liveDeviceForCall(requested: string | undefined): Effect.Effect<string | null, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const deviceId = this._devices.connectedDeviceId(requested);
 
-    if (deviceId) return deviceId;
+      if (deviceId) return deviceId;
 
-    if (requested === undefined && this._devices.connectedDeviceIds().length > 1) {
-      throw new KinuError('bad_input', `${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`);
-    }
+      if (requested === undefined && this._devices.connectedDeviceIds().length > 1) {
+        return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.ambiguous, `${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`));
+      }
 
-    return null;
+      return null;
+    });
   }
 
   async deviceRpc(
@@ -2689,97 +2690,87 @@ export class UserDO extends Agent<Env> {
       onOutput?: (output: DeviceExecOutput) => void | Promise<void>;
     },
   ): Promise<string | undefined> {
-    const resolved = await this.requireTier(caller, 'device.rpc');
-    const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
+    return settle(Effect.gen({ self: this }, function* () {
+      const resolved = yield* attemptInItsWords('io', () => this.requireTier(caller, 'device.rpc'));
+      const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
 
-    if (proven !== null && Object.hasOwn(CHECKPOINT_STORE_METHODS, method) && params[0] !== proven) {
-      throw new KinuError('denied', `workspace ${proven} reads and restores only its own device checkpoints`);
-    }
+      if (proven !== null && deviceMethodHas(method, 'checkpointStore') && params[0] !== proven) {
+        return yield* Effect.fail(new KinuError('denied', `workspace ${proven} reads and restores only its own device checkpoints`));
+      }
 
-    // Cancellation is never consent-gated: it only ends a command already allowed, and
-    // gating it could leave a live process waiting on an unanswered card.
-    const stopping = method === DEVICE_CANCEL_METHOD;
-    const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
+      // Cancellation is never consent-gated: it only ends a command already allowed, and
+      // gating it could leave a live process waiting on an unanswered card.
+      const stopping = method === DEVICE_CANCEL_METHOD;
+      const ownerRead = opts?.agentName === undefined && deviceMethodHas(method, 'consentFree');
 
-    const consentAgent = consentAgentFor(resolved, opts?.agentName, { stopping, ownerRead });
+      const consentAgent = consentAgentFor(resolved, opts?.agentName, { stopping, ownerRead });
 
-    const deviceId = await this.resolveDeviceForCall(opts?.deviceId, consentAgent);
+      const deviceId = yield* this.resolveDeviceForCall(opts?.deviceId, consentAgent);
 
-    if (!stopping && !this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+      if (!stopping && !this.isActiveDevice(deviceId)) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
 
-    if (consentAgent !== undefined) {
-      // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot
-      // ride a sibling workspace's grant.
-      const consent = await this.checkDeviceConsent({
-        agentName: consentAgent, deviceId, method, params,
-        workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
-      });
+      if (consentAgent !== undefined) {
+        // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot
+        // ride a sibling workspace's grant.
+        const consent = yield* attemptInItsWords('io', () => this.checkDeviceConsent({
+          agentName: consentAgent, deviceId, method, params,
+          workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
+        }));
 
-      if (!consent.allowed) throw new KinuError('denied', consent.reason);
-    }
+        if (!consent.allowed) return yield* Effect.fail(new KinuError('denied', consent.reason));
+      }
 
-    const frameSandbox = Object.hasOwn(DEVICE_VIEW_METHODS, method) ? this.frameSandboxFor(method, deviceId, proven) : null;
+      const frameSandbox = deviceMethodHas(method, 'deviceView') ? yield* this.frameSandboxFor(method, deviceId, proven) : null;
 
-    if (!stopping && !this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
-    const tunnel = this._devices.tunnel(deviceId);
+      if (!stopping && !this.isActiveDevice(deviceId)) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
+      const tunnel = this._devices.tunnel(deviceId);
 
-    if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
-    const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = { extra: { deviceId }, ...watchedOutput(opts) };
+      if (!tunnel) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
+      const rpcOptions = deviceCallFrame(deviceId, proven, frameSandbox, opts);
 
-    if (opts?.checkpoint) {
-      rpcOptions.extra = {
-        ...rpcOptions.extra,
-        checkpoint: {
-          agent: proven ?? opts.checkpoint.agent,
-          turnId: opts.checkpoint.turnId,
-          sessionId: opts.checkpoint.sessionId,
-          dir: opts.checkpoint.dir,
-        },
-      };
-    }
+      // Persist before sending: an insert after send races with eviction. Only a proven
+      // workspace command carries a durable turn identity.
+      const requestId = opts?.requestId;
+      const durableExec = method === DEVICE_METHOD.exec && requestId !== undefined && resolved.kind === 'workspace';
 
-    if (frameSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: frameSandbox };
+      if (durableExec) yield* this.persistDeviceExec(tunnel, { requestId, deviceId, workspace: resolved.workspace }, opts);
 
-    if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
+      const result = yield* attemptInItsWords('io', () => tunnel.rpc(method, params, rpcOptions));
 
-    if (opts?.requestId !== undefined) rpcOptions.requestId = opts.requestId;
+      // A tool's own cancel is recorded where a sweep would put it; the first answer wins.
+      if (stopping) yield* this.recordToolPathCancellation(params, result);
 
-    // Persist before sending: an insert after send races with eviction. Only a proven
-    // workspace command carries a durable turn identity.
-    const requestId = opts?.requestId;
-    const durableExec = method === 'exec' && requestId !== undefined && resolved.kind === 'workspace';
+      return result === undefined ? undefined : JSON.stringify(result);
+    }));
+  }
 
-    if (durableExec) {
+  private persistDeviceExec(tunnel: DeviceTunnel, call: { requestId: string; deviceId: string; workspace: string }, opts: Parameters<UserDO['deviceRpc']>[3]): Effect.Effect<void, KinuError> {
+    const { requestId, deviceId, workspace } = call;
+
+    return Effect.gen({ self: this }, function* () {
       // Probe with a fresh id, never the command's own: ACKing a retry's id before replay
       // would delete its retained terminal result.
-      await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [nextDeviceRequestId(), DEVICE_CANCEL_PROTOCOL]);
+      yield* attemptInItsWords('io', () => tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [nextDeviceRequestId()]));
 
       // A revocation sweep can land during the probe await; recheck so no command runs
       // with nothing left to cancel or count it.
-      if (!this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+      if (!this.isActiveDevice(deviceId)) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
       // A command inside a detached scope belongs to the background job from insert.
       // A blank owner is refused: neither turn nor job sweep could ever select that row.
       const backgroundJobId = opts?.backgroundJobId ?? null;
 
       if (backgroundJobId === '') {
-        throw new KinuError('bad_input', 'A background job id must name a job.');
+        return yield* Effect.fail(new KinuError('bad_input', 'A background job id must name a job.'));
       }
 
       this._inflight.insert({
         requestId,
         deviceId,
-        workspace: resolved.workspace,
+        workspace: workspace,
         turnId: opts?.checkpoint?.turnId ?? null,
         backgroundJobId,
       });
-    }
-
-    const result = await tunnel.rpc(method, params, rpcOptions);
-
-    // A tool's own cancel is recorded where a sweep would put it; the first answer wins.
-    if (stopping) this.recordToolPathCancellation(params, result);
-
-    return result === undefined ? undefined : JSON.stringify(result);
+    });
   }
 
   /** The machine carrying `provider` for a web session: for Codex the first daemon with the relay, for the
@@ -2799,22 +2790,24 @@ export class UserDO extends Agent<Env> {
   }
 
   async relayModelCall(caller: UserCaller, deviceId: string, callId: string, request: Request): Promise<Response> {
-    await this.requireTier(caller, 'credentials.model');
-    const target = { method: request.method, url: request.url };
-    const allowed = codexEgressAllowed(target) || chatgptEgressAllowed(target);
-    const body = allowed && request.body !== null ? await request.text() : null;
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* attemptInItsWords('io', () => this.requireTier(caller, 'credentials.model'));
+      const target = { method: request.method, url: request.url };
+      const allowed = codexEgressAllowed(target) || chatgptEgressAllowed(target);
+      const body = allowed && request.body !== null ? yield* attemptInItsWords('io', () => request.text()) : null;
 
-    // No await from here to the send.
-    if (!allowed) return settle(Effect.fail(new KinuError('denied', `the provider relay does not carry ${request.method} ${new URL(request.url).pathname}`)));
+      // No await from here to the send.
+      if (!allowed) return yield* Effect.fail(new KinuError('denied', `the provider relay does not carry ${request.method} ${new URL(request.url).pathname}`));
 
-    if (!this.isActiveDevice(deviceId)) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
+      if (!this.isActiveDevice(deviceId)) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
 
-    return settle(Effect.promise(() => this._devices.relay(deviceId, callId, { method: request.method, url: request.url, headers: [...request.headers], body })));
+      return yield* attemptInItsWords('unavailable', () => this._devices.relay(deviceId, callId, { method: request.method, url: request.url, headers: [...request.headers], body }));
+    }));
   }
 
   async cancelModelRelay(caller: UserCaller, callId: string): Promise<void> {
     await this.requireTier(caller, 'credentials.model');
-    this._devices.cancelRelay(callId);
+    await this._devices.cancelRelay(callId);
   }
 
   /** Null from a daemon without a ChatGPT sign-in. */
@@ -2882,31 +2875,36 @@ export class UserDO extends Agent<Env> {
   }
 
   /** `agentHome` is empty only under the raw tier. */
-  private frameSandboxFor(method: string, deviceId: string, workspace: string | null): JsonObject {
-    const sandbox = this.deviceSandboxFor(deviceId, workspace);
+  private frameSandboxFor(method: string, deviceId: string, workspace: string | null): Effect.Effect<JsonObject, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const sandbox = this.deviceSandboxFor(deviceId, workspace);
 
-    // Neither end ever downgrades a sandboxed command to raw; files need no kernel.
-    if ((method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) && effectiveDeviceMode(sandbox) === 'files_only') {
-      throw new KinuError('denied', this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
-    }
+      // Neither end ever downgrades a sandboxed command to raw; files need no kernel.
+      if ((method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) && effectiveDeviceMode(sandbox) === 'files_only') {
+        return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.sandboxUnavailable, this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox))));
+      }
 
-    if (sandbox.tier === 'sandboxed' && sandbox.agentHome === null) {
-      throw new KinuError('denied', this.sandboxRefusal(deviceId, sandbox, workspace === null
-        ? 'an agent home belongs to a workspace, and this call has none'
-        : 'the daemon did not report where agent homes live'));
-    }
+      if (sandbox.tier === 'sandboxed' && sandbox.agentHome === null) {
+        return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.sandboxUnavailable, this.sandboxRefusal(deviceId, sandbox, workspace === null
+          ? 'an agent home belongs to a workspace, and this call has none'
+          : 'the daemon did not report where agent homes live')));
+      }
 
-    return { tier: sandbox.tier, agentHome: sandbox.agentHome ?? '', roots: [...sandbox.roots] };
+      return { tier: sandbox.tier, agentHome: sandbox.agentHome ?? '', roots: [...sandbox.roots] };
+    });
   }
 
   /** Store the answer from a forwarded cancellation so the durable authority holds one outcome per request.
    *  An answer that does not name the requested id is neither stored nor returned; the row stays live. */
-  private recordToolPathCancellation(params: JsonValue[], result: JsonValue | undefined): void {
+  private recordToolPathCancellation(params: JsonValue[], result: JsonValue | undefined): Effect.Effect<void, KinuError> {
     const requestId = v.safeParse(CancelledRequestIdSchema, params[0]);
 
-    if (!requestId.success) return;
-    const answer = parseDeviceCancelAnswer(requestId.output, result);
-    this._inflight.settleUnclaimed(requestId.output, answer.cancelled);
+    if (!requestId.success) return Effect.void;
+
+    return Effect.try({
+      try: () => parseDeviceCancelAnswer(requestId.output, result),
+      catch: (cause) => cause instanceof KinuError ? cause : new KinuError('io', 'read the device cancellation', { cause }),
+    }).pipe(Effect.map((answer) => this._inflight.settleUnclaimed(requestId.output, answer.cancelled)));
   }
 
   /**
@@ -2914,19 +2912,21 @@ export class UserDO extends Agent<Env> {
    * A claimed row belongs to an in-flight cancellation, which owns the terminal outcome and ack.
    */
   async acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void> {
-    const resolved = await this.requireTier(caller, 'device.rpc');
+    return settle(Effect.gen({ self: this }, function* () {
+      const resolved = yield* attemptInItsWords('io', () => this.requireTier(caller, 'device.rpc'));
 
-    if (resolved.kind !== 'workspace' || requestId === '') return;
-    const held = this._inflight.acknowledgeable(requestId, resolved.workspace);
+      if (resolved.kind !== 'workspace' || requestId === '') return;
+      const held = this._inflight.acknowledgeable(requestId, resolved.workspace);
 
-    if (!held) return;
-    const tunnel = this._devices.tunnel(held.deviceId);
+      if (!held) return;
+      const tunnel = this._devices.tunnel(held.deviceId);
 
-    if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
-    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]);
-    this._inflight.deleteAcknowledged({
-      requestId, workspace: resolved.workspace, deviceId: held.deviceId,
-    });
+      if (!tunnel) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
+      yield* attemptInItsWords('io', () => tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId]));
+      this._inflight.deleteAcknowledged({
+        requestId, workspace: resolved.workspace, deviceId: held.deviceId,
+      });
+    }));
   }
 
   /**
@@ -3005,7 +3005,7 @@ export class UserDO extends Agent<Env> {
 
       try {
         const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
-          DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL],
+          DEVICE_CANCEL_METHOD, [row.requestId],
         )).cancelled;
 
         // Persist before the ack, which can fail. No row updated means the terminal authority took
@@ -3038,8 +3038,8 @@ export class UserDO extends Agent<Env> {
     const tunnel = this._devices.tunnel(row.deviceId);
 
     try {
-      if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
-      await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
+      if (!tunnel) throw deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED);
+      await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId]);
       this._inflight.deleteHeld(row.requestId, row.claim);
     } catch (err) {
       this._inflight.releaseClaim(row.requestId, row.claim);
@@ -3465,7 +3465,7 @@ export class UserDO extends Agent<Env> {
       try {
         if (settled === null) {
           const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
-            DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL],
+            DEVICE_CANCEL_METHOD, [row.requestId],
           )).cancelled;
 
           // Durable before the acknowledgement, so a dying activation leaves an answer, not
@@ -3474,7 +3474,7 @@ export class UserDO extends Agent<Env> {
         }
 
         try {
-          await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
+          await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId]);
         } catch (err) {
           // Kill confirmation is already truthful; this is local replay cleanup, recorded separately so a
           // failed ACK never reads as a possibly running process.

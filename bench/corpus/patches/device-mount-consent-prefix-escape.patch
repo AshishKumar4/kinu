@@ -1,12 +1,12 @@
 diff --git a/packages/core/src/execution/device-tunnel-executor.ts b/packages/core/src/execution/device-tunnel-executor.ts
 --- a/packages/core/src/execution/device-tunnel-executor.ts
 +++ b/packages/core/src/execution/device-tunnel-executor.ts
-@@ -634,7 +634,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
-     const root = await effectiveRoot();
+@@ -719,7 +719,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
+     const root = yield* effectiveRoot();
  
      // A device that named no directory threw above rather than widening to `/`.
 -    if (!(root === '/' || path === root || path.startsWith(`${root}/`))) {
 +    if (!(root === '/' || path === root || path.startsWith(root))) {
-       throw syscallError('EACCES', op, path, {
+       return yield* Effect.fail(syscallError('EACCES', op, path, {
          detail: `outside the consented device directory '${root}': the agent sees the folder the owner `
            + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. Ask the owner to consent that directory`,

@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import {
   activeOperationProfile, asFetchFunction, WORKSPACE_RUN_ID, abortCause, EGRESS_REFUSAL_HEADER, EGRESS_ROUTE_HEADER, refusalError,
-  isDeviceNotConnectedError, isDeviceUnknownMethodError, DEVICE_UNRESPONSIVE,
+  isDeviceNotConnectedError, isDeviceFailure, DEVICE_ERRORS,
   type ActorReference, type OperationProfile, type RelayedProvider, type UserCaller,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
@@ -61,7 +61,7 @@ function stoppedBy(signal: AbortSignal | undefined, cancel: () => Promise<void>,
 }
 
 function deviceLost(failure: { readonly cause: unknown }): boolean {
-  return isDeviceNotConnectedError(failure) || renderThrownChain(failure).includes(DEVICE_UNRESPONSIVE);
+  return isDeviceNotConnectedError(failure) || isDeviceFailure(failure, DEVICE_ERRORS.unresponsive);
 }
 
 function stamped(response: Response, route: string): Response {
@@ -189,7 +189,7 @@ export function deviceRouteFetch(input: {
               if (next.done) controller.close();
               else controller.enqueue(next.value);
             },
-            onFailure: (failure) => { controller.error(deviceLost(failure) ? lostDevice(failure) : failure.cause); },
+            onFailure: (failure) => { controller.error(deviceLost(failure) ? lostDevice(failure) : new KinuError('unavailable', `${route.label}'s device relay was interrupted: ${renderThrownChain(failure)}`, failure)); },
           })),
           cancel: (reason) => reader.cancel(reason),
         });
@@ -199,15 +199,6 @@ export function deviceRouteFetch(input: {
 
       return yield* Effect.catch(named, (failure) => {
         if (signal?.aborted === true) return Effect.die(failure.cause);
-
-        if (isDeviceUnknownMethodError(failure)) {
-          const next = container === undefined ? NONE : CONTAINER;
-
-          if (turn !== null && PINNED.get(turn.actor)?.turn === turn.turn) PINNED.set(turn.actor, { turn: turn.turn, route: Promise.resolve(next) });
-          diagnostics.event('codex.route_pinned', { provider, route: next.kind, device: '', reason: 'daemon_without_relay' });
-
-          return viaFallback(request, init);
-        }
 
         return Effect.fail(deviceLost(failure) ? lostDevice(failure) : toKinuError({ doing: `relaying a ${name} call through the owner's machine`, cause: failure.cause, otherwise: 'unavailable' }));
       });

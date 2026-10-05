@@ -1,19 +1,23 @@
-// The device relay (docs/DEPLOYMENT.md § Codex egress). Frame names are mirrored in packages/pc-agent/src/index.js.
+// The device relay (docs/DEPLOYMENT.md § Codex egress).
 import * as v from 'valibot';
 import { base64ToBytes } from '../utils/base64';
 import { tolerate } from '../obs/expected-failure';
-import { toKinuError } from '../obs/error';
+import { KinuError, toKinuError } from '../obs/error';
+import { diagnostics } from '../obs/log';
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
+import { DEVICE_FRAMES, DEVICE_METHOD } from './device-protocol';
+import type { DeviceCancelResult } from './device-tunnel';
 
 export const DEVICE_RELAY = {
-  method: 'codexRelay',
-  head: 'RELAY_HEAD',
-  body: 'RELAY_BODY',
-  cancel: 'RELAY_CANCEL',
+  method: DEVICE_METHOD.codexRelay,
+  head: DEVICE_FRAMES.relayHead,
+  body: DEVICE_FRAMES.relayBody,
 } as const;
 
 export type RelayedProvider = 'codex' | 'chatgpt';
 
-export const DEVICE_CHATGPT = { status: 'chatgptStatus', signIn: 'chatgptSignIn', signOut: 'chatgptSignOut' } as const;
+export const DEVICE_CHATGPT = { status: DEVICE_METHOD.chatgptStatus, signIn: DEVICE_METHOD.chatgptSignIn, signOut: DEVICE_METHOD.chatgptSignOut } as const;
 
 export type DeviceChatGptMethod = (typeof DEVICE_CHATGPT)[keyof typeof DEVICE_CHATGPT];
 
@@ -56,10 +60,10 @@ export function parseDeviceRelayFrame(data: string): DeviceRelayFrame | null {
 
 interface OpenRelay {
   readonly deviceId: string;
-  readonly stop: () => void;
+  readonly stop: () => Promise<void>;
   /** The reader left: the machine is told to stop, and later frames find no entry. */
-  readonly abandon: () => void;
-  readonly head: ReturnType<typeof Promise.withResolvers<Response>>;
+  readonly abandon: () => Promise<void>;
+  readonly head: ReturnType<typeof Promise.withResolvers<Effect.Effect<Response, KinuError>>>;
   body: ReadableStreamDefaultController<Uint8Array> | null;
   headed: boolean;
 }
@@ -71,27 +75,27 @@ export class DeviceRelays {
   open(input: {
     readonly id: string;
     readonly deviceId: string;
-    readonly cancel: () => void;
+    readonly cancel: () => Promise<DeviceCancelResult | null>;
     readonly answered: () => Promise<PromiseSettledResult<unknown>>;
   }): Promise<Response> {
-    const fail = (cause: Error): void => {
+    const fail = (cause: KinuError): void => {
       if (this.#open.get(input.id) !== entry) return;
       this.#open.delete(input.id);
 
       if (entry.headed) entry.body?.error(cause);
-      else entry.head.reject(cause);
+      else entry.head.resolve(Effect.fail(cause));
     };
 
     const entry: OpenRelay = {
-      deviceId: input.deviceId, head: Promise.withResolvers<Response>(), body: null, headed: false,
-      stop: () => {
-        input.cancel();
-        fail(new DOMException('the caller stopped the request', 'AbortError'));
+      deviceId: input.deviceId, head: Promise.withResolvers<Effect.Effect<Response, KinuError>>(), body: null, headed: false,
+      stop: async () => {
+        fail(new KinuError('cancelled', 'the caller stopped the request'));
+        await input.cancel();
       },
-      abandon: () => {
+      abandon: async () => {
         if (this.#open.get(input.id) !== entry) return;
         this.#open.delete(input.id);
-        input.cancel();
+        await input.cancel();
       },
     };
 
@@ -102,8 +106,8 @@ export class DeviceRelays {
 
       if (outcome.status === 'rejected') {
         const reason: unknown = outcome.reason;
-        fail(reason instanceof Error ? reason : toKinuError({ doing: 'relaying a call through the machine', cause: reason, otherwise: 'unavailable' }));
-      } else if (!entry.headed) fail(new Error('the machine ended the relay without an answer'));
+        fail(reason instanceof KinuError ? reason : toKinuError({ doing: 'relaying a call through the machine', cause: reason, otherwise: 'unavailable' }));
+      } else if (!entry.headed) fail(new KinuError('io', 'the machine ended the relay without an answer'));
       else {
         this.#open.delete(input.id);
         entry.body?.close();
@@ -112,28 +116,38 @@ export class DeviceRelays {
       return entry.head.promise;
     });
 
-    return Promise.race([entry.head.promise, ended]);
+    return settle(Effect.flatMap(Effect.promise(() => Promise.race([entry.head.promise, ended])), (answer) => answer));
   }
 
-  cancel(id: string): void {
-    this.#open.get(id)?.stop();
+  async cancel(id: string): Promise<void> {
+    await this.#open.get(id)?.stop();
   }
 
   receive(deviceId: string, frame: DeviceRelayFrame): void {
     const entry = this.#open.get(frame.relay);
 
-    if (entry?.deviceId !== deviceId) return;
+    if (entry?.deviceId !== deviceId) {
+      diagnostics.event('device.relay_orphan_frame_dropped', { device: deviceId, reason: 'unclaimed_relay' });
 
-    if (frame.type === DEVICE_RELAY.head) {
-      if (entry.headed) return;
+      return;
+    }
+
+    if ('status' in frame) {
+      if (entry.headed) {
+        diagnostics.event('device.relay_duplicate_head_dropped', { device: deviceId, reason: 'duplicate_relay_head' });
+
+        return;
+      }
+
       entry.headed = true;
       const body = new ReadableStream<Uint8Array>({ start: (controller) => { entry.body = controller; }, cancel: entry.abandon });
-      entry.head.resolve(new Response(nullBodyStatus(frame.status) ? null : body, { status: frame.status, headers: frame.headers }));
+      entry.head.resolve(Effect.succeed(new Response(nullBodyStatus(frame.status) ? null : body, { status: frame.status, headers: frame.headers })));
 
       return;
     }
 
     if (entry.headed) entry.body?.enqueue(base64ToBytes(frame.data));
+    else diagnostics.event('device.relay_premature_body_dropped', { device: deviceId, reason: 'relay_body_before_head' });
   }
 }
 

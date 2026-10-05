@@ -22,7 +22,7 @@ const pcAgent = v.parse(
 
 const WORKER_WEBSOCKET_RECEIVE_BYTES = 32 * 1024 * 1024;
 
-const ReplySchema = v.object({ id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()) });
+const ReplySchema = v.object({ id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.object({ code: v.string(), message: v.string() })) });
 
 /** Every frame goes to the daemon as the hub sends it, with the owner's Sandbox switch off; every
  *  answer comes back through the platform's receive limit. */
@@ -50,7 +50,7 @@ function tunnelToDaemon(): DeviceTransport {
 
           const reply = v.parse(ReplySchema, JSON.parse(data));
 
-          if (reply.error !== undefined) reject(new Error(reply.error));
+          if (reply.error !== undefined) reject(new Error(reply.error.message));
           else resolve(reply.result);
         },
       };

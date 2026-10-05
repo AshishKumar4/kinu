@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
 import { WS_OPEN } from './device-hub';
 import {
-  DEVICE_PTY_CLOSE, DEVICE_PTY_INPUT, DEVICE_PTY_MAX_AXIS, DEVICE_PTY_RESIZE,
+  DEVICE_PTY_INPUT, DEVICE_PTY_MAX_AXIS, DEVICE_PTY_RESIZE,
 } from './device-tunnel';
 
 const TERMINAL_WS_TAG_PREFIX = 'terminal:';
@@ -150,7 +150,12 @@ export class DeviceTerminalHub {
   toPane(session: string, bytes: Uint8Array): void {
     const pane = this.paneSocket(session);
 
-    if (!pane) return;
+    if (!pane) {
+      diagnostics.event('device.terminal_output_unclaimed', { reason: 'terminal_pane_missing', workspace: session });
+
+      return;
+    }
+
     pane.send(bytes);
   }
 
@@ -171,11 +176,11 @@ export class DeviceTerminalHub {
   }
 
   /** The pane's socket closed, so the shell is closed too. */
-  paneClosed(session: string, device: string): void {
+  async paneClosed(session: string, device: string): Promise<void> {
     const tunnel = this.devices.tunnel(device);
 
     if (!tunnel) return;
-    tunnel.notify({ type: DEVICE_PTY_CLOSE, session });
+    await tunnel.cancel(session);
   }
 
   panesForDevice(device: string): string[] {
