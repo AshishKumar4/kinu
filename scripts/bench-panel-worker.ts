@@ -29,7 +29,7 @@
 // stdout carries exactly one JSON line (the result); everything else is stderr.
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   HeadController, HeadJournal, MissionGovernor,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
@@ -123,7 +123,10 @@ async function main(): Promise<void> {
     initCraftedToolsTables(sql);
   }
 
-  const rt = createCLIRuntime(db, { llm: analyst });
+  // A local workspace works in a folder; the panel's is beside its database.
+  const folder = join(dirname(input.dbPath), 'work');
+  mkdirSync(folder, { recursive: true });
+  const rt = createCLIRuntime(db, { llm: analyst, cwd: folder });
   const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
   const byIndex = new Map(panel.map((config, index) => [forkSpec(index), config]));
 
@@ -222,7 +225,7 @@ async function main(): Promise<void> {
   } finally {
     await proxy.settle();
     db.close();
-    proxy.stop(true);
+    await proxy.stop(true);
   }
 
   const usage = proxy.usage();

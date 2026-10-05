@@ -4,7 +4,8 @@ import { loadConfigFile, updateConfigFile, type KinuConfig } from './config';
 import { spawnBackgroundRefresh } from './self-update';
 import * as v from 'valibot';
 import { isSameBuild } from '@kinu.run/core';
-import { classify, classifyErrorCode, renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { classify, classifyErrorCode, renderThrownChain, settle, tolerateAsync } from '@kinu.run/core/obs';
 
 const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 
@@ -22,34 +23,32 @@ type ServedVersion = v.InferOutput<typeof ServedVersionSchema>;
 type FetchVersion = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 /** `timeoutMs` is caller-requested only. */
-export async function fetchServedVersion(
+export function fetchServedVersion(
   origin: string,
   fetchImpl: FetchVersion = fetch,
   timeoutMs?: number,
 ): Promise<ServedVersion | null> {
+  return settle(servedVersion(origin, fetchImpl, timeoutMs));
+}
+
+function servedVersion(origin: string, fetchImpl: FetchVersion, timeoutMs: number | undefined): Effect.Effect<ServedVersion | null> {
   // No bound: the probe ends only on the origin's answer or a network failure.
   const controller = timeoutMs === undefined ? undefined : new AbortController();
   const timer = controller === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs);
 
-  try {
-    let res: Response;
+  return Effect.ensuring(Effect.gen(function* () {
+    const res = yield* Effect.catchCause(Effect.promise(() => fetchImpl(`${origin}${CLI_VERSION_PATH}`, { cache: 'no-store', signal: controller?.signal })), (failed) => {
+      const error = Cause.squash(failed);
 
-    try {
-      res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, { cache: 'no-store', signal: controller?.signal });
-    } catch (error) {
       // A malformed origin is ours and propagates, or the check would never fire again.
-      if (classify({ cause: error }) === 'malformed-input') throw error;
+      return classify({ cause: error }) === 'malformed-input' ? Effect.die(error) : Effect.succeed(null);
+    });
 
-      return null;
-    }
-
-    if (!res.ok) return null;
-    const parsed = v.safeParse(ServedVersionSchema, await tolerateAsync(() => res.json(), 'malformed-input'));
+    if (res === null || !res.ok) return null;
+    const parsed = v.safeParse(ServedVersionSchema, yield* Effect.promise(() => tolerateAsync(() => res.json(), 'malformed-input')));
 
     return parsed.success ? parsed.output : null;
-  } finally {
-    clearTimeout(timer);
-  }
+  }), Effect.sync(() => clearTimeout(timer)));
 }
 
 interface NoticeContext {
@@ -77,14 +76,14 @@ function updateNotice(installed: string, served: ServedVersion | null): string |
 }
 
 /** Never awaited, never throws. See {@link STARTUP_PROBE_TIMEOUT_MS}. */
-export async function runStartupUpdateCheck(opts: {
+export function runStartupUpdateCheck(opts: {
   log: (line: string) => void;
   isTTY?: boolean;
   now?: number;
   fetchImpl?: FetchVersion;
   spawnRefresh?: () => void;
 } ): Promise<string | null> {
-  try {
+  return settle(Effect.catchCause(Effect.gen(function* () {
     const config = loadConfigFile();
 
     const ctx: NoticeContext = {
@@ -99,13 +98,13 @@ export async function runStartupUpdateCheck(opts: {
     // `shouldCheckForUpdate` already refused a config with no origin.
     if (origin === undefined) return null;
 
-    const served = await fetchServedVersion(origin, opts.fetchImpl ?? fetch, STARTUP_PROBE_TIMEOUT_MS);
+    const served = yield* servedVersion(origin, opts.fetchImpl ?? fetch, STARTUP_PROBE_TIMEOUT_MS);
     // Record the attempt either way so an unreachable origin does not retry every invocation.
-    await updateConfigFile((c) => {
+    yield* Effect.promise(() => updateConfigFile((c) => {
       c.updateCheckedAt = ctx.now;
 
       if (served) c.updateLatestSeen = served.version;
-    });
+    }));
 
     const notice = updateNotice(VERSION, served);
 
@@ -114,14 +113,15 @@ export async function runStartupUpdateCheck(opts: {
     opts.log(notice);
 
     return notice;
-  } catch (error) {
+  }), (failed) => Effect.sync(() => {
     // Expected probe failures (aborted, timed out, unreachable) stay silent until the next daily window; a check that can
     // never succeed (unwritable config, malformed origin) still reports.
+    const error = Cause.squash(failed);
     const code = classifyErrorCode({ cause: error });
 
     if (code === 'cancelled' || code === 'timeout' || code === 'unavailable') return null;
     opts.log(`Update check failed: ${renderThrownChain({ cause: error })}`);
 
     return null;
-  }
+  })));
 }

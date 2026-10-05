@@ -2285,13 +2285,14 @@ export class UserDO extends Agent<Env> {
     window: { cols: number; rows: number },
     deviceId?: string,
   ): Promise<{ session: string }> {
+    // Gate first: a refused caller must not learn whether a machine is connected.
+    await this.requireTier(caller, 'device.rpc');
+
     return settle(Effect.gen({ self: this }, function* () {
       const bounded = (axis: number, fallback: number): number => (
         Number.isInteger(axis) && axis >= 1 && axis <= DEVICE_PTY_MAX_AXIS ? axis : fallback
       );
 
-      // Gate first: a refused caller must not learn whether a machine is connected.
-      yield* attemptInItsWords('io', () => this.requireTier(caller, 'device.rpc'));
       const session = `pty-${nanoid(16)}`;
       // Resolved before minting: several live devices and none named is an error.
       const target = yield* this.resolveDeviceForCall(deviceId, undefined);
@@ -2690,8 +2691,9 @@ export class UserDO extends Agent<Env> {
       onOutput?: (output: DeviceExecOutput) => void | Promise<void>;
     },
   ): Promise<string | undefined> {
+    const resolved = await this.requireTier(caller, 'device.rpc');
+
     return settle(Effect.gen({ self: this }, function* () {
-      const resolved = yield* attemptInItsWords('io', () => this.requireTier(caller, 'device.rpc'));
       const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
 
       if (proven !== null && deviceMethodHas(method, 'checkpointStore') && params[0] !== proven) {
@@ -2790,8 +2792,9 @@ export class UserDO extends Agent<Env> {
   }
 
   async relayModelCall(caller: UserCaller, deviceId: string, callId: string, request: Request): Promise<Response> {
+    await this.requireTier(caller, 'credentials.model');
+
     return settle(Effect.gen({ self: this }, function* () {
-      yield* attemptInItsWords('io', () => this.requireTier(caller, 'credentials.model'));
       const target = { method: request.method, url: request.url };
       const allowed = codexEgressAllowed(target) || chatgptEgressAllowed(target);
       const body = allowed && request.body !== null ? yield* attemptInItsWords('io', () => request.text()) : null;
@@ -2912,8 +2915,9 @@ export class UserDO extends Agent<Env> {
    * A claimed row belongs to an in-flight cancellation, which owns the terminal outcome and ack.
    */
   async acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void> {
+    const resolved = await this.requireTier(caller, 'device.rpc');
+
     return settle(Effect.gen({ self: this }, function* () {
-      const resolved = yield* attemptInItsWords('io', () => this.requireTier(caller, 'device.rpc'));
 
       if (resolved.kind !== 'workspace' || requestId === '') return;
       const held = this._inflight.acknowledgeable(requestId, resolved.workspace);

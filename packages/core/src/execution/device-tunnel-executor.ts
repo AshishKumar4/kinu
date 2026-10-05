@@ -1,4 +1,5 @@
 import { exists as nimbusExists, readText, type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { direntType } from '../vfs/dirent';
 /**
  * DeviceTunnelExecutor (`device.*`): the user's machines via a daemon connected through the UserDO hub.
  * A fleet: with several live machines a call must name one (`{ device }`); files mount per machine under `/pc/<name>`.
@@ -13,7 +14,7 @@ import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { commandResult, commandResultAt, uncheckpointedSentence, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
-import { attempt, attemptInItsWords, settle } from '../obs/effect';
+import { settle } from '../obs/effect';
 import { DEVICE_METHOD, deviceFailureCodes } from './device-protocol';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
@@ -59,6 +60,12 @@ const ASKED_OF_THE_MACHINE: readonly ExecutorCapability[] = [
 const notConnected = (): Refusal => refusalOf(new KinuError('unavailable', NOT_CONNECTED));
 
 /** Fallback code for an unrecognised failure; a classified cause keeps its more precise code. */
+function deviceCall<A>(doing: string, run: () => Promise<A>): Effect.Effect<A | Refusal> {
+  return Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) }).pipe(Effect.catch((failed) => Effect.succeed(isDeviceNotConnectedError(failed)
+    ? notConnected()
+    : refusalOf(deviceFailure({ doing, cause: failed.cause })))));
+}
+
 function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
   return toKinuError({ ...input, otherwise: 'io' });
 }
@@ -75,7 +82,6 @@ const EXEC_TERMINATED =
 const EXEC_NOTHING_RUNNING =
   'device exec stopped: no active command control entry remained on the device; backgrounded or separately sessioned processes may still run';
 
-
 /** The device left mid-cancellation, so nothing confirmed the kill. */
 const EXEC_CANCEL_UNCONFIRMED =
   'device exec aborted: the device disconnected before it confirmed the command stopped';
@@ -91,14 +97,19 @@ function terminateDeviceExec(
   requestId: string,
   deviceId?: string,
 ): Effect.Effect<string> {
-  return attempt({ doing: 'stop device work', otherwise: 'unavailable' }, async () => {
-    const answer = parseDeviceCancelAnswer(requestId, await rpc(
+  return Effect.match(Effect.tryPromise({
+    try: async () => parseDeviceCancelAnswer(requestId, await rpc(
       DEVICE_CANCEL_METHOD, [requestId], deviceId === undefined ? undefined : { deviceId },
-    ));
+    )),
+    catch: (cause) => ({ cause }),
+  }), {
+    onSuccess: (answer) => (answer.cancelled === 'terminated' ? EXEC_TERMINATED : EXEC_NOTHING_RUNNING),
+    onFailure: (failed) => {
+      if (isDeviceNotConnectedError(failed)) return EXEC_CANCEL_UNCONFIRMED;
 
-    return answer.cancelled === 'terminated' ? EXEC_TERMINATED : EXEC_NOTHING_RUNNING;
-  }).pipe(Effect.catch((failure) => Effect.succeed(isDeviceNotConnectedError({ cause: failure })
-    ? EXEC_CANCEL_UNCONFIRMED : execCancelFailed(renderThrownChain({ cause: failure })))));
+      return execCancelFailed(renderThrownChain(failed));
+    },
+  });
 }
 
 /**
@@ -199,17 +210,17 @@ export function createDeviceTunnelExecutor(
   const names = createShellSession({ home: '~', userRoots: () => [] });
   const rpc: DeviceTransport['rpc'] = (method, params, opts) => transport.rpc(method, params, opts);
 
-  const fileRefusal = (doing: string, failure: KinuError) => Effect.succeed(isDeviceNotConnectedError({ cause: failure })
-    ? notConnected() : refusalOf(deviceFailure({ doing, cause: failure })));
-
   // Connected, registered-but-offline, or none. The row carries the machine's name and grant state.
   const getStatus = (): ExecutorStatus => {
     const s = transport.status();
     const live = (s.devices ?? []).filter((d) => d.connected);
     const named = live[0] ?? s.devices?.[0];
-    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox'>> = {};
+    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox' | 'mounts'>> = {};
 
     if (named) identity.label = named.name;
+
+    // Only a fleet the hub listed has segments to name.
+    if (s.devices !== undefined) identity.mounts = live.map((device) => deviceMountSegment(device, s.devices));
     // Per-device answers count only when exactly one machine is live.
     const perDeviceReach = live.length === 1 ? live[0].granted : undefined;
     const granted = perDeviceReach ?? s.workspaceGranted;
@@ -262,6 +273,8 @@ export function createDeviceTunnelExecutor(
     return memo;
   };
 
+  // Fleet composite file plane: `/pc/<segment>/...` is that machine's `/...`, fleet of one included, so paths survive
+  // a second machine joining. Unknown segment refuses with the connected names, never an empty listing.
   const routes = (): DeviceRoute[] => {
     const fleet = transport.status().devices;
 
@@ -286,21 +299,16 @@ export function createDeviceTunnelExecutor(
 
   /** Dispatches by first segment. Root "/" is handled by readdir/stat/exists. Without a fleet snapshot the unnamed view
    *  goes to the hub. */
-  const dispatch = <T>(path: string, op: (view: DeviceVFS, native: string) => Awaitable<T>) => Effect.gen(function* () {
-    const forward = (view: DeviceVFS, native: string) => Effect.tryPromise({
-      try: () => Promise.resolve(op(view, native)),
-      catch: (cause) => cause instanceof VfsError ? cause : deviceFailure({ doing: 'access device files', cause }),
-    });
-
+  const dispatch = <T>(path: string, op: (view: DeviceVFS, native: string) => Awaitable<T>): Effect.Effect<T, VfsError> => Effect.suspend(() => {
     if (connectedDevices(transport.status().devices).length === 0) {
-      return yield* forward(deviceFiles(transport, consent, undefined), path);
+      return Effect.promise(async () => op(deviceFiles(transport, consent, undefined), path));
     }
 
     const route = routeOf(path);
 
-    if (!route) return yield* Effect.fail(noSuchDevice(transport.status().devices, path.replace(/^[/]+/, '').split('/')[0] ?? ''));
-
-    return yield* forward(route.view, route.rest);
+    return route
+      ? Effect.promise(async () => op(route.view, route.rest))
+      : Effect.fail(noSuchDevice(transport.status().devices, path.replace(/^\/+/, '').split('/')[0] ?? ''));
   });
 
   const isFleetRoot = (path: string): boolean =>
@@ -309,16 +317,16 @@ export function createDeviceTunnelExecutor(
   const files: DeviceVFS = {
     // The mount root is a roster, not a directory, so it cannot be a working directory.
     homeDir: async () => '/',
-    async readFile(path) {
+    readFile(path) {
       return settle(dispatch(path, (view, native) => view.readFile(native)));
     },
-    async readRange(path, offset, length) {
+    readRange(path, offset, length) {
       return settle(dispatch(path, (view, native) => view.readRange(native, offset, length)));
     },
-    async writeFile(path, data) {
+    writeFile(path, data) {
       return settle(dispatch(path, (view, native) => view.writeFile(native, data)));
     },
-    async writeFileWithReport(path, data) {
+    writeFileWithReport(path, data) {
       return settle(dispatch(path, (view, native) => view.writeFileWithReport(native, data)));
     },
     async readdir(path) {
@@ -342,10 +350,10 @@ export function createDeviceTunnelExecutor(
 
       return settle(dispatch(path, (view, native) => view.stat(native, options)));
     },
-    async unlink(path) {
+    unlink(path) {
       return settle(dispatch(path, (view, native) => view.unlink(native)));
     },
-    async mkdir(path, opts) {
+    mkdir(path, opts) {
       return settle(dispatch(path, (view, native) => view.mkdir(native, opts)));
     },
   };
@@ -377,13 +385,11 @@ export function createDeviceTunnelExecutor(
         const call = machineShellCall(command, options, { home: '~', scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
         const held = options.name === undefined ? undefined : `${deviceId ?? ''}\u0000${options.name}`;
 
-        return settle(attemptInItsWords('io', async () => {
-          return await names.hold(held, callJob(options), async () => {
-            // Minted before sending, so a cancel or detach can name the process group.
+        return settle(Effect.tryPromise({
+          try: () => names.hold(held, callJob(options), async () => {
             const requestId = nextDeviceRequestId();
             const ownership = readDeviceOwnershipContext({ context: args[1] });
             ownership.report?.(requestId);
-            // Read per call: a detached scope owns this command from the insert.
             const backgroundJobId = ownership.owner?.() ?? null;
             const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
 
@@ -394,28 +400,24 @@ export function createDeviceTunnelExecutor(
             if (backgroundJobId !== null) execOpts.backgroundJobId = backgroundJobId;
 
             const result = await raceAbort(
-              // No transport deadline: abort, turn cancellation and tunnel liveness still bound it.
-              () => rpc(DEVICE_METHOD.exec, [call.command], execOpts),
-              signal,
-              EXEC_NOT_STARTED,
+              () => rpc(DEVICE_METHOD.exec, [call.command], execOpts), signal, EXEC_NOT_STARTED,
               () => settle(terminateDeviceExec(rpc, requestId, deviceId)),
             );
 
             const settled = call.settle(v.parse(DeviceExecResultSchema, result));
 
             return reportsCwd({ context: args[1] }) ? commandResultAt(settled) : commandResult(settled);
-          }, (message) => refusalOf(new KinuError('unavailable', message)));
-        }).pipe(Effect.catch((failure) => {
-          if (isAbortError(failure)) return Effect.fail(failure);
+          }, (message) => refusalOf(new KinuError('unavailable', message))),
+          catch: (cause) => ({ cause }),
+        }).pipe(Effect.catch((failed) => {
+          if (isAbortError(failed.cause)) return Effect.die(failed.cause);
 
-          if (isDeviceNotConnectedError({ cause: failure })) return Effect.succeed(notConnected());
+          if (isDeviceNotConnectedError(failed)) return Effect.succeed(notConnected());
 
           // Tier refusal with a named fix, not a transport fault; not prefixed with the command.
-          if (isSandboxUnavailableError({ cause: failure })) {
-            return Effect.succeed(refusalOf(new KinuError('denied', renderThrownChain({ cause: failure }))));
-          }
+          if (isSandboxUnavailableError(failed)) return Effect.succeed(refusalOf(new KinuError('denied', renderThrownChain(failed))));
 
-          return Effect.succeed(refusalOf(deviceFailure({ doing: `device exec \`${command}\``, cause: failure })));
+          return Effect.succeed(refusalOf(deviceFailure({ doing: `device exec \`${command}\``, cause: failed.cause })));
         })));
       },
     },
@@ -430,14 +432,14 @@ export function createDeviceTunnelExecutor(
           return refusalOf(new KinuError('bad_input', 'device readFile: path must be a string'));
         }
 
-        return settle(attempt({ doing: "device readFile", otherwise: 'io' }, async () => {
-          const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
+        return settle(deviceCall(`device readFile ${path}`, async () => {
+        const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
 
-          if (target.kind === 'refusal') return target.refusal;
-          const view = target.view;
+        if (target.kind === 'refusal') return target.refusal;
+        const view = target.view;
 
-          return v.parse(v.string(), await readText(view, path));
-        }).pipe(Effect.catch((failure) => fileRefusal(`device readFile ${path}`, failure))));
+        return v.parse(v.string(), await readText(view, path));
+        }));
       },
     },
 
@@ -455,6 +457,7 @@ export function createDeviceTunnelExecutor(
           return refusalOf(new KinuError('bad_input', 'device writeFile: content must be a string'));
         }
 
+        return settle(deviceCall(`device writeFile ${path}`, async () => {
         const target = resolveForCall(transport, readDeviceSelection({ context: args[2] }));
 
         if (target.kind === 'refusal') return target.refusal;
@@ -462,14 +465,15 @@ export function createDeviceTunnelExecutor(
 
         const written = Effect.andThen(
           approveOverwrite(policy, transport, target.deviceId, { view, path, content }),
-          attempt({ doing: 'write a device file', otherwise: 'io' }, () => view.writeFileWithReport(path, new TextEncoder().encode(content))),
+          Effect.promise(() => view.writeFileWithReport(path, new TextEncoder().encode(content))),
         );
 
         const said = `Written ${content.length} bytes to ${path}`;
 
-        return settle(Effect.match(written, {
-          onFailure: (failure) => isDeviceNotConnectedError({ cause: failure }) ? notConnected() : refusalOf(failure),
+        return await settle(Effect.match(written, {
+          onFailure: refusalOf,
           onSuccess: (answer) => answer ? `${said}\n${uncheckpointedSentence(answer.uncheckpointed, 'this write')}` : said,
+        }));
         }));
       },
     },
@@ -484,14 +488,14 @@ export function createDeviceTunnelExecutor(
           return refusalOf(new KinuError('bad_input', 'device readdir: path must be a string'));
         }
 
-        return settle(attempt({ doing: "device readdir", otherwise: 'io' }, async () => {
-          const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
+        return settle(deviceCall(`device readdir ${path ?? '/'}`, async () => {
+        const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
 
-          if (target.kind === 'refusal') return target.refusal;
-          const view = target.view;
+        if (target.kind === 'refusal') return target.refusal;
+        const view = target.view;
 
-          return (await view.readdir(path ?? await view.homeDir())).map(({ name }) => name);
-        }).pipe(Effect.catch((failure) => fileRefusal(`device readdir ${path ?? '/'}`, failure))));
+        return (await view.readdir(path ?? await view.homeDir())).map(({ name }) => name);
+        }));
       },
     },
 
@@ -506,14 +510,14 @@ export function createDeviceTunnelExecutor(
           return refusalOf(new KinuError('bad_input', 'device exists: path must be a string'));
         }
 
-        return settle(attempt({ doing: "device exists", otherwise: 'io' }, async () => {
-          const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
+        return settle(deviceCall(`device exists ${path}`, async () => {
+        const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
 
-          if (target.kind === 'refusal') return target.refusal;
-          const view = target.view;
+        if (target.kind === 'refusal') return target.refusal;
+        const view = target.view;
 
-          return await nimbusExists(view, path);
-        }).pipe(Effect.catch((failure) => fileRefusal(`device exists ${path}`, failure))));
+        return await nimbusExists(view, path);
+        }));
       },
     },
   };
@@ -522,14 +526,16 @@ export function createDeviceTunnelExecutor(
     name: 'device',
     files,
     // The fleet plane opens at the roster; a named machine opens at its own dir.
-    homeDir: async (segment?: string) => {
-      if (segment === undefined) return '/';
-      const fleet = transport.status().devices;
-      const named = connectedDevices(fleet).find((device) => deviceMountSegment(device, fleet) === segment);
+    homeDir: (segment?: string) => {
+      return settle(Effect.gen(function* () {
+        if (segment === undefined) return '/';
+        const fleet = transport.status().devices;
+        const named = connectedDevices(fleet).find((device) => deviceMountSegment(device, fleet) === segment);
 
-      if (named === undefined) return settle(Effect.fail(noSuchDevice(fleet, segment)));
+        if (named === undefined) return yield* Effect.die(noSuchDevice(fleet, segment));
 
-      return deviceFiles(transport, consent, named.id).homeDir();
+        return yield* Effect.promise(() => deviceFiles(transport, consent, named.id).homeDir());
+      }));
     },
     kind: 'device',
     filesOwner: 'user',
@@ -543,16 +549,13 @@ export function createDeviceTunnelExecutor(
     },
     isAvailable: () => transport.status().connected,
     getStatus,
-    connect: async () => {
-      return settle(attempt({ doing: "connect the device", otherwise: 'io' }, async () => {
-        await rpc(DEVICE_METHOD.exec, ['echo connected']);
-      }).pipe(Effect.catch((failure) => {
-        // Classified so callers read the same `unavailable` the tools return.
-        if (isDeviceNotConnectedError({ cause: failure })) return Effect.fail(new KinuError('unavailable', NOT_CONNECTED, { cause: failure }));
-
-        return Effect.fail(failure);
-      })));
-    },
+    connect: () => settle(Effect.tryPromise({ try: () => rpc(DEVICE_METHOD.exec, ['echo connected']), catch: (cause) => ({ cause }) }).pipe(
+      Effect.asVoid,
+      // Classified so callers read the same `unavailable` the tools return.
+      Effect.catch((failed) => (isDeviceNotConnectedError(failed)
+        ? Effect.fail(new KinuError('unavailable', NOT_CONNECTED, { cause: failed.cause }))
+        : Effect.die(failed.cause))),
+    )),
     disconnect: async () => { /* the hub owns the socket lifecycle */ },
     tools,
     types: `/**
@@ -594,7 +597,7 @@ function approveOverwrite(
   const device = deviceId === undefined ? undefined : fleet?.find((entry) => entry.id === deviceId);
   const mounted = device === undefined || !path.startsWith('/') ? null : `/pc/${deviceMountSegment(device, fleet)}${path}`;
 
-  return Effect.flatMap(attempt({ doing: 'inspect the device file', otherwise: 'io' }, () => nimbusExists(view, path)), (exists) => (exists ? approveFileAccess(
+  return Effect.flatMap(Effect.promise(() => nimbusExists(view, path)), (exists) => (exists ? approveFileAccess(
     { op: 'write', path: mounted ?? path, hostPath: mounted ?? path, reaches: 'user-mount', replaces: true }, 'device', policy, {
       subject: async () => ({ path: mounted ?? path, current: asBytes(await view.readFile(path)), next: asBytes(content) }),
       parks: mounted !== null,
@@ -680,46 +683,40 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       catch: (cause) => {
         const code = [...deviceFailureCodes({ cause })].find(isVfsErrorCode);
 
-        if (code !== undefined) return new VfsError(code, renderThrownChain({ cause }), path, { cause });
-
-        return deviceFailure({ doing: `${method} on the device`, cause });
+        return code === undefined ? deviceFailure({ doing: `${method} on the device`, cause }) : new VfsError(code, renderThrownChain({ cause }), path, { cause });
       },
     });
 
-  const effectiveRoot = () => Effect.gen(function* () {
-    const explicit = yield* attempt({ doing: 'read device consent', otherwise: 'denied' }, () => consent.consentedRoot(deviceId));
-
-    if (explicit) return trimmed(explicit);
-
-    return yield* Effect.fail(new VfsError(
+  const effectiveRoot = (): Effect.Effect<string, VfsError> => Effect.flatMap(Effect.promise(() => consent.consentedRoot(deviceId)), (explicit) => (explicit
+    ? Effect.succeed(trimmed(explicit))
+    : Effect.fail(new VfsError(
       'EACCES',
       'this device reported no consented directory, so the base tier reaches nothing on it: '
         + 'run `kinu connect` on the machine, in the directory this workspace should see',
       '/',
-    ));
-  });
+    ))));
 
   /** Where the view opens, distinct from its reach: the full tier has no root. */
-  const openingDir = () => Effect.gen(function* () {
-    const root = yield* attempt({ doing: 'read device consent', otherwise: 'denied' }, () => consent.consentedRoot(deviceId));
+  const openingDir = (): Effect.Effect<string, VfsError> => Effect.gen(function* () {
+    const root = yield* Effect.promise(() => consent.consentedRoot(deviceId));
 
     if (root) return trimmed(root);
-    const home = yield* attempt({ doing: 'read device home', otherwise: 'io' }, () => consent.deviceHome(deviceId));
+    const home = yield* Effect.promise(() => consent.deviceHome(deviceId));
 
     if (home) return trimmed(home);
 
     return yield* Effect.fail(new VfsError('EACCES', 'this device reported neither a consented directory nor a home', '/'));
   });
 
-  const guarded = (path: string, op: string) => Effect.gen(function* () {
-    const scope = yield* attempt({ doing: 'read device consent scope', otherwise: 'denied' }, () => consent.scope(deviceId));
+  const guarded = (path: string, op: string): Effect.Effect<string | null, VfsError> => Effect.gen(function* () {
+    const scope = yield* Effect.promise(() => consent.scope(deviceId));
 
     if (scope === 'unconfined') return null;
 
     if (scope === 'sandboxed' && AGENT_TMP_PATHS.some((tmp) => path === tmp || path.startsWith(`${tmp}/`))) return null;
     const root = yield* effectiveRoot();
 
-    // A device that named no directory threw above rather than widening to `/`.
+    // A device that named no directory failed above rather than widening to `/`.
     if (!(root === '/' || path === root || path.startsWith(`${root}/`))) {
       return yield* Effect.fail(syscallError('EACCES', op, path, {
         detail: `outside the consented device directory '${root}': the agent sees the folder the owner `
@@ -780,8 +777,8 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   });
 
   /** The step toward a confined root: Nimbus stats each directory on a path. */
-  const towardRoot = (path: string) => Effect.gen(function* () {
-    if ((yield* attempt({ doing: 'read device consent scope', otherwise: 'denied' }, () => consent.scope(deviceId))) === 'unconfined') return null;
+  const towardRoot = (path: string): Effect.Effect<string | null, VfsError> => Effect.gen(function* () {
+    if ((yield* Effect.promise(() => consent.scope(deviceId))) === 'unconfined') return null;
     const root = yield* effectiveRoot();
     const prefix = path === '/' ? '/' : `${path}/`;
 
@@ -808,12 +805,10 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     homeDir: () => settle(openingDir()),
     readFile: (path) => settle(Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, 0, null))),
 
-    async readRange(path, offset, length) {
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-        return settle(Effect.fail(syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' })));
-      }
-
-      return settle(Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, offset, length)));
+    readRange(path, offset, length) {
+      return settle(Effect.suspend(() => (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0
+        ? Effect.fail(syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' }))
+        : Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, offset, length)))));
     },
 
     writeFile: (path, data) => settle(Effect.asVoid(writeReported(path, data))),
@@ -828,9 +823,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       const entries: JsonValue[] = [];
 
       for (let offset: number | null = 0; offset !== null;) {
-        const raw = yield* call(
-          DEVICE_METHOD.listFiles, [path, { root, offset, limit: DEVICE_LIST_PAGE_ENTRIES }], path,
-        );
+        const raw: JsonValue | undefined = yield* call(DEVICE_METHOD.listFiles, [path, { root, offset, limit: DEVICE_LIST_PAGE_ENTRIES }], path);
 
         const page: v.InferOutput<typeof DeviceListPageSchema> = yield* Effect.try({
           try: () => v.parse(DeviceListPageSchema, raw),
@@ -845,14 +838,12 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
         if (isJsonObject(entry)) {
           const name = v.safeParse(v.string(), entry.name);
 
-          if (name.success) {
-            if (entry.type === 'symlink') return { name: name.output, type: 'symlink' as const };
+          const kind = v.safeParse(v.string(), entry.type);
 
-            return { name: name.output, type: entry.type === 'directory' || entry.type === 'dir' ? 'directory' as const : 'file' as const };
-          }
+          if (name.success) return { name: name.output, type: direntType(kind.success ? kind.output : undefined) };
         }
 
-        return { name: JSON.stringify(entry), type: 'file' as const };
+        return { name: JSON.stringify(entry), type: 'unknown' as const };
       });
     })),
 

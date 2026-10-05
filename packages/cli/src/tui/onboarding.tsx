@@ -1,8 +1,9 @@
+import { Effect } from 'effect';
 import type { TextareaRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
 
 import type {
   ProviderConnectId,
@@ -151,13 +152,7 @@ export function GuidedOnboarding(props: {
   }, [props.onReady, props.operations]);
 
   const attempt = useCallback((work: () => Promise<void>) => {
-    startTransition(async () => {
-      try {
-        await work();
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-      }
-    });
+    startTransition(() => settle(Effect.catchCause(Effect.promise(work), showing(setError))));
   }, [startTransition]);
 
   useEffect(() => attempt(refresh), [attempt, refresh]);
@@ -191,38 +186,35 @@ export function GuidedOnboarding(props: {
 
       return promise;
     },
-    skippable: async (label, work) => {
+    skippable: (label, work) => settle(Effect.gen(function* () {
       const controller = new AbortController();
       skipRef.current = controller;
       setWaiting(label);
 
-      try {
-        return await work(controller.signal);
-      } catch (cause) {
+      return yield* Effect.ensuring(Effect.catchCause(Effect.promise(async () => work(controller.signal)), (failed) => Effect.gen(function* () {
         if (controller.signal.aborted) return null;
-        throw cause;
-      } finally {
+
+        return yield* Effect.failCause(failed);
+      })), Effect.sync(() => {
         skipRef.current = null;
         setWaiting(null);
-      }
-    },
+      }));
+    })),
   }), []);
 
   const run = useCallback((operation: () => void | Promise<void>) => {
     if (busy) return;
-    startTransition(async () => {
+    startTransition(() => settle(Effect.gen(function* () {
       setBusy(true);
       setError(null);
 
-      try {
-        await operation();
-        await refresh();
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-      } finally {
+      return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+        yield* Effect.promise(async () => operation());
+        yield* Effect.promise(async () => refresh());
+      }), showing(setError)), Effect.sync(() => {
         setBusy(false);
-      }
-    });
+      }));
+    })));
   }, [busy, refresh, startTransition]);
 
   const settled = useCallback(() => setBusy(false), []);

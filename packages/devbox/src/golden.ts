@@ -144,23 +144,29 @@ function build(ports: GoldenPorts, before: GoldenState): Effect.Effect<Pick<Gold
 }
 
 
-export function pipeObject(
+export function pipeParts(
   ports: { readonly get: (key: string) => Promise<R2ObjectBody | null>; readonly container: Container },
   key: string,
   path: string,
 ): Effect.Effect<void, DevboxError> {
   return Effect.gen(function* () {
-    const object = yield* attempt('io', () => ports.get(key));
+    for (let part = 0; ; part += 1) {
+      const object = yield* attempt('io', () => ports.get(`${key}.${String(part)}`));
 
-    if (object === null) return yield* Effect.fail(new DevboxError('configuration', `the store holds no ${key}: bun scripts/devbox-tools.ts publish <bucket>`));
-    const writer = yield* attempt('io', () => ports.container.exec(['/bin/sh', '-c', `cat > ${shellPath(path)}`], { stdin: 'pipe' }));
-    const stdin = writer.stdin;
+      if (object === null && part === 0) {
+        return yield* Effect.fail(new DevboxError('configuration', `the store holds no ${key}.0: bun scripts/devbox-tools.ts publish <bucket>`));
+      }
 
-    if (stdin === null) return yield* Effect.fail(new DevboxError('io', 'the exec took no stdin'));
-    yield* attempt('io', () => object.body.pipeTo(stdin), `writing ${path}`);
-    const written = yield* attempt('io', () => writer.output());
+      if (object === null) return;
+      const writer = yield* attempt('io', () => ports.container.exec(['/bin/sh', '-c', `cat ${part === 0 ? '>' : '>>'} ${shellPath(path)}`], { stdin: 'pipe' }));
+      const stdin = writer.stdin;
 
-    if (written.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `writing ${path} exited ${String(written.exitCode)}`));
+      if (stdin === null) return yield* Effect.fail(new DevboxError('io', 'the exec took no stdin'));
+      yield* attempt('io', () => object.body.pipeTo(stdin), `writing ${path}`);
+      const written = yield* attempt('io', () => writer.output());
+
+      if (written.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `writing ${path} exited ${String(written.exitCode)}`));
+    }
   });
 }
 

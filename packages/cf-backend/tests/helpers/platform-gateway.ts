@@ -1,6 +1,6 @@
 // Fixtures for the platform AI Gateway provider: usable only with a parseable gateway URL and a bound `env.AI`.
 import type {
-  LanguageModelV3, LanguageModelV3CallOptions, LanguageModelV3FunctionTool, LanguageModelV3Message, LanguageModelV3ToolResultOutput,
+  LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4FunctionTool, LanguageModelV4Message, LanguageModelV4ToolResultOutput,
 } from '@ai-sdk/provider';
 import { JsonObjectSchema, JsonValueSchema, type GatewayRunRequest, type JsonObject, type ProviderEnv, type WorkersAIBinding } from '@kinu.run/core';
 import { isRuntimeContext } from '@kinu.run/test-utils';
@@ -148,20 +148,20 @@ const WireRequestSchema = v.object({
 const JsonTextSchema = v.pipe(v.string(), v.parseJson(), JsonValueSchema);
 
 /** A tool result as the model reads it: the JSON a tool answered, else its text. */
-function toolOutput(content: string): LanguageModelV3ToolResultOutput {
+function toolOutput(content: string): LanguageModelV4ToolResultOutput {
   const parsed = v.safeParse(JsonTextSchema, content);
 
   return parsed.success ? { type: 'json', value: parsed.output } : { type: 'text', value: content };
 }
 
 /** One gateway request as the AI SDK hands it to a model: its prompt and the tools it offers. */
-function callOptionsOf(run: RecordedGatewayRun): LanguageModelV3CallOptions {
+function callOptionsOf(run: RecordedGatewayRun): LanguageModelV4CallOptions {
   const request = v.parse(WireRequestSchema, run.query);
 
   const toolNames = new Map(request.messages.flatMap((message) =>
     message.role === 'assistant' ? (message.tool_calls ?? []).map((call) => [call.id, call.function.name] as const) : []));
 
-  const prompt = request.messages.map((message): LanguageModelV3Message => {
+  const prompt = request.messages.map((message): LanguageModelV4Message => {
     switch (message.role) {
       case 'system': return message;
       case 'user': return { role: 'user', content: v.is(v.string(), message.content) ? [{ type: 'text', text: message.content }] : message.content };
@@ -177,7 +177,7 @@ function callOptionsOf(run: RecordedGatewayRun): LanguageModelV3CallOptions {
     }
   });
 
-  const tools = (request.tools ?? []).map((tool): LanguageModelV3FunctionTool => ({
+  const tools = (request.tools ?? []).map((tool): LanguageModelV4FunctionTool => ({
     type: 'function', name: tool.function.name, description: tool.function.description, inputSchema: tool.function.parameters ?? {},
   }));
 
@@ -188,7 +188,7 @@ function callOptionsOf(run: RecordedGatewayRun): LanguageModelV3CallOptions {
  * A gateway whose model is `model`, a scripted AI SDK model: each request reaches it in the SDK's own
  * shape, and its text and tool calls go back as the gateway's answer.
  */
-export function modelGateway(model: Pick<LanguageModelV3, 'doGenerate'>): StubbedAiBinding {
+export function modelGateway(model: Pick<LanguageModelV4, 'doGenerate'>): StubbedAiBinding {
   return stubAiBinding(async (run) => {
     const { content } = await model.doGenerate(callOptionsOf(run));
     const text = content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');

@@ -29,7 +29,8 @@ import {
   type TierAssignment,
   type TierId,
 } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { Effect, type Exit } from 'effect';
+import { hold, showing } from '@kinu.run/core/obs';
 import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
 import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
 import { BrandMark, providerBrand } from './ui/BrandMark';
@@ -39,7 +40,7 @@ import { FilledButton } from './ui/FilledButton';
 const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
 
 interface CatalogOperation {
-  promise: Promise<void> | null;
+  promise: Promise<Exit.Exit<void>> | null;
 }
 
 /** The model that rates each turn from the user's reply (`evolution/ratings.ts`); absent is the default. */
@@ -95,21 +96,17 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
     const owner: CatalogOperation = { promise: null };
     // Install the owner before a synchronous RPC fake can settle this load.
     loadOperation.current = owner;
-    owner.promise = (async () => {
-      try {
-        const [profile, models] = await Promise.all([getProfileCatalog(), listAvailableModels()]);
-        setEnvelope(profile);
-        setDraft(profile.catalog);
-        setMenu(models);
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-      } finally {
-        if (loadOperation.current === owner) {
-          loadOperation.current = null;
-          setBusy(false);
-        }
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const [profile, models] = yield* Effect.promise(() => Promise.all([getProfileCatalog(), listAvailableModels()]));
+      setEnvelope(profile);
+      setDraft(profile.catalog);
+      setMenu(models);
+    }), showing(setError)), Effect.sync(() => {
+      if (loadOperation.current === owner) {
+        loadOperation.current = null;
+        setBusy(false);
       }
-    })();
+    })));
   };
 
   useEffect(() => {
@@ -143,20 +140,16 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
     const owner: CatalogOperation = { promise: null };
     // Install the owner before a synchronous RPC fake can settle this save.
     saveOperation.current = owner;
-    owner.promise = (async () => {
-      try {
-        const updated = await updateProfileCatalog(draft, envelope.version);
-        setEnvelope(updated);
-        setDraft(updated.catalog);
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-      } finally {
-        if (saveOperation.current === owner) {
-          saveOperation.current = null;
-          setBusy(false);
-        }
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const updated = yield* Effect.promise(() => updateProfileCatalog(draft, envelope.version));
+      setEnvelope(updated);
+      setDraft(updated.catalog);
+    }), showing(setError)), Effect.sync(() => {
+      if (saveOperation.current === owner) {
+        saveOperation.current = null;
+        setBusy(false);
       }
-    })();
+    })));
   };
 
   const addRole = () => {

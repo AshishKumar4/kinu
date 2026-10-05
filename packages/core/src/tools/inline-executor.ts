@@ -83,7 +83,7 @@ export interface InlineExecutorDeps {
   ledger?: () => TurnFileLedger | undefined;
   /** Shared like `ledger`; required by the shared dispatcher's deps shape. */
   budget?: () => TurnContextBudget | undefined;
-  /** Toolchain capabilities the shell can reach beyond coreutils, declared by the host (see `workspaceToolchainCapabilities`). */
+  /** Toolchain capabilities the shell can reach beyond coreutils, declared by the host. */
   toolchain?: readonly ExecutorCapability[];
   /** Capabilities the host can neither claim nor rule out; declared, since an omission reads as a measured absence. */
   unmeasured?: readonly ExecutorCapability[];

@@ -2,6 +2,8 @@
  * `/api/user/*` account-authority routes. They are mounted ahead of `userRoutes` because their UserDO
  * methods are floored at the `owner_only` `account` capability; no workspace token reaches them.
  */
+import { Effect, Cause } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import type { UserDO } from './user-do';
@@ -70,27 +72,31 @@ accountRoutes.get('/api/user/held-rows', ownerGate(), async (c) => {
 
 // The typed confirmation is the account email, not a password: the session authenticates,
 // the phrase separates a stray click from a decision. No rate limit; the phrase is the gate.
-accountRoutes.delete('/api/user/account', ownerGate(), async (c) => {
-  const identity = c.get('identity');
-  const owner = c.get('owner');
-  const body = await safeJson(c.req.raw, DeleteConfirm);
+accountRoutes.delete('/api/user/account', ownerGate(), (c) => {
+  return settle(Effect.gen(function* () {
+    const identity = c.get('identity');
+    const owner = c.get('owner');
+    const body = yield* Effect.promise(async () => safeJson(c.req.raw, DeleteConfirm));
 
-  if (!body || !confirmsAccountDelete(body.confirm, identity.email)) {
-    return err(400, 'Type the account email to confirm.');
-  }
+    if (!body || !confirmsAccountDelete(body.confirm, identity.email)) {
+      return err(400, 'Type the account email to confirm.');
+    }
 
-  // Share recipients are named only inside the workspaces the delete destroys; forget them first.
-  await forgetSharesGiven(c.env, identity.userId, owner);
+    // Share recipients are named only inside the workspaces the delete destroys; forget them first.
+    yield* Effect.promise(async () => forgetSharesGiven(c.env, identity.userId, owner));
 
-  try {
-    await account(c).deleteAccount(owner, identity.userId);
-  } catch (cause) {
-    // The SDK's destroy aborts its own isolate after the durable wipe; the 'destroyed' sentinel
-    // means success (same rule as `tearDownWorkspace`).
-    if (!(cause instanceof Error) || cause.message !== 'destroyed') throw cause;
-  }
+    yield* Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => account(c).deleteAccount(owner, identity.userId));
+    }), (failed) => Effect.gen(function* () {
+      const cause = Cause.squash(failed);
+      // The SDK's destroy aborts its own isolate after the durable wipe; the 'destroyed' sentinel
+      // means success (same rule as `tearDownWorkspace`).
 
-  return json({ body: { deleted: true } });
+      if (!(cause instanceof Error) || cause.message !== 'destroyed') return yield* Effect.failCause(failed);
+    }));
+
+    return json({ body: { deleted: true } });
+  }));
 });
 
 accountRoutes.patch('/api/user/profile', ownerGate(), async (c) => {

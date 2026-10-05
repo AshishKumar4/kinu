@@ -156,7 +156,7 @@ function makeTeam() {
           answer: 'answered',
           transcript: 'kept' as const,
         }),
-        release: async () => {},
+        release: () => {},
         reclaim: () => null,
         answered: () => [],
         forget: () => {},

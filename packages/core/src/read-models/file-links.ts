@@ -1,10 +1,10 @@
 /** Where a file the agent names in chat opens: a local file on this machine, a cloud one on the web Files surface. */
-import { cloudPlanes, findPlaneReferences, referencedPath, type PathPlanes } from '../vfs/resolve';
+import { cloudPlanes, findPlaneReferences, referencedPath, referencePrefixes, type PathPlanes } from '../vfs/resolve';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { APP_ROUTES } from './app-routes';
 
 export interface FileLinks {
-  /** The planes a reference may name (`vfs`, `local`...); any other scheme is prose. */
+  /** The prefixes a reference may start with ({@link referencePrefixes}); any other scheme is prose. */
   readonly roots: readonly string[];
   /** The target a reference opens, or null when it names no file. */
   readonly href: (reference: string) => string | null;
@@ -13,7 +13,7 @@ export interface FileLinks {
 /** A local workspace's files are this machine's: each reference opens as the file it names. */
 export function localFileLinks(planes: PathPlanes): FileLinks {
   return {
-    roots: planes.roots.map((root) => root.root),
+    roots: referencePrefixes(planes),
     href: (reference) => {
       const at = referencedPath(reference, planes);
 
@@ -22,12 +22,12 @@ export function localFileLinks(planes: PathPlanes): FileLinks {
   };
 }
 
-/** A cloud workspace's files open on its Files surface, which lands on `?file=<reference>`. */
-export function cloudFileLinks(origin: string, workspace: string): FileLinks {
+/** A cloud workspace's files open on its Files surface, which lands on `?file=<reference>`; `machines` are its live ones. */
+export function cloudFileLinks(origin: string, workspace: string, machines: readonly string[] = []): FileLinks {
   const page = new URL(APP_ROUTES.workspace.replace(':agentId', encodeURIComponent(workspace)), origin);
 
   return {
-    roots: ['vfs', 'sandbox'],
+    roots: referencePrefixes(cloudPlanes(WORKSPACE_ROOT), machines),
     href: (reference) => {
       page.searchParams.set('file', reference);
 

@@ -1,8 +1,8 @@
 import {
-  chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync, statSync,
+  chmodSync, existsSync, readFileSync, mkdirSync, realpathSync, statSync,
   writeFileSync, unlinkSync,
 } from 'node:fs';
-import { basename, isAbsolute, join, relative as relativePath, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
   ANTHROPIC_BASE_URL,
@@ -22,7 +22,8 @@ import {
   type ProfileCatalogEnvelope,
   shellQuote,
 } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
+import { KinuError, settleSync, tolerate } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import {
   makeSql, CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
@@ -219,33 +220,16 @@ export function agentDbPath(name: string): string {
   return join(agentDir(name), 'agent.db');
 }
 
-interface LocalAgentRef {
+export interface LocalAgentRef {
   name: string;
   cwd: string;
   workspaceId: string;
   dbPath: string;
 }
 
-/** `adopted`: this resolve bound an unplaced `~/.kinu/<name>` workspace to the caller's project. */
-type LocalPlacement = 'recorded' | 'adopted' | 'unplaced';
-
-export interface ResolvedLocalAgent extends LocalAgentRef {
-  placement: LocalPlacement;
-}
-
-/** An install-tree placement (the old launcher's) names no project. */
-function insideInstallTree(cwd: string): boolean {
-  const relative = relativePath(canonicalProjectRoot(join(AGENT_HOME, 'cli')), canonicalProjectRoot(cwd));
-
-  return relative === '' || (!relative.startsWith('..') && !isAbsolute(relative));
-}
-
-/** Null without a recorded placement, so an unplaced workspace belongs to no project rather than to the current directory. */
+/** Null without a recorded folder that still exists: such a workspace is listed nowhere and refused at open. */
 function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
-  if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId) return null;
-
-  // A missing recorded directory places nothing; otherwise a renamed project's agents would vanish from every roster.
-  if (!existsSync(agent.cwd) || insideInstallTree(agent.cwd)) return null;
+  if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId || !existsSync(agent.cwd)) return null;
   const name = agent.localName ?? agent.name;
 
   if (!KINU_IDENTIFIER_RE.test(name)) return null;
@@ -265,7 +249,6 @@ export function listLocalRefsAllProjects(): LocalAgentRef[] {
     .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.name.localeCompare(b.name));
 }
 
-/** Unplaced workspaces are not attributed here: attribution is adoption, and adoption is per-agent. */
 function listLocalRefs(cwd = process.cwd()): LocalAgentRef[] {
   const root = canonicalProjectRoot(cwd);
 
@@ -295,19 +278,7 @@ export function listAgentDirs(cwd = process.cwd()): string[] {
   return listLocalRefs(cwd).map((ref) => ref.name);
 }
 
-/** `~/.kinu/<name>` directories with an `agent.db` that no ref places; adopted one at a time. */
-export function listUnplacedAgentNames(): string[] {
-  if (!existsSync(AGENT_HOME)) return [];
-  const placed = new Set(listLocalRefsAllProjects().map((ref) => ref.name));
-
-  return readdirSync(AGENT_HOME)
-    .filter((name) => KINU_IDENTIFIER_RE.test(name)
-      && !placed.has(name)
-      && existsSync(join(AGENT_HOME, name, 'agent.db')))
-    .sort();
-}
-
-export function readWorkspaceIdentityId(dbPath: string): string | null {
+function readWorkspaceIdentityId(dbPath: string): string | null {
   if (!existsSync(dbPath)) return null;
   // Read-write although nothing writes: a WAL database needs its `-shm`, and a readonly connection may not build one.
   const db = new Database(dbPath);
@@ -347,41 +318,17 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
   }
 }
 
-interface AdoptUnplacedAgentOptions {
-  cwd?: string;
-  workspaceId?: string;
-}
-
-/** Binds one named workspace, keyed on its own identity, so nothing sweeps every unplaced directory. Placed refs return unchanged. */
-export async function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOptions = {}): Promise<LocalAgentRef> {
-  const dbPath = agentDbPath(name);
-
-  if (!existsSync(dbPath)) {
-    throw new Error(`Workspace "${name}" not found at ${dbPath}.`);
-  }
-
-  const existing = loadConfigFile().agents?.[name];
-
-  if (existing && existing.mode !== 'local') {
-    throw new Error(`"${name}" is already configured as a cloud workspace.`);
-  }
-
-  const already = existing ? placedRef(existing) : null;
-
-  if (already) return already;
-  const cwd = canonicalProjectRoot(opts.cwd);
-  const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+/** A new local workspace's ref: the folder it works in, and its database's identity (`assertIdentityUnchanged`). */
+export async function placeLocalWorkspace(input: { name: string; cwd: string; workspaceId: string; alias?: string }): Promise<void> {
   await upsertAgentConfig({
-    ...existing,
-    name,
+    name: input.name,
     mode: 'local',
-    localName: name,
-    cwd,
-    workspaceId,
-    identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
+    localName: input.name,
+    alias: input.alias,
+    cwd: input.cwd,
+    workspaceId: input.workspaceId,
+    identityId: readWorkspaceIdentityId(agentDbPath(input.name)) ?? undefined,
   });
-
-  return { name, cwd, workspaceId, dbPath };
 }
 
 export class MissingLocalWorkspaceError extends Error {
@@ -394,15 +341,8 @@ export class MissingLocalWorkspaceError extends Error {
   }
 }
 
-export interface ResolveLocalAgentOptions {
-  cwd?: string;
-  workspaceId?: string;
-  /** Pass false for a read that must not change configuration. */
-  adopt?: boolean;
-}
-
-/** The one local resolution, so the placement a peer group depends on cannot drift between call sites. */
-export async function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions = {}): Promise<ResolvedLocalAgent> {
+/** The one local resolution: a workspace works in the folder its ref records, and one without a folder is refused. */
+export function resolveLocalAgent(input: string): LocalAgentRef {
   const ref = resolveAgentRef(input);
 
   if (ref && ref.mode !== 'local') {
@@ -410,25 +350,17 @@ export async function resolveLocalAgent(input: string, opts: ResolveLocalAgentOp
   }
 
   const name = ref?.localName ?? ref?.name ?? input;
-  const dbPath = agentDbPath(name);
 
-  if (!existsSync(dbPath)) throw new MissingLocalWorkspaceError(name);
+  if (!existsSync(agentDbPath(name))) throw new MissingLocalWorkspaceError(name);
   const placed = ref ? placedRef(ref) : null;
 
-  if (ref && placed) {
-    assertIdentityUnchanged(ref, placed);
-
-    return { ...placed, placement: 'recorded' };
+  if (!ref || !placed) {
+    return settleSync(Effect.fail(new KinuError('missing', `Workspace "${name}" has no folder; create a new one from the folder it should work in.`)));
   }
 
-  const cwd = canonicalProjectRoot(opts.cwd);
-  const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+  assertIdentityUnchanged(ref, placed);
 
-  if (opts.adopt === false) {
-    return { name, cwd, workspaceId, dbPath, placement: 'unplaced' };
-  }
-
-  return { ...(await adoptUnplacedLocalAgent(name, { cwd, workspaceId })), placement: 'adopted' };
+  return placed;
 }
 
 /** A changed identity means the name was reused; continuing would attach history to a different workspace. */

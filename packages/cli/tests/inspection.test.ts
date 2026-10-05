@@ -1,5 +1,6 @@
 import { childEnv, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
+import { placeLocalWorkspace } from './helpers/local-refs';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { join, resolve } from "node:path";
@@ -96,9 +97,11 @@ describe('CLI explicit endpoint options', () => {
 });
 
 /** The production schema via `kinu create`, not a hand-written DDL copy. */
-async function createLocalAgent(home: string, name: string): Promise<void> {
+/** A placed workspace; returns the folder its ref records. */
+async function createLocalAgent(home: string, name: string): Promise<string> {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
+  const folder = placeLocalWorkspace(home, name);
   const db = new Database(join(dir, "agent.db"));
 
   try {
@@ -138,6 +141,8 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
   } finally {
     db.close();
   }
+
+  return folder;
 }
 
 test("a genuinely unreadable workspace names its cause instead of hiding it", async () => {
@@ -146,8 +151,10 @@ test("a genuinely unreadable workspace names its cause instead of hiding it", as
   mkdirSync(dir, { recursive: true });
   // Not a database: the one condition that legitimately reaches the handler.
   writeFileSync(join(dir, "agent.db"), "this is not sqlite\n");
+  const folder = placeLocalWorkspace(home, "broken-ws");
 
-  const list = await runCli(home, ["list"]);
+  // `kinu list` lists the workspaces placed in the folder it runs in.
+  const list = await runToExit([process.execPath, cliBin, "list"], { cwd: folder, env: { ...process.env, KINU_HOME: home } });
   expect(list.exitCode).toBe(0);
   expect(list.stdout).toContain("unreadable:");
 
@@ -194,9 +201,10 @@ describe("CLI inspection commands", () => {
     expect(executors.stdout).toContain("native_binary");
   });
 
-  test("kinu executors <name> workspace runs in the addressed workspace, never the invoking directory", async () => {
+  // 2026-10-04: a local workspace works in its recorded folder; one without a folder is refused.
+  test("kinu executors <name> workspace runs in the addressed workspace's folder, never the invoking directory", async () => {
     const home = scratchDir("cli-executor-exec");
-    await createLocalAgent(home, "localtest");
+    const placed = await createLocalAgent(home, "localtest");
     const invokedFrom = newProjectDir();
 
     const run = (command: string) => runToExit([process.execPath, cliBin, "executors", "localtest", "workspace", command], {
@@ -205,12 +213,15 @@ describe("CLI inspection commands", () => {
 
     const wrote = await run("echo addressed > marker.txt && pwd");
     expect(wrote.exitCode).toBe(0);
-    expect(wrote.stdout).not.toContain(invokedFrom);
+    expect(wrote.stdout).toContain(placed);
     expect(existsSync(join(invokedFrom, "marker.txt"))).toBe(false);
+    expect(readFileSync(join(placed, "marker.txt"), "utf8")).toBe("addressed\n");
 
-    const read = await run("cat marker.txt");
-    expect(read.exitCode).toBe(0);
-    expect(read.stdout).toContain("addressed");
+    // Without its ref the workspace has no folder, and the command runs nowhere.
+    writeFileSync(join(home, "config.json"), JSON.stringify({ agents: {} }));
+    const folderless = await run("pwd");
+    expect(folderless.exitCode).not.toBe(0);
+    expect(folderless.stderr).toContain('Workspace "localtest" has no folder');
   });
 
   test("kinu model normalizes specs through the provider resolver", async () => {

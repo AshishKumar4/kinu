@@ -29,7 +29,7 @@ const richHistory: ModelMessage[] = [
     role: 'user',
     content: [
       { type: 'text', text: 'multi-part user' },
-      { type: 'image', image: new Uint8Array([1, 2, 3]), mediaType: 'image/png' },
+      { type: 'file', data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' },
       { type: 'file', data: 'aGVsbG8=', mediaType: 'application/pdf', filename: 'doc.pdf' },
     ],
   },
@@ -344,7 +344,7 @@ describe('estimation and transcripts', () => {
     expect(kinuCodec.estimateTurns(textTurns)).toBe(1_000);
 
     const imageTurns = kinuCodec.encode([
-      { role: 'user', content: [{ type: 'image', image: new Uint8Array(1_000_000), mediaType: 'image/png' }] },
+      { role: 'user', content: [{ type: 'file', data: new Uint8Array(1_000_000), mediaType: 'image/png' }] },
     ]);
 
     expect(kinuCodec.estimateTurns(imageTurns)).toBe(1_200);
@@ -379,7 +379,7 @@ describe('estimation and transcripts', () => {
         role: 'user',
         content: [
           { type: 'text', text: 'with image' },
-          { type: 'image', image: new Uint8Array(5), mediaType: 'image/png' },
+          { type: 'file', data: new Uint8Array(5), mediaType: 'image/png' },
         ],
       },
       assistant([toolCall('c1', 'shell', { command: 'ls -la' })]),

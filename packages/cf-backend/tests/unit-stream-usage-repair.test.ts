@@ -198,7 +198,7 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
 
     await result.consumeStream();
     const usage = await result.usage;
-    expect(usage.cachedInputTokens).toBe(14528);
+    expect(usage.inputTokenDetails.cacheReadTokens).toBe(14528);
     expect(usage.inputTokens).toBe(14571);
     expect(usage.outputTokens).toBe(3);
   });
@@ -220,7 +220,7 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
 
     await result.consumeStream();
     const usage = await result.usage;
-    expect(usage.cachedInputTokens).toBe(14528);
+    expect(usage.inputTokenDetails.cacheReadTokens).toBe(14528);
     // normalizeUsage witnesses presence off `raw`, so the repair restores the key as well as the number.
     expect(normalizeUsage(usage).cacheRead).toBe(14528);
   });
@@ -286,7 +286,7 @@ describe('cached-usage repair through the direct binding pass', () => {
     await result.consumeStream();
 
     const usage = await result.usage;
-    expect(usage.cachedInputTokens).toBe(14528);
+    expect(usage.inputTokenDetails.cacheReadTokens).toBe(14528);
     expect(normalizeUsage(usage).cacheRead).toBe(14528);
   });
 });

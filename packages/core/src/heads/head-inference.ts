@@ -154,7 +154,7 @@ function recordingTool<Entry extends ToolSet[string]>(
   if (!execute) return entry;
 
   return Object.assign({}, entry, {
-    execute: async (input: never, options: ToolExecutionOptions) => {
+    execute: async (input: never, options: ToolExecutionOptions<unknown>) => {
       const value = projectJsonValue({ value: input });
       const args: JsonObject = isJsonObject(value) ? value : { input: value };
 

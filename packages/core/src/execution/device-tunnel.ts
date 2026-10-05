@@ -3,9 +3,8 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError, toKinuError } from '../obs/error';
-import { diagnostics } from '../obs/log';
-import { settle, settleSync } from '../obs/effect';
-import { tolerate } from '../obs/expected-failure';
+import { detach, diagnostics } from '../obs/log';
+import { settle, settleSync, tolerate } from '../obs/effect';
 import { nanoid } from '../utils/nanoid';
 import { every, REAL_CLOCK, type Clock } from '../types/clock';
 import { DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, deviceFailure, isDeviceFailure } from './device-protocol';
@@ -296,7 +295,7 @@ export class DeviceTunnel {
   private armHeartbeat(): void {
     if (this.heartbeat) return;
     this.probe = null;
-    this.heartbeat = every(this.clock, this.probeMs, () => this.heartbeatTick());
+    this.heartbeat = every(this.clock, this.probeMs, () => detach(this.heartbeatTick()));
   }
 
   private disarmIdleHeartbeat(): void {
@@ -306,9 +305,8 @@ export class DeviceTunnel {
     this.probe = null;
   }
 
-  /** Clock callback: the public edge settles its synchronous socket operation. */
-  async heartbeatTick(): Promise<void> {
-    if (this.openEnded.size === 0) return this.disarmIdleHeartbeat();
+  private heartbeatTick(): Effect.Effect<void> {
+    if (this.openEnded.size === 0) return Effect.sync(() => this.disarmIdleHeartbeat());
 
     if (!this.isConnected()) return this.failOpenEnded(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED);
 
@@ -319,29 +317,32 @@ export class DeviceTunnel {
     this.probe = { id: nextDeviceRequestId(), sentAt: this.clock.now() };
     const frame = { id: this.probe.id, method: DEVICE_METHOD.ping, params: [] };
 
-    return settle(sendFrame(this.socket, frame).pipe(Effect.catch((failure) => Effect.promise(() =>
-      this.failOpenEnded(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED, { cause: failure.cause })))));
+    return sendFrame(this.socket, frame).pipe(Effect.catch((failure) =>
+      this.failOpenEnded(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED, { cause: failure.cause })));
   }
 
-  private async failOpenEnded(code: string, message: string, input?: { cause: unknown }): Promise<void> {
-    const ending: Promise<void>[] = [];
+  private failOpenEnded(code: string, message: string, input?: { cause: unknown }): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      const ending: Effect.Effect<void>[] = [];
 
-    for (const id of this.openEnded) {
-      const pending = this.pending.get(id);
+      for (const id of this.openEnded) {
+        const pending = this.pending.get(id);
 
-      if (!pending) continue;
-      this.pending.delete(id);
-      pending.stop();
+        if (!pending) continue;
+        this.pending.delete(id);
+        pending.stop();
 
-      const failed = (answer: DeviceCancelResult | null) => pending.complete(Effect.fail(deviceFailure(code,
-        answer?.cancelled === 'terminated' ? `${message}: the device confirmed its work stopped`
-          : `${message}: the call may still be running on the device; its stop was not confirmed`, input)));
+        const failed = (answer: DeviceCancelResult | null) => pending.complete(Effect.fail(deviceFailure(code,
+          answer?.cancelled === 'terminated' ? `${message}: the device confirmed its work stopped`
+            : `${message}: the call may still be running on the device; its stop was not confirmed`, input)));
 
-      if (this.isConnected()) ending.push(this.cancel(id).then(failed));
-      else failed(null);
-    }
+        if (this.isConnected()) ending.push(Effect.map(Effect.promise(() => this.cancel(id)), failed));
+        else failed(null);
+      }
 
-    this.disarmIdleHeartbeat();
-    await Promise.all(ending);
+      this.disarmIdleHeartbeat();
+
+      return Effect.asVoid(Effect.all(ending, { concurrency: 'unbounded' }));
+    });
   }
 }

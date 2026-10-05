@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { resolveAgentTarget } from '../agent-target';
 import { lastUsedLocalRef } from '../config';
 import { agentTargetExists, requireAgentTarget } from '../local-target';
@@ -98,37 +100,41 @@ export async function chatCommand(
     const { runTuiChat } = await import('../tui/chat-app');
     await runTuiChat({
       client,
-      onWorkspaceSelect: async (selectedName) => {
-        const selectedTarget = resolveAgentTarget(selectedName);
+      onWorkspaceSelect: (selectedName) => {
+        return settle(Effect.gen(function* () {
+          const selectedTarget = resolveAgentTarget(selectedName);
 
-        // Mid-session, so this throws for the TUI to show rather than exiting.
-        if (!agentTargetExists(selectedTarget)) {
-          throw new Error(`Workspace "${selectedName}" is no longer available.`);
-        }
-
-        if (selectedTarget.mode === 'local') ensureLocalDaemonRunning();
-        const selectedOptions = optionsForWorkspaceSwitch(opts, selectedTarget.mode);
-
-        return createAgentClient(selectedTarget, selectedOptions);
-      },
-      onNewAgent: async (current) => {
-        if (current.mode === 'cloud') {
-          if (!(current instanceof CloudAgentClient)) {
-            throw new Error('This cloud session cannot create additional agents.');
+          // Mid-session, so this throws for the TUI to show rather than exiting.
+          if (!agentTargetExists(selectedTarget)) {
+            return yield* Effect.die(new Error(`Workspace "${selectedName}" is no longer available.`));
           }
 
-          const created = await current.createAdditionalAgent();
+          if (selectedTarget.mode === 'local') ensureLocalDaemonRunning();
+          const selectedOptions = optionsForWorkspaceSwitch(opts, selectedTarget.mode);
 
-          return {
-            ...created,
-            kind: 'cloud-additional' as const,
-            client: current.openAdditionalAgent(created.name),
-          };
-        }
+          return yield* Effect.promise(async () => createAgentClient(selectedTarget, selectedOptions));
+        }));
+      },
+      onNewAgent: (current) => {
+        return settle(Effect.gen(function* () {
+          if (current.mode === 'cloud') {
+            if (!(current instanceof CloudAgentClient)) {
+              return yield* Effect.die(new Error('This cloud session cannot create additional agents.'));
+            }
 
-        const created = await createLocalPeerAgent();
+            const created = yield* Effect.promise(async () => current.createAdditionalAgent());
 
-        return { name: created.name, displayName: created.displayName ?? '', kind: 'local-peer' as const };
+            return {
+              ...created,
+              kind: 'cloud-additional' as const,
+              client: current.openAdditionalAgent(created.name),
+            };
+          }
+
+          const created = yield* Effect.promise(async () => createLocalPeerAgent());
+
+          return { name: created.name, displayName: created.displayName ?? '', kind: 'local-peer' as const };
+        }));
       },
     });
   }

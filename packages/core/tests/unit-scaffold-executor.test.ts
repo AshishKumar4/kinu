@@ -186,6 +186,29 @@ describe('runScaffold', () => {
     expect(deltas).toEqual(['one ', 'two ', 'three']);
   });
 
+  test('host.llmStream refuses a system message before any model call: `system` is the one system prompt', async () => {
+    let calls = 0;
+    let answered: unknown;
+
+    const rt = makeRtWithMockedExecutor(async (_code, providers) => {
+      const host = hostProvider(providers);
+      answered = await host.fns.llmStream({ system: 's', messages: [{ role: 'system', content: 'be terse' }] });
+
+      return { result: null };
+    });
+
+    rt.identity.scaffold.read = async () => 'async function run() {}';
+
+    await runScaffold({ rt, task: 'x', emit: () => undefined, llmStream: () => {
+      calls++;
+
+      return asyncOf({ type: 'text-delta', delta: 'answered' });
+    } });
+
+    expect(calls).toBe(0);
+    expect(answered).toEqual({ error: 'host.llmStream: invalid options' });
+  });
+
   test('a scaffold run stays pending until the executor completes — no elapsed deadline cuts it', async () => {
     const events: ScaffoldEvent[] = [];
     const gate = Promise.withResolvers<void>();

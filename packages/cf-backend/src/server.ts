@@ -4,12 +4,13 @@
  */
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
+import { Cause, Effect, Result } from "effect";
 import { routeAgentRequest } from "agents";
 import { tracing, WorkerEntrypoint } from 'cloudflare:workers';
 import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
 import { containerEventResolver, handleContainerEgress, handleContainerEvent, parseEgressParams, type KinuEgressParams } from './egress/outbound';
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
-import { diagnostics, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
+import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -117,41 +118,41 @@ function authError(request: Request, e: AuthError): Response {
   });
 }
 
-async function authenticateCliAgentTicketRequest(
+function authenticateCliAgentTicketRequest(
   request: Request,
   env: Env,
-): Promise<{ identity: AuthIdentity; request: Request } | Response | null> {
+): Effect.Effect<{ identity: AuthIdentity; request: Request } | Response | null, KinuError> {
   const url = new URL(request.url);
   const agentName = extractTicketOrchestratorAgentName(url.pathname);
   const ticket = url.searchParams.get('ticket');
 
-  if (!agentName || !ticket) return null;
+  if (!agentName || !ticket) return Effect.succeed(null);
 
   if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
-    return new Response(JSON.stringify({ error: 'CLI agent tickets are only valid for WebSocket connections.' }), {
+    return Effect.succeed(new Response(JSON.stringify({ error: 'CLI agent tickets are only valid for WebSocket connections.' }), {
       status: 400,
       headers: { 'content-type': 'application/json' },
-    });
+    }));
   }
 
   const userId = parseCliAgentConnectTicketUserId(ticket);
 
   if (!userId) {
-    return new Response(JSON.stringify({ error: 'Invalid CLI agent connect ticket.' }), {
+    return Effect.succeed(new Response(JSON.stringify({ error: 'Invalid CLI agent connect ticket.' }), {
       status: 401,
       headers: { 'content-type': 'application/json' },
-    });
+    }));
   }
 
-  try {
+  return Effect.catchCause(Effect.gen(function* () {
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
 
-    const verified = await userDO.verifyCliAgentConnectTicket(await ownerCaller(env), ticket, {
+    const verified = yield* Effect.promise(async () => userDO.verifyCliAgentConnectTicket(await ownerCaller(env), ticket, {
       userId,
       agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName,
       capability: 'agent.websocket',
-    });
+    }));
 
     if (!verified.ok || !verified.user) {
       return new Response(JSON.stringify({ error: verified.error ?? 'Invalid CLI agent connect ticket.' }), {
@@ -182,10 +183,10 @@ async function authenticateCliAgentTicketRequest(
       identity,
       request: new Request(url.toString(), request),
     };
-  } catch (cause) {
-    // A throw here is infrastructure, not a bad ticket: the router's `onError` answers its class, not 401.
-    throw toKinuError({ doing: 'verifying a CLI agent connect ticket', cause, otherwise: 'io' });
-  }
+  }), (failed) => Effect.fail(
+    // A failure here is infrastructure, not a bad ticket: the router's `onError` answers its class, not 401.
+    toKinuError({ doing: 'verifying a CLI agent connect ticket', cause: Cause.squash(failed), otherwise: 'io' }),
+  ));
 }
 
 export default {
@@ -212,7 +213,7 @@ export default {
     installAnalyticsDiagnostics(env);
     ctx.waitUntil(keepDevboxGolden(env.KinuDevbox));
     ctx.waitUntil((async () => {
-      try {
+      await settleLogged('monitor.check_failed', { doing: 'running the synthetic monitoring tick', otherwise: 'unavailable' }, async () => {
         const monitor = env.MonitorDO.get(env.MonitorDO.idFromName(MONITOR_SINGLETON));
         const result = await monitor.check();
 
@@ -225,13 +226,7 @@ export default {
             emailSkipped: result.skipped !== undefined,
           });
         }
-      } catch (e) {
-        diagnostics.failure('monitor.check_failed', toKinuError({
-          doing: 'running the synthetic monitoring tick',
-          cause: e,
-          otherwise: 'unavailable',
-        }));
-      }
+      });
     })());
   },
 } satisfies ExportedHandler<Env>;
@@ -369,11 +364,11 @@ for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH]) worker.all(path, app
 
 for (const prefix of ['/auth', '/assets', '/shared/blueprint']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
 
-worker.use('*', async (c, next) => {
+worker.use('*', (c, next) => settle(Effect.gen(function* () {
   const request = c.req.raw;
   let identity: AuthIdentity;
   let routed = request;
-  const cliAgentTicket = await authenticateCliAgentTicketRequest(request, c.env);
+  const cliAgentTicket = yield* authenticateCliAgentTicketRequest(request, c.env);
 
   if (cliAgentTicket instanceof Response) return cliAgentTicket;
 
@@ -381,11 +376,14 @@ worker.use('*', async (c, next) => {
     identity = cliAgentTicket.identity;
     routed = cliAgentTicket.request;
   } else {
-    try { identity = await authenticateRequest(request, c.env); }
-    catch (e) {
-      if (e instanceof AuthError) return authError(request, e);
-      throw e;
-    }
+    const authenticated = yield* Effect.catchCause(Effect.promise(() => authenticateRequest(request, c.env)), (failed) => {
+      const e = Cause.squash(failed);
+
+      return e instanceof AuthError ? Effect.succeed(authError(request, e)) : Effect.failCause(failed);
+    });
+
+    if (authenticated instanceof Response) return authenticated;
+    identity = authenticated;
   }
 
   const crossSite = crossSiteRejection(request);
@@ -397,8 +395,8 @@ worker.use('*', async (c, next) => {
   observeIdentity(c.env, identity, { retain: c.executionCtx });
   c.set('identity', identity);
   c.set('request', routed);
-  await next();
-});
+  yield* Effect.promise(() => next());
+})));
 
 worker.all('/agents/*', async (c, next) => {
   // Refuse any namespace/facet path outside the public actor grammar before SDK routing.
@@ -413,7 +411,7 @@ worker.all('/agents/*', async (c, next) => {
   const identity = c.get('identity');
   const claim = await claimOwnedWorkspace(c.env, identity.userId, agentName);
 
-  if (!claim.ok) return err(claim.status, claim.error);
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
 
   observeWorkspaceUse(c.env, identity, agentName, { retain: c.executionCtx });
 

@@ -10,7 +10,8 @@ import {
 } from '@kinu.run/core';
 import { agentEmailAddress } from './inbound';
 import type { EmailOutbox, OutboundEmailMessage } from '@kinu.run/core';
-import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const EmailThreadAddrSchema = v.object({
@@ -111,36 +112,39 @@ export function createEmailThreadDispatcher(
   getContext: () => EmailSendContext,
 ): import('@kinu.run/core').ReplyDispatcher {
   return {
-    async dispatch(channel, payload) {
-      const ctx = getContext();
+    dispatch(channel, payload) {
+      return settle(Effect.gen(function* () {
+        const ctx = getContext();
+        const email = ctx.email;
 
-      if (!ctx.email) {
-        return { delivered: false, detail: 'send_email binding (EMAIL) not configured' };
-      }
+        if (!email) {
+          return { delivered: false, detail: 'send_email binding (EMAIL) not configured' };
+        }
 
-      let addr: EmailThreadAddr;
+        const parsed = yield* Effect.matchCause(Effect.sync((): EmailThreadAddr => v.parse(EmailThreadAddrSchema, JSON.parse(channel.holder_addr))), {
+          onSuccess: (addr) => ({ addr }),
+          onFailure: (failed) => ({ malformed: renderThrownChain({ cause: Cause.squash(failed) }) }),
+        });
 
-      try {
-        addr = v.parse(EmailThreadAddrSchema, JSON.parse(channel.holder_addr));
-      } catch (error) {
-        return { delivered: false, detail: `malformed email_thread holder_addr: ${renderThrownChain({ cause: error })}` };
-      }
+        if ('malformed' in parsed) return { delivered: false, detail: `malformed email_thread holder_addr: ${parsed.malformed}` };
+        const { addr } = parsed;
 
-      if (!addr.to || !addr.from) {
-        return { delivered: false, detail: 'email_thread holder_addr missing addresses' };
-      }
+        if (!addr.to || !addr.from) {
+          return { delivered: false, detail: 'email_thread holder_addr missing addresses' };
+        }
 
-      // One reply per channel; a lease re-drive after a mid-send crash re-sends the same Message-ID, deduped downstream.
-      const result = await ctx.outbox.send(
-        ctx.email,
-        `reply:${channel.id}`,
-        threadReply(addr, ctx.agentDisplayName, payloadText(payload)),
-        Date.now(),
-      );
+        // One reply per channel; a lease re-drive after a mid-send crash re-sends the same Message-ID, deduped downstream.
+        const result = yield* Effect.promise(() => ctx.outbox.send(
+          email,
+          `reply:${channel.id}`,
+          threadReply(addr, ctx.agentDisplayName, payloadText(payload)),
+          Date.now(),
+        ));
 
-      if (result.status === 'failed') return { delivered: false, detail: result.error };
+        if (result.status === 'failed') return { delivered: false, detail: result.error };
 
-      return { delivered: true };
+        return { delivered: true };
+      }));
     },
   };
 }

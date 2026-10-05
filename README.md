@@ -194,6 +194,32 @@ self-host as of 2026-09-13; it depends on model use, storage and containers.
 - Close the container storage decision with a full live acceptance on deployed Containers ([docs/DEVBOX-DECISIONS.md](docs/DEVBOX-DECISIONS.md), O1).
 - Seed the hosted runtime catalog so a fresh self-host gets Python without a manual step.
 
+## Architecture
+
+I keep each cloud workspace in its own Durable Object, with account credentials
+and device connections in the UserDO.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/system-dark.svg">
+  <img alt="Browser and cloud TUI clients reach the Worker, which routes one Durable Object per workspace and one UserDO per account. Nimbus holds the workspace's own files; non-main agents run in per-agent facets. KinuDevbox uses platform snapshots and an R2 disk-chain backup. Models and connected devices are separate services." src="docs/diagrams/system.svg" width="900">
+</picture>
+
+Locally, I open `kinu` in a folder; the agent works there and keeps its own files
+and database under `~/.kinu/<workspace>/`.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/local-dark.svg">
+  <img alt="The CLI and TUI call a local session in the same process, without a local server. The global VFS root is the workspace's own directory, holding agent homes, slates and agent.db, with a read-only /skills view. The opened folder mounts at /local; local:// aliases vfs://local. Shell commands use real host processes and tools." src="docs/diagrams/local.svg" width="900">
+</picture>
+
+My device daemon opens one outbound tunnel to my account; cloud chat in the TUI
+uses the same protocol as the web app.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/device-dark.svg">
+  <img alt="Cloud agents reach a device through UserDO over one outbound reverse WebSocket, carrying command and file RPC and ChatGPT or Codex model relays. The machine mounts at /pc/name. Separately, the TUI and browser use the same chat protocol through the Worker to a cloud workspace." src="docs/diagrams/device.svg" width="900">
+</picture>
+
 ## Packages
 
 A Bun workspace. Platform-agnostic code lives in `core/`. The two backends are
@@ -222,7 +248,7 @@ over `bun:sqlite` and real processes. Both drive the same core `ChatSession`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/backend-dark.svg">
-  <img alt="Web, CLI and autonomous ingress reach the shared core. AgentRuntime and BackendHost connect it to Cloudflare or local services. Hosted hires and swarm nodes are logical actors in one workspace Durable Object; local hires share their workspace database." src="docs/diagrams/backend.svg" width="900">
+  <img alt="Web, CLI and autonomous ingress reach the shared core. AgentRuntime and BackendHost connect it to Cloudflare or local services. Hosted hires and swarm nodes run in per-agent Worker Loader facets and call tools through workspace RPC; local agents share their workspace database and use real files." src="docs/diagrams/backend.svg" width="900">
 </picture>
 
 To add a backend, implement those two interfaces and wire in the services it

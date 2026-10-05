@@ -7,7 +7,8 @@ import type { FileUIPart } from "ai";
 import { describeError } from "@/hooks/use-async-resource";
 import type { ComposerNotice } from "@/components/Composer";
 import type { InlineSteer } from "@kinu.run/core";
-import { KinuError } from "@kinu.run/core/obs";
+import { Cause, Effect } from "effect";
+import { KinuError, settle } from "@kinu.run/core/obs";
 import type { SendAdmission } from "@/hooks/use-kinu";
 
 /** One notice id for every line, so a new status replaces the old instead of stacking. */
@@ -55,38 +56,33 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
     setSettled(null);
 
     if (admission.landed === "turn") return;
-    startTransition(async () => {
-      try {
-        if (await admission.settled === "turn") {
-          // The turn had ended, so the actor ran this as the next turn, atomically in its own queue.
-          setSettled({
-            id: NOTICE_ID, tone: "info",
-            text: "That turn had already finished, so this went as a new message.",
-          });
-        }
-        // The queued line is read from the server's `queued` broadcast, the same for every open tab.
-      } catch (cause) {
-        // Unread words return to the draft, appended to anything typed since; a stop is not a failure.
-        setDraft((current) => current === "" ? text : `${current}\n\n${text}`);
-        setSettled(cause instanceof KinuError && cause.code === "cancelled"
-          ? { id: NOTICE_ID, tone: "info", text: "Stopped before the agent read this, so it is back here." }
-          : { id: NOTICE_ID, tone: "danger", text: `Could not send to the turn: ${describeError({ cause })}` });
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      if ((yield* Effect.promise(() => admission.settled)) === "turn") {
+        // The turn had ended, so the actor ran this as the next turn, atomically in its own queue.
+        setSettled({
+          id: NOTICE_ID, tone: "info",
+          text: "That turn had already finished, so this went as a new message.",
+        });
       }
-    });
+      // The queued line is read from the server's `queued` broadcast, the same for every open tab.
+    }), (failed) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
+      // Unread words return to the draft, appended to anything typed since; a stop is not a failure.
+      setDraft((current) => current === "" ? text : `${current}\n\n${text}`);
+      setSettled(cause instanceof KinuError && cause.code === "cancelled"
+        ? { id: NOTICE_ID, tone: "info", text: "Stopped before the agent read this, so it is back here." }
+        : { id: NOTICE_ID, tone: "danger", text: `Could not send to the turn: ${describeError({ cause })}` });
+    }))));
   }, [draft, setDraft, attachments, sendChat]);
 
   const stop = useCallback(() => {
     setSettled(null);
-    startTransition(async () => {
-      try {
-        await abortChat();
-      } catch (cause) {
-        setSettled({
-          id: NOTICE_ID, tone: "danger",
-          text: `Could not stop the turn: ${describeError({ cause })}`,
-        });
-      }
-    });
+    startTransition(() => settle(Effect.catchCause(Effect.promise(() => abortChat()), (failed) => Effect.sync(() => {
+      setSettled({
+        id: NOTICE_ID, tone: "danger",
+        text: `Could not stop the turn: ${describeError({ cause: Cause.squash(failed) })}`,
+      });
+    }))));
   }, [abortChat]);
 
   return { notice, send, stop };

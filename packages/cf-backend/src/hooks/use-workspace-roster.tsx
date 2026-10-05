@@ -1,4 +1,5 @@
 /** The owner's roster: pages read from the owner's object, kept current by one socket per tab. */
+import { Cause, Effect } from 'effect';
 import * as v from "valibot";
 import {
   createContext,
@@ -16,7 +17,7 @@ import {
   listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE, UserApiError,
   type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
 } from "@/lib/user-api";
-import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
+import { detach, renderThrownChain, tolerate, settleSync } from "@kinu.run/core/obs";
 
 const ROSTER_PAGE = 50;
 
@@ -139,16 +140,16 @@ function useRosterPages(filter: RosterFilter | null, subscribe: WorkspaceRosterV
     setReading((count) => count + 1);
 
     // Dropped in the publish's batch, so `pending` never falls before the answer shows.
-    listWorkspaces({ cursor, limit, bucket: stable.bucket, q: stable.q }).then(
-      (answer) => {
+    detach(Effect.matchCause(Effect.promise(() => listWorkspaces({ cursor, limit, bucket: stable.bucket, q: stable.q })), {
+      onSuccess: (answer) => {
         publish(current, answer, merge);
         setReading((count) => count - 1);
       },
-      (...failure: [unknown]) => {
-        if (current === generation.current) setError(renderThrownChain({ cause: failure[0] }));
+      onFailure: (failure) => {
+        if (current === generation.current) setError(renderThrownChain({ cause: Cause.squash(failure) }));
         setReading((count) => count - 1);
       },
-    );
+    }));
   }, [stable, publish]);
 
   // Everything loaded, in one read the object clamps, so a reconnect keeps the reader's place.
@@ -211,14 +212,15 @@ function openRosterSocket(): RosterSocket {
 }
 
 /** A refused upgrade closes like any failure; only a read tells a refused session. */
-async function sessionRefused(): Promise<boolean> {
-  try {
-    await listWorkspaces({ limit: 1 });
+function sessionRefused(): Effect.Effect<boolean> {
+  return Effect.matchCause(Effect.promise(() => listWorkspaces({ limit: 1 })), {
+    onSuccess: () => false,
+    onFailure: (failed) => {
+      const cause = Cause.squash(failed);
 
-    return false;
-  } catch (cause) {
-    return cause instanceof UserApiError && cause.status === 401;
-  }
+      return cause instanceof UserApiError && cause.status === 401;
+    },
+  });
 }
 
 const ALL: RosterFilter = {};
@@ -284,7 +286,7 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
         }
 
         setEpoch((current) => Math.max(current, 1));
-        sessionRefused().then((refused) => { if (!refused && !stopped) reconnect(); }, reconnect);
+        detach(Effect.map(sessionRefused(), (refused) => { if (!refused && !stopped) reconnect(); }));
       });
     };
 
@@ -340,11 +342,13 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
 }
 
 export function useWorkspaceRoster(): WorkspaceRosterValue {
-  const roster = useContext(WorkspaceRosterContext);
+  return settleSync(Effect.gen(function* () {
+    const roster = useContext(WorkspaceRosterContext);
 
-  if (roster === null) throw new Error("useWorkspaceRoster requires WorkspaceRosterProvider");
+    if (roster === null) return yield* Effect.die(new Error("useWorkspaceRoster requires WorkspaceRosterProvider"));
 
-  return roster;
+    return roster;
+  }));
 }
 
 export function useFilteredRoster(filter: RosterFilter | null): RosterPages | null {

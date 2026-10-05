@@ -1,6 +1,6 @@
 // The public extension seam: hooks and tools through a real runChat turn, then ExtensionHost directly.
 import { describe, test, expect } from 'bun:test';
-import { stepCountIs, tool, type ModelMessage } from 'ai';
+import { isStepCount, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import * as v from 'valibot';
@@ -102,7 +102,7 @@ describe('extension seam through runChat', () => {
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       tools: {},
-      stopWhen: stepCountIs(3),
+      stopWhen: isStepCount(3),
       extensions: new ExtensionHost().register(ext),
     })) {
       events.push(ev);
@@ -130,7 +130,7 @@ describe('extension seam through runChat', () => {
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       tools: { ping: tool({ description: 'ping', inputSchema: z.object({}), execute: async () => 'pong' }) },
-      stopWhen: stepCountIs(3),
+      stopWhen: isStepCount(3),
     })) {
       if (ev.type === 'text-delta') texts.push(ev.delta);
     }
@@ -214,7 +214,7 @@ describe('transformContext through runChat', () => {
         instructions: '<workspace_instructions>\nvolatile-tail\n</workspace_instructions>',
       },
       tools: {},
-      stopWhen: stepCountIs(1),
+      stopWhen: isStepCount(1),
       extensions: new ExtensionHost().register(compactor),
     })) { /* drain */ }
 
@@ -234,7 +234,7 @@ describe('transformContext through runChat', () => {
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       tools: {},
-      stopWhen: stepCountIs(1),
+      stopWhen: isStepCount(1),
       providerReportedTokens: 123_456,
       extensions: new ExtensionHost().register({
         name: 'observer',
@@ -274,7 +274,7 @@ describe('transformContext through runChat', () => {
         system: 'sys',
         history: [{ role: 'user', content: 'go' }],
         tools: {},
-        stopWhen: stepCountIs(1),
+        stopWhen: isStepCount(1),
         transformTrigger,
         extensions: new ExtensionHost().register(observer),
       })) { /* drain */ }
@@ -292,7 +292,7 @@ describe('transformContext through runChat', () => {
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       tools: {},
-      stopWhen: stepCountIs(1),
+      stopWhen: isStepCount(1),
       extensions: new ExtensionHost().register({
         name: 'broken',
         transformContext: async () => { throw new Error('boom'); },

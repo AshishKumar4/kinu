@@ -9,6 +9,7 @@ import {
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { TestLanguageModelV2 } from './test-language-model';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
+import { scratchDir } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -16,11 +17,11 @@ const DUMMY_LLM: LLMProviderConfig = {
 
 const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
-/** The workspace over the named database: `:memory:` for in-process restarts, a real path for process restarts. */
+/** The workspace over the named database file, in a fresh folder; a child process reopens the same file. */
 export function openTerminalWorkspace(dbPath: string) {
   const db = new Database(dbPath);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   initSearchTables(rt.storage.execRaw);
   initAlternateTakesTable(rt.storage.execRaw);
   initScaffoldTables(rt.storage.execRaw);

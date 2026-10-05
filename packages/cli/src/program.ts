@@ -1,6 +1,8 @@
 /** Command registry; root help (display.ts renderHelp) derives from it. */
 
+import { Effect } from 'effect';
 import { Command, Option } from 'commander';
+import { settleSync } from '@kinu.run/core/obs';
 import { MODEL_OPTION_FLAG } from './options';
 import { createCommand } from './commands/create';
 import { acpCommand } from './commands/acp';
@@ -37,7 +39,7 @@ import { debugCommand } from './commands/debug';
 import { exportCommand, importCommand } from './commands/export-import';
 import { ACCESS_TOKEN_SCOPES, tokensCommand } from './commands/tokens';
 import { workspaceDeleteCommand } from './commands/workspace';
-import { printFailure, setCommandExample, VERSION } from './display';
+import { setCommandExample, VERSION } from './display';
 
 /** Render order; a group's first registration fixes its position. */
 const ACCOUNT = 'Account:';
@@ -79,7 +81,7 @@ export function buildProgram(): Command {
     .option('-y, --yes', 'Take the recommended choice at each prompt where there is one')
     .option('--skip-cloud', 'Skip account sign-in')
     .addOption(new Option('--account-only', 'Only sign in to Kinu').hideHelp())
-    .action(wrapAction(setupCommand));
+    .action(setupCommand);
 
   program
     .command('provider [action] [name] [account]')
@@ -89,35 +91,35 @@ export function buildProgram(): Command {
     .option('--origin <url>', 'Kinu app origin')
     .option(`${MODEL_OPTION_FLAG} <id>`, 'Default model for the selected provider')
     .option('--local', 'Keep the provider key on this machine instead of your Kinu account')
-    .action(wrapAction(providersCommand));
+    .action(providersCommand);
 
   program
     .command('auth')
     .helpGroup(ACCOUNT)
     .description('Sign in to your Kinu account')
     .option('--origin <url>', 'Kinu app origin')
-    .action(wrapAction(authCommand));
+    .action(authCommand);
 
   program
     .command('whoami')
     .helpGroup(ACCOUNT)
     .description('Show which Kinu account you are signed in to')
     .option('--origin <url>', 'Kinu app origin')
-    .action(wrapAction(whoamiCommand));
+    .action(whoamiCommand);
 
   program
     .command('logout')
     .helpGroup(ACCOUNT)
     .description('Sign out and revoke this CLI session')
     .option('--origin <url>', 'Kinu app origin')
-    .action(wrapAction(logoutCommand));
+    .action(logoutCommand);
 
   program
     .command('sessions [action] [hash]')
     .helpGroup(ACCOUNT)
     .description('List or revoke CLI sessions')
     .option('--origin <url>', 'Kinu app origin')
-    .action(wrapAction(sessionsCommand));
+    .action(sessionsCommand);
 
   program
     .command('tokens [action] [name]')
@@ -126,7 +128,7 @@ export function buildProgram(): Command {
     .option('--name <name>', 'Token name for create')
     .option('--scopes <scopes>', `Comma-separated scopes: ${ACCESS_TOKEN_SCOPES.join(', ')}`)
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(tokensCommand));
+    .action(tokensCommand);
 
   llmOpts(
     program
@@ -139,20 +141,20 @@ export function buildProgram(): Command {
       .option('--origin <url>', 'Kinu app origin for first-use sign-in')
       .option('--join', 'Add an agent to the workspace in this directory. It takes the workspace mission, so it needs no name or purpose')
       .option('--no-alias-shim', 'Do not create the alias shell command'),
-  ).action(wrapAction(createCommand));
+  ).action(createCommand);
 
   program
     .command('list')
     .helpGroup(WORKSPACES)
     .description('List your workspaces')
-    .action(wrapAction(listCommand));
+    .action(listCommand);
 
   llmOpts(
     program
       .command('status <name>')
       .helpGroup(WORKSPACES)
       .description('Show a workspace\'s mission, model and evolution state'),
-  ).action(wrapAction(statusCommand));
+  ).action(statusCommand);
 
   program
     .command('workspace')
@@ -161,39 +163,39 @@ export function buildProgram(): Command {
     .command('delete <name>')
     .description('Delete a cloud workspace for good')
     .option('-y, --yes', 'Skip the confirmation prompt')
-    .action(wrapAction(workspaceDeleteCommand));
+    .action(workspaceDeleteCommand);
 
   program
     .command('alias <workspace> [alias]')
     .helpGroup(WORKSPACES)
     .description('Create a shell command that runs a workspace')
-    .action(wrapAction(aliasCommand));
+    .action(aliasCommand);
 
   program
     .command('unalias <alias>')
     .helpGroup(WORKSPACES)
     .description('Remove a workspace\'s shell command')
-    .action(wrapAction(unaliasCommand));
+    .action(unaliasCommand);
 
   program
     .command('aliases')
     .helpGroup(WORKSPACES)
     .description('List workspace shell commands')
-    .action(wrapAction(aliasesCommand));
+    .action(aliasesCommand);
 
   program
     .command('export <name>')
     .helpGroup(WORKSPACES)
     .description('Back up a workspace, local or cloud, to an archive file')
     .option('-o, --output <file>', 'Output file path')
-    .action(wrapAction(exportCommand));
+    .action(exportCommand);
 
   program
     .command('import <file>')
     .helpGroup(WORKSPACES)
-    .description('Restore a workspace archive as a local workspace')
+    .description('Restore a workspace archive as a local workspace that works in the current folder')
     .option('-n, --name <name>', 'Workspace name (default: the name recorded in the archive)')
-    .action(wrapAction(importCommand));
+    .action(importCommand);
 
   llmOpts(
     program
@@ -203,7 +205,7 @@ export function buildProgram(): Command {
       .option('--mode <mode>', 'Output mode: text, json, or rpc', 'text')
       .option('--transcript-dir <dir>', 'Where to store transcripts')
       .option('--no-transcript', 'Do not record a transcript for this run'),
-  ).action(wrapAction(runCommand));
+  ).action(runCommand);
 
   llmOpts(
     program
@@ -213,7 +215,7 @@ export function buildProgram(): Command {
       .option('--classic', 'Use the line-by-line chat instead of the full-screen TUI')
       .option('--transcript-dir <dir>', 'Where to store transcripts')
       .option('--no-transcript', 'Do not record a transcript for this chat'),
-  ).action(wrapAction(chatCommand));
+  ).action(chatCommand);
 
   llmOpts(
     program
@@ -222,7 +224,7 @@ export function buildProgram(): Command {
       .description('Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim, Marimo)')
       .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons, proposals or trials')
       .option('--transcript-dir <dir>', 'Where to store transcripts'),
-  ).action(wrapAction(acpCommand));
+  ).action(acpCommand);
 
   llmOpts(
     program
@@ -234,14 +236,14 @@ export function buildProgram(): Command {
       .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons, proposals or trials')
       .option('--transcript-dir <dir>', 'Where to store transcripts')
       .option('--no-transcript', 'Do not record a transcript for this run'),
-  ).action(wrapAction(execCommand));
+  ).action(execCommand);
 
   program
     .command('executors <name> [executor] [command...]')
     .helpGroup(RUNNING)
     .description('List a workspace\'s executors, or run a command in one')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(executorsCommand));
+    .action(executorsCommand);
 
   program
     .command('transcripts [agent]')
@@ -250,34 +252,34 @@ export function buildProgram(): Command {
     .option('--transcript-dir <dir>', 'Where transcripts are stored')
     .option('--path', 'Show transcript file paths')
     .option('--show <idOrPath>', 'Show one transcript\'s file path')
-    .action(wrapAction(transcriptsCommand));
+    .action(transcriptsCommand);
 
   program
     .command('stop <name>')
     .helpGroup(RUNNING)
     .description('Stop a cloud workspace\'s current work, or cancel a local workspace\'s background jobs')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(stopCommand));
+    .action(stopCommand);
 
   llmOpts(
     program
       .command('model <name> [spec]')
       .helpGroup(CONFIGURE)
       .description('Show or change a workspace\'s model'),
-  ).action(wrapAction(modelCommand));
+  ).action(modelCommand);
 
   program
     .command('effort <name> [level]')
     .helpGroup(CONFIGURE)
     .description('Show or change a workspace\'s reasoning effort')
-    .action(wrapAction(effortCommand));
+    .action(effortCommand);
 
   llmOpts(
     program
       .command('tools <name>')
       .helpGroup(CONFIGURE)
       .description('List the tools a workspace can use'),
-  ).action(wrapAction(toolsCommand));
+  ).action(toolsCommand);
 
   llmOpts(
     program
@@ -289,7 +291,7 @@ export function buildProgram(): Command {
       .option('--content-type <type>', 'Accepted webhook content type')
       .option('--rate-limit <n>', 'Webhook deliveries per minute')
       .option('--json', 'Print raw JSON'),
-  ).action(wrapAction(triggersCommand));
+  ).action(triggersCommand);
 
   program
     .command('webhook <name> <label>')
@@ -300,7 +302,7 @@ export function buildProgram(): Command {
     .option('--content-type <type>', 'Accepted webhook content type')
     .option('--rate-limit <n>', 'Webhook deliveries per minute')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(webhookCommand));
+    .action(webhookCommand);
 
   llmOpts(
     program
@@ -308,28 +310,28 @@ export function buildProgram(): Command {
       .helpGroup(INSPECT)
       .description('List or cancel background jobs')
       .option('--json', 'Print raw JSON'),
-  ).action(wrapAction(jobsCommand));
+  ).action(jobsCommand);
 
   program
     .command('actors <name> [actorId]')
     .helpGroup(INSPECT)
     .description('List every actor a workspace holds, or show one by id')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(actorsCommand));
+    .action(actorsCommand);
 
   program
     .command('state <name>')
     .helpGroup(INSPECT)
     .description('Show the workspace state snapshot')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(stateCommand));
+    .action(stateCommand);
 
   program
     .command('spend <name>')
     .helpGroup(INSPECT)
     .description('Show what a workspace spent, by producer and by mission')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(spendCommand));
+    .action(spendCommand);
 
   program
     .command('memory <name> [query...]')
@@ -337,7 +339,7 @@ export function buildProgram(): Command {
     .description('Read or search a workspace\'s memory')
     .option('--limit <n>', 'Search result limit')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(memoryCommand));
+    .action(memoryCommand);
 
   program
     .command('events <name>')
@@ -347,7 +349,7 @@ export function buildProgram(): Command {
     .option('--since <time>', 'Filter events after a timestamp or date')
     .option('--limit <n>', 'Event limit')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(eventsCommand));
+    .action(eventsCommand);
 
   program
     .command('timeline <name>')
@@ -355,14 +357,14 @@ export function buildProgram(): Command {
     .description('List a workspace\'s runs, evolutions and swarm searches in order')
     .option('--limit <n>', 'Timeline row limit')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(timelineCommand));
+    .action(timelineCommand);
 
   program
     .command('swarm <name> [nodeId]')
     .helpGroup(INSPECT)
     .description('Show a workspace\'s swarm search history')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(swarmCommand));
+    .action(swarmCommand);
 
   program
     .command('heads <name>')
@@ -370,7 +372,7 @@ export function buildProgram(): Command {
     .description('Show parallel reasoning branch runs')
     .option('--limit <n>', 'Run limit')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(headsCommand));
+    .action(headsCommand);
 
   program
     .command('debug <name>')
@@ -383,7 +385,7 @@ export function buildProgram(): Command {
     .option('--json', 'Print the summary as JSON instead of text')
     .option('--turn <id>', 'Write one turn\'s requests, as the model received them, instead of the whole bundle')
     .option('--actor <id>', 'With --turn: a hosted actor\'s id (default: the workspace\'s main actor)')
-    .action(wrapAction(debugCommand));
+    .action(debugCommand);
 
   program
     .command('gepa <name> [runId]')
@@ -392,7 +394,7 @@ export function buildProgram(): Command {
     .option('--run', 'Run one proposer search over the scaffold, judged on recent turns without running it')
     .option('--limit <n>', 'Run limit')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(gepaCommand));
+    .action(gepaCommand);
 
   program
     .command('quality <name>')
@@ -400,27 +402,27 @@ export function buildProgram(): Command {
     .description('Show satisfaction per day: the mean rating of the turns users answered, with 95% intervals')
     .option('--days <n>', 'Days to show (default: 30)')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(qualityCommand));
+    .action(qualityCommand);
 
   program
     .command('connect')
     .helpGroup(THIS_COMPUTER)
     .description('Connect this computer so your agents can run commands on it')
     .option('--label <name>', 'Name for this device (default: the hostname); skips the name prompt')
-    .action(wrapAction((opts: { label?: string }) => desktopCommand('connect', opts)));
+    .action((opts: { label?: string }) => desktopCommand('connect', opts));
 
   program
     .command('desktop [action]')
     .helpGroup(THIS_COMPUTER)
     .description('Connect this computer, or show its connection status and daemon logs')
     .option('--label <name>', 'Name for this device (default: the hostname); skips the name prompt')
-    .action(wrapAction(desktopCommand));
+    .action(desktopCommand);
 
   program
     .command('daemon [action] [workspace]')
     .helpGroup(THIS_COMPUTER)
     .description('Start, stop or check the local scheduler daemon, or run one pass by hand with tick')
-    .action(wrapAction(daemonCommand));
+    .action(daemonCommand);
 
   program
     .command('deploy [target] [action]')
@@ -429,13 +431,13 @@ export function buildProgram(): Command {
       + '`deploy local [start|stop|status]` on this computer')
     .option('--origin <url>', 'Kinu app origin')
     .option('--port <n>', 'Port for the local instance (default 8787)')
-    .action(wrapAction(deployCommand));
+    .action(deployCommand);
 
   program
     .command('doctor')
     .helpGroup(THIS_COMPUTER)
     .description('Check the installed Kinu CLI: paths, origin and version')
-    .action(wrapAction(doctorCommand));
+    .action(doctorCommand);
 
   program
     .command('update [target]')
@@ -445,18 +447,16 @@ export function buildProgram(): Command {
     .option('--force', 'Reinstall even when already up to date')
     // Detached startup-check child: refresh silently, leave the launcher alone.
     .addOption(new Option('--background', 'Stage and swap the CLI tree silently').hideHelp())
-    .action(wrapAction(updateCommand));
+    .action(updateCommand);
 
   program
     .command('uninstall')
     .helpGroup(THIS_COMPUTER)
     .description('Remove the installed Kinu command')
     .option('--purge', 'Also delete ~/.kinu and everything in it')
-    .action(wrapAction(uninstallCommand));
+    .action(uninstallCommand);
 
-  for (const [path, example] of COMMAND_EXAMPLES) setCommandExample(commandAt(program, path), example);
-
-  return program;
+  return settleSync(attachExamples(program));
 }
 
 /** One real invocation for each command, by the words a user types after `kinu`. */
@@ -510,27 +510,26 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['uninstall', 'kinu uninstall'],
 ];
 
-function commandAt(program: Command, path: string): Command {
-  let command = program;
+function attachExamples(program: Command): Effect.Effect<Command> {
+  return Effect.gen(function* () {
+    for (const [path, example] of COMMAND_EXAMPLES) setCommandExample(yield* commandAt(program, path), example);
 
-  for (const name of path.split(' ')) {
-    const next = command.commands.find((child) => child.name() === name);
-
-    if (next === undefined) throw new Error(`No registered command "${path}" to attach an example to`);
-    command = next;
-  }
-
-  return command;
+    return program;
+  });
 }
 
-/** The generic tuple keeps Commander's arity checks. */
-function wrapAction<Args extends readonly unknown[]>(fn: (...args: Args) => Promise<void>) {
-  return async (...args: Args) => {
-    try {
-      await fn(...args);
-    } catch (cause) {
-      printFailure({ cause });
-      process.exit(1);
+function commandAt(program: Command, path: string): Effect.Effect<Command> {
+  return Effect.gen(function* () {
+    let command = program;
+
+    for (const name of path.split(' ')) {
+      const next = command.commands.find((child) => child.name() === name);
+
+      if (next === undefined) return yield* Effect.die(new Error(`No registered command "${path}" to attach an example to`));
+      command = next;
     }
-  };
+
+    return command;
+  });
 }
+

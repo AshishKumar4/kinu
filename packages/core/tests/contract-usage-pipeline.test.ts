@@ -55,7 +55,7 @@ async function workersAIStepUsage(): Promise<Usage> {
 
   const r = await generateText({ model: provider('@cf/deepseek-ai/deepseek-v4-pro-0813'), prompt: 'hi' });
 
-  return normalizeUsage(r.usage);
+  return normalizeUsage(r.finalStep.usage);
 }
 
 async function anthropicStepUsage(): Promise<Usage> {
@@ -74,7 +74,7 @@ async function anthropicStepUsage(): Promise<Usage> {
 
   const r = await generateText({ model: provider('claude-sonnet-4-5'), prompt: 'hi' });
 
-  return normalizeUsage(r.usage);
+  return normalizeUsage(r.finalStep.usage);
 }
 
 function setup() {

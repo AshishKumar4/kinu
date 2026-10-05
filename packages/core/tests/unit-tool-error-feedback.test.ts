@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
-import type { LanguageModelV3ToolResultOutput } from '@ai-sdk/provider';
+import type { LanguageModelV4ToolResultOutput } from '@ai-sdk/provider';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { INTERRUPTED_TURN, runChat, type ChatEvent, type StepRecord } from '../src/chat';
 import { KinuError } from '../src/obs/error';
@@ -45,7 +45,7 @@ async function drive(results: readonly (Error | JsonValue)[], history: ModelMess
     measured, toolMessages, calls, events };
 }
 
-const cases: Array<{ label: string; error: Error; expected: LanguageModelV3ToolResultOutput }> = [
+const cases: Array<{ label: string; error: Error; expected: LanguageModelV4ToolResultOutput }> = [
   { label: 'Kinu class', error: new KinuError('denied', 'blocked', { cause: new Error('underlying evidence') }),
     expected: { type: 'error-json', value: { reason: 'denied', error: 'blocked: underlying evidence' } } },
   { label: 'file verdict', error: new FileRefusalError('unread', 'read this file first'),

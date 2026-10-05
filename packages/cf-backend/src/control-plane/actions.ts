@@ -4,7 +4,8 @@
  * Every action names an account, since `OrchestratorAgent` is addressed by workspace name globally.
  * Arms return `ActionOutcome` and never throw for a refusal, so every attempt is audited.
  */
-import { renderThrownChain, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
+import { Cause, Effect, Result } from 'effect';
+import { renderThrownChain, settle, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
 import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
@@ -167,123 +168,13 @@ export interface ActionEnv<Id> extends ControlPlaneEnv<Id, IndexFeedSink> {
  * Resolves ownership first via `claimOwnedWorkspace`, proving the named account owns the named
  * workspace before any RPC reaches it; returns the same stub resolution `routeAgentRequest` uses.
  */
-export async function runControlAction<Id>(
+export function runControlAction<Id>(
   env: ActionEnv<Id>,
   action: ControlAction,
 ): Promise<ActionOutcome> {
-  try {
-    if (action.action === 'workspace.remove') {
-      // Checked before waking any Durable Object.
-      if (action.confirm !== action.workspace) {
-        return { outcome: 'denied', detail: 'the typed name did not match', reason: 'name_mismatch' };
-      }
+  return settle(Effect.catchCause(Effect.promise(() => controlAction(env, action)), (failed) => Effect.sync((): ActionOutcome => {
+    const cause = Cause.squash(failed);
 
-      // Does not wake-and-claim: `removeWorkspace`/`destroyAgent` check ownership inside the call, and
-      // claiming would run a broken workspace's scaffold bootstrap.
-      const owner = await ownerCaller(env);
-      const user = env.UserDO.get(env.UserDO.idFromName(action.userId));
-      await user.removeWorkspace(owner, action.workspace, action.userId);
-      // Only after the registry says it is gone; a failed teardown must not leave a tombstone.
-      await unindexWorkspace(env, { userId: action.userId, name: action.workspace });
-
-      return {
-        outcome: 'ok', detail: `removed ${action.workspace}`, reason: 'ok', affected: 1,
-      };
-    }
-
-    const owned = await claimOwnedWorkspace(env, action.userId, action.workspace);
-
-    if (!owned.ok) return notOwned(owned.error);
-    const agent = owned.agent;
-
-    switch (action.action) {
-      case 'job.cancel': {
-        const { ok } = await agent.cancelBackgroundJob(action.jobId);
-
-        return ok
-          ? { outcome: 'ok', detail: `cancelled ${action.jobId}`, reason: 'ok', affected: 1 }
-          : { outcome: 'denied', detail: 'that job is not running', reason: 'not_running' };
-      }
-
-      case 'job.retry': {
-        const result = await agent.retryBackgroundJob(action.jobId);
-
-        // Workspace prose: reaches the durable row, never the dataset.
-        return result.ok
-          ? {
-            outcome: 'ok', detail: `retrying ${result.jobId ?? action.jobId}`,
-            reason: 'ok', affected: 1,
-          }
-          : {
-            outcome: 'denied', detail: result.error ?? 'that job could not be retried',
-            reason: 'not_retriable',
-          };
-      }
-
-      case 'job.dismiss': {
-        const { ok } = await agent.dismissBackgroundJob(action.jobId);
-
-        return ok
-          ? { outcome: 'ok', detail: `dismissed ${action.jobId}`, reason: 'ok', affected: 1 }
-          : { outcome: 'denied', detail: 'no such job', reason: 'no_such_job' };
-      }
-
-      case 'jobs.clear': {
-        const { ok } = await agent.clearBackgroundJobs();
-
-        return ok
-          ? { outcome: 'ok', detail: 'cleared settled jobs', reason: 'ok' }
-          : { outcome: 'denied', detail: 'nothing to clear', reason: 'nothing_to_clear' };
-      }
-
-      case 'approvals.decide': {
-        const { decided } = await agent.decideDeferredApprovals(action.ids, action.decision);
-
-        return decided.length > 0
-          ? {
-            outcome: 'ok',
-            detail: `${action.decision} ${String(decided.length)} of ${String(action.ids.length)}`,
-            reason: 'ok',
-            affected: decided.length,
-          }
-          : {
-            outcome: 'denied', detail: 'none of those approvals are still pending',
-            reason: 'none_pending', affected: 0,
-          };
-      }
-
-      case 'workspace.turn_read': {
-        const read = await agent.supportReadTurn({
-          turnId: action.turnId, reason: action.reason,
-          ...(action.actor !== undefined && { actor: action.actor }),
-          ...(action.at !== undefined && { at: action.at }),
-        });
-
-        return {
-          outcome: 'ok', detail: `read turn ${action.turnId} for ${action.reason}`, reason: 'ok',
-          result: decodeJsonValue({ value: read }),
-        };
-      }
-
-      case 'shell_grants.revoke': {
-        // Revoke exactly the grants read first: a guessed set would silently no-op yet audit as revoked.
-        const { grants } = await agent.getShellApprovalGrants();
-
-        if (grants.length === 0) {
-          return { outcome: 'denied', detail: 'no standing grants', reason: 'no_grants' };
-        }
-
-        const after = await agent.revokeShellApprovalGrants(grants);
-
-        return {
-          outcome: 'ok',
-          detail: `revoked ${String(grants.length)}, ${String(after.grants.length)} remain`,
-          reason: 'ok',
-          affected: grants.length,
-        };
-      }
-    }
-  } catch (cause) {
     // The chain is the durable row's detail; the CODE is what the dataset gets.
     return {
       outcome: 'failed',
@@ -291,6 +182,120 @@ export async function runControlAction<Id>(
       reason: 'threw',
       code: toKinuError({ doing: 'running an admin control action', cause, otherwise: 'unavailable' }).code,
     };
+  })));
+}
+
+async function controlAction<Id>(env: ActionEnv<Id>, action: ControlAction): Promise<ActionOutcome> {
+  if (action.action === 'workspace.remove') {
+    // Checked before waking any Durable Object.
+    if (action.confirm !== action.workspace) {
+      return { outcome: 'denied', detail: 'the typed name did not match', reason: 'name_mismatch' };
+    }
+
+    // Does not wake-and-claim: `removeWorkspace`/`destroyAgent` check ownership inside the call, and
+    // claiming would run a broken workspace's scaffold bootstrap.
+    const owner = await ownerCaller(env);
+    const user = env.UserDO.get(env.UserDO.idFromName(action.userId));
+    await user.removeWorkspace(owner, action.workspace, action.userId);
+    // Only after the registry says it is gone; a failed teardown must not leave a tombstone.
+    await unindexWorkspace(env, { userId: action.userId, name: action.workspace });
+
+    return {
+      outcome: 'ok', detail: `removed ${action.workspace}`, reason: 'ok', affected: 1,
+    };
+  }
+
+  const owned = await claimOwnedWorkspace(env, action.userId, action.workspace);
+
+  if (Result.isFailure(owned)) return notOwned(owned.failure.error);
+  const agent = owned.success;
+
+  switch (action.action) {
+    case 'job.cancel': {
+      const { ok } = await agent.cancelBackgroundJob(action.jobId);
+
+      return ok
+        ? { outcome: 'ok', detail: `cancelled ${action.jobId}`, reason: 'ok', affected: 1 }
+        : { outcome: 'denied', detail: 'that job is not running', reason: 'not_running' };
+    }
+
+    case 'job.retry': {
+      const result = await agent.retryBackgroundJob(action.jobId);
+
+      // Workspace prose: reaches the durable row, never the dataset.
+      return result.ok
+        ? {
+          outcome: 'ok', detail: `retrying ${result.jobId ?? action.jobId}`,
+          reason: 'ok', affected: 1,
+        }
+        : {
+          outcome: 'denied', detail: result.error ?? 'that job could not be retried',
+          reason: 'not_retriable',
+        };
+    }
+
+    case 'job.dismiss': {
+      const { ok } = await agent.dismissBackgroundJob(action.jobId);
+
+      return ok
+        ? { outcome: 'ok', detail: `dismissed ${action.jobId}`, reason: 'ok', affected: 1 }
+        : { outcome: 'denied', detail: 'no such job', reason: 'no_such_job' };
+    }
+
+    case 'jobs.clear': {
+      const { ok } = await agent.clearBackgroundJobs();
+
+      return ok
+        ? { outcome: 'ok', detail: 'cleared settled jobs', reason: 'ok' }
+        : { outcome: 'denied', detail: 'nothing to clear', reason: 'nothing_to_clear' };
+    }
+
+    case 'approvals.decide': {
+      const { decided } = await agent.decideDeferredApprovals(action.ids, action.decision);
+
+      return decided.length > 0
+        ? {
+          outcome: 'ok',
+          detail: `${action.decision} ${String(decided.length)} of ${String(action.ids.length)}`,
+          reason: 'ok',
+          affected: decided.length,
+        }
+        : {
+          outcome: 'denied', detail: 'none of those approvals are still pending',
+          reason: 'none_pending', affected: 0,
+        };
+    }
+
+    case 'workspace.turn_read': {
+      const read = await agent.supportReadTurn({
+        turnId: action.turnId, reason: action.reason,
+        ...(action.actor !== undefined && { actor: action.actor }),
+        ...(action.at !== undefined && { at: action.at }),
+      });
+
+      return {
+        outcome: 'ok', detail: `read turn ${action.turnId} for ${action.reason}`, reason: 'ok',
+        result: decodeJsonValue({ value: read }),
+      };
+    }
+
+    case 'shell_grants.revoke': {
+      // Revoke exactly the grants read first: a guessed set would silently no-op yet audit as revoked.
+      const { grants } = await agent.getShellApprovalGrants();
+
+      if (grants.length === 0) {
+        return { outcome: 'denied', detail: 'no standing grants', reason: 'no_grants' };
+      }
+
+      const after = await agent.revokeShellApprovalGrants(grants);
+
+      return {
+        outcome: 'ok',
+        detail: `revoked ${String(grants.length)}, ${String(after.grants.length)} remain`,
+        reason: 'ok',
+        affected: grants.length,
+      };
+    }
   }
 }
 

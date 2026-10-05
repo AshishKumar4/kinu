@@ -4,7 +4,8 @@ import { describe, expect, test } from 'bun:test';
 import { APICallError, generateText, jsonSchema, streamText, tool, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import {
-  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, type AuthRequest, type JsonObject, type ModelCallDeps,
+  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, runChat, serverCompactor,
+  type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { KinuError } from '../src/obs/index';
 
@@ -119,7 +120,7 @@ function failureOf(pending: PromiseLike<unknown>): PromiseLike<{ readonly error:
 
 /** How a stream ended: the error part it carried, or the error its reader threw. */
 async function streamFailure(model: LanguageModel): Promise<{ readonly error: unknown }> {
-  const reader = streamText({ model, prompt: 'hello', maxRetries: 0 }).fullStream.getReader();
+  const reader = streamText({ model, prompt: 'hello', maxRetries: 0 }).stream.getReader();
 
   for (;;) {
     const next = await reader.read().then((read) => ({ read }), (...rejection: [unknown]) => ({ thrown: rejection[0] }));
@@ -132,6 +133,32 @@ async function streamFailure(model: LanguageModel): Promise<{ readonly error: un
   }
 }
 
+// preview-limitations (read 2026-10-05) requires store:false, forbids previous_response_id over HTTP, and says nothing of
+// compaction: OpenAI's server-side compaction is unproven on this route, so it stays off.
+describe('server-side compaction on the plan route', () => {
+  test('a GPT-5 turn asks for none, and a direct-route compaction item is not replayed here', async () => {
+    const api = openai(answered());
+    const model = createChatGptProvider().createModel('gpt-5.5', signedIn(api.fetch).deps);
+
+    for await (const _ of runChat({
+      model, modelSpec: 'chatgpt/gpt-5.5', modelContext: { id: 'chatgpt/gpt-5.5', contextWindow: 400_000 },
+      system: 'You are Kinu.', tools: {},
+      history: [
+        { role: 'user', content: 'older requirement' },
+        { role: 'assistant', content: [{ type: 'custom', kind: 'openai.compaction', providerOptions: { openai: { type: 'compaction', itemId: 'cmp_1', encryptedContent: 'ENCRYPTED' } } }] },
+        { role: 'user', content: 'next ask' },
+      ],
+    })) { /* drain */ }
+
+    const body = api.sent[0]?.body ?? {};
+
+    expect(serverCompactor('chatgpt/gpt-5.5')).toBeNull();
+    expect(body.context_management).toBeUndefined();
+    expect(JSON.stringify(body.input)).not.toContain('ENCRYPTED');
+    expect(JSON.stringify(body.input)).toContain('older requirement');
+  });
+});
+
 describe('the request the preview accepts', () => {
   test('streams statelessly with developer instructions, namespaced tools and no refused field', async () => {
     const api = openai(answered());
@@ -141,7 +168,7 @@ describe('the request the preview accepts', () => {
     const result = streamText({
       model,
       maxRetries: 0,
-      system: 'You are Kinu.',
+      instructions: 'You are Kinu.',
       temperature: 0.2,
       topP: 0.9,
       maxOutputTokens: 512,
@@ -178,7 +205,7 @@ describe('the request the preview accepts', () => {
     expect(input.find((item) => item.type === 'function_call')).toMatchObject({ call_id: 'call_1', name: 'read_file', namespace: 'functions' });
     expect(body.tools).toEqual([{
       type: 'namespace', name: 'functions', description: '',
-      tools: [{ type: 'function', name: 'read_file', description: 'Read a file.', parameters: { type: 'object', properties: { path: { type: 'string' } } } }],
+      tools: [{ type: 'function', name: 'read_file', description: 'Read a file.', parameters: { type: 'object', properties: { path: { type: 'string' } } }, strict: false }],
     }]);
   });
 

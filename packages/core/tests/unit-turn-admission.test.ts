@@ -396,7 +396,7 @@ describe('provider count support', () => {
 
     const answer = await countRequestInputTokens(createAnthropicProvider(), 'claude-opus-4-7', deps, {
       system: 'SYS',
-      messages: [{ role: 'user', content: [{ type: 'image', image: 'AAAA' }] }],
+      messages: [{ role: 'user', content: [{ type: 'file', data: 'AAAA', mediaType: 'image' }] }],
     });
 
     expect(answer.kind).toBe('unsupported');

@@ -1,4 +1,6 @@
-import { isVfsErrorCode, syscallError, toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
+import { isVfsError, isVfsErrorCode, syscallError, toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 /** Node's error text from another plane or isolate as a VfsError on `path`; unknown codes stay unclassified. */
 export function vfsErrorFromText(input: { message: string; path: string | undefined; cause?: unknown }): VfsError | null {
@@ -22,10 +24,8 @@ export function withVfsErrorHint(error: VfsError, hint: string): VfsError {
 }
 
 /** The file-plane path, not the engine's storage key. */
-export async function atVfsPath<T>(absolute: string, syscall: string, call: () => T | Promise<T>): Promise<T> {
-  try {
-    return await call();
-  } catch (error) {
-    throw toVfsError(error, syscall, absolute);
-  }
+export function atVfsPath<T>(absolute: string, syscall: string, call: () => T | Promise<T>): Promise<T> {
+  return settle(Effect.tryPromise({ try: async () => call(), catch: (error) => toVfsError(error, syscall, absolute) }).pipe(
+    Effect.catch((failure) => (isVfsError(failure) ? Effect.fail(failure) : Effect.die(failure))),
+  ));
 }

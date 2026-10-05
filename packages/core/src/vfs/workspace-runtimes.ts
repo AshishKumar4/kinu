@@ -5,11 +5,9 @@
  */
 
 import { textSink } from '@nimbus-sh/core/_shared/bytes.js';
-import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { ShellExecuteFn } from '@nimbus-sh/core/substrate/lifo/commands/system/npm.js';
 import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import * as v from 'valibot';
-import type { ExecutorCapability } from '../execution/types';
 import { KinuError, refusalOf, renderCauseChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 
@@ -79,23 +77,6 @@ export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefin
     // Distinct from a catalog that parsed and named no bins.
     return { unreadable: toKinuError({ doing: 'reading the session box runtime catalog', cause, otherwise: 'io' }) };
   }
-}
-
-/**
- * Capabilities a workspace holding `runtimes` may declare; reads the same list that decides registration,
- * so the declaration cannot drift. `npm` is always registered.
- */
-export function workspaceToolchainCapabilities(
-  runtimes: readonly RuntimePackage[],
-): readonly ExecutorCapability[] {
-  const capabilities: ExecutorCapability[] = ['npm'];
-
-  // `cpython` is the manifest name; `python` is the catalog name users type.
-  if (runtimes.some((pkg) => pkg.manifest.name === 'cpython' || pkg.manifest.name === 'python')) {
-    capabilities.push('python');
-  }
-
-  return capabilities;
 }
 
 /** Registers npm and npx on the workspace's shell; nothing is fetched until a subcommand runs. */

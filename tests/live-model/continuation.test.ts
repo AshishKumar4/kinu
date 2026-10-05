@@ -29,7 +29,7 @@ import {
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
 import {
   EVAL_BACKEND_ENV, liveModelCallSink, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
-  reportLiveModelSpend, resolveEvalBackend, scratchPath, UNCONFIGURED_LLM,
+  reportLiveModelSpend, resolveEvalBackend, scratchDir, scratchPath, UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
 
 const BACKEND = resolveEvalBackend();
@@ -123,7 +123,7 @@ const db = new Database(scratchPath('continuation', 'agent.db'));
 
 initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
-const rt = createCLIRuntime(db, { llm: LLM });
+const rt = createCLIRuntime(db, { llm: LLM, cwd: scratchDir('continuation-work') });
 
 afterAll(() => {
   if (TARGET) {

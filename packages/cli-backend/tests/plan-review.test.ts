@@ -2,7 +2,7 @@
 // and a build turn waiting for the owner's verdict. Asserted only through the session's public surface.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scratchPath, scriptedTurnModel } from '@kinu.run/test-utils';
+import { scratchPath, scriptedTurnModel, scratchDir } from '@kinu.run/test-utils';
 import { CHAT_SESSION_ID, initWorkspaceSchema, type JsonObject, type LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -62,7 +62,7 @@ function scriptedSteps(steps: readonly Step[]) {
 function session(steps: readonly Step[]) {
   const db = new Database(scratchPath('local-plan-review', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   const events: SessionEvent[] = [];
   const { model, taken } = scriptedSteps(steps);
 

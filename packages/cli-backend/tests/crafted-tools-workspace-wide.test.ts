@@ -16,7 +16,7 @@ describe('a crafted tool belongs to the workspace', () => {
   test("a tool main crafted is callable from a swarm node's eval, and main's score retires it there too", async () => {
     const db = new Database(scratchPath('crafted-workspace-wide', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
     rt.actor.config.setLearning(false);
 

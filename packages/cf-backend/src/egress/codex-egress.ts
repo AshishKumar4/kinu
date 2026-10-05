@@ -26,11 +26,11 @@ export class CodexEgress extends DurableObject<{ CodexEgress: Pick<DurableObject
 
   async forward(ownerUserId: string, callId: string, request: Request): Promise<Response> {
     if (!this.env.CodexEgress.idFromName(ownerUserId).equals(this.ctx.id)) {
-      throw new KinuError('denied', 'a Codex egress container serves only the user it is named for');
+      return settle(Effect.fail(new KinuError('denied', 'a Codex egress container serves only the user it is named for')));
     }
 
     if (!codexEgressAllowed({ method: request.method, url: request.url })) {
-      throw new KinuError('denied', `the Codex egress route does not carry ${request.method} ${new URL(request.url).pathname}`);
+      return settle(Effect.fail(new KinuError('denied', `the Codex egress route does not carry ${request.method} ${new URL(request.url).pathname}`)));
     }
 
     const headers = new Headers(request.headers);

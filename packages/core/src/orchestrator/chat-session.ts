@@ -26,6 +26,7 @@ import { runOperationProfile } from '../profiles/operation';
 import type { ResolvedTurnProfile } from '../profiles';
 import type { CacheWarmingLane } from '../providers/cache-warming';
 import { DEFAULT_CACHE_RETENTION } from '../providers/types';
+import { serverCompactor, SERVER_COMPACTION_MIN_TOKENS } from '../providers/server-compaction';
 import type { ToolOutcome } from '../tools/outcome';
 import { OVERFLOW_RETRY_EVENT } from '../turn-failure';
 import type {
@@ -210,7 +211,15 @@ async function answerMetadata(
 export interface ComposedRequest {
   readonly execution: Omit<ActorExecutionInput, 'task'>;
   readonly profile: ResolvedTurnProfile;
+  /** What the conversation's compaction state is kept under. */
+  readonly sessionKey: string;
 }
+
+/**
+ * What `/compact` did: folded the conversation into Better Compact's summary; armed the next request to ask a model
+ * that compacts server-side to; or nothing, for a conversation under what that provider compacts.
+ */
+export type CompactOutcome = 'folded' | 'armed' | 'nothing';
 
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
@@ -609,18 +618,14 @@ export class ChatSession {
 
   /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
   async revertTo(entryId: string): Promise<void> {
-    await this.actorSession.revertConversation(this.sessionId, entryId, () => {
-      if (this.turnInFlight()) throw new KinuError('denied', REVERT_NEEDS_IDLE);
-    });
+    await this.actorSession.revertConversation(this.sessionId, entryId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void);
     this.emit({ type: 'history-reverted', entryId });
     await this.flushEvents();
   }
 
   /** Resolves once the emptied request is measured, with why not if the measure failed; the clear itself stands. */
   async clear(): Promise<KinuError | null> {
-    await this.actorSession.clearConversation(this.sessionId, () => {
-      if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
-    });
+    await this.actorSession.clearConversation(this.sessionId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE)) : Effect.void);
 
     return this.measureCleared();
   }
@@ -646,9 +651,9 @@ export class ChatSession {
   }
 
   /** A failed fold leaves the conversation as it was and arms nothing; a turn sent meanwhile waits. */
-  compact(): Promise<void> {
+  compact(): Promise<CompactOutcome> {
     return this.revise(() => settleEffect(Effect.result(this.fold())))
-      .then((outcome) => settleEffect(Result.isSuccess(outcome) ? Effect.void : Effect.fail(outcome.failure)));
+      .then((outcome) => settleEffect(Result.isSuccess(outcome) ? Effect.succeed(outcome.success) : Effect.fail(outcome.failure)));
   }
 
   /** One revision at a time; a turn waits for the one in flight, so its own measure is the newer. `run` settles its own
@@ -665,36 +670,65 @@ export class ChatSession {
     });
   }
 
-  private fold(): Effect.Effect<void, KinuError> {
+  /** A model that compacts server-side folds on its provider, so the next request is armed to ask it to. */
+  private fold(): Effect.Effect<CompactOutcome, KinuError> {
     return this.pumpActive || this.queue.length > 0
       ? Effect.fail(new KinuError('denied', COMPACT_NEEDS_IDLE))
       : attempt(
         { doing: 'folding the conversation into a summary', otherwise: 'unavailable' },
-        () => this.measureNextRequest({ counted: true, trigger: 'user' }),
+        async (): Promise<CompactOutcome> => {
+          const { measured, chat, sessionKey } = await this.measureNextRequest({ counted: true, trigger: 'user' });
+
+          if (serverCompactor(chat.modelSpec ?? chat.modelContext?.id) === null) return 'folded';
+
+          if (measured === null || measured.tokens < SERVER_COMPACTION_MIN_TOKENS) return 'nothing';
+          this.compactionState.armCompaction(sessionKey);
+
+          return 'armed';
+        },
       );
   }
 
-  /** Uncounted, on an empty conversation, so it folds nothing. */
-  measureSessionStart(): void {
-    const { provider, gate } = this.eventRecorder.readContextMeasures();
+  /** Register before admitting input; a one-shot opening only waits for its restored history. */
+  measureSessionStart(options: { readonly restored?: Promise<unknown>; readonly measure?: boolean } = {}): void {
+    const { restored = Promise.resolve(), measure = true } = options;
 
-    if (provider === null && gate === null && this.actorSession.history.length === 0) this.reviseContext({ counted: false });
+    this.actorSession.orchestrator.track(this.revise(() => settleEffect(Effect.gen({ self: this }, function* () {
+      const history = yield* Effect.result(attempt({ doing: 'restoring working history', otherwise: 'io' }, () => restored));
+
+      if (Result.isFailure(history)) {
+        diagnostics.failure('orchestrator.detached_work_failed', history.failure, { work: 'restoring working history' });
+
+        return;
+      }
+
+      if (!measure) return;
+      const { provider, gate } = this.eventRecorder.readContextMeasures();
+
+      if (provider === null && gate === null && this.actorSession.history.length === 0) yield* this.revisionMeasure({ counted: false });
+    }))), 'measuring the start-up context');
   }
 
   measureContextRevision(options: { readonly counted: boolean }): Promise<void> {
-    return settleEffect(this.pumpActive || this.queue.length > 0 ? Effect.void : attempt(
-      { doing: 'measuring the next request after the context changed', otherwise: 'unavailable' },
-      () => this.measureNextRequest({ ...options, trigger: 'auto' }),
-    ).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('context.revision_measure_failed', failure); }))));
+    return settleEffect(this.pumpActive || this.queue.length > 0 ? Effect.void : this.revisionMeasure(options));
   }
 
-  private async measureNextRequest(options: { readonly counted: boolean; readonly trigger: CompactionTrigger }): Promise<void> {
-    const { execution, profile } = await this.ports.composeRequest();
+  private revisionMeasure(options: { readonly counted: boolean }): Effect.Effect<void> {
+    return attempt(
+      { doing: 'measuring the next request after the context changed', otherwise: 'unavailable' },
+      () => this.measureNextRequest({ ...options, trigger: 'auto' }),
+    ).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('context.revision_measure_failed', failure); })));
+  }
+
+  private async measureNextRequest(options: { readonly counted: boolean; readonly trigger: CompactionTrigger }) {
+    const { execution, profile, sessionKey } = await this.ports.composeRequest();
     const { countInputTokens, ...uncounted } = execution.chat;
     const counted = options.counted && countInputTokens !== undefined ? { ...uncounted, countInputTokens } : uncounted;
     const measured = await this.actorSession.measureNextRequest({ ...execution, chat: { ...counted, transformTrigger: options.trigger } }, profile);
 
     if (measured !== null) this.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'context_admitted', ...measured });
+
+    return { measured, chat: execution.chat, sessionKey };
   }
 
   /** Bypasses the debounce, for a batch tick that ends the session right after. Interactive sessions keep the debounced path. */

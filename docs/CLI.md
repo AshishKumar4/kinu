@@ -35,7 +35,7 @@ kinu <command> [options]
 | [`kinu unalias <alias>`](#kinu-unalias-alias) | Remove a workspace's shell command |
 | [`kinu aliases`](#kinu-aliases) | List workspace shell commands |
 | [`kinu export <name>`](#kinu-export-name) | Back up a workspace, local or cloud, to an archive file |
-| [`kinu import <file>`](#kinu-import-file) | Restore a workspace archive as a local workspace |
+| [`kinu import <file>`](#kinu-import-file) | Restore a workspace archive as a local workspace that works in the current folder |
 
 ### Running
 
@@ -278,7 +278,7 @@ kinu export jarvis -o jarvis.kinu.jsonl
 
 ### kinu import <file>
 
-Restore a workspace archive as a local workspace.
+Restore a workspace archive as a local workspace that works in the current folder.
 
 | Option | What it does |
 | --- | --- |

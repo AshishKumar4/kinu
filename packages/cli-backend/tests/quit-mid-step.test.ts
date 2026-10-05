@@ -5,7 +5,7 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
-import { scratchPath } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir } from '@kinu.run/test-utils';
 import type { LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -43,7 +43,7 @@ function answer(): ReadableStream<LanguageModelV2StreamPart> {
 test('a turn whose slow first call was cut by two quits is resumed and answers', async () => {
   const db = new Database(scratchPath('quit-mid-step', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   let calls = 0;
 
   const model = new TestLanguageModelV2({

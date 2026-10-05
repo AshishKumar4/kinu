@@ -2,7 +2,6 @@ import {
   agentDbPath,
   listAgentDirs,
   listConfiguredAgentRefs,
-  listUnplacedAgentNames,
   readWorkspaceDisplayName,
   requireAuthConfig,
   updateConfigFile,
@@ -21,7 +20,7 @@ export interface ListedAgent {
   readError?: string;
   localName?: string;
   cloudName?: string;
-  /** Unplaced agents carry neither this nor `workspaceId`. */
+  /** The folder a local agent's ref records; cloud rows have none. */
   cwd?: string;
   /** Peers share the pair `{cwd, workspaceId}`. */
   workspaceId?: string;
@@ -36,8 +35,6 @@ interface AgentWorkspaceGroup<T extends ListedAgent = ListedAgent> {
 interface GroupedAgentWorkspaces<T extends ListedAgent = ListedAgent> {
   readonly projectRoot: string;
   readonly workspaces: readonly AgentWorkspaceGroup<T>[];
-  /** Local agents no ref places in any project (a `~/.kinu/<name>` directory). */
-  readonly unplaced: readonly T[];
   readonly remote: readonly T[];
 }
 
@@ -53,23 +50,20 @@ function workspaceIdForRoot(root: string): string {
   return candidate === '' ? 'workspace' : candidate;
 }
 
-/** `'unplaced'` for a local agent no ref places, `null` for cloud, else the peers' `{cwd, workspaceId}` pair. */
+/** `null` for cloud, else the peers' `{cwd, workspaceId}` pair. */
 export function agentWorkspaceKey(agent: ListedAgent, projectRoot: string): string | null {
   if (agent.mode === 'cloud') return null;
-
-  if (agent.cwd === undefined && agent.workspaceId === undefined) return 'unplaced';
   const cwd = agent.cwd ?? projectRoot;
 
   return `${cwd}\u0000${agent.workspaceId ?? workspaceIdForRoot(cwd)}`;
 }
 
-/** Current project's workspaces first, then other projects, unplaced, cloud. Rows keep their order in a group. */
+/** Current project's workspaces first, then other projects, then cloud. Rows keep their order in a group. */
 export function groupAgentWorkspaces<T extends ListedAgent>(
   agents: readonly T[],
   projectRoot: string,
 ): GroupedAgentWorkspaces<T> {
   const groups = new Map<string, { cwd: string; workspaceId: string; agents: T[] }>();
-  const unplaced: T[] = [];
   const remote: T[] = [];
 
   for (const agent of agents) {
@@ -77,11 +71,6 @@ export function groupAgentWorkspaces<T extends ListedAgent>(
 
     if (key === null) {
       remote.push(agent);
-      continue;
-    }
-
-    if (key === 'unplaced') {
-      unplaced.push(agent);
       continue;
     }
 
@@ -94,7 +83,7 @@ export function groupAgentWorkspaces<T extends ListedAgent>(
   const ordered = [...groups.values()].sort((left, right) =>
     Number(right.cwd === projectRoot) - Number(left.cwd === projectRoot));
 
-  return { projectRoot, workspaces: ordered, unplaced, remote };
+  return { projectRoot, workspaces: ordered, remote };
 }
 
 /** The slug is the address `kinu chat <name>` takes, never the title shown. */
@@ -134,7 +123,7 @@ function localRefsByDirName(refs: readonly KinuAgentConfig[]): Map<string, KinuA
 
 /** The one roster `kinu list`, `kinu transcripts` and the chat picker all read. */
 export function listLocalAgentNames(cwd = process.cwd()): string[] {
-  return [...new Set([...listAgentDirs(cwd), ...listUnplacedAgentNames()])];
+  return listAgentDirs(cwd);
 }
 
 /** A cloud ref sharing a local agent's name stays listed: they are different workspaces. */

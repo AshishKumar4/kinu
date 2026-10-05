@@ -55,7 +55,7 @@ describe('createLocalModelResolver', () => {
 
     const llm = { name: 'workers-ai', baseURL: server.url.toString(), headers: { Authorization: 'Bearer test' }, model: '@cf/test/session-retries' };
     const db = new Database(scratchPath('session-retries', 'agent.db'));
-    const rt = createCLIRuntime(db, { llm });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm });
     let session: LocalAgentSession | undefined;
 
     try {
@@ -216,6 +216,7 @@ describe('createLocalModelResolver', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
     const rt = createCLIRuntime(db, {
+      cwd: scratchDir('workspace-folder'),
       llm: { name: 'workers-ai', baseURL: `http://127.0.0.1:${server.port}/v1`, headers: { Authorization: 'Bearer test' }, model: '@cf/test/model' },
     });
 
@@ -249,6 +250,7 @@ describe('createLocalModelResolver', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
     const rt = createCLIRuntime(db, {
+      cwd: scratchDir('workspace-folder'),
       llm: { name: 'workers-ai', baseURL: `http://127.0.0.1:${server.port}/v1`, headers: { Authorization: 'Bearer test' }, model: '@cf/test/model' },
     });
 

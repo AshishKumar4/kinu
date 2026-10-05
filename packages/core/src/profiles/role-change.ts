@@ -1,4 +1,6 @@
 // Role changes land at the next turn boundary; policy per agent: allow, approval (agent widening refused), locked.
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { DEFAULT_ROLE_ID, isValidRoleId } from '../types/profile';
 import {
   effectiveRoleCatalog, validateProfileCatalogEnvelope,
@@ -133,9 +135,11 @@ export function changeRoleAsOwner(input: {
   to: RoleId;
   active: string;
 }) {
-  const changed = changeActiveRole({ config: input.config, envelope: input.envelope, to: input.to, actor: 'user' });
+  return settleSync(Effect.gen(function* () {
+    const changed = changeActiveRole({ config: input.config, envelope: input.envelope, to: input.to, actor: 'user' });
 
-  if (changed.kind !== 'applied') throw new Error(roleChangeOutcomeText(input.to, changed, input.active));
+    if (changed.kind !== 'applied') return yield* Effect.die(new Error(roleChangeOutcomeText(input.to, changed, input.active)));
 
-  return { role: changed.to };
+    return { role: changed.to };
+  }));
 }

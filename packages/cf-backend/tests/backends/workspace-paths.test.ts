@@ -33,7 +33,7 @@ async function publicPlane(name: 'cf' | 'cli') {
         await files.writeFile(path, new TextEncoder().encode(text));
       },
       // The own home is the Nimbus tree's, and a relative path starts there.
-      home: '/home/main', workdir: '/home/main', legacyHomes: ['/home/user'],
+      home: '/home/main', workdir: '/home/main',
       hostFile: null,
     };
   }
@@ -62,7 +62,7 @@ async function publicPlane(name: 'cf' | 'cli') {
     shell: present(rt.shell, 'the local shell'),
     write: async (path: string, text: string) => { await rt.storage.vfs.writeFile(path, new TextEncoder().encode(text)); },
     end: () => db.close(),
-    home: join(space, 'home', 'main'), workdir: cwd, legacyHomes: [],
+    home: join(space, 'home', 'main'), workdir: cwd,
     hostFile: (path: string) => readFileSync(path, 'utf8'),
   };
 }
@@ -77,7 +77,7 @@ for (const name of testBackends()) {
 
         for (const path of [
           '/home/main/notes/item.txt', '/home//main/notes/item.txt', '/home/main/notes/./item.txt', '/home/main/notes/item.txt/',
-          `${plane.home}/notes/item.txt`, ...plane.legacyHomes.map((home) => `${home}/notes/item.txt`),
+          `${plane.home}/notes/item.txt`,
         ]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
@@ -129,6 +129,26 @@ for (const name of testBackends()) {
         expect(await plane.file({ action: 'read', path: written.reference })).toContain('one');
 
         if (name === 'cf') expect(await plane.file({ action: 'read', path: '~/notes/ref.txt' })).toContain('one');
+      } finally {
+        plane.end?.();
+      }
+    });
+
+    // 2026-10-04: vfs:// is the one tree an agent sees, and every other prefix is an alias for a subtree of it.
+    test('a prefix and its vfs:// long form read the same file, and the file tool prints the shorter', async () => {
+      const plane = await publicPlane(name);
+
+      try {
+        const written = v.parse(v.object({ reference: v.string() }), await plane.file({ action: 'write', path: 'notes/alias.txt', content: 'one' }));
+
+        // The cloud's `local://` is its own files, `vfs://` itself; a local workspace's is its folder, `vfs://local`.
+        const forms = name === 'cf'
+          ? ['vfs://home/main/notes/alias.txt', 'local://home/main/notes/alias.txt']
+          : ['local://notes/alias.txt', 'vfs://local/notes/alias.txt'];
+
+        expect(written.reference).toBe(forms[0]);
+
+        for (const form of forms) expect(await plane.file({ action: 'read', path: form })).toContain('one');
       } finally {
         plane.end?.();
       }

@@ -14,7 +14,7 @@ import {
 } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { readTranscriptRows, scratchPath } from '@kinu.run/test-utils';
+import { readTranscriptRows, scratchPath, scratchDir } from '@kinu.run/test-utils';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 
@@ -48,7 +48,7 @@ function fakeModel(answer: string): LanguageModel {
 async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean } = {}) {
   const db = new Database(scratchPath('scaffold-turn', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   // What `kinu create` provisions (workspace-birth.ts), minus the shadow-rollout ledger,
   // which LocalAgentSession must provision itself.
   initScaffoldTables(rt.storage.execRaw);
@@ -79,7 +79,8 @@ async function installScaffold(
   rt: AgentRuntime,
   opts: { version: number; status: 'current' | 'pending'; code: string },
 ): Promise<void> {
-  await writeText(rt.storage.vfs, `scaffold/agent.js.v${opts.version}`, opts.code);
+  // Version files sit beside the live scaffold in the agent's own state, where promotion reads them.
+  await writeText(rt.agentStateVfs ?? rt.storage.vfs, `${rt.identity.scaffold.path}.v${opts.version}`, opts.code);
 
   if (opts.status === 'current') await rt.identity.scaffold.write(opts.code);
   void rt.storage.sql`

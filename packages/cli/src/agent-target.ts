@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import { existsSync } from 'node:fs';
 import {
   agentDbPath,
@@ -13,7 +15,7 @@ export interface AgentTarget {
   mode: AgentMode;
   cloudName: string;
   localName: string;
-  /** Only a configured local ref has one; an unplaced workspace gets one when `resolveLocalAgent` adopts it. */
+  /** Only a configured local ref has one. */
   cwd?: string;
   workspaceId?: string;
 }
@@ -25,38 +27,40 @@ export interface ResolveAgentTargetOptions {
 /** A configured ref decides the backend outright. An unconfigured name falls back to evidence and refuses
  * when both a local database and a cloud workspace match. */
 export function resolveAgentTarget(input: string, opts: ResolveAgentTargetOptions = {}): AgentTarget {
-  const ref = resolveAgentRef(input);
+  return settleSync(Effect.gen(function* () {
+    const ref = resolveAgentRef(input);
 
-  if (ref) {
-    if (opts.backend && opts.backend !== ref.mode) {
-      throw new Error(`"${input}" is a configured ${ref.mode} workspace; it cannot be opened as ${opts.backend}.`);
+    if (ref) {
+      if (opts.backend && opts.backend !== ref.mode) {
+        return yield* Effect.die(new Error(`"${input}" is a configured ${ref.mode} workspace; it cannot be opened as ${opts.backend}.`));
+      }
+
+      return {
+        requestedName: input,
+        name: ref.name,
+        mode: ref.mode,
+        cloudName: ref.cloudName ?? ref.name,
+        localName: ref.localName ?? ref.name,
+        cwd: ref.cwd,
+        workspaceId: ref.workspaceId,
+      };
     }
 
-    return {
-      requestedName: input,
-      name: ref.name,
-      mode: ref.mode,
-      cloudName: ref.cloudName ?? ref.name,
-      localName: ref.localName ?? ref.name,
-      cwd: ref.cwd,
-      workspaceId: ref.workspaceId,
-    };
-  }
+    if (opts.backend) return bareTarget(input, opts.backend);
 
-  if (opts.backend) return bareTarget(input, opts.backend);
+    const dbPath = agentDbPath(input);
+    const localDb = existsSync(dbPath);
+    const cloudRef = localDb ? sameCloudWorkspace(input) : null;
 
-  const dbPath = agentDbPath(input);
-  const localDb = existsSync(dbPath);
-  const cloudRef = localDb ? sameCloudWorkspace(input) : null;
+    if (cloudRef) {
+      return yield* Effect.die(new Error(
+        `"${input}" names both a local workspace (${dbPath}) and the cloud workspace configured `
+        + `as "${cloudRef.name}". Address the cloud one by its configured name, or rename one of them.`,
+      ));
+    }
 
-  if (cloudRef) {
-    throw new Error(
-      `"${input}" names both a local workspace (${dbPath}) and the cloud workspace configured `
-      + `as "${cloudRef.name}". Address the cloud one by its configured name, or rename one of them.`,
-    );
-  }
-
-  return bareTarget(input, localDb ? 'local' : 'cloud');
+    return bareTarget(input, localDb ? 'local' : 'cloud');
+  }));
 }
 
 /** A configured cloud workspace this name addresses under a different config

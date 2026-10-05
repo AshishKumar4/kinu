@@ -3,6 +3,7 @@
  * (KINU-N028): an agent-writable file must not shadow shipped doctrine.
  */
 
+import { Result } from 'effect';
 import { parseSkillFile } from './parse';
 import type { ParsedSkill } from './types';
 
@@ -200,9 +201,9 @@ In \`eval\`, \`workspace.slates.<id>\` is the same stub the client gets: \`await
 function parseBuiltin(src: string): ParsedSkill {
   const r = parseSkillFile(src, 'builtin');
 
-  if (!r.ok) throw new Error(`built-in skill failed to parse: ${r.error}`);
+  if (Result.isFailure(r)) throw new Error(`built-in skill failed to parse: ${r.failure.error}`);
 
-  return r.skill;
+  return r.success;
 }
 
 const PARSED = [AUDIT_IMPLEMENTATION_SRC, SLATES_SRC].map((source) => ({ source, skill: parseBuiltin(source) }));

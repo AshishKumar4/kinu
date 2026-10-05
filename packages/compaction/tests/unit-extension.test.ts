@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { CONTEXT_CHECKPOINT_PREFIX, type TransformContext } from '@kinu.run/core';
+import {
+  CONTEXT_CHECKPOINT_PREFIX, ExtensionHost, OPENAI_CRED_KEY, createChatModel, createFallbackCooldowns, createOpenAIProvider, runChat,
+  type TransformContext,
+} from '@kinu.run/core';
+import { createMockFetch } from '@kinu.run/test-utils';
 import {
   createCompactionExtension,
   kinuCodec,
@@ -46,6 +50,7 @@ function fakeEphemeral(supersededTokens = 0) {
 }
 
 interface Rig {
+  extension: ReturnType<typeof createCompactionExtension>;
   ports: MemoryPorts;
   archive: MemoryArchiveStore;
   prompts: string[];
@@ -93,7 +98,7 @@ function rig(overrides: RigOverrides = {}): Rig {
   };
 
   return {
-    ports, archive, prompts, outcomes, transform,
+    extension, ports, archive, prompts, outcomes, transform,
     ephemeral: overrides.ephemeral ?? ephemeral,
   };
 }
@@ -590,6 +595,98 @@ describe('summaries', () => {
     expect(JSON.stringify(again)).toBe(JSON.stringify(result));
     expect(prompts.length).toBe(promptCount);
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
+  });
+
+  // Owner, 2026-10-04: a Claude model that compacts server-side (core providers/server-compaction.ts) takes the
+  // provider's summary instead of better-compact's, and only what follows the provider's summary is sent.
+  test('a model that compacts server-side gets no better-compact summary, and the request opens at the provider\'s', async () => {
+    const messages: ModelMessage[] = [];
+
+    for (let i = 0; i < 8; i++) {
+      messages.push(user(`requirement ${i}: ${'detail '.repeat(1_000)}`));
+      messages.push(assistant([{ type: 'text', text: `noted ${i}` }]));
+    }
+
+    const own = rig();
+    await own.transform(messages, { model: 'anthropic/claude-haiku-4-5' });
+    const server = rig();
+    await server.transform(messages, { model: 'anthropic/claude-opus-4-7' });
+
+    const compacted: ModelMessage[] = [
+      user('older ask'), assistant([{ type: 'text', text: 'older answer' }]),
+      user('the ask the provider compacted at'),
+      assistant([{ type: 'text', text: 'Summary of everything so far.', providerOptions: { anthropic: { type: 'compaction' } } }, { type: 'text', text: 'Continuing.' }]),
+      user('next ask'),
+    ];
+
+    expect({ own: own.prompts.length > 0, server: server.prompts, sent: await server.transform(compacted, { model: 'anthropic/claude-opus-4-7' }) })
+      .toEqual({ own: true, server: [], sent: compacted.slice(2) });
+  });
+
+  // OpenAI's server-side compaction (developers.openai.com/api/docs/guides/compaction) leaves an encrypted item, which
+  // @ai-sdk/openai keeps as a `custom` part; the request opens at the ask before it, as for Claude's summary.
+  test('a GPT-5 model on OpenAI gets no better-compact summary, and the request opens at its compaction item', async () => {
+    const server = rig();
+    const messages: ModelMessage[] = [];
+
+    for (let i = 0; i < 8; i++) {
+      messages.push(user(`requirement ${i}: ${'detail '.repeat(1_000)}`));
+      messages.push(assistant([{ type: 'text', text: `noted ${i}` }]));
+    }
+
+    await server.transform(messages, { model: 'openai/gpt-5.5' });
+
+    const compacted: ModelMessage[] = [
+      user('older ask'), assistant([{ type: 'text', text: 'older answer' }]),
+      user('the ask the provider compacted at'),
+      assistant([
+        { type: 'custom', kind: 'openai.compaction', providerOptions: { openai: { type: 'compaction', itemId: 'cmp_1', encryptedContent: 'ENCRYPTED' } } },
+        { type: 'text', text: 'Continuing.' },
+      ]),
+      user('next ask'),
+    ];
+
+    expect({ server: server.prompts, sent: await server.transform(compacted, { model: 'openai/gpt-5.5' }) }).toEqual({ server: [], sent: compacted.slice(2) });
+  });
+
+  // RomanticOrangutan, 2026-10-05: the compatible adapter drops OpenAI's encrypted item, so a fallback that cannot read
+  // it is sent the conversation the local way, never the history trimmed at that item.
+  test('a GPT-5 turn that falls back to a model that cannot read its compaction item sends that model the earlier history', async () => {
+    const mock = createMockFetch([
+      { match: 'api.openai.com', respond: { status: 429, headers: { 'retry-after': '0' }, body: JSON.stringify({ error: { message: 'slow down', type: 'rate_limit' } }) } },
+      { match: 'compat.invalid', respond: { status: 200, headers: { 'content-type': 'text/event-stream' }, body: [
+        { choices: [{ index: 0, delta: { role: 'assistant', content: 'done' } }] },
+        { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+      ].map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n' } },
+    ]);
+
+    const compacted: ModelMessage[] = [
+      user('older requirement: keep the parser API stable'), assistant([{ type: 'text', text: 'older answer' }]),
+      user('the ask the provider compacted at'),
+      assistant([
+        { type: 'custom', kind: 'openai.compaction', providerOptions: { openai: { type: 'compaction', itemId: 'cmp_1', encryptedContent: 'ENCRYPTED' } } },
+        { type: 'text', text: 'Continuing.' },
+      ]),
+      user('next ask'),
+    ];
+
+    const gpt = createOpenAIProvider().createModel('gpt-5.5', {
+      env: {}, sessionAffinity: SESSION, fetch: mock.fetch,
+      getAuth: async () => ({ headers: { Authorization: 'Bearer sk-test' } }), hasCredential: async (key) => key === OPENAI_CRED_KEY,
+    });
+
+    const compat = createChatModel({ kind: 'openai-compat', name: 'compat', baseURL: 'https://compat.invalid/v1', headers: {}, modelId: 'm', fetch: mock.fetch });
+
+    for await (const _ of runChat({
+      model: gpt, modelSpec: 'openai/gpt-5.5', modelContext: { id: 'openai/gpt-5.5', contextWindow: 200_000 },
+      fallbacks: [{ spec: 'openai-compat/m', accepts: new Set(), bind: () => ({ model: compat, provider: 'openai-compat' }) }],
+      cooldowns: createFallbackCooldowns(), extensions: new ExtensionHost().register(rig({ model: () => 'openai/gpt-5.5' }).extension),
+      cache: { sessionKey: SESSION }, system: 'sys', history: compacted, tools: {},
+    })) { /* drain */ }
+
+    const fallback = mock.requests.find((request) => request.url.includes('compat.invalid'));
+
+    expect(String(fallback?.body)).toContain('older requirement: keep the parser API stable');
   });
 
   test('a split first turn upgrades the exact compacted fragment', async () => {

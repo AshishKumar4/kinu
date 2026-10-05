@@ -5,9 +5,10 @@
  * per request. Plaintext exists only here and in the outbound handler, outside the container.
  */
 
+import { Effect, Result } from 'effect';
+import { attempt, settle } from '../obs/effect';
 import * as v from 'valibot';
 import type { CredentialCipher } from '../credentials/envelope';
-import { toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
 import type { SqlExec } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
@@ -107,43 +108,45 @@ export function listEgressSecrets(sql: SqlExec): EgressSecretSummary[] {
 }
 
 /** Add or replace a secret. Replacing keeps the placeholder, so rotation needs no container change. */
-export async function putEgressSecret(
+export function putEgressSecret(
   deps: EgressVaultDeps,
   input: PutEgressSecretInput,
 ): Promise<EgressSecretBinding> {
-  if (!BINDING_ID_RE.test(input.id)) {
-    throw new Error(`Invalid egress secret id "${input.id}": letters, digits, dot, dash, underscore, up to 128.`);
-  }
+  return settle(Effect.gen(function* () {
+    if (!BINDING_ID_RE.test(input.id)) {
+      return yield* Effect.die(new Error(`Invalid egress secret id "${input.id}": letters, digits, dot, dash, underscore, up to 128.`));
+    }
 
-  if (!HOST_PATTERN_RE.test(input.host)) {
-    throw new Error(
-      `Invalid egress host "${input.host}": a hostname or a * glob, with no scheme, port, path or space.`,
+    if (!HOST_PATTERN_RE.test(input.host)) {
+      return yield* Effect.die(new Error(
+        `Invalid egress host "${input.host}": a hostname or a * glob, with no scheme, port, path or space.`,
+      ));
+    }
+
+    if (input.secret.length === 0) return yield* Effect.die(new Error('An egress secret cannot be empty.'));
+
+    if (isEgressPlaceholder(input.secret)) {
+      return yield* Effect.die(new Error('That value is a placeholder, not a secret.'));
+    }
+
+    if (input.label.length === 0 || input.label.length > 200) {
+      return yield* Effect.die(new Error('An egress secret needs a label of 1-200 characters.'));
+    }
+
+    const existing = yield* readOne(PlaceholderRow, deps.sql, `SELECT placeholder FROM user_egress_secrets WHERE id = ?`, input.id);
+    const placeholder = existing ? String(existing.placeholder) : mintEgressPlaceholder();
+    const sealed = yield* Effect.promise(() => deps.cipher.seal(deps.aad(input.id), input.secret));
+    deps.sql.exec(
+      `INSERT INTO user_egress_secrets (id, label, host, placeholder, secret)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         label = excluded.label, host = excluded.host, secret = excluded.secret,
+         updated_at = unixepoch() * 1000`,
+      input.id, input.label, input.host, placeholder, sealed,
     );
-  }
 
-  if (input.secret.length === 0) throw new Error('An egress secret cannot be empty.');
-
-  if (isEgressPlaceholder(input.secret)) {
-    throw new Error('That value is a placeholder, not a secret.');
-  }
-
-  if (input.label.length === 0 || input.label.length > 200) {
-    throw new Error('An egress secret needs a label of 1-200 characters.');
-  }
-
-  const existing = readOne(PlaceholderRow, deps.sql, `SELECT placeholder FROM user_egress_secrets WHERE id = ?`, input.id);
-  const placeholder = existing ? String(existing.placeholder) : mintEgressPlaceholder();
-  const sealed = await deps.cipher.seal(deps.aad(input.id), input.secret);
-  deps.sql.exec(
-    `INSERT INTO user_egress_secrets (id, label, host, placeholder, secret)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       label = excluded.label, host = excluded.host, secret = excluded.secret,
-       updated_at = unixepoch() * 1000`,
-    input.id, input.label, input.host, placeholder, sealed,
-  );
-
-  return { id: input.id, label: input.label, host: input.host, placeholder };
+    return { id: input.id, label: input.label, host: input.host, placeholder };
+  }));
 }
 
 /** Returns whether a row went away ("revoked" vs "was never there"). */
@@ -155,68 +158,70 @@ export function revokeEgressSecret(sql: SqlExec, id: string): boolean {
  * Decide one intercepted request and open only the secrets it may spend.
  * `active` is the approval gate's consent; this checks destination on every request.
  */
-export async function resolveEgressInjection(
+export function resolveEgressInjection(
   deps: EgressVaultDeps,
   facts: EgressRequestFacts,
   active: readonly EgressSecretBinding[],
 ): Promise<EgressInjectionResult> {
-  const plan = planEgress(facts, active);
+  return settle(Effect.gen(function* () {
+    const plan = planEgress(facts, active);
 
-  if (plan.kind === 'refuse') return plan;
+    if (plan.kind === 'refuse') return plan;
 
-  if (plan.substitutions.length === 0) return { kind: 'forward', substitutions: [] };
+    if (plan.substitutions.length === 0) return { kind: 'forward', substitutions: [] };
 
-  const substitutions: EgressInjection[] = [];
+    const substitutions: EgressInjection[] = [];
 
-  for (const { bindingId, placeholder } of plan.substitutions) {
-    const row = readOne(SecretRow, deps.sql, `SELECT secret FROM user_egress_secrets WHERE id = ?`, bindingId);
+    for (const { bindingId, placeholder } of plan.substitutions) {
+      const row = yield* readOne(SecretRow, deps.sql, `SELECT secret FROM user_egress_secrets WHERE id = ?`, bindingId);
 
-    if (!row) {
-      // Revoked since configuration: fail closed rather than forward the dummy.
-      return {
-        kind: 'refuse',
-        status: 403,
-        reason: 'A secret this request needs has been revoked.',
-      };
+      if (!row) {
+        // Revoked since configuration: fail closed rather than forward the dummy.
+        return {
+          kind: 'refuse',
+          status: 403,
+          reason: 'A secret this request needs has been revoked.',
+        };
+      }
+
+      substitutions.push({ placeholder, secret: yield* Effect.promise(() => deps.cipher.open(deps.aad(bindingId), String(row.secret))) });
     }
 
-    substitutions.push({ placeholder, secret: await deps.cipher.open(deps.aad(bindingId), String(row.secret)) });
-  }
-
-  return { kind: 'forward', substitutions };
+    return { kind: 'forward', substitutions };
+  }));
 }
 
 /**
  * Re-seal every row under the current key; false when any row failed, so the caller withholds
  * `credential_envelope_key_id` (rotation drops the previous key on the strength of that marker).
  */
-export async function rewrapEgressSecrets(
+export function rewrapEgressSecrets(
   deps: EgressVaultDeps,
 ): Promise<boolean> {
-  let clean = true;
+  return settle(Effect.gen(function* () {
+    let clean = true;
 
-  for (const raw of deps.sql.exec(`SELECT id, secret FROM user_egress_secrets`).toArray()) {
-    const parsed = v.safeParse(IdSecretRow, raw);
+    for (const raw of deps.sql.exec(`SELECT id, secret FROM user_egress_secrets`).toArray()) {
+      const parsed = v.safeParse(IdSecretRow, raw);
 
-    if (!parsed.success) { clean = false; continue; }
+      if (!parsed.success) { clean = false; continue; }
 
-    const { id, secret } = parsed.output;
+      const { id, secret } = parsed.output;
 
-    try {
-      const plaintext = await deps.cipher.open(deps.aad(id), secret);
-      const resealed = await deps.cipher.seal(deps.aad(id), plaintext);
-      deps.sql.exec(`UPDATE user_egress_secrets SET secret = ? WHERE id = ?`, resealed, id);
-    } catch (error) {
-      clean = false;
-      diagnostics.failure('egress.secret_reseal_failed', toKinuError({
-        doing: 'resealing an egress secret under the current key',
-        cause: error,
-        otherwise: 'bad_input',
-      }), { secretId: id });
+      const resealed = yield* Effect.result(attempt({ doing: 'resealing an egress secret under the current key', otherwise: 'bad_input' }, async () => {
+        const plaintext = await deps.cipher.open(deps.aad(id), secret);
+        const sealed = await deps.cipher.seal(deps.aad(id), plaintext);
+        deps.sql.exec(`UPDATE user_egress_secrets SET secret = ? WHERE id = ?`, sealed, id);
+      }));
+
+      if (Result.isFailure(resealed)) {
+        clean = false;
+        diagnostics.failure('egress.secret_reseal_failed', resealed.failure, { secretId: id });
+      }
     }
-  }
 
-  return clean;
+    return clean;
+  }));
 }
 
 const PlaceholderRow = v.object({ placeholder: v.string() });
@@ -227,15 +232,17 @@ const IdSecretRow = v.object({ id: v.string(), secret: v.string() });
 
 function readOne<Schema extends v.GenericSchema>(
   schema: Schema, sql: SqlExec, query: string, ...values: string[]
-): v.InferOutput<Schema> | undefined {
-  const row = sql.exec(query, ...values).toArray()[0];
+): Effect.Effect<v.InferOutput<Schema> | undefined> {
+  return Effect.gen(function* () {
+    const row = sql.exec(query, ...values).toArray()[0];
 
-  if (row === undefined) return undefined;
-  const parsed = v.safeParse(schema, row);
+    if (row === undefined) return undefined;
+    const parsed = v.safeParse(schema, row);
 
-  if (!parsed.success) {
-    throw new Error(`user_egress_secrets row does not match its expected shape: ${query}`);
-  }
+    if (!parsed.success) {
+      return yield* Effect.die(new Error(`user_egress_secrets row does not match its expected shape: ${query}`));
+    }
 
-  return parsed.output;
+    return parsed.output;
+  });
 }

@@ -4,6 +4,8 @@
  */
 import { analyticsPlane, type AnalyticsEnv } from './writer';
 import { FEEDBACK_MARKERS_SCHEMA, type AnalyticsRow } from './schemas';
+import { Effect } from 'effect';
+import { settleSync } from '../effect';
 import { toKinuError } from '../error';
 import { diagnostics } from '../log';
 
@@ -67,15 +69,10 @@ export function writeFeedbackMarker(env: AnalyticsEnv, marker: FeedbackMarker): 
     annotated: marker.annotated ? 1 : 0,
   };
 
-  try {
-    analyticsPlane(env).feedback.write(row);
-  } catch (err) {
-    diagnostics.failure('analytics.feedback_marker_failed', toKinuError({
-      doing: 'writing a feedback marker data point',
-      cause: err,
-      otherwise: 'unavailable',
-    }));
-  }
+  return settleSync(Effect.try({
+    try: () => analyticsPlane(env).feedback.write(row),
+    catch: (cause) => toKinuError({ doing: 'writing a feedback marker data point', cause, otherwise: 'unavailable' }),
+  }).pipe(Effect.catch((failure) => Effect.sync(() => diagnostics.failure('analytics.feedback_marker_failed', failure)))));
 }
 
 const ROUTE_FAMILIES = {

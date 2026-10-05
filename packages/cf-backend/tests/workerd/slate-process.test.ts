@@ -168,6 +168,9 @@ it('a slate declaring a browser surface serves the shell, the client bundle, and
     expect(artifacts.application).toContain('server-only-marker-1c9e');
     expect(artifacts.client).toBeDefined();
     expect(artifacts.client).toContain('client-only-marker-7f3a');
+    // The slate skill's client names no `React`: its JSX must compile to the automatic runtime's imports.
+    expect(artifacts.client).toContain('react/jsx-runtime');
+    expect(artifacts.client).not.toContain('React.createElement');
     expect(artifacts.client).not.toContain('server-only-marker-1c9e');
     expect(artifacts.client).not.toContain('this.storage');
     expect(artifacts.shell).toBe(shell.body);

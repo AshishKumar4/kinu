@@ -3,6 +3,8 @@
  * `afterAll` in `scripts/test-preload.ts`, with {@link SCRATCH_PREFIXES} read by `scripts/preflight.ts`.
  */
 
+import { Cause, Effect } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -81,59 +83,60 @@ export function holdForRelease(label: string, release: () => void): () => void {
  * success over a surviving dir (ENOTEMPTY from a live writer). Failures return as one `AggregateError` and stay owned.
  */
 export function releaseScratch(): number {
-  let removed = 0;
-  const held: Error[] = [];
+  return settleSync(Effect.gen(function* () {
+    let removed = 0;
+    const held: Error[] = [];
 
-  for (const hold of [...holds].reverse()) {
-    holds.delete(hold);
+    for (const hold of [...holds].reverse()) {
+      holds.delete(hold);
 
-    try {
-      hold.release();
-    } catch (cause) {
-      held.push(new Error(`${hold.label}: the hold refused to release`, { cause }));
-    }
-  }
-
-  // Reverse mint order: children before parents; every root is attempted.
-  for (const dir of [...minted].reverse()) {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch (cause) {
-      held.push(new Error(`${dir}: rmSync refused`, { cause }));
-      continue;
+      yield* Effect.catchCause(Effect.sync(() => hold.release()), (failed) => Effect.sync(() => {
+        held.push(new Error(`${hold.label}: the hold refused to release`, { cause: Cause.squash(failed) }));
+      }));
     }
 
-    if (existsSync(dir)) {
-      held.push(new Error(
-        `${dir} survived rmSync, which reports success when a live process is `
-        + 'still writing into the tree. Stop what the suite backgrounded '
-        + 'before the run ends.',
-        { cause: { leftovers: readdirSync(dir, { recursive: true }) } },
+    // Reverse mint order: children before parents; every root is attempted.
+    for (const dir of [...minted].reverse()) {
+      const refused = yield* Effect.catchCause(Effect.as(Effect.sync(() => rmSync(dir, { recursive: true, force: true })), false), (failed) => Effect.sync(() => {
+        held.push(new Error(`${dir}: rmSync refused`, { cause: Cause.squash(failed) }));
+
+        return true;
+      }));
+
+      if (refused) continue;
+
+      if (existsSync(dir)) {
+        held.push(new Error(
+          `${dir} survived rmSync, which reports success when a live process is `
+          + 'still writing into the tree. Stop what the suite backgrounded '
+          + 'before the run ends.',
+          { cause: { leftovers: readdirSync(dir, { recursive: true }) } },
+        ));
+        continue;
+      }
+
+      minted.delete(dir);
+      removed += 1;
+    }
+
+    if (held.length > 0) {
+      // bun's reporter drops each held error's cause, so leftovers go to the OS tmpdir
+      // (process.env.TMPDIR may be inside a root just removed).
+      const report = join('/tmp', 'kinu-scratch-held.json');
+
+      writeFileSync(
+        report,
+        JSON.stringify(held.map((e) => ({ message: e.message, cause: e.cause })), null, 2),
+      );
+
+      return yield* Effect.die(new AggregateError(
+        held,
+        `scratch not released: ${held.length} owned root(s) failed removal and stay owned for a later release (leftovers in ${report})`,
       ));
-      continue;
     }
 
-    minted.delete(dir);
-    removed += 1;
-  }
-
-  if (held.length > 0) {
-    // bun's reporter drops each held error's cause, so leftovers go to the OS tmpdir
-    // (process.env.TMPDIR may be inside a root just removed).
-    const report = join('/tmp', 'kinu-scratch-held.json');
-
-    writeFileSync(
-      report,
-      JSON.stringify(held.map((e) => ({ message: e.message, cause: e.cause })), null, 2),
-    );
-
-    throw new AggregateError(
-      held,
-      `scratch not released: ${held.length} owned root(s) failed removal and stay owned for a later release (leftovers in ${report})`,
-    );
-  }
-
-  return removed;
+    return removed;
+  }));
 }
 
 /** Release on SIGTERM, SIGINT and SIGHUP, then re-raise so a killed run reads as killed. */

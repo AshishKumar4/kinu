@@ -3,6 +3,8 @@
  * One scoped method: a span outliving an invocation is stranded by eviction, hibernation or
  * `do.isolate.reset_silent`.
  */
+import { Cause, Effect } from 'effect';
+import { settleSync } from './effect';
 import { classifyErrorCode, type ErrorCode } from './error';
 
 export interface TraceException {
@@ -124,24 +126,19 @@ export function createRecordingTracer(): RecordingTracer {
 
       let closesLater = false;
 
-      try {
-        const result = fn(span);
-
-        // A foreign thenable closes early and mis-parents what follows.
-        if (result instanceof Promise) {
-          closesLater = true;
-          entry.openAcrossAwait = true;
-          // `then(ok, err)`, not `finally`: `finally` would derive an unhandled rejection.
-          void result.then(close, (...rejection: [unknown]) => { failed(...rejection); close(); });
-        }
-
-        return result;
-      } catch (error) {
-        failed(error);
-        throw error;
-      } finally {
-        if (!closesLater) close();
-      }
+      return settleSync(Effect.sync(() => fn(span)).pipe(
+        Effect.tapCause((cause) => Effect.sync(() => failed(Cause.squash(cause)))),
+        Effect.tap((result) => Effect.sync(() => {
+          // A foreign thenable closes early and mis-parents what follows.
+          if (result instanceof Promise) {
+            closesLater = true;
+            entry.openAcrossAwait = true;
+            // `then(ok, err)`, not `finally`: `finally` would derive an unhandled rejection.
+            void result.then(close, (...rejection: [unknown]) => { failed(...rejection); close(); });
+          }
+        })),
+        Effect.ensuring(Effect.sync(() => { if (!closesLater) close(); })),
+      ));
     },
   };
 }

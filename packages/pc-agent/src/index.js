@@ -233,7 +233,7 @@ const RELAY_DROPPED_HEADERS = new Set([
   'upgrade', 'host', 'content-length', 'x-forwarded-for',
 ]);
 
-/** In-flight relays by call id, so a RELAY_CANCEL can stop one. */
+/** In-flight relays by call id, so a cancel can stop one. */
 const relays = new Map();
 
 

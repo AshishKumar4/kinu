@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
+import { detach } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { withGallery } from '../../scripts/gallery-harness';
 import type { Frame, Page } from 'puppeteer';
 
 async function serveSlate(page: Page): Promise<void> {
   await page.setRequestInterception(true);
-  page.on('request', async (request) => {
+  page.on('request', (request) => detach(Effect.promise(async () => {
     const url = new URL(request.url());
 
     if (!url.hostname.endsWith('.preview.example.test')) {
@@ -26,7 +28,7 @@ async function serveSlate(page: Page): Promise<void> {
       '.catch(cause => { document.querySelector("p").textContent = "blocked: " + cause.message; });',
       '</script>',
     ].join('') });
-  });
+  })));
 }
 
 /** What the slate page shows once its fetch has settled: the served text, or `blocked: <cause>`. It shows `pending`

@@ -3,6 +3,7 @@
  * the DO RPC denial claim lives in `tests/workerd/do-control-plane.test.ts` (`bun test` has no actor).
  */
 import { describe, expect, test } from 'bun:test';
+import { Result } from 'effect';
 import { Database } from 'bun:sqlite';
 import type { Page, PageRequest } from '@kinu.run/core';
 import type { ControlPlaneSql } from '@kinu.run/core/control-plane';
@@ -68,12 +69,12 @@ function freshStore(): StoreUnderTest {
 describe('who may reach the control plane', () => {
   test('an ordinary signed-in user is refused, and the refusal is a 404', () => {
     const answer = authorizeAdmin(ENV, identity({ email: 'someone@example.com' }), { mutating: false });
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('not_admin');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('not_admin');
     // Not 403: a 403 confirms the admin surface exists.
-    expect(adminDenialAnswer(answer.denial).status).toBe(404);
+    expect(adminDenialAnswer(answer.failure).status).toBe(404);
   });
 
   test('a dev-synthesized identity is refused even with its email on the list', () => {
@@ -85,19 +86,19 @@ describe('who may reach the control plane', () => {
       { mutating: false },
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('dev_identity');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('dev_identity');
   });
 
   test('a scoped CLI access token is refused', () => {
     // Long-lived non-interactive credential: step-up means nothing, and admin is in no CLI scope.
     const answer = authorizeAdmin(ENV, identity({ cliScopes: [] }), { mutating: false });
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('token_identity');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('token_identity');
   });
 
   test('an empty allowlist admits nobody, including a would-be operator', () => {
@@ -105,15 +106,15 @@ describe('who may reach the control plane', () => {
       { ...ENV, CONTROL_PLANE_ADMINS: '' }, identity(), { mutating: false },
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('no_admins_configured');
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('no_admins_configured');
   });
 
   test('an operator is matched case-insensitively', () => {
     const answer = authorizeAdmin(ENV, identity({ email: 'OPS@Kinu.RUN' }), { mutating: false });
-    expect(answer.ok).toBe(true);
+    expect(Result.isSuccess(answer)).toBe(true);
   });
 
   test('a deployment with no root secret says so, rather than answering 404', () => {
@@ -121,38 +122,38 @@ describe('who may reach the control plane', () => {
       { CONTROL_PLANE_ADMINS: 'ops@kinu.run' }, identity(), { mutating: false },
     );
 
-    expect(answer.ok).toBe(false);
+    expect(Result.isFailure(answer)).toBe(true);
 
-    if (answer.ok) throw new Error('unreachable');
-    expect(answer.denial).toBe('unconfigured');
-    expect(adminDenialAnswer(answer.denial).status).toBe(503);
+    if (Result.isSuccess(answer)) throw new Error('unreachable');
+    expect(answer.failure).toBe('unconfigured');
+    expect(adminDenialAnswer(answer.failure).status).toBe(503);
   });
 
   test('a mutation needs a fresh sign-in; a read does not', () => {
     const stale = identity({ authTime: Date.now() - 6 * 60 * 1000 });
 
     const read = authorizeAdmin(ENV, stale, { mutating: false });
-    expect(read.ok).toBe(true);
+    expect(Result.isSuccess(read)).toBe(true);
 
     // Carrying the no-write fact lets the route audit an attempted mutation instead of dropping it.
-    if (!read.ok) throw new Error('unreachable');
-    expect(read.admin.fresh).toBe(false);
+    if (Result.isFailure(read)) throw new Error('unreachable');
+    expect(read.success.fresh).toBe(false);
 
     const write = authorizeAdmin(ENV, stale, { mutating: true });
-    expect(write.ok).toBe(false);
+    expect(Result.isFailure(write)).toBe(true);
 
-    if (write.ok) throw new Error('unreachable');
-    expect(write.denial).toBe('stale_auth');
+    if (Result.isSuccess(write)) throw new Error('unreachable');
+    expect(write.failure).toBe('stale_auth');
     // 403, not 404: a known operator whose remedy is to sign in again.
-    expect(adminDenialAnswer(write.denial).status).toBe(403);
+    expect(adminDenialAnswer(write.failure).status).toBe(403);
   });
 
   test('a sign-in inside the window may mutate', () => {
     const answer = authorizeAdmin(ENV, identity({ authTime: Date.now() - 60_000 }), { mutating: true });
-    expect(answer.ok).toBe(true);
+    expect(Result.isSuccess(answer)).toBe(true);
 
-    if (!answer.ok) throw new Error('unreachable');
-    expect(answer.admin.fresh).toBe(true);
+    if (Result.isFailure(answer)) throw new Error('unreachable');
+    expect(answer.success.fresh).toBe(true);
   });
 });
 
@@ -174,8 +175,8 @@ describe('capability attenuation', () => {
   test('the admin caller holds both grades', async () => {
     const authorization = authorizeAdmin(ENV, identity(), { mutating: true });
 
-    if (!authorization.ok) throw new Error('the fixture operator should be authorized');
-    const caller = await adminCaller(ENV, authorization.admin);
+    if (Result.isFailure(authorization)) throw new Error('the fixture operator should be authorized');
+    const caller = await adminCaller(ENV, authorization.success);
     expect(await requireControl(ENV, caller, 'users.read')).toBe('admin');
     expect(await requireControl(ENV, caller, 'audit.write')).toBe('admin');
     expect(await requireControl(ENV, caller, 'index.observe')).toBe('admin');

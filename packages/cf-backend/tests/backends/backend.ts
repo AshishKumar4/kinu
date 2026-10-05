@@ -6,7 +6,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema, type ActorHandle, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
-import { scratchPath, scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
+import { scratchDir, scratchPath, scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
 import {
   historyOver, orchestratorHarness, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
@@ -191,7 +191,7 @@ function scriptedResolver(): LocalModelResolver {
 function cli(): SharedBackend {
   const db = new Database(scratchPath('shared-backend', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: NO_ENDPOINT });
+  const rt = createCLIRuntime(db, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
   const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
   rt.checkpoints = checkpoints;
   const modelResolver = scriptedResolver();

@@ -79,7 +79,7 @@ describe('run tool — workspace shell abort', () => {
 
     const pending = run(
       { command: 'cat big.txt && cat big2.txt' },
-      { toolCallId: 'abort-test', messages: [], abortSignal: controller.signal },
+      { toolCallId: 'abort-test', messages: [], context: undefined, abortSignal: controller.signal },
     );
 
     await expect(pending).rejects.toMatchObject({ code: 'io', execution: { exitCode: 130 }, message: expect.stringContaining('exit 130') });
@@ -209,7 +209,7 @@ describe('remote executor exec abort', () => {
     const pending = provider.tools.exec.execute('sleep 9999', { signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toMatchObject({
-      code: 'cancelled',
+      name: 'AbortError',
       message: 'device exec stopped: the device confirmed its owned command process group terminated; separately sessioned processes may still run',
     });
 
@@ -232,7 +232,7 @@ describe('remote executor exec abort', () => {
     const pending = provider.tools.exec.execute('true', { signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toMatchObject({
-      code: 'cancelled',
+      name: 'AbortError',
       message: 'device exec stopped: no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
     });
   });
@@ -285,7 +285,7 @@ describe('remote executor exec abort', () => {
     const pending = provider.tools.exec.execute('make -j', { signal: controller.signal });
     controller.abort();
 
-    await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     await expect(pending).rejects.toThrow(/could not stop the command, which may still be running/);
     await expect(pending).rejects.toThrow(/device RPC timeout/);
     expect(frames.map((frame) => frame.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
@@ -338,7 +338,7 @@ describe('remote executor exec abort', () => {
     const pending = provider.tools.exec.execute('bun test', { signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toMatchObject({
-      code: 'cancelled',
+      name: 'AbortError',
       message: 'device exec stopped: no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
     });
 
@@ -392,7 +392,7 @@ describe('remote executor exec abort', () => {
 
     await expect(provider.tools.exec.execute('ls', { signal: controller.signal }))
       .rejects.toMatchObject({
-        code: 'cancelled',
+        name: 'AbortError',
         message: 'device exec stopped before the command was sent: nothing ran on the device',
       });
     expect(calls).toEqual([]);

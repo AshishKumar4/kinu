@@ -21,7 +21,7 @@ import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  generateText, stepCountIs,
+  generateText, isStepCount,
   type LanguageModel, type ModelMessage, type ToolSet, type StepResult,
 } from 'ai';
 import {
@@ -35,7 +35,7 @@ import {
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { buildEvalAgentSurface, createStepToolCallLog } from './harness';
-import { provisionLocalTarget, type LocalTarget } from './target-local';
+import { localTargetFolder, provisionLocalTarget, type LocalTarget } from './target-local';
 import { seedTranscriptEntry, EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
 recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
 
@@ -124,7 +124,7 @@ interface ChatTurn {
 async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
   const { history, model, rt, tools, userMessage } = turn;
   const start = Date.now();
-  const soul = await readSoul(rt.storage.vfs) ?? '';
+  const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
   const log = createStepToolCallLog();
 
@@ -135,17 +135,17 @@ async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
 
   const result = await generateText({
     model,
-    system: `${soul}\n\nKnowledge:\n${knowledge}`,
+    instructions: `${soul}\n\nKnowledge:\n${knowledge}`,
     messages: history,
     tools,
-    stopWhen: stepCountIs(500),
-    onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
+    stopWhen: isStepCount(500),
+    onStepEnd: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
   });
 
   recordLiveModelSpend(result.usage);
   // The turn's own output — assistant text AND tool call/result messages —
   // exactly as the SDK shaped them, so the next turn's model sees this one.
-  history.push(...result.response.messages);
+  history.push(...result.responseMessages);
   const responseText = collectStepText(result);
   const id = crypto.randomUUID();
   await seedTranscriptEntry(rt.stores.history, 'e2e', { id, message: { role: 'user', content: userMessage }, origin: 'input' });
@@ -227,7 +227,7 @@ describe('E2E Lifecycle', () => {
     expect(tables).toContain('vfs_inodes');
     expect(tables).toContain('conversation_entries');
     expect(tables).toContain('search_nodes');
-    const soul = await readSoul(rt.storage.vfs) ?? '';
+    const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
     expect(soul).toContain('TypeScript');
   });
 
@@ -370,7 +370,7 @@ describe('E2E Lifecycle', () => {
     db.close();
     const db2 = new Database(DB_PATH);
     const msgsAfter = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;
-    const reopened = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG });
+    const reopened = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG, cwd: localTargetFolder(TEST_DIR) });
     const soul = reopened.info.soul;
     db2.close();
     expect(msgsAfter).toBe(msgsBefore);

@@ -13,7 +13,7 @@ import type { JsonObject, JsonValue } from './utils/json';
 import { usageReported, usageTotal, type Usage } from './usage';
 import { Effect } from 'effect';
 import { KinuError } from './obs/error';
-import { settleSync } from './obs/effect';
+import { settle, settleSync } from './obs/effect';
 
 /** A label with neither cap meters but never refuses. */
 export interface MissionBudgetLimits {
@@ -379,21 +379,16 @@ export class MissionGovernor {
   /** `stream` is guarded, not metered (turn loops debit it); `complete` is estimated from chars at the blended rate. */
   govern(llm: LLM, labels: readonly string[] = this.active): LLM {
     if (labels.length === 0) return llm;
-    const guard = (): void => this.admitCall(labels);
 
     return {
-      stream: (opts) => {
-        guard();
-
-        return llm.stream(opts);
-      },
-      complete: async (prompt) => {
-        guard();
-        const text = await llm.complete(prompt);
+      stream: (opts) => settleSync(Effect.andThen(this.admitCall(labels), Effect.sync(() => llm.stream(opts)))),
+      complete: (prompt) => settle(Effect.gen({ self: this }, function* () {
+        yield* this.admitCall(labels);
+        const text = yield* Effect.promise(() => llm.complete(prompt));
         this.debit(estimateTokens(prompt.length + text.length), { labels, calls: 1 });
 
         return text;
-      },
+      })),
     };
   }
 
@@ -402,21 +397,23 @@ export class MissionGovernor {
   governDecision(decide: DecisionPort, labels: readonly string[] = this.active): DecisionPort {
     if (labels.length === 0) return decide;
 
-    return async (request) => {
-      this.admitCall(labels);
-      const result = await decide(request);
+    return (request) => settle(Effect.gen({ self: this }, function* () {
+      yield* this.admitCall(labels);
+      const result = yield* Effect.promise(() => decide(request));
 
       if (result !== null) this.debit(result.usage.input, { labels, calls: 1 });
 
       return result;
-    };
+    }));
   }
 
   /** One model call's admission under `labels`: a spent cap refuses it before the model is reached. */
-  private admitCall(labels: readonly string[]): void {
-    const refusal = this.guard('model_call', labels);
+  private admitCall(labels: readonly string[]): Effect.Effect<void, KinuError> {
+    return Effect.suspend(() => {
+      const refusal = this.guard('model_call', labels);
 
-    if (refusal) throw new MissionBudgetExhausted(refusal);
+      return refusal ? Effect.fail(new MissionBudgetExhausted(refusal)) : Effect.void;
+    });
   }
 
   private refusalFor(seam: MissionSeam, scope: string, row: MissionRow): MissionBudgetRefusal {

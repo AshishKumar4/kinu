@@ -9,7 +9,7 @@
     "./stores": "./src/stores/index.ts"
   },
   "dependencies": {
-    "@nimbus-sh/core": "0.14.0",
+    "@nimbus-sh/core": "0.15.0",
     "valibot": "^1.4.1"
   }
 }

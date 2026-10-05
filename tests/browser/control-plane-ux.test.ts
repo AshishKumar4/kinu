@@ -23,6 +23,8 @@
  * walk, the confirmation form — is the shipped code path.
  */
 import { describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
+import { detach } from '@kinu.run/core/obs';
 import type { HTTPRequest, Page } from 'puppeteer';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -81,7 +83,7 @@ interface Probe {
 async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe> {
   const probe: Probe = { asked: [], posted: [] };
   await browserPage.setRequestInterception(true);
-  browserPage.on('request', async (request: HTTPRequest) => {
+  browserPage.on('request', (request: HTTPRequest) => detach(Effect.promise(async () => {
     const url = new URL(request.url());
 
     if (!url.pathname.startsWith('/api/control/')) {
@@ -118,7 +120,7 @@ async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe>
     await request.respond({
       status, contentType: 'application/json', body: JSON.stringify(body),
     });
-  });
+  })));
 
   return probe;
 }
@@ -422,7 +424,7 @@ describe('the control plane in a browser', () => {
       let serveOk = false;
       let refused = 0;
       await browserPage.setRequestInterception(true);
-      browserPage.on('request', async (request: HTTPRequest) => {
+      browserPage.on('request', (request: HTTPRequest) => detach(Effect.promise(async () => {
         if (!new URL(request.url()).pathname.startsWith('/api/control/')) {
           await request.continue();
 
@@ -439,7 +441,7 @@ describe('the control plane in a browser', () => {
         await request.respond({
           status: 200, contentType: 'application/json', body: JSON.stringify(OVERVIEW),
         });
-      });
+      })));
       await openControl(browserPage, origin);
 
       // The failure is a sentence in the panel, not an eternal spinner.

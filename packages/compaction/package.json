@@ -8,17 +8,18 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@better-compact/core": "0.2.2",
+    "@better-compact/core": "0.3.0",
     "@kinu.run/core": "workspace:*",
-    "@nimbus-sh/core": "0.14.0",
-    "ai": "6.0.214",
+    "@nimbus-sh/core": "0.15.0",
+    "ai": "7.0.127",
+    "effect": "4.0.0-rc.117",
     "valibot": "^1.4.1"
   },
   "scripts": {
     "check": "tsc --noEmit"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "3.0.12",
+    "@ai-sdk/provider": "4.0.21",
     "@kinu.run/test-utils": "workspace:*"
   }
 }

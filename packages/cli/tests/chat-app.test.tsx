@@ -782,7 +782,7 @@ test('the header shows the size the gate measured the last request at, not the s
 
 test('/compact shows its progress while the fold runs, and a failed fold says why', async () => {
   for (const ends of ['folded', 'failed'] as const) {
-    const fold = Promise.withResolvers<void>();
+    const fold = Promise.withResolvers<'folded'>();
     const agent = fakeClient({ name: `compact-${ends}` });
     const local = agent.client.localControls;
 
@@ -795,7 +795,7 @@ test('/compact shows its progress while the fold runs, and a failed fold says wh
     flushSync(() => screen.mockInput.pressEnter());
     await screen.waitFor('the fold in progress', () => screen.frame().includes(working));
 
-    if (ends === 'folded') fold.resolve();
+    if (ends === 'folded') fold.resolve('folded');
     else fold.reject(new Error('the summarizer is out of credit'));
 
     await screen.waitFor('the fold settled', () => !screen.frame().includes(working));

@@ -338,7 +338,8 @@ export class FakeSandbox {
    *  with the other fault controls; this is not a live process registry. */
   readonly listening = new Set<number>();
   /** Answers a port's fetch in place of the probe status, e.g. with an upgrade. */
-  portAnswer: ((port: number, request: Request) => Response) | undefined;
+  portAnswer: ((port: number, request: Request) => Response | Promise<Response>) | undefined;
+  desktopStart: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
   readonly fileOperations: FileOperation[] = [];
   readonly mountCalls: string[] = [];
   /** Mounts and execs share one chronological list: stop order is a property of the order
@@ -571,9 +572,16 @@ export class FakeSandbox {
     if (command.includes(`> ${TOOLS_STAMP}`)) {
       this.sequence.push('exec:tools-install');
       const archive = /tar -C \/ -xzf '([^']+)'/.exec(command)?.[1] ?? '';
+      const pin = /printf %s '([^']+)' > /.exec(command)?.[1] ?? '';
+      const bytes = this.binaryFiles.get(archive);
 
-      if (!this.binaryFiles.has(archive)) return { stdout: 'no archive', stderr: '', exitCode: 2 };
-      this.files.set(TOOLS_STAMP, /printf %s '([^']+)' > /.exec(command)?.[1] ?? '');
+      if (bytes === undefined) return { stdout: 'no archive', stderr: '', exitCode: 2 };
+
+      if (command.includes('sha256sum <') && createHash('sha256').update(bytes).digest('hex') !== pin) {
+        return { stdout: `${archive} is not the pinned tools ${pin}`, stderr: '', exitCode: 1 };
+      }
+
+      this.files.set(TOOLS_STAMP, pin);
 
       return { stdout: 'installMs=1 changed=1', stderr: '', exitCode: 0 };
     }
@@ -841,7 +849,7 @@ export class FakeSandbox {
       destroy: async () => { await this.destroy(); this.#ended.resolve(); },
       signal: () => { void this.stop().then(this.#ended.resolve, this.#ended.reject); },
       getTcpPort: port => ({
-        fetch: async (request: Request) => this.portAnswer?.(port, request) ?? new Response('', { status: this.listening.has(port) ? 200 : 503 }),
+        fetch: async (request: Request) => await this.portAnswer?.(port, request) ?? new Response('', { status: this.listening.has(port) ? 200 : 503 }),
         connect: () => unreached('port.connect'),
       }),
       setInactivityTimeout: async () => { this.activityRenewals++; },
@@ -910,14 +918,15 @@ export class FakeSandbox {
     await this.#admitNative(options);
 
     // An untimed launch is `setsid -w /bin/bash -c` (D69); a raw exec is `/bin/bash -c`.
-    const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners";
+    const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners"
+      || args[3] === 'devbox-desktop';
 
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 
     // `cat > <path>` fed on stdin: the bytes land in the file once the writer closes.
     if (options.stdin === 'pipe' && args[0] === '/bin/sh') {
-      const target = /^cat > '([^']+)'$/.exec(args[2] ?? '')?.[1] ?? '';
-      const chunks: Uint8Array[] = [];
+      const [, append = '', target = ''] = /^cat (>>?) '([^']+)'$/.exec(args[2] ?? '') ?? [];
+      const chunks: Uint8Array[] = append === '>>' ? [this.binaryFiles.get(target) ?? new Uint8Array()] : [];
       const closed = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
 
       const stdin = new WritableStream<Uint8Array>({
@@ -956,6 +965,12 @@ export class FakeSandbox {
     }
 
     if (PROCESS_SCRIPTS.has(args[3] ?? '')) return await this.#processScript(args, pid);
+
+    if (args[3] === 'devbox-desktop') {
+      this.sequence.push('desktop');
+
+      return processResult(Promise.resolve(this.desktopStart), pid);
+    }
 
     if (args[3] === 'devbox-trust') {
       this.sequence.push('trust');

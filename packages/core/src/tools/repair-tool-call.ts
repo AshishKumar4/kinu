@@ -1,7 +1,7 @@
 import { InvalidToolInputError, NoSuchToolError, type ToolSet } from 'ai';
 import type { ToolCallRepairFunction } from 'ai';
 import * as v from 'valibot';
-import { tolerate } from '../obs/expected-failure';
+import { tolerate } from '../obs/effect';
 import { JsonValueSchema, isJsonObject, type JsonObject } from '../utils/json';
 
 /** A JSON object and not an array, which `JsonObjectSchema`'s record admits. */

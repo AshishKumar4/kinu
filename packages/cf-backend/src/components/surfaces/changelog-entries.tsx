@@ -1,3 +1,4 @@
+import { Effect, Cause } from 'effect';
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
@@ -11,7 +12,7 @@ import type { ChangelogEntryKind, DiffLine } from "@kinu.run/core";
 import * as v from "valibot";
 import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, showing, toKinuError, detach, settle } from "@kinu.run/core/obs";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import {
   DiffLines, CodeBlock,
@@ -48,13 +49,13 @@ export const changelogRevalidate = (): number => 5_000;
 
 /** Showing the digest marks it seen; `onSeen` zeroes the tab badge upstream. */
 export function useChangelog(rpc: Rpc, onSeen?: () => void, moved = 0) {
-  const load = useCallback(async (): Promise<ChangelogView> => {
-    const view = await rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]);
+  const load = useCallback((): Promise<ChangelogView> => settle(Effect.gen(function* () {
+    const view = yield* Effect.promise(async () => rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]));
     // Enrichment only: a failed or misshapen tool list leaves the entries as their rows hold them.
     let tools: CraftedToolDetail[] = [];
 
-    try {
-      const parsed = v.safeParse(CraftedToolListSchema, await rpc<unknown>("getToolDescriptions", []));
+    yield* Effect.catchCause(Effect.gen(function* () {
+      const parsed = v.safeParse(CraftedToolListSchema, yield* Effect.promise(async () => rpc<unknown>("getToolDescriptions", [])));
 
       if (parsed.success) {
         tools = (parsed.output.crafted ?? []).map((tool) => ({
@@ -62,16 +63,17 @@ export function useChangelog(rpc: Rpc, onSeen?: () => void, moved = 0) {
           qualityScore: tool.qualityScore ?? 0.5, usageCount: tool.usageCount ?? 0,
         }));
       }
-    } catch (cause) {
+    }), (failed) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
       diagnostics.failure('changelog.tool_list_unavailable', toKinuError({
         doing: 'enriching changelog tool entries with the live tool list',
         cause, otherwise: 'unavailable',
       }));
       tools = [];
-    }
+    }));
 
     return { ...view, entries: withToolDetails(view.entries, tools) };
-  }, [rpc]);
+  })), [rpc]);
 
   const { resource, reload } = useAsyncResource(load);
   const view = lastValue(resource);
@@ -181,21 +183,21 @@ function useEntryRevert(entryId: string, rpc: Rpc, onReverted: () => void) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
 
-  const revert = useCallback(async () => {
+  const revert = useCallback(() => detach(Effect.gen(function* () {
     setBusy(true);
     setNotice(null);
 
-    try {
-      const r = await rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entryId]);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const r = yield* Effect.promise(async () => rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entryId]));
       setNotice({ text: r.ok ? `Reverted: ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
 
       if (r.ok) onReverted();
-    } catch (e) {
-      setNotice({ text: renderThrownChain({ cause: e }), ok: false });
-    } finally {
+    }), showing((chain) => {
+      setNotice({ text: chain, ok: false });
+    })), Effect.sync(() => {
       setBusy(false);
-    }
-  }, [rpc, entryId, onReverted]);
+    }));
+  })), [rpc, entryId, onReverted]);
 
   return { busy, notice, revert };
 }
@@ -243,7 +245,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   const [diff, setDiff] = useState<AsyncResource<ScaffoldDiff> | null>(null);
   const [expanded, setExpanded] = useState(false);
 
-  const toggleDiff = useCallback(async () => {
+  const toggleDiff = useCallback(() => detach(Effect.gen(function* () {
     if (diff !== null) {
       setDiff(null);
 
@@ -253,13 +255,14 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
     if (entry.scaffoldVersion == null) return;
     setDiff({ status: "loading" });
 
-    try {
-      const d = await rpc<ScaffoldDiff>("getScaffoldDiff", [entry.scaffoldVersion]);
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const d = yield* Effect.promise(async () => rpc<ScaffoldDiff>("getScaffoldDiff", [entry.scaffoldVersion]));
       setDiff(loadSucceeded(d));
-    } catch (cause) {
+    }), (failed) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
       setDiff(loadFailed({ status: "loading" }, { cause }));
-    }
-  }, [rpc, entry.scaffoldVersion, diff]);
+    }));
+  })), [rpc, entry.scaffoldVersion, diff]);
 
   const actions = entry.revert && !kept ? (
     <>
@@ -369,7 +372,7 @@ function StagedSkillDecision(
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
 
-  const open = useCallback(async () => {
+  const open = useCallback(() => detach(Effect.gen(function* () {
     if (staged !== null) {
       setStaged(null);
 
@@ -378,22 +381,23 @@ function StagedSkillDecision(
 
     setStaged({ status: "loading" });
 
-    try {
-      const result = await rpc<StagedSkillResult>("showRefinement", [decision.requestId, decision.routeIndex]);
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const result = yield* Effect.promise(async () => rpc<StagedSkillResult>("showRefinement", [decision.requestId, decision.routeIndex]));
       setStaged((previous) => result.ok
         ? loadSucceeded(result.view)
         : loadFailed(previous ?? { status: "loading" }, { cause: new Error(result.error) }));
-    } catch (cause) {
+    }), (failed) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
       setStaged((previous) => loadFailed(previous ?? { status: "loading" }, { cause }));
-    }
-  }, [rpc, decision.requestId, decision.routeIndex, staged]);
+    }));
+  })), [rpc, decision.requestId, decision.routeIndex, staged]);
 
-  const decide = useCallback(async (verdict: "approve" | "reject", digest: string) => {
+  const decide = useCallback((verdict: "approve" | "reject", digest: string) => detach(Effect.gen(function* () {
     setBusy(true);
     setNotice(null);
 
-    try {
-      const result = await rpc<{ ok: boolean; detail?: string; error?: string }>(
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const result = yield* Effect.promise(async () => rpc<{ ok: boolean; detail?: string; error?: string }>(
         "decideRefinement",
         [{
           requestId: decision.requestId,
@@ -401,17 +405,17 @@ function StagedSkillDecision(
           expectedDigest: digest,
           decision: verdict,
         }],
-      );
+      ));
 
       setNotice({ text: result.ok ? (result.detail ?? "done") : (result.error ?? "failed"), ok: result.ok });
 
       if (result.ok) onDecided();
-    } catch (error) {
-      setNotice({ text: renderThrownChain({ cause: error }), ok: false });
-    } finally {
+    }), showing((chain) => {
+      setNotice({ text: chain, ok: false });
+    })), Effect.sync(() => {
       setBusy(false);
-    }
-  }, [rpc, decision.requestId, decision.routeIndex, onDecided]);
+    }));
+  })), [rpc, decision.requestId, decision.routeIndex, onDecided]);
 
   return (
     <div className="mt-1.5">

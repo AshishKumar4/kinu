@@ -78,7 +78,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     event: 'monitor.check_failed',
     site: 'packages/cf-backend/src/server.ts',
     mechanism: 'diagnostics',
-    emitter: 'failure',
+    emitter: 'settleLogged',
     means: 'The synthetic monitoring tick did not complete. Declared rather than '
       + 'added: the emit predates this registry, and declaring it is what makes '
       + 'its deletion visible.',

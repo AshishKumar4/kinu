@@ -440,6 +440,18 @@ const NAMED_SHELL_STATE_PREFIX = 'nimbus_programmatic_shell:';
 
 const NamedShellStateSchema = v.object({ cwd: v.pipe(v.string(), v.startsWith('/')) });
 
+/** Nimbus 0.15 keeps a named shell's state in the workspace's own SQLite; worker 0.13.1 moves an older key there on
+ *  the box's first named call. Nimbus has no public read of it yet. */
+const NIMBUS_SHELLS_TABLE = 'vfs_shells';
+
+function namedShellCwd(sql: SqlStorage, id: string): string | null {
+  if (sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", NIMBUS_SHELLS_TABLE).toArray().length === 0) return null;
+  const [row] = sql.exec(`SELECT cwd FROM ${NIMBUS_SHELLS_TABLE} WHERE id = ?`, id).toArray();
+  const saved = v.safeParse(NamedShellStateSchema, row);
+
+  return saved.success ? saved.output.cwd : null;
+}
+
 function workspaceBox(deps: {
   runtime: () => Promise<HostedRuntime>;
   ports: PortRegistry;
@@ -467,6 +479,9 @@ function workspaceBox(deps: {
     startProcess: async (command, options): Promise<NimbusStartResult> => await (await runtime()).startProcess(command, named(options)),
     runCode: async (code, options): Promise<NimbusExecResult> => await (await runtime()).runCode(code, named(options)),
     shellCwd: async (name) => {
+      const kept = namedShellCwd(deps.ctx.storage.sql, shellId(name));
+
+      if (kept !== null) return kept;
       const saved = v.safeParse(NamedShellStateSchema, await deps.ctx.storage.get(`${NAMED_SHELL_STATE_PREFIX}${shellId(name)}`));
 
       return saved.success ? saved.output.cwd : null;

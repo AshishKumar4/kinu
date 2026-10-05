@@ -19,6 +19,7 @@
  * gates on this shared tree ("Execution context was destroyed").
  */
 
+import { Effect } from 'effect';
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, watch } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
@@ -27,7 +28,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import type { Page } from 'puppeteer';
 import { build } from 'vite';
 import * as v from 'valibot';
-import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
+import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
 import { releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 import { declaredSettings } from './browser-declarations';
 import { SILENCE_NOTICE_ENV } from './deadline';
@@ -409,7 +410,7 @@ export interface GalleryOptions {
 export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, options: GalleryOptions = {}): Promise<T> {
   const dist = await builtGalleryDist();
 
-  const http = createHttpServer(async (request, response) => {
+  const http = createHttpServer((request, response) => detach(Effect.promise(async () => {
     // Static semantics, GET/HEAD only: the artifact is immutable, and any
     // /api/* traffic a frame produces belongs to the page's own fixtures or
     // to a gate's request interception, never to this server.
@@ -446,7 +447,7 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
     if (bytes === null) return;
     response.writeHead(200, { 'content-type': builtAssetContentType(file), 'content-length': String(bytes.byteLength) });
     response.end(request.method === 'HEAD' ? undefined : bytes);
-  });
+  })));
 
   const listening = Promise.withResolvers<void>();
   http.once('error', listening.reject);
@@ -479,9 +480,9 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
     const noticePath = process.env[SILENCE_NOTICE_ENV];
 
     // The row's runner appends a line when its silence nears the bound: each open wait not yet reported says why.
-    const notices = noticePath === undefined ? null : watch(noticePath, async () => {
+    const notices = noticePath === undefined ? null : watch(noticePath, () => detach(Effect.promise(async () => {
       await Promise.all([...pendingWaits].filter((open) => !open.reported).map(reportStuck));
-    });
+    })));
 
     // Under `bun test` the preload's own listener ends the process first and the browser goes with its release
     // (test-chrome.ts). Under a bare `bun scripts/…` run (computed-style, plan-demo-film, review-package) there is no

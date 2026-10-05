@@ -1,4 +1,6 @@
 import { RpcSession, type RpcTransport } from 'capnweb';
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import type { ResidentSlateProcess } from './resident';
 
 /** Mirrors capnweb's `BatchClientTransport` over the facet's `/__rpc`; `x-slate-call` carries the invocation lineage. */
@@ -12,22 +14,23 @@ class FacetBatchTransport implements RpcTransport {
     process: Pick<ResidentSlateProcess, 'request'>,
     invocation: string,
   ) {
-    this.#promise = this.#scheduleBatch(async (batch: string[]) => {
-      const response = await process.request(new Request('https://slate.invalid/__rpc', {
+    this.#promise = this.#scheduleBatch((batch: string[]) => settle(Effect.gen(function* () {
+      const response = yield* Effect.promise(() => process.request(new Request('https://slate.invalid/__rpc', {
         method: 'POST',
         headers: { 'x-slate-call': invocation, 'content-type': 'text/plain' },
         body: batch.join('\n'),
-      }));
+      })));
 
       if (!response.ok) {
-        await response.body?.cancel();
-        throw new Error(`Slate RPC request failed: ${response.status} ${await response.text()}`);
+        yield* Effect.promise(async () => response.body?.cancel());
+
+        return yield* Effect.die(new Error(`Slate RPC request failed: ${response.status} ${yield* Effect.promise(() => response.text())}`));
       }
 
-      const body = await response.text();
+      const body = yield* Effect.promise(() => response.text());
 
       return body === '' ? [] : body.split('\n');
-    });
+    })));
   }
 
   async send(message: string): Promise<void> {

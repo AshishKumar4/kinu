@@ -5,7 +5,9 @@
  * `descriptor: null` is the no-partition cell; every scoping predicate must use `IS`.
  */
 
+import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
+import { settleSync } from '../obs/effect';
 import type { ExplorationRecord, ObjectiveDirection, ObjectiveScale } from '../strategy/objective';
 import {
   describeObjective, recordsInCell, recordsUnder,
@@ -63,14 +65,15 @@ export function listRecordObjectives(
   cursor: SeekCursor | null = null,
   limit = DEFAULT_OBJECTIVE_PAGE,
 ): Page<RecordObjectiveSummary> {
-  const page = boundedInt(limit, DEFAULT_OBJECTIVE_PAGE, 1, MAX_RECORD_PAGE);
-  const after = cursor === null ? null : objectiveAnchorOf(sql, actor, cursor.after);
-  const from = after === null ? 0 : 1;
-  const at = after?.lastRecordedAt ?? 0;
-  const objective = after?.objectiveId ?? '';
-  const floor = after === null ? '' : after.floorDigest ?? '';
+  return settleSync(Effect.gen(function* () {
+    const page = boundedInt(limit, DEFAULT_OBJECTIVE_PAGE, 1, MAX_RECORD_PAGE);
+    const after = cursor === null ? null : yield* objectiveAnchorOf(sql, actor, cursor.after);
+    const from = after === null ? 0 : 1;
+    const at = after?.lastRecordedAt ?? 0;
+    const objective = after?.objectiveId ?? '';
+    const floor = after === null ? '' : after.floorDigest ?? '';
 
-  const groups = sql<ObjectiveGroup>`
+    const groups = sql<ObjectiveGroup>`
     SELECT objective_id,
            floor_digest,
            MAX(metric)                AS metric,
@@ -94,22 +97,27 @@ export function listRecordObjectives(
      ORDER BY last_recorded_at DESC, objective_id ASC, COALESCE(floor_digest, '') ASC
      LIMIT ${page + 1}`;
 
-  return mapPage(seekPage(groups, page, objectiveCursor), (rows) => rows.map((row) => {
-    const direction = storedMember('direction', OBJECTIVE_DIRECTIONS, row.direction);
-    const handle = { objectiveId: row.objective_id, floorDigest: row.floor_digest };
+    const fetched = seekPage(groups, page, objectiveCursor);
 
-    return {
-      ...handle,
-      metric: row.metric,
-      unit: row.unit,
-      direction,
-      scale: storedMember('scale', OBJECTIVE_SCALES, row.scale),
-      // COUNT DISTINCT skips NULLs; add the no-partition cell back.
-      cells: row.named_cells + (row.unpartitioned > 0 ? 1 : 0),
-      rows: row.row_count,
-      best: recordsUnder(sql, actor, handle, { direction, limit: 1 })[0] ?? null,
-      lastRecordedAt: row.last_recorded_at,
-    };
+    const items = yield* Effect.forEach(fetched.items, (row) => Effect.gen(function* () {
+      const direction = yield* storedMember('direction', OBJECTIVE_DIRECTIONS, row.direction);
+      const handle = { objectiveId: row.objective_id, floorDigest: row.floor_digest };
+
+      return {
+        ...handle,
+        metric: row.metric,
+        unit: row.unit,
+        direction,
+        scale: yield* storedMember('scale', OBJECTIVE_SCALES, row.scale),
+        // COUNT DISTINCT skips NULLs; add the no-partition cell back.
+        cells: row.named_cells + (row.unpartitioned > 0 ? 1 : 0),
+        rows: row.row_count,
+        best: recordsUnder(sql, actor, handle, { direction, limit: 1 })[0] ?? null,
+        lastRecordedAt: row.last_recorded_at,
+      };
+    }));
+
+    return mapPage(fetched, () => items);
   }));
 }
 
@@ -133,16 +141,17 @@ export function listRecordCells(
   handle: RecordObjectiveHandle,
   request: RecordPageRequest = {},
 ): Page<RecordCellSummary> {
-  const direction = directionOf(sql, actor, handle);
+  return settleSync(Effect.gen(function* () {
+    const direction = yield* directionOf(sql, actor, handle);
 
-  if (direction === null) return { status: 'end', items: [] };
-  const page = boundedInt(request.limit, DEFAULT_CELL_PAGE, 1, MAX_RECORD_PAGE);
-  const cursor = request.cursor ?? null;
-  const after = cursor === null ? null : cellAnchorOf(sql, actor, handle, cursor.after);
-  const from = after === null ? 0 : 1;
-  const descriptor = after === null ? null : after.descriptor;
+    if (direction === null) return { status: 'end', items: [] };
+    const page = boundedInt(request.limit, DEFAULT_CELL_PAGE, 1, MAX_RECORD_PAGE);
+    const cursor = request.cursor ?? null;
+    const after = cursor === null ? null : yield* cellAnchorOf(sql, actor, handle, cursor.after);
+    const from = after === null ? 0 : 1;
+    const descriptor = after === null ? null : after.descriptor;
 
-  const cells = sql<{ descriptor: string | null; occupants: number }>`
+    const cells = sql<{ descriptor: string | null; occupants: number }>`
     SELECT descriptor, COUNT(*) AS occupants
       FROM exploration_records
      WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
@@ -154,11 +163,12 @@ export function listRecordCells(
      ORDER BY CASE WHEN descriptor IS NULL THEN 0 ELSE 1 END ASC, descriptor ASC
      LIMIT ${page + 1}`;
 
-  return mapPage(seekPage(cells, page, cellCursor), (rows) => rows.map((row) => ({
-    descriptor: row.descriptor,
-    occupants: row.occupants,
-    elite: recordsInCell(sql, actor, { ...handle, descriptor: row.descriptor }, { direction, seek: null, limit: 1 })[0] ?? null,
-  })));
+    return mapPage(seekPage(cells, page, cellCursor), (rows) => rows.map((row) => ({
+      descriptor: row.descriptor,
+      occupants: row.occupants,
+      elite: recordsInCell(sql, actor, { ...handle, descriptor: row.descriptor }, { direction, seek: null, limit: 1 })[0] ?? null,
+    })));
+  }));
 }
 
 /** One cell's population, best first, paged. `cellOccupants` stays unpaged: admission must
@@ -169,35 +179,37 @@ export function readRecordCell(
   handle: RecordCellHandle,
   request: RecordPageRequest = {},
 ): Page<ExplorationRecord> {
-  const direction = directionOf(sql, actor, handle);
+  return settleSync(Effect.gen(function* () {
+    const direction = yield* directionOf(sql, actor, handle);
 
-  if (direction === null) return { status: 'end', items: [] };
-  const page = boundedInt(request.limit, DEFAULT_OCCUPANT_PAGE, 1, MAX_RECORD_PAGE);
-  const cursor = request.cursor ?? null;
-  const seek = cursor === null ? null : occupantSeek(sql, actor, handle, cursor.after);
+    if (direction === null) return { status: 'end', items: [] };
+    const page = boundedInt(request.limit, DEFAULT_OCCUPANT_PAGE, 1, MAX_RECORD_PAGE);
+    const cursor = request.cursor ?? null;
+    const seek = cursor === null ? null : yield* occupantSeek(sql, actor, handle, cursor.after);
 
-  return seekPage(recordsInCell(sql, actor, handle, { direction, seek, limit: page + 1 }), page,
-    (record) => record.artifactDigest);
+    return seekPage(recordsInCell(sql, actor, handle, { direction, seek, limit: page + 1 }), page,
+      (record) => record.artifactDigest);
+  }));
 }
 
 /** The stored direction for a handle, or null when it names nothing. Rows the store cannot
  *  describe raise rather than read as empty. */
 function directionOf(
   sql: SqlExecutor, actor: ActorHandle, handle: RecordObjectiveHandle,
-): ObjectiveDirection | null {
+): Effect.Effect<ObjectiveDirection | null> {
   const described = describeObjective(sql, actor, handle);
 
-  if (described.identity !== null) return described.identity.direction;
+  if (described.identity !== null) return Effect.succeed(described.identity.direction);
 
   if (described.rows > 0) {
-    throw new Error(
+    return Effect.die(new Error(
       `exploration_records holds ${described.rows} row(s) under objective ${handle.objectiveId}`
       + ' written before the store recorded what it measured: no unit and no direction, so'
       + ' they can be neither ordered nor presented.',
-    );
+    ));
   }
 
-  return null;
+  return Effect.succeed(null);
 }
 
 /** Cursors are JSON so `''` and null descriptors stay distinct; every anchor is resolved against
@@ -223,17 +235,19 @@ function objectiveCursor(row: ObjectiveGroup): string {
   return JSON.stringify({ objectiveId: row.objective_id, floorDigest: row.floor_digest });
 }
 
-function objectiveAnchorOf(sql: SqlExecutor, actor: ActorHandle, after: string): ObjectiveAnchor {
-  const handle = parseAnchor('objective list', after, ObjectiveAnchorSchema);
+function objectiveAnchorOf(sql: SqlExecutor, actor: ActorHandle, after: string): Effect.Effect<ObjectiveAnchor> {
+  return Effect.gen(function* () {
+    const handle = yield* parseAnchor('objective list', after, ObjectiveAnchorSchema);
 
-  const row = sql<{ last_recorded_at: number | null }>`
+    const row = sql<{ last_recorded_at: number | null }>`
     SELECT MAX(first_recorded_at) AS last_recorded_at FROM exploration_records
      WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
        AND floor_digest IS ${handle.floorDigest}`[0];
 
-  if (!row || row.last_recorded_at === null) throw new StaleCursorError('objective list', after);
+    if (!row || row.last_recorded_at === null) return yield* Effect.die(new StaleCursorError('objective list', after));
 
-  return { ...handle, lastRecordedAt: row.last_recorded_at };
+    return { ...handle, lastRecordedAt: row.last_recorded_at };
+  });
 }
 
 function cellCursor(row: CellAnchor): string {
@@ -242,52 +256,53 @@ function cellCursor(row: CellAnchor): string {
 
 function cellAnchorOf(
   sql: SqlExecutor, actor: ActorHandle, handle: RecordObjectiveHandle, after: string,
-): CellAnchor {
-  const anchor = parseAnchor('cell list', after, CellAnchorSchema);
+): Effect.Effect<CellAnchor> {
+  return Effect.gen(function* () {
+    const anchor = yield* parseAnchor('cell list', after, CellAnchorSchema);
 
-  const present = sql<{ present: number }>`
+    const present = sql<{ present: number }>`
     SELECT 1 AS present FROM exploration_records
      WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
        AND floor_digest IS ${handle.floorDigest}
        AND descriptor IS ${anchor.descriptor} LIMIT 1`;
 
-  if (present.length === 0) throw new StaleCursorError('cell list', after);
+    if (present.length === 0) return yield* Effect.die(new StaleCursorError('cell list', after));
 
-  return anchor;
+    return anchor;
+  });
 }
 
 /** Value and time are read back, not carried: a re-record may have moved the row. */
 function occupantSeek(
   sql: SqlExecutor, actor: ActorHandle, handle: RecordCellHandle, after: string,
-): CellSeek {
+): Effect.Effect<CellSeek> {
   const row = sql<{ value: number; first_recorded_at: number }>`
     SELECT value, first_recorded_at FROM exploration_records
      WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
        AND floor_digest IS ${handle.floorDigest}
        AND descriptor IS ${handle.descriptor} AND artifact_digest = ${after} LIMIT 1`[0];
 
-  if (!row) throw new StaleCursorError('cell', after);
+  if (!row) return Effect.die(new StaleCursorError('cell', after));
 
-  return { value: row.value, firstRecordedAt: row.first_recorded_at, artifactDigest: after };
+  return Effect.succeed({ value: row.value, firstRecordedAt: row.first_recorded_at, artifactDigest: after });
 }
 
 /** A malformed cursor is treated as stale, with the parse failure as `cause`. */
-function parseAnchor<T>(what: string, after: string, schema: v.GenericSchema<T>): T {
-  try {
-    return v.parse(schema, JSON.parse(after));
-  } catch (cause) {
-    throw new StaleCursorError(what, after, { cause });
-  }
+function parseAnchor<T>(what: string, after: string, schema: v.GenericSchema<T>): Effect.Effect<T> {
+  return Effect.catchCause(
+    Effect.sync(() => v.parse(schema, JSON.parse(after))),
+    (failed) => Effect.die(new StaleCursorError(what, after, { cause: Cause.squash(failed) })),
+  );
 }
 
 const OBJECTIVE_DIRECTIONS: readonly ObjectiveDirection[] = ['minimise', 'maximise'];
 
 const OBJECTIVE_SCALES: readonly ObjectiveScale[] = ['linear', 'log'];
 
-function storedMember<Member extends string>(column: string, admitted: readonly Member[], stored: string): Member {
+function storedMember<Member extends string>(column: string, admitted: readonly Member[], stored: string): Effect.Effect<Member> {
   const member = admitted.find((candidate) => candidate === stored);
 
-  if (member === undefined) throw new Error(`exploration_records.${column} is ${JSON.stringify(stored)}, not a ${column}`);
+  if (member === undefined) return Effect.die(new Error(`exploration_records.${column} is ${JSON.stringify(stored)}, not a ${column}`));
 
-  return member;
+  return Effect.succeed(member);
 }

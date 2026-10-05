@@ -8,6 +8,7 @@
 // The userId is derived from the verified email (`deriveUserId`), so the email is the account and an
 // unverified address is not an identity.
 
+import { Cause, Data, Effect } from 'effect';
 import type { AuthIdentity } from './session';
 import type { OAuthProviderId } from '@kinu.run/core/identity';
 import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
@@ -17,7 +18,7 @@ import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
-import { classify, diagnostics, toKinuError, type KinuError } from '@kinu.run/core/obs';
+import { classify, diagnostics, toKinuError, type KinuError, settle, settleLogged } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -133,27 +134,29 @@ export async function createOAuthState(
 
 /** Deleted before it is judged, so a concurrent second callback finds nothing. A callback whose
  *  `binding` cookie is missing or wrong is refused before anything in the record is acted on. */
-export async function consumeOAuthState(
+export function consumeOAuthState(
   kv: KvStore,
   state: string,
   provider: OAuthProviderId,
   binding: string | null,
 ): Promise<OAuthStateRecord> {
-  const key = `oauth-state:${await sha256Hex(state)}`;
-  const record = await readKvJson(kv, key, OAuthStateSchema);
-  await kv.delete(key);
+  return settle(Effect.gen(function* () {
+    const key = `oauth-state:${yield* Effect.promise(async () => sha256Hex(state))}`;
+    const record = yield* Effect.promise(async () => readKvJson(kv, key, OAuthStateSchema));
+    yield* Effect.promise(async () => kv.delete(key));
 
-  if (!record) throw new Error('OAuth state is invalid or already used.');
+    if (!record) return yield* Effect.die(new Error('OAuth state is invalid or already used.'));
 
-  if (!binding || !timingSafeEqual(await sha256Hex(binding), record.bindingHash)) {
-    throw new Error('OAuth state was not issued to this browser. Start sign-in again.');
-  }
+    if (!binding || !timingSafeEqual(yield* Effect.promise(async () => sha256Hex(binding)), record.bindingHash)) {
+      return yield* Effect.die(new Error('OAuth state was not issued to this browser. Start sign-in again.'));
+    }
 
-  if (record.provider !== provider) throw new Error('OAuth state provider mismatch.');
+    if (record.provider !== provider) return yield* Effect.die(new Error('OAuth state provider mismatch.'));
 
-  if (record.expiresAt <= Date.now()) throw new Error('OAuth state expired. Start sign-in again.');
+    if (record.expiresAt <= Date.now()) return yield* Effect.die(new Error('OAuth state expired. Start sign-in again.'));
 
-  return { ...record, returnTo: sanitizeReturnTo(record.returnTo, new URL(record.redirectUri).origin) };
+    return { ...record, returnTo: sanitizeReturnTo(record.returnTo, new URL(record.redirectUri).origin) };
+  }));
 }
 
 /** The id is in the token, not KV, so logout always reaches the authority even before KV propagates. */
@@ -163,129 +166,119 @@ function parseSessionTokenUserId(token: string): string | null {
   return match?.[1] ?? null;
 }
 
-export async function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile): Promise<BrowserSession> {
-  const now = Date.now();
-  const identity = await resolveIdentity(env, profile, now);
-  const token = `ps_${identity.userId}_${randomToken(48)}`;
-  const tokenHash = await sha256Hex(token);
-  const expiresAt = now + SESSION_TTL_MS;
-  const caller = await ownerCaller(env);
-  const authority = sessionAuthority(env, identity.userId);
+export function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile): Promise<BrowserSession> {
+  return settle(Effect.gen(function* () {
+    const now = Date.now();
+    const identity = yield* resolveIdentity(env, profile, now);
+    const token = `ps_${identity.userId}_${randomToken(48)}`;
+    const tokenHash = yield* Effect.promise(async () => sha256Hex(token));
+    const expiresAt = now + SESSION_TTL_MS;
+    const caller = yield* Effect.promise(async () => ownerCaller(env));
+    const authority = sessionAuthority(env, identity.userId);
 
-  // One value for both stores so they cannot disagree about what this cookie stands for.
-  const minted: BrowserSessionIdentity = {
-    email: identity.email,
-    displayName: identity.displayName ?? null,
-    provider: identity.provider ?? profile.provider,
-    sub: identity.sub,
-    authTime: now,
-  };
+    // One value for both stores so they cannot disagree about what this cookie stands for.
+    const minted: BrowserSessionIdentity = {
+      email: identity.email,
+      displayName: identity.displayName ?? null,
+      provider: identity.provider ?? profile.provider,
+      sub: identity.sub,
+      authTime: now,
+    };
 
-  // Authority first: a cookie is never outstanding against a session nothing can revoke.
-  await authority.registerBrowserSession(caller, tokenHash, expiresAt, { ...minted, credentialGeneration: profile.credentialGeneration ?? 0 });
+    // Authority first: a cookie is never outstanding against a session nothing can revoke.
+    yield* Effect.promise(async () => authority.registerBrowserSession(caller, tokenHash, expiresAt, { ...minted, credentialGeneration: profile.credentialGeneration ?? 0 }));
 
-  try {
-    await writeKvJson(env.AUTH_KV, sessionKey(tokenHash), {
-      userId: identity.userId,
-      ...minted,
-      expiresAt,
-    }, SESSION_TTL_MS);
-  } catch (writeFailed) {
-    // This token is never returned; withdraw the row rather than leave it holding a slot.
-    try {
-      await authority.revokeBrowserSession(caller, tokenHash);
-    } catch (withdrawFailed) {
-      diagnostics.failure('auth.browser_session_row_stranded', toKinuError({
-        doing: 'withdrawing the session row a failed sign-in left behind',
-        cause: withdrawFailed,
-        otherwise: 'unavailable',
-      }));
-    }
+    yield* Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => writeKvJson(env.AUTH_KV, sessionKey(tokenHash), {
+        userId: identity.userId,
+        ...minted,
+        expiresAt,
+      }, SESSION_TTL_MS));
+    }), (failed) => Effect.gen(function* () {
+      const writeFailed = Cause.squash(failed);
+      // This token is never returned; withdraw the row rather than leave it holding a slot.
+      yield* Effect.promise(async () => settleLogged('auth.browser_session_row_stranded', { doing: 'withdrawing the session row a failed sign-in left behind', otherwise: 'unavailable' }, () => authority.revokeBrowserSession(caller, tokenHash)));
 
-    throw new SessionAuthorityUnavailableError({ cause: writeFailed });
-  }
+      return yield* Effect.die(new SessionAuthorityUnavailableError({ cause: writeFailed }));
+    }));
 
-  return { token, issuedAt: now, expiresAt, identity };
+    return { token, issuedAt: now, expiresAt, identity };
+  }));
 }
 
 /** A session that cannot be checked is not an invalid one: answering 401 during an outage would sign
  *  everyone out into a sign-in that also fails. Raised only at the store boundaries. */
-export class SessionAuthorityUnavailableError extends Error {
+export class SessionAuthorityUnavailableError extends Data.TaggedError('SessionAuthorityUnavailableError')<{ readonly message: string; readonly cause?: unknown }> {
   constructor(options: { cause: unknown }) {
-    super(
-      'Kinu cannot reach the store that holds your sign-in right now. Try again shortly.',
-      { cause: options.cause },
-    );
-    this.name = 'SessionAuthorityUnavailableError';
+    super({ message: 'Kinu cannot reach the store that holds your sign-in right now. Try again shortly.', cause: options.cause });
   }
 }
 
 /** Null when not signed in; throws {@link SessionAuthorityUnavailableError} when the answer cannot be
  *  obtained. Liveness is the authority row on every request; identity comes from the KV projection,
  *  or the row when KV has not caught up. Revocation deletes the row, so neither copy can revive it. */
-export async function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise<AuthIdentity | null> {
-  const userId = parseSessionTokenUserId(token);
+export function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise<AuthIdentity | null> {
+  return settle(Effect.gen(function* () {
+    const userId = parseSessionTokenUserId(token);
 
-  if (!userId) return null;
-  const tokenHash = await sha256Hex(token);
-  let record: v.InferOutput<typeof SessionSchema> | null;
+    if (!userId) return null;
+    const tokenHash = sha256Hex(token);
 
-  try {
-    record = await readKvJson(env.AUTH_KV, sessionKey(tokenHash), SessionSchema);
-  } catch (unreadable) {
-    // Told apart by the decoder's error type, never prose. An unreachable namespace is an outage;
-    // undecodable bytes are cleaned out and answered as signed out (a 503 would trap the browser).
-    if (!isMalformedRecord({ cause: unreadable })) {
-      throw new SessionAuthorityUnavailableError({ cause: unreadable });
-    }
+    const record = yield* Effect.catchCause(Effect.promise(() => readKvJson(env.AUTH_KV, sessionKey(tokenHash), SessionSchema)), (failed) => {
+      const unreadable = Cause.squash(failed);
 
-    await discardCorruptSession(env, userId, tokenHash, toKinuError({
-      doing: 'decoding the browser session record this cookie names',
-      cause: unreadable,
-      otherwise: 'bad_input',
-    }));
+      // Told apart by the decoder's error type, never prose. An unreachable namespace is an outage;
+      // undecodable bytes are cleaned out and answered as signed out (a 503 would trap the browser).
+      if (!isMalformedRecord({ cause: unreadable })) {
+        return Effect.die(new SessionAuthorityUnavailableError({ cause: unreadable }));
+      }
 
-    return null;
-  }
+      return Effect.as(Effect.promise(() => discardCorruptSession(env, userId, tokenHash, toKinuError({
+        doing: 'decoding the browser session record this cookie names',
+        cause: unreadable,
+        otherwise: 'bad_input',
+      }))), 'discarded' as const);
+    });
 
-  // kv.ts floors TTLs, so a record can outlive its deadline; this only picks which identity copy to read.
-  const projected = record && record.expiresAt > Date.now() ? record : null;
+    if (record === 'discarded') return null;
 
-  // Outside the try: a missing owner secret is a misconfiguration, not an unreachable DO.
-  const caller = await ownerCaller(env);
-  let live: LiveBrowserSession | null;
+    // kv.ts floors TTLs, so a record can outlive its deadline; this only picks which identity copy to read.
+    const projected = record && record.expiresAt > Date.now() ? record : null;
 
-  try {
-    live = await sessionAuthority(env, userId).verifyBrowserSession(caller, tokenHash);
-  } catch (unreachable) {
-    throw new SessionAuthorityUnavailableError({ cause: unreachable });
-  }
+    // Outside the catch: a missing owner secret is a misconfiguration, not an unreachable DO.
+    const caller = yield* Effect.promise(() => ownerCaller(env));
 
-  if (!live) return null;
+    const live: LiveBrowserSession | null = yield* Effect.catchCause(
+      Effect.promise(() => sessionAuthority(env, userId).verifyBrowserSession(caller, tokenHash)),
+      (failed) => Effect.die(new SessionAuthorityUnavailableError({ cause: Cause.squash(failed) })),
+    );
 
-  // Row fallback serves the first request after sign-in at a colo KV has not reached. `identity` is
-  // null only on rows registered before the row carried one.
-  const snapshot = projected ?? live.identity;
+    if (!live) return null;
 
-  if (!snapshot) return null;
+    // Row fallback serves the first request after sign-in at a colo KV has not reached. `identity` is
+    // null only on rows registered before the row carried one.
+    const snapshot = projected ?? live.identity;
 
-  // Once OAuth is declared, built-in sessions end with built-in sign-in.
-  if (BUILTIN_METHODS.has(snapshot.provider) && !builtinSignInOn(env)) return null;
+    if (!snapshot) return null;
 
-  // Annotated, not inferred, so the field-supply census sees the one site connecting `sessionTokenHash`.
-  const identity: AuthIdentity = {
-    // From the token, never a record, so no stored field can point a cookie at another user.
-    userId,
-    email: snapshot.email,
-    sub: snapshot.sub,
-    provider: snapshot.provider,
-    displayName: snapshot.displayName,
-    authTime: snapshot.authTime,
-    // Lets a later logout reach websockets tagged with this session.
-    sessionTokenHash: tokenHash,
-  };
+    // Once OAuth is declared, built-in sessions end with built-in sign-in.
+    if (BUILTIN_METHODS.has(snapshot.provider) && !builtinSignInOn(env)) return null;
 
-  return identity;
+    // Annotated, not inferred, so the field-supply census sees the one site connecting `sessionTokenHash`.
+    const identity: AuthIdentity = {
+      // From the token, never a record, so no stored field can point a cookie at another user.
+      userId,
+      email: snapshot.email,
+      sub: snapshot.sub,
+      provider: snapshot.provider,
+      displayName: snapshot.displayName,
+      authTime: snapshot.authTime,
+      // Lets a later logout reach websockets tagged with this session.
+      sessionTokenHash: tokenHash,
+    };
+
+    return identity;
+  }));
 }
 
 /** Decided by type, never by matching an error's prose. */
@@ -305,25 +298,11 @@ async function discardCorruptSession<Id>(
 ): Promise<void> {
   diagnostics.failure('auth.browser_session_record_malformed', fault);
 
-  try {
+  await settleLogged('auth.browser_session_row_left', { doing: 'revoking the session row of a record that no longer decodes', otherwise: 'unavailable' }, async () => {
     await sessionAuthority(env, userId).revokeBrowserSession(await ownerCaller(env), tokenHash);
-  } catch (rowFailed) {
-    diagnostics.failure('auth.browser_session_row_left', toKinuError({
-      doing: 'revoking the session row of a record that no longer decodes',
-      cause: rowFailed,
-      otherwise: 'unavailable',
-    }));
-  }
+  });
 
-  try {
-    await env.AUTH_KV.delete(sessionKey(tokenHash));
-  } catch (recordFailed) {
-    diagnostics.failure('auth.browser_session_record_left', toKinuError({
-      doing: 'removing a browser session record that no longer decodes',
-      cause: recordFailed,
-      otherwise: 'unavailable',
-    }));
-  }
+  await settleLogged('auth.browser_session_record_left', { doing: 'removing a browser session record that no longer decodes', otherwise: 'unavailable' }, () => env.AUTH_KV.delete(sessionKey(tokenHash)));
 }
 
 /** Deletes the authority row first so the cookie is refused at every colo; throws if that fails.
@@ -336,15 +315,7 @@ export async function revokeSession<Id>(env: AuthStoreEnv<Id>, token: string): P
   const caller = await ownerCaller(env);
   await sessionAuthority(env, userId).revokeBrowserSession(caller, tokenHash);
 
-  try {
-    await env.AUTH_KV.delete(sessionKey(tokenHash));
-  } catch (cleanupFailed) {
-    diagnostics.failure('auth.browser_session_record_left', toKinuError({
-      doing: 'removing the KV record of a session that is already revoked',
-      cause: cleanupFailed,
-      otherwise: 'unavailable',
-    }));
-  }
+  await settleLogged('auth.browser_session_record_left', { doing: 'removing the KV record of a session that is already revoked', otherwise: 'unavailable' }, () => env.AUTH_KV.delete(sessionKey(tokenHash)));
 }
 
 function sessionKey(tokenHash: string): string {
@@ -356,33 +327,35 @@ function sessionAuthority<Id>(env: AuthStoreEnv<Id>, userId: string): SessionAut
   return env.UserDO.get(env.UserDO.idFromName(userId));
 }
 
-async function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number): Promise<AuthIdentity> {
-  const email = profile.email.trim().toLowerCase();
+function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number): Effect.Effect<AuthIdentity, KinuError> {
+  return Effect.gen(function* () {
+    const email = profile.email.trim().toLowerCase();
 
-  if (!email) throw new Error('OAuth provider did not return an email address.');
+    if (!email) return yield* Effect.die(new Error('OAuth provider did not return an email address.'));
 
-  if (!profile.providerSub) throw new Error('OAuth provider did not return a stable subject.');
+    if (!profile.providerSub) return yield* Effect.die(new Error('OAuth provider did not return a stable subject.'));
 
-  const builtin = BUILTIN_METHODS.has(profile.provider);
+    const builtin = BUILTIN_METHODS.has(profile.provider);
 
-  // Unverified: a built-in account keeps its own namespace.
-  if (!profile.emailVerified && !builtin) {
-    throw new Error('OAuth provider did not report this email address as verified.');
-  }
+    // Unverified: a built-in account keeps its own namespace.
+    if (!profile.emailVerified && !builtin) {
+      return yield* Effect.die(new Error('OAuth provider did not report this email address as verified.'));
+    }
 
-  const userId = builtin ? await deriveBuiltinUserId(email) : await deriveUserId(email);
+    const userId = builtin ? (yield* Effect.promise(async () => deriveBuiltinUserId(email))) : (yield* Effect.promise(async () => deriveUserId(email)));
 
-  const stored = await sessionAuthority(env, userId)
-    .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined);
+    const stored = yield* Effect.promise(async () => sessionAuthority(env, userId)
+      .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined));
 
-  return {
-    userId,
-    email,
-    sub: profile.providerSub,
-    provider: profile.provider,
-    displayName: profile.displayName ?? stored.displayName,
-    authTime: now,
-  };
+    return {
+      userId,
+      email,
+      sub: profile.providerSub,
+      provider: profile.provider,
+      displayName: profile.displayName ?? stored.displayName,
+      authTime: now,
+    };
+  });
 }
 
 /** A path on `origin`, never the auth flow. A parser strips tab or newline (`/\t/evil.example` is another host). */

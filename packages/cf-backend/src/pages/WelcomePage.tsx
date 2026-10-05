@@ -1,4 +1,5 @@
 /** First-run setup wizard; an unfinished account lands here from any URL. */
+import { Cause, Effect } from 'effect';
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -9,7 +10,7 @@ import {
 import {
   APP_ROUTES, ONBOARDING_STEPS,
 } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, settle, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
@@ -102,30 +103,35 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const named = displayName.trim() || (profile?.email ?? '');
   const letter = (named === '' ? '?' : named)[0].toUpperCase();
 
-  const finish = useCallback(async () => {
+  const finish = useCallback(() => detach(Effect.gen(function* () {
     setBusy(true);
     setError(null);
 
-    try {
-      const { onboardedAt } = await completeOnboarding();
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const { onboardedAt } = yield* Effect.promise(async () => completeOnboarding());
       const current = lastValue(account.profile);
 
       // Publish the stamp before navigating so the gate doesn't bounce back to /welcome.
       if (current !== null) account.set({ ...current, onboardedAt });
       account.reload();
-      await navigate(APP_ROUTES.home, { replace: true });
-    } catch (cause) {
-      setError(renderThrownChain({ cause }));
+      yield* Effect.promise(async () => navigate(APP_ROUTES.home, { replace: true }));
+    }), showing((chain) => {
+      setError(chain);
       setBusy(false);
-    }
-  }, [account, navigate]);
+    }));
+  })), [account, navigate]);
 
-  const next = useCallback(async () => {
+  const next = useCallback(() => settle(Effect.gen(function* () {
     setError(null);
 
     if (step === 0 && name !== null && name !== profile?.displayName) {
       setBusy(true);
-      const failure = await setDisplayName(name).then(() => null, (...rejection: [unknown]) => renderThrownChain({ cause: rejection[0] }));
+
+      const failure = yield* Effect.matchCause(Effect.promise(() => setDisplayName(name)), {
+        onSuccess: () => null,
+        onFailure: (failed) => renderThrownChain({ cause: Cause.squash(failed) }),
+      });
+
       setBusy(false);
 
       if (failure !== null) {
@@ -138,7 +144,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
     }
 
     setStep((s) => Math.min(s + 1, LAST_STEP));
-  }, [step, name, profile, account]);
+  })), [step, name, profile, account]);
 
   return (
     <div className="fixed inset-0 p-bg overflow-y-auto">
@@ -210,7 +216,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">
                   Skip setup
                 </button>
-                <FilledButton disabled={busy} onClick={next}>
+                <FilledButton disabled={busy} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
                   {busy && <Loader size="sm" />} Next
                 </FilledButton>
               </div>

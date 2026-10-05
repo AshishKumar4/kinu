@@ -12,7 +12,7 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 // skills wait for owner approval, subagent specs are refused, and facts must be
 // backed by the user's own sentence in the reviewed turns.
 
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
 import { judgeAuthoredEdit } from './proposer';
@@ -255,8 +255,8 @@ function plan(
       // An evicted pass's refiner is still working; a later pass takes its answer.
       if (answered === 'running') return null;
 
-      if (!answered.ok) return refuse(answered.error);
-      proposal = answered.proposal;
+      if (Result.isFailure(answered)) return refuse(answered.failure);
+      proposal = answered.success;
     }
 
     if (proposal.scope !== request.scope) {
@@ -304,9 +304,7 @@ function plan(
   });
 }
 
-type RefinerAnswer =
-  | { readonly ok: true; readonly proposal: RefinementProposal }
-  | { readonly ok: false; readonly error: string };
+type RefinerAnswer = Result.Result<RefinementProposal, string>;
 
 /** One of the nine error codes, so owner-visible refusals use the shared vocabulary. */
 const OFF_SCHEMA_ANSWER: ErrorCode = 'bad_input';
@@ -333,7 +331,7 @@ async function askRefiner(
 ): Promise<RefinerAnswer | 'running'> {
   const refiner = deps.refiner;
 
-  if (!refiner) return { ok: false, error: 'this host wires no refiner' };
+  if (!refiner) return Result.fail('this host wires no refiner');
   const lane = { requestId: request.id } as const;
   const held = refiner.reclaim(lane);
 
@@ -357,18 +355,18 @@ async function askRefiner(
     const outcome = await refiner.start(brief);
 
     if (!('status' in outcome)) {
-      return { ok: false, error: `the refiner could not start: ${outcome.error}` };
+      return Result.fail(`the refiner could not start: ${outcome.error}`);
     }
 
     if (outcome.status === 'failed') {
-      return { ok: false, error: `the refiner could not start (${outcome.reason ?? 'unknown'}): ${outcome.answer}` };
+      return Result.fail(`the refiner could not start (${outcome.reason ?? 'unknown'}): ${outcome.answer}`);
     }
 
     // A later pass reclaims its answer.
     return 'running';
   }
 
-  if (held.status !== 'completed') return { ok: false, error: `the refiner did not answer (unavailable): ${held.answer}` };
+  if (held.status !== 'completed') return Result.fail(`the refiner did not answer (unavailable): ${held.answer}`);
   const answer = held.answer;
 
   const parsed = v.safeParse(
@@ -378,14 +376,11 @@ async function askRefiner(
 
   if (!parsed.success) {
     // `renderIssues` names each issue's path, so the refusal names keys to fix.
-    return {
-      ok: false,
-      error: `the refiner's answer is not a valid refinement proposal (${OFF_SCHEMA_ANSWER}): `
-        + renderIssues(parsed.issues),
-    };
+    return Result.fail(`the refiner's answer is not a valid refinement proposal (${OFF_SCHEMA_ANSWER}): `
+      + renderIssues(parsed.issues));
   }
 
-  return { ok: true, proposal: parsed.output };
+  return Result.succeed(parsed.output);
 }
 
 /**
@@ -559,20 +554,15 @@ function userEvidence(row: TurnRating): string {
   return `${row.request}\n${row.followup ?? ''}`;
 }
 
-type QuoteVerdict = { readonly ok: true } | { readonly ok: false; readonly reason: string };
-
-function checkQuote(quote: string, reviewed: readonly TurnRating[]): QuoteVerdict {
+function checkQuote(quote: string, reviewed: readonly TurnRating[]): Result.Result<void, string> {
   const trimmed = quote.trim();
   const words = trimmed.split(/\s+/u).filter((word) => word !== '');
 
   if (trimmed.length < MIN_QUOTE_CHARS || words.length < MIN_QUOTE_WORDS) {
-    return {
-      ok: false,
-      reason: `the quote is not substantive: ${String(trimmed.length)} characters and `
-        + `${String(words.length)} words, below the ${String(MIN_QUOTE_CHARS)}-character and `
-        + `${String(MIN_QUOTE_WORDS)}-word floor. A fragment that short matches almost any `
-        + 'conversation, so it is evidence of nothing',
-    };
+    return Result.fail(`the quote is not substantive: ${String(trimmed.length)} characters and `
+      + `${String(words.length)} words, below the ${String(MIN_QUOTE_CHARS)}-character and `
+      + `${String(MIN_QUOTE_WORDS)}-word floor. A fragment that short matches almost any `
+      + 'conversation, so it is evidence of nothing');
   }
 
   // Whitespace-normalised and case-insensitive (the ledger re-wraps what it
@@ -583,15 +573,12 @@ function checkQuote(quote: string, reviewed: readonly TurnRating[]): QuoteVerdic
     userEvidence(row).replace(/\s+/gu, ' ').toLowerCase().includes(needle));
 
   if (!said) {
-    return {
-      ok: false,
-      reason: 'not quoted by the user anywhere in the reviewed trajectory: a preference reaches '
-        + "memory immediately, so the user's own words are the only evidence that can stand in "
-        + 'for a trial',
-    };
+    return Result.fail('not quoted by the user anywhere in the reviewed trajectory: a preference reaches '
+      + "memory immediately, so the user's own words are the only evidence that can stand in "
+      + 'for a trial');
   }
 
-  return { ok: true };
+  return Result.void;
 }
 
 /**
@@ -607,10 +594,10 @@ function routeFact(
 ): RefinementRoute {
   const verdict = checkQuote(edit.quote, reviewed);
 
-  if (!verdict.ok) {
+  if (Result.isFailure(verdict)) {
     return {
       kind: 'fact', owner: 'agent_facts', target: edit.key,
-      disposition: 'refused', reason: verdict.reason,
+      disposition: 'refused', reason: verdict.failure,
     };
   }
 

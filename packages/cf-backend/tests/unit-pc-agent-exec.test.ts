@@ -1122,7 +1122,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({
-      code: 'cancelled',
+      name: 'AbortError',
       message: 'device exec stopped: the device confirmed its owned command process group terminated; separately sessioned processes may still run',
     });
     expect(await gone(descendant)).toBe(true);

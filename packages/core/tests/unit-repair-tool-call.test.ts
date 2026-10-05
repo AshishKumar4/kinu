@@ -18,7 +18,7 @@ const invalid = (toolName: string, input: string) => new InvalidToolInputError({
 const repair = repairToolCall<typeof tools>();
 
 const run = (toolName: string, input: string, error: InvalidToolInputError | NoSuchToolError) =>
-  repair({ toolCall: call(toolName, input), tools, error, system: undefined, messages, inputSchema: async () => ({}) });
+  repair({ toolCall: call(toolName, input), tools, error, instructions: undefined, system: undefined, messages, inputSchema: async () => ({}) });
 
 describe('the deterministic tool-call repair', () => {
   test('a case-only name drift is renamed when exactly one tool matches', async () => {

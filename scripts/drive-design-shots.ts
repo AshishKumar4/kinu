@@ -102,7 +102,13 @@ async function shootOne(page: Page, origin: string, shot: Shot): Promise<string>
 
 async function shoot(newPage: () => Promise<Page>, origin: string): Promise<string[]> {
   const listing = await newPage();
-  const views = await designViews(listing, origin).finally(() => listing.close());
+  let views: Awaited<ReturnType<typeof designViews>>;
+
+  try {
+    views = await designViews(listing, origin);
+  } finally {
+    await listing.close();
+  }
 
   const shots: Shot[] = views.filter((view) => kept('only', view.id)).flatMap((view) => VIEWPORTS
     .filter((viewport) => kept('vp', viewport.name))

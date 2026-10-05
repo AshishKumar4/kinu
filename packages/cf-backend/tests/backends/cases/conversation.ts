@@ -1,7 +1,9 @@
 import { seedTranscriptEntry } from '@kinu.run/test-utils';
 /** The conversation itself: what the owner sends, and taking it back. */
 import { expect } from 'bun:test';
-import { CHAT_SESSION_ID, type SessionHistory } from '@kinu.run/core';
+import { Effect } from 'effect';
+import { CHAT_SESSION_ID, type ActorHandle, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import type { SharedCase } from '../cases';
 
 /** One question and its answer, as a settled turn records them. */
@@ -18,6 +20,14 @@ async function spoken(history: SessionHistory): Promise<string[][]> {
   return (await history.transcript(CHAT_SESSION_ID).history()).map((message) => [
     message.role, message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
   ]);
+}
+
+/** Every context and revision row the actor holds: a revert forks a context before its last fence. */
+function contextRows(sql: SqlExecutor, actor: ActorHandle): number[] {
+  return [
+    sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_contexts WHERE actor_id=${actor.actorId}`[0]?.n ?? 0,
+    sql<{ n: number }>`SELECT COUNT(*) AS n FROM context_revisions WHERE actor_id=${actor.actorId}`[0]?.n ?? 0,
+  ];
 }
 
 export const CONVERSATION_CASES: readonly SharedCase[] = [
@@ -58,6 +68,27 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
       await surface.revertConversation('q-2');
       expect(await spoken(history)).toEqual([['user', 'Name the release.'], ['assistant', 'Aurora.']]);
       await expect(surface.revertConversation('q-9')).rejects.toThrow('conversation entry does not exist');
+    },
+  },
+  {
+    title: 'a fence refusing after the revert has forked rolls the whole transaction back',
+    covers: ['revertConversation'],
+    async run({ history, sql, actor }) {
+      await exchange(history, 'q-1', 'Name the release.', 'Aurora.');
+      await exchange(history, 'q-2', 'Shorter.', 'Aur.');
+      const before = contextRows(sql, actor);
+      let checks = 0;
+
+      const idle = () => Effect.suspend(() => {
+        checks += 1;
+
+        return checks > 1 ? Effect.fail(new KinuError('denied', 'a turn started mid-revert')) : Effect.void;
+      });
+
+      expect(() => history.revertTo(CHAT_SESSION_ID, 'q-2', idle)).toThrow('a turn started mid-revert');
+      expect(checks).toBe(2);
+      expect(contextRows(sql, actor)).toEqual(before);
+      expect(await spoken(history)).toEqual([['user', 'Name the release.'], ['assistant', 'Aurora.'], ['user', 'Shorter.'], ['assistant', 'Aur.']]);
     },
   },
   {

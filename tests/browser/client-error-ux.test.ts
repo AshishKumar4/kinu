@@ -28,9 +28,10 @@
  *      throws, all while one POST hangs open.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
 import type { HTTPRequest, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, detach } from '@kinu.run/core/obs';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 import { CLIENT_ERROR_ENDPOINT, CLIENT_ERROR_MAX_REQUEST_BYTES } from '@kinu.run/core';
@@ -160,7 +161,7 @@ async function serve(
   sent: Reports,
 ): Promise<void> {
   await page.setRequestInterception(true);
-  page.on('request', async (request: HTTPRequest) => {
+  page.on('request', (request: HTTPRequest) => detach(Effect.promise(async () => {
     const path = new URL(request.url()).pathname;
 
     if (path === HEALTH) {
@@ -215,7 +216,7 @@ async function serve(
       contentType: 'application/json',
       body: JSON.stringify({ releaseMatch: 'match' }),
     });
-  });
+  })));
 }
 
 /** The boundary's fallback, as a reader sees it. */

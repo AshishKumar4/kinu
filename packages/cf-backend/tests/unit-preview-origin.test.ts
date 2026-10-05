@@ -894,6 +894,22 @@ describe('the app document policy', () => {
     expect(cspOf(null)).toContain("font-src 'self' data:");
   });
 
+  // D70: KasmVNC's client takes its socket's host, port and path from settings a user can edit.
+  test('the desktop client is framed by the app alone, and its socket reaches this origin only', () => {
+    const res = withAppSecurityHeaders(
+      new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } }), new URL(`${APP}/kasmvnc/vnc.html`), `https://*.${SUFFIX}`,
+    );
+
+    const csp = res.headers.get('content-security-policy') ?? '';
+
+    expect({
+      frame: res.headers.get('x-frame-options'), ancestors: /frame-ancestors [^;]*/.exec(csp)?.[0], connect: /connect-src [^;]*/.exec(csp)?.[0],
+      frames: /frame-src [^;]*/.exec(csp)?.[0],
+    }).toEqual({
+      frame: 'SAMEORIGIN', ancestors: "frame-ancestors 'self'", connect: `connect-src 'self' wss://${new URL(APP).host}`, frames: "frame-src 'none'",
+    });
+  });
+
   test('non-document responses are left alone', () => {
     const json = new Response('{}', { headers: { 'content-type': 'application/json' } });
     expect(withAppSecurityHeaders(json, new URL(APP), null)).toBe(json);

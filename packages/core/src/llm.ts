@@ -26,7 +26,7 @@ export function createVercelAILLM(config: LLMProviderConfig, spend: ModelCallSpe
   return {
     stream: (opts) => streamTextReported({
       model,
-      system: opts.system,
+      instructions: opts.system,
       messages: opts.messages.map(m => ({
         role: m.role,
         content: m.content,

@@ -1,4 +1,6 @@
 import type { ActorHandle } from '../identity/actor-handle';
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
 import type { MessageReference, SessionMessageReader } from './messages';
@@ -37,8 +39,7 @@ export interface ContextCommitRequest {
   readonly turnId: string | null;
   /** Returns the membership the revision publishes; runs inside the transaction. */
   readonly mutate: (current: readonly ContextEntry[]) => readonly ContextEntry[];
-  /** Throws when the turn that prepared this change no longer holds the actor. */
-  readonly assertEpoch: () => void;
+  readonly assertEpoch: () => Effect.Effect<void, KinuError>;
   /** The staged proposal this change applies: it authors the revision and is recorded on it. */
   readonly proposal?: { readonly id: string; readonly author: string };
 }
@@ -155,9 +156,9 @@ export class SessionContext {
   commit(expected: ContextSelection | null, request: ContextCommitRequest): ContextSelection {
     const { cause, turnId, mutate, assertEpoch, proposal } = request;
 
-    return this.atomic(() => {
+    return this.atomic(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
-      assertEpoch();
+      yield* assertEpoch();
       const selected = this.selected() ?? (expected === null ? this.initialize() : null);
 
       if (selected === null || (expected !== null && (selected.contextId !== expected.contextId || selected.revision !== expected.revision))) throw new KinuError('denied', 'context changed during preparation');
@@ -181,17 +182,17 @@ export class SessionContext {
       // An empty authored edit is still recorded: an explicitly empty history is a statement.
       return this.revise(selected, current, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
         recordUnchanged: proposal !== undefined || cause === 'edit' });
-    });
+    })));
   }
 
   /** Before entry `before`, else at the end; one revision, less the renders it `replaces`. */
   addRender(
     reference: MessageReference, at: { readonly before: string | null; readonly replaces: boolean },
-    request: { readonly turnId: string | null; readonly assertEpoch: () => void },
+    request: { readonly turnId: string | null; readonly assertEpoch: () => Effect.Effect<void, KinuError> },
   ): ContextSelection {
-    return this.atomic(() => {
+    return this.atomic(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
-      request.assertEpoch();
+      yield* request.assertEpoch();
       const selected = this.selected() ?? this.initialize();
       const current = this.headEntries(selected);
       const kept = at.replaces ? this.conversationOf(current) : current;
@@ -201,7 +202,7 @@ export class SessionContext {
       const next = [...kept.slice(0, index), added, ...kept.slice(index)].map((entry, position) => ({ ...entry, position }));
 
       return this.revise(selected, current, next, { author: this.actor.actorId, cause: 'render', turnId: request.turnId, proposalId: null, recordUnchanged: false });
-    });
+    })));
   }
 
   /** The next revision of an unselected context, opened on first use: an entry is its position, so a kept message writes nothing. */
@@ -276,16 +277,16 @@ export class SessionContext {
     });
   }
 
-  select(expected: ContextSelection, target: ContextSelection, assertIdle: () => void): void {
-    this.atomic(() => {
+  select(expected: ContextSelection, target: ContextSelection, assertIdle: () => Effect.Effect<void, KinuError>): void {
+    return this.atomic(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
-      assertIdle();
+      yield* assertIdle();
       const selected = this.selected();
 
       if (selected?.contextId !== expected.contextId || selected.revision !== expected.revision) throw new KinuError('denied', 'context selection changed');
 
       if (this.head(target.contextId) !== target.revision) throw new KinuError('denied', 'branch selection must name its current revision');
       void this.sql`UPDATE actor_context_selection SET context_id=${target.contextId} WHERE actor_id=${this.actor.actorId}`;
-    });
+    })));
   }
 }

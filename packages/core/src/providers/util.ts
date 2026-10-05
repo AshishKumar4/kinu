@@ -1,5 +1,5 @@
-import type { LanguageModelV3Message } from '@ai-sdk/provider';
-import type { LanguageModelMiddleware } from 'ai';
+import type { LanguageModelV4Message } from '@ai-sdk/provider';
+import { StreamProviderError, type LanguageModelMiddleware } from 'ai';
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
@@ -66,7 +66,7 @@ export function statelessResponses(reasoning: boolean): LanguageModelMiddleware 
   const stateless = reasoning ? { store: false, forceReasoning: true } : { store: false };
 
   return {
-    specificationVersion: 'v3',
+    specificationVersion: 'v4',
     transformParams: async ({ params }) => ({
       ...params,
       prompt: params.prompt.map(withoutItemIds),
@@ -75,7 +75,7 @@ export function statelessResponses(reasoning: boolean): LanguageModelMiddleware 
   };
 }
 
-function withoutItemIds(message: LanguageModelV3Message): LanguageModelV3Message {
+function withoutItemIds(message: LanguageModelV4Message): LanguageModelV4Message {
   if (message.role !== 'assistant') return message;
 
   return {
@@ -188,6 +188,14 @@ function readErrorFailure(input: { readonly error: Error; readonly depth: number
   const { error, depth } = input;
   const envelope = v.safeParse(ApiCallErrorSchema, error);
   const status = envelope.success ? envelope.output.statusCode : undefined;
+
+  // ai 7 wraps a failure reading an accepted response in a 2xx `APICallError`: the facts are its cause's.
+  if (status !== undefined && status < 300 && depth < PROVIDER_ERROR_MAX_DEPTH) {
+    const read = readProviderFailure({ cause: error.cause, depth: depth + 1 });
+
+    if (read !== null) return read;
+  }
+
   const body = envelope.success ? envelope.output.responseBody : undefined;
 
   // The reason lives in the body; `||` because an empty message says nothing.
@@ -211,6 +219,11 @@ function readProviderFailure(
   input: { readonly cause: unknown; readonly depth: number },
 ): ProviderFailureFacts | null {
   const { cause: error, depth } = input;
+
+  // ai 7 wraps the payload a provider streamed; the payload is the provider's own word.
+  if (StreamProviderError.isInstance(error) && depth < PROVIDER_ERROR_MAX_DEPTH) {
+    return readProviderFailure({ cause: error.data, depth: depth + 1 }) ?? readErrorFailure({ error, depth });
+  }
 
   if (error instanceof Error) return readErrorFailure({ error, depth });
 

@@ -32,7 +32,8 @@ import { nanoid } from '../utils/nanoid';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { type WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
-import { diagnostics, toKinuError } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { diagnostics, toKinuError, settle, settleLogged, settleLoggedSync } from '../obs/index';
 
 /**
  * Whether an arriving user message is a genuine follow-up or an independent task invocation.
@@ -249,17 +250,8 @@ export class AgentOrchestrator {
 
       const cadence = this.runDueSessionEvolution();
       const previousCadence = this.cadencePasses;
-      this.cadencePasses = (async (): Promise<void> => {
-        try {
-          await Promise.all([previousCadence, cadence]);
-        } catch (cause) {
-          diagnostics.failure(
-            'orchestrator.detached_work_failed',
-            toKinuError({ doing: 'run detached post-turn work', cause, otherwise: 'unavailable' }),
-            { work: 'Session evolution' },
-          );
-        }
-      })();
+      this.cadencePasses = settleLogged('orchestrator.detached_work_failed', { doing: 'run detached post-turn work', otherwise: 'unavailable' },
+        async () => { await Promise.all([previousCadence, cadence]); }, { work: 'Session evolution' });
     }
   }
 
@@ -333,19 +325,12 @@ export class AgentOrchestrator {
     await this.runDueEvolution();
 
     if (claimed) {
-      try {
-        await this.deps.engine.onSessionComplete({
+      await settleLogged('evolution.session_pass_failed', { doing: 'run the session evolution pass', otherwise: 'unavailable' }, () => this.deps.engine.onSessionComplete({
           sessionId: `sess-${nanoid()}`,
           turns: claimed.turns,
           startedAt: claimed.startedAt,
           endedAt: Date.now(),
-        });
-      } catch (err) {
-        diagnostics.failure(
-          'evolution.session_pass_failed',
-          toKinuError({ doing: 'run the session evolution pass', cause: err, otherwise: 'unavailable' }),
-        );
-      }
+        }));
 
       // Settled either way: retrying a persistently failing window would livelock. Carry-forward is for a dead host.
       claimed.settle();
@@ -360,14 +345,7 @@ export class AgentOrchestrator {
 
     if (!lane) return;
 
-    try {
-      await lane();
-    } catch (err) {
-      diagnostics.failure(
-        'evolution.refinement_lane_failed',
-        toKinuError({ doing: 'advance the continual-refinement lane', cause: err, otherwise: 'unavailable' }),
-      );
-    }
+    await settleLogged('evolution.refinement_lane_failed', { doing: 'advance the continual-refinement lane', otherwise: 'unavailable' }, () => lane());
   }
 
   private runDueEvolution(): Promise<void> {
@@ -438,14 +416,9 @@ export class AgentOrchestrator {
 
   /** Absent on a host whose next wake is its own next start (see BackendHost.reconcileDurableWake). */
   private reconcileDurableWake(): void {
-    try {
+    settleLoggedSync('event.durable_wake_arm_failed', { doing: 'arming the durable wake a pending reaction needs', otherwise: 'io' }, () => {
       this.deps.host.reconcileDurableWake?.();
-    } catch (err) {
-      diagnostics.failure(
-        'event.durable_wake_arm_failed',
-        toKinuError({ doing: 'arming the durable wake a pending reaction needs', cause: err, otherwise: 'io' }),
-      );
-    }
+    });
   }
 
   /**
@@ -454,15 +427,9 @@ export class AgentOrchestrator {
    */
   private returnEventsToPending(ids: readonly string[]): void {
     for (const id of ids) {
-      try {
+      settleLoggedSync('event.unbind_failed', { doing: 'return a bound event to pending', otherwise: 'io' }, () => {
         this.deps.eventLog.unbind(id);
-      } catch (err) {
-        diagnostics.failure(
-          'event.unbind_failed',
-          toKinuError({ doing: 'return a bound event to pending', cause: err, otherwise: 'io' }),
-          { eventId: id },
-        );
-      }
+      }, { eventId: id });
     }
 
     this.reconcileDurableWake();
@@ -473,73 +440,67 @@ export class AgentOrchestrator {
    * sees them consumed), then send the batch as one signal bound to `replyTurnId`. An undelivered signal
    * puts its events back. No-op when nothing is pending.
    */
-  async drainPendingEvents(
+  drainPendingEvents(
     /** Rethrow selection/binding failures: a durable effect that owes this drain must not report done. */
     opts?: { readonly rethrow?: boolean },
   ): Promise<void> {
-    let batch: ReturnType<typeof buildDrainBatch>;
-    const turnId = `evt-${nanoid()}`;
-    const bound: string[] = [];
+    return settle(Effect.gen({ self: this }, function* () {
+      const turnId = `evt-${nanoid()}`;
+      const bound: string[] = [];
 
-    try {
-      const pending = this.deps.eventLog.pending({ resolve_deferred: { now: Date.now(), phase: 'idle' } });
-      batch = buildDrainBatch(pending, this.deps.eventLog.isEvolutionReport);
+      const batch = yield* Effect.catchCause(Effect.sync(() => {
+        const pending = this.deps.eventLog.pending({ resolve_deferred: { now: Date.now(), phase: 'idle' } });
+        const selected = buildDrainBatch(pending, this.deps.eventLog.isEvolutionReport);
 
-      if (!batch) return;
-
-      for (const id of batch.ids) {
-        this.deps.eventLog.markConsumed(id, turnId, 0);
-        bound.push(id);
-      }
-    } catch (err) {
-      // Unbind the prefix so the retry sees the whole batch; otherwise it strands with no signal or wake.
-      for (const id of bound) {
-        try {
-          this.deps.eventLog.unbind(id);
-        } catch (undo) {
-          diagnostics.failure(
-            'orchestrator.drain_unbind_failed',
-            toKinuError({ doing: 'release an event bound by a drain that failed', cause: undo, otherwise: 'io' }),
-            { turnId, event: id },
-          );
+        for (const id of selected?.ids ?? []) {
+          this.deps.eventLog.markConsumed(id, turnId, 0);
+          bound.push(id);
         }
-      }
 
-      const failure = toKinuError({
-        doing: 'select the pending events for a drain turn', cause: err, otherwise: 'io',
+        return selected;
+      }), (failed) => {
+        // Unbind the prefix so the retry sees the whole batch; otherwise it strands with no signal or wake.
+        for (const id of bound) {
+          settleLoggedSync('orchestrator.drain_unbind_failed', { doing: 'release an event bound by a drain that failed', otherwise: 'io' }, () => {
+            this.deps.eventLog.unbind(id);
+          }, { turnId, event: id });
+        }
+
+        const failure = toKinuError({
+          doing: 'select the pending events for a drain turn', cause: Cause.squash(failed), otherwise: 'io',
+        });
+
+        diagnostics.failure('orchestrator.drain_select_failed', failure, { turnId });
+
+        return opts?.rethrow === true ? Effect.fail(failure) : Effect.succeed(null);
       });
 
-      diagnostics.failure('orchestrator.drain_select_failed', failure, { turnId });
+      if (!batch) return;
+      const ids = batch.ids;
+      let metadata: JsonObject | undefined;
 
-      if (opts?.rethrow) throw failure;
+      if (batch.mode !== null || batch.missions.length > 0) {
+        metadata = {};
 
-      return;
-    }
+        if (batch.mode !== null) metadata.kinuMode = batch.mode;
 
-    const ids = batch.ids;
-    let metadata: JsonObject | undefined;
+        if (batch.missions.length > 0) metadata[MISSION_LABELS_METADATA_KEY] = batch.missions;
+      }
 
-    if (batch.mode !== null || batch.missions.length > 0) {
-      metadata = {};
+      const signal: AgentSignal = {
+        kind: 'event_drain',
+        text: batch.text,
+        stepText: batch.midTurnText,
+        replyTurnId: turnId,
+        // The rows are already bound to `turnId`, so it routes the queued half through the host's durable
+        // admission ledger; a re-delivery of the same drain collapses to one turn.
+        idempotencyKey: turnId,
+        compensate: () => this.returnEventsToPending(ids),
+        metadata,
+      };
 
-      if (batch.mode !== null) metadata.kinuMode = batch.mode;
-
-      if (batch.missions.length > 0) metadata[MISSION_LABELS_METADATA_KEY] = batch.missions;
-    }
-
-    const signal: AgentSignal = {
-      kind: 'event_drain',
-      text: batch.text,
-      stepText: batch.midTurnText,
-      replyTurnId: turnId,
-      // The rows are already bound to `turnId`, so it routes the queued half through the host's durable
-      // admission ledger; a re-delivery of the same drain collapses to one turn.
-      idempotencyKey: turnId,
-      compensate: () => this.returnEventsToPending(ids),
-      metadata,
-    };
-
-    await this.inbox.send(signal);
+      yield* Effect.promise(() => this.inbox.send(signal));
+    }));
   }
 
   // The settle spine is `declareTerminalRoster` (orchestrator/terminal-roster.ts). The pure rules below are

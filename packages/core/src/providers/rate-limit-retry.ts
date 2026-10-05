@@ -1,7 +1,8 @@
 import { APICallError } from 'ai';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import * as v from 'valibot';
-import { diagnostics, KinuError, tolerate, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, KinuError, settle, settleSync, tolerate, toKinuError } from '../obs/index';
 import { fmtSpan } from '../utils/format';
 import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
 import { retryAfterOf } from './fallback-cooldown';
@@ -64,45 +65,46 @@ export function withRateLimitRetry(
     new KinuError('unavailable', message),
   ));
 
-  return asFetchFunction(async (input, requested) => {
-    const headers = copyHeaders(requested?.headers);
-    const stated = headers.get(PROVIDER_RETRIES_HEADER);
-    const retries = stated === null ? DEFAULT_PROVIDER_RETRIES : Number(stated);
+  return asFetchFunction((input, requested) => settle(Effect.gen(function* () {
+      const headers = copyHeaders(requested?.headers);
+      const stated = headers.get(PROVIDER_RETRIES_HEADER);
+      const retries = stated === null ? DEFAULT_PROVIDER_RETRIES : Number(stated);
 
-    headers.delete(PROVIDER_RETRIES_HEADER);
-    const init: RequestInit | undefined = stated === null ? requested : { ...requested, headers };
+      headers.delete(PROVIDER_RETRIES_HEADER);
+      const init: RequestInit | undefined = stated === null ? requested : { ...requested, headers };
 
-    if (!hasReplayableBody(input, init)) return fetchImpl(input, init);
+      if (!hasReplayableBody(input, init)) return yield* Effect.promise(() => fetchImpl(input, init));
 
-    const host = providerHost(input);
-    const lane = opts.lane === undefined ? host : `${host} ${opts.lane}`;
-    const signal = init?.signal ?? undefined;
+      const host = providerHost(input);
+      const lane = opts.lane === undefined ? host : `${host} ${opts.lane}`;
+      const signal = init?.signal ?? undefined;
 
-    const body = v.safeParse(v.string(), init?.body);
-    const streams = body.success && v.is(StreamRequestSchema, tolerate<unknown>(() => JSON.parse(body.output), 'malformed-input'));
+      const body = v.safeParse(v.string(), init?.body);
+      const streams = body.success && v.is(StreamRequestSchema, tolerate<unknown>(() => JSON.parse(body.output), 'malformed-input'));
 
-    const stalled = (): APICallError => new APICallError({
-      message: `${opts.provider ?? host} sent nothing for ${fmtSpan(silenceBoundMs('provider.stream.idle_ms'))}`,
-      url: input instanceof Request ? input.url : input.toString(),
-      requestBodyValues: undefined,
-      isRetryable: false,
-      cause: new KinuError('timeout', `the ${opts.provider ?? host} stream stalled`),
-    });
+      const stalled = (): APICallError => new APICallError({
+        message: `${opts.provider ?? host} sent nothing for ${fmtSpan(silenceBoundMs('provider.stream.idle_ms'))}`,
+        url: input instanceof Request ? input.url : input.toString(),
+        requestBodyValues: undefined,
+        isRetryable: false,
+        cause: new KinuError('timeout', `the ${opts.provider ?? host} stream stalled`),
+      });
 
-    const handedOver = (status: number | null, resetsInMs: number | null): APICallError => new APICallError({
-      message: `${host} is rate-limiting this account${status === null ? '' : ` (HTTP ${String(status)})`}`
-        + `${resetsInMs === null ? '' : `; it resets in ${fmtSpan(resetsInMs)}`}`,
-      url: input instanceof Request ? input.url : input.toString(),
-      requestBodyValues: undefined,
-      ...(status !== null && { statusCode: status }),
-      ...(resetsInMs !== null && { responseHeaders: { 'retry-after-ms': String(resetsInMs) } }),
-      isRetryable: false,
-    });
+      const handedOver = (status: number | null, resetsInMs: number | null): APICallError => new APICallError({
+        message: `${host} is rate-limiting this account${status === null ? '' : ` (HTTP ${String(status)})`}`
+          + `${resetsInMs === null ? '' : `; it resets in ${fmtSpan(resetsInMs)}`}`,
+        url: input instanceof Request ? input.url : input.toString(),
+        requestBodyValues: undefined,
+        ...(status !== null && { statusCode: status }),
+        ...(resetsInMs !== null && { responseHeaders: { 'retry-after-ms': String(resetsInMs) } }),
+        isRetryable: false,
+      });
 
-    const reportWait = (waitMs: number, attempt: number, source: ProviderWaitInfo['source'], status?: number): void => {
-      if (opts.onWait === undefined) return;
+      const reportWait = (waitMs: number, attempt: number, source: ProviderWaitInfo['source'], status?: number): Effect.Effect<void> => {
+        const onWait = opts.onWait;
 
-      try {
+        if (onWait === undefined) return Effect.void;
+
         const info: ProviderWaitInfo = {
           provider: opts.provider ?? host,
           waitMs,
@@ -112,85 +114,79 @@ export function withRateLimitRetry(
           ...(status !== undefined && { status }),
         };
 
-        opts.onWait(info);
-      } catch (cause) {
-        diagnostics.failure('provider.wait_notify_failed', toKinuError({
-          doing: 'reporting a provider wait',
-          cause,
-          otherwise: 'io',
+        return Effect.try({
+          try: () => onWait(info),
+          catch: (cause) => toKinuError({ doing: 'reporting a provider wait', cause, otherwise: 'io' }),
+        }).pipe(Effect.catch((failure) => Effect.sync(() => diagnostics.failure('provider.wait_notify_failed', failure))));
+      };
+
+      // Announce only cooldowns another request declared.
+      let owned: number | null = null;
+      let waits = 0;
+
+      const spendRetry = (spent: () => APICallError): Effect.Effect<void> => Effect.suspend(() => (++waits > retries ? Effect.die(spent()) : Effect.void));
+
+      for (let attempt = 1; ; attempt++) {
+          yield* Effect.promise(() => pacer.admit(lane, signal, {
+          onCooldown: (waitMs, untilMs, reason) => settleSync(Effect.gen(function* () {
+            if (waitMs > MAX_RETRY_DELAY_MS) {
+              return yield* Effect.die(waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason }));
+            }
+
+            if (untilMs === owned) return;
+
+            // A chain entry takes a call with no retries.
+            if (retries === 0) return yield* Effect.die(handedOver(null, waitMs));
+
+            yield* reportWait(waitMs, 0, 'cooldown');
+          })),
         }));
+
+        const reading = streams ? new LiveStream(stalled) : UNTIMED;
+        const response = yield* Effect.promise(() => reading.open(fetchImpl, input, init));
+        const limit = response === null ? null : yield* Effect.promise(() => rateLimitOf(response));
+        const read = response !== null && limit === null ? yield* Effect.promise(() => reading.body(response, waits >= retries)) : 'stall';
+
+        if (read instanceof Response) return read;
+
+        if (response === null || limit === null) {
+          yield* spendRetry(stalled);
+          const waitMs = Math.floor(random() * backoffCeiling(attempt));
+
+          yield* reportWait(waitMs, attempt, read);
+          yield* Effect.promise(() => sleep(waitMs, signal));
+          continue;
+        }
+
+        if ('spent' in limit) return yield* Effect.die(allowanceSpent({ input, response, body: limit.body, host, exhausted: limit.spent }));
+
+        const retryAfter = retryAfterOf(response.headers, now());
+
+        if (retryAfter !== null && retryAfter > MAX_RETRY_DELAY_MS) {
+          const reason = providerMessage({ body: limit.body });
+          const untilMs = now() + retryAfter;
+
+          pacer.declareWait(lane, retryAfter, reason);
+
+          return yield* Effect.die(waitTooLong({
+            input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason, status: limit.status, response,
+          }));
+        }
+
+        const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attempt));
+
+        const declared = pacer.declareWait(lane, waitMs);
+
+        yield* spendRetry(() => handedOver(limit.status, retryAfter ?? waitMs));
+        owned = declared;
+        warn(
+          `[kinu] ${host} rate-limited: waiting ${fmtSpan(waitMs)} `
+          + `(attempt ${String(attempt)})`,
+        );
+        yield* reportWait(waitMs, attempt, retryAfter !== null ? 'header' : 'backoff', limit.status);
+        yield* Effect.promise(() => sleep(waitMs, signal));
       }
-    };
-
-    // Announce only cooldowns another request declared.
-    let owned: number | null = null;
-    let waits = 0;
-
-    const spendRetry = (spent: () => APICallError): void => {
-      if (++waits > retries) throw spent();
-    };
-
-    for (let attempt = 1; ; attempt++) {
-      await pacer.admit(lane, signal, {
-        onCooldown: (waitMs, untilMs, reason) => {
-          if (waitMs > MAX_RETRY_DELAY_MS) {
-            throw waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason });
-          }
-
-          if (untilMs === owned) return;
-
-          // A chain entry takes a call with no retries.
-          if (retries === 0) throw handedOver(null, waitMs);
-
-          reportWait(waitMs, 0, 'cooldown');
-        },
-      });
-
-      const reading = streams ? new LiveStream(stalled) : UNTIMED;
-      const response = await reading.open(fetchImpl, input, init);
-      const limit = response === null ? null : await rateLimitOf(response);
-      const read = response !== null && limit === null ? await reading.body(response, waits >= retries) : 'stall';
-
-      if (read instanceof Response) return read;
-
-      if (response === null || limit === null) {
-        spendRetry(stalled);
-        const waitMs = Math.floor(random() * backoffCeiling(attempt));
-
-        reportWait(waitMs, attempt, read);
-        await sleep(waitMs, signal);
-        continue;
-      }
-
-      if ('spent' in limit) throw allowanceSpent({ input, response, body: limit.body, host, exhausted: limit.spent });
-
-      const retryAfter = retryAfterOf(response.headers, now());
-
-      if (retryAfter !== null && retryAfter > MAX_RETRY_DELAY_MS) {
-        const reason = providerMessage({ body: limit.body });
-        const untilMs = now() + retryAfter;
-
-        pacer.declareWait(lane, retryAfter, reason);
-
-        throw waitTooLong({
-          input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason, status: limit.status, response,
-        });
-      }
-
-      const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attempt));
-
-      const declared = pacer.declareWait(lane, waitMs);
-
-      spendRetry(() => handedOver(limit.status, retryAfter ?? waitMs));
-      owned = declared;
-      warn(
-        `[kinu] ${host} rate-limited: waiting ${fmtSpan(waitMs)} `
-        + `(attempt ${String(attempt)})`,
-      );
-      reportWait(waitMs, attempt, retryAfter !== null ? 'header' : 'backoff', limit.status);
-      await sleep(waitMs, signal);
-    }
-  });
+  })));
 }
 
 function backoffCeiling(attempt: number): number {

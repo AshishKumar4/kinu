@@ -1,7 +1,8 @@
+import { Effect, Cause } from 'effect';
 import type { Browser, BrowserWorker } from '@cloudflare/puppeteer';
 import * as v from 'valibot';
 import { markStoreChanged, sha256Hex, type RawSqlExec, type SqlExec } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, recording, toKinuError, settle } from '@kinu.run/core/obs';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from '../workspace-host';
 
 const AFTER_LAST_RENDER_MS = 30_000;
@@ -105,95 +106,101 @@ export class SlatePictures {
   }
 
   /** Left open: a shot whose put lands between this listing and the row's removal keeps its object; rare, and teardown reclaims it. */
-  async forget(workspace: string, slate: string, bucket: PictureBucket | undefined): Promise<void> {
-    try {
-      if (bucket !== undefined) await deletePictures(bucket, picturePrefix(workspace, slate));
+  forget(workspace: string, slate: string, bucket: PictureBucket | undefined): Promise<void> {
+    return settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
+      if (bucket !== undefined) yield* Effect.promise(() => deletePictures(bucket, picturePrefix(workspace, slate)));
       this.db.exec(`DELETE FROM slate_pictures WHERE slate = ?`, slate);
       markStoreChanged(this.db);
-    } catch (cause) {
+    }), recording({ doing: `deleting the pictures of removed slate ${slate}`, otherwise: 'unavailable' }, (failure) => {
       this.db.exec(
         `UPDATE slate_pictures SET due_at = ? + ? * (1 << MIN(attempts, 7)), due_since = NULL, attempts = attempts + 1 WHERE slate = ?`,
         Date.now(), RETRY_MS, slate,
       );
-      diagnostics.failure('slate.picture_delete_failed', toKinuError({
-        doing: `deleting the pictures of removed slate ${slate}`, cause, otherwise: 'unavailable',
-      }), { workspace, slate });
-    }
+      diagnostics.failure('slate.picture_delete_failed', failure, { workspace, slate });
+    })));
   }
 
-  async captureDue(capture: PictureCapture, now: number): Promise<boolean> {
-    const due = this.due(now);
+  captureDue(capture: PictureCapture, now: number): Promise<boolean> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const due = this.due(now);
 
-    if (due.length === 0) return false;
-    const live = await capture.slates();
+      if (due.length === 0) return false;
+      const live = yield* Effect.promise(async () => capture.slates());
 
-    for (const picture of due) {
-      if (!live.has(picture.slate)) await this.forget(capture.workspace, picture.slate, capture.bucket);
-    }
-
-    const shots = due.filter((picture) => live.has(picture.slate));
-
-    if (shots.length === 0) return false;
-    let camera: Camera;
-
-    try {
-      camera = await capture.camera();
-    } catch (cause) {
-      for (const picture of shots) this.failed(picture, Date.now());
-      throw cause;
-    }
-
-    let changed = false;
-
-    try {
-      for (const picture of shots.slice(0, SHOTS_PER_TICK)) {
-        try {
-          changed = await this.shoot(camera, capture, picture) || changed;
-        } catch (cause) {
-          this.failed(picture, Date.now());
-          diagnostics.failure('slate.picture_failed', toKinuError({
-            doing: `photographing slate ${picture.slate}`, cause, otherwise: 'unavailable',
-          }), { workspace: capture.workspace, slate: picture.slate, attempts: picture.attempts + 1 });
-        }
-      }
-    } finally {
-      await camera.close();
-    }
-
-    return changed;
-  }
-
-  private async shoot(camera: Camera, capture: PictureCapture, picture: DuePicture): Promise<boolean> {
-    const token = captureToken();
-    this.openCapture(picture.slate, token.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH), Date.now() + CAPTURE_HANDLE_LIFE_MS);
-
-    try {
-      const url = await capture.url(picture.port, token);
-
-      if (url === null) throw new Error('this deployment has no preview host');
-      const shot = await camera.shoot(url);
-      const digest = sha256Hex(shot);
-      const changed = digest !== picture.digest;
-
-      if (changed) {
-        const key = pictureKey(capture.workspace, picture.slate, digest);
-        await capture.bucket.put(key, shot, { httpMetadata: { contentType: 'image/webp' } });
-
-        if (this.removed(picture.slate)) {
-          await capture.bucket.delete(key);
-
-          return false;
-        }
-
-        if (picture.digest !== null) await capture.bucket.delete(pictureKey(capture.workspace, picture.slate, picture.digest));
+      for (const picture of due) {
+        if (!live.has(picture.slate)) yield* Effect.promise(async () => this.forget(capture.workspace, picture.slate, capture.bucket));
       }
 
-      this.stored(picture.slate, digest);
+      const shots = due.filter((picture) => live.has(picture.slate));
+
+      if (shots.length === 0) return false;
+      let camera: Camera;
+
+      yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
+        camera = yield* Effect.promise(async () => capture.camera());
+      }), (failed) => Effect.gen({ self: this }, function* () {
+        for (const picture of shots) this.failed(picture, Date.now());
+
+        return yield* Effect.failCause(failed);
+      }));
+
+      let changed = false;
+
+      yield* Effect.ensuring(Effect.gen({ self: this }, function* () {
+        for (const picture of shots.slice(0, SHOTS_PER_TICK)) {
+          yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
+            changed = (yield* this.shoot(camera, capture, picture)) || changed;
+          }), (failed) => Effect.sync(() => {
+            const cause = Cause.squash(failed);
+            this.failed(picture, Date.now());
+            diagnostics.failure('slate.picture_failed', toKinuError({
+              doing: `photographing slate ${picture.slate}`, cause, otherwise: 'unavailable',
+            }), { workspace: capture.workspace, slate: picture.slate, attempts: picture.attempts + 1 });
+          }));
+        }
+      }), Effect.gen({ self: this }, function* () {
+        yield* Effect.promise(async () => camera.close());
+      }));
 
       return changed;
-    } finally {
-      this.closeCapture(picture.slate);
-    }
+    }));
+  }
+
+  private shoot(camera: Camera, capture: PictureCapture, picture: DuePicture): Effect.Effect<boolean> {
+    return Effect.gen({ self: this }, function* () {
+      const token = captureToken();
+      this.openCapture(picture.slate, token.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH), Date.now() + CAPTURE_HANDLE_LIFE_MS);
+
+      return yield* Effect.ensuring(Effect.gen({ self: this }, function* () {
+        const url = yield* Effect.promise(async () => capture.url(picture.port, token));
+
+        if (url === null) return yield* Effect.die(new Error('this deployment has no preview host'));
+        const shot = yield* Effect.promise(async () => camera.shoot(url));
+        const digest = sha256Hex(shot);
+        const changed = digest !== picture.digest;
+
+        if (changed) {
+          const key = pictureKey(capture.workspace, picture.slate, digest);
+          yield* Effect.promise(async () => capture.bucket.put(key, shot, { httpMetadata: { contentType: 'image/webp' } }));
+
+          if (this.removed(picture.slate)) {
+            yield* Effect.promise(async () => capture.bucket.delete(key));
+
+            return false;
+          }
+
+          const previous = picture.digest;
+
+          if (previous !== null) yield* Effect.promise(async () => capture.bucket.delete(pictureKey(capture.workspace, picture.slate, previous)));
+        }
+
+        this.stored(picture.slate, digest);
+
+        return changed;
+      }), Effect.sync(() => {
+        this.closeCapture(picture.slate);
+      }));
+    });
   }
 }
 

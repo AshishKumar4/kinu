@@ -419,7 +419,7 @@ describe('OpenCode provider', () => {
     expect(JSON.stringify(body.input)).not.toContain('item_reference');
     expect(body.input).toEqual(expect.arrayContaining([
       { type: 'reasoning', encrypted_content: 'ENCRYPTED-1', summary: [] },
-      { role: 'assistant', content: [{ type: 'output_text', text: 'Reading notes.md now.' }] },
+      { role: 'assistant', content: 'Reading notes.md now.' },
       { type: 'function_call', call_id: 'call_1', name: 'file', arguments: '{"path":"notes.md"}' },
     ]));
   });

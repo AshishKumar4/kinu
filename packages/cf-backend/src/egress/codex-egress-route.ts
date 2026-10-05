@@ -1,10 +1,10 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import {
   activeOperationProfile, asFetchFunction, WORKSPACE_RUN_ID, abortCause, EGRESS_REFUSAL_HEADER, EGRESS_ROUTE_HEADER, refusalError,
   isDeviceNotConnectedError, isDeviceFailure, DEVICE_ERRORS,
   type ActorReference, type OperationProfile, type RelayedProvider, type UserCaller,
 } from '@kinu.run/core';
-import { attempt, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { attempt, detach, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import type { CodexEgress } from './codex-egress';
 
 export interface CodexEgressNamespace<Id = DurableObjectId> {
@@ -52,9 +52,9 @@ function stoppedBy(signal: AbortSignal | undefined, cancel: () => Promise<void>,
 
   signal?.addEventListener('abort', () => {
     stopped.reject(abortCause(signal));
-    cancel().catch((...rejection: [unknown]) => diagnostics.failure('codex_egress.cancel_failed', toKinuError({
-      doing: 'cancelling a relayed model call', cause: rejection[0], otherwise: 'unavailable',
-    }), { route }));
+    detach(Effect.catchCause(Effect.promise(cancel), (failed) => Effect.sync(() => diagnostics.failure('codex_egress.cancel_failed', toKinuError({
+      doing: 'cancelling a relayed model call', cause: Cause.squash(failed), otherwise: 'unavailable',
+    }), { route }))));
   }, { once: true });
 
   return stopped.promise;

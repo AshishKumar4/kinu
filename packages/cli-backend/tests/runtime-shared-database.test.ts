@@ -14,7 +14,7 @@ test('a write while another process holds the database waits for it instead of f
   const db = new Database(dbPath, { create: true });
   db.exec('PRAGMA journal_mode = WAL');
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: { name: 'openai-compat', baseURL: 'http://localhost:0', headers: {}, model: 'm' } });
+  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: { name: 'openai-compat', baseURL: 'http://localhost:0', headers: {}, model: 'm' } });
 
   const holder = spawnTest(['bun', '-e', `
     const { Database } = require('bun:sqlite');

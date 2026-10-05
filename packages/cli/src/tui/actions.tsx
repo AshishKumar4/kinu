@@ -1,4 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import { Effect } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import { TUI_ADVERTISED_PRESET_BINDINGS } from '@kinu.run/core/tui';
 
 export const KEYMAP_PRESET_IDS = ['pi-omp', 'kinu', 'opencode'] as const;
@@ -235,38 +237,40 @@ export function createKeybindingRegistry(input: {
   readonly presetId?: KeymapPresetId;
   readonly overrides?: KeymapOverrides;
 } = {}): KeybindingRegistry {
-  const presetId = input.presetId ?? 'pi-omp';
-  const bindings: ActionBinding[] = [];
-  const presetBindings = PRESET_BINDINGS[presetId];
+  return settleSync(Effect.gen(function* () {
+    const presetId = input.presetId ?? 'pi-omp';
+    const bindings: ActionBinding[] = [];
+    const presetBindings = PRESET_BINDINGS[presetId];
 
-  for (const actionId of TUI_ACTION_IDS) {
-    const configured = input.overrides?.[actionId]
-      ?? configuredBindings(presetBindings, actionId)
-      ?? configuredBindings(COMMON_BINDINGS, actionId)
-      ?? [];
+    for (const actionId of TUI_ACTION_IDS) {
+      const configured = input.overrides?.[actionId]
+        ?? configuredBindings(presetBindings, actionId)
+        ?? configuredBindings(COMMON_BINDINGS, actionId)
+        ?? [];
 
-    for (const display of configured) {
-      const sequence = parseSequence(display);
-      bindings.push({ actionId, scope: TUI_ACTIONS[actionId].scope, sequence, display: formatSequence(sequence) });
+      for (const display of configured) {
+        const sequence = yield* parseSequence(display);
+        bindings.push({ actionId, scope: TUI_ACTIONS[actionId].scope, sequence, display: formatSequence(sequence) });
+      }
     }
-  }
 
-  rejectConflicts(bindings);
-  const byAction = new Map<TuiActionId, string[]>();
+    yield* rejectConflicts(bindings);
+    const byAction = new Map<TuiActionId, string[]>();
 
-  for (const binding of bindings) {
-    const current = byAction.get(binding.actionId) ?? [];
-    current.push(binding.display);
-    byAction.set(binding.actionId, current);
-  }
+    for (const binding of bindings) {
+      const current = byAction.get(binding.actionId) ?? [];
+      current.push(binding.display);
+      byAction.set(binding.actionId, current);
+    }
 
-  return Object.freeze({
-    presetId,
-    actionIds: TUI_ACTION_IDS,
-    bindings: Object.freeze(bindings),
-    bindingsFor: (actionId: TuiActionId) => Object.freeze(byAction.get(actionId) ?? []),
-    hint: (actionId: TuiActionId) => byAction.get(actionId)?.[0] ?? '',
-  });
+    return Object.freeze({
+      presetId,
+      actionIds: TUI_ACTION_IDS,
+      bindings: Object.freeze(bindings),
+      bindingsFor: (actionId: TuiActionId) => Object.freeze(byAction.get(actionId) ?? []),
+      hint: (actionId: TuiActionId) => byAction.get(actionId)?.[0] ?? '',
+    });
+  }));
 }
 
 function keyEventAction(
@@ -378,35 +382,35 @@ export function useKeybindingRegistry(): KeybindingRegistry {
 }
 
 
-function parseSequence(input: string): readonly KeyStroke[] {
+function parseSequence(input: string): Effect.Effect<readonly KeyStroke[]> {
   const value = input.trim().toLowerCase();
 
-  if (value === '') throw new Error('Keybinding cannot be empty.');
+  if (value === '') return Effect.die(new Error('Keybinding cannot be empty.'));
 
-  return Object.freeze(value.split(/\s+/u).map(parseStroke));
+  return Effect.map(Effect.forEach(value.split(/\s+/u), parseStroke), (strokes) => Object.freeze(strokes));
 }
 
-function parseStroke(input: string): KeyStroke {
+function parseStroke(input: string): Effect.Effect<KeyStroke> {
   const parts = input.split('+');
   const name = parts.pop()?.trim() ?? '';
 
-  if (name === '') throw new Error(`Invalid keybinding: ${input}`);
+  if (name === '') return Effect.die(new Error(`Invalid keybinding: ${input}`));
   const modifiers = new Set(parts);
 
   for (const modifier of modifiers) {
     if (!['ctrl', 'shift', 'alt', 'meta', 'super'].includes(modifier)) {
-      throw new Error(`Unknown key modifier "${modifier}" in ${input}`);
+      return Effect.die(new Error(`Unknown key modifier "${modifier}" in ${input}`));
     }
   }
 
-  return Object.freeze({
+  return Effect.succeed(Object.freeze({
     name: normalizeKeyName(name),
     ctrl: modifiers.has('ctrl'),
     shift: modifiers.has('shift'),
     alt: modifiers.has('alt'),
     meta: modifiers.has('meta'),
     super: modifiers.has('super'),
-  });
+  }));
 }
 
 function normalizeKeyName(name: string): string {
@@ -473,7 +477,7 @@ function displayKeyName(name: string): string {
   return name.length === 1 ? name.toUpperCase() : name[0].toUpperCase() + name.slice(1);
 }
 
-function rejectConflicts(bindings: readonly ActionBinding[]): void {
+function rejectConflicts(bindings: readonly ActionBinding[]): Effect.Effect<void> {
   for (let leftIndex = 0; leftIndex < bindings.length; leftIndex += 1) {
     const left = bindings[leftIndex];
 
@@ -483,9 +487,12 @@ function rejectConflicts(bindings: readonly ActionBinding[]): void {
       if (left.actionId === right.actionId) continue;
 
       if (!sameSequence(left.sequence, right.sequence) || !scopesOverlap(left.scope, right.scope)) continue;
-      throw new Error(`Keybinding conflict for ${left.display}: ${left.actionId} and ${right.actionId} overlap.`);
+
+      return Effect.die(new Error(`Keybinding conflict for ${left.display}: ${left.actionId} and ${right.actionId} overlap.`));
     }
   }
+
+  return Effect.void;
 }
 
 function scopesOverlap(left: KeyScope, right: KeyScope): boolean {

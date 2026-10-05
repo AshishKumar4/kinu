@@ -1,11 +1,10 @@
 // The device relay (docs/DEPLOYMENT.md § Codex egress).
 import * as v from 'valibot';
 import { base64ToBytes } from '../utils/base64';
-import { tolerate } from '../obs/expected-failure';
+import { settle, tolerate } from '../obs/effect';
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
 import { Effect } from 'effect';
-import { settle } from '../obs/effect';
 import { DEVICE_FRAMES, DEVICE_METHOD } from './device-protocol';
 import type { DeviceCancelResult } from './device-tunnel';
 

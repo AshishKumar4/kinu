@@ -94,6 +94,7 @@ function scaffoldRunOptions(
 }
 
 /**
+
  * Run the current scaffold for a one-shot task without injecting into the
  * conversation. `useShadowOverride` runs the pending proposal instead.
  */
@@ -110,20 +111,23 @@ export async function runScaffoldOnce(
   }));
 }
 
+
 /** Preview a scaffold version from its VFS `agent.js.vN` backup. */
-export async function previewScaffoldLive(
+export function previewScaffoldLive(
   control: ScaffoldControl,
   version: number,
   task: string,
 ): Promise<ScaffoldRunResult> {
-  const codeOverride = await readScaffoldVersion(control.rt, version);
+  return settle(Effect.gen(function* () {
+    const codeOverride = yield* Effect.promise(() => readScaffoldVersion(control.rt, version));
 
-  if (codeOverride == null) {
-    throw new Error(`previewScaffoldLive: no scaffold code found for v${version}`);
-  }
+    if (codeOverride == null) {
+      return yield* Effect.die(new Error(`previewScaffoldLive: no scaffold code found for v${version}`));
+    }
 
-  return runScaffold(scaffoldRunOptions(control, task, {
-    scaffoldCodeOverride: codeOverride,
+    return yield* Effect.promise(() => runScaffold(scaffoldRunOptions(control, task, {
+      scaffoldCodeOverride: codeOverride,
+    })));
   }));
 }
 
@@ -200,6 +204,7 @@ export async function runOptimization(control: ScaffoldControl, target: string =
 
   return runProposer({ rt: control.rt, decide, reflect: control.rt.judgeModel ?? control.rt.llm, now: Date.now() }, target);
 }
+
 
 export function createJsonJudge(
   model: () => LanguageModel | Promise<LanguageModel>,

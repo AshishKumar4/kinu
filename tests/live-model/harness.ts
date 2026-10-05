@@ -29,6 +29,10 @@ import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { createNodeCodemodeToolFactory } from '../../packages/cli-backend/src/codemode-tool-factory';
 import { hostedCodemodeTool } from '../../packages/cli-backend/src/head-runtime';
 import { liveModelCallSink } from '@kinu.run/test-utils';
+import { isAbsolute, relative, resolve } from 'node:path';
+
+/** The repository this suite runs from: an episode's folder is never it, nor a folder above it. */
+const REPO_ROOT = resolve(import.meta.dir, '..', '..');
 
 /**
  * THE EVAL AGENT'S SURFACE, BUILT BY THE PRODUCTION ROOTS.
@@ -176,7 +180,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const builtinTools = Object.keys(tools).filter(isBuiltinToolName);
   const agentsActions = agentsActionsFor(agents);
 
-  const backend = rt.cwd ? 'cli-local' : 'cli-vfs';
+  const backend = 'cli-local';
 
   return {
     tools,
@@ -499,9 +503,8 @@ export function requireExecutorSurface(taskId: string, rt: AgentRuntime): void {
   }
 }
 
-/** Executor kinds an episode may be measured on: planes whose filesystem is
- *  not the developer's. An allowlist rather than a `device` denylist, so a
- *  plane added later is refused until someone decides it is isolated. */
+/** Executor kinds an episode may be measured on: the workspace's own shell, in the episode's scratch folder. An
+ *  allowlist rather than a `device` denylist, so a plane added later is refused until someone decides it is fenced. */
 const SANDBOXED_EXECUTOR_KINDS: readonly string[] = ['workspace'];
 
 /**
@@ -524,12 +527,11 @@ const SANDBOXED_EXECUTOR_KINDS: readonly string[] = ['workspace'];
 export class UnsandboxedRuntimeError extends Error {
   constructor(readonly taskId: string, readonly executor: string) {
     super(`unsandboxed runtime for ${taskId}: executor \`${executor}\` runs on the `
-      + 'developer\'s own machine. The eval must not run: an episode reaches every '
-      + 'registered provider through `eval`, and a corpus task that writes '
-      + 'files then writes them into the repo the harness was launched from. Open the '
-      + 'workspace with no `cwd` (cli-backend/src/open.ts) so its plane is the '
-      + 'in-SQLite workspace filesystem — re-rooting a bound directory somewhere '
-      + 'harmless contains nothing, because the workspace shell can `cd` anywhere.');
+      + 'developer\'s own machine outside the episode\'s folder. The eval must not run: an episode '
+      + 'reaches every registered provider through `eval`, and a corpus task that writes files then '
+      + 'writes them where its shell starts. Open the workspace in the episode\'s own scratch folder '
+      + '(scratchDir, under TMPDIR), never the repo or a folder above it: its writes outside that '
+      + 'folder and its own space then wait for an approval nobody here gives.');
     this.name = 'UnsandboxedRuntimeError';
   }
 }
@@ -546,19 +548,31 @@ export class UnsandboxedRuntimeError extends Error {
  * refusal costs nothing, and discovering it afterwards costs a paid run plus
  * whatever the episode wrote.
  */
-/** The directory a CLI runtime bound its workspace plane to, or null. Read
- *  through a parse of the runtime's own shape rather than a cast: core's
- *  `AgentRuntime` does not declare `cwd`, the CLI's runtime does. */
+/** The folder a CLI runtime works in, or null. Read through a parse of the runtime's own shape rather than a cast:
+ *  core's `AgentRuntime` does not declare `cwd`, the CLI's runtime does. */
 function boundDirectory(rt: AgentRuntime): string | null {
   const parsed = v.safeParse(v.object({ cwd: v.optional(v.nullable(v.string())) }), rt);
 
   return parsed.success ? parsed.output.cwd ?? null : null;
 }
 
-export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): void {
-  // A bound directory makes the `workspace` executor the developer's own
-  // shell, so the kind alone does not settle the question there.
-  if (boundDirectory(rt) !== null) throw new UnsandboxedRuntimeError(taskId, 'workspace');
+/** True when `folder` is `repo` or a folder above it, where an episode's shell would work in the developer's tree. */
+function holdsRepo(folder: string, repo: string): boolean {
+  const from = relative(resolve(folder), resolve(repo));
+
+  return from === '' || (!from.startsWith('..') && !isAbsolute(from));
+}
+
+/**
+ * Since 2026-10-04 every local workspace's shell is the machine's, in its folder: an episode is fenced by working in
+ * its own scratch folder, so the runtime must work in exactly `folder`, which is neither the repo nor above it.
+ */
+export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime, folder: string): void {
+  const bound = boundDirectory(rt);
+
+  if (bound === null || resolve(bound) !== resolve(folder) || holdsRepo(folder, REPO_ROOT)) {
+    throw new UnsandboxedRuntimeError(taskId, 'workspace');
+  }
 
   for (const executor of rt.executionRouter?.listExecutors() ?? []) {
     if (!SANDBOXED_EXECUTOR_KINDS.includes(executor.kind)) {

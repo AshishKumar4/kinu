@@ -15,7 +15,9 @@ import {
   type ClientErrorReport,
 } from "./client-error-contract";
 import type { ReportedRoute } from './app-routes';
+import { Cause, Effect } from 'effect';
 import { KinuError } from '../obs/index';
+import { settle } from '../obs/effect';
 
 export interface PageIdentity {
   /** The build this page loaded (not the live one), or null when unidentified. */
@@ -59,46 +61,46 @@ function renderFailureReport(
   return fitClientErrorReport(page.release === null ? report : { ...report, release: page.release });
 }
 
-export async function reportRenderFailure(
+export function reportRenderFailure(
   error: Error, componentStack: string, page: PageIdentity,
 ): Promise<void> {
-  await send(renderFailureReport(error, componentStack, page));
+  return settle(Effect.suspend(() => send(renderFailureReport(error, componentStack, page))));
 }
 
 /** Once per error; a protocol error adds its part. */
-export async function reportChatStreamFailure(
+export function reportChatStreamFailure(
   error: Error, pane: ChatStreamFailureReport['pane'], page: PageIdentity,
 ): Promise<void> {
-  const part = v.safeParse(StreamPartErrorSchema, error);
+  return settle(Effect.gen(function* () {
+    const part = v.safeParse(StreamPartErrorSchema, error);
 
-  const report: ChatStreamFailureReport = {
-    event: CLIENT_CHAT_STREAM_FAILED,
-    errorName: IDENTIFIER.test(error.name) ? error.name : 'Error',
-    route: page.route,
-    pane,
-    stack: errorFrames(error),
-    ...(part.success && { part: { type: part.output.chunkType, id: part.output.chunkId } }),
-  };
+    const report: ChatStreamFailureReport = {
+      event: CLIENT_CHAT_STREAM_FAILED,
+      errorName: IDENTIFIER.test(error.name) ? error.name : 'Error',
+      route: page.route,
+      pane,
+      stack: errorFrames(error),
+      ...(part.success && { part: { type: part.output.chunkType, id: part.output.chunkId } }),
+    };
 
-  await send(fitChatStreamFailureReport(page.release === null ? report : { ...report, release: page.release }));
+    return yield* send(fitChatStreamFailureReport(page.release === null ? report : { ...report, release: page.release }));
+  }));
 }
 
 /** Never rejects on the network; `keepalive` outlives a reload. A refused report rejects. */
-async function send(report: ClientErrorReport | ChatStreamFailureReport): Promise<void> {
-  let answer: Response;
+function send(report: ClientErrorReport | ChatStreamFailureReport): Effect.Effect<void, KinuError> {
+  const posted = Effect.promise(async () => fetch(CLIENT_ERROR_ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(report),
+    keepalive: true,
+  }));
 
-  try {
-    answer = await fetch(CLIENT_ERROR_ENDPOINT, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(report),
-      keepalive: true,
-    });
-  } catch (cause) {
-    if (!isTolerableSendFailure({ cause })) throw cause;
+  return Effect.catchCause(posted, (failed) => (isTolerableSendFailure({ cause: Cause.squash(failed) }) ? Effect.succeed(null) : Effect.failCause(failed))).pipe(
+    Effect.flatMap((answer) => Effect.gen(function* () {
+      if (answer === null || answer.ok) return;
 
-    return;
-  }
-
-  if (!answer.ok) throw new KinuError('io', `the error report was refused: ${String(answer.status)} ${(await answer.text()).slice(0, 160)}`);
+      return yield* new KinuError('io', `the error report was refused: ${String(answer.status)} ${(yield* Effect.promise(async () => answer.text())).slice(0, 160)}`);
+    })),
+  );
 }

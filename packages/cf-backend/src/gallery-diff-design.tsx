@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
@@ -667,18 +668,18 @@ function Scene({ params }: { params: URLSearchParams }) {
   const latest = useRef<readonly ReviewAnnotation[]>(initial);
 
   const store = useMemo<NotesStore>(() => ({
-    load: () => Promise.resolve({ ok: true, notes: [...latest.current] }),
-    save: (notes) => {
+    load: () => Effect.sync(() => ({ ok: true, notes: [...latest.current] })),
+    save: (notes) => Effect.sync(() => {
       latest.current = notes;
 
-      return Promise.resolve({ ok: true, notes: [...notes] });
-    },
-    send: () => {
+      return { ok: true, notes: [...notes] };
+    }),
+    send: () => Effect.sync(() => {
       setSent(latest.current);
       setChatPane(true);
 
-      return Promise.resolve({ ok: true, notes: [] });
-    },
+      return { ok: true, notes: [] };
+    }),
   }), []);
 
   const openNote = (anchor: DiffAnchor | undefined): void => {

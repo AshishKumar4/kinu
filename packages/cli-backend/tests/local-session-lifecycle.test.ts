@@ -364,10 +364,12 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
 
     await session.send('think hard', { id: crypto.randomUUID() });
+    // A GPT-5 model on the direct route also asks for server-side compaction, in the same namespace.
     expect(providerOptions).toEqual({
       openai: {
         promptCacheKey: expect.any(String),
         reasoningEffort: 'high',
+        contextManagement: [{ type: 'compaction', compactThreshold: expect.any(Number) }],
       },
     });
     expect(session.getReasoningEffort()).toEqual({ effort: null });
@@ -454,7 +456,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(JSON.stringify(requests[1]?.input)).not.toContain('item_reference');
     expect(requests[1]?.input).toEqual(expect.arrayContaining([
       { type: 'reasoning', encrypted_content: 'ENCRYPTED-1', summary: [] },
-      { role: 'assistant', content: [{ type: 'output_text', text: said }] },
+      { role: 'assistant', content: said },
     ]));
   });
 
@@ -885,7 +887,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     new InstructionApprovalStore(
       rt.storage.sql,
       rt.actor,
-      `local:${realpathSync(process.cwd())}`,
+      `local:${realpathSync(rt.cwd)}`,
     )
       .revoke(FOCUSED_PATH);
     await session.send('/focused remember this', { id: crypto.randomUUID() });
@@ -902,7 +904,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     new InstructionApprovalStore(
       rt.storage.sql,
       rt.actor,
-      `local:${realpathSync(process.cwd())}`,
+      `local:${realpathSync(rt.cwd)}`,
     )
       .approve(FOCUSED_PATH, instructionDigest(FOCUSED_SKILL));
 
@@ -1446,7 +1448,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
   ) {
     const db = new Database(scratchPath('local-session-review', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     // The rating rides rt.decide and the reflection rt.llm.complete; both are stubbed so the review runs offline.
     const completions: string[] = [];
 

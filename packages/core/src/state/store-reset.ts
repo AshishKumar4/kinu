@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
@@ -82,17 +84,19 @@ const ColumnSchema = v.object({ name: v.string() });
 // IF NOT EXISTS keeps an old table.
 export function resetGuardedExec(exec: RawSqlExec, read: SqlExec): RawSqlExec {
   return (ddl) => {
-    const declared = declaredTable(ddl);
+    return settleSync(Effect.gen(function* () {
+      const declared = declaredTable(ddl);
 
-    if (declared !== null) {
-      const present = new Set(read.exec(`PRAGMA table_info("${declared.table}")`).toArray()
-        .map((row) => v.parse(ColumnSchema, row).name));
+      if (declared !== null) {
+        const present = new Set(read.exec(`PRAGMA table_info("${declared.table}")`).toArray()
+          .map((row) => v.parse(ColumnSchema, row).name));
 
-      const missing = declared.columns.filter((column) => !present.has(column));
+        const missing = declared.columns.filter((column) => !present.has(column));
 
-      if (present.size > 0 && missing.length > 0) throw new StoragePredatesResetError(declared.table, missing);
-    }
+        if (present.size > 0 && missing.length > 0) return yield* Effect.die(new StoragePredatesResetError(declared.table, missing));
+      }
 
-    exec(ddl);
+      exec(ddl);
+    }));
   };
 }

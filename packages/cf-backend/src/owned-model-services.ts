@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type { LanguageModel } from 'ai';
 import {
   agentAffinityKey, parseModelSpec, reasoningEffortOptions,
@@ -7,7 +8,7 @@ import {
   type WebSearchProvider,
   type ProviderEnv, type WorkersAIBinding,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, recording, settle, settleSync } from '@kinu.run/core/obs';
 import { buildCfWebSearchProvider, type BrowserRunQuickActions } from '@kinu.run/core';
 import {
   createAgentProviderRegistry,
@@ -69,29 +70,31 @@ export class OwnedModelServices<Id = DurableObjectId> {
   }
 
   providerRegistry(): AgentProviderRegistry {
-    if (this.providerRegistryCache) return this.providerRegistryCache;
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (this.providerRegistryCache) return this.providerRegistryCache;
 
-    const userId = this.options.getOwnerUserId();
+      const userId = this.options.getOwnerUserId();
 
-    if (!userId && this.options.ownerRequired) {
-      throw new Error('Agent has no owner_user_id yet: Worker must call claimOwner before any model use.');
-    }
+      if (!userId && this.options.ownerRequired) {
+        return yield* Effect.die(new Error('Agent has no owner_user_id yet: Worker must call claimOwner before any model use.'));
+      }
 
-    const userDOStub = userId
-      ? this.options.env.UserDO.get(this.options.env.UserDO.idFromName(userId))
-      : null;
+      const userDOStub = userId
+        ? this.options.env.UserDO.get(this.options.env.UserDO.idFromName(userId))
+        : null;
 
-    this.providerRegistryCache = createAgentProviderRegistry({
-      env: this.options.env,
-      ownerUserId: userId,
-      userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
-      appTitle: this.options.appTitle,
-      onProviderWait: this.options.onProviderWait,
-      accountFor: this.options.accountFor,
-      ...(this.options.currentTurn !== undefined && { currentTurn: this.options.currentTurn }),
-    });
+      this.providerRegistryCache = createAgentProviderRegistry({
+        env: this.options.env,
+        ownerUserId: userId,
+        userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
+        appTitle: this.options.appTitle,
+        onProviderWait: this.options.onProviderWait,
+        accountFor: this.options.accountFor,
+        ...(this.options.currentTurn !== undefined && { currentTurn: this.options.currentTurn }),
+      });
 
-    return this.providerRegistryCache;
+      return this.providerRegistryCache;
+    }));
   }
 
   /** Memoized on the normalized spec: heads ask once per step. `invalidate()` drops it. */
@@ -124,32 +127,30 @@ export class OwnedModelServices<Id = DurableObjectId> {
     };
   }
 
-  async profileProviderSnapshot(): Promise<ProviderSnapshotRead> {
+  profileProviderSnapshot(): Promise<ProviderSnapshotRead> {
+    return settle(Effect.gen({ self: this }, function* () {
     // Durable reconciliation against the account revision: the fan-out can fail silently, this cannot.
-    try {
-      const revision = await this.options.getCredentialsRevision();
+      yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const revision = yield* Effect.promise(() => this.options.getCredentialsRevision());
 
-      if (revision !== this.cachedCredentialsRevision) this.invalidate();
-      this.cachedCredentialsRevision = revision;
-    } catch (cause) {
-      // Logged so a possibly stale listing is diagnosable.
-      diagnostics.failure('profile.credentials_revision_unreadable', toKinuError({
-        doing: 'reading the account credential revision a cached provider listing is measured against',
-        cause,
-        otherwise: 'unavailable',
-      }), { agent: this.options.agentName() });
-    }
+        if (revision !== this.cachedCredentialsRevision) this.invalidate();
+        this.cachedCredentialsRevision = revision;
+      }), recording({ doing: 'reading the account credential revision a cached provider listing is measured against', otherwise: 'unavailable' }, (failure) => {
+        // Logged so a possibly stale listing is diagnosable.
+        diagnostics.failure('profile.credentials_revision_unreadable', failure, { agent: this.options.agentName() });
+      }));
 
-    const { listing, cache } = await this.providerListings.read();
-    const snapshot = providerSnapshotOf(listing);
-    diagnostics.event('profile.provider_snapshot.resolved', {
-      cache,
-      models: snapshot.availableModels.length,
-      unavailable: listing.failures.length,
-      revision: snapshot.revision,
-    });
+      const { listing, cache } = yield* Effect.promise(() => this.providerListings.read());
+      const snapshot = providerSnapshotOf(listing);
+      diagnostics.event('profile.provider_snapshot.resolved', {
+        cache,
+        models: snapshot.availableModels.length,
+        unavailable: listing.failures.length,
+        revision: snapshot.revision,
+      });
 
-    return { snapshot, cache };
+      return { snapshot, cache };
+    }));
   }
 
   private async sweepProviderListing(): Promise<ProviderListing> {

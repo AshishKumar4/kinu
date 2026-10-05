@@ -1,6 +1,6 @@
 // Mechanical turn steering (orchestrator/turn-steering.ts) through the turn extension and a full runChat turn.
 import { describe, expect, test } from 'bun:test';
-import { stepCountIs, tool, type ModelMessage } from 'ai';
+import { isStepCount, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { createTestRuntime, present } from '@kinu.run/test-utils';
@@ -679,7 +679,7 @@ describe('through a real runChat turn', () => {
       system: 'sys',
       history: followUp('build caffe'),
       tools,
-      stopWhen: stepCountIs(6),
+      stopWhen: isStepCount(6),
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
@@ -715,7 +715,7 @@ describe('through a real runChat turn', () => {
       system: 'sys',
       history: followUp('build it'),
       tools,
-      stopWhen: stepCountIs(6),
+      stopWhen: isStepCount(6),
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
@@ -746,7 +746,7 @@ describe('through a real runChat turn', () => {
       system: 'sys',
       history: followUp('look around'),
       tools,
-      stopWhen: stepCountIs(6),
+      stopWhen: isStepCount(6),
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
@@ -771,7 +771,7 @@ describe('through a real runChat turn', () => {
       system: 'sys',
       history: [user('add caching to the api and update the docs')],
       tools,
-      stopWhen: stepCountIs(4),
+      stopWhen: isStepCount(4),
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 

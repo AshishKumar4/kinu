@@ -1,3 +1,4 @@
+import { Effect, Cause } from 'effect';
 import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import {
   WrenchIcon, CaretDownIcon, CaretRightIcon,
@@ -20,7 +21,7 @@ import type { AdvisorSeverity, DiffAnchor, InlineSteer, JsonObject, JsonValue, P
 import { changeNotesCard, MAIN_AGENT, slatesChanged } from "@kinu.run/core";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
-import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { MarkdownContent, CodeBlock, SlateLink } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
@@ -864,21 +865,21 @@ function MessageFeedback({
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  const toggle = useCallback(async (next: 'positive' | 'negative') => {
+  const toggle = useCallback((next: 'positive' | 'negative') => detach(Effect.gen(function* () {
     if (busy) return;
     setBusy(true);
     setFailed(false);
     const apply = current === next ? null : next;
 
-    try {
-      await onFeedback(messageId, apply);
-    } catch (error) {
-      diagnostics.event('ui.feedback_failed', { error: renderThrownChain({ cause: error }) });
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => onFeedback(messageId, apply));
+    }), (refused) => Effect.sync(() => {
+      diagnostics.event('ui.feedback_failed', { error: renderThrownChain({ cause: Cause.squash(refused) }) });
       setFailed(true);
-    } finally {
+    })), Effect.sync(() => {
       setBusy(false);
-    }
-  }, [busy, current, messageId, onFeedback]);
+    }));
+  })), [busy, current, messageId, onFeedback]);
 
   return (
     <div className={`flex items-center gap-1 transition-opacity ${current === null ? 'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100' : ''}`}>

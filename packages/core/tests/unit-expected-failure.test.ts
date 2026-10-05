@@ -7,7 +7,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 
-import { classify, tolerate, tolerateAsync, type ExpectedFailure } from '../src/obs/expected-failure';
+import { tolerate, tolerateAsync } from '../src/obs/effect';
+import { classify, type ExpectedFailure } from '../src/obs/expected-failure';
 
 function thrown(provoke: () => void): Error {
   try {

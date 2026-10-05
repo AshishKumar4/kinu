@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Scaffold evolution with a real LLM. Needs AI_GATEWAY_BASE_URL and AI_GATEWAY_AUTH; skips otherwise. */
 
@@ -125,11 +126,11 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
     expect(await readText(rt.storage.vfs, `${rt.identity.scaffold.path}.v1`)).toBe(validCode);
 
     const rbResult = await rollbackScaffold(rt, 0);
-    expect(rbResult.ok).toBe(true);
+    expect(Result.isSuccess(rbResult)).toBe(true);
     expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
 
     const missing = await rollbackScaffold(rt, 99);
-    expect(missing.ok).toBe(false);
-    expect(missing.error).toContain('99');
+    expect(Result.isSuccess(missing)).toBe(false);
+    expect(missing).toMatchObject({ failure: expect.stringContaining('99') });
   });
 });

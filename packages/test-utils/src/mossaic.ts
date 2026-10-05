@@ -1,4 +1,5 @@
 /** In-memory Mossaic stand-in for `createVFS(env, { tenant })`; the real client runs in packages/cf-backend/tests/workerd/shared-drive.test.ts. */
+import { Data } from 'effect';
 import type { MossaicClient, MossaicChild, MossaicStat } from '@kinu.run/core';
 
 const CHILD_KIND: Record<MossaicStat['type'], MossaicChild['kind']> = {
@@ -8,9 +9,10 @@ const CHILD_KIND: Record<MossaicStat['type'], MossaicChild['kind']> = {
 };
 
 /** What Mossaic's SDK throws: an Error carrying one of its own codes. */
-export class FakeMossaicError extends Error {
+export class FakeMossaicError extends Data.TaggedError('FakeMossaicError')<{ readonly message: string }> {
   constructor(readonly code: string, path: string) {
-    super(`${code}: ${path}`);
+    super({ message: `${code}: ${path}` });
+    this.name = 'Error';
   }
 }
 

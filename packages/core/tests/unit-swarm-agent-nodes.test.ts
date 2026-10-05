@@ -6,9 +6,9 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { getToolName, isToolUIPart } from 'ai';
-import type { MockLanguageModelV3 } from 'ai/test';
+import type { MockLanguageModelV4 } from 'ai/test';
 import { scriptedTurnModel, unobservedSearchSeams, unobservedSpend } from '@kinu.run/test-utils';
-import type { LanguageModelV3Content } from '@ai-sdk/provider';
+import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
@@ -140,7 +140,7 @@ interface ScriptedRun {
 
 /** Scripted off the node's own turns, not a shared counter: nodes run concurrently. */
 interface ScriptedNode {
-  readonly model: MockLanguageModelV3;
+  readonly model: MockLanguageModelV4;
   readonly script: ScriptedRun;
 }
 
@@ -187,7 +187,7 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
       const proposes = canPropose && input.proposeAtDepth1;
       const reportAt = proposes ? 2 : 1;
 
-      const content: LanguageModelV3Content[] = [];
+      const content: LanguageModelV4Content[] = [];
       let finish: 'stop' | 'tool-calls' = 'tool-calls';
 
       if (own === 0) {

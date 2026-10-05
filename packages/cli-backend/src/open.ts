@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type { LLMProviderConfig } from '@kinu.run/core';
 import {
   initWorkspaceSchema, initActorStateSchema, readSoul, summarizeSoul,
@@ -8,7 +9,7 @@ import type { LocalCloudSession, LocalProviderCredentials } from './model-resolv
 import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
 import type { LocalActorConfig } from '@kinu.run/core';
-import { KinuError } from '@kinu.run/core/obs';
+import { KinuError, settle } from '@kinu.run/core/obs';
 import { requireSchemaGenesis } from './schema-genesis';
 
 export interface WorkspaceInfo {
@@ -29,7 +30,8 @@ interface CLIOpenOptions {
   oauthStore?: LocalOAuthStore;
   /** The signed-in session, whose worker rates turns. */
   cloud?: LocalCloudSession;
-  cwd?: string | null;
+  /** The folder the workspace works in; see `CLIRuntimeConfig.cwd`. */
+  cwd: string;
   checkpointKeep?: number;
 }
 
@@ -37,58 +39,60 @@ export type CLIOpenConfig = CLIOpenOptions & LocalActorConfig;
 
 interface OpenedWorkspaceIdentity { readonly id: string; readonly name: string; readonly created_at: number }
 
-export async function openWorkspaceCLI(
+export function openWorkspaceCLI(
   db: Database,
   dbPath: string,
   config: CLIOpenConfig,
 ): Promise<{ rt: CLIRuntime; info: WorkspaceInfo }> {
-  waitOnSharedWrites(db);
-  const sql = makeSql(db);
-  // Set on open, not at creation: `kinu create` publishes the file with no sidecars,
-  // and a WAL database is unreadable without its `-shm`.
-  db.exec('PRAGMA journal_mode = WAL');
+  return settle(Effect.gen(function* () {
+    waitOnSharedWrites(db);
+    const sql = makeSql(db);
+    // Set on open, not at creation: `kinu create` publishes the file with no sidecars,
+    // and a WAL database is unreadable without its `-shm`.
+    db.exec('PRAGMA journal_mode = WAL');
 
-  let identity: OpenedWorkspaceIdentity;
+    let identity: OpenedWorkspaceIdentity;
 
-  if (config.facet !== undefined) {
-    initActorStateSchema(makeWorkspaceSchemaSql(db));
-    identity = { id: config.actorBinding.reference.actorId, name: config.actorBinding.name, created_at: config.actorBinding.createdAt };
-  } else {
-    requireSchemaGenesis(db, dbPath);
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const stored = sql<OpenedWorkspaceIdentity>`SELECT id, name, created_at FROM workspace_identity LIMIT 1`[0];
+    if (config.facet !== undefined) {
+      initActorStateSchema(makeWorkspaceSchemaSql(db));
+      identity = { id: config.actorBinding.reference.actorId, name: config.actorBinding.name, created_at: config.actorBinding.createdAt };
+    } else {
+      requireSchemaGenesis(db, dbPath);
+      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+      const stored = sql<OpenedWorkspaceIdentity>`SELECT id, name, created_at FROM workspace_identity LIMIT 1`[0];
 
-    if (!stored) throw new KinuError('missing', 'The workspace has no durable identity.');
-    identity = stored;
-  }
+      if (!stored) return yield* new KinuError('missing', 'The workspace has no durable identity.');
+      identity = stored;
+    }
 
-  const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
+    const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
 
-  // SOUL belongs to the agent, not to the shared physical project directory.
-  const soul = await (rt.ownerSoul?.() ?? readSoul(rt.agentStateVfs ?? rt.storage.vfs));
+    // SOUL belongs to the agent, not to the shared physical project directory.
+    const soul = yield* Effect.promise(async () => (rt.ownerSoul?.() ?? readSoul(rt.agentStateVfs ?? rt.storage.vfs)));
 
-  if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
+    if (!soul) return yield* Effect.die(new Error('No SOUL.md found. Database may be corrupted.'));
 
-  // The live version, scoped to `rt.actor`: a facet opens as its own actor, and
-  // the scaffold pointer is per-actor.
-  const scaffoldVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? 0;
+    // The live version, scoped to `rt.actor`: a facet opens as its own actor, and
+    // the scaffold pointer is per-actor.
+    const scaffoldVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? 0;
 
-  const searchNodeCount = sql<{ c: number }>`
-    SELECT COUNT(*) as c FROM search_nodes WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
+    const searchNodeCount = sql<{ c: number }>`
+      SELECT COUNT(*) as c FROM search_nodes WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
 
-  const memorySize = await memoryBytes(rt.agentStateVfs ?? rt.storage.vfs);
+    const memorySize = yield* Effect.promise(async () => memoryBytes(rt.agentStateVfs ?? rt.storage.vfs));
 
-  return {
-    rt,
-    info: {
-      id: identity.id,
-      name: identity.name,
-      purpose: summarizeSoul(soul),
-      soul,
-      scaffoldVersion,
-      searchNodeCount,
-      memorySize,
-      createdAt: identity.created_at,
-    },
-  };
+    return {
+      rt,
+      info: {
+        id: identity.id,
+        name: identity.name,
+        purpose: summarizeSoul(soul),
+        soul,
+        scaffoldVersion,
+        searchNodeCount,
+        memorySize,
+        createdAt: identity.created_at,
+      },
+    };
+  }));
 }

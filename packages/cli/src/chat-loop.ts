@@ -5,7 +5,6 @@
 
 import * as readline from 'node:readline';
 import { renderChangelogText } from '@kinu.run/core/tui';
-import { EMPTY_MODEL_MENU } from '@kinu.run/core';
 import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client';
 import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderPlanReview, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments';
@@ -25,7 +24,8 @@ import {
   printStepCut, printToolCall, printToolResult, printEvolutionEvent, createTurnStatus, formatFailure,
   ACCENT, DIM, MUTED, ERR, OK, WARN, type TurnStatus,
 } from './display';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, detach } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { type WorkMode } from '@kinu.run/core';
 import { clipText } from '@kinu.run/core/tui';
 
@@ -116,8 +116,8 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     }
   };
 
-  rl.on('SIGINT', onInterrupt);
-  process.on('SIGINT', onInterrupt);
+  rl.on('SIGINT', () => detach(Effect.promise(onInterrupt)));
+  process.on('SIGINT', () => detach(Effect.promise(onInterrupt)));
 
   // Lines answering a consent question are excluded.
   const onMidTurnLine = async (input: string) => {
@@ -171,18 +171,16 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     else console.log(DIM('  ⧗ the turn had just finished, so this ran as the next message.'));
   };
 
-  rl.on('line', async (line) => {
-    if (!turnInFlight || consentAskPending || exiting) return;
-    const input = line.trim();
-
-    if (!input) return;
-
-    try {
-      await onMidTurnLine(input);
-    } catch (cause) {
-      console.log(`\n${formatFailure({ cause })}\n`);
-    }
-  });
+  rl.on('line', (line) => detach(Effect.promise(async () => { if (!turnInFlight || consentAskPending || exiting) return;
+  const input = line.trim();
+  
+  if (!input) return;
+  
+  try {
+    await onMidTurnLine(input);
+  } catch (cause) {
+    console.log(`\n${formatFailure({ cause })}\n`);
+  } })));
 
   await client.connect();
 
@@ -523,7 +521,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'model-picker': {
       const current = await client.getModelSpec();
       console.log(`\n${DIM('Model:')} ${ACCENT(current ?? '(default)')}`);
-      const menu = await client.listModels().catch(() => EMPTY_MODEL_MENU);
+      const menu = await client.listModels();
 
       if (menu.models.length > 0) {
         console.log(DIM('Available (set with /model <spec>):'));

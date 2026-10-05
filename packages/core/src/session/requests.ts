@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync, settle } from '../obs/effect';
 import type { ModelMessage } from 'ai';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
@@ -31,15 +33,15 @@ export interface PreparedRequestBundle {
 
 interface RequestRow { request_id: string; turn_id: string; run_id: string; epoch: number; revision: number; step_index: number | null; context_id: string; context_revision: number; metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null }
 
-function requestOf(row: RequestRow): PreparedRequest {
+function requestOf(row: RequestRow): Effect.Effect<PreparedRequest, KinuError> {
   let metadata: SessionPayload;
 
   if (row.metadata_json !== null && row.metadata_path === null && row.metadata_digest === null) metadata = { json: row.metadata_json, path: null, digest: null };
   else if (row.metadata_json === null && row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
-  else throw new KinuError('io', 'invalid prepared request metadata reference');
+  else return Effect.fail(new KinuError('io', 'invalid prepared request metadata reference'));
 
-  return { id: row.request_id, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, revision: row.revision, step: row.step_index,
-    source: { contextId: row.context_id, revision: row.context_revision }, metadata };
+  return Effect.succeed({ id: row.request_id, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, revision: row.revision, step: row.step_index,
+    source: { contextId: row.context_id, revision: row.context_revision }, metadata });
 }
 
 /** Immutable prepared-request evidence; never a source for working-context replay. */
@@ -90,8 +92,8 @@ export class SessionRequests {
   forTurn(turnId: string): readonly PreparedRequest[] {
     this.actor.assertCurrent();
 
-    return this.sql<RequestRow>`SELECT request_id,turn_id,run_id,epoch,revision,step_index,context_id,context_revision,metadata_json,metadata_path,metadata_digest
-      FROM actor_requests WHERE actor_id=${this.actor.actorId} AND turn_id=${turnId} ORDER BY epoch,revision`.map(requestOf);
+    return settleSync(Effect.forEach(this.sql<RequestRow>`SELECT request_id,turn_id,run_id,epoch,revision,step_index,context_id,context_revision,metadata_json,metadata_path,metadata_digest
+      FROM actor_requests WHERE actor_id=${this.actor.actorId} AND turn_id=${turnId} ORDER BY epoch,revision`, requestOf));
   }
 
   /** Inside the claim owner's transaction, after it rechecked its epoch. */
@@ -116,29 +118,35 @@ export class SessionRequests {
     const row = this.sql<RequestRow>`SELECT request_id,turn_id,run_id,epoch,revision,step_index,context_id,context_revision,metadata_json,metadata_path,metadata_digest
       FROM actor_requests WHERE actor_id=${this.actor.actorId} AND request_id=${id}`[0];
 
-    return row === undefined ? null : requestOf(row);
+    if (row === undefined) return null;
+
+    return settleSync(requestOf(row));
   }
 
   /** A step's list is what it sent; an admission's, the conversation. */
   messagesOf(request: PreparedRequest): readonly MessageReference[] {
-    if (request.step === null) return this.context.conversationOf(this.context.entries(request.source));
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (request.step === null) return this.context.conversationOf(this.context.entries(request.source));
 
-    const list = this.sql<{ context_id: string; revision: number }>`SELECT context_id,revision FROM request_renders
-      WHERE actor_id=${this.actor.actorId} AND request_id=${request.id}`[0];
+      const list = this.sql<{ context_id: string; revision: number }>`SELECT context_id,revision FROM request_renders
+        WHERE actor_id=${this.actor.actorId} AND request_id=${request.id}`[0];
 
-    if (list === undefined) throw new KinuError('io', `request ${request.id} has no recorded message list`);
+      if (list === undefined) return yield* new KinuError('io', `request ${request.id} has no recorded message list`);
 
-    return this.context.entries({ contextId: list.context_id, revision: list.revision });
+      return this.context.entries({ contextId: list.context_id, revision: list.revision });
+    }));
   }
 
-  async materialize(id: string): Promise<{ readonly request: PreparedRequest; readonly messages: readonly ModelMessage[]; readonly metadata: JsonValue }> {
-    const request = this.read(id);
+  materialize(id: string): Promise<{ readonly request: PreparedRequest; readonly messages: readonly ModelMessage[]; readonly metadata: JsonValue }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const request = this.read(id);
 
-    if (request === null) throw new KinuError('missing', 'prepared request does not exist');
-    const messages: ModelMessage[] = [];
+      if (request === null) return yield* new KinuError('missing', 'prepared request does not exist');
+      const messages: ModelMessage[] = [];
 
-    for (const reference of this.messagesOf(request)) messages.push(await this.messages.materialize(reference));
+      for (const reference of this.messagesOf(request)) messages.push(yield* Effect.promise(() => this.messages.materialize(reference)));
 
-    return { request, messages, metadata: await this.messages.payloads.read(request.metadata) };
+      return { request, messages, metadata: yield* Effect.promise(() => this.messages.payloads.read(request.metadata)) };
+    }));
   }
 }

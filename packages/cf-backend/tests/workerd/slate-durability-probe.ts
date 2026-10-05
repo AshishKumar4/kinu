@@ -86,7 +86,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
     if (execute === undefined) throw new Error('No callable eval tool');
 
-    return JSON.stringify(await execute({ code }, { toolCallId: 'slate-program', messages: [] }) ?? null);
+    return JSON.stringify(await execute({ code }, { toolCallId: 'slate-program', messages: [], context: undefined }) ?? null);
   }
 
   /**

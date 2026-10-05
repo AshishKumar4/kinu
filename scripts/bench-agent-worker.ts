@@ -59,7 +59,10 @@ async function main(): Promise<void> {
     initCraftedToolsTables(sql);
   }
 
-  const { rt } = await openWorkspaceCLI(db, input.dbPath, { llm: meteredLLM });
+  // A local workspace works in a folder; the bench's is beside its database.
+  const folder = join(dirname(input.dbPath), 'work');
+  mkdirSync(folder, { recursive: true });
+  const { rt } = await openWorkspaceCLI(db, input.dbPath, { llm: meteredLLM, cwd: folder });
   rt.actor.config.setLearning(input.autoEvolve);
 
   let steps = 0;
@@ -110,7 +113,7 @@ async function main(): Promise<void> {
 
     await proxy.settle();
     db.close();
-    proxy.stop(true);
+    await proxy.stop(true);
   }
 
   const usage = proxy.usage();

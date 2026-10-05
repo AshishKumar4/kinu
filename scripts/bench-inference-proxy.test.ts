@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createBenchInferenceProxy } from './bench-inference-proxy';
 
-const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
+const servers: Array<{ stop(closeActiveConnections?: boolean): Promise<void> }> = [];
 
-afterEach(() => {
-  for (const server of servers.splice(0)) server.stop(true);
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(async (server) => server.stop(true)));
 });
 
 describe('bench inference proxy', () => {

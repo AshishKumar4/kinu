@@ -4,7 +4,7 @@ import { CloudflareApiError } from './cloudflare';
 import { FACT_ADDRESS } from './context';
 import type { DeployContext, DeployFacts } from './context';
 import type { DeployStep } from './steps';
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { renderThrownChain, settle } from '../obs/index';
 
 export type DeployStepState = 'pending' | 'running' | 'done' | 'failed';
@@ -138,11 +138,15 @@ interface StepOutcome {
 }
 
 function stepOutcome(step: DeployStep, context: DeployContext): Effect.Effect<StepOutcome> {
-  return Effect.tryPromise({ try: () => step.run(context), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+  return step.run(context).pipe(Effect.matchCause({
     onSuccess: (detail): StepOutcome => ({ detail, failure: null }),
-    onFailure: (failed): StepOutcome => (failed.cause instanceof CloudflareApiError
-      ? { detail: '', failure: { detail: failed.cause.detail, code: failed.cause.code, status: failed.cause.status } }
-      : { detail: '', failure: { detail: renderThrownChain(failed), code: 0, status: 0 } }),
+    onFailure: (failed): StepOutcome => {
+      const cause = Cause.squash(failed);
+
+      return cause instanceof CloudflareApiError
+        ? { detail: '', failure: { detail: cause.detail, code: cause.code, status: cause.status } }
+        : { detail: '', failure: { detail: renderThrownChain({ cause }), code: 0, status: 0 } };
+    },
   }));
 }
 
