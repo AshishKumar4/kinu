@@ -5,7 +5,7 @@
 import { Effect } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { threadLiveTail, type PanelAgent, type TurnLiveness, requestUrl } from "@kinu.run/core";
 import { followJobOutput, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
@@ -19,7 +19,7 @@ import { diagnostics, renderThrownChain, toKinuError, tolerate, settle } from "@
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  TrashIcon, BrainIcon,
+  TrashIcon, BrainIcon, GearIcon,
 } from "@phosphor-icons/react";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
@@ -32,8 +32,8 @@ import {
 import Sidebar from "@/components/Sidebar";
 import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";
-import { Composer, type ChatMode, type ComposerNotice } from "@/components/Composer";
-import { WorkspaceBar } from "@/components/WorkspaceBar";
+import { Composer, useProviderWaitNotice, type ChatMode, type ComposerNotice } from "@/components/Composer";
+import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
@@ -47,7 +47,6 @@ import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
 import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
-import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
@@ -64,11 +63,9 @@ import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
-import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
-import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
-import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
+import { CreateWebhookModal, NewWebhookCard } from "@/components/WorkspaceAutomations";
 import { AddServerCard } from "@/components/account/McpServersPanel";
 import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { AccountProvider } from "@/hooks/use-account";
@@ -101,7 +98,7 @@ import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
   FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
-  AccountSpend, PendingAction, ProducerSpend, RunSummary, SearchTreeRow, Usage, WorkspaceSpend,
+  AccountSpend, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
@@ -112,10 +109,6 @@ const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
 // Declared before the shell mounts so the app background attaches its stepping controls here only (tests/browser/app-background-ux.test.ts).
 window.__kinuGalleryStepping = true;
-
-const squareButtonVariant = "square";
-
-const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
 const NOW = Date.now();
 
@@ -1639,7 +1632,14 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     ],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
-  listWorkspaceAgents: () => (AGENTS_PANEL ? GALLERY_AGENTS : []),
+  listWorkspaceAgents: galleryWorkspaceAgents,
+  getShellApprovalGrants: () => ({ grants: SHELL_GRANTS }),
+  renameMainChat: (args?: unknown[]) => {
+    GALLERY_MAIN_TITLE.value = v.parse(v.tuple([v.string()]), args)[0];
+    rosterMoved();
+
+    return { title: GALLERY_MAIN_TITLE.value };
+  },
   // As the server does: the stopped worker settles aborted, which the panel reads as stopped, and the roster read moves.
   stopSwarmWorker: (args?: unknown[]) => {
     const [headId] = v.parse(v.tuple([v.string()]), args);
@@ -1725,6 +1725,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     };
 
     GALLERY_SUBS.push(entry);
+    rosterMoved();
     galleryAgentPlan = {
       ...galleryAgentPlan,
       status: "pending",
@@ -1745,6 +1746,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
 
     if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
     entry.displayName = displayName;
+    rosterMoved();
 
     return { value: { ok: true, name, displayName, subordinate: { ...entry } } };
   }
@@ -1754,6 +1756,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
 
     if (index >= 0) GALLERY_SUBS.splice(index, 1);
+    rosterMoved();
 
     return { value: { ok: true, name, historyKept: keepHistory ?? true } };
   }
@@ -1839,25 +1842,52 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
   return from === 0 ? { status: "end", items } : { status: "more", items, next: { before: from } };
 }
 
+/** `&agents=panel`: chats, hires nested two deep, a swarm and a helper. */
 const GALLERY_AGENTS: PanelAgent[] = [
-  { key: "main", label: "Main", category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
-    figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } },
-  { key: galleryActorId("docs"), label: "Docs writer", category: "user", activity: "idle", parent: "Main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
+  { key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
+    actorId: galleryActorId(WORKSPACE_PAGE_NAME), figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } },
+  { key: galleryActorId("docs"), label: "Release notes", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
     figures: { tokens: 12_400, usd: 0.03, activeMs: 3 * 60_000, cacheEma: 0.88 } },
-  { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "Main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true,
-    figures: { tokens: 48_900, usd: 0.11, activeMs: 7 * 60_000, cacheEma: 0.91 } },
-  { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "Coupon auditor", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true,
+  { key: galleryActorId("perf"), label: "Perf pass on checkout", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
+    figures: { tokens: 31_000, usd: 0.07, activeMs: 9 * 60_000, cacheEma: 0.9 } },
+  { key: galleryActorId("i18n"), label: "Currency formatting", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "i18n" }, tab: true, input: true,
+    figures: { tokens: 8_200, activeMs: 2 * 60_000, cacheEma: null } },
+  { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true,
+    actorId: galleryActorId("coupon-auditor"), figures: { tokens: 48_900, usd: 0.11, activeMs: 7 * 60_000, cacheEma: 0.91 } },
+  { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "a-scout", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true,
     figures: { tokens: 6_100, activeMs: 45_000, cacheEma: null } },
-  { key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "Main",
+  { key: "a-copy", label: "Changelog writer", category: "hired", activity: "idle", parent: galleryActorId("docs"), open: { kind: "chat", path: "docs/changelog" }, tab: false, input: true,
+    figures: { tokens: 2_100, activeMs: 30_000, cacheEma: null } },
+  { key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false,
     figures: { tokens: 9_800, activeMs: 94_000, cacheEma: null } },
-  { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "Main",
+  { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false, figures: { activeMs: 0, cacheEma: null } },
-  { key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "Main",
+  { key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false, figures: { activeMs: 0, cacheEma: null } },
-  { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "Main", open: { kind: "chat", path: "refiner" }, tab: false, input: false,
+  { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "main", open: { kind: "chat", path: "refiner" }, tab: false, input: false,
     figures: { tokens: 2_300, usd: 0.004, activeMs: 20_000, cacheEma: 0.5 } },
 ];
+
+const NO_GALLERY_FIGURES = { activeMs: 0, cacheEma: null };
+
+/** Main, the page's chats, and the fixture's agents when asked for. */
+function galleryWorkspaceAgents(): PanelAgent[] {
+  const created = GALLERY_SUBS.map((sub): PanelAgent => ({
+    key: sub.actorId, label: sub.displayName || codenameFor(sub.name), category: "user", activity: "idle", parent: "main",
+    open: { kind: "chat", path: sub.name }, tab: true, input: true, actorId: sub.actorId, figures: NO_GALLERY_FIGURES,
+  }));
+
+  const main: PanelAgent = { key: "main", label: GALLERY_MAIN_TITLE.value, category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: NO_GALLERY_FIGURES };
+
+  return AGENTS_PANEL ? [...GALLERY_AGENTS, ...created.filter((agent) => !GALLERY_AGENTS.some((fixed) => fixed.key === agent.key))] : [main, ...created];
+}
+
+const GALLERY_MAIN_TITLE = { value: "Main" };
+
+function rosterMoved(): void {
+  queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubordinates"] })); });
+}
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getChatHistoryPage" && HISTORY_ROWS > 0) return rpcResult(await galleryHistoryPage(args)).json<T>();
@@ -2878,28 +2908,23 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
   );
 }
 
-/* The real component: there is exactly one identity row. */
-function GalleryWorkspaceBar({ providerWait }: { providerWait?: { provider: string; untilMs: number } | null }) {
-  return (
-    <WorkspaceBar
-      title="Checkout coupon bug"
-      onRename={async (name) => name}
-      connectionStatus="connected"
-      working
-      providerWait={providerWait ?? null}
-      altitude="run"
-      onAltitude={() => {}}
-    />
-  );
-}
+/** The bar over fixture chats: working, waiting, failed. */
+const GALLERY_CHATS: readonly PanelAgent[] = [
+  { key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { key: galleryActorId("docs"), label: "Release notes", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { key: galleryActorId("agent-4f2c"), label: "Coupon audit", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+];
 
-/* Clearing is absent until there is a transcript to clear, like the app. */
-function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
+function GalleryWorkspaceHeader({ active = "main" }: { active?: string }) {
   return (
-    <SubordinateTabs
-      workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
-      onCreate={async () => {}} creating={false} onDismiss={async () => {}} onRename={async (_name, displayName) => displayName}
-      trailing={clearable && <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />}
+    <WorkspaceHeader
+      workspace={{ title: "Checkout coupon bug", to: "/workspace/checkout-fixes/overview", editValue: "Checkout coupon bug", rename: async () => {}, remove: () => {} }}
+      chats={GALLERY_CHATS.map((agent): ChatTab => (agent.key === "main"
+        ? { agent, to: "/workspace/checkout-fixes", rename: async () => {} }
+        : { agent, to: "/workspace/checkout-fixes", rename: async () => {}, remove: () => {} }))}
+      active={active}
+      newChat="/workspace/checkout-fixes/new"
+      trailing={<Link to="/workspace/checkout-fixes/settings" className="p-bar-icon" aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>}
     />
   );
 }
@@ -2995,18 +3020,19 @@ function Shell(
     notices?: readonly ComposerNotice[];
   },
 ) {
+  const waitNotice = useProviderWaitNotice(providerWait);
+
   return (
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       {/* Mirrors components/layout.tsx. */}
       <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
       <main className="p-workbench min-h-0 flex-1 min-w-0 overflow-hidden">
         <div className="h-full flex flex-col">
-          <GalleryWorkspaceBar providerWait={providerWait} />
+          <GalleryWorkspaceHeader />
           <div className="flex-1 flex min-h-0">
             <div className="@container flex min-w-0 flex-1 flex-col h-full border-r p-border">
-              <GalleryChatTabs />
               <ChatMessages />
-              <GalleryComposer notices={notices} />
+              <GalleryComposer notices={[...notices, ...waitNotice]} />
             </div>
             <div className="z-[2] -ml-[3px] w-[5px] shrink-0" />
             <div className="w-[430px] shrink-0 min-w-0">
@@ -3076,7 +3102,7 @@ function ChatFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
-        <GalleryChatTabs />
+        <GalleryWorkspaceHeader />
         <ChatMessages />
         <GalleryComposer notices={REFRESH_NOTICE} />
       </div>
@@ -3130,7 +3156,7 @@ function ChatSteerFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
-        <GalleryChatTabs />
+        <GalleryWorkspaceHeader />
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8" data-gallery-chat>
           {thread.entries.map(({ message, steers }) => (
             <div key={message.id} data-chat-row={message.id}>
@@ -3187,7 +3213,7 @@ function ChatCodeFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
-        <GalleryChatTabs />
+        <GalleryWorkspaceHeader />
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8" data-gallery-chat>
           {CODE_THREAD.map((m) => (
             <div key={m.id} data-chat-row={m.id}>
@@ -3206,7 +3232,7 @@ function ChatEmptyFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
-        <GalleryChatTabs clearable={false} />
+        <GalleryWorkspaceHeader />
         <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
           <EmptyConversation mission={BRAIN_STATUS.purpose} />
         </div>
@@ -3226,7 +3252,7 @@ function ChatLoadingFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
-        <GalleryChatTabs clearable={false} />
+        <GalleryWorkspaceHeader />
         <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
           <ConversationSkeleton />
         </div>
@@ -3398,15 +3424,26 @@ function ChatHistoryFrame() {
       }]);
     };
 
-    window.addEventListener("gallery:arrive", onArrive);
+    // A streaming answer: the last live message grows by one paragraph.
+    const onStream = () => {
+      setLive((prev) => prev.map((message, index) => (index === prev.length - 1
+        ? { ...message, parts: [...message.parts, { type: "text", text: `A further paragraph of the streaming answer, long enough to wrap across the column and grow it. ${String(message.parts.length)}` }] }
+        : message)));
+    };
 
-    return () => window.removeEventListener("gallery:arrive", onArrive);
+    window.addEventListener("gallery:arrive", onArrive);
+    window.addEventListener("gallery:stream", onStream);
+
+    return () => {
+      window.removeEventListener("gallery:arrive", onArrive);
+      window.removeEventListener("gallery:stream", onStream);
+    };
   }, []);
 
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
-        <GalleryChatTabs />
+        <GalleryWorkspaceHeader />
         <div ref={messagesRef} data-testid="chat-scroll"
           className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
           <HistoryBoundary
@@ -3458,7 +3495,7 @@ function HistoryAuthorityFrame() {
   return (
     <div data-history-authority className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
-        <GalleryChatTabs clearable={false} />
+        <GalleryWorkspaceHeader />
         <button data-history-release type="button" onClick={() => hold.resolve()}
           className="p-btn-quiet m-2 self-start px-2 py-1 text-xs">
           Release first page
@@ -3614,216 +3651,28 @@ function QualityRetryFrame() {
 function All() {
   return (
     <div className="p-bg p-text min-h-screen">
-      <Section title="Chat column"><div className="@container max-w-3xl border p-border rounded-lg overflow-hidden"><GalleryWorkspaceBar /><GalleryChatTabs /><ChatMessages /><GalleryComposer /></div></Section>
+      <Section title="Chat column"><div className="@container max-w-3xl border p-border rounded-lg overflow-hidden"><GalleryWorkspaceHeader /><ChatMessages /><GalleryComposer /></div></Section>
       <Section title="Controls">{<Controls />}</Section>
     </div>
   );
 }
 
-const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
-  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", nameOrigin: "auto", origin: "agent", lifetime: "durable", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
-  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", nameOrigin: "auto", origin: "agent", lifetime: "durable", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
-  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", nameOrigin: "user", origin: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
-  // A one-click agent the titler has not reached: blank name, shown as "New agent".
-  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", nameOrigin: "auto", origin: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
+/* Each strip opens a different tab; the narrowest overflows. */
+const TAB_STRIPS: readonly { readonly open: string; readonly width: number }[] = [
+  { open: "main", width: 760 },
+  { open: galleryActorId("docs"), width: 560 },
+  { open: "overview", width: 380 },
 ];
 
-/* The open tab is the strip's hook, so a gate can compare strips. */
-interface TabStripCase {
-  readonly open?: string;
-  readonly width: number;
-  readonly body: string;
-}
-
-const TAB_STRIPS: readonly TabStripCase[] = [
-  { width: 520, body: "Main chat body" },
-  { width: 380, body: "Main chat body" },
-  { open: "coupon-tester", width: 520, body: "Subordinate chat body" },
-  // Still under its codename (blank display name); last in the roster, so the strip is wide enough to keep it visible.
-  { open: "agent-4f2c", width: 760, body: "Codename chat body" },
-];
-
-/* On the chat column's own ground: elsewhere hides the seam under review. */
 function TabsFrame() {
   return (
     <div className="p-bg min-h-screen p-8 space-y-8">
       {TAB_STRIPS.map((one) => (
-        <div
-          key={`${one.open ?? "main"}-${one.width}`}
-          data-tab-strip={one.open ?? "main"}
-          className="flex flex-col border p-border overflow-hidden"
-          style={{ width: one.width, height: 190 }}
-        >
-          <SubordinateTabs
-            workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={one.open}
-            onCreate={async () => {}} creating={false} onDismiss={async () => {}} onRename={async (_name, displayName) => displayName}
-          />
-          <div className="flex-1 px-5 py-4 p-row-text p-text-3">{one.body}</div>
+        <div key={`${one.open}-${one.width}`} data-tab-strip={one.open} className="flex flex-col overflow-hidden" style={{ width: one.width, height: 150 }}>
+          <GalleryWorkspaceHeader active={one.open} />
+          <div className="flex-1 px-5 py-4 p-row-text p-text-3">Chat body</div>
         </div>
       ))}
-    </div>
-  );
-}
-
-/** Internal only: the gate asserts this string never reaches the document. */
-const AGENTCHATS_MISSION = "Audit the checkout flow end to end and fix what breaks";
-
-type GalleryRosterEntry = Parameters<typeof SubordinateTabs>[0]["subordinates"][number];
-
-const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
-  // Distinctive: the gate asserts it never renders; subordination shows as hierarchy, not a badge.
-  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", nameOrigin: "user", origin: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
-  // Agent-created: keeps the confirmation path, unlike the user-created seed.
-  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", nameOrigin: "auto", origin: "agent", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
-];
-
-const AGENTCHATS_ROWS = 40;
-
-/** Wired like SubordinateChatColumn: no title bar (rename is on the tab), same mode segment and per-conversation state hook. */
-function AgentChatsPane({ conversation, transcript, onSend }: {
-  conversation: string;
-  transcript: readonly string[];
-  onSend: (text: string, mode: ChatMode) => void;
-}) {
-  const ui = useConversationUiState(conversation);
-
-  const scrollRef = useGrowingScroll({
-    grows: "up",
-    content: transcript,
-    fetched: false,
-    initialScroll: ui.savedScroll,
-    onScrollPosition: ui.rememberScroll,
-  });
-
-  return (
-    <div className="@container relative flex min-h-0 flex-1 flex-col" data-agent-pane={conversation}>
-      <div ref={scrollRef} data-agent-scroll className="flex-1 space-y-3 overflow-y-auto px-6 py-5">
-        {transcript.length === 0
-          ? <p className="text-sm p-text-3">This agent's conversation starts here.</p>
-          : transcript.map((row, i) => (
-            <div key={i} data-agent-row className="rounded-lg border p-border px-3 py-2 text-sm p-text-2">{row}</div>
-          ))}
-      </div>
-      <div className="border-t p-border p-sidebar">
-        <Composer
-          value={ui.draft}
-          onValueChange={ui.setDraft}
-          onSend={() => {
-            const text = ui.draft.trim();
-
-            if (!text) return;
-            onSend(text, ui.mode);
-            ui.setDraft("");
-          }}
-          placeholder="Send a message..."
-          disabled={false}
-          liveness={IDLE_TURN}
-          onStop={() => {}}
-          mode={{ value: ui.mode, onChange: ui.setMode }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function AgentChatsScene() {
-  const { subName } = useParams();
-  const navigate = useNavigate();
-  const [roster, setRoster] = useState<readonly GalleryRosterEntry[]>(AGENTCHATS_SEED);
-
-  const [transcripts, setTranscripts] = useState<Record<string, readonly string[]>>({
-    main: Array.from({ length: AGENTCHATS_ROWS }, (_, i) => `Main turn ${i + 1}: enough rows for the scroller to hold a position.`),
-    scout: Array.from({ length: AGENTCHATS_ROWS }, (_, i) => `Scout turn ${i + 1}: an existing conversation with history.`),
-  });
-
-  useEffect(() => {
-    const keepNewest = (event: Event) => {
-      const count = v.safeParse(v.number(), event instanceof CustomEvent ? event.detail : null);
-
-      if (count.success) setTranscripts((current) => Object.fromEntries(Object.entries(current).map(([agent, rows]) => [agent, rows.slice(-count.output)])));
-    };
-
-    window.addEventListener("gallery:keep-newest", keepNewest);
-
-    return () => window.removeEventListener("gallery:keep-newest", keepNewest);
-  }, []);
-
-  const [sent, setSent] = useState<readonly { agent: string; mode: ChatMode; text: string }[]>([]);
-  const [dismissals, setDismissals] = useState<readonly { agent: string; historyKept: boolean }[]>([]);
-  const counter = useRef(0);
-  const missions = useRef<Record<string, string>>({});
-
-  const create = async () => {
-    maybeRefuseCreate();
-    const name = `agent-${++counter.current}`;
-    missions.current[name] = AGENTCHATS_MISSION;
-    setRoster((current) => [...current, {
-      name, actorId: galleryActorId(name), displayName: "", role: "agent", nameOrigin: "auto", origin: "user", lifetime: "durable",
-      status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
-    }]);
-    await navigate(`/workspace/checkout-fixes/agents/${name}`);
-  };
-
-  const send = (agent: string) => (text: string, mode: ChatMode) => {
-    setSent((current) => [...current, { agent, mode, text }]);
-    setTranscripts((current) => ({ ...current, [agent]: [...(current[agent] ?? []), text] }));
-    // The first-message titler, as the roster re-read its frame asks for.
-    setTimeout(() => {
-      setRoster((current) => current.map((entry) =>
-        entry.name === agent && entry.displayName === ""
-          ? { ...entry, displayName: text.slice(0, 32) }
-          : entry));
-    }, 120);
-  };
-
-  const active = subName ? roster.find((entry) => entry.name === subName) : undefined;
-
-  return (
-    <div className="p-bg p-text flex h-screen flex-col" data-agentchats>
-      <div className="mx-auto flex h-full w-full max-w-3xl min-w-0 flex-col border-x p-border">
-        <SubordinateTabs
-          workspace="checkout-fixes"
-          subordinates={roster}
-          activeName={subName}
-          onCreate={create}
-          creating={false}
-          onRename={async (name, displayName) => {
-            setRoster((current) => current.map((entry) =>
-              entry.name === name ? { ...entry, displayName } : entry));
-
-            return displayName;
-          }}
-          onDismiss={async (name, keepHistory) => {
-            setRoster((current) => current.filter((entry) => entry.name !== name));
-            // Mirrors core `dismiss`: `keepHistory` defaults to keeping; delete takes the conversation. The gate reads this, not the dialog.
-            const historyKept = keepHistory ?? true;
-
-            if (!historyKept) {
-              setTranscripts((current) => Object.fromEntries(
-                Object.entries(current).filter(([agent]) => agent !== name)));
-            }
-
-            setDismissals((current) => [...current, { agent: name, historyKept }]);
-          }}
-        />
-        {subName && active ? (
-          <AgentChatsPane
-            key={subName}
-            conversation={`checkout-fixes/agents/${subName}`}
-            transcript={transcripts[subName] ?? []}
-            onSend={send(subName)}
-          />
-        ) : (
-          <AgentChatsPane
-            key="main"
-            conversation="checkout-fixes/main"
-            transcript={transcripts["main"] ?? []}
-            onSend={send("main")}
-          />
-        )}
-      </div>
-      <div data-sent-log={JSON.stringify(sent)} />
-      <div data-dismiss-log={JSON.stringify(dismissals)} />
     </div>
   );
 }
@@ -4156,7 +4005,7 @@ function ChatSlateFrame() {
     <SlateInlineContext.Provider value={inline}>
       <div className="flex h-screen justify-center p-bg p-text">
         <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
-          <GalleryChatTabs />
+          <GalleryWorkspaceHeader />
           <div className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8" data-gallery-chat>
             {thread.entries.map(({ message, steers }) => (
               <div key={message.id} data-chat-row={message.id}>
@@ -4912,192 +4761,6 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
 // Every block is fed so its type roles render at real scale.
 
 /** Typed so fixtures track `RunSummary`. The second run is silent (no provider report) and must render unreported, not free; longer than one page for the pager. */
-const SUPERVISE_RUNS: RunSummary[] = [
-  {
-    runId: "run_9c1", startedAt: NOW - 45 * 60e3, causedBy: "chat",
-    userMessage: "Why does the percentage coupon drop off at checkout?",
-    status: "completed", eventCount: 62, turnsWithoutUsage: 0,
-    usage: { input: 184_320, output: 9_140, cacheRead: 121_400 },
-  },
-  {
-    runId: "run_9b7", startedAt: NOW - 6 * 36e5, causedBy: "timer",
-    userMessage: null, status: "completed", eventCount: 18,
-    usage: {}, turnsWithoutUsage: 3,
-  },
-  ...olderRuns(),
-];
-
-function olderRuns(): RunSummary[] {
-  const asked = [
-    "Which migration dropped the coupon index?",
-    "Show me every reader of rules[kind]",
-    "Does the cart serializer already guard this?",
-    "Run the checkout suite against the fix",
-    "Why is the admin report still 500ing?",
-    null,
-  ];
-
-  return Array.from({ length: 40 }, (_, i) => {
-    const silent = i % 9 === 8;
-    const asking = asked[i % asked.length] ?? null;
-
-    return {
-      runId: `run_8${String(99 - i).padStart(2, "0")}`,
-      startedAt: NOW - (7 + i) * 36e5,
-      causedBy: asking === null ? "timer" : "chat",
-      userMessage: asking,
-      status: i % 11 === 7 ? "aborted" : "completed",
-      eventCount: 12 + ((i * 7) % 50),
-      usage: silent ? {} : {
-        input: 12_000 + i * 1_400,
-        output: 800 + i * 60,
-        cacheRead: i % 3 === 0 ? 0 : 6_000 + i * 900,
-      },
-      turnsWithoutUsage: silent ? 2 : 0,
-    };
-  });
-}
-
-const SUPERVISE_TRIGGERS = [
-  {
-    id: "01K5ZQ8F2P0000000000000WH1", kind: "webhook_durable", state: "active",
-    created_at: NOW - 12 * 864e5, spec: { label: "deploy-failed" },
-    rate_limit_per_min: 30, fire_count: 41,
-    last_fire_at: NOW - 3 * 36e5, next_fire_at: null,
-    url: "/api/workspaces/checkout-fixes/webhook/01K5ZQ8F2P0000000000000WH1"
-      + "/v1-4f1c9a02d7b64e8fa3105c6d29be7a41",
-  },
-  {
-    id: "trg_tm1", kind: "timer_cron", state: "active", created_at: NOW - 30 * 864e5,
-    spec: { cron: "0 9 * * 1" }, fire_count: 4,
-    last_fire_at: NOW - 3 * 864e5, next_fire_at: NOW + 4 * 864e5,
-  },
-];
-
-const SUPERVISE_JOBS: BackgroundJob[] = [
-  {
-    id: "bgjob-71ae4c02", kind: "heads", label: "Audit the CLI surface", status: "running",
-    workMode: "build", result: null, error: null, createdAt: NOW - 4 * 60e3, settledAt: null,
-  },
-  {
-    id: "bgjob-70bd19f7", kind: "agents", label: "Pick a migration-backfill approach",
-    workMode: "build", status: "completed", result: "Settled on the backfill-on-read approach", error: null,
-    createdAt: NOW - 50 * 60e3, settledAt: NOW - 41 * 60e3,
-  },
-];
-
-/** One entry per changelog kind. `supervisefresh` answers empty until `gallery:supervise-evolve`; its jobs read fails until
- *  `gallery:supervise-jobs-heal`; `gallery:supervise-evolution-fail` throws once. `changesOnly` filters measurement kinds before the limit, as the real read does. */
-const SuperviseChangelogArgsSchema = v.object({
-  limit: v.optional(v.number()),
-  changesOnly: v.optional(v.boolean()),
-});
-
-interface SuperviseChangelogDigest {
-  seenAt: number; unseenCount: number; entries: EvolutionEntry[];
-}
-
-const SUPERVISE_CHANGELOG: SuperviseChangelogDigest = {
-  seenAt: NOW - 30e5, unseenCount: 2,
-  entries: [
-    { id: "cl_s1", kind: "scaffold", at: NOW - 10e5,
-      summary: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
-      evidence: "shadow eval: 7 trials · 5 pending wins · 1 regression · 1 tie" },
-    { id: "cl_s2", kind: "ratings", at: NOW - 20e5,
-      summary: "Rated 6 turns · 6 by the decision model from the user's reply",
-      evidence: "satisfaction 3.4 (95% CI 2.6 to 4.1) of 5 · corrected 33%" },
-    { id: "cl_s3", kind: "fact", at: NOW - 50e5,
-      summary: "Remembered: percentage coupons carry kind:null after Tuesday's migration",
-      evidence: null },
-  ],
-};
-
-const SUPERVISE_EMPTY_CHANGELOG: SuperviseChangelogDigest = { seenAt: NOW, unseenCount: 0, entries: [] };
-
-/** The newest change inside the limit, as the real `changesOnly` read answers. */
-const SUPERVISE_EVOLVED_CHANGELOG: SuperviseChangelogDigest = {
-  seenAt: NOW, unseenCount: 1,
-  entries: [
-    { id: "cl_e1", kind: "scaffold", at: NOW - 5 * 60e3,
-      summary: "I improved how I work (won 4 of 6 trial runs)",
-      evidence: "Promoted scaffold v9 — session reflection · shadow 4W-1L-1T" },
-  ],
-};
-
-const superviseRpc =
-  (state: { current: { evolved: boolean; jobsHealthy: boolean; evolutionFailNext: boolean } },
-    evolvedAtStart: boolean): Rpc =>
-  async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === "getEvolutionChangelog") {
-      // Consumed once, so the failure lands over last-good entries.
-      if (state.current.evolutionFailNext) {
-        state.current.evolutionFailNext = false;
-
-        throw new Error("evolution digest fixture failed");
-      }
-
-      const request = v.parse(SuperviseChangelogArgsSchema, args?.[0] ?? {});
-
-      const evolved = state.current.evolved ? SUPERVISE_EVOLVED_CHANGELOG : SUPERVISE_EMPTY_CHANGELOG;
-      const changelog = evolvedAtStart ? SUPERVISE_CHANGELOG : evolved;
-
-      const entries = request.changesOnly === true
-        ? changelog.entries.filter((entry) => entry.kind !== "ratings")
-        : changelog.entries;
-
-      return rpcResult({ ...changelog, entries }).json<T>();
-    }
-
-    if (method === "getRunSummaries") {
-      const request = v.parse(GalleryPageRequestSchema, args?.[0] ?? {});
-      const limit = request.limit ?? 30;
-      const after = request.cursor?.after;
-      const start = after === undefined ? 0 : SUPERVISE_RUNS.findIndex((run) => run.runId === after) + 1;
-
-      return rpcResult(v.parse(JsonValueSchema, seekPage(
-        SUPERVISE_RUNS.slice(start, start + limit + 1), limit, (run) => run.runId,
-      ))).json<T>();
-    }
-
-    if (method === "listTriggers") return rpcResult(v.parse(JsonValueSchema, { triggers: SUPERVISE_TRIGGERS })).json<T>();
-
-    if (method === "listBackgroundJobs") {
-      if (!state.current.jobsHealthy) throw new Error("jobs fixture failed");
-
-      return rpcResult(v.parse(JsonValueSchema, SUPERVISE_JOBS)).json<T>();
-    }
-
-    return stubRpc<T>(method, args);
-  };
-
-function SuperviseFrame({ evolved = true }: { evolved?: boolean }) {
-  const state = useRef({ evolved, jobsHealthy: evolved, evolutionFailNext: false });
-  useEffect(() => {
-    const evolve = () => { state.current.evolved = true; };
-
-    const heal = () => { state.current.jobsHealthy = true; };
-
-    const failEvolution = () => { state.current.evolutionFailNext = true; };
-
-    window.addEventListener("gallery:supervise-evolve", evolve);
-    window.addEventListener("gallery:supervise-jobs-heal", heal);
-    window.addEventListener("gallery:supervise-evolution-fail", failEvolution);
-
-    return () => {
-      window.removeEventListener("gallery:supervise-evolve", evolve);
-      window.removeEventListener("gallery:supervise-jobs-heal", heal);
-      window.removeEventListener("gallery:supervise-evolution-fail", failEvolution);
-    };
-  }, []);
-
-  const rpc = useMemo(() => superviseRpc(state, evolved), [evolved]);
-
-  return (
-    <div className="p-bg p-text min-h-screen">
-      <SupervisePage rpc={rpc} />
-    </div>
-  );
-}
 
 
 /** `cacheRead` is a subset of `input`, never an addition. */
@@ -6186,9 +5849,9 @@ function routedPage(entry: string, path: string, page: React.ReactNode, height =
 
 /** Routed: the page builds back-links and breadcrumbs from `agentId`. */
 async function settingsFrame(): Promise<MountedFrame> {
-  const { default: SettingsPage } = await import("@/pages/SettingsPage");
+  serveGalleryRpc(workspacePageRpc);
 
-  return routedPage("/workspace/checkout-fixes/settings", "/workspace/:agentId/settings", <SettingsPage />, "min-h-screen");
+  return routedPage("/workspace/checkout-fixes/settings", "/workspace/:agentId/:view", <WorkspacePage />);
 }
 
 /** Routed: tab, account and workspace selection live in the URL. */
@@ -6260,18 +5923,6 @@ function lazyRouteFrame(): MountedFrame {
   };
 }
 
-/** Routed so create lands on the new conversation's URL and Main goes back. */
-function agentChatsFrame(): MountedFrame {
-  return {
-    entries: ["/workspace/checkout-fixes"],
-    node: (
-      <Routes>
-        <Route path="/workspace/:agentId" element={<AgentChatsScene />} />
-        <Route path="/workspace/:agentId/agents/:subName" element={<AgentChatsScene />} />
-      </Routes>
-    ),
-  };
-}
 
 /** Owns a real root connection for the plan-arrival hint; the surfaces read fixture props. */
 function previewTabsFrame(): MountedFrame {
@@ -6311,6 +5962,7 @@ function workspacePageFrame(): MountedFrame {
         <Routes>
           <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+          <Route path="/workspace/:agentId/:view" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
         </Routes>
       </>
     ),
@@ -6327,6 +5979,7 @@ function workspaceShellFrame(): MountedFrame {
         <Route element={<Layout />}>
           <Route path="/workspace/:agentId" element={<WorkspacePage />} />
           <Route path="/workspace/:agentId/agents/:subName" element={<WorkspacePage />} />
+          <Route path="/workspace/:agentId/:view" element={<WorkspacePage />} />
           <Route path="*" element={<div className="h-full" data-gallery-blank />} />
         </Route>
       </Routes>
@@ -6451,8 +6104,6 @@ async function mount() {
 
   // Frames fully fixed by name; `entries` is the MemoryRouter location for frames that read a route param.
   const fixtureFrames = new Map<string, { node: React.ReactNode; entries: string[] }>([
-    ["supervise", { node: <SuperviseFrame />, entries: ["/"] }],
-    ["supervisefresh", { node: <SuperviseFrame evolved={false} />, entries: ["/"] }],
     ["activity", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />, entries: ["/"] }],
     ["activityclean", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />, entries: ["/"] }],
     ["activityempty", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />, entries: ["/"] }],
@@ -6545,7 +6196,6 @@ async function mount() {
   else if (frame === "palette") node = <Palette />;
   else if (frame === "marks") node = <MarksFrame />;
   else if (frame === "tabs") node = <TabsFrame />;
-  else if (frame === "agentchats") ({ node, entries } = agentChatsFrame());
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "coderendering") node = <CodeRenderingFrame />;
   else if (frame === "chat") node = <ChatFrame />;

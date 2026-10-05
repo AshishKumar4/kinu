@@ -1,10 +1,10 @@
 /**
- * FIRST RUN: the Changes and Supervise panes read a workspace that
+ * FIRST RUN: the Changes pane and the run list read a workspace that
  * just did one piece of work.
  *
  * THE ASK. Every user-facing surface has a deployed row. After one turn that
  * writes one file, the Changes pane shows the file against the review baseline
- * and forgets it once the baseline is reset; the Supervise page lists the turn
+ * and forgets it once the baseline is reset; the run list lists the turn
  * among the workspace's runs and reads its triggers. Each through the RPC its
  * pane calls.
  *

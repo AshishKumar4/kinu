@@ -199,7 +199,7 @@ async function drawnRoster(page: Page, plan: PublicSessionPlan, workspace: strin
   await painted(page);
 
   return page.evaluate((name: string) => ({
-    tabs: [...document.querySelectorAll<HTMLElement>('nav[aria-label="Workspace agents"] [data-agent-tab]')]
+    tabs: [...document.querySelectorAll<HTMLElement>('nav[aria-label="Chats"] [data-agent-tab]')]
       .map((tab) => tab.dataset.agentTab ?? '').filter((tab) => tab !== 'main'),
     rows: [...document.querySelectorAll<HTMLElement>(`[data-sidebar-agents="${name}"] [data-agent-row]`)]
       .map((row) => row.dataset.agentRow ?? ''),

@@ -1,11 +1,11 @@
 import { Effect, Cause } from 'effect';
 import { startTransition, useState, useEffect, useCallback, useRef } from "react";
-import { useParams, Link } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Link } from "react-router-dom";
+import { Button, Loader } from "@cloudflare/kumo";
 import {
-  FloppyDiskIcon, BrainIcon, CheckIcon, ArrowLeftIcon,
-  ShieldIcon, KeyIcon, PlugIcon, SparkleIcon,
-  DownloadSimpleIcon, EyeIcon,
+  FloppyDiskIcon, BrainIcon, CheckIcon,
+  ShieldIcon, KeyIcon, SparkleIcon,
+  DownloadSimpleIcon, EyeIcon, ChatsCircleIcon, TrashIcon,
 } from "@phosphor-icons/react";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
@@ -16,7 +16,9 @@ import {
   ArchiveCursorSchema,
 } from "@kinu.run/core";
 import { executorLabel } from "@kinu.run/core";
-import { useKinu } from "@/hooks/use-kinu";
+import type { AgentStatus, ConnectionStatus, WorkspaceNotice } from "@/hooks/use-kinu";
+import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
+import { Modal } from "@/components/ui/Modal";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -109,11 +111,20 @@ function saveLabel(saving: boolean, saved: boolean): string {
   return "Save";
 }
 
-export default function SettingsPage() {
-  const { agentId } = useParams();
-  const state = useKinu(agentId);
+/** The workspace socket's pieces settings read; the page shares the chat's socket rather than opening its own. */
+export interface SettingsSource {
+  readonly rpc: Rpc;
+  readonly connectionStatus: ConnectionStatus;
+  readonly agentStatus: AgentStatus | null;
+  readonly error: WorkspaceNotice | null;
+  readonly retryLoad: () => void;
+  readonly clearHistory: () => void;
+}
+
+export function WorkspaceSettings({ workspace: agentId, state }: { workspace: string; state: SettingsSource }) {
   // Stable pieces only: `state` is a fresh object every render, and depending on it loops refetches that clobber edits.
-  const { rpc, connectionStatus, agentStatus, error: snapshotError, retryLoad } = state;
+  const { rpc, connectionStatus, agentStatus, error: snapshotError, retryLoad, clearHistory } = state;
+  const [clearing, setClearing] = useState(false);
 
   const displayName = useSettingField<string>();
   const soul = useSettingField<string>();
@@ -210,40 +221,29 @@ export default function SettingsPage() {
 
   if (connectionStatus !== "connected") {
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-3 text-sm p-text-2">
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-sm p-text-2">
         {connectionStatus === "connecting" ? (
           <><Loader size="base" /><span>Connecting to {agentId}…</span></>
         ) : (
-          <>
-            <span className="p-danger">Not connected to this workspace. Settings cannot load or save until it reconnects.</span>
-            <Link to={`/workspace/${agentId}`} className="text-xs p-accent underline">Back to chat</Link>
-          </>
+          <span className="p-danger">Not connected to this workspace. Settings cannot load or save until it reconnects.</span>
         )}
       </div>
     );
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-3xl space-y-8 px-5 py-8 sm:px-6">
+    <div className="min-h-0 flex-1 overflow-y-auto" data-workspace-settings>
+      <div className="mx-auto max-w-3xl space-y-8 px-5 pb-16 pt-9 sm:px-8">
         <header className="flex flex-wrap items-end justify-between gap-4 border-b p-border pb-6">
           <div className="min-w-0">
-            <Link to={`/workspace/${agentId}`} className="p-btn-ghost -ml-2 mb-4 inline-flex h-6.5 items-center gap-1 rounded-md px-2 text-xs">
-              <ArrowLeftIcon size={12} /> Back to chat
-            </Link>
-            <p className="p-eyebrow">Workspace</p>
-            <h1 className="p-display mt-1 text-[26px] leading-8">Workspace settings</h1>
+            <h1 className="p-display text-[26px] leading-8">Settings</h1>
             <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 p-row-text p-text-3">
               <span className="font-mono">{agentId}</span>
-              <CopyButton value={agentId ?? ""} what="the workspace slug" size={11}
+              <CopyButton value={agentId} what="the workspace slug" size={11}
                 className="rounded-sm p-0.5 p-card-hover hover:p-text transition-colors" />
               <span>·</span>
               <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
                 <KeyIcon size={11} /> Account settings and credentials
-              </Link>
-              <span>·</span>
-              <Link to={`/workspace/${agentId}?altitude=supervise`} className="hover:p-text inline-flex items-center gap-1">
-                <PlugIcon size={11} /> Automations (webhooks, timers)
               </Link>
             </p>
           </div>
@@ -341,11 +341,35 @@ export default function SettingsPage() {
 
         <AlwaysActiveSkillsCard rpc={rpc} />
 
-        <WorkspaceBackupCard rpc={rpc} workspace={agentId ?? ""} />
+        <div className="p-card border p-border p-5" id="automations"><WorkspaceAutomations rpc={rpc} workspace={agentId} /></div>
+
+        <WorkspaceBackupCard rpc={rpc} workspace={agentId} />
 
         <GepaOptimizationCard rpc={rpc} />
+
+        <Card title="Main's conversation" icon={ChatsCircleIcon}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="p-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
+            <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={() => setClearing(true)}>Clear history</Button>
+          </div>
+        </Card>
         </div>
       </div>
+      {clearing && (
+        <Modal
+          title="Clear conversation history"
+          icon={<TrashIcon size={18} className="p-danger" />}
+          onClose={() => setClearing(false)}
+          footer={<>
+            <Button size="sm" variant="ghost" onClick={() => setClearing(false)}>Cancel</Button>
+            <FilledButton danger onClick={() => { clearHistory(); setClearing(false); }}>Clear history</FilledButton>
+          </>}
+        >
+          <p className="text-xs p-text-2 leading-relaxed">
+            This cannot be undone. Memory, SOUL.md, learned tools, and evolution stay unchanged.
+          </p>
+        </Modal>
+      )}
     </div>
   );
 }

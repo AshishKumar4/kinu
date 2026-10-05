@@ -7,11 +7,11 @@ import { Effect } from "effect";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
 import {
-  StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon,
+  StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon, ArrowUpIcon, PlusIcon,
   WarningCircleIcon, InfoIcon, CheckCircleIcon, FileIcon, XIcon,
 } from "@phosphor-icons/react";
 import type { FileUIPart } from "ai";
-import type { TurnLiveness } from "@kinu.run/core";
+import { fmtSpan, type TurnLiveness } from "@kinu.run/core";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import type { WorkspaceNotice } from "@/hooks/use-kinu";
 import { composing } from "@/components/ui/form";
@@ -95,6 +95,23 @@ function Notice({ notice }: { notice: ComposerNotice }) {
   );
 }
 
+/** Who a provider's wait is on, and for how long. `untilMs` is this browser's clock. */
+export function useProviderWaitNotice(wait: { provider: string; untilMs: number } | null): ComposerNotice[] {
+  const [now, setNow] = useState(Date.now);
+
+  useEffect(() => {
+    if (wait === null) return undefined;
+    setNow(Date.now());
+    const tick = setInterval(() => setNow(Date.now()), 1_000);
+
+    return () => clearInterval(tick);
+  }, [wait]);
+
+  if (wait === null) return [];
+
+  return [{ id: "provider-wait", tone: "progress", text: `Waiting on ${wait.provider} · retrying in ${fmtSpan(Math.max(0, wait.untilMs - now))}` }];
+}
+
 /** Neither tone disables the composer; that belongs to the socket. */
 export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void): ComposerNotice {
   const mapped: ComposerNotice = {
@@ -125,7 +142,7 @@ function ModeSegment({ value, onChange, disabled }: {
   value: ChatMode; onChange: (mode: ChatMode) => void; disabled: boolean;
 }) {
   return (
-    <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="Turn mode">
+    <div className="p-composer-mode" role="group" aria-label="Turn mode">
       {CHAT_MODES.map((mode) => {
         const build = mode === "build";
         const selected = value === mode;
@@ -139,11 +156,7 @@ function ModeSegment({ value, onChange, disabled }: {
             disabled={disabled}
             aria-pressed={selected}
             title={title}
-            className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
-              selected
-                ? "border-[rgba(224,164,88,.3)] bg-[rgba(224,164,88,.1)] p-accent"
-                : "p-border p-text-3 hover:p-text-2 hover:border-[var(--c-accent)]"
-            }`}
+            className="p-composer-quiet disabled:opacity-40"
           >
             {build ? "Auto" : "Plan"}
           </button>
@@ -240,7 +253,7 @@ export function Composer({
 
   return (
     // @container: the action row collapses to icons in a narrow chat column.
-    <div data-composer-root className="@container mx-auto w-full max-w-[820px] px-4 py-3.5 sm:px-5"
+    <div data-composer-root className="@container mx-auto w-full max-w-[820px] px-3 pb-3 sm:px-5 sm:pb-4"
       onPaste={(e) => {
         if (!attachments) return;
         const files = pastedFiles(e.clipboardData);
@@ -318,18 +331,16 @@ export function Composer({
             submit?.();
           }}
           placeholder={placeholder} disabled={disabled} rows={1}
-          className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-4 pt-3 pb-1 !bg-transparent !shadow-none !outline-none !ring-0 focus:!ring-0" />
+          className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-[18px] pt-3.5 pb-1 !bg-transparent !text-[15px] !leading-6 pointer-coarse:!text-[16px] !shadow-none !outline-none !ring-0 focus:!ring-0" />
 
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 pt-2 pb-3">
+        <div className="flex flex-wrap items-center gap-x-1 gap-y-1.5 px-2.5 pt-1 pb-2.5">
           {attachments && (
             <>
               <input ref={fileInputRef} type="file" multiple className="hidden"
                 onChange={(e) => { attachments.onAdd(e.currentTarget.files); e.currentTarget.value = ""; }} />
               <button type="button" onClick={() => fileInputRef.current?.click()} disabled={disabled}
-                className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border p-border px-3 py-1 text-xs p-text-3 transition-colors hover:p-accent hover:border-[var(--c-accent)]"
-                aria-label="Attach files" title="Attach files">
-                <span aria-hidden className="text-[13px] leading-none">+</span>
-                <span className="hidden @[26rem]:inline">Attach</span>
+                className="p-composer-round" aria-label="Attach files" title="Attach files">
+                <PlusIcon size={16} />
               </button>
             </>
           )}
@@ -338,22 +349,8 @@ export function Composer({
             <ModeSegment value={mode.value} onChange={mode.onChange} disabled={disabled || streaming} />
           )}
 
-          {modelPicker && (
-            <div className="flex min-w-0 flex-1 basis-32 max-w-44 flex-col items-start gap-y-0.5 @[30rem]:max-w-[17.5rem] @[30rem]:flex-row @[30rem]:items-center @[30rem]:gap-x-3 [&>*]:min-w-0 [&_input]:!p-text-2 [&_input]:!bg-transparent [&_input]:!shadow-none [&_input]:!ring-0 [&_input]:transition-colors [&_input]:hover:!bg-[var(--c-elevated)] [&_input]:focus:!bg-[var(--c-elevated)]">
-              {modelPicker}
-            </div>
-          )}
-
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
-            {streaming && (
-              <button type="button" onClick={() => { setStopping(true); onStop(); }}
-                className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2"
-                aria-label="Stop this turn"
-                title="Stop this turn. Queued messages run next.">
-                <StopIcon size={14} weight="fill" />
-                <span className="hidden @[30rem]:inline p-meta">{stopping ? "Stopping…" : "Stop"}</span>
-              </button>
-            )}
+          <div className="ml-auto flex min-w-0 items-center gap-1">
+            {modelPicker && <div className="p-composer-model">{modelPicker}</div>}
             {stranded && onRecover && (
               <button type="button" disabled={recovering}
                 onClick={() => detach(Effect.promise(async () => {
@@ -362,7 +359,7 @@ export function Composer({
                   await onRecover();
                   setRecovering(false);
                 }))}
-                className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2 disabled:opacity-50"
+                className="p-composer-quiet disabled:opacity-50"
                 aria-label="Recover this turn"
                 title="This turn's worker stopped without finishing. Settle it so the agent takes work again.">
                 <ArrowsClockwiseIcon size={14} />
@@ -371,29 +368,46 @@ export function Composer({
             )}
             {canBranch && (
               <button type="button" onClick={onBranch}
-                className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2"
+                className="p-composer-quiet"
                 aria-label="Run the draft as a parallel branch"
                 title="Answer beside the live turn, then compare. Neither turn interrupts the other.">
                 <GitBranchIcon size={15} />
                 <span className="hidden @[30rem]:inline p-meta">Branch</span>
               </button>
             )}
-            {streaming
-              ? <button type="button" onClick={onSend} disabled={empty || disabled || hasFailedAttachment}
-                  className="p-btn inline-flex h-[30px] cursor-pointer items-center justify-center gap-1.5 rounded-full px-[18px] text-[12.5px]"
-                  aria-label="Steer the running turn"
-                  title="Send this to the running turn. It arrives at the agent's next step.">
-                  <ArrowBendUpRightIcon size={14} weight="bold" />
-                  Steer
-                </button>
-              : <button type="button" onClick={onSend} disabled={empty || disabled || hasFailedAttachment}
-                  className="p-btn inline-flex h-[30px] cursor-pointer items-center justify-center gap-1.5 rounded-full px-[18px] text-[12.5px]"
-                  aria-label="Send">
-                  Send
-                </button>}
+            <SendControls streaming={streaming} empty={empty} blocked={disabled || hasFailedAttachment} stopping={stopping}
+              onSend={onSend} onStop={() => { setStopping(true); onStop(); }} />
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+/** The one filled shape: Send at rest; while a turn runs, Stop, with Steer beside it once there is a draft. */
+function SendControls({ streaming, empty, blocked, stopping, onSend, onStop }: {
+  streaming: boolean; empty: boolean; blocked: boolean; stopping: boolean; onSend: () => void; onStop: () => void;
+}) {
+  if (!streaming) {
+    return (
+      <button type="button" onClick={onSend} disabled={empty || blocked} className="p-composer-send" aria-label="Send" title="Send">
+        <ArrowUpIcon size={16} weight="bold" />
+      </button>
+    );
+  }
+
+  return (
+    <>
+      <button type="button" onClick={onStop} className={empty ? "p-composer-send" : "p-composer-round"} data-stop disabled={stopping}
+        aria-label="Stop this turn" title={stopping ? "Stopping…" : "Stop this turn. Queued messages run next."}>
+        <StopIcon size={13} weight="fill" />
+      </button>
+      {!empty && (
+        <button type="button" onClick={onSend} disabled={blocked} className="p-composer-send"
+          aria-label="Steer the running turn" title="Send this to the running turn. It arrives at the agent's next step.">
+          <ArrowBendUpRightIcon size={16} weight="bold" />
+        </button>
+      )}
+    </>
   );
 }

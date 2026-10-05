@@ -65,6 +65,8 @@ export const AGENT_CONFIG_KEYS = {
   isolateGen: 'isolate_gen',
   /** Canonical conversation id (config/conversation.ts); absent on first open, adopted as `default`. */
   conversationId: 'conversation.id',
+  /** The root's chat title as the person set it; the workspace keeps its own name. */
+  chatTitle: 'chat_title',
 } as const;
 
 /** Keys the shell-approval gate reads as authorization; a fork must not inherit them. Add any new gate key here. */

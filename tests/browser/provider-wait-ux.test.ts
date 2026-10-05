@@ -3,7 +3,7 @@ import { withGallery } from '../../scripts/gallery-harness';
 
 /**
  * The `providerwait` frame pins a turn mid-wait: a model call is sleeping out
- * the provider's declared cooldown and the task indicator is what says so.
+ * the provider's declared cooldown, and the notice above the composer says so.
  *
  * What this guards: a rate-limited turn used to read `working` the whole time
  * it was asleep, indistinguishable from a slow one. The chip naming the
@@ -17,11 +17,13 @@ test('a turn sleeping out a provider wait says who it is waiting on, not working
     await page.goto(`${origin}/gallery.html?frame=providerwait`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('.p-workbench');
 
-    // The task indicator is the header's status region. It names the provider and counts down the time
-    // the provider set; a working turn names no provider and shows no time.
-    const chip = await page.waitForSelector('.p-workbench [role="status"][aria-label="Task state"]');
+    // The notice names the provider and counts down the time the provider set; a working turn shows none.
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-composer-root] [role="status"]')].some((notice) => notice.textContent?.includes('Waiting on') === true));
+    const notices = await page.$$('[data-composer-root] [role="status"]');
+    const texts = await Promise.all(notices.map((notice) => notice.evaluate((el) => el.textContent ?? '')));
+    const chip = notices[texts.findIndex((text) => text.includes('Waiting on'))];
 
-    if (chip === null) throw new Error('no task indicator in the workspace header');
+    if (chip === undefined) throw new Error('no provider wait above the composer');
 
     const secondsIn = (text: string): number => Number(/\d+/u.exec(text)?.[0] ?? Number.NaN);
     const before = await chip.evaluate((el) => el.textContent ?? '');

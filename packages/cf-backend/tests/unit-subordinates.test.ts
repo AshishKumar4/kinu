@@ -11,12 +11,10 @@ import {
   actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS,
   observedActionEnum, REPORT_TOOL, SubordinateInspectionRequestSchema, type JsonValue, type Rpc, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
-import type { SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import { present } from '@kinu.run/test-utils';
-import { SubordinateTabs } from '../src/components/SubordinateTabs';
 import { KeptTranscript } from '../src/components/KeptTranscript';
 import { HelperChatBase, MessageView } from '../src/components/MessageView';
-import { nestedAgent } from '../src/pages/nested-agent';
+import { nestedAgent } from '@kinu.run/core';
 import type { UIMessage } from 'ai';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
@@ -182,53 +180,6 @@ describe('a dismissed agent keeps its conversation reachable', () => {
 
     expect(listed.map((entry) => entry.name)).toContain(name);
     expect(listed.find((entry) => entry.name === name)?.status).toBe('dismissed');
-  });
-
-  const rosterRow = (name: string, fields: Partial<SubordinateRosterEntry>): SubordinateRosterEntry => ({
-    name, actorId: `actor-${name}`, displayName: name, role: 'task', nameOrigin: 'user', origin: 'user', lifetime: 'durable',
-    status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, ...fields,
-  });
-
-  const ROSTER: SubordinateRosterEntry[] = [
-    rosterRow('busy-mill-01', { displayName: 'Busy Mill', nameOrigin: 'auto', status: 'working', currentTask: 'Build the chess app' }),
-    rosterRow('hello', { displayName: 'hello', createdAt: 2 }),
-    rosterRow('quiet-harbor-1a4e20', { displayName: 'Quiet Harbor', status: 'dismissed', createdAt: 3, dismissedAt: 200 }),
-    // Internal helpers: an evolution lane's refiner, and one-question helpers running and finished.
-    rosterRow('ask-refiner-fb0gr9', { displayName: 'Quiet Ash', nameOrigin: 'auto', origin: 'evolution', lifetime: 'task', status: 'working', createdAt: 4 }),
-    rosterRow('ask-reviewer-a1', { displayName: 'reviewing', nameOrigin: 'auto', origin: 'agent', lifetime: 'task', status: 'working', createdAt: 5 }),
-    ...['ask-reviewer-b2', 'ask-reviewer-c3', 'ask-reviewer-d4'].map((name, index) => rosterRow(name, {
-      displayName: 'reviewing', nameOrigin: 'auto', origin: 'agent', lifetime: 'task', status: 'dismissed', createdAt: 6 + index, dismissedAt: 300,
-    })),
-  ];
-
-  const strip = (activeName?: string) => renderToStaticMarkup(createElement(MemoryRouter, null,
-    createElement(SubordinateTabs, {
-      workspace: 'hardy-workshop', subordinates: ROSTER, activeName,
-      onCreate: async () => {}, creating: false,
-      onDismiss: async () => {}, onRename: async () => '',
-    })));
-
-  test('the strip announces the dismissed agents it is holding', () => {
-    const markup = strip();
-
-    expect(markup).toContain('/workspace/hardy-workshop/agents/busy-mill-01');
-    expect(markup).toContain('Dismissed (1)');
-    expect(markup).toContain('aria-expanded="false"');
-  });
-
-  test('a deep link into a dismissed agent opens the section it lives in', () => {
-    const markup = strip('quiet-harbor-1a4e20');
-
-    expect(markup).toContain('/workspace/hardy-workshop/agents/quiet-harbor-1a4e20');
-    expect(markup).toContain('aria-expanded="true"');
-  });
-
-  test('internal helpers, running or finished, get no tab and no dismissed entry', () => {
-    const markup = strip('quiet-harbor-1a4e20');
-
-    for (const name of ['ask-refiner-fb0gr9', 'ask-reviewer-a1', 'ask-reviewer-b2', 'ask-reviewer-c3', 'ask-reviewer-d4']) {
-      expect(markup).not.toContain(`data-agent-tab="${name}"`);
-    }
   });
 
   test('the kept pane draws an entry it could not read in its place, named, between the ones it could', () => {

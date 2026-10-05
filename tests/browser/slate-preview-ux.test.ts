@@ -792,21 +792,19 @@ describe('inline slate previews in the chat', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
-      // The pane switch's two buttons carry no hook of their own; their names are what a reader reads.
-      const pressed = (name: string): Promise<string | null> => page.$$eval('button[aria-pressed]', (buttons, wanted) =>
-        buttons.find((button) => button.textContent?.trim().startsWith(wanted))?.getAttribute('aria-pressed') ?? null, name);
+      // The bar's one toggle swaps the panes; its name says which pane it would show next.
+      const shown = (): Promise<string | null> => page.$eval('.p-bar [data-inspector-toggle]', (toggle) =>
+        (toggle.getAttribute('aria-label') === 'Show chat' ? 'Workspace' : 'Chat'));
 
       try {
         await openSlateThread(page, origin, { width: 390, height: 844 });
-        expect(await pressed('Chat')).toBe('true');
+        expect(await shown()).toBe('Chat');
         await openFromChat(page, 'board');
-        expect(await pressed('Workspace')).toBe('true');
+        expect(await shown()).toBe('Workspace');
         expect(await page.$('.p-tabstrip button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
 
         // The two panes never share the screen, so back in the chat the board's preview is still unfolded.
-        await page.$$eval('button[aria-pressed]', (buttons) => {
-          buttons.find((button) => button.textContent?.trim().startsWith('Chat'))?.click();
-        });
+        await page.click('.p-bar [data-inspector-toggle]');
         await page.waitForFunction(() => document.querySelectorAll('[data-slate-inline]').length === 3);
         await drawn(page);
         expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);

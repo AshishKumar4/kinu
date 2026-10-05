@@ -5,11 +5,10 @@ import type { UIMessage } from "ai";
 import { GaugeIcon } from "@phosphor-icons/react";
 import {
   diffLines, fileDiff, inNoteOrder, parseGitDiff, type ChangeNotesCard, type ChangeSet, type DiffAnchor, type FileDiff, type FileStatus,
-  type ReviewAnnotation, type TurnLiveness,
+  type PanelAgent, type ReviewAnnotation, type TurnLiveness,
 } from "@kinu.run/core";
 import Layout from "@/components/layout";
-import { WorkspaceBar } from "@/components/WorkspaceBar";
-import { SubordinateTabs } from "@/components/SubordinateTabs";
+import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { MessageView } from "@/components/MessageView";
 import { Composer, type ChatMode } from "@/components/Composer";
 import { ModelPicker } from "@/components/ModelPicker";
@@ -511,16 +510,12 @@ function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly 
 
   return (
     <div className={`flex h-full min-w-0 flex-1 flex-col ${wide ? "border-r p-border" : ""}`}>
-      {wide && (
-        <SubordinateTabs workspace={WORKSPACE} subordinates={[]} activeName={undefined} onCreate={async () => {}} creating={false}
-          onDismiss={async () => {}} onRename={async (_name, displayName) => displayName} />
-      )}
       <div className="flex-1 space-y-5 overflow-y-auto px-4 py-6 lg:px-8 [&>*]:mx-auto [&>*]:max-w-[780px]">
         {MESSAGES.map((message) => <div key={message.id}><MessageView message={message} /></div>)}
         {sent !== null && <FeedbackCard card={cardOf(sent)} sentAt={NOW - 60e3} now={NOW} onOpen={onOpenNote} />}
         {sent !== null && <div><MessageView message={REPLY} /></div>}
       </div>
-      <div className="border-t p-border p-sidebar">
+      <div className="p-composer-dock">
         <Composer value={value} onValueChange={setValue} onSend={() => setValue("")} onStop={() => {}} placeholder="Send a message..."
           disabled={false} liveness={IDLE} mode={{ value: mode, onChange: setMode }}
           attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
@@ -629,10 +624,19 @@ function DesignSelection({ kind }: { kind: string | null }) {
   return null;
 }
 
+const MAIN_CHAT: PanelAgent = {
+  key: "main", label: "Main", category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null },
+};
+
 function Workspace({ wide, chatPane, inspector, chat, panel }: { wide: boolean; chatPane: boolean; inspector: number; chat: ReactNode; panel: ReactNode }) {
   return (
     <div className="flex h-full flex-col">
-      <WorkspaceBar title="Checkout coupon bug" onRename={async (name) => name} connectionStatus="connected" working={false} altitude="run" onAltitude={() => {}} />
+      <WorkspaceHeader
+        workspace={{ title: "Checkout coupon bug", to: `/workspace/${WORKSPACE}/overview`, editValue: "Checkout coupon bug", rename: async () => {}, remove: () => {} }}
+        chats={[{ agent: MAIN_CHAT, to: `/workspace/${WORKSPACE}`, rename: async () => {} }]}
+        active="main"
+        newChat={`/workspace/${WORKSPACE}/new`}
+      />
       <div className="flex shrink-0 items-center gap-1 border-b p-border p-sidebar px-3 py-2 md:hidden">
         <button type="button" aria-pressed={chatPane} className={`rounded-full px-3 py-1.5 text-xs ${chatPane ? "p-accent-subtle p-accent" : "p-text-3"}`}>Chat</button>
         <button type="button" aria-pressed={!chatPane} className={`rounded-full px-3 py-1.5 text-xs ${chatPane ? "p-text-3" : "p-accent-subtle p-accent"}`}>Workspace</button>

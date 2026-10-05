@@ -1,41 +1,21 @@
 import { Effect, Cause } from 'effect';
-import { useState, useCallback, type ReactNode } from "react";
-import { useParams } from "react-router-dom";
+import { useState, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  ClockIcon, LightningIcon, CheckIcon,
+  LightningIcon, CheckIcon,
   PlusIcon, TrashIcon, WarningIcon, PlugIcon,
 } from "@phosphor-icons/react";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { usePagedScroll } from "@/hooks/use-paged-scroll";
-import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
-import { changelogRevalidate } from "@/components/surfaces/changelog-entries";
-import { EvolutionEntrySchema, EvolutionSection } from "@/components/surfaces/supervise-evolution";
-import { BackgroundJobRow } from "@/components/surfaces/work-jobs";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc } from "@kinu.run/core";
-import { fmtTokens } from "@kinu.run/core";
-import { pageSchema, UsageSchema, usageTotal, type SeekCursor } from "@kinu.run/core";
 import * as v from "valibot";
 import { renderThrownChain, showing, detach } from '@kinu.run/core/obs';
-
-const RunSummarySchema = v.object({
-  runId: v.string(), startedAt: v.number(), causedBy: v.nullable(v.string()),
-  userMessage: v.nullable(v.string()), status: v.nullable(v.string()),
-  usage: UsageSchema, turnsWithoutUsage: v.number(), eventCount: v.number(),
-});
-
-const JobRowSchema = v.object({
-  id: v.string(), kind: v.string(), label: v.nullable(v.string()),
-  status: v.string(), createdAt: v.number(), settledAt: v.nullable(v.number()),
-});
 
 const TriggerRowSchema = v.object({
   id: v.string(),
@@ -56,146 +36,8 @@ type TriggerRow = v.InferOutput<typeof TriggerRowSchema>;
 const AuthModeSchema = v.picklist(["hmac", "bearer", "mtls"]);
 
 
-export interface SupervisePageProps {
-  rpc: Rpc;
-}
-
-export function SupervisePage({ rpc }: SupervisePageProps) {
-  return (
-    <div className="h-full overflow-y-auto px-6 py-6 lg:px-8">
-      <div className="mx-auto flex max-w-[1380px] flex-col gap-[18px]">
-        <SuperviseCard><AutomationsBlock rpc={rpc} /></SuperviseCard>
-        <SuperviseCard><RunHistoryBlock rpc={rpc} /></SuperviseCard>
-        <EvolutionCard rpc={rpc} />
-      </div>
-    </div>
-  );
-}
-
-
-
-function SuperviseCard({ children }: { children: ReactNode }) {
-  return (
-    <div className="min-w-0 overflow-hidden rounded-[14px] border p-border p-surface p-5">
-      {children}
-    </div>
-  );
-}
-
-
-/** `changesOnly` applies before the limit, so fresh bookkeeping cannot hide an older change. */
-function EvolutionCard({ rpc }: { rpc: Rpc }) {
-  const load = useCallback(
-    async () => v.parse(
-      v.object({ entries: v.array(EvolutionEntrySchema) }),
-      await rpc("getEvolutionChangelog", [{ limit: 8, changesOnly: true }]),
-    ).entries,
-    [rpc],
-  );
-
-  const { resource, reload } = useAsyncResource(load, changelogRevalidate);
-  const entries = lastValue(resource);
-
-  // A failed read must never pose as "no evolution".
-  if (resource.status === "error") {
-    return (
-      <SuperviseCard>
-        <LoadFailure what="the evolution digest" message={resource.message} onRetry={reload} />
-        {entries !== null && entries.length > 0 && <EvolutionSection entries={entries} />}
-      </SuperviseCard>
-    );
-  }
-
-  if (entries === null || entries.length === 0) return null;
-
-  return <SuperviseCard><EvolutionSection entries={entries} /></SuperviseCard>;
-}
-
-
-/** Each row costs a full event read, so the page is small. */
-const RUN_HISTORY_PAGE = 30;
-
-const RunPageSchema = pageSchema(RunSummarySchema);
-
-function dotTone(tones: Readonly<Record<string, string | undefined>>, status: string): string {
-  return tones[status] ?? "p-dot-neutral";
-}
-
-const RUN_DOT = { completed: "p-dot-success", aborted: "p-dot-danger" };
-
-function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
-  const load = useCallback(
-    async () => v.parse(RunPageSchema, await rpc("getRunSummaries", [{ limit: RUN_HISTORY_PAGE }])),
-    [rpc],
-  );
-
-  const { resource, reload } = useAsyncResource(load);
-  const first = lastValue(resource);
-
-  const fetchPage = useCallback(
-    async (cursor: SeekCursor) => v.parse(
-      RunPageSchema, await rpc("getRunSummaries", [{ cursor, limit: RUN_HISTORY_PAGE }]),
-    ),
-    [rpc],
-  );
-
-  // The cursor is opaque; only the server can spell it.
-  const startFrom = useCallback(
-    () => (first !== null && first.status === "more" ? first.next : null),
-    [first],
-  );
-
-  const tail = usePagedScroll<v.InferOutput<typeof RunSummarySchema>>({ fetchPage, startFrom });
-
-  const runs = first === null ? null : [...first.items, ...tail.fetched];
-  const exhausted = first !== null && (first.status === "end" || tail.exhausted);
-
-  const containerRef = useGrowingScroll({
-    grows: "down", content: runs, fetched: tail.fetched, onReachEdge: tail.loadMore,
-  });
-
-  return (
-    <section className="min-w-0">
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <ClockIcon size={16} className="p-accent" />
-        <h2 className="text-sm font-semibold p-text">Run history</h2>
-        {runs && <Badge variant="secondary">{exhausted ? `${runs.length}` : `${runs.length}+`}</Badge>}
-      </div>
-      {runs === null && (resource.status === "error"
-        ? <LoadFailure what="the run history" message={resource.message} onRetry={reload} />
-        : <div className="flex justify-center py-6"><Loader size="sm" /></div>)}
-      {runs !== null && runs.length === 0 && <p className="text-xs p-text-3">No recorded runs yet.</p>}
-      {runs !== null && runs.length > 0 && (
-        <div ref={containerRef} className="max-h-[28rem] overflow-y-auto rounded-md border p-border text-xs">
-          {runs.map((r) => {
-            const tokens = usageTotal(r.usage);
-
-            return (
-              <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border">
-                <span className={`size-1.5 rounded-full shrink-0 ${dotTone(RUN_DOT, r.status ?? "")}`} />
-                <span className="p-meta px-1 rounded-sm p-fill p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
-                <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
-                <span className="p-text-3 shrink-0 tabular-nums"
-                  title={tokens === undefined
-                    ? `provider reported no usage for ${r.turnsWithoutUsage} turn${r.turnsWithoutUsage === 1 ? "" : "s"}`
-                    : "input and output tokens"}>{fmtTokens(tokens)} tok</span>
-                <span className="p-text-3 shrink-0 tabular-nums">{new Date(r.startedAt).toLocaleDateString()}</span>
-              </div>
-            );
-          })}
-          <ScrollBoundary what="runs" count={runs.length}
-            loading={tail.loading} exhausted={exhausted} error={tail.error} onRetry={tail.loadMore} />
-        </div>
-      )}
-    </section>
-  );
-}
-
-
-const JOB_DOT = { running: "p-dot-warning", serving: "p-dot-success", completed: "p-dot-success", failed: "p-dot-danger" };
-
-function AutomationsBlock({ rpc }: { rpc: Rpc }) {
-  const { agentId } = useParams();
+/** What wakes this workspace's agent from outside: its webhooks and timers. */
+export function WorkspaceAutomations({ rpc, workspace }: { rpc: Rpc; workspace: string }) {
   const [showCreate, setShowCreate] = useState(false);
   const [created, setCreated] = useState<CreateWebhookResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -209,25 +51,15 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const { resource, reload } = useAsyncResource(load);
   const triggers = lastValue(resource);
 
-  const loadJobs = useCallback(
-    async () => v.parse(v.array(JobRowSchema), await rpc("listBackgroundJobs", [10])),
-    [rpc],
-  );
-
-  const { resource: jobsResource, reload: reloadJobs } = useAsyncResource(loadJobs, changelogRevalidate);
-  const jobs = lastValue(jobsResource);
-
   const revoke = useCallback((triggerId: string) => detach(Effect.gen(function* () {
-    if (!agentId) return;
-
     if (!confirm("Revoke this automation? It stops firing, and a webhook's URL stops working.")) return;
     setErr(null);
 
-    yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => cancelTrigger(agentId, triggerId)); }), (failed) => Effect.sync(() => {
+    yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => cancelTrigger(workspace, triggerId)); }), (failed) => Effect.sync(() => {
       const e = Cause.squash(failed); setErr(renderThrownChain({ cause: e })); }));
 
     reload();
-  })), [agentId, reload]);
+  })), [workspace, reload]);
 
   const active = (triggers ?? []).filter((t) => t.state === "active").length;
 
@@ -246,7 +78,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         <Button size="sm" variant="secondary" className="ml-auto" icon={<PlusIcon size={12} />}
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">Webhooks, timers and background jobs: what wakes this agent and what it has running.</p>
+      <p className="text-xs p-text-3 mb-3">Webhooks and timers: what wakes this workspace's agent from outside.</p>
       {err && <div className="text-xs p-danger mb-2">{err}</div>}
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
       {triggers === null && (resource.status === "error"
@@ -261,25 +93,9 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         </div>
       )}
 
-      {jobsResource.status === "error" && (
-        <LoadFailure what="the background jobs" message={jobsResource.message} onRetry={reloadJobs} />
-      )}
-
-      {jobsResource.status === "loading" && (
-        <div className="flex justify-center py-4"><Loader size="sm" /></div>
-      )}
-
-      {jobs !== null && jobs.length > 0 && (
-        <div className="mt-3">
-          <div className="p-eyebrow p-text-4 mb-1.5">Background jobs</div>
-          <div className="rounded-md border p-border overflow-hidden text-xs">
-            {jobs.map((job) => <BackgroundJobRow key={job.id} job={job} tone={dotTone(JOB_DOT, job.status)} />)}
-          </div>
-        </div>
-      )}
-      {showCreate && agentId && (
+      {showCreate && (
         <CreateWebhookModal
-          agentName={agentId}
+          agentName={workspace}
           onClose={() => setShowCreate(false)}
           onCreated={(r) => { setCreated(r); setShowCreate(false); reload(); }}
         />
@@ -288,7 +104,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   );
 }
 
-const TRIGGER_DOT = { active: "p-dot-success", paused: "p-dot-warning" };
+const TRIGGER_DOT = new Map([["active", "p-dot-success"], ["paused", "p-dot-warning"]]);
 
 /** The delivery URL carries a signed route capability; a URL built here would 404. */
 function TriggerLine({ trigger, onRevoke }: {
@@ -300,7 +116,7 @@ function TriggerLine({ trigger, onRevoke }: {
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-      <span className={`size-1.5 rounded-full shrink-0 ${dotTone(TRIGGER_DOT, trigger.state)}`} />
+      <span className={`size-1.5 rounded-full shrink-0 ${TRIGGER_DOT.get(trigger.state) ?? "p-dot-neutral"}`} />
       <span className="font-medium p-text-2 truncate max-w-40" title={spec.label ?? trigger.id}>{spec.label ?? trigger.id}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
       {spec.cron && <code className="p-fill px-1 rounded-sm p-text-3 shrink-0">{spec.cron}</code>}

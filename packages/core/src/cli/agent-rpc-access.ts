@@ -90,6 +90,7 @@ export const AGENT_RPC_ACCESS = {
   showRefinement: 'interactive',
   createSubordinateAgent: 'interactive',
   renameSubordinateAgent: 'interactive',
+  renameMainChat: 'interactive',
   decidePlanReview: 'interactive',
   dismissPlanReview: 'interactive',
   listDeferredApprovals: 'interactive',

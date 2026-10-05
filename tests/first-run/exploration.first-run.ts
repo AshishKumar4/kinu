@@ -50,7 +50,6 @@ const PanelAgentSchema = v.looseObject({
 });
 
 interface OpenedWorker {
-  readonly counter: string;
   readonly stream: string;
   readonly composer: boolean;
   readonly stop: boolean;
@@ -60,8 +59,10 @@ async function openWorkerFromPanel(browser: TestChrome, plan: { origin: string; 
   const page = await signedInPage(browser.browser, plan.identity);
   await page.goto(`${plan.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-agents-counter]');
-  const counter = await page.$eval('[data-agents-counter]', (button) => button.getAttribute('aria-label') ?? '');
   await page.click('[data-agents-counter]');
+  // Swarm workers sit in their own group, folded until asked for.
+  await page.waitForSelector('section[aria-label="Swarms"] [aria-expanded="false"]');
+  await page.click('section[aria-label="Swarms"] [aria-expanded="false"]');
   await page.waitForSelector(`[data-agent-row="${key}"]`);
   await page.click(`[data-agent-row="${key}"]`);
   const pane = `[data-agent-pane="node/${key}"]`;
@@ -73,7 +74,7 @@ async function openWorkerFromPanel(browser: TestChrome, plan: { origin: string; 
     stop: node.querySelector('[data-view-only]') !== null,
   }));
 
-  return { ...drawn, counter };
+  return drawn;
 }
 
 const liveTest = test.skipIf(PLAN === null);
@@ -115,14 +116,13 @@ async function swarmWakeClosed(session: FirstRunSession, socket: PublicSocket, j
   }
 }
 
-/** The Agents panel lists every node, one opens in the chat column read-only, and the counter is the roster's. */
+/** The Agents panel lists every node, and one opens in the chat column read-only. */
 async function panelSubgoal({ socket, opened }: { socket: PublicSocket; opened: boolean }, plan: Parameters<typeof openWorkerFromPanel>[1], workspace: string, nodes: number): Promise<EvalSubgoal> {
   if (!opened) return { what: 'panel-opens-a-worker-read-only', reached: false, detail: 'the workspace socket never opened' };
   const listed = await ask(socket, 'listWorkspaceAgents', []);
   const agents = listed.ok ? v.safeParse(v.array(PanelAgentSchema), listed.value) : null;
   const rows = agents?.success === true ? agents.output : [];
   const workers = rows.filter((agent) => agent.category === 'swarm');
-  const hidden = rows.filter((agent) => ['working', 'waiting'].includes(agent.activity) && !agent.tab).length;
   const worker = workers[0];
   let browser: TestChrome | null = null;
 
@@ -134,13 +134,11 @@ async function panelSubgoal({ socket, opened }: { socket: PublicSocket; opened: 
       return { what: 'panel-opens-a-worker-read-only', reached: false, detail: `the panel listed ${String(workers.length)} swarm worker(s) for ${String(nodes)} node(s)` };
     }
 
-    const counted = Number(/(\d+) active/u.exec(drawn.counter)?.[1] ?? 0);
-
     return {
       what: 'panel-opens-a-worker-read-only',
-      reached: workers.length === nodes && !drawn.composer && drawn.stop && drawn.stream.includes('Task') && counted === hidden,
+      reached: workers.length === nodes && !drawn.composer && drawn.stop && drawn.stream.includes('Task'),
       detail: `${String(workers.length)} worker(s) listed; ${worker?.key ?? ''} drew ${String(drawn.stream.length)} chars, `
-        + `composer ${String(drawn.composer)}, view-only bar ${String(drawn.stop)}; counter "${drawn.counter}" against ${String(hidden)} hidden active`,
+        + `composer ${String(drawn.composer)}, view-only bar ${String(drawn.stop)}`,
     };
   } finally {
     await browser?.close();

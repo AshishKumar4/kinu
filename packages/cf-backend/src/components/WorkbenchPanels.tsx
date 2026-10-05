@@ -1,6 +1,6 @@
 /** Owns the inspector policy (`useInspectorLayout` over core's `decideInspector`). Below `md` the group is
  *  re-keyed so the library lays out from defaults rather than rescaling. */
-import { useEffect, useImperativeHandle, useState, type ReactNode, type Ref } from "react";
+import { useEffect, useImperativeHandle, useMemo, useState, type ReactNode, type Ref } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { SidebarSimpleIcon } from "@phosphor-icons/react";
 import { needsTheUser, type PersonAsks } from "@kinu.run/core";
@@ -12,8 +12,10 @@ export interface WorkbenchPanelsProps {
   readonly workspace: string | undefined;
   readonly scope?: string;
   readonly contents: PersonAsks;
-  readonly chat: (inspector: InspectorControl | null) => ReactNode;
+  readonly chat: (inspector: InspectorControl) => ReactNode;
   readonly inspector: ReactNode;
+  /** The bar above draws the toggle: on a phone it switches the one pane shown. */
+  readonly onInspector?: (control: InspectorControl | null) => void;
   /** Lets the page bring the inspector into view, where a surface it opens would otherwise stay hidden. */
   readonly ref?: Ref<WorkbenchHandle>;
 }
@@ -24,9 +26,19 @@ export interface WorkbenchHandle {
   readonly showChat: () => void;
 }
 
+/** `beside`: the inspector shares the screen with the chat, as it never does on a phone. */
 export interface InspectorControl {
   readonly collapsed: boolean;
   readonly toggle: () => void;
+  readonly beside: boolean;
+  readonly waiting: number;
+}
+
+/** Beside the chat it shows or hides the inspector; on a phone it swaps the chat for the workspace and back. */
+function toggleLabel({ collapsed, beside }: InspectorControl): string {
+  if (beside) return collapsed ? "Show inspector" : "Hide inspector";
+
+  return collapsed ? "Show workspace" : "Show chat";
 }
 
 export function InspectorToggle({ control }: { control: InspectorControl }) {
@@ -34,19 +46,20 @@ export function InspectorToggle({ control }: { control: InspectorControl }) {
     <button
       type="button"
       onClick={control.toggle}
-      aria-label={control.collapsed ? "Show inspector" : "Hide inspector"}
-      title={control.collapsed ? "Show inspector" : "Hide inspector"}
+      aria-label={toggleLabel(control)}
+      title={toggleLabel(control)}
       aria-pressed={!control.collapsed}
       data-inspector-toggle
       {...(control.collapsed ? { "data-inspector-expand": "" } : { "data-inspector-collapse": "" })}
-      className={`flex size-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--c-elevated)] ${control.collapsed ? "p-text-3 hover:p-text" : "p-text-2"}`}
+      className="p-bar-icon relative"
     >
       <SidebarSimpleIcon size={16} style={{ transform: "scaleX(-1)" }} />
+      {control.waiting > 0 && control.collapsed && <span className="p-bar-icon-dot" aria-hidden />}
     </button>
   );
 }
 
-export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspector }: WorkbenchPanelsProps) {
+export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspector, onInspector }: WorkbenchPanelsProps) {
   const [mobilePane, setMobilePane] = useState<"chat" | "workspace">("chat");
 
   const [desktopPanels, setDesktopPanels] = useState(
@@ -82,19 +95,19 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
 
   const waiting = contents.pendingActions.length;
 
+  const control = useMemo<InspectorControl>(() => (desktopPanels
+    ? { collapsed: layout.collapsed, toggle: layout.toggleCollapsed, beside: true, waiting }
+    : { collapsed: mobilePane === "chat", toggle: () => setMobilePane((pane) => (pane === "chat" ? "workspace" : "chat")), beside: false, waiting }),
+  [desktopPanels, layout.collapsed, layout.toggleCollapsed, mobilePane, waiting]);
+
+  useEffect(() => {
+    onInspector?.(control);
+  }, [onInspector, control]);
+
+  useEffect(() => () => onInspector?.(null), [onInspector]);
+
   return (
     <>
-      <div className="flex shrink-0 items-center gap-1 border-b p-border p-sidebar px-3 py-2 md:hidden">
-        <button type="button" onClick={() => setMobilePane("chat")} aria-pressed={mobilePane === "chat"}
-          className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === "chat" ? "p-accent-subtle p-accent" : "p-text-3"}`}>Chat</button>
-        <button type="button" onClick={() => setMobilePane("workspace")} aria-pressed={mobilePane === "workspace"}
-          className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${mobilePane === "workspace" ? "p-accent-subtle p-accent" : "p-text-3"}`}>
-          Workspace
-          {waiting > 0 && (
-            <span className="flex min-w-4 px-1 h-4 items-center justify-center rounded-full bg-[var(--c-accent)] text-[10px] font-semibold leading-none text-[var(--c-accent-on)]">{waiting}</span>
-          )}
-        </button>
-      </div>
       <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="relative flex-1" resizeTargetMinimumSize={{ coarse: 20, fine: 10 }} {...layout.groupProps}>
         <Panel
           id={layout.chatPanelId}
@@ -104,7 +117,7 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
           groupResizeBehavior="preserve-relative-size"
         >
           <div className="flex flex-col h-full border-r p-border">
-            {chat(desktopPanels ? { collapsed: layout.collapsed, toggle: layout.toggleCollapsed } : null)}
+            {chat(control)}
           </div>
         </Panel>
 

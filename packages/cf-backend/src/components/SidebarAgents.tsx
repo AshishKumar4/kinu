@@ -1,115 +1,105 @@
-import { useEffect, useRef } from "react";
-import { ArrowLeftIcon, UsersThreeIcon } from "@phosphor-icons/react";
-import { fmtPct, fmtSpan, fmtTokens, fmtUsd, workspaceDisplayTitle, type AgentCategory, type PanelAgent } from "@kinu.run/core";
-import { useAgentsNav, useDrilledPanel, type WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
-import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { useEffect, useRef, useState } from "react";
+import { ArrowLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { fmtPct, fmtSpan, fmtTokens, fmtUsd, type PanelAgent } from "@kinu.run/core";
+import type { WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
+import { AgentStatusMark } from "./AgentStatus";
 import { navRowCls } from "./nav";
 
-const SECTIONS: readonly { readonly category: AgentCategory; readonly title: string }[] = [
-  { category: "main", title: "Main" },
-  { category: "user", title: "Yours" },
-  { category: "hired", title: "Hired" },
-  { category: "swarm", title: "Swarm · view only" },
+/** Agents nobody talks to: listed apart, folded until asked for. */
+const GROUPS: readonly { readonly category: PanelAgent["category"]; readonly title: string }[] = [
+  { category: "swarm", title: "Swarms" },
   { category: "background", title: "Background" },
 ];
 
-const ACTIVITY = {
-  working: { word: "Working", dot: "p-dot-accent p-dot-pulse" },
-  waiting: { word: "Needs you", dot: "bg-[var(--c-warning)]" },
-  idle: { word: "Idle", dot: "bg-[var(--c-text-3)] opacity-50" },
-  done: { word: "Done", dot: "bg-[var(--c-success)]" },
-  stopped: { word: "Stopped", dot: "bg-[var(--c-text-3)]" },
-  failed: { word: "Failed", dot: "bg-[var(--c-danger)]" },
-  dismissed: { word: "Dismissed", dot: "bg-[var(--c-text-3)] opacity-30" },
-} satisfies Record<PanelAgent["activity"], { word: string; dot: string }>;
-
-function agentFiguresLine({ tokens, usd, activeMs, cacheEma }: PanelAgent["figures"]): string {
+function figuresLine({ tokens, usd, activeMs, cacheEma }: PanelAgent["figures"]): string {
   return [
-    tokens === undefined ? null : `${fmtTokens(tokens)} tok`,
+    tokens === undefined ? null : `${fmtTokens(tokens)} tokens`,
     usd === undefined ? null : fmtUsd(usd),
-    activeMs === 0 ? null : fmtSpan(activeMs),
+    activeMs > 0 ? fmtSpan(activeMs) : null,
     cacheEma === null ? null : `${fmtPct(cacheEma)} cached`,
   ].filter((part) => part !== null).join(" · ");
 }
 
-function hiredDepth(agent: PanelAgent, hiredPaths: ReadonlySet<string>): number {
-  if (agent.open.kind !== "chat" || agent.open.path === null) return 0;
-  const segments = agent.open.path.split("/");
+/** The person's chats, each with the agents it started nested under it; swarms and helpers in folded groups below. */
+export function SidebarAgents({ panel, onBack }: { panel: WorkspaceAgentsPanel; onBack: () => void }) {
+  const back = useRef<HTMLButtonElement>(null);
+  const chats = panel.list.filter((agent) => agent.category === "main" || (agent.category === "user" && agent.parent === "main"));
 
-  return segments.slice(1).filter((_, index) => hiredPaths.has(segments.slice(0, index + 1).join("/"))).length;
-}
-
-function pathOf(agent: PanelAgent): string {
-  return agent.open.kind === "chat" ? agent.open.path ?? "" : "";
-}
-
-export function SidebarAgents({ workspace }: { workspace: string | undefined }) {
-  const panel = useDrilledPanel(workspace);
-
-  return panel === null ? null : <AgentsList panel={panel} />;
-}
-
-function AgentsList({ panel }: { panel: WorkspaceAgentsPanel }) {
-  const heading = useRef<HTMLHeadingElement>(null);
-  const { back } = useAgentsNav();
-  const listed = useWorkspaceRoster().entries.find((entry) => entry.name === panel.workspace);
-  const title = workspaceDisplayTitle(listed ?? { name: panel.workspace });
-
-  useEffect(() => { heading.current?.focus(); }, []);
-
-  const hired = panel.list.filter((agent) => agent.category === "hired");
-  const hiredPaths = new Set(hired.map(pathOf));
-
-  const sections = SECTIONS.map((section) => {
-    const rows = panel.list.filter((agent) => agent.category === section.category);
-
-    return { ...section, rows: section.category === "hired" ? [...rows].sort((a, b) => pathOf(a).localeCompare(pathOf(b))) : rows };
-  }).filter((section) => section.rows.length > 0);
+  useEffect(() => { back.current?.focus({ preventScroll: true }); }, []);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-sidebar-agents={panel.workspace}>
-      <div className="px-2 pt-1">
-        <button type="button" onClick={back} data-agents-back
-          className={`flex w-full items-center gap-2 rounded-lg px-3 py-[7px] p-row-text transition-colors ${navRowCls(false)}`}>
+    <div className="flex h-full min-h-0 flex-col" data-sidebar-agents={panel.workspace}>
+      <div className="px-2 pb-1 pt-2">
+        <button ref={back} type="button" onClick={onBack} data-agents-back
+          className={`flex w-full items-center gap-2 rounded-lg px-3 py-[7px] p-row-text transition-colors ${navRowCls(false, "p-text-3")}`}>
           <ArrowLeftIcon size={14} aria-hidden="true" /> Workspaces
         </button>
       </div>
-      <h2 ref={heading} tabIndex={-1} className="flex items-center gap-2 px-5 pb-1 pt-3 text-sm font-semibold p-text outline-none">
-        <UsersThreeIcon size={15} aria-hidden="true" className="p-text-3" />
-        <span className="min-w-0 truncate">{title}</span>
-      </h2>
-      <div className="flex-1 overflow-y-auto pb-3">
-        {sections.map((section) => (
-          <section key={section.category} aria-label={section.title}>
-            <div className="px-5 pb-1.5 pt-3 p-eyebrow">{section.title}</div>
-            <ul className="space-y-0.5 px-2">
-              {section.rows.map((agent) => {
-                const status = ACTIVITY[agent.activity];
-                const depth = section.category === "hired" ? hiredDepth(agent, hiredPaths) : 0;
-                const figures = agentFiguresLine(agent.figures);
-                const launched = section.category === "swarm" || (section.category === "hired" && depth === 0);
-                const from = launched ? agent.parent : null;
+      <nav aria-label="Agents in this workspace" className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-1">
+        <ul className="space-y-px">
+          {chats.map((chat) => <AgentBranch key={chat.key} agent={chat} panel={panel} />)}
+        </ul>
+      </nav>
+      <div className="flex flex-col gap-px px-2 pb-2">
+        {GROUPS.map(({ category, title }) => {
+          const members = panel.list.filter((agent) => agent.category === category);
 
-                return (
-                  <li key={agent.key}>
-                    <button type="button" onClick={() => panel.open(agent)} data-agent-row={agent.key}
-                      aria-current={panel.shown === agent.key ? "true" : undefined}
-                      style={depth === 0 ? undefined : { paddingLeft: `${String(0.75 + depth)}rem` }}
-                      className={`flex w-full items-start gap-2 rounded-lg px-3 py-[6px] text-left transition-colors ${navRowCls(panel.shown === agent.key)}`}>
-                      <span aria-hidden="true" className={`mt-[7px] size-1.5 shrink-0 rounded-full ${status.dot}`} title={status.word} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate p-row-text">{agent.label}<span className="sr-only">, {status.word}</span></span>
-                        {from !== null && <span className="block truncate p-meta p-text-3">from {from}</span>}
-                        {figures !== "" && <span className="block p-meta tabular-nums p-text-3" data-agent-figures>{figures}</span>}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        ))}
+          return members.length === 0 ? null : <AgentGroup key={category} title={title} members={members} panel={panel} />;
+        })}
       </div>
     </div>
+  );
+}
+
+function AgentBranch({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgentsPanel }) {
+  const children = panel.list.filter((child) => child.parent === agent.key && child.category === "hired");
+
+  return (
+    <li>
+      <AgentRow agent={agent} panel={panel} />
+      {children.length > 0 && (
+        <ul className="p-nest ml-4">
+          {children.map((child) => <AgentBranch key={child.key} agent={child} panel={panel} />)}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+function AgentRow({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgentsPanel }) {
+  const shown = panel.shown === agent.key;
+  const figures = figuresLine(agent.figures);
+
+  return (
+    <button type="button" onClick={() => panel.open(agent)} data-agent-row={agent.key}
+      aria-current={shown ? "page" : undefined} title={figures === "" ? undefined : figures}
+      className={`flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2.5 pr-3 text-left transition-colors ${navRowCls(shown)}`}>
+      <span className="flex w-[13px] shrink-0 justify-center"><AgentStatusMark activity={agent.activity} /></span>
+      <span className="min-w-0 flex-1 truncate p-row-text">{agent.label}</span>
+    </button>
+  );
+}
+
+function AgentGroup({ title, members, panel }: { title: string; members: readonly PanelAgent[]; panel: WorkspaceAgentsPanel }) {
+  const [open, setOpen] = useState(() => members.some((agent) => agent.key === panel.shown));
+  const busy = members.some((agent) => agent.activity === "working");
+
+  return (
+    <section aria-label={title}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+        className={`flex w-full items-center gap-2 rounded-lg py-[6px] pl-2.5 pr-3 text-left transition-colors ${navRowCls(false, "p-text-3")}`}>
+        <CaretRightIcon size={11} className={`w-[13px] shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""}`} aria-hidden />
+        <span className="min-w-0 flex-1 truncate p-t-control">{title}</span>
+        {busy && <AgentStatusMark activity="working" />}
+        <span className="p-meta tabular-nums p-text-4">{members.length}</span>
+      </button>
+      <div className="p-fold" data-folded={open ? undefined : ""}>
+        <div inert={!open}>
+          <ul className="p-nest ml-4 max-h-[40vh] overflow-y-auto">
+            {members.map((agent) => <li key={agent.key}><AgentRow agent={agent} panel={panel} /></li>)}
+          </ul>
+        </div>
+      </div>
+    </section>
   );
 }

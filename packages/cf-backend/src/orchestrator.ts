@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { AGENT_CONFIG_KEYS, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -2901,7 +2901,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async listWorkspaceAgents(): Promise<PanelAgent[]> {
     return readWorkspaceAgents({
-      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main', queued: this.chatTurnOwed,
+      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), queued: this.chatTurnOwed,
       actors: this.workspaceActors().list({ retired: true }),
       figures: (actorIds) => {
         const main = this.actorHandle().actorId;
@@ -4699,6 +4699,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ...result,
       subordinate: await this.subordinateView(result.subordinate.name),
     };
+  }
+
+  @callable() async renameMainChat(title: string): Promise<{ title: string }> {
+    this.actorHandle().config.set(AGENT_CONFIG_KEYS.chatTitle, title);
+
+    return { title };
   }
 
   @callable() async dismissSubordinate(name: string, keepHistory = true): Promise<{

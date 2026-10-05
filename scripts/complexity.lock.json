@@ -11,7 +11,7 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 58
+      "complexity": 57
     },
     {
       "key": "packages/devbox/bench/worker.ts#fetch",
@@ -110,10 +110,6 @@
       "complexity": 33
     },
     {
-      "key": "packages/cf-backend/src/components/Composer.tsx#Composer",
-      "complexity": 32
-    },
-    {
       "key": "packages/cf-backend/src/pages/SwarmExplorer.tsx#ExplorerBody",
       "complexity": 32
     },
@@ -198,10 +194,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
-      "complexity": 29
-    },
-    {
       "key": "packages/cf-backend/tests/helpers/actor-harness.ts#chatSessionTurns>admit",
       "complexity": 29
     },
@@ -267,10 +259,6 @@
     },
     {
       "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#6>handler",
-      "complexity": 28
-    },
-    {
-      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage>prop#2",
       "complexity": 28
     },
     {

@@ -1,0 +1,192 @@
+/**
+ * The workspace's own page: one line on where things stand, its GitHub work, and every agent's tasks on one board.
+ * Each section reads a real source or says plainly that none exists yet.
+ */
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { Link } from "react-router-dom";
+import { GitBranchIcon, GitPullRequestIcon } from "@phosphor-icons/react";
+import type { AgentTaskTree, PanelAgent, Rpc, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
+import type { ForkLineage, ReadMoves } from "@/hooks/use-kinu";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { AgentStatusMark } from "@/components/AgentStatus";
+
+type Lane = "todo" | "doing" | "waiting" | "done";
+
+const LANES: readonly { readonly lane: Lane; readonly title: string }[] = [
+  { lane: "todo", title: "To do" },
+  { lane: "doing", title: "In progress" },
+  { lane: "waiting", title: "Waiting on you" },
+  { lane: "done", title: "Done" },
+];
+
+interface Card {
+  readonly id: string;
+  readonly title: string;
+  readonly owner: WorkspaceWorkOwner;
+  readonly agent: PanelAgent | undefined;
+  readonly progress: { readonly done: number; readonly total: number } | null;
+  readonly lane: Lane;
+}
+
+/** A task's lane: its own status, except that open work held by an agent waiting on the person waits with it. */
+function laneOf(task: AgentTaskTree, agent: PanelAgent | undefined): Lane | null {
+  if (task.status === "dropped") return null;
+
+  if (task.status === "done") return "done";
+
+  if (agent?.activity === "waiting") return "waiting";
+
+  return task.status === "active" ? "doing" : "todo";
+}
+
+function cardsOf(work: WorkspaceWork, agents: readonly PanelAgent[]): Card[] {
+  const agentOf = (owner: WorkspaceWorkOwner) => agents.find((agent) => agent.actorId === owner.actorId);
+
+  const tasks = [...work.tasks, ...work.plans].flatMap(({ owner, tasks: trees }) => trees.flatMap((task) => {
+    const agent = agentOf(owner);
+    const lane = laneOf(task, agent);
+    const live = task.subtasks.filter((sub) => sub.status !== "dropped");
+
+    return lane === null ? [] : [{
+      id: `${owner.actorId}/${task.id}`, title: task.title, owner, agent, lane,
+      progress: live.length === 0 ? null : { done: live.filter((sub) => sub.status === "done").length, total: live.length },
+    }];
+  }));
+
+  const reviews = work.plans.filter(({ plan }) => plan.status === "pending").map(({ owner, plan }) => ({
+    id: `${owner.actorId}/plan/${plan.id}`, title: `Review the plan: ${(plan.content.match(/^#\s+(.+)$/m)?.[1] ?? "untitled").replaceAll("`", "")}`,
+    owner, agent: agentOf(owner), lane: "waiting" as const, progress: null,
+  }));
+
+  return [...reviews, ...tasks];
+}
+
+function summaryOf(agents: readonly PanelAgent[], cards: readonly Card[]): string {
+  const chats = agents.filter((agent) => agent.tab).length;
+  const working = agents.filter((agent) => agent.activity === "working").length;
+  const waiting = agents.filter((agent) => agent.activity === "waiting").length;
+  const done = cards.filter((card) => card.lane === "done").length;
+
+  return [
+    `${chats} ${chats === 1 ? "chat" : "chats"}`,
+    working > 0 ? `${working} ${working === 1 ? "agent" : "agents"} working` : "nothing running",
+    ...(waiting > 0 ? [`${waiting} waiting on you`] : []),
+    cards.length === 0 ? "no tasks yet" : `${done} of ${cards.length} tasks done`,
+  ].join(" · ");
+}
+
+export function WorkspaceOverview({ workspace, title, rpc, readMoves, lineage, agents }: {
+  workspace: string;
+  title: string;
+  rpc: Rpc;
+  readMoves: ReadMoves;
+  lineage: ForkLineage | null;
+  agents: readonly PanelAgent[];
+}) {
+  const load = useCallback(() => rpc<WorkspaceWork>("listWorkspaceWork", []), [rpc]);
+  const { resource, reload } = useAsyncResource(load);
+  const work = lastValue(resource);
+  const moves = readMoves.listWorkspaceWork ?? 0;
+  const seen = useRef(moves);
+
+  useEffect(() => {
+    if (seen.current === moves) return;
+    seen.current = moves;
+    reload();
+  }, [moves, reload]);
+
+  const cards = useMemo(() => (work === null ? [] : cardsOf(work, agents)), [work, agents]);
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto" data-workspace-overview>
+      <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-10 px-5 pb-16 pt-9 sm:px-8">
+        <header className="flex flex-col gap-1.5">
+          <h1 className="p-display text-[26px] font-semibold leading-tight p-text">{title}</h1>
+          <p className="text-[13.5px] p-text-3" data-overview-summary>
+            {work === null ? "Reading the workspace…" : summaryOf(agents, cards)}
+            {lineage && <> · forked from <Link to={`/workspace/${lineage.sourceWorkspaceName}`} className="p-accent hover:underline">its parent</Link></>}
+          </p>
+        </header>
+
+        <section aria-labelledby="overview-github" className="flex flex-col gap-3">
+          <h2 id="overview-github" className="p-eyebrow">GitHub</h2>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Quiet icon={<GitBranchIcon size={15} />} title="Repositories"
+              text="Linking a GitHub repository to a workspace is not available yet. Branches, pushes and CI will show here once it is." />
+            <Quiet icon={<GitPullRequestIcon size={15} />} title="Issues and pull requests"
+              text="Kinu does not yet record the issues and pull requests its agents open or touch." />
+          </div>
+        </section>
+
+        <section aria-labelledby="overview-tasks" className="flex flex-col gap-3">
+          <h2 id="overview-tasks" className="p-eyebrow">Tasks</h2>
+          {resource.status === "error" && work === null
+            ? <LoadFailure what="this workspace's tasks" message={resource.message} onRetry={reload} />
+            : <Board cards={cards} workspace={workspace} loaded={work !== null} />}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function Quiet({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
+  return (
+    <div className="flex gap-3 rounded-xl border border-dashed p-border px-4 py-3.5">
+      <span className="mt-0.5 p-text-3">{icon}</span>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-[13.5px] font-medium p-text-2">{title}</span>
+        <span className="text-[12.5px] leading-[18px] p-text-3">{text}</span>
+      </div>
+    </div>
+  );
+}
+
+function Board({ cards, workspace, loaded }: { cards: readonly Card[]; workspace: string; loaded: boolean }) {
+  if (loaded && cards.length === 0) {
+    return <p className="rounded-xl border border-dashed p-border px-4 py-6 text-center p-meta p-text-3">No tasks yet. When an agent plans its work with the tasks tool, each task lands here.</p>;
+  }
+
+  return (
+    <div className="-mx-5 overflow-x-auto px-5 sm:mx-0 sm:px-0">
+      <div className="grid min-w-[760px] grid-cols-4 gap-3">
+        {LANES.map(({ lane, title }) => {
+          const shown = cards.filter((card) => card.lane === lane);
+
+          return (
+            <div key={lane} className="flex min-w-0 flex-col gap-2 rounded-2xl bg-[var(--c-neutral-tint)] p-2" data-lane={lane}>
+              <div className="flex items-baseline justify-between px-2 pb-0.5 pt-1.5">
+                <span className={`text-[13px] font-medium ${lane === "waiting" && shown.length > 0 ? "p-accent" : "p-text-2"}`}>{title}</span>
+                <span className="p-meta tabular-nums p-text-4">{shown.length}</span>
+              </div>
+              {shown.map((card) => <TaskCard key={card.id} card={card} workspace={workspace} />)}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TaskCard({ card, workspace }: { card: Card; workspace: string }) {
+  const path = card.owner.path;
+  const to = path === null || path.length === 0 ? `/workspace/${workspace}` : `/workspace/${workspace}/agents/${path.map(encodeURIComponent).join("/")}`;
+
+  return (
+    <Link to={to} className="group flex flex-col gap-2.5 rounded-xl border p-border bg-[var(--c-bg)] px-3 py-2.5 transition-colors hover:border-[var(--c-border-strong)]">
+      <span className={`text-[13.5px] leading-snug ${card.lane === "done" ? "p-text-3 line-through decoration-[var(--c-border-strong)]" : "p-text"}`}>{card.title}</span>
+      <span className="flex items-center gap-2 text-[12px] p-text-3">
+        {card.agent && <AgentStatusMark activity={card.agent.activity} />}
+        <span className="min-w-0 truncate">{card.agent?.label ?? card.owner.title}</span>
+        {card.progress && (
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 tabular-nums" aria-label={`${card.progress.done} of ${card.progress.total} steps done`}>
+            <span className="relative h-1 w-10 overflow-hidden rounded-full bg-[var(--c-neutral-tint)]">
+              <span className="absolute inset-y-0 left-0 rounded-full bg-[var(--c-accent-mark)]" style={{ width: `${(100 * card.progress.done) / card.progress.total}%` }} />
+            </span>
+            {card.progress.done}/{card.progress.total}
+          </span>
+        )}
+      </span>
+    </Link>
+  );
+}

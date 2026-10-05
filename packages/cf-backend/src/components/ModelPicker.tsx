@@ -61,10 +61,7 @@ function EffortPicker({ options, value, onChange, disabled }: {
       disabled={disabled}
       onValueChange={(next) => { onChange(isReasoningEffort(next) ? next : null); }}
       renderValue={(picked) => (
-        <span className="inline-flex items-center gap-1 p-text-2">
-          <BrainIcon size={12} aria-hidden="true" />
-          {effortLabel(isReasoningEffort(picked) ? picked : DEFAULT_EFFORT)}
-        </span>
+        <span className="p-text-2">{effortLabel(isReasoningEffort(picked) ? picked : DEFAULT_EFFORT)}</span>
       )}
     >
       <Select.Option value={DEFAULT_EFFORT}>{effortLabel(DEFAULT_EFFORT)}</Select.Option>
@@ -164,7 +161,7 @@ export function ModelPicker({
       size={size}
     >
       <Combobox.TriggerValue className={`min-w-0 max-w-full ${className ?? ""}`}>
-        <span className="flex min-w-0 items-center gap-1.5 pr-5" data-model-picker={label}>
+        <span className="flex min-w-0 items-center gap-1.5" data-model-picker={label}>
           <span className="sr-only">{label}: </span>
           {selected !== null && <ProviderIcon provider={selected.provider} />}
           <span className={`min-w-0 truncate ${selected === null ? "p-text-3" : ""}`}>{selected?.label ?? (value === '' ? placeholder : listed)}</span>

@@ -13,10 +13,10 @@ export const APP_ROUTES = {
   workspace: '/workspace/:agentId',
   workspaceAgent: '/workspace/:agentId/agents/:subName',
   workspaceAgentPath: '/workspace/:agentId/agents/:subName/*',
+  /** `overview`, `settings` or `new`: the workspace's own pages, under the bar the chats share. */
+  workspaceView: '/workspace/:agentId/:view',
   explore: '/swarm/:agentId',
   control: '/control',
-  agentSettings: '/settings/:agentId',
-  triggers: '/triggers/:agentId',
   drive: '/drive',
   /** The Drive below its root: `*` is the folder path, any depth. */
   driveFolder: '/drive/*',

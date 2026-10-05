@@ -397,7 +397,7 @@ describe('Live Smoke — one real turn per backend', () => {
       await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForFunction(() => !(document.body.textContent ?? '').includes('Connecting...'));
-      await clickButton(page, 'Workspace');
+      await clickAriaPrefix(page, 'Show workspace');
 
       const mobile = await page.evaluate(() => {
         const panelWidth = (element: Element | null): number | null => {
@@ -431,16 +431,13 @@ describe('Live Smoke — one real turn per backend', () => {
       await clickAriaPrefix(page, 'Open menu');
 
       const actions = await page.evaluate((workspaceName: string) => Object.fromEntries([...document.querySelectorAll('a,button')]
-        .filter((element) => /^(Workspace settings|Rename workspace|Remove workspace)/
+        .filter((element) => /^(Rename workspace|Remove workspace)/
           .test(element.getAttribute('aria-label') ?? '')
           && element.getAttribute('aria-label')?.endsWith(workspaceName) === true
           && element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))
         .map((element) => {
           const label = element.getAttribute('aria-label') ?? '';
-          let action = 'remove';
-
-          if (label.startsWith('Workspace settings')) action = 'settings';
-          else if (label.startsWith('Rename workspace')) action = 'rename';
+          const action = label.startsWith('Rename workspace') ? 'rename' : 'remove';
 
           const box = element.getBoundingClientRect();
           const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
@@ -448,7 +445,7 @@ describe('Live Smoke — one real turn per backend', () => {
           return [action, hit !== null && (element === hit || element.contains(hit)) && !element.matches(':disabled, [aria-disabled="true"]')];
         })), 'Staging UI Smoke');
 
-      expect(actions).toEqual({ settings: true, rename: true, remove: true });
+      expect(actions).toEqual({ rename: true, remove: true });
     } finally {
       await chrome.close();
     }

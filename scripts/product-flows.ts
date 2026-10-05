@@ -170,13 +170,11 @@ async function removeFlowWorkspace(target: FlowTarget, workspace: string): Promi
  *  page-wide query and is not a composer. */
 export const CHAT_COMPOSER_LIVE = `[...document.querySelectorAll('#chat textarea')].some(t => !t.disabled)`;
 
-/** Press the agent strip's '+'; an absent control throws, and that is the finding. */
-export const NEW_AGENT = `(() => {
-  const create = [...document.querySelectorAll('nav[aria-label="Workspace agents"] button')]
-    .find((b) => (b.getAttribute('aria-label') ?? '').includes('New agent'));
-  if (create === undefined) throw new Error('no New agent control');
-  create.click();
-})()`;
+/** The workspace bar's chats, Main first. */
+const CHATS = 'nav[aria-label="Chats"]';
+
+/** The opening every flow gives a chat it starts: the bar's + asks for one, and the scripted model answers it. */
+const NEW_CHAT_OPENING = 'Reply with one word: ready.';
 
 /** The chat column's Send control is back to sending, so no turn is running:
  *  while one runs, the same control steers it instead. */
@@ -323,6 +321,18 @@ export async function typeIntoComposer(page: Page, text: string): Promise<Elemen
 
 /** Type into the chat column's live composer and press its Send; resolves once
  *  the pane shows the words and the turn they started has ended. */
+/** + then the first message, as a person opens a chat; resolves once that opening turn has settled. */
+async function startNewChat(page: Page): Promise<void> {
+  await page.click(`${CHATS} a[aria-label="New chat"]`);
+  await until(page, 'the new-chat question', `document.querySelector('[data-new-chat] textarea') !== null`);
+  await page.type('[data-new-chat] textarea', NEW_CHAT_OPENING);
+  await page.click('[data-new-chat] button[type="submit"]');
+  await until(page, "the new chat's page", `location.pathname.includes('/agents/')`);
+  await until(page, 'the opening in the chat column',
+    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(NEW_CHAT_OPENING)})`);
+  await until(page, "the opening turn's end, Send offered again", CHAT_IDLE);
+}
+
 async function sendAndSettle(page: Page, text: string): Promise<void> {
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
@@ -550,7 +560,7 @@ async function agentPresence(page: Page, workspace: string, agent: string, actor
       element !== null && element.getClientRects().length > 0 ? (element.textContent ?? '').trim() : null;
 
     return {
-      tab: shown(document.querySelector(`nav[aria-label="Workspace agents"] [data-agent-tab="${input.agent}"]`)),
+      tab: shown(document.querySelector(`nav[aria-label="Chats"] [data-agent-tab="${input.agent}"]`)),
       sidebar: shown(document.querySelector(`[data-sidebar-agents="${input.workspace}"] [data-agent-row="${input.actorId}"]`)),
     };
   }, { workspace, agent, actorId }));
@@ -590,7 +600,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
-    await page.evaluate(NEW_AGENT);
+    await startNewChat(page);
 
     const agentPath = `/workspace/${encodeURIComponent(workspace)}/agents/`;
 
@@ -607,14 +617,15 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     await sendAndSettle(page, said);
     const renameLedger = await frameLedger(page);
 
-    // Rename through the tab: its title button opens the name field with the
-    // current name selected, so typing replaces it.
-    await page.click(`[data-agent-tab="${agent}"] button[title="Rename agent"]`);
-    await until(page, "the agent's name field", `document.querySelector('input[aria-label="Agent name"]') !== null`);
+    // Rename through the tab: its pencil opens the name field with the current
+    // name selected, so typing replaces it.
+    await page.hover(`${CHATS} [data-agent-tab="${agent}"] a`);
+    await page.click(`${CHATS} [data-agent-tab="${agent}"] button[aria-label^="Rename "]`);
+    await until(page, "the chat's name field", `document.querySelector('input[aria-label="Chat name"]') !== null`);
     await page.keyboard.type(renamed);
     renameLedger.restart();
     await page.keyboard.press('Enter');
-    await until(page, 'the name field to close', `document.querySelector('input[aria-label="Agent name"]') === null`);
+    await until(page, 'the name field to close', `document.querySelector('input[aria-label="Chat name"]') === null`);
     // The rename reply can close the editor before the deferred reads_changed notice refreshes the sidebar.
     await settledAfter(page, renameLedger, 'renameSubordinateAgent', 'listWorkspaceAgents');
     await renameLedger.stop();
@@ -623,7 +634,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     // The current row belongs to the agent whose chat is open; its key is an actor id, not the URL name.
     const actorId = v.parse(v.string(), await page.$eval(
-      `[data-sidebar-agents="${workspace}"] [data-agent-row][aria-current="true"]`,
+      `[data-sidebar-agents="${workspace}"] [data-agent-row][aria-current="page"]`,
       (row) => row.getAttribute('data-agent-row'),
     ));
 
@@ -651,7 +662,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     if (after.tab !== null) {
       ledger.restart();
-      await back.click(`nav[aria-label="Workspace agents"] [data-agent-tab="${agent}"] a`);
+      await back.click(`nav[aria-label="Chats"] [data-agent-tab="${agent}"] a`);
       await until(back, "the agent's page", `location.pathname === ${JSON.stringify(`${agentPath}${encodeURIComponent(agent)}`)}`);
       await until(back, "the agent's own composer", agentComposer(workspace, agent));
       await settledAfter(back, ledger, 'getChatHistoryPage');
@@ -668,30 +679,24 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
   }
 }
 
-/** Which tab of the agent strip is current, by index: 0 is Main, the
- *  subordinates follow in roster order, -1 while none is marked. */
+/** Which chat tab is current, by index: 0 is Main, the person's chats
+ *  follow in roster order, -1 while none is marked. */
 export const ACTIVE_TAB_INDEX = `(() => {
-  const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')];
-  // The mark sits ON the Main link and INSIDE an open agent tab (whose own
-  // element is the rename host), so both shapes answer here.
-  return tabs.findIndex((tab) => tab.matches('[aria-current="page"]') || tab.querySelector('[aria-current="page"]') !== null);
+  const tabs = [...document.querySelectorAll('nav[aria-label="Chats"] [data-agent-tab]')];
+  return tabs.findIndex((tab) => tab.querySelector('[aria-current="page"]') !== null);
 })()`;
 
 /** Click the control; an absent control throws, and that is the finding. */
 const ClickScripts = {
   lastAgentTab: `(() => {
-    // Tabs by their own hook, not by element: the OPEN tab is a div (it hosts
-    // the rename editor), so counting links saw one fewer tab than exists and
-    // this row's wait never finished.
-    const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')];
-    const target = tabs.pop();
-    if (target === undefined) throw new Error('no agent tab to open');
-    (target.querySelector('a') ?? target).click();
+    const target = [...document.querySelectorAll('nav[aria-label="Chats"] [data-agent-tab] a')].pop();
+    if (target === undefined) throw new Error('no chat tab to open');
+    target.click();
   })()`,
   mainTab: `(() => {
-    const first = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')][0];
-    if (first === undefined) throw new Error('no Main tab to return to');
-    first.click();
+    const main = document.querySelector('nav[aria-label="Chats"] [data-agent-tab="main"] a');
+    if (main === null) throw new Error('no Main tab to return to');
+    main.click();
   })()`,
   filesTab: `(() => {
     const files = [...document.querySelectorAll('.p-tabstrip')]
@@ -858,7 +863,7 @@ export async function rightPanelKeepsItsState(target: FlowTarget): Promise<Panel
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
-    await page.evaluate(NEW_AGENT);
+    await startNewChat(page);
     await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
     await page.evaluate(ClickScripts.mainTab);
@@ -1010,9 +1015,9 @@ export async function eachPaneKeepsItsTranscript(target: FlowTarget): Promise<St
     await sendInChat(page, rootMarker);
     await until(page, "the root turn's answer", `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)})`);
 
-    await page.evaluate(NEW_AGENT);
+    await startNewChat(page);
     await until(page, 'a second agent tab',
-      `[...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')].length > 1`);
+      `[...document.querySelectorAll('nav[aria-label="Chats"] [data-agent-tab]')].length > 1`);
     await page.evaluate(ClickScripts.lastAgentTab);
     await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
     // The actor's pane is live when ITS column holds an enabled composer: a pane

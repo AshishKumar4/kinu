@@ -1,12 +1,11 @@
 import { Cause, Effect } from 'effect';
-import { useState, useCallback, useRef, type FormEvent, type ReactNode } from "react";
+import { useState, useCallback, useRef, type FormEvent, type RefObject } from "react";
 import { Link, NavLink, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
+  UsersThreeIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
-import { Button } from "@cloudflare/kumo";
-import { FilledButton } from "./ui/FilledButton";
 import { KinuLogo } from "./ui/KinuLogo";
-import { removeWorkspace, type WorkspaceEntry } from "../lib/user-api";
+import type { RosterEntry, WorkspaceEntry } from "../lib/user-api";
 import { useAccount } from "@/hooks/use-account";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-kinu";
@@ -14,10 +13,12 @@ import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
-import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle } from "@kinu.run/core";
-import { Modal } from "./ui/Modal";
-import { renderCauseChain, showing, detach } from "@kinu.run/core/obs";
+import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, type PanelAgent } from "@kinu.run/core";
+import { renderCauseChain, detach } from "@kinu.run/core/obs";
 import { SidebarAgents } from "./SidebarAgents";
+import { AgentStatusMark } from "./AgentStatus";
+import { RemoveWorkspaceDialog } from "./RemoveWorkspaceDialog";
+import { useAgentsNav, useOpenAgentsPanel, type WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
 import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
 import { composing } from "@/components/ui/form";
 
@@ -38,8 +39,7 @@ function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
 }
 
 
-// Deleting an agent must first leave all of these: a mounted socket auto-reconnects and resurrects the DO.
-const WORKSPACE_SCOPED_SECTIONS = ["workspace", "swarm", "settings", "triggers"];
+const WORKSPACE_SCOPED_SECTIONS = ["workspace", "swarm"];
 
 function connectionWait(status: ConnectionStatus): string {
   if (status === "connecting") return "Connecting…";
@@ -116,6 +116,15 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
   );
 }
 
+/** A workspace at work pulses; one with news, or the open one, wears the accent. */
+function WorkspaceDot({ overview, open }: { overview: RosterEntry["overview"]; open: boolean }) {
+  if (overview?.activity === "working") return <span className="block size-1.5 rounded-full p-dot-success p-dot-pulse" title="Working now" />;
+
+  if (overview?.hasUpdates === true) return <span className="block size-1.5 rounded-full p-dot-accent" title="Updated" />;
+
+  return open ? <span className="block size-1.5 rounded-full p-dot-accent" /> : null;
+}
+
 export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}) {
   // Sidebar renders outside the route's Outlet, so useParams cannot see :agentId.
   const sectionMatch = useMatch({ path: "/:section/:agentId/*", end: false });
@@ -127,6 +136,8 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
   const onHome = useMatch({ path: "/", end: true }) !== null;
 
   const navigate = useNavigate();
+  const agentsNav = useAgentsNav();
+  const { panel, drilled } = useOpenAgentsPanel(agentId);
 
   const {
     entries: workspaces,
@@ -135,7 +146,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
     loading: listLoading,
     refresh: refreshWorkspaces,
     rename: renameWorkspace,
-    remove: removeFromRoster,
   } = useWorkspaceRoster();
 
   const account = useAccount();
@@ -144,30 +154,13 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceEntry | null>(null);
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   const closeUserMenu = useCallback(() => setShowUserMenu(false), []);
   useCloseOnOutsideClick(showUserMenu, userMenuRef, closeUserMenu);
 
-  const confirmDelete = useCallback(() => detach(Effect.gen(function* () {
-    if (!deleteTarget) return;
-    const name = deleteTarget.name;
-    setDeleteBusy(true);
-    setDeleteError(null);
 
-    // Navigate away first: a mounted useAgent socket reconnects and idFromName resurrects an empty agent.
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      if (name === agentId) yield* Effect.promise(async () => navigate("/"));
-      yield* Effect.promise(async () => removeWorkspace(name));
-      removeFromRoster(name);
-      setDeleteTarget(null);
-    }), showing(setDeleteError)), Effect.sync(() => {
-      setDeleteBusy(false);
-    }));
-  })), [deleteTarget, agentId, navigate, removeFromRoster]);
 
 
   return (
@@ -192,23 +185,22 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
 
       {!onHome && (
         <div className="px-3.5 pb-1.5">
-          <Button
+          <button
             type="button"
-            variant="secondary"
-            size="base"
             onClick={() => detach(Effect.promise(async () => navigate("/")))}
-            className="!h-10 w-full justify-center"
-            icon={<PlusIcon size={15} weight="bold" />}
+            className="p-btn flex h-10 w-full items-center justify-center gap-2 p-t-control"
           >
+            <PlusIcon size={14} weight="bold" />
             New workspace
-          </Button>
+          </button>
         </div>
       )}
       <nav aria-label="Primary" className="px-2 pt-1 space-y-1">
         {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}
       </nav>
-      <SidebarAgents workspace={agentId} />
-      <div className="flex-1 overflow-y-auto pt-2 pb-3 group-has-[[data-sidebar-agents]]/side:hidden">
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div className="p-slide" data-drilled={drilled || undefined}>
+      <div className="h-full overflow-y-auto pt-2 pb-3" inert={drilled}>
         <div className="px-5 pb-2 pt-4 p-eyebrow">
           Workspaces{workspaceTotal > workspaces.length ? ` · ${workspaces.length}/${workspaceTotal}` : ""}
         </div>
@@ -229,16 +221,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
             const isActive = a.name === agentId;
             const shown = workspaceDisplayTitle(a);
 
-            let dot: ReactNode = null;
-
-            if (overview?.activity === "working") {
-              dot = <span className="block size-1.5 rounded-full p-dot-success p-dot-pulse" title="Working now" />;
-            } else if (overview?.hasUpdates === true) {
-              dot = <span className="block size-1.5 rounded-full p-dot-accent" title="Updated" />;
-            } else if (isActive) {
-              dot = <span className="block size-1.5 rounded-full p-dot-accent" />;
-            }
-
             return (
               <li key={a.name}>
                 <div className="group relative mx-2">
@@ -257,39 +239,38 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                         to={`/workspace/${a.name}`}
                         end
                         className={({ isActive: linkActive }) =>
-                          `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-16 lg:pr-3 lg:group-hover:pr-16 lg:group-focus-within:pr-16 transition-colors ${navRowCls(linkActive)}`
+                          `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-12 lg:pr-3 lg:group-hover:pr-12 lg:group-focus-within:pr-12 transition-colors ${navRowCls(linkActive && panel === null)}`
                         }
                       >
-                        <span className="size-1.5 shrink-0 rounded-full">{dot}</span>
+                        <span className="flex w-[13px] shrink-0 justify-center"><WorkspaceDot overview={overview} open={isActive} /></span>
                         <span className={`min-w-0 flex-1 truncate p-row-text font-semibold ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
                         {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
-                      <Link
-                        to={`/settings/${a.name}`}
-                        className="absolute right-11 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-accent focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
-                        title="Workspace settings"
-                        aria-label={`Workspace settings for ${shown}`}
-                      ><GearIcon size={11} /></Link>
                       <button
                         onClick={() => setEditingWorkspace(a.name)}
-                        className="absolute right-6 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-text focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
+                        className="absolute right-6 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-opacity p-text-3 hover:p-text focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-70"
                         title="Rename"
                         aria-label={`Rename workspace ${shown}`}
                       ><PencilSimpleIcon size={11} /></button>
                       <button
-                        onClick={() => { setDeleteError(null); setDeleteTarget(a); }}
-                        className="absolute right-1 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-danger focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
+                        onClick={() => setDeleteTarget(a)}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-opacity p-text-3 hover:p-danger focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-70"
                         title="Remove"
                         aria-label={`Remove workspace ${shown}`}
                       ><TrashIcon size={11} /></button>
                     </>
                   )}
                 </div>
-
+                {isActive && panel !== null && <WorkspaceChats panel={panel} trigger={agentsNav.trigger} onAgents={() => agentsNav.enter(a.name)} />}
               </li>
             );
           })}
         </ul>
+      </div>
+      <div className="h-full" inert={!drilled}>
+        {panel !== null && <SidebarAgents panel={panel} onBack={agentsNav.back} />}
+      </div>
+      </div>
       </div>
 
       <div className="border-t p-border px-4 py-3.5 relative" ref={userMenuRef}>
@@ -332,28 +313,42 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
         )}
       </div>
 
-      {deleteTarget && (
-        <Modal
-          title="Remove workspace"
-          icon={<TrashIcon size={18} className="p-danger" />}
-          onClose={() => setDeleteTarget(null)}
-          busy={deleteBusy}
-          footer={<>
-            <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>Cancel</Button>
-            <FilledButton danger onClick={confirmDelete} disabled={deleteBusy}>
-              {deleteBusy ? "Removing…" : "Remove"}
-            </FilledButton>
-          </>}
-        >
-          <p className="text-xs p-text-2 leading-relaxed">
-            Remove <span className="font-medium p-text">{workspaceDisplayTitle(deleteTarget)}</span> and delete
-            everything in it? This cannot be undone.
-          </p>
-          {deleteError && (
-            <div className="p-notice-danger text-xs rounded-md px-3 py-2">Could not remove: {deleteError}</div>
-          )}
-        </Modal>
-      )}
+      {deleteTarget && <RemoveWorkspaceDialog workspace={deleteTarget} onClose={() => setDeleteTarget(null)} />}
     </div>
+  );
+}
+
+/** The open workspace's chats under its row, as production draws them, with a way into every agent it runs. */
+function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPanel; trigger: RefObject<HTMLButtonElement | null>; onAgents: () => void }) {
+  const chats = panel.list.filter((agent) => agent.tab);
+  const others = panel.list.length - chats.length;
+
+  return (
+    <ul className="p-nest mb-1 ml-[26px] mr-2 mt-0.5 space-y-px" aria-label="Chats">
+      {chats.map((chat: PanelAgent) => (
+        <li key={chat.key}>
+          <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key}
+            aria-current={panel.shown === chat.key ? "page" : undefined}
+            className={`flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(panel.shown === chat.key)}`}>
+            <span className="flex w-[13px] shrink-0 justify-center"><AgentStatusMark activity={chat.activity} /></span>
+            <span className="min-w-0 flex-1 truncate p-row-text">{chat.label}</span>
+          </button>
+        </li>
+      ))}
+      <li>
+        <Link to={`/workspace/${panel.workspace}/new`} className={`flex items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 p-row-text transition-colors ${navRowCls(false, "p-text-3")}`}>
+          <PlusIcon size={12} className="w-[13px] shrink-0" aria-hidden /> New agent
+        </Link>
+      </li>
+      <li>
+        <button ref={trigger} type="button" onClick={onAgents} data-agents-counter
+          className={`flex w-full items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left p-row-text transition-colors ${navRowCls(false, "p-text-3")}`}>
+          <UsersThreeIcon size={13} className="w-[13px] shrink-0" aria-hidden />
+          <span className="flex-1">All agents</span>
+          {others > 0 && <span className="p-meta tabular-nums p-text-4">{others}</span>}
+          <CaretRightIcon size={11} aria-hidden />
+        </button>
+      </li>
+    </ul>
   );
 }

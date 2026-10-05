@@ -1,12 +1,12 @@
 import { Effect, Cause } from 'effect';
 import { Fragment, startTransition, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
-import { useParams, useLocation, Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
+  ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, GearIcon, ListIcon,
   ClockIcon, WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
-  ClockCounterClockwiseIcon, UserPlusIcon, UsersThreeIcon, type Icon,
+  ClockCounterClockwiseIcon, UserPlusIcon, type Icon,
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
@@ -39,26 +39,24 @@ import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
-import { SLATE_PREFIX, agentActive, type ForkNode, type PanelAgent, type SurfaceKind } from "@kinu.run/core";
+import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent, type SurfaceKind } from "@kinu.run/core";
 import { ViewOnlyBar } from "@/components/ViewOnlyBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { ConversationStartBoundary, FileLinkContext, HistoryBoundary } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
-import { SupervisePage } from "./SupervisePage";
-import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { KeptChatColumn } from "@/components/KeptChatColumn";
-import { nestedAgent, type AgentLinkIds } from "@/pages/nested-agent";
-import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
-import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
+import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
+import { RemoveWorkspaceDialog } from "@/components/RemoveWorkspaceDialog";
+import { DeleteChatDialog } from "@/components/DeleteChatDialog";
+import { NewChatView } from "@/components/workspaces/NewChatView";
+import { WorkspaceOverview } from "@/components/workspaces/WorkspaceOverview";
+import { WorkspaceSettings } from "@/pages/SettingsPage";
+import { useLayoutDrawer } from "@/components/layout";
+import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
-
-/** Composed key: Kumo's `Button` requires a `shape` prop, `anti-slop/no-shape-in-symbol-names`
- *  bans the substring in symbol names, and lint suppression comments are forbidden. */
-const squareButtonVariant = "square";
-
-const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
+import { useOpeningMessage } from "@/components/workspaces/NewChatView";
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
@@ -385,7 +383,7 @@ function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench
   const agents = useMemo((): readonly PanelAgent[] => {
     const main = listed?.find((agent) => agent.category === "main") ?? MAIN_AGENT;
 
-    return [{ ...main, activity: live ? "working" : main.activity }, ...(listed ?? []).filter((agent) => agent.category !== "main")];
+    return [{ ...main, activity: mainActivity(main.activity, live) }, ...(listed ?? []).filter((agent) => agent.category !== "main")];
   }, [listed, live]);
 
   const shownAgent = useMemo(() => shownPanelAgent(agents, node, subName), [agents, node, subName]);
@@ -401,9 +399,18 @@ function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench
   return {
     shownAgent,
     rosterLoaded: listed !== null,
-    hiddenActive: agents.filter((agent) => agentActive(agent) && !agent.tab).length,
     panel,
   };
+}
+
+/** Main's mark follows this page's own socket for working, so the bar and the composer's Stop never disagree; a
+ *  question for the person outranks either. */
+function mainActivity(listed: PanelAgent["activity"], live: boolean): PanelAgent["activity"] {
+  if (listed === "waiting") return listed;
+
+  if (live) return "working";
+
+  return listed === "working" ? "idle" : listed;
 }
 
 function shownPanelAgent(agents: readonly PanelAgent[], node: string | null, subName: string | undefined): PanelAgent | undefined {
@@ -439,6 +446,33 @@ function SwarmNodePane({ main, node, ownerPath, agent, rosterLoaded }: {
   }
 
   return <SwarmNodeColumn main={main} ownerPath={ownerPath} runId={runId} nodeId={nodeId} agent={agent} />;
+}
+
+/** The workspace's own pages share the chat route's key, so the socket and the bar stay mounted across them. */
+const WORKSPACE_VIEW = "/workspace/:agentId/:view";
+
+/** Main keeps its chat and takes a new title only; a chat the person opened can be renamed or deleted. */
+function chatTab(workspace: string, agent: PanelAgent, actions: {
+  renameMain: (title: string) => Promise<void>;
+  renameChat: (path: string, title: string) => Promise<void>;
+  remove: (path: string) => void;
+}): ChatTab {
+  const path = agent.open.kind === "chat" ? agent.open.path : null;
+
+  if (path === null) return { agent, to: `/workspace/${workspace}`, rename: actions.renameMain };
+
+  return {
+    agent, to: helperBase(workspace, path).slice(0, -1),
+    rename: (title: string) => actions.renameChat(path, title),
+    remove: () => actions.remove(path),
+  };
+}
+
+/** The bar's open item: the overview, or the chat shown when it has a tab. */
+function openBarItem(view: string | undefined, shown: PanelAgent | undefined): string | null {
+  if (view === "overview") return "overview";
+
+  return view === undefined && shown?.tab === true ? shown.key : null;
 }
 
 function helperBase(workspace: string, subName: string): string {
@@ -531,6 +565,8 @@ function SubordinateChatColumn({
     steerRuns: state.steerRuns,
   });
 
+  useOpeningMessage(state.connectionStatus === "connected", (text) => { state.sendChat(text, [], ui.mode); });
+
   if (state.terminalClose && !state.agentStatus) {
     return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
   }
@@ -552,7 +588,7 @@ function SubordinateChatColumn({
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
-        <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-5 space-y-5">
+        <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column pt-5 pb-12 space-y-5">
           <HistoryReserve range={reserves.top} rowPx={rowPx} history={history} />
           {thread.entries.length > 0 && (
             <HistoryBoundary
@@ -602,7 +638,7 @@ function SubordinateChatColumn({
       </ErrorBoundary>
 
       {!takesInput && <ViewOnlyBar running={live} onStop={stop} />}
-      {takesInput && <div className="border-t p-border p-sidebar">
+      {takesInput && <div className="p-composer-dock">
         <Composer
           textareaRef={inputRef}
           value={input}
@@ -657,6 +693,77 @@ function loadNotices(error: WorkspaceNotice | null, onRetry: () => void): Compos
 }
 
 
+type WorkspaceState = ReturnType<typeof useKinu>;
+
+/** The workspace's bar, with the dialogs its delete controls open. */
+function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view, subName, inspector }: {
+  workspace: string;
+  title: string;
+  editValue: string;
+  state: WorkspaceState;
+  agents: readonly PanelAgent[];
+  shown: PanelAgent | undefined;
+  view: string | undefined;
+  subName: string | undefined;
+  inspector: InspectorControl | null;
+}) {
+  const navigate = useNavigate();
+  const drawer = useLayoutDrawer();
+  const [removing, setRemoving] = useState(false);
+  const [deleting, setDeleting] = useState<{ title: string; path: string } | null>(null);
+
+  const chats = agents.filter((agent) => agent.tab).map((agent) => chatTab(workspace, agent, {
+    renameMain: async (name) => { await state.rpc("renameMainChat", [name]); },
+    renameChat: async (path, name) => { await state.renameSubordinate(path, name); },
+    remove: (path) => setDeleting({ title: agent.label, path }),
+  }));
+
+  return (
+    <>
+      <WorkspaceHeader
+        workspace={{
+          title, to: `/workspace/${workspace}/overview`, editValue,
+          rename: async (name) => { await state.setDisplayName(name); }, remove: () => setRemoving(true),
+        }}
+        chats={chats}
+        active={openBarItem(view, shown)}
+        newChat={`/workspace/${workspace}/new`}
+        leading={drawer && <button type="button" onClick={drawer} className="p-bar-icon" aria-label="Open menu"><ListIcon size={18} /></button>}
+        trailing={<>
+          <Link to={`/workspace/${workspace}/settings`} className="p-bar-icon" aria-current={view === "settings" ? "page" : undefined}
+            aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
+          {view === undefined && inspector && <InspectorToggle control={inspector} />}
+        </>}
+      />
+      {removing && <RemoveWorkspaceDialog workspace={{ name: workspace, displayName: editValue }} onClose={() => setRemoving(false)} />}
+      {deleting && (
+        <DeleteChatDialog title={deleting.title} onClose={() => setDeleting(null)}
+          onDelete={async () => {
+            await state.dismissSubordinate(deleting.path, false);
+
+            if (subName === deleting.path) await navigate(`/workspace/${workspace}`);
+          }} />
+      )}
+    </>
+  );
+}
+
+/** The workspace's own pages, under the bar the chats share. */
+function WorkspaceView({ view, workspace, title, state, agents }: {
+  view: string;
+  workspace: string;
+  title: string;
+  state: WorkspaceState;
+  agents: readonly PanelAgent[];
+}) {
+  if (view === "settings") return <WorkspaceSettings workspace={workspace} state={state} />;
+
+  if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
+
+  return <WorkspaceOverview workspace={workspace} title={title} rpc={state.rpc} readMoves={state.readMoves}
+    lineage={state.agentStatus?.forkLineage ?? null} agents={agents} />;
+}
+
 export default function WorkspacePage() {
   const params = useParams();
   const { agentId } = params;
@@ -672,24 +779,8 @@ export default function WorkspacePage() {
   const live = state.liveness.kind === "live";
   const { entries: workspaceEntries } = useWorkspaceRoster();
 
-  const [creatingAgent, setCreatingAgent] = useState(false);
-  const creatingAgentRef = useRef(false);
-  const [createAgentError, setCreateAgentError] = useState<string | null>(null);
-
-  const createAndOpenAgent = useCallback(() => settle(Effect.gen(function* () {
-    if (!agentId || creatingAgentRef.current) return;
-    creatingAgentRef.current = true;
-    setCreatingAgent(true);
-    setCreateAgentError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const created = yield* Effect.promise(async () => state.createSubordinate());
-      yield* Effect.promise(async () => navigate(`/workspace/${agentId}/agents/${created.name}`));
-    }), showing(setCreateAgentError)), Effect.sync(() => {
-      creatingAgentRef.current = false;
-      setCreatingAgent(false);
-    }));
-  })), [agentId, navigate, state.createSubordinate]);
+  const view = useMatch(WORKSPACE_VIEW)?.params.view;
+  const [inspectorControl, setInspectorControl] = useState<InspectorControl | null>(null);
 
   // `setModel` records failure on `state.error` and rolls the picker back itself.
   const setModel = state.setModel;
@@ -718,17 +809,12 @@ export default function WorkspacePage() {
     reportSide(source, describeError({ cause: Cause.squash(failed) }));
   }), [reportSide]);
 
-  // ?altitude=supervise deep-links to Supervise (/triggers/:id redirect, settings' Automations link).
-  const [altitude, setAltitude] = useState<Altitude>(
-    () => new URLSearchParams(location.search).get("altitude") === "supervise" ? "supervise" : "run",
-  );
-
   const visiblePlan = state.activePlan;
   const [surface, setSurface] = useState<SurfaceKind>("Work");
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
   const workbench = useRef<WorkbenchHandle | null>(null);
 
-  const { shownAgent, rosterLoaded, hiddenActive, panel: agentsPanel } = useAgentsPanel({ listed: state.workspaceAgents, live, workspace: agentId, node: shownNode, subName, workbench });
+  const { shownAgent, rosterLoaded, panel: agentsPanel } = useAgentsPanel({ listed: state.workspaceAgents, live, workspace: agentId, node: shownNode, subName, workbench });
   const agentsNav = useAgentsNav();
   const { publish } = agentsNav;
 
@@ -784,7 +870,6 @@ export default function WorkspacePage() {
   const chatInput = ui.draft;
   const setChatInput = ui.setDraft;
   const [forkFor, setForkFor] = useState<string | null>(null);
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   // `state.messages` is the SDK's newest window with streamed messages; older history pages from storage.
   const { history, transcript, thread, reserves, positions } = useChatThread({
@@ -884,6 +969,7 @@ export default function WorkspacePage() {
   }), [state.signalCards, messageCardIds]);
 
   const mainTail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
+  const providerWait = useProviderWaitNotice(state.providerWait);
 
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
@@ -948,8 +1034,8 @@ export default function WorkspacePage() {
   }), [state.rpc, show]);
 
   // The slate the inspector shows beside the chat folds its chat previews; a phone never shows both.
-  const panelSlate = (control: InspectorControl | null): string | null =>
-    control !== null && !control.collapsed && surface.startsWith(SLATE_PREFIX) ? surface.slice(SLATE_PREFIX.length) : null;
+  const panelSlate = (control: InspectorControl): string | null =>
+    control.beside && !control.collapsed && surface.startsWith(SLATE_PREFIX) ? surface.slice(SLATE_PREFIX.length) : null;
 
   // Never unmount on transient WS errors.
   if (state.connectionStatus === "connecting" && !state.agentStatus) return (
@@ -993,66 +1079,17 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      <WorkspaceBar
-        title={shownTitle}
-        editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
-        onRename={state.setDisplayName}
-        connectionStatus={state.connectionStatus}
-        working={live}
-        providerWait={state.providerWait}
-        waitingOnYou={state.pendingActions.length > 0 || state.pendingConsents.length > 0}
-        {...(as?.forkLineage ? { forkParent: { workspace: as.forkLineage.sourceWorkspaceName, forkedAt: as.forkLineage.forkedAt } } : {})}
-        altitude={altitude}
-        onAltitude={setAltitude}
-      />
-      {createAgentError && (
-        <div role="alert" className="flex items-center justify-center gap-3 border-b p-border px-3 py-1.5 text-xs p-notice-danger">
-          <span>Could not create an agent: {createAgentError}</span>
-          <button type="button" className="font-medium underline" onClick={() => setCreateAgentError(null)}>
-            Dismiss
-          </button>
-        </div>
-      )}
+      <WorkspaceBar workspace={agentId} title={shownTitle} editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
+        state={state} agents={agentsPanel.list} shown={shownAgent} view={view} subName={subName} inspector={inspectorControl} />
 
-      {altitude === "supervise" ? (
-        <div className="flex-1 min-h-0">
-          <ErrorBoundary label="Supervise">
-            <SupervisePage rpc={state.rpc} />
-          </ErrorBoundary>
-        </div>
-      ) : (
+      {view !== undefined && <WorkspaceView view={view} workspace={agentId} title={shownTitle} state={state} agents={agentsPanel.list} />}
+      {view === undefined && (
       <WorkbenchPanels
         ref={workbench}
         workspace={agentId}
         contents={state}
-        chat={(inspectorControl) => <HelperChatBase.Provider value={{ base: `/workspace/${agentId}/agents/`, parent: null }}><ChatSlates shownInPanel={panelSlate(inspectorControl)}>
-            <SubordinateTabs
-              workspace={agentId}
-              subordinates={state.subordinates}
-              activeName={shownNode === null ? subName : `node:${shownNode}`}
-              onCreate={createAndOpenAgent}
-              creating={creatingAgent}
-              onDismiss={(name, keepHistory) => state.dismissSubordinate(name, keepHistory).then(() => {})}
-              onRename={(name, displayName) => state.renameSubordinate(name, displayName).then((entry) => entry.displayName)}
-              trailing={<>
-                <button type="button" onClick={() => agentsNav.enter(agentId ?? "")} data-agents-counter ref={agentsNav.trigger}
-                  aria-pressed={agentsNav.drilled === agentId}
-                  aria-label={hiddenActive === 0 ? "Agents" : `Agents: ${hiddenActive} active without a tab`}
-                  title="Every agent in this workspace"
-                  className="relative flex size-7 items-center justify-center rounded-md p-text-2 transition-colors hover:bg-[var(--c-elevated)] hover:p-text focus-visible:bg-[var(--c-elevated)]">
-                  <UsersThreeIcon size={15} />
-                  {hiddenActive > 0 && (
-                    <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--c-accent)] px-1 text-[10px] font-semibold leading-none text-[var(--c-accent-on)]">{hiddenActive}</span>
-                  )}
-                </button>
-                {!subName && state.messages.length > 0 && (
-                  <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm"
-                    onClick={() => setShowClearConfirm(true)}
-                    icon={<TrashIcon size={12} />} aria-label="Clear history" />
-                )}
-                {inspectorControl && <InspectorToggle control={inspectorControl} />}
-              </>}
-            />
+        onInspector={setInspectorControl}
+        chat={(control) => <HelperChatBase.Provider value={{ base: `/workspace/${agentId}/agents/`, parent: null }}><ChatSlates shownInPanel={panelSlate(control)}>
             {shownNode !== null && (
               <SwarmNodePane key={shownNode} main={state} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} rosterLoaded={rosterLoaded} />
             )}
@@ -1071,7 +1108,7 @@ export default function WorkspacePage() {
               </div>
             )}
             <ErrorBoundary label="Chat">
-            <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-7 space-y-5">
+            <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column pt-7 pb-12 space-y-5">
               <ConversationStartBoundary
                 hasEntries={thread.entries.length > 0}
                 streaming={live}
@@ -1154,7 +1191,7 @@ export default function WorkspacePage() {
               </div>
             )}
 
-            <div className="border-t p-border p-sidebar">
+            <div className="p-composer-dock">
               <Composer
                 textareaRef={chatInputRef}
                 value={chatInput}
@@ -1195,6 +1232,7 @@ export default function WorkspacePage() {
                     text: `Branch unavailable: ${branchNotice}`, onDismiss: () => setBranchNotice(null) }] : []),
                   ...(restoreNotice ? [{ id: "restore", tone: "neutral" as const, text: restoreNotice,
                     onDismiss: () => setRestoreNotice(null) }] : []),
+                  ...providerWait,
                   ...(steerNotice ? [steerNotice] : []),
                 ]}
               />
@@ -1287,26 +1325,6 @@ export default function WorkspacePage() {
           onCancel={() => setRestorePlan(null)} onConfirm={applyRestore} />
       )}
 
-      {showClearConfirm && (
-        <Modal
-          title="Clear conversation history"
-          icon={<TrashIcon size={18} className="p-danger" />}
-          onClose={() => setShowClearConfirm(false)}
-          footer={<>
-            <Button size="sm" variant="ghost" onClick={() => setShowClearConfirm(false)}>Cancel</Button>
-            {/* Reset in the same press: an in-flight first page would otherwise restore the cleared messages. */}
-            <FilledButton danger onClick={() => {
-              state.clearHistory();
-              history.reset();
-              setShowClearConfirm(false);
-            }}>Clear history</FilledButton>
-          </>}
-        >
-          <p className="text-xs p-text-2 leading-relaxed">
-            This cannot be undone. Memory, SOUL.md, learned tools, and evolution stay unchanged.
-          </p>
-        </Modal>
-      )}
     </div>
     </FileLinkContext.Provider></SlateInlineContext.Provider>
   );

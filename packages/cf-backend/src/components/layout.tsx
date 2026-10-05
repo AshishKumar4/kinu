@@ -1,7 +1,7 @@
 import { detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
-import { useEffect, useState } from "react";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { createContext, useContext, useEffect, useState } from "react";
+import { Link, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
 import { SidebarRail } from "./SidebarRail";
@@ -12,6 +12,13 @@ import { AgentsNavProvider, useAgentsNav } from "@/hooks/use-agents-nav";
 import { AppBackground } from "./AppBackground";
 
 /** The root isolates its stacking so the negative-z canvas paints above its ground and under in-flow children. */
+
+/** Opens the phone's menu drawer, for a page that draws its own top bar; null outside the shell. */
+const DrawerContext = createContext<(() => void) | null>(null);
+
+export function useLayoutDrawer(): (() => void) | null {
+  return useContext(DrawerContext);
+}
 
 export default function Layout() {
   return <AgentsNavProvider><Shell /></AgentsNavProvider>;
@@ -24,13 +31,15 @@ function Shell() {
   const { entries } = useAgentsNav();
 
   useEffect(() => { setDrawerOpen(false); }, [location]);
+  // A workspace's bar carries the menu button itself: one bar on a phone, not two.
+  const ownBar = useMatch({ path: "/workspace/:agentId", end: false }) !== null;
   useEffect(() => { if (entries > 0 && !window.matchMedia("(min-width: 768px)").matches) setDrawerOpen(true); }, [entries]);
 
   return (
     <WorkspaceRosterProvider>
     <div className="isolate flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       <AppBackground />
-      <header className="flex h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden">
+      <header className={`h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden ${ownBar ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -67,7 +76,9 @@ function Shell() {
       )}
 
       <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
-        <Outlet />
+        <DrawerContext.Provider value={() => setDrawerOpen(true)}>
+          <Outlet />
+        </DrawerContext.Provider>
       </main>
 
     </div>

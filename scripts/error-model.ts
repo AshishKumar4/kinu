@@ -239,7 +239,7 @@ export const DECLARED = byFile([
       'the CLI routes\' HTTP JSON bodies, read by the CLI\'s fetch'],
     ['packages/cf-backend/src/cli/rpc-gate.ts', ['rejectOutOfScopeRpc'],
       'the Agents SDK\'s `{ success: false }` RPC denial sent over the socket'],
-    ['packages/cf-backend/src/components/landing/landing-fixtures.ts', ['rpc', 'planRpc', 'superviseRpc'],
+    ['packages/cf-backend/src/components/landing/landing-fixtures.ts', ['rpc', 'planRpc'],
       'landing-page fixtures that mirror workspace RPC answers'],
     ['packages/cf-backend/src/components/surfaces/ChangesSurface.tsx', ['Restored'],
       '`Restored`, the restoreWorkspaceBaseline RPC answer the surface reads'],

@@ -10,21 +10,19 @@ import { ChatLiveTail, MessageView } from '@/components/MessageView';
 import { ModelPicker } from '@/components/ModelPicker';
 import { PreviewChrome } from '@/components/PreviewFrame';
 import { SidebarRail } from '@/components/SidebarRail';
-import { SubordinateTabs } from '@/components/SubordinateTabs';
-import { WorkspaceBar, type Altitude } from '@/components/WorkspaceBar';
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { WorkSurface } from '@/components/surfaces/WorkSurface';
-import { InspectorToggle, WorkbenchPanels } from '@/components/WorkbenchPanels';
+import { InspectorToggle, WorkbenchPanels, type InspectorControl } from '@/components/WorkbenchPanels';
 import { SLATE_PREFIX, type SurfaceKind } from '@kinu.run/core';
-import { SupervisePage } from '@/pages/SupervisePage';
 import { AccountProvider } from '@/hooks/use-account';
 import { usePlanApprovedMode } from '@/hooks/use-conversation-ui-state';
 import { WorkspaceRosterProvider } from '@/hooks/use-workspace-roster';
 import type { ForkNode } from '@kinu.run/core';
 
 import {
-  CHECKOUT_MESSAGES, LANDING_MODEL, LANDING_MODELS, LANDING_SUBORDINATES, LANDING_TAB_PRESENCE, LANDING_WORKSPACE,
+  CHECKOUT_MESSAGES, LANDING_CHATS, LANDING_MODEL, LANDING_MODELS, LANDING_TAB_PRESENCE, LANDING_WORKSPACE,
   SLATE_MESSAGES, SLATE_PREVIEW_URL, SLATE_SUMMARY,
-  checkoutWorkFixture, planRpc, superviseRpc,
+  checkoutWorkFixture, planRpc,
 } from './landing-fixtures';
 import { MOVIE_CUES, MOVIE_END, type LandingMovieHandle } from '@kinu.run/core';
 import {
@@ -111,7 +109,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   const messages = kind === 'plan' ? discrete.messages : STATIC_MESSAGES[kind];
   const streaming = isMovie && discrete.streaming;
 
-  const [altitude, setAltitude] = useState<Altitude>('run');
+  const [inspectorControl, setInspectorControl] = useState<InspectorControl | null>(null);
 
   const [surface, setSurface] = useState<SurfaceKind>(
     reduced && isMovie ? discreteAt(MOVIE_END).surface : frame.surface,
@@ -156,7 +154,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     const list = transcript.current;
 
     if (list !== null) list.scrollTop = list.scrollHeight;
-  }, [altitude, cueCount]);
+  }, [cueCount]);
 
   /** Null while unmounted (plan chunk loading, or slate tab not opened). */
   const resolveTarget = (target: MovieTarget): { x: number; y: number } | null => {
@@ -462,7 +460,6 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
       <div
         ref={stageRef}
         data-landing-frame={kind}
-        data-workspace-mode={altitude}
         {...(isMovie
           ? { 'data-movie-phase': discrete.phase, 'data-movie-settled': discrete.settled ? 'true' : 'false' }
           : {})}
@@ -472,40 +469,25 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
         {/* Below md the app summons a drawer from its header; the frame has no header, so no rail there. */}
         <SidebarRail />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <WorkspaceBar
-          title={frame.title}
-          onRename={async (name) => name}
-          connectionStatus="connected"
-          working={kind === 'checkout'}
-          altitude={altitude}
-          onAltitude={setAltitude}
+        <WorkspaceHeader
+          workspace={{ title: frame.title, to: `/workspace/${LANDING_WORKSPACE}`, editValue: frame.title, rename: async () => {}, remove: () => {} }}
+          chats={LANDING_CHATS.map((agent) => ({ agent, to: `/workspace/${LANDING_WORKSPACE}`, rename: async () => {} }))}
+          active="main"
+          newChat={`/workspace/${LANDING_WORKSPACE}`}
+          trailing={inspectorControl && <InspectorToggle control={inspectorControl} />}
         />
-        {altitude === 'supervise' ? (
-          <div data-workspace-panel="supervise" className="h-[760px] min-h-0 overflow-hidden">
-            <SupervisePage rpc={superviseRpc} />
-          </div>
-        ) : (
           <div data-workspace-panel="run" className="flex h-[620px] min-h-0 flex-col md:h-[760px]">
             <WorkbenchPanels
               scope={kind}
               workspace={undefined}
               contents={{ pendingActions: isMovie ? [] : work.pending(), pendingConsents: [], activePlan: plan }}
-              chat={(inspectorControl) => <>
-                <SubordinateTabs
-                  workspace={LANDING_WORKSPACE}
-                  subordinates={LANDING_SUBORDINATES}
-                  activeName={undefined}
-                  onCreate={async () => {}}
-                  creating={false}
-                  onDismiss={async () => {}}
-                  onRename={async (_name, displayName) => displayName}
-                  trailing={inspectorControl && <InspectorToggle control={inspectorControl} />}
-                />
+              onInspector={setInspectorControl}
+              chat={() => <>
                 <div className="@container flex min-h-0 flex-1 flex-col">
-                  <div ref={transcript} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-7 lg:px-8 [&>*]:mx-auto [&>*]:max-w-[780px]">
+                  <div ref={transcript} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pt-7 pb-12 lg:px-8 [&>*]:mx-auto [&>*]:max-w-[780px]">
                     <Transcript messages={messages} streaming={streaming} />
                   </div>
-                  <div data-movie-target="composer" className="border-t p-border p-sidebar">
+                  <div data-movie-target="composer" className="p-composer-dock">
                     <Composer
                       value={draft}
                       onValueChange={setDraft}
@@ -538,7 +520,6 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
               )}
             />
           </div>
-        )}
         </div>
         {isMovie && !reduced && (
           <div aria-hidden className="pointer-events-none absolute inset-0 z-30">

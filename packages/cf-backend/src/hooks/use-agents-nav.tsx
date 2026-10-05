@@ -63,8 +63,15 @@ export function useAgentsNav(): AgentsNavValue {
   return useContext(AgentsNavContext);
 }
 
-export function useDrilledPanel(workspace: string | undefined): WorkspaceAgentsPanel | null {
-  const { drilled, panel } = useAgentsNav();
+/** The open workspace's agents, and whether the sidebar shows them in place of the workspace list. */
+export interface OpenAgentsPanel {
+  readonly panel: WorkspaceAgentsPanel | null;
+  readonly drilled: boolean;
+}
 
-  return panel !== null && drilled === panel.workspace && panel.workspace === workspace ? panel : null;
+export function useOpenAgentsPanel(workspace: string | undefined): OpenAgentsPanel {
+  const { drilled, panel } = useAgentsNav();
+  const open = panel !== null && panel.workspace === workspace ? panel : null;
+
+  return { panel: open, drilled: open !== null && drilled === workspace };
 }

@@ -31,13 +31,6 @@ describe("the tab strip's rule is continuous and the active underline sits on it
     expect(Math.abs(light.ruleRight - light.panelRight)).toBeLessThanOrEqual(1);
     expect(Math.abs(light.activeBottom - light.ruleBottom)).toBeLessThanOrEqual(1);
   });
-
-  test('the chat and inspector rules are one line across the two columns', () => {
-    const geometry = verdictOf(observed.geometry, 'geometry');
-
-    expect(Math.abs(geometry.dark.chatRuleBottom - geometry.dark.ruleBottom)).toBeLessThanOrEqual(1);
-    expect(Math.abs(geometry.light.chatRuleBottom - geometry.light.ruleBottom)).toBeLessThanOrEqual(1);
-  });
 });
 
 describe('a collapsed right panel can be reopened and the left rail can be collapsed', () => {

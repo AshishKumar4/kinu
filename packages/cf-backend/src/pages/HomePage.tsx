@@ -1,6 +1,4 @@
-import { type FormEvent, useState, useTransition } from "react";
-import { Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { useState, useTransition } from "react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { SetupCard } from "@/components/account/SetupCard";
 import {
@@ -11,7 +9,7 @@ import {
 } from "@/hooks/use-create-workspace";
 import { RECENT_WORKSPACES, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
-import { composing } from "@/components/ui/form";
+import { PromptCard } from "@/components/workspaces/PromptCard";
 
 export default function HomePage() {
   const [mission, setMission] = useState("");
@@ -21,11 +19,7 @@ export default function HomePage() {
   const [isPending, startTransition] = useTransition();
   const creating = busy || isPending;
 
-  const submit = (event?: FormEvent): void => {
-    event?.preventDefault();
-
-    if (creating) return;
-
+  const submit = (): void => {
     startTransition(async () => {
       await create(mission);
     });
@@ -40,47 +34,19 @@ export default function HomePage() {
           </h1>
         </header>
 
-        <form onSubmit={submit} className="p-focus min-w-0 overflow-hidden rounded-2xl border p-border bg-[var(--c-input-bg)] shadow-[0_18px_55px_-42px_rgba(0,0,0,.75)] transition-[border-color,box-shadow]">
-          <div className="px-6 pt-5">
-            <label htmlFor="workspace-mission" className="block p-t-status p-text-3">
-              {MISSION_LABEL}
-            </label>
-            <textarea
-              id="workspace-mission"
-              value={mission}
-              onChange={(event) => setMission(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !composing(event.nativeEvent)) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-              placeholder={MISSION_PLACEHOLDER}
-              rows={4}
-              autoFocus
-              disabled={creating}
-              className="block min-h-[128px] w-full resize-none bg-transparent pb-4 pt-3 p-t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
-            />
-          </div>
-          {hasModels === false && (
-            <div className="px-6 pb-4">
-              <CloudflareAIConnectNotice returnTo="/" message={CONNECT_AI_MESSAGE} />
-            </div>
-          )}
-          {err && (
-            <div className="mx-6 mb-4 rounded-md px-3 py-2 text-xs p-notice-danger">{err}</div>
-          )}
-          <div className="flex items-center justify-end px-6 pb-5">
-            <FilledButton
-              type="submit"
-              disabled={creating || hasModels === false}
-              className="!h-10 !rounded-full px-5 p-t-control"
-            >
-              {creating && <Loader size="sm" />}
-              Create workspace
-            </FilledButton>
-          </div>
-        </form>
+        <PromptCard
+          id="workspace-mission"
+          label={MISSION_LABEL}
+          placeholder={MISSION_PLACEHOLDER}
+          action="Create workspace"
+          value={mission}
+          onChange={setMission}
+          onSubmit={submit}
+          busy={creating}
+          blocked={hasModels === false}
+          error={err}
+          notice={hasModels === false && <CloudflareAIConnectNotice returnTo="/" message={CONNECT_AI_MESSAGE} />}
+        />
 
         <aside className="order-3 min-w-0 lg:order-none">
           <SetupCard returnTo="/" />

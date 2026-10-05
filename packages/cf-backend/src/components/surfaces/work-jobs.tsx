@@ -144,27 +144,3 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
     </div>
   );
 }
-
-export interface BackgroundJobRowJob {
-  readonly id: string;
-  readonly kind: string;
-  readonly label: string | null;
-  readonly status: string;
-  readonly createdAt: number;
-  readonly settledAt: number | null;
-}
-
-export function BackgroundJobRow({ job, tone }: { job: BackgroundJobRowJob; tone: string }) {
-  const name = jobName(job);
-
-  return (
-    <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-      <span className={`size-1.5 rounded-full shrink-0 ${tone}`} />
-      <span className="font-medium p-text-2 truncate" title={name.title}>{name.title}</span>
-      <span className="font-mono p-text-3 shrink-0">{name.shortId}</span>
-      <span className="flex-1" />
-      <span className="p-text-3 shrink-0">{job.status}</span>
-      <span className="p-text-3 shrink-0 tabular-nums">{new Date(job.settledAt ?? job.createdAt).toLocaleDateString()}</span>
-    </div>
-  );
-}

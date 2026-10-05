@@ -1566,8 +1566,10 @@ export {
 
 export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema } from './read-models/workspace-work';
 
+export { agentTitle, nestedAgent, type AgentLinkIds } from './subordinates/nested-agent';
+
 export {
-  readWorkspaceAgents, agentActive,
+  readWorkspaceAgents,
   type PanelAgent, type AgentCategory, type AgentActivity, type AgentOpening,
 } from './read-models/workspace-agents';
 

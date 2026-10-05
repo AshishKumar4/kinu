@@ -2,9 +2,9 @@
  *  Nothing here is served; only the install command comes from the deployment. */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { JsonValueSchema, SubordinateInspectionRequestSchema, seekPage, type JsonValue, type Page, type PageRequest, type PendingAction, type PlanReview, type RunSummary, type SlateSummary, type TabPresence } from '@kinu.run/core';
+import { JsonValueSchema, SubordinateInspectionRequestSchema, type JsonValue, type PanelAgent, type PendingAction, type PlanReview, type SlateSummary, type TabPresence } from '@kinu.run/core';
 import type { Rpc } from '@kinu.run/core';
-import type { BackgroundJob, SubordinateRosterEntry } from '@kinu.run/core/protocol';
+import type { BackgroundJob } from '@kinu.run/core/protocol';
 import type { ModelMenuEntry, RosterPage, UserProfile } from '@/lib/user-api';
 
 const NOW = Date.now();
@@ -15,7 +15,6 @@ type FixtureReply =
   | undefined
   | BackgroundJob
   | PlanReview
-  | Page<RunSummary>
   | readonly FixtureReply[]
   | { readonly [field: string]: FixtureReply };
 
@@ -40,9 +39,12 @@ export const LANDING_WORKSPACE = 'checkout-fixes';
 /** No exploration runs, so `surfaceHasContent` hides Swarms. */
 export const LANDING_TAB_PRESENCE: TabPresence = { explorations: false, work: true };
 
-export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
-  { name: 'coupon-tester', actorId: 'actor-coupon-tester', displayName: 'Coupon tester', role: 'QA', nameOrigin: 'auto', origin: 'agent', lifetime: 'durable', status: 'working', currentTask: 'Running the checkout regression suite', createdAt: NOW - 36e5, dismissedAt: null },
-  { name: 'migration-review', actorId: 'actor-migration-review', displayName: 'Migration review', role: 'Reviewer', nameOrigin: 'auto', origin: 'agent', lifetime: 'durable', status: 'awaiting_input', currentTask: 'Needs a call on the backfill order', createdAt: NOW - 72e5, dismissedAt: null },
+const NO_FIGURES = { activeMs: 0, cacheEma: null };
+
+/** The frame's chats: Main at work, and one waiting on the person. */
+export const LANDING_CHATS: readonly PanelAgent[] = [
+  { key: 'main', label: 'Main', category: 'main', activity: 'working', parent: null, open: { kind: 'chat', path: null }, tab: true, input: true, figures: NO_FIGURES },
+  { key: 'actor-migration', label: 'Migration plan', category: 'user', activity: 'waiting', parent: 'main', open: { kind: 'chat', path: 'migration-plan' }, tab: true, input: true, figures: NO_FIGURES },
 ];
 
 /** Served by the `landing.tsx` fetch shim; the frame's workspace is first so the rail marks it open. */
@@ -181,63 +183,6 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
   return { rpc, jobs: () => jobs, pending: () => pending };
 }
 
-const SUPERVISE_RUNS: RunSummary[] = [
-  { runId: 'run_9c1', startedAt: NOW - 45 * 60e3, causedBy: 'chat', userMessage: 'Why does the percentage coupon drop off at checkout?', status: 'completed', eventCount: 62, turnsWithoutUsage: 0, usage: { input: 184_320, output: 9_140, cacheRead: 121_400 } },
-  { runId: 'run_9b7', startedAt: NOW - 6 * 36e5, causedBy: 'timer', userMessage: null, status: 'completed', eventCount: 18, usage: {}, turnsWithoutUsage: 3 },
-  ...Array.from({ length: 12 }, (_, index): RunSummary => {
-    const asked = ['Which migration dropped the coupon index?', 'Show me every reader of rules[kind]', 'Run the checkout suite against the fix', null];
-    const asking = asked[index % asked.length] ?? null;
-
-    return {
-      runId: `run_8${String(99 - index).padStart(2, '0')}`,
-      startedAt: NOW - (7 + index) * 36e5,
-      causedBy: asking === null ? 'timer' : 'chat',
-      userMessage: asking,
-      status: 'completed',
-      eventCount: 12 + ((index * 7) % 50),
-      usage: { input: 12_000 + index * 1_400, output: 800 + index * 60, cacheRead: 6_000 + index * 900 },
-      turnsWithoutUsage: 0,
-    };
-  }),
-];
-
-const SUPERVISE_TRIGGERS = [
-  {
-    id: '01K5ZQ8F2P0000000000000WH1', kind: 'webhook_durable', state: 'active', created_at: NOW - 12 * 864e5,
-    spec: { label: 'deploy-failed' }, rate_limit_per_min: 30, fire_count: 41, last_fire_at: NOW - 3 * 36e5, next_fire_at: null,
-    url: '/api/workspaces/checkout-fixes/webhook/01K5ZQ8F2P0000000000000WH1/v1-4f1c9a02d7b64e8fa3105c6d29be7a41',
-  },
-  {
-    id: 'trg_tm1', kind: 'timer_cron', state: 'active', created_at: NOW - 30 * 864e5,
-    spec: { cron: '0 9 * * 1' }, fire_count: 4, last_fire_at: NOW - 3 * 864e5, next_fire_at: NOW + 4 * 864e5,
-  },
-];
-
-const PageRequestSchema: v.GenericSchema<PageRequest> = v.object({
-  cursor: v.optional(v.object({ after: v.string() })),
-  limit: v.optional(v.number()),
-});
-
-export const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === 'getEvolutionChangelog') return answer(CHECKOUT_CHANGELOG);
-
-  if (method === 'getRunSummaries') {
-    const request = v.parse(PageRequestSchema, args?.[0] ?? {});
-    const limit = request.limit ?? 30;
-    const after = request.cursor?.after;
-    const start = after === undefined ? 0 : SUPERVISE_RUNS.findIndex((run) => run.runId === after) + 1;
-
-    return answer(seekPage(SUPERVISE_RUNS.slice(start, start + limit + 1), limit, (run) => run.runId));
-  }
-
-  if (method === 'listTriggers') return answer({ triggers: SUPERVISE_TRIGGERS });
-
-  if (method === 'listBackgroundJobs') return answer(CHECKOUT_JOBS);
-
-  if (method.startsWith('list') || method.startsWith('get')) return answer([]);
-
-  return answer({ ok: true });
-};
 
 const PLAN_MARKDOWN = `# Repair the \`applyCoupon\` eligibility guard
 

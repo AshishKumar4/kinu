@@ -3,7 +3,6 @@ import { Suspense } from "react";
 import Layout from "./components/layout";
 import HomePage from "./pages/HomePage";
 import WorkspacePage from "./pages/WorkspacePage";
-import SettingsPage from "./pages/SettingsPage";
 import UserSettingsPage from "./pages/UserSettingsPage";
 import UserMcpPage from "./pages/UserMcpPage";
 import WelcomePage from "./pages/WelcomePage";
@@ -46,20 +45,6 @@ function KeyedWorkspace() {
   return <WorkspacePage key={agentId} />;
 }
 
-// Keyed per workspace: unkeyed, the fetch-once ref and pending edits survive a switch and Save writes A's form into B.
-function KeyedSettings() {
-  const { agentId } = useParams();
-
-  return <SettingsPage key={agentId} />;
-}
-
-// /triggers deep links land in Supervise's Automations block.
-function TriggersRedirect() {
-  const { agentId } = useParams();
-
-  return <Navigate to={`/workspace/${agentId}?altitude=supervise`} replace />;
-}
-
 // An account needing setup lands on /welcome from any URL; /welcome stays open to all; a failed profile read gates nothing.
 function OnboardingGate() {
   const { profile } = useAccount();
@@ -94,6 +79,7 @@ export default function App() {
             <Route path={APP_ROUTES.workspace} element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
             <Route path={APP_ROUTES.workspaceAgent} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
             <Route path={APP_ROUTES.workspaceAgentPath} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.workspaceView} element={<ErrorBoundary label="workspace-view"><KeyedWorkspace /></ErrorBoundary>} />
             <Route path={APP_ROUTES.explore} element={
               <ErrorBoundary label="swarm-explorer">
                 <Suspense fallback={<LazyFallback />}>
@@ -115,8 +101,6 @@ export default function App() {
                 </Suspense>
               </ErrorBoundary>
             } />
-            <Route path={APP_ROUTES.agentSettings} element={<ErrorBoundary label="agent-settings"><KeyedSettings /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.triggers} element={<TriggersRedirect />} />
           </Route>
         </Route>
         {/* Outside the shell: a viewer without a session sees this page and nothing else. */}

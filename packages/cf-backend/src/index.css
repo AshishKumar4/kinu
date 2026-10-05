@@ -189,6 +189,7 @@ html, body, #root {
 
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-glide: cubic-bezier(0.32, 0.72, 0, 1);  /* a selection that travels: quick to leave, soft to land */
   --dur-fast: 120ms;
   --dur-base: 150ms;
   --dur-enter: 220ms;
@@ -274,7 +275,10 @@ html, body, #root {
   --shadow-card: none;
   --shadow-overlay: 0 18px 44px -12px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
   --shadow-menu:    0 10px 28px -10px rgba(0, 0, 0, 0.5);
-  --shadow-composer: 0 -6px 24px -16px rgba(0, 0, 0, 0.45);
+  --shadow-composer: 0 12px 32px -12px rgba(0, 0, 0, 0.6), 0 2px 6px -2px rgba(0, 0, 0, 0.35);
+  --c-composer-bg: #1A1714;
+  --c-composer-line: rgba(237, 229, 216, 0.08);
+  --c-composer-line-focus: rgba(237, 229, 216, 0.16);
 
   /* ── Kumo, retoned ──────────────────────────────────────────────
      Kumo's components are compiled: their utilities (`bg-kumo-brand`,
@@ -423,7 +427,10 @@ html, body, #root {
   --shadow-card: none;
   --shadow-overlay: 0 16px 40px -14px rgba(43, 26, 4, 0.20), 0 2px 8px rgba(43, 26, 4, 0.07);
   --shadow-menu:    0 10px 24px -10px rgba(43, 26, 4, 0.18), 0 1px 3px rgba(43, 26, 4, 0.06);
-  --shadow-composer: 0 -6px 20px -16px rgba(43, 26, 4, 0.14), 0 1px 2px rgba(60, 45, 25, 0.05);
+  --shadow-composer: 0 12px 32px -14px rgba(43, 26, 4, 0.24), 0 1px 3px rgba(43, 26, 4, 0.07);
+  --c-composer-bg: #F8F4EB;
+  --c-composer-line: rgba(43, 36, 25, 0.10);
+  --c-composer-line-focus: rgba(43, 36, 25, 0.20);
 
   /* Kumo follows the semantic shadow role in both modes. */
   --color-kumo-shadow-drop: var(--c-shadow-drop);
@@ -852,16 +859,66 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* Composer — the one place the user acts; a distinct raised surface that
    lifts a touch on focus. */
 .p-composer {
-  background: var(--c-input-bg);
-  border: 1px solid var(--c-input-border);
-  border-radius: var(--r-overlay);
+  background: var(--c-composer-bg);
+  border: 1px solid var(--c-composer-line);
+  border-radius: 24px;
   box-shadow: var(--shadow-composer);
   transition: border-color var(--dur-base) ease-out, box-shadow var(--dur-base) ease-out;
 }
-.p-composer:focus-within {
-  border-color: var(--c-accent);
-  box-shadow: var(--shadow-composer), 0 0 0 3px var(--c-accent-subtle);
+.p-composer:focus-within { border-color: var(--c-composer-line-focus); }
+
+/* The composer's controls are quiet: text and round icons that ink on
+   hover; the one filled shape is Send. */
+.p-composer-quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: var(--c-text-3);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
+.p-composer-quiet:hover:not(:disabled) { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-composer-quiet[aria-pressed="true"] { color: var(--c-text); }
+.p-composer-mode { display: flex; flex-shrink: 0; align-items: center; }
+.p-composer-round, .p-composer-send {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out, opacity var(--dur-fast) ease-out;
+}
+.p-composer-round { color: var(--c-text-3); }
+.p-composer-round:hover:not(:disabled) { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-composer-send { background: var(--c-accent); color: var(--c-accent-on); }
+.p-composer-send:hover:not(:disabled) { background: color-mix(in srgb, var(--c-accent) 90%, var(--c-text)); }
+.p-composer-send:disabled { background: var(--c-neutral-tint); color: var(--c-text-4); cursor: default; }
+.p-composer-send[data-stop] { background: var(--c-text); color: var(--c-bg); }
+/* Model and effort read as quiet text with a chevron, like the rest of the row. */
+.p-composer-model { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 2px; }
+.p-composer-model > * { min-width: 0; }
+.p-composer-model :is(button, [role="combobox"]) {
+  height: 32px !important;
+  padding-left: 10px !important;
+  padding-right: 24px !important;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--c-text-3) !important;
+  font-size: 13px !important;
+  border-radius: 999px !important;
+  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+}
+.p-composer-model :is(button, [role="combobox"]):hover { color: var(--c-text) !important; background: var(--c-neutral-tint) !important; }
+.p-composer-model :is(button, [role="combobox"]) > span[aria-hidden="true"]:last-child { right: 8px; }
+.p-composer-model [data-model-picker] svg { display: none; }
 
 .p-row-hover:hover { background: var(--c-elevated); }
 
@@ -1471,4 +1528,278 @@ body > .annotation-toolbar {
 @media (pointer: coarse) {
   input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
   textarea, select { font-size: max(16px, 1em); }
+}
+
+/* ── Workspace bar ─────────────────────────────────────────────────
+   One bar on the page's own ground: the workspace's name, its chats as
+   browser tabs, then +. A single hairline is both the bar's bottom rule
+   and the open tab's outline: an arm, a concave flare, a side, a rounded
+   top, and back down. The parts sit inside the scrolled content so the
+   outline scrolls with its tab, and glide when the selection moves. */
+.p-bar {
+  --bar-line: var(--c-border-strong);
+  --flare: 8px;
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  align-items: stretch;
+  height: 46px;
+  background: var(--c-bg);
+}
+[data-mode="light"] .p-bar { --bar-line: var(--c-border); }
+.p-bar > :not(.p-bar-strip) { border-bottom: 1px solid var(--bar-line); }
+.p-bar-menu { display: none; align-items: center; padding-left: 8px; }
+@media (max-width: 767px) { .p-bar-menu { display: flex; } }
+.p-bar-strip { position: relative; display: flex; min-width: 0; flex: 1; }
+.p-bar-strip::before, .p-bar-strip::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 1px;
+  z-index: 1;
+  width: 28px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-base) ease-out;
+}
+.p-bar-strip::before { left: 0; background: linear-gradient(to left, transparent, var(--c-bg)); }
+.p-bar-strip::after { right: 0; background: linear-gradient(to right, transparent, var(--c-bg)); }
+.p-bar-strip:is([data-overflow="start"], [data-overflow="both"])::before,
+.p-bar-strip:is([data-overflow="end"], [data-overflow="both"])::after { opacity: 1; }
+.p-bar-tabs {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: flex-end;
+  min-width: 0;
+  margin: 0;
+  padding: 0 0 0 8px;
+  list-style: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.p-bar-tabs::-webkit-scrollbar { display: none; }
+/* A tab is as wide as its label at rest, within bounds, and narrows
+   Chrome-style only when the strip is crowded. The label sits over an
+   invisible copy that fixes the width, so revealing the actions ellipsizes
+   the label with room to spare and nothing beside it moves. */
+.p-bar-tab {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 124px;
+  max-width: 240px;
+  height: 38px;
+}
+.p-bar-tab[data-active] { flex-shrink: 0; }
+.p-bar-tab[data-title] { min-width: 120px; max-width: 300px; flex-shrink: 2; }
+.p-bar-sizer, .p-bar-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 0 calc(var(--flare) + 12px) 2px;
+  font-size: 13px;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+}
+.p-bar-sizer { visibility: hidden; overflow: hidden; height: 100%; }
+.p-bar-tab[data-title] :is(.p-bar-sizer, .p-bar-link) { font-weight: 600; font-size: 13.5px; letter-spacing: -0.01em; }
+.p-bar-tab[data-active] .p-bar-sizer { font-weight: 500; }
+@media (max-width: 767px) {
+  .p-bar-tab { min-width: 96px; }
+  .p-bar-tab[data-title] { min-width: 56px; }
+}
+.p-bar-tab + .p-bar-tab::before {
+  content: "";
+  position: absolute;
+  left: -0.5px;
+  top: 13px;
+  width: 1px;
+  height: 14px;
+  background: var(--bar-line);
+  transition: opacity var(--dur-base) ease-out;
+}
+.p-bar-tab:is([data-active], [data-after-active])::before { opacity: 0; }
+.p-bar-link {
+  position: absolute;
+  inset: 0;
+  color: var(--c-text-3);
+  transition: color var(--dur-base) ease-out, padding var(--dur-fast) ease-out;
+}
+.p-bar-link:hover { color: var(--c-text-2); }
+.p-bar-link:focus-visible { outline: none; color: var(--c-text); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--c-accent); }
+.p-bar-tab[data-active] .p-bar-link { color: var(--c-text); font-weight: 500; }
+.p-bar-tab[data-title] .p-bar-link { color: var(--c-text); }
+.p-bar-tab[data-title]:not([data-active]) .p-bar-link:hover { color: var(--c-accent-fg); }
+.p-bar-actions {
+  position: absolute;
+  top: 0;
+  right: calc(var(--flare) + 6px);
+  bottom: 2px;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) ease-out;
+}
+.p-bar-tab:is(:hover, :focus-within) .p-bar-actions { opacity: 1; pointer-events: auto; }
+.p-bar-tab:is(:hover, :focus-within):has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
+.p-bar-tab:is(:hover, :focus-within):has(.p-bar-action:only-child) .p-bar-link { padding-right: calc(var(--flare) + 32px); }
+@media (hover: none) {
+  .p-bar-tab[data-active] .p-bar-actions { opacity: 1; pointer-events: auto; }
+  .p-bar-tab[data-active]:has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
+}
+.p-bar-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--c-text-4);
+  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+}
+.p-bar-action:hover, .p-bar-action:focus-visible { outline: none; background: var(--c-neutral-tint); color: var(--c-text); }
+.p-bar-action[data-danger]:hover, .p-bar-action[data-danger]:focus-visible { color: var(--c-danger); }
+.p-bar-rename { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 calc(var(--flare) + 6px) 2px; }
+.p-bar-rename input {
+  min-width: 72px;
+  max-width: 200px;
+  height: 26px;
+  padding: 0 7px;
+  border-radius: 7px;
+  border: 1px solid var(--c-accent);
+  background: var(--c-input-bg);
+  color: var(--c-text);
+  font-size: 13px;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--c-accent-subtle);
+}
+.p-bar-rename-error { font-size: 11px; color: var(--c-danger); white-space: nowrap; }
+.p-bar-new { position: relative; z-index: 1; display: flex; flex-shrink: 0; align-items: center; height: 38px; padding: 0 10px 2px 2px; }
+.p-bar-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--c-text-3);
+  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+}
+.p-bar-icon:hover, .p-bar-icon:focus-visible { outline: none; background: var(--c-neutral-tint); color: var(--c-text); }
+.p-bar-icon[aria-current="page"], .p-bar-icon[aria-pressed="true"] { color: var(--c-text); }
+.p-bar-trailing { display: flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0 10px 0 6px; }
+.p-bar-outline { position: absolute; top: 8px; bottom: 0; left: 0; pointer-events: none; }
+.p-bar-outline > span { position: absolute; bottom: 0; border: 0 solid var(--bar-line); }
+.p-bar-outline > [data-part="arm-start"] { left: 0; border-bottom-width: 1px; }
+.p-bar-outline > [data-part="flare-start"] {
+  width: var(--flare);
+  height: var(--flare);
+  border-right-width: 1px;
+  border-bottom-width: 1px;
+  border-bottom-right-radius: var(--flare);
+}
+.p-bar-outline > [data-part="body"] { top: 0; bottom: var(--flare); border-width: 1px 1px 0; border-radius: 10px 10px 0 0; }
+.p-bar-outline > [data-part="flare-end"] {
+  width: var(--flare);
+  height: var(--flare);
+  border-left-width: 1px;
+  border-bottom-width: 1px;
+  border-bottom-left-radius: var(--flare);
+}
+.p-bar-outline > [data-part="arm-end"] { right: 0; border-bottom-width: 1px; }
+.p-bar-outline[data-glide] > span { transition: left 260ms var(--ease-glide), width 260ms var(--ease-glide); }
+@media (prefers-reduced-motion: reduce) {
+  .p-bar-outline[data-glide] > span { transition: none; }
+}
+
+/* An agent's status, read by shape as well as hue: a turning arc while it
+   works, the accent with a slow halo when it needs the person, a small
+   red mark when its last turn failed. At rest it shows nothing. */
+.p-agent-status { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 13px; height: 13px; }
+.p-agent-status[data-status="working"]::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--c-accent-mark) 24%, transparent);
+  border-top-color: var(--c-accent-mark);
+  animation: p-status-turn 1.15s linear infinite;
+}
+.p-agent-status[data-status="waiting"]::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-accent-mark);
+  animation: p-status-halo 2.4s ease-out infinite;
+}
+.p-agent-status[data-status="failed"] { color: var(--c-danger); }
+@keyframes p-status-turn { to { transform: rotate(360deg); } }
+@keyframes p-status-halo {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-accent-mark) 50%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--c-accent-mark) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .p-agent-status::before { animation: none !important; }
+  .p-agent-status[data-status="working"]::before { border-right-color: var(--c-accent-mark); }
+  .p-agent-status[data-status="waiting"]::before { box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--c-accent-mark) 28%, transparent); }
+}
+
+/* A nested list: rows indented under their parent, with one thin guide
+   line under the parent's mark. */
+.p-nest { position: relative; padding-left: 10px; }
+.p-nest::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 1px;
+  border-radius: 1px;
+  background: var(--c-border);
+}
+
+/* The sidebar's two views side by side: the workspace list, and every
+   agent in the open workspace. Drilling in moves the content left to
+   reveal the agents; back reverses it. */
+.p-slide {
+  display: grid;
+  grid-template-columns: 100% 100%;
+  height: 100%;
+  transition: transform 280ms var(--ease-glide);
+}
+.p-slide > * { min-width: 0; transition: opacity 280ms var(--ease-glide); }
+.p-slide[data-drilled] { transform: translateX(-100%); }
+.p-slide[data-drilled] > :first-child, .p-slide:not([data-drilled]) > :last-child { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .p-slide { transition: none; }
+  .p-slide > * { transition-duration: 120ms; }
+}
+
+/* The composer floats over the chat's end: no rule, no band. The thread
+   scrolls beneath it and fades out just above it. */
+.p-composer-dock {
+  position: relative;
+  flex-shrink: 0;
+  margin-top: -40px;
+  padding-top: 40px;
+  background: linear-gradient(to bottom, transparent, var(--c-bg) 40px);
+  pointer-events: none;
+}
+.p-composer-dock > * { pointer-events: auto; }
+.p-bar-icon-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-accent-mark);
+  box-shadow: 0 0 0 2px var(--c-bg);
 }

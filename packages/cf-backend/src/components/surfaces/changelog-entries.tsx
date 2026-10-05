@@ -44,9 +44,6 @@ const KIND_ICON = {
   refinement: ArrowsClockwiseIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
-/** The Supervise page holds no workspace socket, so it re-reads the ledger on a clock. */
-export const changelogRevalidate = (): number => 5_000;
-
 /** Showing the digest marks it seen; `onSeen` zeroes the tab badge upstream. */
 export function useChangelog(rpc: Rpc, onSeen?: () => void, moved = 0) {
   const load = useCallback((): Promise<ChangelogView> => settle(Effect.gen(function* () {

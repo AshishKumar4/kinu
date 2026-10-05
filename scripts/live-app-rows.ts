@@ -143,7 +143,6 @@ interface StripGeometry {
   /** The chat column's own tab rule. The two columns sit side by side at one
    *  strip height, so a rule at a different Y is the break B5's third clause
    *  names (the rail carries no header rule of its own to compare against). */
-  readonly chatRuleBottom: number;
   readonly activeBottom: number;
   readonly mode: string;
 }
@@ -204,7 +203,7 @@ export interface TierVerdicts {
 const StripGeometrySchema = v.object({
   ruleBottom: v.number(), stripBottom: v.number(),
   ruleRight: v.number(), panelRight: v.number(),
-  chatRuleBottom: v.number(), activeBottom: v.number(), mode: v.string(),
+  activeBottom: v.number(), mode: v.string(),
 });
 
 
@@ -224,7 +223,8 @@ export const RAIL_SHUT_PX = 64;
 
 const SHUT_NAMES = 'hide|collapse|close';
 
-const TASK_STATE = '[role="status"][aria-label="Task state"]';
+/** Main's tab in the workspace bar: its status mark names what the chat is doing, and it is absent at rest. */
+const MAIN_TAB = 'nav[aria-label="Chats"] [data-agent-tab="main"]';
 
 /** Every 20 ms from install: whether the chat column offers Stop, how many live states it draws, and the header's
  *  task word. A Thinking row, a live reasoning label, a caret on text that shows, and running call rows (one state
@@ -246,7 +246,8 @@ const INSTALL_LIVE_SAMPLER = `(() => {
       t: Math.round(performance.now() - started),
       stop: [...chat.querySelectorAll('button[aria-label="Stop this turn"]')].some(shown),
       states: drawn('thinking').length + drawn('reasoning').length + carets + running,
-      task: document.querySelector(${JSON.stringify(TASK_STATE)})?.textContent?.trim() ?? null,
+      task: document.querySelector(${JSON.stringify(MAIN_TAB)}) === null ? null
+        : document.querySelector(${JSON.stringify(`${MAIN_TAB} [role="img"]`)})?.getAttribute('aria-label')?.toLowerCase() ?? 'idle',
     });
   }, 20);
 })()`;
@@ -368,14 +369,11 @@ const readStripGeometry = `(() => {
   if (active === undefined) throw new Error('no active tab');
   const panel = rule.closest('#inspector');
   if (panel === null) throw new Error('no inspector column around the strip');
-  const chatRule = document.querySelector('nav[aria-label="Workspace agents"]');
-  if (chatRule === null) throw new Error('no chat tab rule');
   return {
     ruleBottom: Math.round(rule.getBoundingClientRect().bottom),
     stripBottom: Math.round(strip.getBoundingClientRect().bottom),
     ruleRight: Math.round(rule.getBoundingClientRect().right),
     panelRight: Math.round(panel.getBoundingClientRect().right),
-    chatRuleBottom: Math.round(chatRule.getBoundingClientRect().bottom),
     activeBottom: active.getBoundingClientRect().bottom,
     mode: document.documentElement.getAttribute('data-mode') ?? '?',
   };
@@ -753,7 +751,7 @@ async function measureOpenedMidTurn(
     reads.restart();
     await page.reload({ waitUntil: 'load' });
     await until(page, 'the workspace page, reloaded', `document.querySelector('textarea') !== null`);
-    await until(page, "the header's task state", `document.querySelector(${JSON.stringify(TASK_STATE)}) !== null`);
+    await until(page, "the bar's Main tab", `document.querySelector(${JSON.stringify(MAIN_TAB)}) !== null`);
     await page.evaluate(INSTALL_LIVE_SAMPLER);
     await waitOn(page, 'the reloaded page\'s snapshot', settledAfter(page, reads, 'getWorkspaceSnapshot'));
     await rendered(page);

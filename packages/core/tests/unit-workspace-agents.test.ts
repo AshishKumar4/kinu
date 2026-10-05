@@ -1,5 +1,5 @@
 // Defends: an agent the panel cannot see, a hired or background agent given a tab or a composer, a swarm worker
-// left out or shown working after its run ended.
+// left out or shown working after its run ended, and a chat that needs the person or failed reading idle.
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestActors } from '@kinu.run/test-utils';
@@ -12,12 +12,14 @@ import { initActorClaimTables } from '../src/orchestrator/actor-claims';
 import { SubordinateRosterStore } from '../src/subordinates/roster';
 import { actorReferenceOf, type ActorHandle } from '../src/identity/actor-handle';
 import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
-import { agentActive, readWorkspaceAgents, type PanelAgent } from '../src/read-models/workspace-agents';
+import { readWorkspaceAgents, type PanelAgent } from '../src/read-models/workspace-agents';
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { readAgentFigures } from '../src/read-models/agent-figures';
 import { EventLog, initEventsHubTables, type EmailPayload } from '../src/events/hub/index';
 import { admitSubordinateTask } from '../src/subordinates/support';
+import { initDeferredApprovalsTable } from '../src/safety/deferred-approval';
+import { initPlanReviewTable } from '../src/plans/review';
 
 const EMAIL: EmailPayload = {
   from: 'owner@example.com', to: 'kinu@agents.example.com', subject: 'Status?', body_text: 'Is staging green?',
@@ -52,7 +54,7 @@ function workspace() {
   };
 
   const read = (queued = false): Promise<PanelAgent[]> => readWorkspaceAgents({
-    sql, exec, root: actors.main, rootLabel: 'Kinu', actors: actors.directory.list({ retired: true }),
+    sql, exec, root: actors.main, actors: actors.directory.list({ retired: true }),
     figures: (actorIds) => readAgentFigures(sql, actorIds), queued,
   });
 
@@ -81,7 +83,10 @@ function workspace() {
 
 const byLabel = <T extends { label: string }>(rows: T[]): T[] => rows.sort((a, b) => a.label.localeCompare(b.label));
 
-const row = ({ label, category, activity, parent, tab, input, open }: PanelAgent) => ({ label, category, activity, parent, tab, input, open });
+/** The parent named by its label, so a row reads the same whatever ids the directory minted. */
+const rows = (listed: readonly PanelAgent[]) => listed.map(({ label, category, activity, parent, tab, input, open }) => ({
+  label, category, activity, parent: listed.find((agent) => agent.key === parent)?.label ?? null, tab, input, open,
+}));
 
 describe('the Agents panel lists every agent in the workspace', () => {
   test('the owner\'s own, one an agent hired, and a background helper, each placed as the design says', async () => {
@@ -90,16 +95,18 @@ describe('the Agents panel lists every agent in the workspace', () => {
     openTurn(hire(alice, 'scout-1', {}));
     hire(main, 'refiner-1', { origin: 'evolution', lifetime: 'task' });
     openTurn(hire(main, 'lookup-1', { lifetime: 'task' }));
+    hire(main, 'reviewer', {});
     db.query('UPDATE workspace_actors SET created_at = 0 WHERE name = ?').run('scout-1');
 
-    expect(byLabel((await read()).map(row))).toEqual(byLabel([
-      { label: 'Kinu', category: 'main', activity: 'idle', parent: null, tab: true, input: true, open: { kind: 'chat', path: null } },
-      { label: 'alice', category: 'user', activity: 'idle', parent: 'Kinu', tab: true, input: true, open: { kind: 'chat', path: 'alice' } },
+    expect(byLabel(rows(await read()))).toEqual(byLabel([
+      { label: 'Main', category: 'main', activity: 'idle', parent: null, tab: true, input: true, open: { kind: 'chat', path: null } },
+      { label: 'alice', category: 'user', activity: 'idle', parent: 'Main', tab: true, input: true, open: { kind: 'chat', path: 'alice' } },
       { label: 'scout-1', category: 'hired', activity: 'working', parent: 'alice', tab: false, input: true, open: { kind: 'chat', path: 'alice/scout-1' } },
-      { label: 'refiner-1', category: 'background', activity: 'idle', parent: 'Kinu', tab: false, input: false, open: { kind: 'chat', path: 'refiner-1' } },
-      { label: 'lookup-1', category: 'hired', activity: 'working', parent: 'Kinu', tab: false, input: true, open: { kind: 'chat', path: 'lookup-1' } },
+      { label: 'refiner-1', category: 'background', activity: 'idle', parent: 'Main', tab: false, input: false, open: { kind: 'chat', path: 'refiner-1' } },
+      { label: 'lookup-1', category: 'hired', activity: 'working', parent: 'Main', tab: false, input: true, open: { kind: 'chat', path: 'lookup-1' } },
+      // A durable hire talks to its parent, not the person: it never takes a tab.
+      { label: 'reviewer', category: 'hired', activity: 'idle', parent: 'Main', tab: false, input: true, open: { kind: 'chat', path: 'reviewer' } },
     ]));
-    expect((await read()).filter((agent) => agentActive(agent) && !agent.tab).map((agent) => agent.label).sort()).toEqual(['lookup-1', 'scout-1']);
   });
 
   test('a swarm\'s workers are listed under the agent that started it: working while the run runs, read-only', async () => {
@@ -112,13 +119,12 @@ describe('the Agents panel lists every agent in the workspace', () => {
     head.run(main.actorId, 'h-a', 'Try the PEG parser', 'running', 11);
     head.run(main.actorId, 'h-b', 'Try the Pratt parser', 'completed', 12);
 
-    const workers = (await read()).filter((agent) => agent.category === 'swarm').map(row);
+    const workers = rows(await read()).filter((agent) => agent.category === 'swarm');
 
     expect(workers).toEqual([
-      { label: 'Try the PEG parser', category: 'swarm', activity: 'working', parent: 'Kinu', tab: false, input: false, open: { kind: 'node', runId: 'run-1', nodeId: 'h-a', owner: null } },
-      { label: 'Try the Pratt parser', category: 'swarm', activity: 'done', parent: 'Kinu', tab: false, input: false, open: { kind: 'node', runId: 'run-1', nodeId: 'h-b', owner: null } },
+      { label: 'Try the PEG parser', category: 'swarm', activity: 'working', parent: 'Main', tab: false, input: false, open: { kind: 'node', runId: 'run-1', nodeId: 'h-a', owner: null } },
+      { label: 'Try the Pratt parser', category: 'swarm', activity: 'done', parent: 'Main', tab: false, input: false, open: { kind: 'node', runId: 'run-1', nodeId: 'h-b', owner: null } },
     ]);
-    expect((await read()).filter(agentActive).map((agent) => agent.label)).toEqual(['Try the PEG parser']);
   });
 
   test('only a worker its owner stopped reads stopped; one cut off with its search or that errored reads failed', async () => {
@@ -158,10 +164,10 @@ describe('the Agents panel lists every agent in the workspace', () => {
     const helper = hire(main, 'counter-1', { lifetime: 'task' });
     const activity = async (queued = false) => Object.fromEntries((await read(queued)).map((agent) => [agent.label, agent.activity]));
 
-    expect(await activity()).toEqual({ Kinu: 'idle', 'counter-1': 'idle' });
+    expect(await activity()).toEqual({ Main: 'idle', 'counter-1': 'idle' });
 
     // The lead's chat queued a turn (a job's wake) it has not claimed.
-    expect((await activity(true)).Kinu).toBe('working');
+    expect((await activity(true)).Main).toBe('working');
 
     // The helper was handed a task its drain has not run.
     admitSubordinateTask(new EventLog(exec, helper), { fromWorkspace: helper.workspaceId, kind: 'task', body: 'Count the files.', mode: 'build', now: Date.now() });
@@ -169,7 +175,35 @@ describe('the Agents panel lists every agent in the workspace', () => {
 
     // An email reached the lead, and the drain that takes it has not run.
     new EventLog(exec, main).publish({ descriptor: { ingress: 'email_inbound', variant: 'email', sender_class: 'owner', payload: EMAIL }, now: Date.now() });
-    expect((await activity()).Kinu).toBe('working');
+    expect((await activity()).Main).toBe('working');
+  });
+
+  test('a chat that asks the person reads waiting, even mid-turn, and one whose last turn failed reads failed until the next starts', async () => {
+    const { db, main, hire, read, openTurn } = workspace();
+    const alice = hire(main, 'alice', { origin: 'user' });
+    const scout = hire(main, 'scout', {});
+    const activity = async () => Object.fromEntries((await read()).map((agent) => [agent.label, agent.activity]));
+
+    const claim = db.query(`INSERT INTO actor_turn_claims (actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version, outcome, claimed_at)
+      VALUES (?, ?, 'run', 0, 'build', 'builtin', 1, ?, ?)`);
+
+    initDeferredApprovalsTable(makeExecRaw(db));
+    initPlanReviewTable(makeExecRaw(db));
+    openTurn(alice);
+    db.query(`INSERT INTO deferred_approvals (actor_id, id, command, reason, status, requested_at) VALUES (?, 'd1', 'rm -rf build', 'deletes files', 'queued', 1)`).run(alice.actorId);
+    db.query(`INSERT INTO plan_reviews (actor_id, id, session_id, revision, content, status, created_at, updated_at) VALUES (?, 'p1', 's', 1, '# Plan', 'pending', 1, 1)`).run(main.actorId);
+    claim.run(scout.actorId, 't1', 'error', 5);
+
+    expect(await activity()).toEqual({ Main: 'waiting', alice: 'waiting', scout: 'failed' });
+
+    db.query(`UPDATE deferred_approvals SET status = 'approved'`).run();
+    db.query(`UPDATE plan_reviews SET status = 'approved'`).run();
+    claim.run(scout.actorId, 't2', null, 6);
+
+    expect(await activity()).toEqual({ Main: 'idle', alice: 'working', scout: 'working' });
+
+    db.query(`UPDATE actor_turn_claims SET outcome = 'completed' WHERE turn_id = 't2'`).run();
+    expect((await activity()).scout).toBe('idle');
   });
 
   test('a worker still running in an old swarm stays listed past the newest twenty runs', async () => {
@@ -208,7 +242,7 @@ describe('the Agents panel lists every agent in the workspace', () => {
 
     // The EMA seeds on the first rate (0) and moves α = 0.2 toward the second (0.9).
     expect(figures('alice')).toEqual({ tokens: 3300, usd: 0.03, activeMs: 180_000, cacheEma: 0.2 * 0.9 });
-    expect(figures('Kinu')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8 });
+    expect(figures('Main')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8 });
   });
 
   test('an agent that has not run shows no figures, not zeros', async () => {

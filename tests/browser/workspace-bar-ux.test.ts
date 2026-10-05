@@ -1,0 +1,302 @@
+/**
+ * The workspace bar, as a browser drives it on the real page: + asks the landing's question and the first message
+ * opens a chat as the current tab; a chat renames in its tab and deletes after a confirmation; Main renames and never
+ * deletes; drafts stay with their conversation; and the open tab is the one the hairline rises around.
+ */
+import { describe, expect, test } from 'bun:test';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Page } from 'puppeteer';
+
+import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+
+const TAB_SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'workspace-bar-ux');
+
+mkdirSync(TAB_SHOTS, { recursive: true });
+
+const CHATS = 'nav[aria-label="Chats"]';
+
+/** The open tab's label, as the bar shows it. */
+function openTab(page: Page): Promise<string> {
+  return page.$eval(`${CHATS} [data-active] a`, (link) => (link.textContent ?? '').trim());
+}
+
+async function openWorkspacePage(newPage: Gallery['newPage'], origin: string, query = ''): Promise<Page> {
+  const page = await newPage();
+  await page.setViewport({ width: 1280, height: 900 });
+  await page.goto(`${origin}/gallery.html?frame=workspacepage${query}`, { waitUntil: 'networkidle0' });
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForSelector(`${CHATS} [data-agent-tab="main"]`);
+
+  return page;
+}
+
+/** + then the first message: what a person does to open a chat. */
+async function startChat(page: Page, opening: string): Promise<void> {
+  await page.click(`${CHATS} a[aria-label="New chat"]`);
+  await page.waitForSelector('[data-new-chat] textarea');
+  await page.type('[data-new-chat] textarea', opening);
+  await page.click('[data-new-chat] button[type="submit"]');
+}
+
+async function waitForNewChatOpen(page: Page): Promise<void> {
+  await page.waitForFunction((chats) => {
+    const open = document.querySelector(`${chats} [data-active]`);
+
+    return open !== null && open.getAttribute('data-agent-tab') !== 'main' && open.getAttribute('data-title') === null;
+  }, {}, CHATS);
+}
+
+describe('a chat in the workspace, as an ordinary conversation', () => {
+  /** Kept equal to the gallery's two-frame refusal, so a chain it stopped chaining fails the equality. */
+  const CREATE_REFUSAL_CHAIN = 'the workspace refused the new agent: subordinate quota exhausted';
+
+  test('+ asks the workspace question; the first message opens the chat as the current tab and is sent once', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openWorkspacePage(newPage, origin);
+      const sends = () => page.evaluate(() => Number(document.documentElement.dataset.galleryChatSends ?? '0'));
+      const before = await sends();
+
+      await page.click(`${CHATS} a[aria-label="New chat"]`);
+      await page.waitForSelector('[data-new-chat]');
+      expect(await page.$eval('[data-new-chat] h1', (heading) => heading.textContent ?? '')).toContain('What do you want to work on in ');
+
+      await page.type('[data-new-chat] textarea', 'Audit the coupon rules');
+      await page.click('[data-new-chat] button[type="submit"]');
+      await waitForNewChatOpen(page);
+      await page.waitForSelector('[data-agent-pane^="checkout-fixes/agents/"] textarea');
+      await page.waitForFunction((from) => Number(document.documentElement.dataset.galleryChatSends ?? '0') === from + 1, {}, before);
+
+      // The opening is spent: leaving the chat and coming back sends nothing again.
+      await page.click(`${CHATS} [data-agent-tab="main"] a`);
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"] textarea');
+      await page.click(`${CHATS} [data-agent-tab]:not([data-agent-tab="main"]) a`);
+      await page.waitForSelector('[data-agent-pane^="checkout-fixes/agents/"] textarea');
+      expect(await sends()).toBe(before + 1);
+      await page.close();
+    });
+  });
+
+  test('a refused create says why where it was asked, and the next try lands', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openWorkspacePage(newPage, origin, '&createFails=1');
+
+      await startChat(page, 'Audit the coupon rules');
+      await page.waitForFunction((chain) => (document.querySelector('[data-new-chat]')?.textContent ?? '').includes(chain), {}, CREATE_REFUSAL_CHAIN);
+      // The draft survives the refusal, so the retry is one click.
+      expect(await page.$eval('[data-new-chat] textarea', (field) => field.value)).toBe('Audit the coupon rules');
+
+      await page.click('[data-new-chat] button[type="submit"]');
+      await waitForNewChatOpen(page);
+      expect(await page.evaluate(() => document.body.innerText)).not.toContain(CREATE_REFUSAL_CHAIN);
+      await page.close();
+    });
+  });
+
+  test('a chat renames in its tab and deletes after a confirmation; Main renames and never deletes', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openWorkspacePage(newPage, origin);
+      expect(await page.$(`${CHATS} [data-agent-tab="main"] button[aria-label="Delete Main"]`)).toBeNull();
+      expect(await page.$(`${CHATS} [data-agent-tab="main"] button[aria-label="Rename Main"]`)).not.toBeNull();
+
+      await startChat(page, 'Audit the coupon rules');
+      await waitForNewChatOpen(page);
+      const open = `${CHATS} [data-active]`;
+
+      await page.hover(`${open} a`);
+      await page.click(`${open} button[aria-label^="Rename "]`);
+      await page.waitForSelector(`${open} input[aria-label="Chat name"]`);
+      await page.type(`${open} input[aria-label="Chat name"]`, 'Payments triage');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction((chats) => (document.querySelector(`${chats} [data-active] a`)?.textContent ?? '').includes('Payments triage'), {}, CHATS);
+
+      // Cancel decides nothing; Delete removes the tab and returns to Main.
+      await page.hover(`${open} a`);
+      await page.click(`${open} button[aria-label="Delete Payments triage"]`);
+      await page.waitForSelector('[role="dialog"]');
+      await clickDialogButton(page, 'Cancel');
+      expect(await openTab(page)).toBe('Payments triage');
+
+      await page.hover(`${open} a`);
+      await page.click(`${open} button[aria-label="Delete Payments triage"]`);
+      await page.waitForSelector('[role="dialog"]');
+      await clickDialogButton(page, 'Delete');
+      await page.waitForFunction((chats) => document.querySelector(`${chats} [data-active]`)?.getAttribute('data-agent-tab') === 'main', {}, CHATS);
+      expect(await page.evaluate((chats) => document.querySelector(chats)?.textContent ?? '', CHATS)).not.toContain('Payments triage');
+      await page.close();
+    });
+  });
+
+  test('Main takes a title of its own, which its tab shows', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openWorkspacePage(newPage, origin);
+      const main = `${CHATS} [data-agent-tab="main"]`;
+
+      await page.hover(`${main} a`);
+      await page.click(`${main} button[aria-label="Rename Main"]`);
+      await page.waitForSelector(`${main} input[aria-label="Chat name"]`);
+      await page.type(`${main} input[aria-label="Chat name"]`, 'Release plan');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction((tab) => (document.querySelector(`${tab} a`)?.textContent ?? '') === 'Release plan', {}, main);
+      await page.close();
+    });
+  });
+
+  test('an agent pane\'s picker shows the actor\'s effective model and writes the actor\'s own pin', async () => {
+    // The pane's picker once wrote to the ROOT's `setModel`, so a pick there repinned the whole workspace. A pick or
+    // a thinking level is written to THIS actor, never the workspace.
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openWorkspacePage(newPage, origin);
+      await startChat(page, 'Audit the coupon rules');
+      await waitForNewChatOpen(page);
+      await page.waitForFunction(() => {
+        const picker = document.querySelector('[data-agent-pane] [data-model-picker="Model"]');
+        const trigger = picker?.closest('button');
+
+        return picker?.textContent?.includes('Claude Opus 4') === true && trigger instanceof HTMLButtonElement && !trigger.disabled;
+      });
+
+      // A real pointer press: the option commits on the pointer, not on a synthetic click().
+      await page.click('[data-agent-pane] [aria-label="Thinking level"]');
+      await page.waitForSelector('[role="option"]');
+      let pickedHigh = false;
+
+      for (const option of await page.$$('[role="option"]')) {
+        if (((await option.evaluate((el) => el.textContent)) ?? '').trim() === 'High') {
+          await option.click();
+          pickedHigh = true;
+          break;
+        }
+      }
+
+      if (!pickedHigh) throw new Error('High absent in the thinking-level popup');
+
+      await page.waitForFunction(() => (document.documentElement.dataset.galleryModelCalls ?? '').includes('setReasoningEffort'));
+      const calls = await page.evaluate(() => JSON.parse(document.documentElement.dataset.galleryModelCalls ?? '[]'));
+      expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'agent-1'] }]);
+      await page.close();
+    });
+  });
+
+  test('each conversation keeps its own draft across tab switches', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openWorkspacePage(newPage, origin);
+      await page.type('[data-agent-pane="checkout-fixes/main"] textarea', 'main draft');
+      await startChat(page, 'Audit the coupon rules');
+      await waitForNewChatOpen(page);
+      await page.waitForSelector('[data-agent-pane^="checkout-fixes/agents/"] textarea');
+      expect(await page.$eval('[data-agent-pane] textarea', (field) => field.value)).toBe('');
+
+      await page.click(`${CHATS} [data-agent-tab="main"] a`);
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
+      expect(await page.$eval('[data-agent-pane] textarea', (field) => field.value)).toBe('main draft');
+      await page.close();
+    });
+  });
+});
+
+/** Presses a dialog's button by its words. */
+async function clickDialogButton(page: Page, words: string): Promise<void> {
+  await page.evaluate((label) => {
+    const button = [...document.querySelectorAll('[role="dialog"] button')].find((node) => (node.textContent ?? '').trim() === label);
+
+    if (!(button instanceof HTMLButtonElement)) throw new Error(`${label} absent in the dialog`);
+    button.click();
+  }, words);
+  await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
+}
+
+
+/** One tab of the bar, as painted: its text colour and its box. */
+interface TabPaint {
+  readonly key: string;
+  readonly current: boolean;
+  /** The workspace's own name, always in full ink: it is not a chat tab. */
+  readonly title: boolean;
+  readonly color: string;
+  readonly left: number;
+  readonly right: number;
+}
+
+/** The bar's tabs and the open tab's outline, once their colour transitions have ended. */
+function barPaint(page: Page, strip: string): Promise<{ tabs: TabPaint[]; outline: { left: number; right: number } | null }> {
+  return page.$eval(`[data-tab-strip="${strip}"] .p-bar`, async (bar) => {
+    await Promise.allSettled([...bar.querySelectorAll('.p-bar-link')].flatMap((link) => link.getAnimations().map((animation) => animation.finished)));
+    const body = bar.querySelector('.p-bar-outline [data-part="body"]')?.getBoundingClientRect();
+
+    return {
+      tabs: [...bar.querySelectorAll('.p-bar-tab')].flatMap((tab) => {
+        const link = tab.querySelector('.p-bar-link');
+
+        if (link === null) return [];
+        const box = tab.getBoundingClientRect();
+
+        return [{
+          key: tab.getAttribute('data-key') ?? '', current: link.getAttribute('aria-current') === 'page', title: tab.hasAttribute('data-title'),
+          color: getComputedStyle(link).color, left: box.left, right: box.right,
+        }];
+      }),
+      outline: body === undefined ? null : { left: body.left, right: body.right },
+    };
+  });
+}
+
+/**
+ * The open chat tab, as a reader finds it: the complaint was a strip where nothing said which tab the conversation
+ * below belonged to. The open tab is the one the hairline rises around, and its words are inked apart from the closed
+ * tabs beside it, in both themes. A closed tab under the pointer brightens and never takes the open tab's ink.
+ */
+describe('the open tab, as the browser paints it', () => {
+  for (const open of ['main', 'actor-docs', 'overview']) {
+    test(`the ${open} tab reads as the open one, dark and light`, async () => {
+      await withGallery(async ({ newPage, origin }) => {
+        for (const theme of ['dark', 'light'] as const) {
+          const page = await newPage();
+          await page.setViewport({ width: 900, height: 700 });
+          await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
+          await page.goto(`${origin}/gallery.html?frame=tabs`, { waitUntil: 'networkidle0' });
+          await page.waitForSelector(`[data-tab-strip="${open}"] .p-bar-outline [data-part="body"]`);
+
+          const paint = await barPaint(page, open);
+          const current = paint.tabs.filter((tab) => tab.current);
+          const closed = paint.tabs.filter((tab) => !tab.current && !tab.title);
+
+          expect(current.map((tab) => tab.key)).toEqual([open]);
+          expect(closed.length).toBeGreaterThan(0);
+
+          for (const other of closed) expect(current[0]?.color).not.toBe(other.color);
+
+          // The outline's body sits inside the open tab, inset by its flares.
+          expect(paint.outline?.left).toBeGreaterThan((current[0]?.left ?? 0) - 1);
+          expect(paint.outline?.right).toBeLessThan((current[0]?.right ?? 0) + 1);
+
+          await page.screenshot({ path: join(TAB_SHOTS, `bar-${open}-${theme}.png`), fullPage: true });
+          await page.close();
+        }
+      });
+    });
+  }
+
+  test('a closed tab under the pointer brightens, never to the open tab\'s ink', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      for (const theme of ['dark', 'light'] as const) {
+        const page = await newPage();
+        await page.setViewport({ width: 900, height: 700 });
+        await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
+        await page.goto(`${origin}/gallery.html?frame=tabs`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-tab-strip="main"] .p-bar-outline');
+        const rest = await barPaint(page, 'main');
+        const open = rest.tabs.find((tab) => tab.current);
+        const closed = 'actor-docs';
+
+        await page.hover(`[data-tab-strip="main"] [data-key="${closed}"] .p-bar-link`);
+        const hovered = (await barPaint(page, 'main')).tabs.find((tab) => tab.key === closed);
+
+        expect(hovered?.color).not.toBe(rest.tabs.find((tab) => tab.key === closed)?.color);
+        expect(hovered?.color).not.toBe(open?.color);
+        await page.close();
+      }
+    });
+  });
+});
+

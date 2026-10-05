@@ -164,9 +164,11 @@ export function useAgentChat(options: { agent: GalleryAgent }) {
 	}, [agent]);
 
 	const controls = useMemo(() => ({
-		sendMessage: () => {
+		sendMessage: (message: { readonly parts?: readonly { readonly type: string; readonly filename?: string; readonly text?: string }[] }) => {
 			const root = document.documentElement;
 			root.dataset.galleryChatSends = String(Number(root.dataset.galleryChatSends ?? "0") + 1);
+			// What the transport was handed, part by part.
+			root.dataset.galleryChatSent = JSON.stringify((message.parts ?? []).map((part) => (part.type === "file" ? `file:${part.filename ?? ""}` : `${part.type}:${part.text ?? ""}`)));
 
 			if (root.dataset.galleryChatHold !== "1") return Promise.resolve();
 
